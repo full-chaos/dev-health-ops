@@ -84,6 +84,44 @@ For the generic worker outbox:
 5. Preserve deferred or terminal rows for audit; do not silently republish them to Celery.
 6. After correction, process one bounded row and verify a single domain effect.
 
+### Scheduled report delivery abandonment
+
+The fixed scheduler reports a pending scheduled-report run whose handoff exhausted its delivery budget as:
+
+```text
+fixed_scheduler_schedule_degraded{schedule="scheduled_reports_dispatch",reason="scheduled_reports_undeliverable"} 1
+```
+
+This is a persistent, non-fatal schedule verdict. It may coexist with healthy reports from other organizations, and it survives terminal outbox retention. The metric describes the process's last evaluation, so confirm the durable database state rather than treating one scrape as the complete incident record.
+
+Inspect both sides of retention without selecting job arguments or detailed errors:
+
+```sql
+SELECT run.id,
+       run.report_id,
+       handoff.status AS retained_outbox_status,
+       abandonment.abandoned_at,
+       abandonment.attempt_count,
+       abandonment.last_error_code
+FROM report_runs AS run
+LEFT JOIN worker_job_outbox AS handoff
+  ON handoff.dedupe_key = 'report.run:' || run.id::text
+LEFT JOIN worker_job_delivery_abandonments AS abandonment
+  ON abandonment.dedupe_key = 'report.run:' || run.id::text
+WHERE run.status = 'pending'
+  AND (handoff.status = 'dead' OR abandonment.dedupe_key IS NOT NULL);
+```
+
+Interpret the replay state as follows:
+
+| Delivery state | Scheduler action |
+| --- | --- |
+| No outbox row and no abandonment fact | Treat as never published and re-arm the linked run. |
+| Pending, claimed, or delivered outbox row | Leave the handoff with its current owner. |
+| Dead outbox row or retained abandonment fact | Keep the run degraded and do not mint a fresh attempt budget. |
+
+Do not delete or update the abandonment fact, reset the pending run, or republish the dedupe key to clear the metric. Preserve the run ID and the minimal evidence above, correct the underlying contract or dependency, and escalate for the reviewed repair or cancellation path.
+
 ## Scheduler failure
 
 Celery Beat remains the active production scheduler. Verify it is running exactly once and that due work is persisted and dispatched.

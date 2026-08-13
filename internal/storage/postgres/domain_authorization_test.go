@@ -219,6 +219,28 @@ func TestSyncDispatchOutboxPosturesKeepBothRolesLeastPrivilege(t *testing.T) {
 	}
 }
 
+func TestDeliveryAbandonmentEvidenceIsCoordinatorReadOnly(t *testing.T) {
+	t.Parallel()
+
+	var matches []TablePrivilege
+	for _, table := range coordinatorPosture().RequiredTables {
+		if table.TableName == "worker_job_delivery_abandonments" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("delivery-abandonment posture rows = %d, want exactly 1", len(matches))
+	}
+	if grant := matches[0]; grant.AllowInsert || grant.AllowUpdate || grant.AllowDelete {
+		t.Fatalf("coordinator delivery-abandonment posture = %+v, want SELECT only", grant)
+	}
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "worker_job_delivery_abandonments" {
+			t.Fatal("domain runtime must not receive delivery-abandonment access")
+		}
+	}
+}
+
 // unnest() does not error on mismatched array-parameter lengths; it silently
 // NULL-pads the shorter ones instead (confirmed empirically against a live
 // server — see CheckRolePosture's comment). This pins the Go-side guard that

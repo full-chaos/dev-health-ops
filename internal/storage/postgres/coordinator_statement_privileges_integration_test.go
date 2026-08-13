@@ -100,6 +100,13 @@ func coordinatorExclusiveDDL() []string {
 			generation bigint NOT NULL DEFAULT 1,
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
+		`CREATE TABLE public.worker_job_delivery_abandonments (
+			dedupe_key text PRIMARY KEY,
+			job_kind text NOT NULL,
+			abandoned_at timestamptz NOT NULL,
+			attempt_count integer NOT NULL,
+			last_error_code text
+		)`,
 		`CREATE TABLE public.sync_run_reference_discoveries (
 			id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
 			status text NOT NULL, attempts integer NOT NULL, available_at timestamptz NOT NULL,
@@ -220,6 +227,14 @@ func coordinatorStatements() []coordinatorStatement {
 			// Rollback only — ApplyCheckedIn never touches this table.
 			privilege: "worker_job_outbox UPDATE (implied by LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE)",
 			sql:       "LOCK TABLE public.worker_job_outbox IN SHARE ROW EXCLUSIVE MODE",
+		},
+		{
+			name:      "scheduled-report replay reads retained delivery abandonment",
+			site:      "internal/scheduler/fixed/reports.go replayNeedsRearming -> replayedReportRunSQL",
+			privilege: "worker_job_delivery_abandonments SELECT",
+			sql: `SELECT dedupe_key IS NOT NULL
+				FROM public.worker_job_delivery_abandonments
+				WHERE dedupe_key = 'report.run:11111111-1111-5111-8111-111111111111'`,
 		},
 		{
 			name:      "sync-dispatch route pause",

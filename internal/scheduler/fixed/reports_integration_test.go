@@ -15,7 +15,8 @@ import (
 )
 
 // The DDL mirrors the shape alembic revisions 0001, 0005, 0053 and 0056 leave
-// behind for the four tables this producer touches. It is repeated here rather
+// behind for the report graph and the two delivery-state tables this producer
+// reads. It is repeated here rather
 // than executed through Alembic so the Go integration test has no Python runtime
 // dependency, and it deliberately keeps the parts that constrain the producer:
 //
@@ -110,6 +111,13 @@ CREATE TABLE public.worker_job_outbox (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE public.worker_job_delivery_abandonments (
+    dedupe_key VARCHAR(256) PRIMARY KEY,
+    job_kind VARCHAR(96) NOT NULL,
+    abandoned_at TIMESTAMPTZ NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    last_error_code VARCHAR(64)
 );
 `
 
@@ -346,8 +354,9 @@ func TestRepeatedOccurrenceWindowMaterializesNothingFurther(t *testing.T) {
 	first := readReportState(t, pool)
 	// The engine, not the producer, publishes the handoff, so a direct Produce
 	// leaves none behind. Seed the live row the engine would have written:
-	// without it replay would correctly RE-ARM the pruned handoff, which is a
-	// different property (TestReplayRearmsAPendingRunWhoseHandoffWasPruned).
+	// without it replay would correctly RE-ARM the never-published handoff,
+	// which is a different property
+	// (TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished).
 	seedHandoff(t, pool, first.RunID, "pending")
 
 	outcome, err := produceInTransaction(t, pool, schedule, occurrence)

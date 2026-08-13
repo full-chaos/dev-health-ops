@@ -50,6 +50,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
@@ -110,6 +111,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
@@ -133,6 +135,15 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "INSERT INTO public.worker_job_delivery_abandonments (dedupe_key) VALUES ('report.run:abandoned')"); err != nil {
+		t.Fatalf("queue cannot preserve minimal delivery-abandonment evidence: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.worker_job_delivery_abandonments SET dedupe_key=dedupe_key"); err == nil {
+		t.Fatal("queue unexpectedly mutates delivery-abandonment evidence")
+	}
+	if _, err := queue.Exec(ctx, "DELETE FROM public.worker_job_delivery_abandonments"); err == nil {
+		t.Fatal("queue unexpectedly deletes delivery-abandonment evidence")
 	}
 	if _, err := domain.Exec(ctx, "INSERT INTO public.sync_run_units (id, state) VALUES (1, 'planned')"); err != nil {
 		t.Fatalf("domain materializer cannot insert sync-run-unit state: %v", err)

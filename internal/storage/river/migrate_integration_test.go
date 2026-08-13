@@ -73,6 +73,7 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (key text PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
@@ -460,6 +461,7 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	for _, statement := range []string{
 		"SELECT count(*) FROM public.domain_runtime_probe",
+		"SELECT count(*) FROM public.worker_job_delivery_abandonments",
 		"INSERT INTO public.domain_runtime_probe (value) VALUES ('forbidden')",
 		"UPDATE public.domain_runtime_probe SET value='forbidden'",
 		"DELETE FROM public.domain_runtime_probe",
@@ -565,6 +567,24 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"DELETE FROM public.worker_job_outbox WHERE id='00000000-0000-0000-0000-000000000001'",
 	); err != nil {
 		t.Fatalf("queue role cannot retire outbox state: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"INSERT INTO public.worker_job_delivery_abandonments (dedupe_key) VALUES ('report.run:abandoned')",
+	); err != nil {
+		t.Fatalf("queue role cannot preserve delivery-abandonment evidence: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"UPDATE public.worker_job_delivery_abandonments SET dedupe_key=dedupe_key",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("queue delivery-abandonment UPDATE = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"DELETE FROM public.worker_job_delivery_abandonments",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("queue delivery-abandonment DELETE = %v, want 42501 insufficient_privilege", err)
 	}
 	if _, err := queuePool.Exec(
 		ctx,

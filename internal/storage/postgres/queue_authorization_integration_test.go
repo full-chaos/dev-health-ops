@@ -34,6 +34,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY)",
@@ -45,6 +46,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"GRANT CONNECT ON DATABASE worker_test TO " + queueAuthorizationFenceRole,
 		"GRANT USAGE ON SCHEMA public, river TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox, public.worker_job_completion_fences TO " + queueAuthorizationFenceRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + queueAuthorizationFenceRole,
@@ -59,6 +61,40 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 	queue := openPostgresPool(t, ctx, postgresRoleURI(t, instance.URI, queueAuthorizationFenceRole, queueAuthorizationFencePass))
 	defer queue.Close()
 	assertQueueFenceAuthorized(t, ctx, queue)
+
+	for _, test := range []struct {
+		name    string
+		grant   string
+		revoke  string
+		missing bool
+	}{
+		{name: "missing abandonment select", revoke: "REVOKE SELECT ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "missing abandonment insert", revoke: "REVOKE INSERT ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole, grant: "GRANT INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "abandonment update", grant: "GRANT UPDATE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
+		{name: "abandonment delete", grant: "GRANT DELETE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE DELETE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
+		{name: "abandonment truncate", grant: "GRANT TRUNCATE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE TRUNCATE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statement := test.grant
+			if test.missing {
+				statement = test.revoke
+			}
+			if _, err := admin.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+			if err := postgresstore.CheckQueueAuthorization(ctx, queue, queueAuthorizationFenceRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+				t.Fatalf("queue authorization with %s error = %v, want ErrUnavailable", test.name, err)
+			}
+			statement = test.revoke
+			if test.missing {
+				statement = test.grant
+			}
+			if _, err := admin.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+			assertQueueFenceAuthorized(t, ctx, queue)
+		})
+	}
 
 	for _, test := range []struct {
 		name    string

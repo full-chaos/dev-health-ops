@@ -672,6 +672,11 @@ func domainPosture() RolePosture {
 //     is proven by coordinator_statement_privileges_integration_test.go, which
 //     executes the real statements as both roles.
 //
+//   - worker_job_delivery_abandonments (coordinator: SELECT): scheduled-report
+//     replay reads the minimal terminal-delivery fact after queue-side outbox
+//     retention deletes the full dead row. The queue role owns INSERT; the
+//     coordinator never mutates this write-once evidence.
+//
 //   - remaining_metric_runs, remaining_metric_partitions,
 //     work_graph_execution_requests, daily_metrics_runs (coordinator: SELECT,
 //     INSERT) and the
@@ -774,6 +779,7 @@ func coordinatorPosture() RolePosture {
 			{"tier_limits", false, false, false},
 			{"job_runs", true, false, false},
 			{"worker_job_outbox", true, true, false},
+			{"worker_job_delivery_abandonments", false, false, false},
 			{"remaining_metric_runs", true, false, false},
 			{"remaining_metric_partitions", true, false, false},
 			{"work_graph_execution_requests", true, false, false},

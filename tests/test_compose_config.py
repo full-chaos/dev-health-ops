@@ -1037,6 +1037,10 @@ def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
         pytest.skip("platform compose.yml is only present in the monorepo checkout")
 
     services = _load_yaml(compose_path).get("services") or {}
+    migrate = services["migrate"]
+    assert (migrate.get("build") or {})["context"] == ("${DEV_HEALTH_OPS_ROOT:-./ops}")
+    assert "${DEV_HEALTH_OPS_ROOT:-./ops}:/app" in (migrate.get("volumes") or [])
+
     scheduler = services.get("go-scheduler")
     assert scheduler is not None, "platform Compose must run the Go scheduler"
     assert not scheduler.get("profiles"), "local scheduler must not require a profile"

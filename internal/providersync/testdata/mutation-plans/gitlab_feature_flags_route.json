@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "GitLab feature-flags provider-local route (CHAOS-3702)",
   "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
-  "$limitation": "Provider-local mutation coverage only. The focused route suite proves the valid multi-page request sequence, physical request accounting, scope rows, three destinations, cap/no-watermark, non-list fail-closed behavior, qualified 403 classification, invalid configuration guards, project fallback, recovery policies, result identity, and evidence identity. The fresh live proof executes the pinned Python client, normalizers, worker edge block, and real WorkGraphBuilder methods with a capturing sink. Frozen tests do not contain malformed nested scope shapes, project HTTP/decode failures, duplicate scopes with different timestamps, or sub-millisecond timestamp precision cases; those unmeasurable mutations are intentionally excluded rather than overstating coverage. This plan intentionally excludes registry, matrix, scheduler, transport wiring, ClickHouse implementation, and the mutation harness itself.",
+  "$limitation": "Provider-local mutation coverage only. The focused route suite proves the valid multi-page request sequence, physical request accounting, scope rows, three destinations, cap/no-watermark, non-list fail-closed behavior, qualified 403 classification, plain-403 terminal dataset classification, invalid configuration guards, project fallback, recovery policies, result identity, and evidence identity. The fresh live proof executes the pinned Python client, normalizers, worker edge block, and real WorkGraphBuilder methods with a capturing sink. Frozen tests do not contain malformed nested scope shapes, project HTTP/decode failures, duplicate scopes with different timestamps, or sub-millisecond timestamp precision cases; those unmeasurable mutations are intentionally excluded rather than overstating coverage. This plan intentionally excludes registry, matrix, scheduler, transport wiring, ClickHouse implementation, and the mutation harness itself.",
   "mutations": [
     {
       "id": "R1-context-guard",
@@ -115,30 +115,6 @@
       "replace": "func (doer gitLabFeatureFlagsCountingDoer) Do(request *http.Request) (*http.Response, error) {\n\t*doer.attempts = *doer.attempts",
       "rationale": "accepted fetch evidence must count every physical page and project request",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteMirrorsPythonOrderScopesAndEffects$", "./internal/providersync/"]]
-    },
-    {
-      "id": "R17-qualified-403-conversion",
-      "file": "internal/providersync/gitlab_feature_flags_route.go",
-      "find": "if response != nil && gitLabFeatureFlagsQualified403(response) {",
-      "replace": "if false {",
-      "rationale": "only GitLab's qualified 403 shape may enter shared retry accounting as a throttle",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteClassifiesCaseInsensitiveQualified403$", "./internal/providersync/"]]
-    },
-    {
-      "id": "R18-rate-limit-header-clause",
-      "file": "internal/providersync/gitlab_feature_flags_route.go",
-      "find": "strings.TrimSpace(gitLabFeatureFlagsHeaderValue(response.Header, \"RateLimit-Remaining\")) == \"0\"",
-      "replace": "false",
-      "rationale": "RateLimit-Remaining: 0 is an explicit GitLab throttle signal",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteClassifiesCaseInsensitiveQualified403$", "./internal/providersync/"]]
-    },
-    {
-      "id": "R19-case-insensitive-rate-header",
-      "file": "internal/providersync/gitlab_feature_flags_route.go",
-      "find": "if strings.EqualFold(key, wanted) && len(values) > 0 {",
-      "replace": "if key == wanted && len(values) > 0 {",
-      "rationale": "HTTP header names are case-insensitive and the Python client accepts GitLab's casing variants",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteClassifiesCaseInsensitiveQualified403$", "./internal/providersync/"]]
     },
     {
       "id": "R20-feature-flags-endpoint",
@@ -491,6 +467,39 @@
       "replace": "Dataset: \"\",",
       "rationale": "fetch evidence must retain the canonical feature-flags dataset identity",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteMirrorsPythonOrderScopesAndEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R80-plain-403-dataset-fence",
+      "file": "internal/providersync/gitlab_feature_flags_route.go",
+      "find": "providerErr.StatusCode == http.StatusForbidden {",
+      "replace": "providerErr.StatusCode == http.StatusOK {",
+      "rationale": "a plain GitLab feature-flags 403 is an unavailable project dataset, while 401 and unrelated status classes must retain their credential or provider meaning",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteClassifiesPlain403AsUnavailableDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R81-plain-403-durable-verdict",
+      "file": "internal/providersync/gitlab_feature_flags_route.go",
+      "find": "return errors.Join(ErrProviderDatasetUnavailable, err)",
+      "replace": "return err",
+      "rationale": "the endpoint-specific 403 must reach the provider-unit state machine as a durable unavailable-dataset verdict instead of consuming every River attempt as generic exhaustion",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteClassifiesPlain403AsUnavailableDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R82-dataset-unavailable-first-attempt",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {\n\t\treturn ProviderDatasetUnavailableCategory, true",
+      "replace": "if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {\n\t\treturn \"\", false",
+      "rationale": "a deterministic feature-flags access denial must fail with provider_dataset_unavailable on the first attempt rather than re-entering dispatch and ending as provider_unit_exhausted",
+      "build": ["go", "test", "-run", "^$", "./internal/jobs/providerunit/"],
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderDatasetUnavailableTerminalizesOnFirstAttempt$", "./internal/jobs/providerunit/"]]
+    },
+    {
+      "id": "R83-project-lookup-scope-fence",
+      "file": "internal/providersync/gitlab_feature_flags_route.go",
+      "find": "projectKey, err := fetchGitLabFeatureFlagProjectName(\n\t\tctx, &counted, projectPath, projectIDOrPath,\n\t)\n\tif err != nil {\n\t\treturn CompleteRouteBatch{}, err\n\t}",
+      "replace": "projectKey, err := fetchGitLabFeatureFlagProjectName(\n\t\tctx, &counted, projectPath, projectIDOrPath,\n\t)\n\tif err != nil {\n\t\treturn CompleteRouteBatch{}, gitLabFeatureFlagsCollectionError(err)\n\t}",
+      "rationale": "only the feature-flags inventory endpoint may translate a plain 403 into unavailable-dataset; the project-name lookup must retain ordinary authentication semantics",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsRouteKeepsProjectLookup403AsAuthentication$", "./internal/providersync/"]]
     }
   ]
 }

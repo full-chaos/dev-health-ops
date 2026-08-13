@@ -257,6 +257,53 @@ func TestProviderBudgetStoreUnavailableRemainsAnAttemptFailure(t *testing.T) {
 	}
 }
 
+func TestProviderDatasetUnavailableTerminalizesOnFirstAttempt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	unit.Provider = "gitlab"
+	unit.Dataset = "feature-flags"
+	unit.SourceExternalID = "group/project"
+	unit.SourceName = "group/project"
+	repository := newMemoryUnitRepository(unit)
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			GitlabFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, errors.Join(
+				providersync.ErrProviderDatasetUnavailable,
+				&providerfoundation.ProviderError{
+					Class: providerfoundation.ErrorAuthentication, StatusCode: http.StatusForbidden,
+				},
+			)
+		},
+	}
+	execution := providerExecution(unit, now, 1)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+	if !errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
+		t.Fatalf("Work()=%v want unavailable dataset", err)
+	}
+	if repository.status != "failed" || repository.attempt != 1 ||
+		repository.failures != 1 ||
+		repository.lastFailCategory != ProviderDatasetUnavailableCategory {
+		t.Fatalf(
+			"status=%q attempt=%d failures=%d category=%q",
+			repository.status, repository.attempt, repository.failures,
+			repository.lastFailCategory,
+		)
+	}
+	if repository.releaseCalls != 0 {
+		t.Fatalf("unavailable dataset was released for retry %d times", repository.releaseCalls)
+	}
+}
+
 func TestProviderBudgetContentionDelayIsDeterministicAndBounded(t *testing.T) {
 	t.Parallel()
 	first := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111")

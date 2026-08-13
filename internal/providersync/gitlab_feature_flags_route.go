@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -38,34 +39,7 @@ type gitLabFeatureFlagsCountingDoer struct {
 
 func (doer gitLabFeatureFlagsCountingDoer) Do(request *http.Request) (*http.Response, error) {
 	*doer.attempts++
-	response, err := doer.delegate.Do(request)
-	if response != nil && gitLabFeatureFlagsQualified403(response) {
-		// providerfoundation's shared classifier intentionally gives GitLab's
-		// 403 the ordinary authentication meaning. GitLabFeatureFlagsClient has
-		// one provider-specific exception: a 403 carrying Retry-After or
-		// RateLimit-Remaining: 0 is a retryable throttle. Convert only that
-		// qualified shape to the shared 429 class at this provider boundary so
-		// the HTTP client's retry accounting remains physical and bounded.
-		response.StatusCode = http.StatusTooManyRequests
-	}
-	return response, err
-}
-
-func gitLabFeatureFlagsQualified403(response *http.Response) bool {
-	if response == nil || response.StatusCode != http.StatusForbidden {
-		return false
-	}
-	return strings.TrimSpace(gitLabFeatureFlagsHeaderValue(response.Header, "Retry-After")) != "" ||
-		strings.TrimSpace(gitLabFeatureFlagsHeaderValue(response.Header, "RateLimit-Remaining")) == "0"
-}
-
-func gitLabFeatureFlagsHeaderValue(headers http.Header, wanted string) string {
-	for key, values := range headers {
-		if strings.EqualFold(key, wanted) && len(values) > 0 {
-			return values[0]
-		}
-	}
-	return ""
+	return doer.delegate.Do(request)
 }
 
 func (handler GitLabFeatureFlagsRouteHandler) limits() (int, int, error) {
@@ -115,7 +89,7 @@ func (handler GitLabFeatureFlagsRouteHandler) Collect(
 		},
 	)
 	if err != nil {
-		return CompleteRouteBatch{}, err
+		return CompleteRouteBatch{}, gitLabFeatureFlagsCollectionError(err)
 	}
 	if flagsPage.CapReached {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
@@ -176,6 +150,22 @@ func (handler GitLabFeatureFlagsRouteHandler) Collect(
 			Requests: requests, Pages: flagsPage.Pages, Records: len(flags) + len(events) + len(edges),
 		},
 	}, nil
+}
+
+func gitLabFeatureFlagsCollectionError(err error) error {
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) &&
+		providerErr.Class == providerfoundation.ErrorAuthentication &&
+		providerErr.StatusCode == http.StatusForbidden {
+		// GitLab requires Developer-or-higher project access for this endpoint.
+		// A plain 403 can also mean feature flags are unavailable for the project;
+		// neither condition can change on a later attempt with the same claim.
+		// Join the durable dataset verdict with the bounded provider error so the
+		// worker terminalizes immediately while parity/error telemetry can still
+		// observe the original authentication classification.
+		return errors.Join(ErrProviderDatasetUnavailable, err)
+	}
+	return err
 }
 
 func fetchGitLabFeatureFlagProjectName(

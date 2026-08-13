@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -19,6 +20,8 @@ const defaultLease = 10 * time.Minute
 const dailyRepositoryPartitionSize = 100
 
 var dailyRunNamespace = uuid.MustParse("db1556db-28a7-58f6-982d-fc6f54dc7240")
+
+const scheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
@@ -52,15 +55,7 @@ func (store *PostgresStore) StartRunTx(
 	if err != nil {
 		return Run{}, err
 	}
-	run := Run{
-		ID: uuid.NewSHA1(
-			dailyRunNamespace,
-			[]byte(request.OrganizationID+"|"+request.TargetDay.Format("2006-01-02")+"|"+request.Generation),
-		).String(),
-		OrganizationID: request.OrganizationID,
-		Generation:     request.Generation,
-		Status:         "pending",
-	}
+	run := newRun(request.OrganizationID, request.TargetDay, request.Generation)
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
@@ -111,6 +106,44 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	return run, nil
 }
 
+// StartScheduledFanoutRunTx creates the durable state for one organization in
+// the nightly fixed schedule. Repository discovery intentionally happens in
+// the heavy worker after this coordinator transaction commits.
+func (store *PostgresStore) StartScheduledFanoutRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	request ScheduledFanoutRequest,
+	publisher RunPublisher,
+) (Run, error) {
+	if !store.valid() || tx == nil || publisher == nil {
+		return Run{}, ErrUnavailable
+	}
+	normalized, err := normalizeScheduledFanoutRequest(request)
+	if err != nil {
+		return Run{}, err
+	}
+	run := newRun(normalized.OrganizationID, normalized.TargetDay, normalized.Generation)
+	now := store.now().UTC()
+	command, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+ON CONFLICT DO NOTHING`,
+		run.ID, run.OrganizationID, normalized.TargetDay.Format("2006-01-02"), run.Generation, now)
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	if command.RowsAffected() == 0 {
+		if err := verifyScheduledFanoutRun(ctx, tx, run, normalized.TargetDay); err != nil {
+			return Run{}, err
+		}
+	}
+	if err := publisher.PublishDispatchTx(ctx, tx, run, ""); err != nil {
+		return Run{}, err
+	}
+	return run, nil
+}
+
 func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]string, error) {
 	if !validUUID(request.OrganizationID) || request.Generation == "" ||
 		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 ||
@@ -122,11 +155,54 @@ func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]str
 	if request.TargetDay.IsZero() {
 		return StartRunRequest{}, nil, ErrInvalidState
 	}
-	seen := make(map[string]struct{}, len(request.RepositoryIDs))
-	repositories := make([]string, 0, len(request.RepositoryIDs))
-	for _, repositoryID := range request.RepositoryIDs {
+	partitions, err := normalizeRepositoryPartitions(request.RepositoryIDs)
+	if err != nil {
+		return StartRunRequest{}, nil, err
+	}
+	request.RepositoryIDs = nil
+	for _, partition := range partitions {
+		request.RepositoryIDs = append(request.RepositoryIDs, partition...)
+	}
+	if len(partitions) == 0 {
+		partitions = append(partitions, []string{})
+	}
+	return request, partitions, nil
+}
+
+func normalizeScheduledFanoutRequest(request ScheduledFanoutRequest) (ScheduledFanoutRequest, error) {
+	if !validUUID(request.OrganizationID) || !isScheduledFanoutGeneration(request.Generation) {
+		return ScheduledFanoutRequest{}, ErrInvalidState
+	}
+	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
+	request.TargetDay = request.TargetDay.UTC()
+	if request.TargetDay.IsZero() {
+		return ScheduledFanoutRequest{}, ErrInvalidState
+	}
+	return request, nil
+}
+
+func newRun(organizationID string, targetDay time.Time, generation string) Run {
+	return Run{
+		ID: uuid.NewSHA1(
+			dailyRunNamespace,
+			[]byte(organizationID+"|"+targetDay.Format("2006-01-02")+"|"+generation),
+		).String(),
+		OrganizationID: organizationID,
+		Generation:     generation,
+		Status:         "pending",
+	}
+}
+
+func isScheduledFanoutGeneration(generation string) bool {
+	return strings.HasPrefix(generation, scheduledFanoutGenerationPrefix) && len(generation) <= 64
+}
+
+func normalizeRepositoryPartitions(repositoryIDs []string) ([][]string, error) {
+	seen := make(map[string]struct{}, len(repositoryIDs))
+	repositories := make([]string, 0, len(repositoryIDs))
+	for _, repositoryID := range repositoryIDs {
 		if !validUUID(repositoryID) {
-			return StartRunRequest{}, nil, ErrInvalidState
+			return nil, ErrInvalidState
 		}
 		canonical := uuid.MustParse(repositoryID).String()
 		if _, duplicate := seen[canonical]; duplicate {
@@ -136,17 +212,32 @@ func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]str
 		repositories = append(repositories, canonical)
 	}
 	sort.Strings(repositories)
-	request.RepositoryIDs = repositories
-	partitions := make([][]string, 0, max(1, (len(repositories)+dailyRepositoryPartitionSize-1)/dailyRepositoryPartitionSize))
+	return partitionRepositoryIDs(repositories), nil
+}
+
+func partitionRepositoryIDs(repositories []string) [][]string {
+	partitions := make([][]string, 0, (len(repositories)+dailyRepositoryPartitionSize-1)/dailyRepositoryPartitionSize)
 	for len(repositories) > 0 {
 		size := min(dailyRepositoryPartitionSize, len(repositories))
 		partitions = append(partitions, append([]string(nil), repositories[:size]...))
 		repositories = repositories[size:]
 	}
-	if len(partitions) == 0 {
-		partitions = append(partitions, []string{})
+	return partitions
+}
+
+func verifyScheduledFanoutRun(ctx context.Context, tx pgx.Tx, run Run, targetDay time.Time) error {
+	var organizationID, generation, day string
+	if err := tx.QueryRow(ctx, `
+SELECT org_id::text, generation, target_day::text
+FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).
+		Scan(&organizationID, &generation, &day); err != nil {
+		return ErrUnavailable
 	}
-	return request, partitions, nil
+	if organizationID != run.OrganizationID || generation != run.Generation ||
+		day != targetDay.Format("2006-01-02") || !isScheduledFanoutGeneration(generation) {
+		return ErrInvalidState
+	}
+	return nil
 }
 
 func verifyStartedRun(
@@ -236,8 +327,11 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 UPDATE public.daily_metrics_runs
 SET status = 'running', updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')
-RETURNING id::text, org_id::text, generation, status`, store.now().UTC(), runID).
-		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status)
+RETURNING id::text, org_id::text, generation, status,
+  generation LIKE '`+scheduledFanoutGenerationPrefix+`%' AND NOT EXISTS (
+    SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = daily_metrics_runs.id
+  )`, store.now().UTC(), runID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &run.RepositoryDiscoveryRequired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -245,6 +339,101 @@ RETURNING id::text, org_id::text, generation, status`, store.now().UTC(), runID)
 		return nil, ErrUnavailable
 	}
 	return &run, nil
+}
+
+// MaterializeScheduledFanout persists the repository snapshot selected by the
+// heavy worker before it publishes any partition work. On retry it preserves an
+// already materialized partition set rather than replacing it with a newer
+// ClickHouse snapshot.
+//
+// An empty snapshot terminalizes the run as no_repositories with its completion
+// fence and does not create a synthetic empty partition. Such a partition would
+// report a successful compute while doing no work.
+func (store *PostgresStore) MaterializeScheduledFanout(
+	ctx context.Context,
+	run Run,
+	repositoryIDs []string,
+) (bool, error) {
+	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
+		!isScheduledFanoutGeneration(run.Generation) {
+		return false, ErrInvalidState
+	}
+	partitions, err := normalizeRepositoryPartitions(repositoryIDs)
+	if err != nil {
+		return false, err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	var organizationID, generation, status string
+	if err := tx.QueryRow(ctx, `
+SELECT org_id::text, generation, status
+FROM public.daily_metrics_runs
+WHERE id = $1::uuid
+FOR UPDATE`, run.ID).Scan(&organizationID, &generation, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrInvalidState
+		}
+		return false, ErrUnavailable
+	}
+	if organizationID != run.OrganizationID || generation != run.Generation || status != "running" {
+		return false, ErrInvalidState
+	}
+	var existing int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&existing); err != nil {
+		return false, ErrUnavailable
+	}
+	if existing != 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return false, ErrUnavailable
+		}
+		return false, nil
+	}
+	now := store.now().UTC()
+	if len(partitions) == 0 {
+		command, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'no_repositories', finalization_status = 'succeeded', finalized_at = $1, updated_at = $1
+WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
+		if err != nil {
+			return false, ErrUnavailable
+		}
+		if command.RowsAffected() != 1 {
+			return false, ErrInvalidState
+		}
+		completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
+		if err != nil {
+			return false, ErrInvalidState
+		}
+		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+			return false, ErrUnavailable
+		}
+	} else {
+		for ordinal, ids := range partitions {
+			raw, err := json.Marshal(ids)
+			if err != nil {
+				return false, ErrInvalidState
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_partitions
+    (id, run_id, ordinal, repo_ids, status, attempt_count, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
+				dailyPartitionID(run.ID, ordinal), run.ID, ordinal, raw, now); err != nil {
+				return false, ErrUnavailable
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, ErrUnavailable
+	}
+	return true, nil
 }
 
 func (store *PostgresStore) DispatchablePartitions(ctx context.Context, runID string) ([]Partition, error) {

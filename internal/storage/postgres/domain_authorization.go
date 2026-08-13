@@ -673,7 +673,8 @@ func domainPosture() RolePosture {
 //     executes the real statements as both roles.
 //
 //   - remaining_metric_runs, remaining_metric_partitions,
-//     work_graph_execution_requests (coordinator: SELECT, INSERT) and the
+//     work_graph_execution_requests, daily_metrics_runs (coordinator: SELECT,
+//     INSERT) and the
 //     INSERT half of worker_job_outbox, plus the ColumnScoped
 //     worker_job_completion_fences pair: CHAOS-3114's second half. The
 //     fixed-schedule engine (internal/scheduler/fixed) now runs on the
@@ -707,6 +708,11 @@ func domainPosture() RolePosture {
 //     grant stays column-scoped for exactly the reason it is on the domain
 //     side: completed_at is server-owned and a table-wide grant would let the
 //     coordinator forge a fence retention never reaps.
+//     daily_metrics_runs         SELECT+INSERT         daily/postgres.go
+//     StartScheduledFanoutRunTx inserts one durable per-organization run and
+//     verifyScheduledFanoutRun re-reads it on replay. It deliberately does not
+//     touch daily_metrics_partitions: ClickHouse discovery and partition
+//     materialization execute later in the heavy domain worker.
 //
 //     Widening the COORDINATOR rather than the domain role is the deliberate
 //     choice. The property the partition protects is that provider-sync
@@ -771,6 +777,7 @@ func coordinatorPosture() RolePosture {
 			{"remaining_metric_runs", true, false, false},
 			{"remaining_metric_partitions", true, false, false},
 			{"work_graph_execution_requests", true, false, false},
+			{"daily_metrics_runs", true, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"integration_credentials", "id", "SELECT"},

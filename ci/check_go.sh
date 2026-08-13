@@ -27,7 +27,7 @@ usage() {
   race   Run go test -race ./... in every Go module.
   live-python-oracles
          Run the provider-sync, providerfoundation encryption,
-         scheduled-planner, and sync-coverage live-Python oracle packages
+         scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
          with `go test -count=1` unconditionally
          (cache lookup disabled by -count=1 itself, not by any assumption
          about cache state). Separate from `test` because that package
@@ -309,6 +309,28 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/scheduler-sync"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: scheduler/sync live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily (live Python repository discovery source is outside the Go embed/cache boundary)\n'
+  if ! (
+    cd "${ROOT}"
+    GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestPythonDiscoverReposOracle$' \
+        ./internal/jobs/metrics/daily
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/daily-metrics-discover"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: daily metrics live Python repository-discovery measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import strawberry
+from croniter import CroniterError
+from croniter import croniter as Croniter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -317,6 +319,22 @@ async def _load_report_run_rows(
     return [_report_run_type_from_row(row) for row in result.all()]
 
 
+def _validate_report_schedule_cron(cron: str) -> None:
+    fields = cron.split()
+    if len(fields) != 5:
+        raise ValueError(
+            f"Invalid report schedule cron expression {cron!r}: expected exactly "
+            "five fields (minute hour day-of-month month day-of-week)"
+        )
+
+    try:
+        Croniter(cron, datetime.now(timezone.utc)).get_next(datetime)
+    except CroniterError as exc:
+        raise ValueError(
+            f"Invalid report schedule cron expression {cron!r}: {exc}"
+        ) from exc
+
+
 async def _ensure_or_update_schedule(
     session: AsyncSession,
     report: SavedReport,
@@ -329,6 +347,7 @@ async def _ensure_or_update_schedule(
     # Reject invalid timezones up front so a schedule never silently runs in UTC
     # at dispatch time (CHAOS-2689). Raises ValueError -> surfaced as a GraphQL error.
     validate_timezone_name(tz)
+    _validate_report_schedule_cron(cron)
 
     # next_run_at is the durable fairness key used by the bounded native sweep.
     # A new schedule has no run history, so its creation time is the same base the
@@ -460,7 +479,7 @@ async def resolve_create_saved_report(
         await session.flush()
         report_uuid = _uuid_value(report.id)
 
-        if input.schedule_cron:
+        if input.schedule_cron is not None:
             await _ensure_or_update_schedule(
                 session, report, input.schedule_cron, input.schedule_timezone
             )

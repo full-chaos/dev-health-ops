@@ -71,6 +71,20 @@
           "./internal/scheduler/fixed/"
         ]
       ]
+    },
+    {
+      "id": "M4",
+      "file": "src/dev_health_ops/alembic/versions/0100_add_fixed_schedule_degraded_reason.py",
+      "find": "sa.Column(_COLUMN, sa.String(length=64), nullable=True)",
+      "replace": "sa.Column(_COLUMN, sa.String(length=65), nullable=True)",
+      "rationale": "Widens the durable verdict beyond the bounded 64-character producer vocabulary. The real PostgreSQL migration proof must inspect the deployed column rather than trusting the Alembic source declaration.",
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/test_fixed_schedule_degraded_reason_postgres_migration.py::test_0100_adds_nullable_bounded_degraded_reason_without_rewriting_history"
+        ]
+      ]
     }
   ]
 }

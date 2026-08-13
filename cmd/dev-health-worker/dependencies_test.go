@@ -787,7 +787,7 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 	}
 }
 
-func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T) {
+func TestProductionDailyBuilderFailsClosedWithoutClickHouse(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := executableHeavyRegistry(t, false)
 	ctx := context.Background()
@@ -811,7 +811,7 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 		return runtimeRegistry, nil
 	}
-	components, err := configureWorkerDependenciesWithSources(
+	_, err = configureWorkerDependenciesWithSources(
 		ctx,
 		config.Config{
 			Profile:                  "heavy",
@@ -826,15 +826,8 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 		sources,
 		slog.Default(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
-		components[2].Name() != "river-heavy-metrics-worker" {
-		t.Fatalf("production components = %#v", components)
-	}
-	if err := components[0].Shutdown(ctx); err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("configure without ClickHouse = %v, want dependency refusal", err)
 	}
 }
 

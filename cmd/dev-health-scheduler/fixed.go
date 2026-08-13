@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -29,30 +30,11 @@ const defaultContractRoot = "contracts/jobs/v1"
 // vague predecessors let two of these gaps stay invisible while their
 // tickets were closed.
 //
-// The two producers still registered as NewNotImplementedProducer below are
-// declared but not built. Registering a stub that quietly produced nothing would
-// make an unmigrated schedule indistinguishable from a healthy one, so each one
-// instead fails the window, which closes `fixed_scheduler_loop` readiness and
-// keeps the schedule out of any migration evidence until its blocker is cleared.
-//
-// The remaining daily-metrics fan-out gap is architectural rather than
-// unstarted work. Its reason must stay specific: the previous wording ("needs
-// Go per-organization repository discovery") read as a to-do and let the gap
-// stay invisible while CUT-12 was marked done:
-//
-// The daily fan-out schedule targets metrics.daily_dispatch, which requires a
-// daily_metrics_runs row whose partitions carry real repository IDs. The
-// partition compute iterates scope["repo_ids"] and reports success having done
-// nothing for an empty list (see _run_daily_direct in
-// src/dev_health_ops/api/internal/worker_metrics.py), so an empty-repo partition
-// is a false pass, not a whole-organization run. Repository identity lives only
-// in the ClickHouse `repos` table — there is no repositories table anywhere in
-// PostgreSQL — while this process has no ClickHouse dependency and every
-// producer runs inside Engine.runOccurrence's single coordinator transaction,
-// where a remote read is forbidden. The fix belongs on the worker side, which
-// already holds a ClickHouse connection: discovery should materialize partitions
-// from internal/jobs/metrics/daily after the run is claimed, leaving the
-// scheduler to create only the run.
+// The daily-metrics fan-out now creates one durable per-organization run and
+// dispatch handoff in the coordinator transaction. The heavy worker claims that
+// run, reads ClickHouse repository identities, and atomically materializes only
+// non-empty partitions. An empty snapshot terminalizes as no_repositories,
+// without a synthetic zero-work partition.
 //
 // `dispatch-scheduled-metrics` is no longer in this set. CHAOS-3128 retired it
 // after its source audit found no production ScheduledJob writer for
@@ -72,6 +54,22 @@ func buildFixedScheduleProducers(
 		return nil, err
 	}
 	remainingPublisher, err := remaining.NewPostgresPublisher(coordinatorPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	dailyStore, err := daily.NewPostgresStore(coordinatorPool)
+	if err != nil {
+		return nil, err
+	}
+	dailyPublisher, err := daily.NewPostgresPublisher(coordinatorPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	dailyFanout, err := schedulerfixed.NewDailyMetricsFanoutProducer(
+		dailyStore,
+		dailyPublisher,
+		schedulerfixed.NewPostgresOrganizationLister(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +114,7 @@ func buildFixedScheduleProducers(
 		retention,
 		remainingFanout,
 		scheduledReports,
-		schedulerfixed.NewNotImplementedProducer(
-			schedulerfixed.ProducerDailyMetricsFanout,
-			"blocked: repository identity is ClickHouse-only and this process has no "+
-				"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-		),
+		dailyFanout,
 	)
 }
 

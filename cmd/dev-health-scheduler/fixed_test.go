@@ -33,10 +33,7 @@ const testContractRoot = "../../" + defaultContractRoot
 // build. It is deliberately data rather than a comment so the remaining gap is
 // visible to anyone reading the test output, not only to someone reading
 // buildFixedScheduleProducers.
-var checkedInUnbuiltSchedules = map[string]string{
-	"daily_metrics_fanout": "blocked: repository identity is ClickHouse-only and this process has no " +
-		"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-}
+var checkedInUnbuiltSchedules = map[string]string{}
 
 // unconnectedPool is a constructed but never-dialled pool. The stores
 // buildFixedScheduleProducers wires reject a nil pool at construction, and

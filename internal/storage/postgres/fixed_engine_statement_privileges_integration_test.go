@@ -160,6 +160,25 @@ func fixedEngineStatements() []fixedEngineStatement {
 				FROM public.remaining_metric_runs WHERE id = gen_random_uuid()`,
 		},
 		{
+			name:                   "daily-metrics fan-out starts a durable repository-discovery run",
+			site:                   "internal/jobs/metrics/daily/postgres.go StartScheduledFanoutRunTx, reached from internal/scheduler/fixed/producers.go DailyMetricsFanoutProducer.Produce",
+			privilege:              "daily_metrics_runs INSERT",
+			deniedBeforeThisChange: true,
+			sql: `INSERT INTO public.daily_metrics_runs
+					(id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+				VALUES (gen_random_uuid(), gen_random_uuid(), '2026-08-12',
+					'fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z', 'pending', 'pending', now(), now())
+				ON CONFLICT DO NOTHING`,
+		},
+		{
+			name:                   "daily-metrics fan-out replay verifies the existing durable run",
+			site:                   "internal/jobs/metrics/daily/postgres.go verifyScheduledFanoutRun, reached from StartScheduledFanoutRunTx conflict arm",
+			privilege:              "daily_metrics_runs SELECT",
+			deniedBeforeThisChange: true,
+			sql: `SELECT org_id::text, generation, target_day::text
+				FROM public.daily_metrics_runs WHERE id = gen_random_uuid()`,
+		},
+		{
 			name:                   "fan-out producer writes each run partition",
 			site:                   "internal/jobs/metrics/remaining/postgres.go StartRunTx",
 			privilege:              "remaining_metric_partitions INSERT",
@@ -239,7 +258,8 @@ func fixedEngineStatements() []fixedEngineStatement {
 
 // preCHAOS3114CoordinatorRevocations restores the coordinator role to exactly
 // the grant set it held before this change: remaining_metric_runs,
-// remaining_metric_partitions and work_graph_execution_requests were absent
+// remaining_metric_partitions, work_graph_execution_requests, and
+// daily_metrics_runs were absent
 // from coordinatorPosture entirely, worker_job_outbox was SELECT+UPDATE (the
 // UPDATE existing only for the jobroute LOCK), and worker_job_completion_fences
 // had no coordinator grant of any kind.
@@ -248,6 +268,7 @@ func preCHAOS3114CoordinatorRevocations() []string {
 		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_runs FROM " + grantCoordinatorRole,
 		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_partitions FROM " + grantCoordinatorRole,
 		"REVOKE ALL PRIVILEGES ON TABLE public.work_graph_execution_requests FROM " + grantCoordinatorRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.daily_metrics_runs FROM " + grantCoordinatorRole,
 		"REVOKE INSERT ON TABLE public.worker_job_outbox FROM " + grantCoordinatorRole,
 		"REVOKE SELECT (completion_key), INSERT (completion_key) " +
 			"ON TABLE public.worker_job_completion_fences FROM " + grantCoordinatorRole,
@@ -332,6 +353,42 @@ func TestFixedEngineStatementsAreDeniedByThePreCHAOS3114CoordinatorGrants(t *tes
 	// run the engine — it must refuse to report ready at all.
 	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
 		t.Error("coordinator readiness passed with the pre-CHAOS-3114 grant set, so it is not checking the posture it declares")
+	}
+}
+
+// TestDailyFanoutReplayReadNeedsCoordinatorSelect proves the SELECT half of
+// daily_metrics_runs separately from INSERT. TablePrivilege intentionally
+// models table grants as a single required read/write posture, so mutating its
+// INSERT bit removes both capabilities. This real restricted-role test keeps
+// INSERT, revokes only SELECT, and requires the conflict replay read to reach
+// PostgreSQL's permission check with 42501.
+func TestDailyFanoutReplayReadNeedsCoordinatorSelect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.daily_metrics_runs FROM "+grantCoordinatorRole); err != nil {
+		t.Fatal(err)
+	}
+	var insert, replay *fixedEngineStatement
+	for _, statement := range fixedEngineStatements() {
+		statement := statement
+		switch statement.name {
+		case "daily-metrics fan-out starts a durable repository-discovery run":
+			insert = &statement
+		case "daily-metrics fan-out replay verifies the existing durable run":
+			replay = &statement
+		}
+	}
+	if insert == nil || replay == nil {
+		t.Fatal("daily fan-out fixed-engine privilege statements are missing")
+	}
+	if err := execInRolledBackTransaction(t, ctx, coordinator, insert.sql); err != nil {
+		t.Fatalf("daily fan-out INSERT was denied after only SELECT was revoked: %v", err)
+	}
+	err := execInRolledBackTransaction(t, ctx, coordinator, replay.sql)
+	if !isInsufficientPrivilege(err) {
+		t.Fatalf("daily fan-out replay SELECT error=%v, want 42501", err)
 	}
 }
 

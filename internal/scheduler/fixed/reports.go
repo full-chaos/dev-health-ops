@@ -903,11 +903,10 @@ func refuseAmbiguousReportSchedules(ctx context.Context, tx pgx.Tx) error {
 // rejectAmbiguousReportSchedules refuses a schedule that owns more than one
 // active report within the locked candidate set.
 //
-// saved_reports.schedule_id carries no unique constraint, so two active reports
-// can point at one ScheduledJob. Python resolves the report with one_or_none()
-// and raises MultipleResultsFound, which its outer except swallows into an
-// empty dispatch. Joining would instead fan out silently and advance one
-// schedule's next_run_at twice. Neither is a defensible reading of the data.
+// Alembic 0096 makes saved_reports.schedule_id unique. Keep this assertion for
+// a partially migrated or manually drifted schema: two active reports pointing
+// at one ScheduledJob would otherwise fan out silently and advance one
+// schedule's next_run_at twice. Python's one_or_none() also refuses that state.
 //
 // This is the SECONDARY guard and cannot be the only one: it sees the sweep's
 // post-SKIP-LOCKED result, where a locked sibling has already been removed.
@@ -981,8 +980,9 @@ JOIN public.saved_reports AS report
    AND report.is_active
    -- Tenant ownership, not decoration. reports.execution_trigger._require_schedule
    -- rejects report.org_id != job.org_id explicitly, and the schema enforces only
-   -- the schedule_id foreign key, so legacy or inconsistent data can point one
-   -- tenant's job at another tenant's report. Without this the producer would
+   -- neither the schedule_id foreign key nor its unique constraint verifies
+   -- organization ownership, so inconsistent data can point one tenant's job
+   -- at another tenant's report. Without this the producer would
    -- file the occurrence under the JOB's organization while the global report
    -- worker executed the REPORT's tenant data.
    AND report.org_id = job.org_id

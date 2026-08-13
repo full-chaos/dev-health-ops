@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -116,7 +117,7 @@ def _revisions(engine: Engine) -> set[str]:
         }
 
 
-def _column_map(engine: Engine) -> dict[str, dict[str, object]]:
+def _column_map(engine: Engine) -> dict[str, Any]:
     return {
         str(column["name"]): column
         for column in sa.inspect(engine).get_columns("report_runs")

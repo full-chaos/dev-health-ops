@@ -8,18 +8,26 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	riverUnhandledRescueError      = "Stuck job rescued by JobRescuer"
-	providerTerminalRecoveryCode   = "river_unhandled_rescue"
-	providerTerminalRecoveryDetail = "terminal River delivery recovered"
+	riverUnhandledRescueError                = "Stuck job rescued by JobRescuer"
+	providerTerminalRecoveryCode             = "river_unhandled_rescue"
+	providerTerminalRecoveryDetail           = "terminal River delivery recovered"
+	providerPostRepairContractRecoveryCode   = "post_repair_contract_rejection_recovered"
+	providerPostRepairContractRecoveryDetail = "post-repair contract rejection recovered"
+	providerContractRejectedCode             = "contract_rejected"
+	providerContractRejectedDetail           = "stored job contract was rejected"
 )
 
 var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 type TerminalDeliveryRepairResult struct {
-	Recovered int
+	Recovered                             int
+	PostRepairContractRejectionsRecovered int
 }
 
 // TerminalDeliveryRepair rearms a provider-unit outbox row only when its
@@ -27,7 +35,10 @@ type TerminalDeliveryRepairResult struct {
 // while the authoritative run and unit remain active and due. The outbox and
 // River rows are locked together so replicas converge on one replacement.
 type TerminalDeliveryRepair struct {
-	begin func(context.Context) (pgx.Tx, error)
+	begin  func(context.Context) (pgx.Tx, error)
+	client interface {
+		JobDeleteTx(context.Context, pgx.Tx, int64) (*rivertype.JobRow, error)
+	}
 	query string
 }
 
@@ -39,10 +50,22 @@ func NewTerminalDeliveryRepair(
 		return nil, ErrInvalidConfiguration
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
+	stateInMask := pgx.Identifier{riverSchema, "river_job_state_in_bitmask"}.Sanitize()
+	client, err := river.NewClient(riverpgxv5.New(queueControlPool), &river.Config{Schema: riverSchema})
+	if err != nil {
+		return nil, ErrInvalidConfiguration
+	}
 	return &TerminalDeliveryRepair{
-		begin: queueControlPool.Begin,
-		query: fmt.Sprintf(repairProviderUnitTerminalDeliverySQL, jobTable),
+		begin:  queueControlPool.Begin,
+		client: riverDeleteAdapter{client: client},
+		query:  fmt.Sprintf(repairProviderUnitTerminalDeliverySQL, jobTable, stateInMask),
 	}, nil
+}
+
+type riverDeleteAdapter struct{ client *river.Client[pgx.Tx] }
+
+func (adapter riverDeleteAdapter) JobDeleteTx(ctx context.Context, tx pgx.Tx, id int64) (*rivertype.JobRow, error) {
+	return adapter.client.JobDeleteTx(ctx, tx, id)
 }
 
 func (repair *TerminalDeliveryRepair) Step(
@@ -50,7 +73,7 @@ func (repair *TerminalDeliveryRepair) Step(
 	now time.Time,
 	limit int,
 ) (TerminalDeliveryRepairResult, error) {
-	if repair == nil || repair.begin == nil || ctx == nil || now.IsZero() ||
+	if repair == nil || repair.begin == nil || repair.client == nil || ctx == nil || now.IsZero() ||
 		limit < minReconcilerLimit || limit > maxReconcilerLimit {
 		return TerminalDeliveryRepairResult{}, ErrInvalidConfiguration
 	}
@@ -70,21 +93,52 @@ func (repair *TerminalDeliveryRepair) Step(
 		riverUnhandledRescueError,
 		providerTerminalRecoveryCode,
 		providerTerminalRecoveryDetail,
+		providerPostRepairContractRecoveryCode,
+		providerPostRepairContractRecoveryDetail,
+		providerContractRejectedCode,
+		providerContractRejectedDetail,
 	)
 	if err != nil || rows == nil {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
 	defer rows.Close()
-	result := TerminalDeliveryRepairResult{}
+	type candidate struct {
+		outboxID, recoveryCode, recoveryDetail string
+		riverJobID                             int64
+	}
+	candidates := make([]candidate, 0, limit)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil || !uuidPattern.MatchString(id) {
+		var candidate candidate
+		if err := rows.Scan(&candidate.outboxID, &candidate.riverJobID, &candidate.recoveryCode, &candidate.recoveryDetail); err != nil ||
+			!uuidPattern.MatchString(candidate.outboxID) || candidate.riverJobID <= 0 {
+			return TerminalDeliveryRepairResult{}, ErrUnavailable
+		}
+		candidates = append(candidates, candidate)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(candidates) > limit {
+		return TerminalDeliveryRepairResult{}, ErrUnavailable
+	}
+	result := TerminalDeliveryRepairResult{}
+	for _, candidate := range candidates {
+		deleted, err := repair.client.JobDeleteTx(ctx, tx, candidate.riverJobID)
+		if err != nil || deleted == nil || deleted.ID != candidate.riverJobID || deleted.State != rivertype.JobStateDiscarded {
+			return TerminalDeliveryRepairResult{}, ErrUnavailable
+		}
+		command, err := tx.Exec(ctx, `
+			UPDATE public.worker_job_outbox
+			SET status = 'pending', next_attempt_at = $2,
+				last_error_code = $3, last_error_detail = $4, last_error_at = $2,
+				river_job_id = NULL, delivered_at = NULL,
+				claim_token = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = $2
+			WHERE id = $1`, candidate.outboxID, now.UTC(), candidate.recoveryCode, candidate.recoveryDetail)
+		if err != nil || command.RowsAffected() != 1 {
 			return TerminalDeliveryRepairResult{}, ErrUnavailable
 		}
 		result.Recovered++
-	}
-	if err := rows.Err(); err != nil || result.Recovered > limit {
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		if candidate.recoveryCode == providerPostRepairContractRecoveryCode {
+			result.PostRepairContractRejectionsRecovered++
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
@@ -96,11 +150,20 @@ func (repair *TerminalDeliveryRepair) Step(
 // mutation authority over the generic outbox and River schema. The identity
 // predicates bind the immutable outbox envelope, authoritative domain row,
 // current outbox delivery, and River metadata together before any row is
-// rearmed. A paused integration is intentionally absent: pausing prevents new
-// planning, but does not cancel already-planned work in an active run.
+// rearmed. The supported River delete runs in this same transaction after the
+// exact terminal row is locked; a new relay step then creates fresh strict
+// metadata. A paused integration is intentionally absent: pausing prevents
+// new planning, but does not cancel already-planned work in an active run.
 const repairProviderUnitTerminalDeliverySQL = `
-WITH candidates AS (
-	SELECT outbox.id
+	SELECT outbox.id::text, job.id,
+		CASE
+			WHEN outbox.status = 'delivered' THEN $4::text
+			ELSE $6::text
+		END AS recovery_code,
+		CASE
+			WHEN outbox.status = 'delivered' THEN $5::text
+			ELSE $7::text
+		END AS recovery_detail
 	FROM public.worker_job_outbox AS outbox
 	JOIN public.sync_run_units AS unit
 		ON unit.id = CASE
@@ -114,15 +177,25 @@ WITH candidates AS (
 	JOIN public.sync_runs AS run
 		ON run.id = unit.sync_run_id
 		AND run.org_id = unit.org_id
-	JOIN %s AS job
-		ON job.id = outbox.river_job_id
-		AND job.kind = outbox.job_kind
-		AND job.args = outbox.args::jsonb
-		AND job.metadata ->> 'worker_outbox_id' = outbox.id::text
-		AND job.metadata ->> 'payload_hash' = outbox.payload_hash
-		AND job.metadata ->> 'contract_version' = outbox.contract_version::text
-	WHERE outbox.status = 'delivered'
-		AND outbox.job_kind = 'sync.provider_unit'
+	JOIN LATERAL (
+		SELECT candidate_job.*
+		FROM %s AS candidate_job
+		WHERE candidate_job.kind = outbox.job_kind
+			AND candidate_job.args = outbox.args::jsonb
+			AND candidate_job.metadata ->> 'worker_outbox_id' = outbox.id::text
+			AND candidate_job.metadata ->> 'payload_hash' = outbox.payload_hash
+			AND candidate_job.metadata ->> 'contract_version' = outbox.contract_version::text
+			AND candidate_job.state::text = 'discarded'
+			AND candidate_job.finalized_at IS NOT NULL
+			AND candidate_job.attempt < candidate_job.max_attempts
+			AND candidate_job.unique_key IS NOT NULL
+			AND %s(candidate_job.unique_states, candidate_job.state)
+			AND cardinality(candidate_job.errors) > 0
+			AND (candidate_job.errors[cardinality(candidate_job.errors)]->>'error') = $3
+		ORDER BY candidate_job.id DESC
+		LIMIT 1
+	) AS job ON TRUE
+	WHERE outbox.job_kind = 'sync.provider_unit'
 		AND outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text
 		AND outbox.args #>> '{domain,type}' = 'sync_run_unit'
 		AND unit.status = 'dispatching'
@@ -130,28 +203,24 @@ WITH candidates AS (
 		AND unit.lease_owner IS NULL
 		AND unit.lease_expires_at IS NULL
 		AND run.status IN ('planned', 'dispatching', 'running')
-		AND job.state::text = 'discarded'
-		AND job.finalized_at IS NOT NULL
-		AND job.attempt < job.max_attempts
-		AND cardinality(job.errors) > 0
-		AND (job.errors[cardinality(job.errors)]->>'error') = $3
+		AND (
+			(
+				outbox.status = 'delivered'
+				AND outbox.river_job_id = job.id
+			)
+			OR (
+				outbox.status = 'dead'
+				AND outbox.river_job_id IS NULL
+				AND outbox.delivered_at IS NULL
+				AND outbox.contract_version = 1
+				AND outbox.queue = 'sync_provider'
+				AND outbox.priority = 2
+				AND outbox.max_attempts = 5
+				AND outbox.last_error_code = $8
+				AND outbox.last_error_detail = $9
+			)
+		)
 	ORDER BY outbox.delivered_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
 	LIMIT $2::int
-)
-UPDATE public.worker_job_outbox AS outbox
-SET status = 'pending',
-	next_attempt_at = $1,
-	last_error_code = $4,
-	last_error_detail = $5,
-	last_error_at = $1,
-	river_job_id = NULL,
-	delivered_at = NULL,
-	claim_token = NULL,
-	claimed_at = NULL,
-	claim_expires_at = NULL,
-	updated_at = $1
-FROM candidates
-WHERE outbox.id = candidates.id
-RETURNING outbox.id::text
 `

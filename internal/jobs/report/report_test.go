@@ -31,6 +31,35 @@ func TestExecuteStoresOneArtifactAndNotification(t *testing.T) {
 	}
 }
 
+func TestRunWithLeaseRenewalRenewsBeforeLongWorkCompletes(t *testing.T) {
+	renewed := make(chan struct{})
+	err := runWithLeaseRenewal(
+		context.Background(),
+		30*time.Millisecond,
+		func(context.Context) error {
+			select {
+			case <-renewed:
+			default:
+				close(renewed)
+			}
+			return nil
+		},
+		func(ctx context.Context) error {
+			select {
+			case <-renewed:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+				return errors.New("lease was never renewed")
+			}
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecuteDuplicateOrCancelledClaimDoesNothing(t *testing.T) {
 	store := &fakeRunStore{}
 	err := execute(context.Background(), reportEnvelope(), "00000000-0000-4000-8000-000000000002", Dependencies{
@@ -38,6 +67,17 @@ func TestExecuteDuplicateOrCancelledClaimDoesNothing(t *testing.T) {
 	})
 	if err != nil || store.completed != 0 {
 		t.Fatalf("duplicate execution err=%v completed=%d", err, store.completed)
+	}
+}
+
+func TestExecuteSnoozesUntilLiveRunLeaseExpires(t *testing.T) {
+	store := &fakeRunStore{claimError: &RunLeaseActiveError{RetryAfter: 42 * time.Second}}
+	err := execute(context.Background(), reportEnvelope(), "00000000-0000-4000-8000-000000000002", Dependencies{
+		Runs: store, Query: queryFunc(nil), Renderer: rendererFunc(nil), Artifacts: artifactFunc(nil), Notifications: notificationFunc(nil),
+	})
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed || delay != 42*time.Second {
+		t.Fatalf("live lease result = %v, delay=%s; want attempt-neutral 42s snooze", err, delay)
 	}
 }
 
@@ -213,16 +253,26 @@ func reportEnvelope() jobcontract.Envelope {
 type fakeRunStore struct {
 	claim, complete, notificationClaim                       bool
 	completed, notificationsCompleted, notificationsReleased int
+	claimError                                               error
 }
 
-func (store *fakeRunStore) Claim(context.Context, string, string) (bool, error) {
-	return store.claim, nil
+func (store *fakeRunStore) Claim(context.Context, string, string) (*RunClaim, error) {
+	if store.claimError != nil {
+		return nil, store.claimError
+	}
+	if !store.claim {
+		return nil, nil
+	}
+	return &RunClaim{
+		Token: "00000000-0000-4000-8000-000000000098", LeaseDuration: time.Minute,
+	}, nil
 }
-func (store *fakeRunStore) Complete(context.Context, string, Artifact) (bool, error) {
+func (store *fakeRunStore) Renew(context.Context, string, RunClaim) error { return nil }
+func (store *fakeRunStore) Complete(context.Context, string, RunClaim, Artifact) (bool, error) {
 	store.completed++
 	return store.complete, nil
 }
-func (store *fakeRunStore) Fail(context.Context, string, string) error { return nil }
+func (store *fakeRunStore) Fail(context.Context, string, RunClaim, string) error { return nil }
 func (store *fakeRunStore) ClaimNotification(context.Context, string) (*NotificationClaim, error) {
 	if !store.notificationClaim {
 		return nil, nil

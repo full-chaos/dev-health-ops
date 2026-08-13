@@ -25,6 +25,21 @@ def test_saved_report_model_declares_one_report_per_schedule() -> None:
     assert constraints["uq_saved_reports_schedule_id"] == ("schedule_id",)
 
 
+def test_report_run_model_declares_the_execution_reclaim_index() -> None:
+    table = cast(Table, ReportRun.__table__)
+    indexes = {
+        index.name: tuple(column.name for column in index.columns)
+        for index in table.indexes
+    }
+
+    assert indexes["ix_report_runs_execution_reclaim"] == (
+        "status",
+        "execution_lease_expires_at",
+    )
+    assert table.c.execution_reclaim_count.server_default is not None
+    assert str(table.c.execution_reclaim_count.server_default.arg) == "0"
+
+
 @pytest_asyncio.fixture
 async def session_maker(tmp_path: Path):
     db_path = tmp_path / "reports-test.db"

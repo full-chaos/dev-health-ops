@@ -759,6 +759,151 @@
           "tests/test_0097_backfill_report_schedule_next_run_postgres.py::test_0097_refuses_an_unevaluable_legacy_cron_without_partial_backfill"
         ]
       ]
+    },
+    {
+      "id": "CHAOS3158-L1",
+      "file": "internal/jobs/report/postgres.go",
+      "find": "\t\tif leaseExpiresAt != nil && leaseExpiresAt.After(now) {",
+      "replace": "\t\tif leaseExpiresAt != nil && !leaseExpiresAt.After(now) {",
+      "rationale": "An expired running report must be reclaimable, while a live lease must remain exclusive. Inverting only the time comparison restores the permanent running-state stall and also makes an active holder reclaimable.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestPostgresRunStoreReclaimsAnExpiredRunningRun$",
+          "./internal/jobs/report/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L2",
+      "file": "internal/jobs/report/postgres.go",
+      "find": "\t\tif reclaimCount >= maxExecutionReclaims {",
+      "replace": "\t\tif reclaimCount > maxExecutionReclaims {",
+      "rationale": "The persisted reclaim count must terminalize at the declared bound. Moving the boundary by one permits an extra automatic execution holder and makes repeated crash recovery unbounded relative to the contract.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestPostgresRunStoreReclaimsAnExpiredRunningRun$",
+          "./internal/jobs/report/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L3",
+      "file": "internal/jobs/report/postgres.go",
+      "find": "  AND execution_claim_token = $2::uuid\n  AND execution_lease_expires_at > $4",
+      "replace": "  AND execution_claim_token IS NOT NULL AND $2::uuid IS NOT NULL\n  AND execution_lease_expires_at > $4",
+      "rationale": "Lease renewal must be fenced by the current claim token. Testing only lease time would let a worker paused before reclaim extend the new holder's lease and retain authority after it was replaced.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestPostgresRunStoreReclaimsAnExpiredRunningRun$",
+          "./internal/jobs/report/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L4",
+      "file": "internal/jobs/report/postgres.go",
+      "find": "  ON run.scheduled_occurrence_id = occurrence.occurrence_id",
+      "replace": "  ON run.report_id = occurrence.report_id",
+      "rationale": "Only the immutable occurrence linked to the terminal run may invalidate the schedule marker. Joining by report alone makes a manual run clear next_run_at whenever that report has any scheduled occurrence.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestPostgresRunStorePreservesArtifactCancellationAndNotificationSemantics$",
+          "./internal/jobs/report/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L5",
+      "file": "internal/jobs/report/report.go",
+      "find": "\t\tticker := time.NewTicker(leaseDuration / 3)",
+      "replace": "\t\tticker := time.NewTicker(leaseDuration * 100)",
+      "rationale": "Long report work must renew well before the execution lease expires. Delaying the first renewal beyond the lease restores the crash-recovery race in which healthy long work loses its fence and a second holder starts.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-timeout",
+          "5m",
+          "-run",
+          "^TestRunWithLeaseRenewalRenewsBeforeLongWorkCompletes$",
+          "./internal/jobs/report/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L6-migration-reclaim-index",
+      "file": "src/dev_health_ops/alembic/versions/0098_add_report_run_execution_lease.py",
+      "find": "        [\"status\", \"execution_lease_expires_at\"],",
+      "replace": "        [\"status\", \"execution_reclaim_count\"],",
+      "rationale": "The reclaim scan must use the status and lease-expiry access path. Indexing the count instead makes the migration look indexed but leaves expired-running discovery without its declared SQL-sortable key.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0098_add_report_run_execution_lease.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_report_run_execution_lease_postgres_migration.py::test_0098_adds_exact_execution_lease_schema"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS3158-L7-migration-zero-reclaim-count",
+      "file": "src/dev_health_ops/alembic/versions/0098_add_report_run_execution_lease.py",
+      "find": "            server_default=\"0\",",
+      "replace": "            server_default=\"1\",",
+      "rationale": "A pre-0098 running row has not yet consumed a replacement holder. Giving it a reclaim count of one spends half of the bounded crash-recovery budget at migration time.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0098_add_report_run_execution_lease.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_report_run_execution_lease_postgres_migration.py::test_0098_makes_a_legacy_running_run_immediately_reclaimable"
+        ]
+      ]
     }
   ]
 }

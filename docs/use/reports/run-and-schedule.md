@@ -35,15 +35,22 @@ The run contract distinguishes manual and scheduler-triggered executions. The vi
 
 ## Understand run states
 
-| State | Meaning | Reader action |
-| --- | --- | --- |
-| Queued or pending | The run was accepted but has not started | Wait for processing; repeated clicks can create additional runs. |
-| In progress | A worker is producing the report | Keep the definition stable and monitor the run rather than editing around it. |
-| Completed | The run produced usable output | Open the output and confirm its definition and timestamps. |
-| Failed | The run ended without usable output | Inspect the visible error or run context and use report troubleshooting. |
-| No run | The definition has never executed | Run it before sharing or interpreting a result. |
+`ReportRun` is the authority for an execution. The API, scheduler, and workers use the same durable states in both execution runtimes.
+
+| Visible state | Durable state | Owner and schedule effect | Reader action |
+| --- | --- | --- | --- |
+| Queued or pending | `pending` | The API or scheduler creates the run and handoff. This state does not advance a schedule. | Wait for processing; repeated manual clicks can create additional runs. |
+| In progress | `running` | A worker holds a renewable execution lease. This state does not advance a schedule. | Monitor the same run ID. Do not create a replacement run for a stalled worker. |
+| Completed | `success` | The worker stores the artifact and advances the saved report. A scheduled run also invalidates its next-due marker so the scheduler can compute the next cron time. | Open the output and confirm its definition and timestamps. |
+| Failed | `failed` | The worker records the failure and advances the saved report. A scheduled run also invalidates its next-due marker. A bounded task retry or an explicit retry can reuse the same run ID. | Inspect the visible error or run context and use report troubleshooting. |
+| Canceled | `canceled` | The cancellation path advances a scheduler-triggered report to the canceled occurrence and invalidates its next-due marker. A manual cancellation does not change a schedule marker. | Confirm that the intended occurrence was canceled. The next cron occurrence can still run. |
+| No run | No row | The definition has never executed. | Run it before sharing or interpreting a result. |
 
 Run history can include older successful output beside a newer failed run. Identify the exact run you are reading.
+
+Workers renew a running execution lease while they query, render, and store the report. If a worker stops after it sets the run to `running`, another worker can reclaim the same run after the lease expires. The replacement gets a new fencing token, so the stopped worker cannot later store an artifact or failure over the new attempt. The system allows two expired-lease reclaims. A third expiry changes the run to `failed` with `report_run_execution_reclaim_exhausted` instead of retrying forever.
+
+Operators can monitor `worker_report_run_lease_expired_total`. The `result="retrying"` label counts durable reclaims. The `result="failed"` label counts runs that reached the reclaim limit. A growing failed count needs investigation of worker health or report duration.
 
 ## Schedule recurring runs
 

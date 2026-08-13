@@ -56,6 +56,9 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.ObserveSyncLeaseExpired(syncLease, SyncLeaseResultRetrying); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveReportRunLeaseExpired(ReportRunLeaseResultRetrying); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := collector.SetStreamLag(stream, 19); err != nil {
 		t.Fatal(err)
@@ -101,6 +104,8 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_domain_state_mismatch_total{domain_type="maintenance_run"} 1`,
 		`worker_sync_lease_expired_total{provider="github",dataset_family="work_items",result="failed"} 0`,
 		`worker_sync_lease_expired_total{provider="github",dataset_family="work_items",result="retrying"} 1`,
+		`worker_report_run_lease_expired_total{result="failed"} 0`,
+		`worker_report_run_lease_expired_total{result="retrying"} 1`,
 		`worker_stream_lag{stream="external_ingest",consumer_group="sink_workers"} 19`,
 		`worker_stream_pending{stream="external_ingest",consumer_group="sink_workers"} 3`,
 		`worker_stream_oldest_pending_seconds{stream="external_ingest",consumer_group="sink_workers"} 8`,
@@ -120,7 +125,8 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		"worker_runtime_info", "worker_jobs_available", "worker_job_oldest_age_seconds",
 		"worker_jobs_running", "worker_execution_saturation_ratio", "worker_job_wait_seconds", "worker_job_duration_seconds",
 		"worker_job_attempts_total", "worker_job_panics_total", "worker_job_cancellations_total",
-		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_stream_lag", "worker_stream_pending",
+		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
+		"worker_stream_lag", "worker_stream_pending",
 		"worker_stream_oldest_pending_seconds", "worker_budget_wait_seconds",
 		"worker_database_pool_saturation_ratio", "worker_database_pool_acquire_seconds",
 	}
@@ -176,6 +182,9 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 	}
 	if err := collector.ObserveSyncLeaseExpired(SyncLeaseLabels{Provider: "github", DatasetFamily: "work_items"}, SyncLeaseResult("cas_conflict")); err == nil {
 		t.Fatal("unregistered sync lease result accepted")
+	}
+	if err := collector.ObserveReportRunLeaseExpired(ReportRunLeaseResult("cas_conflict")); err == nil {
+		t.Fatal("unregistered report run lease result accepted")
 	}
 	if err := collector.SetDatabasePoolSaturation("tenant_pool", 0.5); err == nil {
 		t.Fatal("unregistered pool accepted")

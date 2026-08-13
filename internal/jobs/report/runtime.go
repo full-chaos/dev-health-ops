@@ -18,8 +18,9 @@ type RuntimeAdapters struct {
 func NewProductionDependencies(
 	domainPool *pgxpool.Pool,
 	clickhouseConnection driver.Conn,
+	leaseObservers ...jobruntime.ReportRunLeaseObserver,
 ) (Dependencies, error) {
-	runs, err := NewPostgresRunStore(domainPool)
+	runs, err := NewPostgresRunStore(domainPool, leaseObservers...)
 	if err != nil {
 		return Dependencies{}, err
 	}
@@ -44,7 +45,13 @@ func NewProductionRuntimeAdapters(
 	clickhouseConnection driver.Conn,
 	runtimeDependencies jobruntime.Dependencies,
 ) (*RuntimeAdapters, error) {
-	dependencies, err := NewProductionDependencies(domainPool, clickhouseConnection)
+	var leaseObservers []jobruntime.ReportRunLeaseObserver
+	if observer, ok := runtimeDependencies.Observer.(jobruntime.ReportRunLeaseObserver); ok {
+		leaseObservers = append(leaseObservers, observer)
+	}
+	dependencies, err := NewProductionDependencies(
+		domainPool, clickhouseConnection, leaseObservers...,
+	)
 	if err != nil {
 		return nil, err
 	}

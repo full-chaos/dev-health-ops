@@ -38,6 +38,16 @@ const (
 	SyncLeaseResultFailed   SyncLeaseResult = "failed"
 )
 
+// ReportRunLeaseResult is the bounded durable outcome of one expired report
+// execution lease. Retrying means a new holder was fenced in; failed means the
+// persisted reclaim ceiling terminalized the ReportRun.
+type ReportRunLeaseResult string
+
+const (
+	ReportRunLeaseResultRetrying ReportRunLeaseResult = "retrying"
+	ReportRunLeaseResultFailed   ReportRunLeaseResult = "failed"
+)
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -146,17 +156,18 @@ type MetricsCollector struct {
 
 	runtimeInfo *RuntimeInfo
 
-	jobsAvailable       map[JobLabels]int64
-	jobOldestAge        map[queueLabels]float64
-	jobsRunning         map[JobLabels]int64
-	executionSaturation map[string]float64
-	jobWait             map[JobLabels]*histogram
-	jobDuration         map[jobResultLabels]*histogram
-	jobAttempts         map[attemptLabels]uint64
-	jobPanics           map[string]uint64
-	cancellations       map[cancellationLabels]uint64
-	domainMismatch      map[string]uint64
-	syncLeaseExpired    map[syncLeaseResultLabels]uint64
+	jobsAvailable         map[JobLabels]int64
+	jobOldestAge          map[queueLabels]float64
+	jobsRunning           map[JobLabels]int64
+	executionSaturation   map[string]float64
+	jobWait               map[JobLabels]*histogram
+	jobDuration           map[jobResultLabels]*histogram
+	jobAttempts           map[attemptLabels]uint64
+	jobPanics             map[string]uint64
+	cancellations         map[cancellationLabels]uint64
+	domainMismatch        map[string]uint64
+	syncLeaseExpired      map[syncLeaseResultLabels]uint64
+	reportRunLeaseExpired map[ReportRunLeaseResult]uint64
 
 	streamLag           map[StreamLabels]int64
 	streamPending       map[StreamLabels]int64
@@ -168,6 +179,7 @@ type MetricsCollector struct {
 
 var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
+var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -180,31 +192,32 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 
 	collector := &MetricsCollector{
-		allowedJobs:         make(map[JobLabels]struct{}, len(dimensions.Jobs)),
-		allowedQueues:       make(map[queueLabels]struct{}),
-		allowedKinds:        make(map[string]struct{}),
-		allowedProfiles:     make(map[string]struct{}),
-		allowedDomains:      make(map[string]struct{}, len(dimensions.DomainTypes)),
-		allowedSyncLeases:   make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
-		allowedStreams:      make(map[StreamLabels]struct{}, len(dimensions.Streams)),
-		allowedBudgets:      make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
-		jobsAvailable:       make(map[JobLabels]int64, len(dimensions.Jobs)),
-		jobOldestAge:        make(map[queueLabels]float64),
-		jobsRunning:         make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation: make(map[string]float64),
-		jobWait:             make(map[JobLabels]*histogram, len(dimensions.Jobs)),
-		jobDuration:         make(map[jobResultLabels]*histogram),
-		jobAttempts:         make(map[attemptLabels]uint64),
-		jobPanics:           make(map[string]uint64),
-		cancellations:       make(map[cancellationLabels]uint64),
-		domainMismatch:      make(map[string]uint64, len(dimensions.DomainTypes)),
-		syncLeaseExpired:    make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
-		streamLag:           make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamPending:       make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamOldestPending: make(map[StreamLabels]float64, len(dimensions.Streams)),
-		budgetWait:          make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
-		poolSaturation:      map[string]float64{poolDomain: 0, poolQueueControl: 0},
-		poolAcquire:         make(map[poolAcquireLabels]*histogram, 8),
+		allowedJobs:           make(map[JobLabels]struct{}, len(dimensions.Jobs)),
+		allowedQueues:         make(map[queueLabels]struct{}),
+		allowedKinds:          make(map[string]struct{}),
+		allowedProfiles:       make(map[string]struct{}),
+		allowedDomains:        make(map[string]struct{}, len(dimensions.DomainTypes)),
+		allowedSyncLeases:     make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
+		allowedStreams:        make(map[StreamLabels]struct{}, len(dimensions.Streams)),
+		allowedBudgets:        make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
+		jobsAvailable:         make(map[JobLabels]int64, len(dimensions.Jobs)),
+		jobOldestAge:          make(map[queueLabels]float64),
+		jobsRunning:           make(map[JobLabels]int64, len(dimensions.Jobs)),
+		executionSaturation:   make(map[string]float64),
+		jobWait:               make(map[JobLabels]*histogram, len(dimensions.Jobs)),
+		jobDuration:           make(map[jobResultLabels]*histogram),
+		jobAttempts:           make(map[attemptLabels]uint64),
+		jobPanics:             make(map[string]uint64),
+		cancellations:         make(map[cancellationLabels]uint64),
+		domainMismatch:        make(map[string]uint64, len(dimensions.DomainTypes)),
+		syncLeaseExpired:      make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
+		reportRunLeaseExpired: make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		streamLag:             make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamPending:         make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamOldestPending:   make(map[StreamLabels]float64, len(dimensions.Streams)),
+		budgetWait:            make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
+		poolSaturation:        map[string]float64{poolDomain: 0, poolQueueControl: 0},
+		poolAcquire:           make(map[poolAcquireLabels]*histogram, 8),
 	}
 	for _, profile := range dimensions.Profiles {
 		if !metricIdentifier(profile, 32) {
@@ -267,6 +280,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		for _, result := range syncLeaseResults() {
 			collector.syncLeaseExpired[syncLeaseResultLabels{Lease: labels, Result: result}] = 0
 		}
+	}
+	for _, result := range reportRunLeaseResults() {
+		collector.reportRunLeaseExpired[result] = 0
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -472,6 +488,18 @@ func (collector *MetricsCollector) ObserveSyncLeaseExpired(labels SyncLeaseLabel
 	return nil
 }
 
+// ObserveReportRunLeaseExpired records only durable expired-lease outcomes.
+// A worker that loses the row-lock race must not call this method.
+func (collector *MetricsCollector) ObserveReportRunLeaseExpired(result ReportRunLeaseResult) error {
+	if !validReportRunLeaseResult(result) {
+		return errors.New("report run lease result is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.reportRunLeaseExpired[result]++
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(profile string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -574,6 +602,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeRuntime(&output)
 	collector.writeJobs(&output)
 	collector.writeSyncLeases(&output)
+	collector.writeReportRunLeases(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
 	collector.writePools(&output)
@@ -716,6 +745,15 @@ func (collector *MetricsCollector) writeSyncLeases(output *strings.Builder) {
 				{"provider", labels.Provider}, {"dataset_family", labels.DatasetFamily}, {"result", string(result)},
 			}, collector.syncLeaseExpired[syncLeaseResultLabels{Lease: labels, Result: result}])
 		}
+	}
+}
+
+func (collector *MetricsCollector) writeReportRunLeases(output *strings.Builder) {
+	writeMetadata(output, "worker_report_run_lease_expired_total", "Expired report execution leases by bounded durable result.", "counter")
+	for _, result := range reportRunLeaseResults() {
+		writeUintSample(output, "worker_report_run_lease_expired_total", []metricLabel{
+			{"result", string(result)},
+		}, collector.reportRunLeaseExpired[result])
 	}
 }
 
@@ -881,6 +919,14 @@ func validSyncLeaseResult(result SyncLeaseResult) bool {
 
 func syncLeaseResults() []SyncLeaseResult {
 	return []SyncLeaseResult{SyncLeaseResultFailed, SyncLeaseResultRetrying}
+}
+
+func validReportRunLeaseResult(result ReportRunLeaseResult) bool {
+	return result == ReportRunLeaseResultRetrying || result == ReportRunLeaseResultFailed
+}
+
+func reportRunLeaseResults() []ReportRunLeaseResult {
+	return []ReportRunLeaseResult{ReportRunLeaseResultFailed, ReportRunLeaseResultRetrying}
 }
 
 func poolAcquireResults() []string {

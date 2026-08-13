@@ -159,6 +159,9 @@ def retry_report_execution(session: Session, run_id: str) -> ReportExecutionTrig
     run.status = ReportRunStatus.PENDING.value
     run.error = None
     run.error_traceback = None
+    run.execution_claim_token = None
+    run.execution_lease_expires_at = None
+    run.execution_reclaim_count = 0
     payload = _payload_for_run(run, report)
     row = _enqueue_run(session, run, payload, scheduled_for=run.created_at)
     session.flush()
@@ -177,16 +180,59 @@ def cancel_report_execution(session: Session, run_id: str) -> bool:
     if run is None:
         return False
     if run.status == ReportRunStatus.CANCELED.value:
+        _advance_canceled_schedule(session, run, datetime.now(UTC))
         return True
     if run.status == ReportRunStatus.SUCCESS.value:
         return False
     now = datetime.now(UTC)
     run.status = ReportRunStatus.CANCELED.value
     run.completed_at = now
+    run.execution_claim_token = None
+    run.execution_lease_expires_at = None
     if run.started_at is not None:
         run.duration_seconds = max(0.0, (now - _as_utc(run.started_at)).total_seconds())
+    _advance_canceled_schedule(session, run, now)
     session.flush()
     return True
+
+
+def _advance_canceled_schedule(
+    session: Session,
+    run: ReportRun,
+    now: datetime,
+) -> None:
+    """Move only a scheduler-triggered report to its canceled occurrence."""
+
+    if run.triggered_by != "scheduler" or run.scheduled_occurrence_id is None:
+        return
+    occurrence = (
+        session.query(ScheduledReportOccurrence)
+        .filter(ScheduledReportOccurrence.occurrence_id == run.scheduled_occurrence_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if occurrence is None:
+        return
+    report = (
+        session.query(SavedReport)
+        .filter(SavedReport.id == run.report_id)
+        .with_for_update()
+        .one()
+    )
+    scheduled_for = _as_utc(occurrence.scheduled_for)
+    if report.last_run_at is None or _as_utc(report.last_run_at) < scheduled_for:
+        report.last_run_at = scheduled_for
+        report.last_run_status = ReportRunStatus.CANCELED.value
+        report.updated_at = now
+        job = (
+            session.query(ScheduledJob)
+            .filter(ScheduledJob.id == occurrence.scheduled_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if job is not None:
+            job.next_run_at = None
+            job.updated_at = now
 
 
 def _create_run_and_handoff(
@@ -295,12 +341,16 @@ def _existing_trigger(
     )
     if row is None:
         raise ReportExecutionConflictError("scheduled report occurrence has no handoff")
+    running_lease_expired = run.status == ReportRunStatus.RUNNING.value and (
+        run.execution_lease_expires_at is None
+        or _as_utc(run.execution_lease_expires_at) <= datetime.now(UTC)
+    )
     return ReportExecutionTrigger(
         str(run.report_id),
         str(run.id),
         str(row.id),
         False,
-        run.status == ReportRunStatus.PENDING.value,
+        run.status == ReportRunStatus.PENDING.value or running_lease_expired,
     )
 
 

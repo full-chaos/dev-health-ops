@@ -56,6 +56,14 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			wantResult: ResultRetry, wantCategory: CategoryBudget,
 		},
 		{
+			name: "retryable contention snooze at attempt ceiling", attempt: 3,
+			claimState: ClaimProceed,
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return RetryableAfter(errors.New("lease still active"), 2*time.Second)
+			},
+			wantResult: ResultRetry, wantCategory: CategoryRetryable,
+		},
+		{
 			name: "discard", attempt: 3, claimState: ClaimProceed,
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return Retryable(errors.New("credential=do-not-log"))
@@ -146,9 +154,16 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 				t.Fatalf("cancel wrapper = %v, want %v (err=%v)", errors.As(err, &cancelErr), test.wantCancelError, err)
 			}
 			var snoozeErr *rivertype.JobSnoozeError
-			if test.name == "budget contention snooze at attempt ceiling" {
-				if !errors.As(err, &snoozeErr) || snoozeErr.Duration != 1500*time.Millisecond {
-					t.Fatalf("snooze error = %#v, want 1.5s River snooze", err)
+			wantSnooze := time.Duration(0)
+			switch test.name {
+			case "budget contention snooze at attempt ceiling":
+				wantSnooze = 1500 * time.Millisecond
+			case "retryable contention snooze at attempt ceiling":
+				wantSnooze = 2 * time.Second
+			}
+			if wantSnooze > 0 {
+				if !errors.As(err, &snoozeErr) || snoozeErr.Duration != wantSnooze {
+					t.Fatalf("snooze error = %#v, want %s River snooze", err, wantSnooze)
 				}
 			} else if errors.As(err, &snoozeErr) {
 				t.Fatalf("unexpected River snooze: %v", err)

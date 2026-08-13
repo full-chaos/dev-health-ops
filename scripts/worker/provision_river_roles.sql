@@ -146,8 +146,9 @@ SELECT format(
 
 -- The queue role may atomically relay the generic outbox, append minimal
 -- delivery-abandonment evidence during terminal retention, and transition the
--- sync-dispatch outbox while checking its read-only route fence. It never
--- receives producer-outbox INSERT or general semantic-table/sequence privileges.
+-- sync-dispatch outbox while checking its read-only route and active-run
+-- fences. It never receives INSERT or general semantic-table/sequence
+-- privileges.
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";
@@ -182,4 +183,10 @@ SELECT format(
          :'queue_role'
        )
  WHERE to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT ON TABLE public.sync_runs TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_runs') IS NOT NULL
 \gexec

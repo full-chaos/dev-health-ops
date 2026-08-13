@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -318,6 +319,17 @@ func buildSyncCoordinatorWorker(
 		queues = []jobruntime.QueueBudget{
 			{Queue: syncCoordinatorQueue, MaxWorkers: syncCoordinatorQueueWorkers},
 		}
+	}
+	if err := registerRescueCoverage(
+		workers,
+		registry,
+		handlers,
+		syncdispatchcontract.KindDispatchSyncRun,
+		syncdispatchcontract.KindFinalizeSyncRun,
+		syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.KindReferenceDiscovery,
+	); err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
 		Logger: logger,

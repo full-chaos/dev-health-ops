@@ -190,7 +190,17 @@ func (adapter *Adapter[T]) Timeout(*river.Job[T]) time.Duration {
 }
 
 func (adapter *Adapter[T]) NextRetry(job *river.Job[T]) time.Time {
-	if adapter.descriptor.RetryPolicy != "bounded_exponential_jitter" || job == nil || job.JobRow == nil {
+	if job == nil {
+		return time.Time{}
+	}
+	return NextRetryAt(adapter.descriptor, job.JobRow)
+}
+
+// NextRetryAt applies the checked-in retry policy without requiring an
+// executable handler. River maintenance clients use it when they carry
+// type-only workers for kinds executed by another queue.
+func NextRetryAt(descriptor Descriptor, job *rivertype.JobRow) time.Time {
+	if descriptor.RetryPolicy != "bounded_exponential_jitter" || job == nil {
 		return time.Time{}
 	}
 	attempt := job.Attempt

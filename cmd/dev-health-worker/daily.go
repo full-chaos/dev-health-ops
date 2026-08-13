@@ -253,6 +253,12 @@ func buildDailyWorker(
 			registered = append(registered, registeredSpec)
 		}
 	}
+	if err := registerRescueCoverage(workers, registry, registered); err != nil {
+		if metricsClickHouse != nil {
+			_ = metricsClickHouse.Close()
+		}
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),

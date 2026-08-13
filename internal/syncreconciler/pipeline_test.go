@@ -36,6 +36,20 @@ func (function pipelineMaterializerFunc) Step(
 	return function(ctx, now, stale, limit)
 }
 
+type pipelineTerminalDeliveryRepairFunc func(
+	context.Context,
+	time.Time,
+	int,
+) (TerminalDeliveryRepairResult, error)
+
+func (function pipelineTerminalDeliveryRepairFunc) Step(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) (TerminalDeliveryRepairResult, error) {
+	return function(ctx, now, limit)
+}
+
 type pipelineKernelFunc func(
 	context.Context,
 	time.Time,
@@ -83,6 +97,13 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 			}
 			return LeaseRepairResult{}, nil
 		}),
+		pipelineTerminalDeliveryRepairFunc(func(_ context.Context, got time.Time, limit int) (TerminalDeliveryRepairResult, error) {
+			calls = append(calls, "recover-terminal-delivery")
+			if !got.Equal(now.UTC()) || limit != 17 {
+				t.Fatalf("terminal repair now=%s limit=%d", got, limit)
+			}
+			return TerminalDeliveryRepairResult{Recovered: 1}, nil
+		}),
 		pipelineMaterializerFunc(func(_ context.Context, got, stale time.Time, limit int) (MaterializerResult, error) {
 			calls = append(calls, "materialize")
 			if !got.Equal(now.UTC()) || !stale.Equal(now.UTC().Add(-config.StaleDispatchAge)) || limit != 17 {
@@ -127,7 +148,7 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 	if observation.CandidateDigest != "sha256:result" {
 		t.Fatalf("observation = %#v", observation)
 	}
-	if want := []string{"repair", "materialize", "kernel", "observe"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"repair", "recover-terminal-delivery", "materialize", "kernel", "observe"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
 	}
 }
@@ -138,6 +159,10 @@ func TestMutationPipelineStopsAtFirstFailedStage(t *testing.T) {
 	pipeline, err := NewMutationPipeline(
 		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
 			return LeaseRepairResult{}, sentinel
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			called = true
+			return TerminalDeliveryRepairResult{}, nil
 		}),
 		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
 			called = true
@@ -171,6 +196,9 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 	validMaterializer := pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
 		return MaterializerResult{}, nil
 	})
+	validTerminalRepair := pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+		return TerminalDeliveryRepairResult{}, nil
+	})
 	validKernel := pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
 		return KernelResult{}, nil
 	})
@@ -179,6 +207,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 	})
 	if _, err := NewMutationPipeline(
 		nil,
+		validTerminalRepair,
 		validMaterializer,
 		validKernel,
 		validObserver,
@@ -192,6 +221,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 	invalid.LeaseDuration = 0
 	if _, err := NewMutationPipeline(
 		validRepair,
+		validTerminalRepair,
 		validMaterializer,
 		validKernel,
 		validObserver,
@@ -200,5 +230,17 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		invalid,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("invalid config error = %v", err)
+	}
+	if _, err := NewMutationPipeline(
+		validRepair,
+		nil,
+		validMaterializer,
+		validKernel,
+		validObserver,
+		nil,
+		nil,
+		DefaultMutationPipelineConfig(),
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("missing terminal repair error = %v", err)
 	}
 }

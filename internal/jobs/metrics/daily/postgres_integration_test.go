@@ -111,6 +111,120 @@ func TestPostgresStoreStartRunTxReplaysWholeGenerationAtomically(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ScheduledFanoutRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000009",
+		TargetDay:      time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC),
+		Generation:     "fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z",
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		tx, beginErr := pool.Begin(ctx)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		if _, startErr := store.StartScheduledFanoutRunTx(ctx, tx, request, publisher); startErr != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(startErr)
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			t.Fatal(commitErr)
+		}
+	}
+	var runID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM daily_metrics_runs`).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.ClaimDispatch(ctx, runID)
+	if err != nil || run == nil || !run.RepositoryDiscoveryRequired {
+		t.Fatalf("scheduled dispatch claim=%#v err=%v", run, err)
+	}
+	created, err := store.MaterializeScheduledFanout(ctx, *run, []string{
+		"00000000-0000-4000-8000-000000000002",
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000002",
+	})
+	if err != nil || !created {
+		t.Fatalf("materialize=%t err=%v", created, err)
+	}
+	if duplicate, err := store.MaterializeScheduledFanout(ctx, *run, []string{"00000000-0000-4000-8000-000000000003"}); err != nil || duplicate {
+		t.Fatalf("replay materialize=%t err=%v", duplicate, err)
+	}
+	var partitions, handoffs int
+	var ids string
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions`).Scan(&partitions); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT repo_ids::text FROM daily_metrics_partitions`).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_dispatch'`).Scan(&handoffs); err != nil {
+		t.Fatal(err)
+	}
+	if partitions != 1 || handoffs != 1 || ids != `["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]` {
+		t.Fatalf("partitions=%d handoffs=%d ids=%s", partitions, handoffs, ids)
+	}
+
+	request.Generation = "fixed-schedule:daily_metrics_fanout:2026-08-12T01:01:00Z"
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyRun, err := store.StartScheduledFanoutRunTx(ctx, tx, request, publisher)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	emptyRunClaim, err := store.ClaimDispatch(ctx, emptyRun.ID)
+	if err != nil || emptyRunClaim == nil || !emptyRunClaim.RepositoryDiscoveryRequired {
+		t.Fatalf("empty dispatch claim=%#v err=%v", emptyRunClaim, err)
+	}
+	if created, err := store.MaterializeScheduledFanout(ctx, *emptyRunClaim, nil); err != nil || !created {
+		t.Fatalf("empty materialize=%t err=%v", created, err)
+	}
+	var status, finalization string
+	var emptyPartitions, fences int
+	if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id=$1::uuid`, emptyRun.ID).Scan(&status, &finalization); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id=$1::uuid`, emptyRun.ID).Scan(&emptyPartitions); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_completion_fences WHERE completion_key=$1`, "daily_metrics_run:"+emptyRun.ID).Scan(&fences); err != nil {
+		t.Fatal(err)
+	}
+	if status != "no_repositories" || finalization != "succeeded" || emptyPartitions != 0 || fences != 1 {
+		t.Fatalf("empty status=%s finalization=%s partitions=%d fences=%d", status, finalization, emptyPartitions, fences)
+	}
+}
+
 func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -308,7 +422,9 @@ CREATE TABLE daily_metrics_runs (
  id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation text NOT NULL,
  status text NOT NULL, finalization_status text NOT NULL, finalization_claim_token uuid NULL,
  finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ CONSTRAINT ck_daily_metrics_run_status CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')),
+ CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed'))
 );
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,

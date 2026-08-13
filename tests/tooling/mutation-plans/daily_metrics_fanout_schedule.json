@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "daily metrics fixed fan-out schedule",
+  "$comment": "Clause-level proof for durable fixed scheduling, the scheduler/worker ownership boundary, explicit no-repository outcome, production Python query parity, and coordinator-only least privilege.",
+  "build": [
+    "env",
+    "GOCACHE=/tmp/daily-metrics-fanout-mutation-cache",
+    "go",
+    "test",
+    "-tags=integration",
+    "-run",
+    "^$",
+    "./internal/jobs/metrics/daily/",
+    "./internal/scheduler/fixed/",
+    "./cmd/dev-health-scheduler/",
+    "./internal/storage/postgres/"
+  ],
+  "mutations": [
+    {
+      "id": "DMF01-production-scheduler-construction",
+      "file": "internal/scheduler/fixed/producers.go",
+      "find": "return &DailyMetricsFanoutProducer{store: store, publisher: publisher, lister: lister}, nil",
+      "replace": "return NewNotImplementedProducer(ProducerDailyMetricsFanout, \"mutated schedule producer\"), nil",
+      "expect_occurrences": 1,
+      "rationale": "the production scheduler composition must receive an executable daily fan-out producer rather than a declaration-only stub",
+      "proof": [["env", "GOCACHE=/tmp/daily-metrics-fanout-mutation-cache", "go", "test", "-count=1", "-run", "^TestUnbuiltFixedScheduleProducersMatchTheCheckedInDeclaration$", "./cmd/dev-health-scheduler/"]]
+    },
+    {
+      "id": "DMF02-empty-snapshot-is-not-success",
+      "file": "internal/jobs/metrics/daily/postgres.go",
+      "find": "SET status = 'no_repositories', finalization_status = 'succeeded', finalized_at = $1, updated_at = $1",
+      "replace": "SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1, updated_at = $1",
+      "expect_occurrences": 1,
+      "rationale": "a ClickHouse snapshot with no repositories must persist the explicit no_repositories outcome and create no synthetic zero-work partition",
+      "proof": [["env", "GOCACHE=/tmp/daily-metrics-fanout-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories$", "./internal/jobs/metrics/daily/"]]
+    },
+    {
+      "id": "DMF03-python-oracle-comparator",
+      "file": "internal/jobs/metrics/daily/clickhouse_test.go",
+      "find": "if strings.Join(goIDs, \",\") != strings.Join(pythonIDs, \",\") {",
+      "replace": "if false {",
+      "expect_occurrences": 1,
+      "rationale": "the differential comparator must reject a deliberate Go/Python repository identity mismatch",
+      "proof": [["env", "GOCACHE=/tmp/daily-metrics-fanout-mutation-cache", "go", "test", "-count=1", "-run", "^TestDailyOracleComparatorRejectsMismatch$", "./internal/jobs/metrics/daily/"]]
+    },
+    {
+      "id": "DMF04-coordinator-daily-run-grant",
+      "file": "internal/storage/postgres/domain_authorization.go",
+      "find": "\t\t\t{\"daily_metrics_runs\", true, false, false},",
+      "replace": "\t\t\t{\"daily_metrics_runs\", false, false, false},",
+      "expect_occurrences": 1,
+      "rationale": "the coordinator must retain SELECT plus INSERT for the scheduler transaction's durable-run insert and conflict replay read, while no partition grant is added",
+      "proof": [["env", "GOCACHE=/tmp/daily-metrics-fanout-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestFixedEngineStatementsArePermittedToTheCoordinatorRole$", "./internal/storage/postgres/"]]
+    }
+  ]
+}

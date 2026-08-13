@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
@@ -22,6 +23,20 @@ const (
 
 type recordingRemainingStore struct {
 	requests []remaining.StartRunRequest
+}
+
+type recordingDailyFanoutStore struct {
+	requests []daily.ScheduledFanoutRequest
+}
+
+func (store *recordingDailyFanoutStore) StartScheduledFanoutRunTx(
+	_ context.Context,
+	_ pgx.Tx,
+	request daily.ScheduledFanoutRequest,
+	_ daily.RunPublisher,
+) (daily.Run, error) {
+	store.requests = append(store.requests, request)
+	return daily.Run{ID: uuid.NewString(), OrganizationID: request.OrganizationID}, nil
 }
 
 func (store *recordingRemainingStore) StartRunTx(
@@ -94,6 +109,27 @@ func (nopPartitionPublisher) PublishPartitionTx(
 	return nil
 }
 
+type nopDailyRunPublisher struct{}
+
+func (nopDailyRunPublisher) PublishDispatchTx(
+	context.Context, pgx.Tx, daily.Run, string,
+) error {
+	return nil
+}
+
+func dailyFanoutProducer(
+	t *testing.T,
+	lister OrganizationLister,
+) (*DailyMetricsFanoutProducer, *recordingDailyFanoutStore) {
+	t.Helper()
+	store := &recordingDailyFanoutStore{}
+	producer, err := NewDailyMetricsFanoutProducer(store, nopDailyRunPublisher{}, lister)
+	if err != nil {
+		t.Fatalf("NewDailyMetricsFanoutProducer() = %v", err)
+	}
+	return producer.(*DailyMetricsFanoutProducer), store
+}
+
 func fanoutProducer(
 	t *testing.T,
 	lister OrganizationLister,
@@ -158,6 +194,46 @@ func TestSyncCoverageRefreshProducerEmitsOneBoundedDeterministicSweep(t *testing
 	}
 	if request.Envelope.OrganizationID != nil || request.Envelope.Domain.Type != "schedule_occurrence" {
 		t.Fatalf("global occurrence envelope = %+v", request.Envelope)
+	}
+}
+
+func TestDailyMetricsFanoutCreatesOnlyDurablePerOrganizationRuns(t *testing.T) {
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	producer, store := dailyFanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}})
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-08-12T01:00:00Z"), mustTime(t, "2026-08-12T01:00:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if outcome.Handoffs != 2 || len(store.requests) != 2 {
+		t.Fatalf("outcome=%+v requests=%d", outcome, len(store.requests))
+	}
+	for index, request := range store.requests {
+		wantOrganization := []string{testOrgA, testOrgB}[index]
+		if request.OrganizationID != wantOrganization ||
+			request.TargetDay != mustTime(t, "2026-08-12T01:00:00Z") ||
+			request.Generation != "fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z" {
+			t.Fatalf("request[%d]=%+v", index, request)
+		}
+	}
+}
+
+func TestDailyMetricsFanoutReportsNoActiveOrganizations(t *testing.T) {
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	producer, store := dailyFanoutProducer(t, fixedOrganizationLister{})
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-08-12T01:00:00Z"), mustTime(t, "2026-08-12T01:00:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if outcome.SkipReason != SkipNoActiveOrganizations || len(store.requests) != 0 {
+		t.Fatalf("outcome=%+v requests=%d", outcome, len(store.requests))
 	}
 }
 

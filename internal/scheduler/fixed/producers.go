@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
@@ -350,6 +351,70 @@ type RemainingMetricsStore interface {
 // OrganizationLister enumerates the organizations a fan-out schedule covers.
 type OrganizationLister interface {
 	ActiveOrganizationIDs(context.Context, pgx.Tx) ([]string, error)
+}
+
+// DailyMetricsFanoutStore owns the durable scheduler-side half of the nightly
+// daily-metrics handoff. The repository snapshot is intentionally absent from
+// this interface: only the heavy worker may read ClickHouse and materialize it.
+type DailyMetricsFanoutStore interface {
+	StartScheduledFanoutRunTx(context.Context, pgx.Tx, daily.ScheduledFanoutRequest, daily.RunPublisher) (daily.Run, error)
+}
+
+// DailyMetricsFanoutProducer creates one durable run and dispatch handoff per
+// active organization. It does not create a partition; the heavy worker first
+// discovers the organization repository IDs from ClickHouse and atomically
+// materializes non-empty partitions under that run.
+type DailyMetricsFanoutProducer struct {
+	store     DailyMetricsFanoutStore
+	publisher daily.RunPublisher
+	lister    OrganizationLister
+}
+
+func NewDailyMetricsFanoutProducer(
+	store DailyMetricsFanoutStore,
+	publisher daily.RunPublisher,
+	lister OrganizationLister,
+) (Producer, error) {
+	if store == nil || publisher == nil || lister == nil {
+		return nil, ErrProducerUnavailable
+	}
+	return &DailyMetricsFanoutProducer{store: store, publisher: publisher, lister: lister}, nil
+}
+
+func (*DailyMetricsFanoutProducer) ID() string { return ProducerDailyMetricsFanout }
+
+func (producer *DailyMetricsFanoutProducer) Produce(
+	ctx context.Context,
+	tx pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	if producer == nil || schedule.ID != "daily_metrics_fanout" ||
+		schedule.TargetKind != jobcontract.KindDailyMetricsDispatch {
+		return Outcome{}, ErrProducerUnavailable
+	}
+	organizationIDs, err := producer.lister.ActiveOrganizationIDs(ctx, tx)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(organizationIDs) == 0 {
+		return Outcome{SkipReason: SkipNoActiveOrganizations}, nil
+	}
+	due := occurrence.ScheduledFor.UTC()
+	generation := "fixed-schedule:" + schedule.ID + ":" + due.Format(time.RFC3339)
+	for _, organizationID := range organizationIDs {
+		if err := ctx.Err(); err != nil {
+			return Outcome{}, err
+		}
+		if _, err := producer.store.StartScheduledFanoutRunTx(ctx, tx, daily.ScheduledFanoutRequest{
+			OrganizationID: organizationID,
+			TargetDay:      due,
+			Generation:     generation,
+		}, producer.publisher); err != nil {
+			return Outcome{}, fmt.Errorf("start daily metrics run for organization: %w", err)
+		}
+	}
+	return Outcome{Handoffs: len(organizationIDs)}, nil
 }
 
 // RemainingMetricsFanoutProducer materializes one remaining-metrics run per

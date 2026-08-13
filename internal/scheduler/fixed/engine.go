@@ -88,6 +88,9 @@ type ScheduleResult struct {
 	// is spent. It is exported so an operator can tell "nothing to do" from
 	// "working", and it may accompany produced work.
 	Degraded string
+	// DegradedLoaded reports that Degraded came from the shared occurrence
+	// ledger. It is true even when the durable verdict is clear.
+	DegradedLoaded bool
 	// Evaluated reports that a producer returned a verdict AND the occurrence
 	// committed, so Degraded reflects a fresh, durable observation.
 	//
@@ -256,8 +259,21 @@ func (engine *Engine) stepSchedule(
 	ctx context.Context,
 	schedule Schedule,
 	observedAt time.Time,
-) ScheduleResult {
-	outcome := ScheduleResult{ScheduleID: schedule.ID}
+) (outcome ScheduleResult) {
+	outcome = ScheduleResult{ScheduleID: schedule.ID}
+	defer func() {
+		evaluation, present, err := engine.lastEvaluation(ctx, schedule.ID)
+		if err != nil {
+			outcome.Err = errors.Join(outcome.Err, err)
+			return
+		}
+		outcome.DegradedLoaded = true
+		if present {
+			outcome.Degraded = evaluation.Degraded
+		} else {
+			outcome.Degraded = ""
+		}
+	}()
 	lastRecorded, err := engine.lastRecorded(ctx, schedule)
 	if err != nil {
 		outcome.Err = err
@@ -329,6 +345,22 @@ func (engine *Engine) lastRecorded(
 	return &anchor, nil
 }
 
+func (engine *Engine) lastEvaluation(
+	ctx context.Context,
+	scheduleID string,
+) (Evaluation, bool, error) {
+	tx, err := engine.beginner.Begin(ctx)
+	if err != nil {
+		return Evaluation{}, false, fmt.Errorf("begin fixed schedule evaluation read: %w", err)
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	return engine.ledger.LastEvaluation(ctx, tx, scheduleID)
+}
+
 // runOccurrence performs the single transaction that owns one occurrence:
 // claim, produce, publish, record. Every write commits together, so a crash at
 // any point either leaves the occurrence entirely unmaterialized and eligible
@@ -375,7 +407,7 @@ func (engine *Engine) runOccurrence(
 		// started inside as owed would fire a schedule that Beat had already
 		// run, or run one a full period early.
 		if err := engine.ledger.Complete(
-			ctx, tx, occurrence, OccurrenceSkipped, 0, coldStartBaselineReason,
+			ctx, tx, occurrence, OccurrenceSkipped, 0, coldStartBaselineReason, "",
 		); err != nil {
 			return 0, 0, 0, 0, "", false, err
 		}
@@ -420,7 +452,9 @@ func (engine *Engine) runOccurrence(
 			reason = "producer_returned_no_work"
 		}
 	}
-	if err := engine.ledger.Complete(ctx, tx, occurrence, status, total, reason); err != nil {
+	if err := engine.ledger.Complete(
+		ctx, tx, occurrence, status, total, reason, result.Degraded,
+	); err != nil {
 		return 0, 0, 0, 0, "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {

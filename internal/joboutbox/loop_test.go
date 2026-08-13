@@ -108,7 +108,7 @@ func TestReconcilerLoopImmediateNoopStepOpensReadiness(t *testing.T) {
 
 func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
-	results := []StepResult{{Recovered: 1, Claimed: 2, Delivered: 1, Retried: 1}, {Recovered: 2, Claimed: 3, Dead: 1, LeaseLost: 2}}
+	results := []StepResult{{Recovered: 1, PostRepairContractRejectionsRecovered: 1, Claimed: 2, Delivered: 1, Retried: 1}, {Recovered: 2, Claimed: 3, Dead: 1, LeaseLost: 2}}
 	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		result := results[0]
 		results = results[1:]
@@ -131,6 +131,7 @@ func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *test
 	}
 	for _, want := range []string{
 		"worker_outbox_reconciler_terminal_deliveries_recovered_total 3",
+		"worker_outbox_reconciler_post_repair_contract_rejections_recovered_total 1",
 		"worker_outbox_reconciler_claimed_total 5",
 		"worker_outbox_reconciler_delivered_total 1",
 		"worker_outbox_reconciler_retried_total 1",

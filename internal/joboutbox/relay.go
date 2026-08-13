@@ -36,13 +36,14 @@ func (config RelayConfig) validate() error {
 }
 
 type StepResult struct {
-	Recovered int
-	Claimed   int
-	Deferred  int
-	Delivered int
-	Retried   int
-	Dead      int
-	LeaseLost int
+	Recovered                             int
+	PostRepairContractRejectionsRecovered int
+	Claimed                               int
+	Deferred                              int
+	Delivered                             int
+	Retried                               int
+	Dead                                  int
+	LeaseLost                             int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
@@ -165,6 +166,7 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 			return result, err
 		}
 		result.Recovered = recovered.Recovered
+		result.PostRepairContractRejectionsRecovered = recovered.PostRepairContractRejectionsRecovered
 	}
 	deferred := relay.deferredKinds
 	if relay.routes != nil {

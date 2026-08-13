@@ -554,6 +554,211 @@
           "tests/models/test_reports.py::test_saved_report_model_declares_one_report_per_schedule"
         ]
       ]
+    },
+    {
+      "id": "CHAOS-3159-M1-due-page-predicate",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "      OR job.next_run_at <= $2",
+      "replace": "      OR job.next_run_at > $2",
+      "rationale": "Only schedules whose durable marker is due may consume the bounded SQL page. Inverting this clause lets one tenant's 20,001 future rows fill the page and hide another tenant's due report, recreating the exact cross-tenant availability failure without the old allocation error.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "8m",
+          "-run",
+          "^TestOneTenantsRowsBeyondTheFormerReadGuardDoNotBlockAnotherTenant$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M2-lock-page-bound",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "\tmaximumScheduledReportCandidatesPerOccurrence = maximumScheduledReportsPerOccurrence + 1",
+      "replace": "\tmaximumScheduledReportCandidatesPerOccurrence = maximumScheduledReportsPerOccurrence + 2",
+      "rationale": "The transaction may lock exactly the 500-item work budget plus one row proving a remainder. Growing that page changes the operator-facing lock-footprint contract; the proof uses an independent literal 501 rather than copying this production constant as its oracle.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "5m",
+          "-run",
+          "^TestSweepReadsOneBoundedPageAndObservesTheRemainder$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M3-new-before-replay",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "ORDER BY replay.occurrence_id IS NOT NULL,",
+      "replace": "ORDER BY replay.occurrence_id IS NULL,",
+      "rationale": "Never-materialized work must sort ahead of durable replays. Reversing this boolean lets the same replay population refill every bounded page under continuous arrival, so a specific carried-over report can remain due forever.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "8m",
+          "-run",
+          "^TestCarriedOverReportLandsUnderContinuousArrival$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M4-replay-status-authority",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "    FROM public.scheduled_report_occurrences AS occurrence\n    WHERE occurrence.report_id = report.id",
+      "replace": "    FROM public.scheduled_report_occurrences AS occurrence\n    JOIN public.report_runs AS run\n      ON run.id = occurrence.report_run_id\n     AND run.status IN ('pending', 'running')\n    WHERE occurrence.report_id = report.id",
+      "rationale": "The bounded selector must not pre-decide replay semantics from run status. Terminal and link-corrupt occurrences still belong to replayExisting, which respectively stays quiet or fails visibly; filtering them here hides both states and falsely reports no due work.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "6m",
+          "-run",
+          "^(TestReplayIgnoresARunThatIsNoLongerPending|TestReplayFailsWhenTheOccurrenceNoLongerLinksItsRun)$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M5-terminal-base-is-strict",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "      AND occurrence.scheduled_for > COALESCE(report.last_run_at, report.created_at)",
+      "replace": "      AND occurrence.scheduled_for >= COALESCE(report.last_run_at, report.created_at)",
+      "rationale": "A terminal transition may advance last_run_at to the exact scheduled occurrence. Equality means that occurrence is finished and the next cron instant is owed; treating it as replay suppresses the following run behind an old terminal occurrence.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "5m",
+          "-run",
+          "^TestTerminalBaseEqualityIsNotSelectedAsReplay$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M6-new-schedule-marker",
+      "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
+      "find": "    setattr(job, \"next_run_at\", next_run_at)",
+      "replace": "    setattr(job, \"next_run_at\", None)",
+      "rationale": "A newly created report schedule must enter the SQL fairness order with the exact croniter-derived marker. Leaving it NULL makes rolling-upgrade repair consume the head of a bounded page and turns marker population into an unbounded backlog.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/graphql/resolvers/reports.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/api/test_saved_reports.py::test_report_schedule_writes_the_exact_next_due_marker"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M7-updated-schedule-marker",
+      "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
+      "find": "            setattr(existing_job, \"next_run_at\", next_run_at)",
+      "replace": "            setattr(existing_job, \"next_run_at\", None)",
+      "rationale": "Changing an existing schedule's cron or report base must replace its paging marker without allocating a second job. A stale/NULL marker can misorder the report indefinitely relative to continuously arriving work.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/graphql/resolvers/reports.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/api/test_saved_reports.py::test_report_schedule_writes_the_exact_next_due_marker"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M8-backfill-report-base",
+      "file": "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py",
+      "find": "           COALESCE(report.last_run_at, report.created_at) AS marker_base",
+      "replace": "           report.created_at AS marker_base",
+      "rationale": "The backfill must derive a previously-run report's next marker from last_run_at, not creation. Using creation silently reintroduces an already-consumed occurrence and moves old reports ahead of genuinely overdue work.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/test_0097_backfill_report_schedule_next_run_postgres.py::test_0097_backfills_exact_report_markers_and_leaves_other_jobs_unchanged"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M9-backfill-keyset-continuation",
+      "file": "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py",
+      "find": "        after_job_id = str(rows[-1][\"job_id\"])",
+      "replace": "        return processed",
+      "rationale": "The migration's memory bound is a keyset loop, not a truncated first page. Stopping after one batch leaves every later report with its stale marker while still advancing the Alembic revision.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/test_0097_backfill_report_schedule_next_run_postgres.py::test_0097_processes_more_than_one_bounded_marker_batch"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M10-five-field-backfill-guard",
+      "file": "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py",
+      "find": "    if len(cron_expression.split()) != 5:\n        raise ValueError(\"cron must contain exactly five fields\")",
+      "replace": "    if False:\n        raise ValueError(\"cron must contain exactly five fields\")",
+      "rationale": "The backfill must fail transactionally on legacy expressions outside the scheduler's five-field dialect. Letting croniter interpret a six-field row can stamp a marker the Go evaluator can never reproduce, advance 0097, and leave a permanently fatal runtime row.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/test_0097_backfill_report_schedule_next_run_postgres.py::test_0097_refuses_an_unevaluable_legacy_cron_without_partial_backfill"
+        ]
+      ]
     }
   ]
 }

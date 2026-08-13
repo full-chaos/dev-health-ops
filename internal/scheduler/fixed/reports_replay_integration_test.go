@@ -858,12 +858,61 @@ FROM new_jobs`,
 	if err != nil {
 		t.Fatalf("lockDueCandidates(): %v", err)
 	}
-	want := maximumScheduledReportCandidatesPerOccurrence
+	// This is the external transaction-footprint contract, not an oracle copied
+	// from the production constant. If the lock page grows, this assertion must
+	// fail and force an explicit operational decision.
+	const want = 501
 	if len(candidates) != want {
 		t.Fatalf(
 			"the sweep read %d candidates, want the bounded %d-row page for a %d-row population",
 			len(candidates), want, maximumScheduledReportsPerOccurrence+excess+1,
 		)
+	}
+}
+
+// The replay selector uses a strict comparison against the report's terminal
+// base. A cancellation records last_run_at as the exact scheduled occurrence,
+// so equality means the OLD occurrence is complete and must not occupy the
+// bounded replay page while the paging marker is invalidated for recomputation.
+func TestTerminalBaseEqualityIsNotSelectedAsReplay(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	schedule, _, _ := dueScheduledReport(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	scheduledFor := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+UPDATE public.saved_reports
+SET last_run_at = $1, last_run_status = 'canceled'
+	WHERE id = $2::uuid`, scheduledFor, testReportID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE public.scheduled_jobs SET next_run_at = NULL WHERE id = $1::uuid`, testJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	candidates, err := reportsProducer(t).lockDueCandidates(
+		ctx, tx, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("lockDueCandidates(): %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want one", len(candidates))
+	}
+	if candidates[0].AlreadyMaterialized {
+		t.Fatal("terminal occurrence equal to last_run_at was selected as replay")
+	}
+	if candidates[0].NextDueAt != nil {
+		t.Fatalf("invalidated next_run_at = %v, want NULL for recomputation", candidates[0].NextDueAt)
+	}
+	if schedule.ID != scheduledReportsScheduleID {
+		t.Fatalf("test schedule = %q", schedule.ID)
 	}
 }
 

@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -188,6 +189,107 @@ func TestGitHubTestsRouteFetchFailureCannotCommitEffectsOrWatermark(t *testing.T
 	}
 	if len(batch.Effects) != 0 || batch.Watermark != nil {
 		t.Fatalf("partial batch=%+v", batch)
+	}
+}
+
+func TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 30, 0, 0, time.UTC)
+	doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{
+		"reports/good.xml":  githubTestsJUnitFixture,
+		"reports/good.info": githubTestsLCOVFixture,
+		"reports/bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+	})}
+	claim := nativeTestClaim("github", "tests")
+	batch, err := (GitHubTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, doer), now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, effect := range batch.Effects {
+		counts[effect.Destination] = len(effect.Rows)
+	}
+	if counts["test_suite_results"] != 1 || counts["test_case_results"] != 2 ||
+		counts["coverage_snapshots"] != 1 {
+		t.Fatalf("valid report rows were lost: %v", counts)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("incomplete report inventory advanced watermark=%v", batch.Watermark)
+	}
+	encoded, marshalErr := json.Marshal(batch.Result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var durable struct {
+		ReportsComplete bool                    `json:"reports_complete"`
+		ReportsSkipped  int                     `json:"reports_skipped"`
+		Incomplete      []GitHubTestsIncomplete `json:"incomplete"`
+	}
+	if err := json.Unmarshal(encoded, &durable); err != nil {
+		t.Fatal(err)
+	}
+	wantIncomplete := []GitHubTestsIncomplete{{
+		Component: "report_member", Cause: "malformed", Count: 1,
+	}}
+	if durable.ReportsComplete || durable.ReportsSkipped != 1 ||
+		!reflect.DeepEqual(durable.Incomplete, wantIncomplete) {
+		t.Fatalf("durable result=%+v", durable)
+	}
+	if batch.Result["reports_complete"] != false || batch.Result["reports_skipped"] != 1 {
+		t.Fatalf("result=%+v", batch.Result)
+	}
+	comparison, compareErr := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, batch,
+	)
+	if compareErr != nil || !comparison.Match || comparison.NativeRecords != 7 ||
+		comparison.PythonRecords != 7 {
+		t.Fatalf("comparison=%+v error=%v", comparison, compareErr)
+	}
+	invalidWatermark := batch
+	invalidWatermark.Watermark = claim.BeforeAt
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, invalidWatermark,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("incomplete watermark comparison error=%v", err)
+	}
+	invalidCount := batch
+	invalidCount.Result = make(map[string]any, len(batch.Result))
+	for key, value := range batch.Result {
+		invalidCount.Result[key] = value
+	}
+	invalidCount.Result["reports_skipped"] = 2
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, invalidCount,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("inconsistent skipped count comparison error=%v", err)
+	}
+	invalidComplete := batch
+	invalidComplete.Result = make(map[string]any, len(batch.Result))
+	for key, value := range batch.Result {
+		invalidComplete.Result[key] = value
+	}
+	invalidComplete.Result["reports_complete"] = true
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, invalidComplete,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("false complete comparison error=%v", err)
+	}
+}
+
+func TestGitHubTestsRouteUnsafeArchiveFailureRemainsFailClosed(t *testing.T) {
+	doer := &githubTestsRouteDoer{t: t, archive: []byte("not a zip archive")}
+	claim := nativeTestClaim("github", "tests")
+	batch, err := (GitHubTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, doer), time.Now(),
+	)
+	if !errors.Is(err, ErrGitHubTestsIncomplete) {
+		t.Fatalf("error=%v", err)
+	}
+	if len(batch.Effects) != 0 || batch.Watermark != nil || batch.Result != nil {
+		t.Fatalf("unsafe archive returned partial batch=%+v", batch)
 	}
 }
 

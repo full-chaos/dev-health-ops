@@ -506,6 +506,160 @@
           "producer_actuals_share_tests_estimator_admission_identity"
         ]
       ]
+    },
+    {
+      "id": "T31-optional-report-member-preserved",
+      "file": "internal/providersync/github_tests_route.go",
+      "find": "if !optional {",
+      "replace": "if optional && len(reportIncomplete) > 0 {",
+      "rationale": "a bounded malformed or unreadable member must record incompleteness while valid rows in the same archive remain committable",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T32-unsafe-archive-parse-fails-closed",
+      "file": "internal/providersync/github_tests_route.go",
+      "find": "if parseErr != nil {",
+      "replace": "if false {",
+      "rationale": "a globally unreadable archive is not one bounded report-member omission and must return no effects or watermark",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRouteUnsafeArchiveFailureRemainsFailClosed$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T33-incomplete-report-withholds-watermark",
+      "file": "internal/providersync/github_tests_route.go",
+      "find": "if len(incomplete) > 0 {",
+      "replace": "if false {",
+      "rationale": "partial report effects may land, but the unit watermark must remain retryable until every report member is readable",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T34-comparator-rejects-incomplete-watermark",
+      "file": "internal/providersync/complete_route_comparator.go",
+      "find": "if batch.Watermark != nil {",
+      "replace": "if false {",
+      "rationale": "the production comparator must reject an incomplete batch that claims durable progress",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T35-comparator-counts-incomplete-evidence",
+      "file": "internal/providersync/complete_route_comparator.go",
+      "find": "githubTestsIncompleteCount(incomplete) != skipped {",
+      "replace": "false {",
+      "rationale": "the reported skipped count must equal the bounded typed evidence that explains why coverage is incomplete",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T36-incomplete-effects-reject-foreign-tenant",
+      "file": "internal/providersync/github_tests_effects_clickhouse.go",
+      "find": "orgID != claim.OrgID",
+      "replace": "false",
+      "rationale": "preserved partial effects must retain the same tenant boundary and cannot be written under another claim",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-tags=integration",
+          "-run",
+          "^TestGitHubTestsIncompleteBatchCommitsOnceAndRemainsTenantScoped$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T37-incomplete-evidence-reaches-durable-result",
+      "file": "internal/providersync/github_tests_route.go",
+      "find": "\"incomplete\":       incomplete,",
+      "replace": "\"incomplete\":       []GitHubTestsIncomplete{},",
+      "rationale": "best-effort continuation is safe only when the typed omission evidence survives the JSON encoding written to the durable unit result",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T38-incomplete-result-cannot-claim-complete",
+      "file": "internal/providersync/github_tests_route.go",
+      "find": "\"reports_complete\": len(incomplete) == 0,",
+      "replace": "\"reports_complete\": true,",
+      "rationale": "a skipped report member must remain explicitly incomplete in the durable unit result",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T39-unreadable-member-has-typed-evidence",
+      "file": "internal/providersync/github_tests_reports.go",
+      "find": "result.recordSkipped(\"unreadable\", false)",
+      "replace": "result.recordSkipped(\"malformed\", false)",
+      "rationale": "a bounded member read failure must preserve other rows and remain distinguishable from report parse failure in durable evidence",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsUnreadableMemberWithoutDroppingValidReports$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

@@ -8,6 +8,7 @@ source_of_truth:
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/
   - src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py
+  - src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py
   - current worker and synchronization settings
 applicability: current
 lifecycle: active
@@ -107,6 +108,49 @@ The migration locks `saved_reports` writers while it repeats this audit and
 adds the constraint. This closes the gap in which a new duplicate could arrive
 between the check and the schema change. Plan the brief write pause as part of
 the database maintenance window.
+
+### Operate the bounded saved-report sweep
+
+Application migration `0097` backfills `scheduled_jobs.next_run_at` for every
+linked report schedule. This timestamp is a paging projection derived from the
+report's last run (or creation), cron expression, and timezone. It is not proof
+that a report ran: `saved_reports.last_run_at`, `report_runs`, and
+`scheduled_report_occurrences` remain the execution record.
+
+The native sweep locks at most 501 eligible schedule/report pairs per
+occurrence and materializes at most 500. It orders never-materialized work
+before durable replays, then oldest due time and report ID. A tenant with more
+rows than the page therefore cannot abort or monopolize a global read. The
+remainder stays due for the next five-minute tick and publishes:
+
+```text
+fixed_scheduler_schedule_degraded{
+  schedule="scheduled_reports_dispatch",
+  reason="scheduled_reports_deferred"
+} 1
+```
+
+The gauge clears after a later evaluation observes no deferred remainder. A
+non-zero value alone is bounded backpressure, not lost work; alert when it does
+not clear across enough ticks to drain the active due population.
+
+Audit the projection after migration:
+
+```sql
+SELECT count(*) FILTER (WHERE job.next_run_at IS NULL) AS missing_markers,
+       count(*) AS linked_report_schedules
+FROM scheduled_jobs AS job
+JOIN saved_reports AS report ON report.schedule_id = job.id
+WHERE job.job_type = 'report';
+```
+
+`missing_markers` must be zero. Migration `0097` reads in 500-row keyset
+batches and stops transactionally if a legacy cron cannot be evaluated. Its
+error names the scheduled-job ID without echoing tenant-authored cron text.
+Repair that row to an evaluable five-field cron, then rerun the migration. New
+GraphQL create and update writes evaluate the cron before persistence and keep
+`next_run_at` current; the producer independently re-evaluates it as a runtime
+backstop for legacy, corrupt, or direct-database rows.
 
 The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
 first, with no Celery predecessor. CHAOS-3404 has since added the Beat entry

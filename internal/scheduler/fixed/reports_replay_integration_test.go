@@ -1093,7 +1093,8 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 	}
 
 	// The polls that follow: no occurrence is due, so the producer never runs. Each
-	// must report Evaluated false and must not assert a verdict of its own.
+	// must report Evaluated false while still returning the persisted authoritative
+	// degraded verdict from the occurrence ledger.
 	for poll := 1; poll <= 3; poll++ {
 		nonEvaluating, err := engine.Step(ctx, observedAt.Add(time.Duration(poll)*15*time.Second))
 		if err != nil {
@@ -1109,8 +1110,9 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 		if quiet.Evaluated {
 			t.Fatalf("poll %d claimed to have evaluated the schedule without an occurrence", poll)
 		}
-		if quiet.Degraded != "" {
-			t.Fatalf("poll %d asserted degraded %q without running the producer", poll, quiet.Degraded)
+		if quiet.Degraded != DegradedScheduledReportsUndeliverable {
+			t.Fatalf("poll %d degraded = %q, want persisted %q",
+				poll, quiet.Degraded, DegradedScheduledReportsUndeliverable)
 		}
 	}
 }

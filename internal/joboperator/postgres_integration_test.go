@@ -341,6 +341,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			job_kind text,
 			status text
 		)`,
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_runs (
 			id uuid PRIMARY KEY,

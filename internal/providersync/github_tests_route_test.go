@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,76 @@ func githubTestsClient(t *testing.T, doer providerfoundation.HTTPDoer) *provider
 		t.Fatal(err)
 	}
 	return client
+}
+
+// githubTestsHighVolumeDoer models three complete Actions listing pages. The
+// 201st in-window run is deliberate: the historical 200-run default failed
+// before it could fetch any jobs, whereas a bounded multi-page default must
+// collect all three pages.
+type githubTestsHighVolumeDoer struct {
+	t               *testing.T
+	runListRequests int
+}
+
+func (doer *githubTestsHighVolumeDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}}
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api":
+		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+	case path == "/repos/acme/api/actions/runs":
+		if request.URL.Query().Get("branch") != "" {
+			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[]}`), nil
+		}
+		doer.runListRequests++
+		page := 1
+		if raw := request.URL.Query().Get("page"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				doer.t.Fatalf("invalid page query %q: %v", raw, err)
+			}
+			page = parsed
+		}
+		first := (page-1)*nativePerPage + 1
+		last := first + nativePerPage - 1
+		if page == 3 {
+			last = 201
+		}
+		if page < 1 || page > 3 {
+			doer.t.Fatalf("unexpected workflow-runs page %d", page)
+		}
+		if page < 3 {
+			header.Set("Link", "<https://api.github.com/repos/acme/api/actions/runs?page="+strconv.Itoa(page+1)+">; rel=\"next\"")
+		}
+		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(first, last)), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/runs/") && strings.HasSuffix(path, "/jobs"):
+		return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+func githubTestsHTTPResponse(request *http.Request, header http.Header, body string) *http.Response {
+	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: request}
+}
+
+func githubTestsWorkflowRunsFixture(first, last int) string {
+	var body strings.Builder
+	body.WriteString(`{"workflow_runs":[`)
+	for id := first; id <= last; id++ {
+		if id > first {
+			body.WriteByte(',')
+		}
+		body.WriteString(`{"id":`)
+		body.WriteString(strconv.Itoa(id))
+		body.WriteString(`,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-07-22T10:00:00Z","run_started_at":"2026-07-22T10:01:00Z","updated_at":"2026-07-22T10:05:00Z","run_attempt":1,"event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/acme/api/actions/runs/`)
+		body.WriteString(strconv.Itoa(id))
+		body.WriteString(`","pull_requests":[]}`)
+	}
+	body.WriteString(`]}`)
+	return body.String()
 }
 
 func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing.T) {
@@ -171,13 +242,34 @@ func TestGitHubTestsRouteKeepsPythonDateFloorArtifactSelectionIndependent(t *tes
 func TestGitHubTestsRouteFailsClosedOnRunPaginationCap(t *testing.T) {
 	doer := &githubTestsRouteDoer{t: t, capRuns: true}
 	claim := nativeTestClaim("github", "tests")
-	batch, err := (GitHubTestsRouteHandler{MaxRuns: 1}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
+	batch, err := (GitHubTestsRouteHandler{MaxRuns: githubTestsMaxRuns}).Collect(context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer), time.Now())
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("error=%v", err)
 	}
 	if len(batch.Effects) != 0 || batch.Watermark != nil {
 		t.Fatalf("partial batch=%+v", batch)
 	}
+}
+
+func TestGitHubTestsRouteDefaultCollectsMoreThanTwoPagesOfInWindowRuns(t *testing.T) {
+	doer := &githubTestsHighVolumeDoer{t: t}
+	claim := nativeTestClaim("github", "cicd")
+	batch, err := (GitHubTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, githubTestsClient(t, doer),
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.runListRequests != 3 {
+		t.Fatalf("workflow run pages=%d want 3", doer.runListRequests)
+	}
+	for _, effect := range batch.Effects {
+		if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) == 201 {
+			return
+		}
+	}
+	t.Fatalf("did not retain all 201 in-window workflow runs: %+v", batch.Effects)
 }
 
 func TestGitHubTestsRouteFetchFailureCannotCommitEffectsOrWatermark(t *testing.T) {

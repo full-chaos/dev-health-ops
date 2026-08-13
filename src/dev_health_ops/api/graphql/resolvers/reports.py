@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
 from dev_health_ops.models.settings import JobStatus, ScheduledJob
 from dev_health_ops.utils.datetime import validate_timezone_name
+from dev_health_ops.workers.task_utils import cron_next_run
 
 
 @strawberry.type
@@ -329,6 +330,15 @@ async def _ensure_or_update_schedule(
     # at dispatch time (CHAOS-2689). Raises ValueError -> surfaced as a GraphQL error.
     validate_timezone_name(tz)
 
+    # next_run_at is the durable fairness key used by the bounded native sweep.
+    # A new schedule has no run history, so its creation time is the same base the
+    # dispatchers use. Evaluate it before the write so invalid input cannot leave a
+    # schedule with an unknown position in the global page.
+    marker_base = _datetime_or_none(report.last_run_at) or _datetime_value(
+        report.created_at
+    )
+    next_run_at = cron_next_run(cron, marker_base, tz)
+
     if report.schedule_id:
         result = await session.execute(
             select(ScheduledJob).where(ScheduledJob.id == report.schedule_id)
@@ -337,6 +347,7 @@ async def _ensure_or_update_schedule(
         if existing_job:
             setattr(existing_job, "schedule_cron", cron)
             setattr(existing_job, "timezone", tz)
+            setattr(existing_job, "next_run_at", next_run_at)
             setattr(existing_job, "updated_at", datetime.now(timezone.utc))
             return
 
@@ -349,6 +360,7 @@ async def _ensure_or_update_schedule(
         tz=tz,
         status=JobStatus.ACTIVE.value,
     )
+    setattr(job, "next_run_at", next_run_at)
     session.add(job)
     await session.flush()
     setattr(report, "schedule_id", _uuid_value(job.id))

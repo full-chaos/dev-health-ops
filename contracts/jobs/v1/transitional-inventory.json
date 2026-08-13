@@ -497,12 +497,12 @@
       "notes": "checkedInReconcilerActivation.syncMutation=true selects the active Go mutation stepper; the shadow adapter remains only as an explicit rollback builder"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/report_task.py:85",
+      "id": "celery_task:src/dev_health_ops/workers/report_task.py:113",
       "surface": "execute_saved_report",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/report_task.py",
-        "line": 85
+        "line": 113
       },
       "queue_or_cadence": "default decorator default, called with queue=reports",
       "dispatches": "self",
@@ -1625,12 +1625,12 @@
       "notes": "debounced countdown dispatch"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/api/graphql/resolvers/reports.py:588",
+      "id": "call_site_literal:src/dev_health_ops/api/graphql/resolvers/reports.py:619",
       "surface": "execute_saved_report.apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
-        "line": 588
+        "line": 619
       },
       "queue_or_cadence": "reports",
       "dispatches": "execute_saved_report",
@@ -2492,12 +2492,12 @@
       "route_mount_prefix": "/webhooks/pagerduty"
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/graphql/resolvers/reports.py:588",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/graphql/resolvers/reports.py:619",
       "surface": "GraphQL executeSavedReport-style mutation",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
-        "line": 588
+        "line": 619
       },
       "queue_or_cadence": "n/a",
       "dispatches": "execute_saved_report",

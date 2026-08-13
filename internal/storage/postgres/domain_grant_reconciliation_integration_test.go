@@ -70,8 +70,8 @@ func reconciliationTables() []domainTable {
 		},
 		{
 			// The native coverage projector reads fixed-schedule state on the
-			// domain worker. The scheduler remains the only writer, so this is a
-			// deliberate read-only dual-role relation.
+			// domain worker. Report terminalization also clears next_run_at through
+			// the immutable occurrence link so the scheduler recomputes it.
 			name: "scheduled_jobs",
 			ddl: `CREATE TABLE public.scheduled_jobs (
 				id uuid PRIMARY KEY, org_id text NOT NULL, job_type text NOT NULL,
@@ -81,6 +81,15 @@ func reconciliationTables() []domainTable {
 			exercise: []string{
 				"SELECT EXISTS (SELECT 1 FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync')",
 				"SELECT schedule_cron, next_run_at FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync' AND status = 0 ORDER BY next_run_at ASC NULLS LAST, created_at DESC LIMIT 1",
+				"UPDATE public.scheduled_jobs SET next_run_at = NULL, updated_at = now() WHERE id = gen_random_uuid()",
+			},
+		},
+		{
+			name: "scheduled_report_occurrences",
+			ddl: `CREATE TABLE public.scheduled_report_occurrences (
+				occurrence_id text PRIMARY KEY, scheduled_job_id uuid NOT NULL)`,
+			exercise: []string{
+				"SELECT occurrence_id, scheduled_job_id FROM public.scheduled_report_occurrences LIMIT 1",
 			},
 		},
 		{
@@ -113,10 +122,10 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
-			// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
-			// and fixed_schedule_occurrences moved to coordinatorPosture
-			// entirely under the Option B split and no longer appear here —
-			// the domain role has no grant on any of them.
+			// worker_job_routes, scheduled_sync_occurrences, and
+			// fixed_schedule_occurrences moved to coordinatorPosture entirely
+			// under the Option B split and no longer appear here. scheduled_jobs
+			// remains dual-role for coverage reads and report marker invalidation.
 			name: "organizations",
 			ddl: "CREATE TABLE public.organizations (id uuid PRIMARY KEY, " +
 				"is_active boolean NOT NULL, tier text NOT NULL DEFAULT 'community')",

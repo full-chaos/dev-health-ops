@@ -17,7 +17,19 @@ var (
 	ErrDependencyUnavailable = errors.New("report execution dependency is unavailable")
 	ErrContractMismatch      = errors.New("report execution contract does not match its run")
 	ErrArtifactConflict      = errors.New("report artifact conflicts with completed run")
+	ErrRunLeaseActive        = errors.New("report run execution lease is active")
+	ErrRunLeaseLost          = errors.New("report run execution lease was lost")
+	ErrRunReclaimExhausted   = errors.New("report run execution reclaim limit was exhausted")
 )
+
+// RunLeaseActiveError carries the remaining live-lease delay without exposing
+// it through an unbounded error message or consuming a River attempt.
+type RunLeaseActiveError struct {
+	RetryAfter time.Duration
+}
+
+func (err *RunLeaseActiveError) Error() string { return ErrRunLeaseActive.Error() }
+func (err *RunLeaseActiveError) Unwrap() error { return ErrRunLeaseActive }
 
 // QueryInput contains stable identifiers only. Implementations must load the
 // plan and source data from authoritative stores; no report data travels in a
@@ -123,17 +135,28 @@ type NotificationClaim struct {
 	Token string
 }
 
+// RunClaim is the durable authority for one report execution attempt. A new
+// token replaces the old token whenever an expired running row is reclaimed,
+// so the worker that resumed after a pause cannot complete the newer attempt.
+type RunClaim struct {
+	Token         string
+	LeaseDuration time.Duration
+	Reclaimed     bool
+}
+
 type RunStore interface {
-	// Claim atomically transitions pending/failed -> running. Failed is allowed
-	// so a bounded River retry can reuse the authoritative ReportRun; explicit
-	// Python retries first reset failed -> pending and reach the same CAS.
-	// A false claim is an idempotent no-op for completed, canceled, or
-	// concurrently-running runs.
-	Claim(ctx context.Context, runID, reportID string) (bool, error)
+	// Claim atomically transitions pending/failed -> running and also reclaims
+	// an expired running lease. Failed is allowed so a bounded River retry can
+	// reuse the authoritative ReportRun; explicit Python retries first reset
+	// failed -> pending and reach the same CAS. A nil claim is an idempotent
+	// no-op for completed or canceled runs. A live concurrent holder returns a
+	// typed delay so River can snooze without consuming an attempt.
+	Claim(ctx context.Context, runID, reportID string) (*RunClaim, error)
+	Renew(ctx context.Context, runID string, claim RunClaim) error
 	// Complete atomically persists the artifact only if it has the same
 	// fingerprint on a retry. It returns false for canceled/already-completed.
-	Complete(ctx context.Context, runID string, artifact Artifact) (bool, error)
-	Fail(ctx context.Context, runID, code string) error
+	Complete(ctx context.Context, runID string, claim RunClaim, artifact Artifact) (bool, error)
+	Fail(ctx context.Context, runID string, claim RunClaim, code string) error
 	// ClaimNotification reserves the side effect by its durable key with a
 	// bounded lease. A nil claim means delivery already completed or another
 	// worker still owns the unexpired lease.
@@ -188,28 +211,57 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 		return ErrContractMismatch
 	}
 	runID := envelope.Domain.ID
-	claimed, err := dependencies.Runs.Claim(ctx, runID, reportID)
+	claim, err := dependencies.Runs.Claim(ctx, runID, reportID)
 	if err != nil {
-		return fmt.Errorf("claim report run: %w", err)
+		var active *RunLeaseActiveError
+		if errors.As(err, &active) {
+			return jobruntime.RetryableAfter(err, active.RetryAfter)
+		}
+		if errors.Is(err, ErrRunReclaimExhausted) {
+			return jobruntime.Permanent(err)
+		}
+		return jobruntime.Retryable(fmt.Errorf("claim report run: %w", err))
 	}
-	if !claimed {
+	if claim == nil {
 		return notify(ctx, dependencies, runID, reportID)
 	}
-	input, err := dependencies.Query.Query(ctx, QueryInput{ReportID: reportID, RunID: runID})
+	var artifact Artifact
+	failureCode := "execution_lease_lost"
+	err = runWithLeaseRenewal(
+		ctx,
+		claim.LeaseDuration,
+		func(renewCtx context.Context) error {
+			return dependencies.Runs.Renew(renewCtx, runID, *claim)
+		},
+		func(workCtx context.Context) error {
+			input, queryErr := dependencies.Query.Query(workCtx, QueryInput{ReportID: reportID, RunID: runID})
+			if queryErr != nil {
+				failureCode = "query_failed"
+				return queryErr
+			}
+			var renderErr error
+			artifact, renderErr = dependencies.Renderer.Render(workCtx, input)
+			if renderErr != nil {
+				failureCode = "render_failed"
+				return renderErr
+			}
+			artifact, renderErr = dependencies.Artifacts.Store(workCtx, runID, artifact)
+			if renderErr != nil {
+				failureCode = "storage_failed"
+				return renderErr
+			}
+			return nil
+		},
+	)
 	if err != nil {
-		return fail(ctx, dependencies.Runs, runID, "query_failed", err)
+		return fail(ctx, dependencies.Runs, runID, *claim, failureCode, err)
 	}
-	artifact, err := dependencies.Renderer.Render(ctx, input)
+	completed, err := dependencies.Runs.Complete(ctx, runID, *claim, artifact)
 	if err != nil {
-		return fail(ctx, dependencies.Runs, runID, "render_failed", err)
-	}
-	artifact, err = dependencies.Artifacts.Store(ctx, runID, artifact)
-	if err != nil {
-		return fail(ctx, dependencies.Runs, runID, "storage_failed", err)
-	}
-	completed, err := dependencies.Runs.Complete(ctx, runID, artifact)
-	if err != nil {
-		return fmt.Errorf("complete report run: %w", err)
+		if errors.Is(err, ErrArtifactConflict) {
+			return jobruntime.Permanent(err)
+		}
+		return jobruntime.Retryable(fmt.Errorf("complete report run: %w", err))
 	}
 	if !completed {
 		return notify(ctx, dependencies, runID, reportID)
@@ -237,9 +289,51 @@ func notify(ctx context.Context, dependencies Dependencies, runID, reportID stri
 	return nil
 }
 
-func fail(ctx context.Context, store RunStore, runID, code string, cause error) error {
-	if err := store.Fail(ctx, runID, code); err != nil {
-		return fmt.Errorf("%s: %w", code, err)
+func fail(ctx context.Context, store RunStore, runID string, claim RunClaim, code string, cause error) error {
+	if err := store.Fail(ctx, runID, claim, code); err != nil {
+		return jobruntime.Retryable(fmt.Errorf("%s: %w", code, err))
 	}
-	return fmt.Errorf("%s: %w", code, cause)
+	return jobruntime.Retryable(fmt.Errorf("%s: %w", code, cause))
+}
+
+func runWithLeaseRenewal(
+	ctx context.Context,
+	leaseDuration time.Duration,
+	renew func(context.Context) error,
+	work func(context.Context) error,
+) error {
+	if ctx == nil || leaseDuration < 3*time.Millisecond || renew == nil || work == nil {
+		return ErrDependencyUnavailable
+	}
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
+	stop := make(chan struct{})
+	renewalResult := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(leaseDuration / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				renewalResult <- nil
+				return
+			case <-ctx.Done():
+				cancelWork()
+				renewalResult <- ctx.Err()
+				return
+			case <-ticker.C:
+				if err := renew(ctx); err != nil {
+					cancelWork()
+					renewalResult <- err
+					return
+				}
+			}
+		}
+	}()
+	workErr := work(workCtx)
+	close(stop)
+	if renewalErr := <-renewalResult; renewalErr != nil {
+		return renewalErr
+	}
+	return workErr
 }

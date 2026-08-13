@@ -232,6 +232,23 @@ class ReportRun(Base):
         nullable=True,
         comment="SHA-256 identity of the rendered artifact; retries must preserve it",
     )
+    execution_claim_token: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        nullable=True,
+        comment="Fencing token for the current report execution lease",
+    )
+    execution_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Renewable execution lease; expiry permits crash recovery",
+    )
+    execution_reclaim_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Number of expired running holders replaced for this run",
+    )
     notification_key: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -275,6 +292,11 @@ class ReportRun(Base):
         Index("ix_report_runs_report_created", "report_id", "created_at"),
         Index("ix_report_runs_status", "status"),
         Index("ix_report_runs_notification_key", "notification_key"),
+        Index(
+            "ix_report_runs_execution_reclaim",
+            "status",
+            "execution_lease_expires_at",
+        ),
         Index(
             "ix_report_runs_notification_reclaim",
             "notification_status",

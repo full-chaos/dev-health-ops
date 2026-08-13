@@ -59,6 +59,13 @@ type SyncLeaseObserver interface {
 	ObserveSyncLeaseExpired(SyncLeaseLabels, SyncLeaseResult) error
 }
 
+// ReportRunLeaseObserver is the narrow capability used by the report domain
+// store after it durably reclaims or terminalizes an expired execution lease.
+// Generic runtime middleware cannot infer this state change from a job retry.
+type ReportRunLeaseObserver interface {
+	ObserveReportRunLeaseExpired(ReportRunLeaseResult) error
+}
+
 // RegisterRuntime validates the low-cardinality scrape-presence identity
 // before passing it to an Observer.
 func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) error {

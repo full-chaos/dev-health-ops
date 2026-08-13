@@ -52,6 +52,15 @@ func (err *markedError) Unwrap() error { return err.cause }
 // Retryable marks an expected transient handler failure.
 func Retryable(err error) error { return mark(CategoryRetryable, err, false) }
 
+// RetryableAfter marks transient contention that must be retried after a
+// known delay without consuming the job's bounded failure attempts.
+func RetryableAfter(err error, delay time.Duration) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	return &markedError{category: CategoryRetryable, cause: nonNilError(err), snooze: delay}
+}
+
 // BudgetContention marks a short-lived shared-request reservation collision.
 // River snoozes do not count as attempts, so this is distinct from Retryable:
 // healthy sibling work cannot consume a job's bounded failure budget.

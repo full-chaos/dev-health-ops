@@ -226,6 +226,41 @@ async def test_create_and_delete_saved_report(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_cron",
+    ["not-a-cron", "", "0 6 * * * *", "@daily", "99 * * * *"],
+)
+async def test_create_saved_report_rejects_unevaluable_cron(
+    monkeypatch, session_maker, seeded_reports, bad_cron
+):
+    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session",
+        _make_mock_session(session_maker),
+    )
+
+    with pytest.raises(ValueError, match=r"Invalid report schedule cron expression"):
+        await reports_mod.resolve_create_saved_report(
+            org_id=seeded_reports["org_id"],
+            input=reports_mod.CreateSavedReportInput(
+                name="Invalid Schedule",
+                report_plan=cast(Any, {"report_type": "custom"}),
+                schedule_cron=bad_cron,
+            ),
+        )
+
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(SavedReport).where(SavedReport.name == "Invalid Schedule")
+            )
+            is None
+        )
+        assert await session.scalar(select(ScheduledJob)) is None
+
+
+@pytest.mark.asyncio
 async def test_clone_saved_report(monkeypatch, session_maker, seeded_reports):
     from dev_health_ops.api.graphql.resolvers import reports as reports_mod
 
@@ -321,3 +356,46 @@ async def test_report_schedule_writes_the_exact_next_due_marker(
         assert len(jobs) == 1
         assert jobs[0].id == original_job_id
         assert jobs[0].next_run_at == datetime(2026, 7, 25, 7, 30)
+
+
+@pytest.mark.asyncio
+async def test_update_saved_report_rejects_unevaluable_cron(
+    monkeypatch, session_maker, seeded_reports
+):
+    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session",
+        _make_mock_session(session_maker),
+    )
+
+    created = await reports_mod.resolve_create_saved_report(
+        org_id=seeded_reports["org_id"],
+        input=reports_mod.CreateSavedReportInput(
+            name="Valid Schedule",
+            report_plan=cast(Any, {"report_type": "custom"}),
+            schedule_cron="0 6 * * *",
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"Invalid report schedule cron expression"):
+        await reports_mod.resolve_update_saved_report(
+            org_id=seeded_reports["org_id"],
+            report_id=created.id,
+            input=reports_mod.UpdateSavedReportInput(
+                name="Invalid Update",
+                schedule_cron="99 * * * *",
+            ),
+        )
+
+    async with session_maker() as session:
+        report = await session.scalar(
+            select(SavedReport).where(SavedReport.id == uuid.UUID(created.id))
+        )
+        assert report is not None
+        assert report.name == "Valid Schedule"
+        job = await session.scalar(
+            select(ScheduledJob).where(ScheduledJob.id == report.schedule_id)
+        )
+        assert job is not None
+        assert job.schedule_cron == "0 6 * * *"

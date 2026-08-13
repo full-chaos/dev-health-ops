@@ -967,6 +967,78 @@
           "tests/test_report_run_execution_lease_postgres_migration.py::test_0098_makes_a_legacy_running_run_immediately_reclaimable"
         ]
       ]
+    },
+    {
+      "id": "CHAOS-3149-M1",
+      "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
+      "find": "    if len(fields) != 5:\n        raise ValueError(",
+      "replace": "    if False and len(fields) != 5:\n        raise ValueError(",
+      "rationale": "Report schedules must stay inside the native scheduler's five-field cron boundary. Removing this guard lets descriptors and extended six-field expressions pass croniter at the write path and then abort the Go scheduled-report occurrence.",
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/graphql/resolvers/reports.py"
+      ],
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/api/test_saved_reports.py",
+          "-k",
+          "create_saved_report_rejects_unevaluable_cron"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3149-M2",
+      "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
+      "find": "        Croniter(cron, datetime.now(timezone.utc)).get_next(datetime)",
+      "replace": "        Croniter(\"0 * * * *\", datetime.now(timezone.utc)).get_next(datetime)",
+      "rationale": "The resolver must evaluate the tenant-supplied expression, not merely exercise croniter with a known-valid value. Substituting a fixed expression lets out-of-range schedules persist and turns input validation back into a recurring producer failure.",
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/graphql/resolvers/reports.py"
+      ],
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/api/test_saved_reports.py",
+          "-k",
+          "create_saved_report_rejects_unevaluable_cron or update_saved_report_rejects_unevaluable_cron"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3149-M3",
+      "file": "src/dev_health_ops/api/graphql/resolvers/reports.py",
+      "find": "        if input.schedule_cron is not None:\n            await _ensure_or_update_schedule(\n                session, report, input.schedule_cron, input.schedule_timezone\n            )",
+      "replace": "        if input.schedule_cron:\n            await _ensure_or_update_schedule(\n                session, report, input.schedule_cron, input.schedule_timezone\n            )",
+      "rationale": "An empty cron value is invalid input, not an omitted schedule. Restoring the truthiness check bypasses validation only on create and silently persists the report without the schedule the tenant requested.",
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/graphql/resolvers/reports.py"
+      ],
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/api/test_saved_reports.py",
+          "-k",
+          "create_saved_report_rejects_unevaluable_cron"
+        ]
+      ]
     }
   ]
 }

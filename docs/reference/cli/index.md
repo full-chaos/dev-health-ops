@@ -1273,7 +1273,7 @@ Each report requires a `ReportPlan` that defines scope, time range, sections, an
 
 ### Scheduling
 
-Reports can be scheduled with a cron expression (via `scheduleCron` in the create/update mutation). The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
+Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
 
 ### Worker Configuration
 

@@ -392,9 +392,9 @@
     {
       "id": "M29",
       "file": "internal/scheduler/fixed/loop.go",
-      "find": "\t\tif schedule.Evaluated {\n\t\t\tstate.degraded = schedule.Degraded\n\t\t}",
-      "replace": "\t\tstate.degraded = schedule.Degraded",
-      "rationale": "Restores the unconditional overwrite. The loop polls far more often than any schedule is due, so a window that never ran the producer cleared a live degraded reason on the very next poll \u2014 making a permanent fault visible for one poll interval and invisible to any realistic scrape. This is what made the whole per-report degraded fix unobservable in practice, so the fix and its signal must be mutated separately. Must be proved through the loop's exported metric, not the engine's returned ScheduleResult: a test that only inspects Step's return never reaches Loop.record.",
+      "find": "\t\tif schedule.DegradedLoaded {\n\t\t\tstate.degraded = schedule.Degraded\n\t\t}",
+      "replace": "\t\tif schedule.DegradedLoaded && false {\n\t\t\tstate.degraded = schedule.Degraded\n\t\t}",
+      "rationale": "Disconnects the newest durable degraded verdict from the loop's synchronous Prometheus snapshot. PostgreSQL remains correct while a restarted process exports reason=none. Must be proved through the exported metric, not only through the engine return or ledger row.",
       "proof": [
         [
           "go",

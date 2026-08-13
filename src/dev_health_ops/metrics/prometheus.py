@@ -92,6 +92,12 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0),
     )
 
+    REPORT_RUN_LEASE_EXPIRED_TOTAL = _prometheus_client_module.Counter(
+        "worker_report_run_lease_expired_total",
+        "Expired report execution leases by bounded durable result",
+        ["result"],
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -347,6 +353,7 @@ else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
     CELERY_TASK_DURATION_SECONDS = _noop_histogram()
+    REPORT_RUN_LEASE_EXPIRED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     LLM_REQUESTS_TOTAL = _noop_counter()

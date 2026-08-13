@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -30,16 +31,43 @@ def _json_object(value: object | None) -> dict[str, Any]:
     return {str(key): raw_value for key, raw_value in value.items()}
 
 
-def _datetime_or_none(value: object | None) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    return None
-
-
 def _string_value(value: object | None) -> str:
     if value is None:
         return ""
     return value if isinstance(value, str) else str(value)
+
+
+async def _execute_with_report_run_lease(
+    execute_report: Any,
+    plan: Any,
+    chart_specs: list[Any],
+    clickhouse_dsn: str,
+    run_id: str,
+    claim: Any,
+) -> Any:
+    """Renew the durable execution fence while the async report work runs."""
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.reports.export import renew_report_run
+
+    work = asyncio.create_task(execute_report(plan, chart_specs, clickhouse_dsn))
+    interval = max(0.001, float(claim.lease_seconds) / 3.0)
+    try:
+        while True:
+            done, _ = await asyncio.wait({work}, timeout=interval)
+            if done:
+                return await work
+            with get_postgres_session_sync() as session:
+                if not renew_report_run(session, run_id, claim.token):
+                    raise RuntimeError("report run execution lease was lost")
+                session.commit()
+    finally:
+        if not work.done():
+            work.cancel()
+            try:
+                await work
+            except asyncio.CancelledError:
+                pass
 
 
 def _build_default_plan(
@@ -82,11 +110,23 @@ def _build_default_plan(
     return plan
 
 
-@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.execute_saved_report")
+@celery_app.task(
+    bind=True,
+    name="dev_health_ops.workers.tasks.execute_saved_report",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def execute_saved_report(self, report_id: str, run_id: str) -> dict:
     from dev_health_ops.db import get_postgres_session_sync, require_clickhouse_uri
-    from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
-    from dev_health_ops.reports.export import persist_report_run, start_report_run
+    from dev_health_ops.metrics.prometheus import REPORT_RUN_LEASE_EXPIRED_TOTAL
+    from dev_health_ops.models.reports import ReportRun, SavedReport
+    from dev_health_ops.reports.export import (
+        ReportRunLeaseActive,
+        ReportRunReclaimExhausted,
+        fail_report_run,
+        persist_report_run,
+        start_report_run,
+    )
 
     report_uuid = uuid.UUID(report_id)
     run_uuid = uuid.UUID(run_id)
@@ -108,9 +148,23 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
             logger.error("ReportRun %s not found", run_id)
             return {"status": "error", "reason": "run_not_found"}
 
-        if not start_report_run(session, run_id):
+        try:
+            claim = start_report_run(session, run_id)
+        except ReportRunLeaseActive as exc:
+            raise self.retry(
+                exc=exc,
+                countdown=max(1, math.ceil(exc.retry_after_seconds)),
+            ) from exc
+        except ReportRunReclaimExhausted as exc:
+            session.commit()
+            if exc.terminalized:
+                REPORT_RUN_LEASE_EXPIRED_TOTAL.labels(result="failed").inc()
+            raise
+        if claim is None:
             return {"status": "ignored", "reason": "run_not_pending", "run_id": run_id}
         session.commit()
+    if claim.reclaimed:
+        REPORT_RUN_LEASE_EXPIRED_TOTAL.labels(result="retrying").inc()
 
     try:
         from dev_health_ops.db import reset_async_engines
@@ -144,7 +198,16 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
 
         chart_specs = [ChartSpec(**spec) for spec in plan_data.get("chart_specs", [])]
 
-        result = asyncio.run(execute_report(plan, chart_specs, clickhouse_dsn))
+        result = asyncio.run(
+            _execute_with_report_run_lease(
+                execute_report,
+                plan,
+                chart_specs,
+                clickhouse_dsn,
+                run_id,
+                claim,
+            )
+        )
 
         with get_postgres_session_sync() as session:
             persisted = persist_report_run(
@@ -160,6 +223,7 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
                     }
                     for p in result.provenance
                 ],
+                claim_token=claim.token,
             )
 
         return {"status": "success" if persisted else "ignored", "run_id": run_id}
@@ -174,34 +238,19 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
         # workers/sync_units.py, CHAOS-2766).
         sanitized_error = sanitize_error_text(exc)
         with get_postgres_session_sync() as session:
-            run = session.execute(
-                select(ReportRun).where(ReportRun.id == run_uuid)
-            ).scalar_one_or_none()
-            if run and run.status != ReportRunStatus.CANCELED.value:
-                completed_at = datetime.now(timezone.utc)
-                setattr(run, "status", ReportRunStatus.FAILED.value)
-                setattr(run, "completed_at", completed_at)
-                started_at = _datetime_or_none(run.started_at)
-                if started_at is not None:
-                    setattr(
-                        run,
-                        "duration_seconds",
-                        (completed_at - started_at).total_seconds(),
-                    )
-                setattr(run, "error", sanitized_error)
-                setattr(
-                    run,
-                    "error_traceback",
-                    sanitize_error_text(traceback.format_exc()),
-                )
-                session.commit()
+            persisted_failure = fail_report_run(
+                session,
+                run_id,
+                claim.token,
+                sanitized_error,
+                sanitize_error_text(traceback.format_exc()),
+            )
+            session.commit()
 
-            report_obj = session.execute(
-                select(SavedReport).where(SavedReport.id == report_uuid)
-            ).scalar_one_or_none()
-            if report_obj:
-                setattr(report_obj, "last_run_at", datetime.now(timezone.utc))
-                setattr(report_obj, "last_run_status", ReportRunStatus.FAILED.value)
-                session.commit()
-
+        if not persisted_failure:
+            return {
+                "status": "ignored",
+                "reason": "execution_lease_lost",
+                "run_id": run_id,
+            }
         return {"status": "failed", "run_id": run_id, "error": sanitized_error}

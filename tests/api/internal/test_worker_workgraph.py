@@ -26,12 +26,16 @@ from dev_health_ops.api.internal.worker_workgraph import (
 )
 
 
-async def _wait_for_marker(path: Path) -> None:
+async def _wait_for_pid_pair(path: Path) -> tuple[int, int]:
     for _ in range(100):
-        if path.exists():
-            return
+        try:
+            values = path.read_text(encoding="utf-8").split(":")
+        except FileNotFoundError:
+            values = []
+        if len(values) == 2 and all(value.isdecimal() for value in values):
+            return int(values[0]), int(values[1])
         await asyncio.sleep(0.01)
-    pytest.fail("compatibility child did not start")
+    pytest.fail("compatibility child did not publish a complete PID marker")
 
 
 async def _assert_process_reaped(pid: int) -> None:
@@ -42,6 +46,21 @@ async def _assert_process_reaped(pid: int) -> None:
             return
         await asyncio.sleep(0.01)
     pytest.fail(f"compatibility process {pid} was not reaped")
+
+
+@pytest.mark.asyncio
+async def test_wait_for_pid_pair_ignores_a_partially_written_marker(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "partial.pid"
+    marker.write_text("123:", encoding="utf-8")
+
+    waiter = asyncio.create_task(_wait_for_pid_pair(marker))
+    await asyncio.sleep(0)
+    assert not waiter.done()
+
+    marker.write_text("123:456", encoding="utf-8")
+    assert await waiter == (123, 456)
 
 
 def _runner_command(source: str, *arguments: str) -> tuple[str, ...]:
@@ -439,8 +458,7 @@ async def test_compatibility_process_cancellation_terminates_and_reaps_child(
     execution = asyncio.create_task(
         _run_compatibility_process("workgraph.build", {"org_id": "org"})
     )
-    await _wait_for_marker(marker)
-    pid, child_pid = (int(value) for value in marker.read_text().split(":"))
+    pid, child_pid = await _wait_for_pid_pair(marker)
     execution.cancel()
 
     with pytest.raises(asyncio.CancelledError):

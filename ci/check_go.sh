@@ -781,39 +781,14 @@ load_providersync_test_shard_manifest() {
     || die "provider test shard manifest must declare at least two shards"
 }
 
-# Go's own test listing is the executable-name authority. Source inspection is
-# used only to classify those names by cost, and only across files `go list`
-# says are active for the integration build tag on this runner.
+# `go list` is the active-file authority for this runner's integration build.
+# Reading the top-level test declarations from those files keeps shard planning
+# independent of a second compile-heavy `go test -list` inside the Python xdist
+# gate. The integration-vet and integration shard verbs still compile the same
+# tagged package before execution.
 discover_providersync_tests() {
-  local list_output files_output go_file source_file test_name
+  local files_output go_file source_file test_name integration_file
   declare -A discovered_names=()
-
-  if ! list_output="$(
-    cd "${ROOT}"
-    GOWORK=off go test -mod=readonly -tags=integration -count=1 -run '^$' -list '^Test' ./internal/providersync
-  )"; then
-    die "failed to discover providersync top-level tests with go test -list"
-  fi
-
-  PROVIDER_TEST_NAMES=()
-  while IFS= read -r test_name; do
-    case "${test_name}" in
-      Test*[![:alnum:]_]*)
-        die "providersync test discovery returned unsupported top-level test name '${test_name}'"
-        ;;
-      Test*) ;;
-      *) continue ;;
-    esac
-    [ -z "${discovered_names[${test_name}]+set}" ] \
-      || die "providersync test discovery returned '${test_name}' more than once"
-    discovered_names["${test_name}"]=1
-    PROVIDER_TEST_NAMES+=("${test_name}")
-  done < <(printf '%s\n' "${list_output}" | LC_ALL=C sort)
-
-  [ "${#PROVIDER_TEST_NAMES[@]}" -gt 0 ] \
-    || die "providersync test discovery returned zero top-level tests"
-  [ "${PROVIDER_TEST_SHARD_COUNT}" -le "${#PROVIDER_TEST_NAMES[@]}" ] \
-    || die "provider test shard manifest declares more shards than discovered tests"
 
   if ! files_output="$(
     cd "${ROOT}"
@@ -824,6 +799,7 @@ discover_providersync_tests() {
     die "failed to discover active providersync test files with go list"
   fi
 
+  PROVIDER_TEST_NAMES=()
   PROVIDER_INTEGRATION_TEST_NAMES=()
   while IFS= read -r go_file; do
     [ -n "${go_file}" ] || continue
@@ -833,25 +809,40 @@ discover_providersync_tests() {
     source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
     [ -f "${source_file}" ] \
       || die "go list returned missing providersync test file '${go_file}'"
-    grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
-      "${source_file}" || continue
+    integration_file=0
+    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
+      "${source_file}"; then
+      integration_file=1
+    fi
     while IFS= read -r test_name; do
       [ -n "${test_name}" ] || continue
-      [ -z "${PROVIDER_INTEGRATION_TEST_NAMES[${test_name}]+set}" ] \
-        || die "integration-tagged providersync source declares '${test_name}' more than once"
-      PROVIDER_INTEGRATION_TEST_NAMES["${test_name}"]=1
+      case "${test_name}" in
+        Test*[![:alnum:]_]*)
+          die "providersync source discovery returned unsupported top-level test name '${test_name}'"
+          ;;
+        Test*) ;;
+        *) continue ;;
+      esac
+      [ -z "${discovered_names[${test_name}]+set}" ] \
+        || die "providersync source discovery returned '${test_name}' more than once"
+      discovered_names["${test_name}"]=1
+      PROVIDER_TEST_NAMES+=("${test_name}")
+      if [ "${integration_file}" -eq 1 ]; then
+        PROVIDER_INTEGRATION_TEST_NAMES["${test_name}"]=1
+      fi
     done < <(
       sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' \
         "${source_file}"
     )
   done <<< "${files_output}"
 
+  mapfile -t PROVIDER_TEST_NAMES < <(printf '%s\n' "${PROVIDER_TEST_NAMES[@]}" | LC_ALL=C sort)
+  [ "${#PROVIDER_TEST_NAMES[@]}" -gt 0 ] \
+    || die "providersync source discovery returned zero top-level tests"
+  [ "${PROVIDER_TEST_SHARD_COUNT}" -le "${#PROVIDER_TEST_NAMES[@]}" ] \
+    || die "provider test shard manifest declares more shards than discovered tests"
   [ "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
     || die "providersync source discovery returned zero integration-tagged top-level tests"
-  for test_name in "${!PROVIDER_INTEGRATION_TEST_NAMES[@]}"; do
-    [ -n "${discovered_names[${test_name}]+set}" ] \
-      || die "integration-tagged providersync source test '${test_name}' is absent from go test -list"
-  done
 
   PROVIDER_TEST_WEIGHTS=()
   PROVIDER_TEST_CLASS=()

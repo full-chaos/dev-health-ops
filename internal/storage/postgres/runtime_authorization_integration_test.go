@@ -118,6 +118,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_runs TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.sync_run_units TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
@@ -155,6 +156,12 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 		t.Fatalf("queue domain materializer write-boundary error = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := queue.Exec(ctx, "SELECT id FROM public.sync_run_units LIMIT 1"); err != nil {
+		t.Fatalf("queue cannot read sync-run-unit recovery state: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.sync_run_units SET state = state"); err == nil {
+		t.Fatal("queue unexpectedly mutates sync-run-unit recovery state")
 	}
 	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE worker_test TO PUBLIC"); err != nil {
 		t.Fatal(err)

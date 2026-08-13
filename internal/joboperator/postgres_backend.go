@@ -183,7 +183,7 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 		return JobSummary{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := backend.lockCurrentSyncDispatchDelivery(ctx, tx, id); err != nil {
+	if err := backend.lockCurrentDelivery(ctx, tx, id); err != nil {
 		return JobSummary{}, err
 	}
 	if err := backend.compareLockedState(ctx, tx, id, mutation.ExpectedState); err != nil {
@@ -203,12 +203,12 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 	return summary, nil
 }
 
-// lockCurrentSyncDispatchDelivery serializes an audited retry with terminal
-// delivery recovery. Coordinator jobs are only retryable while the durable
-// outbox still names that exact River row. Locking the outbox before the River
-// row matches the reconciler's lock order and prevents an old job plus a new
+// lockCurrentDelivery serializes an audited retry with terminal delivery
+// recovery. Recoverable jobs are only retryable while their durable outbox
+// still names that exact River row. Locking the outbox before the River row
+// matches both reconcilers' lock order and prevents an old job plus a new
 // outbox attempt from becoming runnable together.
-func (backend *PostgresBackend) lockCurrentSyncDispatchDelivery(
+func (backend *PostgresBackend) lockCurrentDelivery(
 	ctx context.Context,
 	tx pgx.Tx,
 	id int64,
@@ -220,17 +220,28 @@ func (backend *PostgresBackend) lockCurrentSyncDispatchDelivery(
 		}
 		return err
 	}
-	if !isSyncDispatchKind(kind) {
+	var outboxID string
+	var err error
+	switch {
+	case isSyncDispatchKind(kind):
+		err = tx.QueryRow(ctx, `
+			SELECT id::text
+			FROM public.sync_dispatch_outbox
+			WHERE transport_job_id = ($1::bigint)::text
+				AND kind = $2
+				AND status = 'dispatched'
+			FOR UPDATE`, id, kind).Scan(&outboxID)
+	case kind == jobcontract.KindSyncProviderUnit:
+		err = tx.QueryRow(ctx, `
+			SELECT id::text
+			FROM public.worker_job_outbox
+			WHERE river_job_id = $1
+				AND job_kind = $2
+				AND status = 'delivered'
+			FOR UPDATE`, id, kind).Scan(&outboxID)
+	default:
 		return nil
 	}
-	var outboxID string
-	err := tx.QueryRow(ctx, `
-		SELECT id::text
-		FROM public.sync_dispatch_outbox
-		WHERE transport_job_id = ($1::bigint)::text
-			AND kind = $2
-			AND status = 'dispatched'
-		FOR UPDATE`, id, kind).Scan(&outboxID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrStateConflict
 	}

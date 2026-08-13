@@ -102,6 +102,7 @@ type ReconcilerLoop struct {
 	done     chan struct{}
 	ticker   reconcilerTicker
 
+	recovered uint64
 	claimed   uint64
 	delivered uint64
 	retried   uint64
@@ -216,6 +217,7 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 		return err
 	}
 	loop.mu.Lock()
+	loop.recovered += nonNegativeUint(result.Recovered)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -298,6 +300,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 		return errors.New("Prometheus output is required")
 	}
 	loop.mu.Lock()
+	recovered := loop.recovered
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -313,6 +316,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 		lastSuccessAge = now.Sub(lastOK).Seconds()
 	}
 	var text strings.Builder
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_terminal_deliveries_recovered_total", "Terminal River deliveries rearmed by the reconciler.", recovered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

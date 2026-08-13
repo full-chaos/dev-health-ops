@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -266,3 +267,36 @@ async def test_update_saved_report(monkeypatch, session_maker, seeded_reports):
     assert updated is not None
     assert updated.name == "Updated Weekly Health"
     assert updated.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_report_schedule_writes_the_exact_next_due_marker(
+    monkeypatch, session_maker, seeded_reports
+):
+    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session",
+        _make_mock_session(session_maker),
+    )
+    base = datetime(2026, 7, 24, 6, 30, tzinfo=UTC)
+    async with session_maker() as session:
+        report = await session.get(SavedReport, uuid.UUID(seeded_reports["report1_id"]))
+        assert report is not None
+        report.last_run_at = base
+        await session.commit()
+
+    updated = await reports_mod.resolve_update_saved_report(
+        org_id=seeded_reports["org_id"],
+        report_id=seeded_reports["report1_id"],
+        input=reports_mod.UpdateSavedReportInput(
+            schedule_cron="0 6 * * *",
+            schedule_timezone="UTC",
+        ),
+    )
+    assert updated is not None
+
+    async with session_maker() as session:
+        job = await session.scalar(select(ScheduledJob))
+        assert job is not None
+        assert job.next_run_at == datetime(2026, 7, 25, 6, 0)

@@ -121,6 +121,16 @@
       "expect_occurrences": 1,
       "rationale": "Deployed role reprovisioning must reproduce the same read-only active-run fence as the pinned Go migrator.",
       "proof": [[".venv/bin/pytest", "--noconftest", "-q", "tests/test_compose_config.py::test_local_postgres_bootstraps_distinct_go_runtime_roles"]]
+    },
+    {
+      "id": "RTDR13-deployed-active-run-index",
+      "file": "src/dev_health_ops/alembic/versions/0101_index_active_sync_runs_for_terminal_repair.py",
+      "find": "    op.create_index(_INDEX, _TABLE, [\"status\", \"id\"])",
+      "replace": "    op.create_index(_INDEX, _TABLE, [\"status\", \"organization_id\"])",
+      "expect_occurrences": 1,
+      "rationale": "The deployed migration must create the same status/id access path used by the bounded active-run terminal-repair query. Indexing organization_id instead leaves the retained-history scan risk in the real schema.",
+      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/alembic/versions/0101_index_active_sync_runs_for_terminal_repair.py"],
+      "proof": [[".venv/bin/pytest", "--noconftest", "-q", "tests/test_sync_run_terminal_repair_index_postgres_migration.py::test_0101_adds_the_deployed_active_sync_run_access_path"]]
     }
   ]
 }

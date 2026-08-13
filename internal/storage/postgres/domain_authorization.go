@@ -581,10 +581,13 @@ func domainPosture() RolePosture {
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
 			{"sync_configurations", false, false, false},
-			// The native sync-coverage projector replaces the Python Beat task.
-			// It reads schedule/backfill facts and atomically inserts or replaces
-			// the compact projection; neither source table is mutated here.
-			{"scheduled_jobs", false, false, false},
+			// The native sync-coverage projector reads schedule facts. The report
+			// worker also clears next_run_at after a terminal scheduled run so the
+			// fixed scheduler recomputes the next cron instant.
+			{"scheduled_jobs", false, true, false},
+			// Read only: terminal report handling follows the immutable occurrence
+			// link to the scheduled_jobs row it is allowed to invalidate.
+			{"scheduled_report_occurrences", false, false, false},
 			{"backfill_jobs", false, false, false},
 			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},

@@ -395,9 +395,11 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// MigrationOptions.CoordinatorRole is set, coordinatorGrantStatements
 		// below emits them from the injected posture in this same transaction,
 		// so local dev and CI are self-provisioning for all three roles.
-		// scheduled_jobs is now a read-only dual-role relation because the
-		// native sync-coverage projector reads schedule facts on the domain
-		// worker while the fixed scheduler remains its only writer.
+		// scheduled_jobs is dual-role. The native sync-coverage projector reads
+		// schedule facts, and the report worker clears next_run_at through the
+		// immutable scheduled occurrence whenever a run terminalizes so the fixed
+		// scheduler recomputes the next cron instant. That repair also reads the
+		// scheduled_report_occurrences link; it never mutates the occurrence row.
 		// sync_configurations is SELECT-only for the domain role: its
 		// coordinator-side FOR UPDATE row-locking use does not make the
 		// domain role's own posture require UPDATE. sync_runs, by contrast,
@@ -416,7 +418,8 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_report_occurrences') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_report_occurrences TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",

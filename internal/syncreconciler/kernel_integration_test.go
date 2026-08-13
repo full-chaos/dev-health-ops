@@ -900,6 +900,7 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",

@@ -695,6 +695,7 @@ WHERE dedupe_key=$1`, seed.DedupeKey).Scan(
 		if _, err := adminPool.Exec(ctx, `
 			UPDATE river.river_job
 			SET state = 'discarded', attempt = 1, max_attempts = 5,
+				unique_states = B'11111111',
 				finalized_at = $2::timestamptz,
 				errors = ARRAY[jsonb_build_object(
 					'at', $2::timestamptz, 'attempt', 1,
@@ -778,8 +779,8 @@ WHERE dedupe_key=$1`, seed.DedupeKey).Scan(
 			WHERE kind = $1`, jobcontract.KindSyncProviderUnit).Scan(&jobs); err != nil {
 			t.Fatal(err)
 		}
-		if jobs != 2 {
-			t.Fatalf("provider River jobs=%d want=2", jobs)
+		if jobs != 1 {
+			t.Fatalf("provider River jobs=%d want=1", jobs)
 		}
 
 		if _, err := adminPool.Exec(ctx, `
@@ -847,6 +848,248 @@ WHERE dedupe_key=$1`, seed.DedupeKey).Scan(
 		if err != nil || exhausted.Recovered != 0 {
 			t.Fatalf("exhausted repair Step() = %#v, %v", exhausted, err)
 		}
+	})
+
+	t.Run("post-repair contract rejection releases its retained discarded transport", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Second)
+		seed := providerUnitSeed(105, integrationUUID(4105), now)
+		seedProviderUnitDomain(t, ctx, adminPool, seed, "dispatching", "running", now.Add(-time.Hour))
+		seedOutbox(t, ctx, adminPool, seed.outbox)
+		claim := claimOne(t, ctx, repository, now, 30*time.Second)
+		firstJobID, err := repository.Dispatch(ctx, claim, now, inserter.Insert)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, max_attempts = 5,
+				unique_states = B'11111111', finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2::timestamptz, 'attempt', 1,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', ''
+				)]
+			WHERE id = $1`, firstJobID, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE public.worker_job_outbox
+			SET status = 'dead', river_job_id = NULL, delivered_at = NULL, attempt_count = 2,
+				first_attempt_at = $2, last_attempt_at = $2,
+				last_error_code = 'contract_rejected',
+				last_error_detail = 'stored job contract was rejected',
+				last_error_at = $2, updated_at = $2
+			WHERE id = $1`, seed.outbox.ID, now); err != nil {
+			t.Fatal(err)
+		}
+
+		results := make(chan TerminalDeliveryRepairResult, 2)
+		errorsByReplica := make(chan error, 2)
+		var replicas sync.WaitGroup
+		for range 2 {
+			repair, repairErr := NewTerminalDeliveryRepair(queuePool, "river")
+			if repairErr != nil {
+				t.Fatal(repairErr)
+			}
+			replicas.Add(1)
+			go func() {
+				defer replicas.Done()
+				result, stepErr := repair.Step(ctx, now.Add(time.Minute), 10)
+				results <- result
+				errorsByReplica <- stepErr
+			}()
+		}
+		replicas.Wait()
+		close(results)
+		close(errorsByReplica)
+		var recovered, postRepairRecovered int
+		for stepErr := range errorsByReplica {
+			if stepErr != nil {
+				t.Fatal(stepErr)
+			}
+		}
+		for result := range results {
+			recovered += result.Recovered
+			postRepairRecovered += result.PostRepairContractRejectionsRecovered
+		}
+		if recovered != 1 || postRepairRecovered != 1 {
+			t.Fatalf("post-repair contract replica recovery = %d/%d, want 1/1", recovered, postRepairRecovered)
+		}
+		var staleJobs int
+		if err := adminPool.QueryRow(ctx, `SELECT count(*) FROM river.river_job WHERE id=$1`, firstJobID).Scan(&staleJobs); err != nil {
+			t.Fatal(err)
+		}
+		if staleJobs != 0 {
+			t.Fatal("terminal stale transport was not deleted")
+		}
+		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		relay, err := NewRelayWithRoutesAndRecovery(
+			repository,
+			inserter,
+			fakeRouteResolver{route: "river"},
+			repair,
+			DefaultRelayConfig(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		delivery, err := relay.Step(ctx, now.Add(2*time.Minute), 10)
+		if err != nil || delivery.Claimed != 1 || delivery.Delivered != 1 {
+			t.Fatalf("post-repair contract relay Step() = %#v, %v", delivery, err)
+		}
+		var secondJobID int64
+		if err := adminPool.QueryRow(ctx, `SELECT river_job_id FROM public.worker_job_outbox WHERE id=$1`, seed.outbox.ID).Scan(&secondJobID); err != nil {
+			t.Fatal(err)
+		}
+		if secondJobID == firstJobID {
+			t.Fatal("relay reattached the terminal duplicate instead of inserting a new job")
+		}
+		var secondState string
+		if err := adminPool.QueryRow(ctx, `SELECT state::text FROM river.river_job WHERE id=$1`, secondJobID).Scan(&secondState); err != nil {
+			t.Fatal(err)
+		}
+		if secondState != "available" && secondState != "scheduled" {
+			t.Fatalf("fresh River job state=%s, want schedulable", secondState)
+		}
+		assertOutboxStatus(t, ctx, adminPool, seed.outbox.ID, statusDelivered, 3)
+	})
+
+	t.Run("mismatched terminal transport is never deleted or rearmed", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Second)
+		seed := providerUnitSeed(106, integrationUUID(4106), now)
+		seedProviderUnitDomain(t, ctx, adminPool, seed, "dispatching", "running", now.Add(-time.Hour))
+		seedOutbox(t, ctx, adminPool, seed.outbox)
+		claim := claimOne(t, ctx, repository, now, 30*time.Second)
+		jobID, err := repository.Dispatch(ctx, claim, now, inserter.Insert)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, max_attempts = 5,
+				unique_states = B'11111111', finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2::timestamptz, 'attempt', 1,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', ''
+				)],
+				metadata = jsonb_set(metadata, '{worker_outbox_id}', '"00000000-0000-4000-8000-000000009999"')
+			WHERE id = $1`, jobID, now); err != nil {
+			t.Fatal(err)
+		}
+		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := repair.Step(ctx, now.Add(time.Minute), 10)
+		if err != nil || result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("mismatched transport repair Step() = %#v, %v", result, err)
+		}
+		assertOutboxStatus(t, ctx, adminPool, seed.outbox.ID, statusDelivered, 1)
+		var jobs int
+		if err := adminPool.QueryRow(ctx, `SELECT count(*) FROM river.river_job WHERE id=$1`, jobID).Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if jobs != 1 {
+			t.Fatal("mismatched terminal transport was deleted")
+		}
+	})
+
+	t.Run("post-repair recovery deletes only the latest exact stale transport", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Second)
+		seed := providerUnitSeed(107, integrationUUID(4107), now)
+		seedProviderUnitDomain(t, ctx, adminPool, seed, "dispatching", "running", now.Add(-time.Hour))
+		seedOutbox(t, ctx, adminPool, seed.outbox)
+		claim := claimOne(t, ctx, repository, now, 30*time.Second)
+		firstJobID, err := repository.Dispatch(ctx, claim, now, inserter.Insert)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, max_attempts = 5,
+				unique_states = B'11111111', finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2::timestamptz, 'attempt', 1,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', ''
+				)]
+			WHERE id = $1`, firstJobID, now); err != nil {
+			t.Fatal(err)
+		}
+		var secondStaleJobID int64
+		if err := adminPool.QueryRow(ctx, `
+			INSERT INTO river.river_job (
+				args, attempt, created_at, errors, finalized_at, kind, max_attempts,
+				metadata, priority, queue, state, scheduled_at, unique_key, unique_states
+			)
+			SELECT args, 1, $2::timestamptz, errors, $2::timestamptz, kind, max_attempts,
+				metadata, priority, queue, 'discarded', scheduled_at,
+				decode(repeat('ab', 32), 'hex'), B'11110101'
+			FROM river.river_job WHERE id=$1
+			RETURNING id`, firstJobID, now.Add(time.Second)).Scan(&secondStaleJobID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE public.worker_job_outbox
+			SET status = 'dead', river_job_id = NULL, delivered_at = NULL, attempt_count = 2,
+				first_attempt_at = $2, last_attempt_at = $2,
+				last_error_code = 'contract_rejected',
+				last_error_detail = 'stored job contract was rejected', last_error_at = $2, updated_at = $2
+			WHERE id=$1`, seed.outbox.ID, now); err != nil {
+			t.Fatal(err)
+		}
+		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := repair.Step(ctx, now.Add(2*time.Minute), 10)
+		if err != nil || result != (TerminalDeliveryRepairResult{Recovered: 1, PostRepairContractRejectionsRecovered: 1}) {
+			t.Fatalf("multi-stale repair Step() = %#v, %v", result, err)
+		}
+		var firstJobs, secondJobs int
+		if err := adminPool.QueryRow(ctx, `SELECT count(*) FROM river.river_job WHERE id=$1`, firstJobID).Scan(&firstJobs); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminPool.QueryRow(ctx, `SELECT count(*) FROM river.river_job WHERE id=$1`, secondStaleJobID).Scan(&secondJobs); err != nil {
+			t.Fatal(err)
+		}
+		if firstJobs != 0 || secondJobs != 1 {
+			t.Fatalf("multi-stale deletion first/second=%d/%d, want 0/1", firstJobs, secondJobs)
+		}
+		relay, err := NewRelayWithRoutesAndRecovery(
+			repository,
+			inserter,
+			fakeRouteResolver{route: "river"},
+			repair,
+			DefaultRelayConfig(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		delivery, err := relay.Step(ctx, now.Add(3*time.Minute), 10)
+		if err != nil || delivery.Claimed != 1 || delivery.Delivered != 1 {
+			t.Fatalf("multi-stale relay Step() = %#v, %v", delivery, err)
+		}
+		var freshJobID int64
+		var freshState string
+		if err := adminPool.QueryRow(ctx, `
+			SELECT river_job_id FROM public.worker_job_outbox WHERE id=$1`, seed.outbox.ID).Scan(&freshJobID); err != nil {
+			t.Fatal(err)
+		}
+		if freshJobID == firstJobID || freshJobID == secondStaleJobID {
+			t.Fatalf("multi-stale relay reused terminal job %d", freshJobID)
+		}
+		if err := adminPool.QueryRow(ctx, `SELECT state::text FROM river.river_job WHERE id=$1`, freshJobID).Scan(&freshState); err != nil {
+			t.Fatal(err)
+		}
+		if freshState != "available" && freshState != "scheduled" {
+			t.Fatalf("multi-stale fresh River job state=%s, want schedulable", freshState)
+		}
+		assertOutboxStatus(t, ctx, adminPool, seed.outbox.ID, statusDelivered, 3)
 	})
 }
 

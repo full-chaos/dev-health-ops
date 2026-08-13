@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "provider-unit post-repair contract rejection recovery",
+  "$limitation": "Pins recovery only for active provider units with an exact discarded, finalized River transport. It does not reopen mismatched, running, cancelled, or terminal work.",
+  "mutations": [
+    {
+      "id": "PUPR01-dead-contract-evidence",
+      "file": "internal/joboutbox/terminal_delivery_repair.go",
+      "find": "\t\t\t\tAND outbox.last_error_code = $8\n",
+      "replace": "\t\t\t\tAND outbox.last_error_code <> $8\n",
+      "expect_occurrences": 1,
+      "rationale": "Only the recorded post-repair contract rejection can rearm a dead outbox row.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/joboutbox/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestGenericOutboxLiveFailureInjectionMatrix$/^post-repair_contract_rejection_releases_its_retained_discarded_transport$", "./internal/joboutbox/"]]
+    },
+    {
+      "id": "PUPR02-outbox-identity",
+      "file": "internal/joboutbox/terminal_delivery_repair.go",
+      "find": "\t\t\tAND candidate_job.metadata ->> 'worker_outbox_id' = outbox.id::text\n",
+      "replace": "\t\t\tAND candidate_job.metadata ->> 'worker_outbox_id' <> outbox.id::text\n",
+      "expect_occurrences": 1,
+      "rationale": "A mismatched terminal River job must neither be deleted nor rearm another outbox delivery.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/joboutbox/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestGenericOutboxLiveFailureInjectionMatrix$/^mismatched_terminal_transport_is_never_deleted_or_rearmed$", "./internal/joboutbox/"]]
+    },
+    {
+      "id": "PUPR03-supported-terminal-delete",
+      "file": "internal/joboutbox/terminal_delivery_repair.go",
+      "find": "\t\tdeleted, err := repair.client.JobDeleteTx(ctx, tx, candidate.riverJobID)\n",
+      "replace": "\t\tdeleted, err := &rivertype.JobRow{ID: candidate.riverJobID, State: rivertype.JobStateDiscarded}, error(nil)\n",
+      "expect_occurrences": 1,
+      "rationale": "The stale terminal job must be removed before the ordinary relay can insert a fresh, schedulable delivery.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/joboutbox/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestGenericOutboxLiveFailureInjectionMatrix$/^post-repair_contract_rejection_releases_its_retained_discarded_transport$", "./internal/joboutbox/"]]
+    },
+    {
+      "id": "PUPR04-legacy-unique-blocker",
+      "file": "internal/joboutbox/terminal_delivery_repair.go",
+      "find": "\t\t\tAND %s(candidate_job.unique_states, candidate_job.state)\n",
+      "replace": "\t\t\tAND NOT %s(candidate_job.unique_states, candidate_job.state)\n",
+      "expect_occurrences": 1,
+      "rationale": "A dead outbox is recovered only when the selected discarded job still owns the legacy uniqueness key that blocks a fresh relay insert.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/joboutbox/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/chaos3805-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestGenericOutboxLiveFailureInjectionMatrix$/^post-repair_contract_rejection_releases_its_retained_discarded_transport$", "./internal/joboutbox/"]]
+    }
+  ]
+}

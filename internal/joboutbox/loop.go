@@ -102,14 +102,15 @@ type ReconcilerLoop struct {
 	done     chan struct{}
 	ticker   reconcilerTicker
 
-	recovered uint64
-	claimed   uint64
-	delivered uint64
-	retried   uint64
-	dead      uint64
-	leaseLost uint64
-	lastOK    time.Time
-	up        bool
+	recovered                    uint64
+	postRepairContractRejections uint64
+	claimed                      uint64
+	delivered                    uint64
+	retried                      uint64
+	dead                         uint64
+	leaseLost                    uint64
+	lastOK                       time.Time
+	up                           bool
 
 	errors chan error
 }
@@ -218,6 +219,7 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	}
 	loop.mu.Lock()
 	loop.recovered += nonNegativeUint(result.Recovered)
+	loop.postRepairContractRejections += nonNegativeUint(result.PostRepairContractRejectionsRecovered)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -301,6 +303,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	}
 	loop.mu.Lock()
 	recovered := loop.recovered
+	postRepairContractRejections := loop.postRepairContractRejections
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -317,6 +320,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	}
 	var text strings.Builder
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_terminal_deliveries_recovered_total", "Terminal River deliveries rearmed by the reconciler.", recovered)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_post_repair_contract_rejections_recovered_total", "Post-repair provider contract rejections recovered by the reconciler.", postRepairContractRejections)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

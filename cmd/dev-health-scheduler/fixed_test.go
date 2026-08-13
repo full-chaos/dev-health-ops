@@ -32,7 +32,8 @@ const testContractRoot = "../../" + defaultContractRoot
 // forgetting to remove one after building the real producer, both fail the
 // build. It is deliberately data rather than a comment so the remaining gap is
 // visible to anyone reading the test output, not only to someone reading
-// buildFixedScheduleProducers.
+// buildFixedScheduleProducers. It is empty only when every declared schedule
+// is executable.
 var checkedInUnbuiltSchedules = map[string]string{}
 
 // unconnectedPool is a constructed but never-dialled pool. The stores
@@ -212,7 +213,7 @@ func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
 	err = refuseUnbuiltFixedSchedules(producers, schedules)
 	if len(checkedInUnbuiltSchedules) == 0 {
 		if err != nil {
-			t.Fatalf("the fully built production schedule set was refused: %v", err)
+			t.Fatalf("the runtime was refused after every checked schedule was built: %v", err)
 		}
 	} else {
 		if err == nil {
@@ -239,6 +240,15 @@ func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
 	heartbeat := scheduleWithID(t, schedules, "phone_home_heartbeat")
 	if err := refuseUnbuiltFixedSchedules(built, []schedulerfixed.Schedule{heartbeat}); err != nil {
 		t.Fatalf("a fully built schedule set was refused: %v", err)
+	}
+	stub, err := schedulerfixed.NewProducerSet(
+		schedulerfixed.NewNotImplementedProducer(schedulerfixed.ProducerHeartbeat, "test stub"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseUnbuiltFixedSchedules(stub, []schedulerfixed.Schedule{heartbeat}); !errors.Is(err, errFixedScheduleUnbuilt) {
+		t.Fatalf("unbuilt producer error = %v, want unbuilt-schedule refusal", err)
 	}
 }
 

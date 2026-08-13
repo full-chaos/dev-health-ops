@@ -93,6 +93,18 @@ def _pinned_clickhouse_image() -> str:
     return image
 
 
+def test_provider_shard_discovery_does_not_compile_the_test_binary() -> None:
+    source = CHECK_GO.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^discover_providersync_tests\(\) \{\n(?P<body>.*?)^\}",
+        source,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "go list -mod=readonly -tags=integration" in body
+    assert "go test -mod=readonly" not in body
+
+
 def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
     """Keep the public CLI guard compatible with the hosted ShellCheck gate."""
 
@@ -122,18 +134,13 @@ def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
     env["GOTOOLCHAIN"] = "go1.25.9"
     env["GOWORK"] = "off"
-    # Reuse the production subprocess cache. The previous distinct cache made
-    # this independent oracle pay for a second cold compile in the same test.
-    env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
         [
             "go",
-            "test",
+            "list",
             "-mod=readonly",
             "-tags=integration",
-            "-count=1",
-            "-run=^$",
-            "-list=^Test",
+            "-f={{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}",
             f"./{PROVIDER_PACKAGE}",
         ],
         cwd=ROOT,
@@ -144,11 +151,16 @@ def _providersync_top_level_tests() -> set[str]:
         timeout=CHECK_GO_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    candidates = [
-        line for line in result.stdout.splitlines() if line.startswith("Test")
-    ]
-    assert all(re.fullmatch(r"Test[A-Za-z0-9_]+", line) for line in candidates)
-    return set(candidates)
+    tests: list[str] = []
+    for filename in result.stdout.splitlines():
+        if not filename:
+            continue
+        assert Path(filename).name == filename
+        source = ROOT.joinpath(PROVIDER_PACKAGE, filename).read_text(encoding="utf-8")
+        tests.extend(re.findall(r"(?m)^func (Test[A-Za-z0-9_]+)\s*\(", source))
+    assert tests
+    assert len(tests) == len(set(tests))
+    return set(tests)
 
 
 def _providersync_integration_tagged_tests() -> set[str]:

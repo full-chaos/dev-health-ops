@@ -7,6 +7,7 @@ source_of_truth:
   - deploy/go-workers/profiles.json
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/
+  - src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py
   - current worker and synchronization settings
 applicability: current
 lifecycle: active
@@ -75,6 +76,37 @@ Before changing a route:
 Celery Beat remains required for current production schedules. The Go scheduler foundation can evaluate bounded schedule timing for comparison, but it does not currently own organization entitlement, mutation, lease repair, or production publication.
 
 Run exactly one active production scheduler unless the deployment contract explicitly provides leader election or another duplicate-prevention mechanism. Verify that recurring work cannot overlap beyond provider, worker, and store capacity.
+
+### Audit saved-report schedule ownership
+
+Each non-null `saved_reports.schedule_id` must belong to one report. Application
+schema migration `0096` enforces this rule. The migration does not choose a
+winner or delete a report when it finds older duplicate data. It stops before
+adding the constraint and lists the first 25 duplicate schedule IDs with their
+report IDs and the total number of duplicate schedules.
+
+Audit a database before its maintenance window:
+
+```sql
+SELECT schedule_id,
+       count(*) AS report_count,
+       array_agg(id ORDER BY id) AS report_ids
+FROM saved_reports
+WHERE schedule_id IS NOT NULL
+GROUP BY schedule_id
+HAVING count(*) > 1
+ORDER BY schedule_id;
+```
+
+An empty result is ready for the constraint. For each returned schedule, decide
+which report keeps the cadence and detach the other reports by setting their
+`schedule_id` to `NULL`. Preserve every report definition unless the customer
+separately requests its deletion. Rerun the audit, then rerun the migration.
+
+The migration locks `saved_reports` writers while it repeats this audit and
+adds the constraint. This closes the gap in which a new duplicate could arrive
+between the check and the schema change. Plan the brief write pause as part of
+the database maintenance window.
 
 The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
 first, with no Celery predecessor. CHAOS-3404 has since added the Beat entry

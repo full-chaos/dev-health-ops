@@ -66,6 +66,10 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
     )
     assert "tests/test_0066_celery_river_cutover_postgres.py" in postgres_step["run"]
+    assert (
+        "tests/test_saved_report_schedule_unique_postgres_migration.py"
+        in postgres_step["run"]
+    )
 
     unit_step = next(
         step
@@ -74,6 +78,10 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
     )
     assert (
         "--ignore=tests/test_0066_celery_river_cutover_postgres.py"
+        in (unit_step["env"]["PYTEST_ADDOPTS"])
+    )
+    assert (
+        "--ignore=tests/test_saved_report_schedule_unique_postgres_migration.py"
         in (unit_step["env"]["PYTEST_ADDOPTS"])
     )
     assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (

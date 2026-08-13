@@ -449,6 +449,111 @@
           "./internal/scheduler/fixed/"
         ]
       ]
+    },
+    {
+      "id": "CHAOS-3150-M1-audit-duplicates",
+      "file": "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py",
+      "find": "    if duplicate_schedules:\n        raise RuntimeError(_format_duplicate_error(duplicate_schedules))",
+      "replace": "    if duplicate_schedules and False:\n        raise RuntimeError(_format_duplicate_error(duplicate_schedules))",
+      "rationale": "The pre-DDL audit must fail with exact schedule and report identities. Disabling only its positive-result clause would fall through to a raw UniqueViolation, which is the mid-migration failure CHAOS-3150 requires operators to avoid.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_saved_report_schedule_unique_postgres_migration.py::test_migration_refuses_existing_duplicates_with_exact_offending_rows"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3150-M2-audit-write-lock",
+      "file": "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py",
+      "find": "LOCK TABLE public.saved_reports IN SHARE ROW EXCLUSIVE MODE",
+      "replace": "LOCK TABLE public.saved_reports IN SHARE UPDATE EXCLUSIVE MODE",
+      "rationale": "The audit and ALTER must observe one stable write set. SHARE UPDATE EXCLUSIVE does not conflict with an INSERT's ROW EXCLUSIVE lock, so a duplicate can arrive after the audit and turn the planned operator error into a raw DDL failure.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_saved_report_schedule_unique_postgres_migration.py::test_audit_lock_prevents_a_duplicate_insert_between_check_and_constraint"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3150-M3-null-schedules",
+      "file": "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py",
+      "find": "    WHERE schedule_id IS NOT NULL",
+      "replace": "    WHERE TRUE",
+      "rationale": "Only non-null schedule ownership is unique. Multiple manual reports intentionally have NULL schedule_id; treating NULL as a duplicate would block valid installations before PostgreSQL's unique constraint, which itself permits multiple NULLs.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_saved_report_schedule_unique_postgres_migration.py::test_unique_constraint_allows_multiple_unscheduled_reports_and_downgrades"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3150-M4-storage-column",
+      "file": "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py",
+      "find": "    op.create_unique_constraint(_CONSTRAINT, _TABLE, [\"schedule_id\"])",
+      "replace": "    op.create_unique_constraint(_CONSTRAINT, _TABLE, [\"id\"])",
+      "rationale": "The storage rule is one saved report per non-null schedule_id. A named unique constraint on the already-unique primary key would let the exact ambiguous join state survive while making schema inspection look superficially complete.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_saved_report_schedule_unique_postgres_migration.py::test_application_head_rejects_a_second_report_for_one_schedule"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3150-M5-model-column",
+      "file": "src/dev_health_ops/models/reports.py",
+      "find": "        UniqueConstraint(\"schedule_id\", name=\"uq_saved_reports_schedule_id\"),",
+      "replace": "        UniqueConstraint(\"id\", name=\"uq_saved_reports_schedule_id\"),",
+      "rationale": "The SQLAlchemy metadata used by tests and schema tooling must declare the same schedule_id invariant as Alembic. Reusing the migration's constraint name on id would create a false parity signal.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/models/reports.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/models/test_reports.py::test_saved_report_model_declares_one_report_per_schedule"
+        ]
+      ]
     }
   ]
 }

@@ -55,6 +55,11 @@ Where the current Report Center exposes schedule controls, the supported choices
 
 Choose a cadence that lets the underlying trend accumulate and matches the review cycle. A schedule automates execution; it does not validate that the scope, measures, or comparison remain appropriate over time.
 
+One recurring schedule can belong to only one saved report. A report can remain
+unscheduled, and any number of reports can remain manual. To move a cadence to a
+different report, detach it from the first report before you attach it to the
+second. Cloning a report does not copy its recurring schedule.
+
 The public guide does not promise schedule controls in every deployment or role. Treat them as available only when the current workspace exposes them.
 
 ## Monitor the result

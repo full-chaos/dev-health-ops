@@ -197,9 +197,9 @@ func TestScheduledReportsProducerRequiresACronEvaluator(t *testing.T) {
 }
 
 // A schedule owning two active reports is refused rather than fanned out.
-// saved_reports.schedule_id has no unique constraint, so this is reachable data,
-// and joining would silently produce two runs and advance one schedule's
-// next_run_at twice.
+// Alembic 0096 makes this unreachable in a current database. The guard remains
+// an assertion for a partially migrated or manually drifted schema, where a
+// join would silently produce two runs and advance next_run_at twice.
 func TestAmbiguousReportScheduleIsRefused(t *testing.T) {
 	candidates := []dueReportCandidate{
 		{JobID: "job-a", ReportID: "report-1"},

@@ -24,6 +24,28 @@ type gitLabTestsChunkCursor struct {
 	Coverage   int    `json:"coverage"`
 	Requests   int    `json:"requests"`
 	Pages      int    `json:"pages"`
+	// Cumulative per-phase inventory-page counts. See CHAOS-3822 and the
+	// matching fields on githubTestsChunkCursor: the paginator cap is local to
+	// one invocation, so a continuation would otherwise renew the budget.
+	PipelinePages int `json:"pipeline_pages"`
+	ReportPages   int `json:"report_pages"`
+	// Repo and ProjectID let the terminal `done` resume publish completion
+	// metadata without re-fetching the project object (CHAOS-3820).
+	Repo      string `json:"repo,omitempty"`
+	ProjectID int64  `json:"project_id,omitempty"`
+}
+
+// emitGitLabCursorPair publishes the terminal metadata emission, whose before
+// and after cursors are the same value because it advances no provider
+// position.
+func emitGitLabCursorPair(
+	cursor gitLabTestsChunkCursor, batch CompleteRouteBatch, emit func(ChunkRouteEmission) error,
+) error {
+	raw, err := encodeGitLabTestsChunkCursor(cursor)
+	if err != nil {
+		return err
+	}
+	return emit(ChunkRouteEmission{Batch: batch, CursorBefore: raw, CursorAfter: raw, Final: true})
 }
 
 func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
@@ -32,7 +54,9 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 	}
 	var cursor gitLabTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
-		(cursor.Phase != "pipelines" && cursor.Phase != "reports") || cursor.Page < 0 || cursor.Index < 0 {
+		(cursor.Phase != "pipelines" && cursor.Phase != "reports" && cursor.Phase != "done") ||
+		cursor.Page < 0 || cursor.Index < 0 ||
+		cursor.PipelinePages < 0 || cursor.ReportPages < 0 {
 		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
 	return cursor, nil
@@ -79,9 +103,42 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
+	// Decode BEFORE any provider call: a terminal cursor must re-publish
+	// completion metadata, never re-enter pagination (CHAOS-3820).
 	cursor, err := decodeGitLabTestsChunkCursor(resumeCursor)
 	if err != nil {
 		return err
+	}
+	emitFinalMetadata := func(cursor gitLabTestsChunkCursor) error {
+		cursor.Phase = "done"
+		effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
+		if effectErr != nil {
+			return effectErr
+		}
+		return emitGitLabCursorPair(cursor, CompleteRouteBatch{
+			Effects: effects,
+			Result: map[string]any{
+				"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
+				"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
+				"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
+				"repo": cursor.Repo, "project_id": cursor.ProjectID,
+				"actual_route_family": gitLabTestsActualRouteFamily(claim.Dataset),
+				"observations": map[string]any{"provider_usage": []any{map[string]any{
+					"transport": "rest", "route_family": gitLabTestsActualRouteFamily(claim.Dataset),
+					"dimension": "rest_core", "request_count": cursor.Requests,
+				}}},
+			},
+			Watermark: claim.BeforeAt,
+			Evidence: FetchEvidence{
+				Provider: claim.Provider, Dataset: claim.Dataset,
+				Requests: cursor.Requests, Pages: cursor.Pages,
+				Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance +
+					cursor.Suites + cursor.Cases + cursor.Coverage,
+			},
+		}, emit)
+	}
+	if cursor.Phase == "done" {
+		return emitFinalMetadata(cursor)
 	}
 	requests := cursor.Requests
 	counted := *client
@@ -97,6 +154,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		return providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
+	cursor.Repo, cursor.ProjectID = fullName, parsedProjectID
 	repoID, err := repositoryIdentity(fullName)
 	if err != nil {
 		return err
@@ -126,6 +184,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "pipelines" {
 		visit := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
+			cursor.PipelinePages++
 			pageNumber, _ := strconv.Atoi(page.CursorBefore)
 			start := 0
 			if cursor.Page == pageNumber {
@@ -207,8 +266,12 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			}
 			return nil
 		}
+		allowance, budgetErr := remainingPageBudget(maxPages, cursor.PipelinePages)
+		if budgetErr != nil {
+			return budgetErr
+		}
 		collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: maxPages, InitialPage: cursor.Page,
+			Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
 		}, visit)
 		if visitErr != nil {
 			return visitErr
@@ -230,6 +293,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 	reportVisit := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
+		cursor.ReportPages++
 		pageNumber, _ := strconv.Atoi(page.CursorBefore)
 		start := 0
 		if cursor.Page == pageNumber {
@@ -319,8 +383,12 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		}
 		return nil
 	}
+	reportAllowance, reportBudgetErr := remainingPageBudget(maxPages, cursor.ReportPages)
+	if reportBudgetErr != nil {
+		return reportBudgetErr
+	}
 	collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-		Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: maxPages, InitialPage: cursor.Page,
+		Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
 	}, reportVisit)
 	if visitErr != nil {
 		return visitErr
@@ -329,24 +397,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		return ErrPaginationCapExceeded
 	}
 	cursor.Requests = requests
-	result := map[string]any{
-		"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
-		"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
-		"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
-		"repo": fullName, "project_id": parsedProjectID,
-		"actual_route_family": gitLabTestsActualRouteFamily(claim.Dataset),
-		"observations": map[string]any{"provider_usage": []any{map[string]any{
-			"transport": "rest", "route_family": gitLabTestsActualRouteFamily(claim.Dataset), "dimension": "rest_core", "request_count": cursor.Requests,
-		}}},
-	}
-	effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
-	if effectErr != nil {
-		return effectErr
-	}
-	return emitCursor(cursor, cursor, CompleteRouteBatch{
-		Effects: effects, Result: result, Watermark: claim.BeforeAt,
-		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: cursor.Requests, Pages: cursor.Pages, Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage},
-	}, true)
+	return emitFinalMetadata(cursor)
 }
 
 var _ ChunkedCompleteRouteHandler = GitLabTestsRouteHandler{}

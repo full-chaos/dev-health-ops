@@ -29,6 +29,42 @@ type githubTestsChunkCursor struct {
 	Requests   int                     `json:"requests"`
 	Pages      int                     `json:"pages"`
 	Incomplete []GitHubTestsIncomplete `json:"incomplete,omitempty"`
+	// RunPages and ArtifactPages are CUMULATIVE inventory-page counts per
+	// phase. The paginator's own cap is local to one invocation, and a
+	// continuation starts a new invocation, so without these a route crosses
+	// its page budget once per attempt-neutral resume and never reports
+	// ErrPaginationCapExceeded (CHAOS-3822).
+	RunPages      int `json:"run_pages"`
+	ArtifactPages int `json:"artifact_pages"`
+	// Repo lets the terminal `done` resume publish completion metadata without
+	// re-fetching the repository object.
+	Repo string `json:"repo,omitempty"`
+}
+
+// emitCursorPair publishes one emission whose before and after cursors are the
+// same value. Used for the terminal metadata emission, which advances no
+// provider position.
+func emitCursorPair(
+	cursor githubTestsChunkCursor, batch CompleteRouteBatch, emit func(ChunkRouteEmission) error,
+) error {
+	raw, err := encodeGitHubTestsChunkCursor(cursor)
+	if err != nil {
+		return err
+	}
+	return emit(ChunkRouteEmission{Batch: batch, CursorBefore: raw, CursorAfter: raw, Final: true})
+}
+
+// remainingPageBudget converts a total inventory budget plus the pages already
+// spent on earlier attempts into the allowance for this invocation. A budget
+// that is already exhausted must fail, not silently fetch one more page.
+func remainingPageBudget(budget, spent int) (int, error) {
+	if budget < 1 {
+		return 0, ErrInvalidConfiguration
+	}
+	if spent >= budget {
+		return 0, ErrPaginationCapExceeded
+	}
+	return budget - spent, nil
 }
 
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
@@ -37,8 +73,9 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	}
 	var cursor githubTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
-		(cursor.Phase != "runs" && cursor.Phase != "artifacts") ||
-		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 {
+		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != "done") ||
+		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
 	return cursor, nil
@@ -74,11 +111,55 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
+	// Decode BEFORE any provider call. A cursor in the terminal `done` phase
+	// means the inventory scan already finished on an earlier attempt; the only
+	// thing left is to re-publish the completion metadata so the unit can
+	// finalize. Re-entering pagination there refetched the whole final phase,
+	// re-downloaded artifacts, and double-counted the cursor's own counters
+	// (CHAOS-3820).
+	cursor, err := decodeGitHubTestsChunkCursor(resumeCursor)
+	if err != nil {
+		return err
+	}
+	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
+		cursor.Phase = "done"
+		effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
+		if effectErr != nil {
+			return effectErr
+		}
+		return emitCursorPair(cursor, CompleteRouteBatch{
+			Effects: effects,
+			Result: map[string]any{
+				"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
+				"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
+				"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
+				"repo": cursor.Repo, "reports_complete": len(cursor.Incomplete) == 0,
+				"reports_skipped": githubTestsIncompleteCount(cursor.Incomplete),
+				"incomplete":      cursor.Incomplete,
+			},
+			Watermark: func() *time.Time {
+				if len(cursor.Incomplete) > 0 {
+					return nil
+				}
+				return claim.BeforeAt
+			}(),
+			Evidence: FetchEvidence{
+				Provider: claim.Provider, Dataset: claim.Dataset,
+				Requests: cursor.Requests, Pages: cursor.Pages,
+				Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance +
+					cursor.Suites + cursor.Cases + cursor.Coverage,
+			},
+		}, emit)
+	}
+	if cursor.Phase == "done" {
+		return emitFinalMetadata(cursor)
+	}
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repo gitHubRepositoryPayload
 	if err := fetchObject(ctx, client, root, &repo); err != nil {
 		return err
 	}
+	cursor.Repo = repo.FullName
 	repoID, err := repositoryIdentity(repo.FullName)
 	if err != nil {
 		return err
@@ -98,10 +179,6 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
 	}
-	cursor, err := decodeGitHubTestsChunkCursor(resumeCursor)
-	if err != nil {
-		return err
-	}
 	if cursor.Requests == 0 {
 		cursor.Requests = 1 // repository lookup above
 	}
@@ -119,6 +196,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
+		cursor.RunPages++
 		start := 0
 		if cursor.NextURL == page.CursorBefore {
 			start = cursor.Index
@@ -231,7 +309,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			query.Set("created", start+".."+end)
 		}
-		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: query, DataKey: "workflow_runs", MaxPages: (maxRuns + nativePerPage - 1) / nativePerPage, InitialURL: cursor.NextURL}
+		allowance, budgetErr := remainingPageBudget(
+			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
+		if budgetErr != nil {
+			return budgetErr
+		}
+		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
 		if visitErr != nil {
 			return visitErr
@@ -255,6 +338,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
+			cursor.ArtifactPages++
 			start := 0
 			if cursor.NextURL == page.CursorBefore {
 				start = cursor.Index
@@ -349,7 +433,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			return nil
 		}
-		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: artifactQuery, DataKey: "workflow_runs", MaxPages: (maxRuns + nativePerPage - 1) / nativePerPage, InitialURL: cursor.NextURL}, artifactPage)
+		allowance, budgetErr := remainingPageBudget(
+			(maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
+		if budgetErr != nil {
+			return budgetErr
+		}
+		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
 		if visitErr != nil {
 			return visitErr
 		}
@@ -358,27 +447,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 	}
 
-	result := map[string]any{
-		"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
-		"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
-		"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
-		"repo": repo.FullName, "reports_complete": len(cursor.Incomplete) == 0,
-		"reports_skipped": githubTestsIncompleteCount(cursor.Incomplete), "incomplete": cursor.Incomplete,
-	}
-	effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
-	if effectErr != nil {
-		return effectErr
-	}
-	return emitCursor(cursor, cursor, CompleteRouteBatch{
-		Effects: effects, Result: result,
-		Watermark: func() *time.Time {
-			if len(cursor.Incomplete) > 0 {
-				return nil
-			}
-			return claim.BeforeAt
-		}(),
-		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: cursor.Requests, Pages: cursor.Pages, Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage},
-	}, true)
+	// The inventory scan is complete. Publishing the terminal phase in the
+	// SAME emission that carries the completion metadata means a crash between
+	// this commit and MarkInventoryComplete resumes into emitFinalMetadata
+	// rather than back into pagination.
+	return emitFinalMetadata(cursor)
 }
 
 var _ ChunkedCompleteRouteHandler = GitHubTestsRouteHandler{}

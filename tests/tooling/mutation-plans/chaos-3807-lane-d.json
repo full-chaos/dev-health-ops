@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, and independent root and descendant authority-directory symlink refusals. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, and recovery of manifest-authorized pre-child staging. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -139,6 +139,19 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_direct_named_go_test_rejects_duplicate_conflicting_count",
         "tests/tooling/test_mutation_harness_lane_d.py::test_shell_named_go_test_rejects_duplicate_conflicting_count"
+      ]]
+    },
+    {
+      "id": "D11-zero-shard-staging-recovery",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if not raw_shards:\n        if coordinator.get(\"lifecycle\") != \"aborted\":",
+      "replace": "if False and not raw_shards:\n        if coordinator.get(\"lifecycle\") != \"aborted\":",
+      "rationale": "an aborted run with zero recorded children must enter the separately authorized partial-staging recovery path instead of remaining permanently wedged",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_zero_recorded_shards_recovers_owned_partial_staging_tree"
       ]]
     }
   ]

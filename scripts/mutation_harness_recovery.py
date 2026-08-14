@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ RUNS_DIRNAME = "runs"
 MANIFEST_FILENAME = "manifest.json"
 SCHEMA_VERSION = 1
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_PARTIAL_SHARD_NAME = re.compile(r"shard-(0|[1-9][0-9]*)")
+_EXECUTION_TREE_MARKER = Path(STATE_DIRNAME) / "execution-tree-owner.json"
 
 RestoreMutation = Callable[[Path], str]
 CleanupOwnedTree = Callable[[Path, Path, int], None]
@@ -129,7 +132,18 @@ class RunRecord:
     source_manifest_digest: str
     plan_digest: str
     diagnostic_pid: int | None
+    staging_temporary_root: Path | None
+    staging_shard_limit: int | None
     shards: tuple[ShardRecord, ...]
+
+
+@dataclass(frozen=True)
+class PartialShardRecord:
+    """One fully validated pre-child staging tree."""
+
+    shard_index: int
+    root: Path
+    ownership_marker: Path
 
 
 @dataclass(frozen=True)
@@ -269,6 +283,54 @@ def _contained_path(path: Path, root: Path, label: str) -> Path:
     return resolved
 
 
+def _private_temporary_root(value: object, source_root: Path) -> Path:
+    """Validate a canonical private directory below the operating-system temp root."""
+
+    if not isinstance(value, str) or not value:
+        raise RecoveryError(
+            "zero-shard run manifest has no durable temporary_root authority"
+        )
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise RecoveryError(f"temporary_root {path} is not an absolute lexical path")
+    try:
+        temporary_base = Path(tempfile.gettempdir()).resolve(strict=True)
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be resolved: {exc}"
+        ) from exc
+    if resolved != path:
+        raise RecoveryError(
+            f"temporary_root {path} is not canonical or contains a symlink"
+        )
+    if (
+        resolved == temporary_base
+        or not resolved.is_relative_to(temporary_base)
+        or resolved in {Path("/").resolve(), source_root, source_root / STATE_DIRNAME}
+    ):
+        raise RecoveryError(
+            f"temporary_root {path} is outside the private run boundary"
+        )
+
+    relative = resolved.relative_to(temporary_base)
+    current = temporary_base
+    for component in relative.parts:
+        current /= component
+        _trusted_authority_directory(current, "temporary-root component")
+    try:
+        mode = stat.S_IMODE(resolved.lstat().st_mode)
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be inspected: {exc}"
+        ) from exc
+    if mode != 0o700:
+        raise RecoveryError(
+            f"temporary_root {path} mode is {mode:#o}, expected private mode 0o700"
+        )
+    return resolved
+
+
 def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord]:
     if not _SAFE_RUN_ID.fullmatch(run_id):
         raise RecoveryError(f"run id {run_id!r} is not a plain name")
@@ -337,8 +399,42 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         )
 
     raw_shards = manifest.get("shards")
-    if not isinstance(raw_shards, list) or not raw_shards:
-        raise RecoveryError("run manifest must record at least one shard")
+    if not isinstance(raw_shards, list):
+        raise RecoveryError("run manifest shards must be a list")
+    staging_temporary_root: Path | None = None
+    staging_shard_limit: int | None = None
+    if not raw_shards:
+        if coordinator.get("lifecycle") != "aborted":
+            raise RecoveryError(
+                "zero-shard recovery requires an aborted coordinator lifecycle"
+            )
+        if coordinator.get("shards") != []:
+            raise RecoveryError(
+                "zero-shard manifest differs from the coordinator shard record"
+            )
+        requested_shards = manifest.get("requested_shards")
+        effective_shards = manifest.get("effective_shards")
+        if (
+            not isinstance(requested_shards, int)
+            or isinstance(requested_shards, bool)
+            or requested_shards < 1
+            or not isinstance(effective_shards, int)
+            or isinstance(effective_shards, bool)
+            or effective_shards < 1
+            or effective_shards > requested_shards
+        ):
+            raise RecoveryError(
+                "zero-shard run manifest has invalid requested/effective shard bounds"
+            )
+        manifest_temporary_root = manifest.get("temporary_root")
+        if coordinator.get("temporary_root") != manifest_temporary_root:
+            raise RecoveryError(
+                "zero-shard coordinator and manifest temporary_root values differ"
+            )
+        staging_temporary_root = _private_temporary_root(
+            manifest_temporary_root, source_root
+        )
+        staging_shard_limit = effective_shards
     shards: list[ShardRecord] = []
     seen_indexes: set[int] = set()
     seen_roots: set[Path] = set()
@@ -418,6 +514,8 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         diagnostic_pid=(
             coordinator.get("pid") if isinstance(coordinator.get("pid"), int) else None
         ),
+        staging_temporary_root=staging_temporary_root,
+        staging_shard_limit=staging_shard_limit,
         shards=tuple(shards),
     )
 
@@ -441,6 +539,94 @@ def _marker_error(record: RunRecord, shard: ShardRecord) -> str | None:
                 f"{marker.get(key)!r}, expected {value!r}"
             )
     return None
+
+
+def _partial_staging_shards(record: RunRecord) -> tuple[PartialShardRecord, ...]:
+    """Validate every entry before authorizing any pre-child staging cleanup."""
+
+    temporary_root = record.staging_temporary_root
+    shard_limit = record.staging_shard_limit
+    if temporary_root is None or shard_limit is None:
+        raise RecoveryError("zero-shard recovery has no private staging authority")
+    _private_temporary_root(str(temporary_root), record.source_root)
+    try:
+        entries = sorted(temporary_root.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {temporary_root} could not be enumerated: {exc}"
+        ) from exc
+
+    partials: list[PartialShardRecord] = []
+    expected_marker_keys = {
+        "schema_version",
+        "run_id",
+        "shard_index",
+        "source_manifest_digest",
+        "plan_digest",
+    }
+    for entry in entries:
+        match = _PARTIAL_SHARD_NAME.fullmatch(entry.name)
+        if match is None:
+            raise RecoveryError(f"unexpected private-root entry {entry}")
+        shard_index = int(match.group(1))
+        if shard_index >= shard_limit:
+            raise RecoveryError(
+                f"partial shard {entry} exceeds effective shard bound {shard_limit}"
+            )
+        try:
+            info = entry.lstat()
+        except OSError as exc:
+            raise RecoveryError(
+                f"partial shard {entry} could not be inspected: {exc}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise RecoveryError(f"partial shard {entry} is a symlink")
+        if not stat.S_ISDIR(info.st_mode):
+            raise RecoveryError(f"partial shard {entry} is not a directory")
+        if entry.resolve(strict=True) != entry:
+            raise RecoveryError(f"partial shard {entry} is not canonical")
+
+        state_directory = entry / STATE_DIRNAME
+        _trusted_authority_directory(state_directory, "partial shard state directory")
+        marker_path = entry / _EXECUTION_TREE_MARKER
+        _trusted_authority_file(marker_path, "ownership marker")
+        try:
+            state_entries = {path.name for path in state_directory.iterdir()}
+        except OSError as exc:
+            raise RecoveryError(
+                f"partial shard state directory {state_directory} could not be read: {exc}"
+            ) from exc
+        if state_entries != {marker_path.name}:
+            raise RecoveryError(
+                f"partial shard {entry} has child liveness or unexpected state evidence"
+            )
+
+        marker = _read_json(marker_path, "ownership marker")
+        if set(marker) != expected_marker_keys:
+            raise RecoveryError(
+                f"{marker_path}: ownership marker does not have the exact field set"
+            )
+        expected: dict[str, object] = {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": record.run_id,
+            "shard_index": shard_index,
+            "source_manifest_digest": record.source_manifest_digest,
+            "plan_digest": record.plan_digest,
+        }
+        for key, value in expected.items():
+            if marker.get(key) != value:
+                raise RecoveryError(
+                    f"{marker_path}: ownership marker {key} is "
+                    f"{marker.get(key)!r}, expected {value!r}"
+                )
+        partials.append(
+            PartialShardRecord(
+                shard_index=shard_index,
+                root=entry,
+                ownership_marker=marker_path,
+            )
+        )
+    return tuple(partials)
 
 
 def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, ...]]:
@@ -511,11 +697,20 @@ def _default_cleanup_for(record: RunRecord) -> CleanupOwnedTree:
             "execution-tree cleanup backend is unavailable; retain the owned shard"
         ) from exc
     cleanup = getattr(module, "cleanup_execution_tree", None)
+    cleanup_partial = getattr(module, "cleanup_partial_execution_tree", None)
     manifest_from_dict = getattr(module, "source_manifest_from_dict", None)
     staged_type = getattr(module, "StagedExecutionTree", None)
-    if not callable(cleanup) or not callable(manifest_from_dict) or staged_type is None:
+    if not callable(manifest_from_dict):
         raise RecoveryError(
             "execution-tree cleanup backend has no recovery-safe cleanup entry point"
+        )
+    if record.shards and (not callable(cleanup) or staged_type is None):
+        raise RecoveryError(
+            "execution-tree cleanup backend has no completed-shard cleanup entry point"
+        )
+    if not record.shards and not callable(cleanup_partial):
+        raise RecoveryError(
+            "execution-tree cleanup backend has no partial-staging cleanup entry point"
         )
 
     try:
@@ -524,6 +719,26 @@ def _default_cleanup_for(record: RunRecord) -> CleanupOwnedTree:
         raise RecoveryError(f"serialized source manifest is invalid: {exc}") from exc
 
     def cleanup_one(root: Path, marker: Path, shard_index: int) -> None:
+        if not record.shards:
+            temporary_root = record.staging_temporary_root
+            if temporary_root is None:
+                raise RecoveryError("partial cleanup has no temporary_root")
+            if marker != root / _EXECUTION_TREE_MARKER:
+                raise RecoveryError("partial cleanup marker path changed")
+            assert callable(cleanup_partial)
+            cleanup_partial(
+                record.source_root,
+                root,
+                temporary_root=temporary_root,
+                run_id=record.run_id,
+                shard_index=shard_index,
+                source_manifest=source_manifest,
+                plan_digest=record.plan_digest,
+                child_liveness_proven=True,
+            )
+            return
+        assert staged_type is not None
+        assert callable(cleanup)
         staged = staged_type(
             root=root,
             ownership_marker=marker,
@@ -573,6 +788,94 @@ def _recover_one(
         )
 
 
+def _recover_partial_staging(
+    root: Path,
+    state_path: Path,
+    state: dict[str, Any],
+    record: RunRecord,
+    *,
+    force: bool,
+    cleanup_owned_tree: CleanupOwnedTree | None,
+    output: TextIO | None,
+) -> str:
+    """Recover staging that aborted after ownership marking but before children."""
+
+    import sys
+
+    partials = _partial_staging_shards(record)
+    temporary_root = record.staging_temporary_root
+    if temporary_root is None:
+        raise RecoveryError("partial recovery has no temporary_root")
+    preflight = RecoveryPreflight(
+        remove=tuple([*(partial.root for partial in partials), temporary_root]),
+        leave=(),
+        unknown=(),
+    )
+    if force:
+        stream = output or sys.stdout
+        stream.write(preflight.render(record.run_id))
+        stream.flush()
+
+    coordinator = state.get("coordinator_run")
+    if not isinstance(coordinator, dict):
+        raise RecoveryError("coordinator state changed during recovery")
+    coordinator["lifecycle"] = "recovering"
+    _write_root_recovery_json(root, state_path, state)
+
+    cleanup_callback = cleanup_owned_tree
+    if partials and cleanup_callback is None:
+        cleanup_callback = _default_cleanup_for(record)
+    failures: list[str] = []
+    removed = 0
+    for partial in partials:
+        try:
+            if cleanup_callback is None:
+                raise RecoveryError("partial cleanup callback is unavailable")
+            cleanup_callback(
+                partial.root,
+                partial.ownership_marker,
+                partial.shard_index,
+            )
+            if partial.root.exists():
+                raise RecoveryError(
+                    f"{partial.root}: cleanup returned but the partial shard still exists"
+                )
+        except Exception as exc:
+            failures.append(f"{partial.root}: verified partial cleanup failed: {exc}")
+            if not force:
+                break
+        else:
+            removed += 1
+
+    if not failures:
+        try:
+            _private_temporary_root(str(temporary_root), record.source_root)
+            temporary_root.rmdir()
+        except (OSError, RecoveryError) as exc:
+            failures.append(f"{temporary_root}: private-root cleanup failed: {exc}")
+
+    if failures:
+        coordinator["lifecycle"] = "recovering"
+        coordinator["recovery_unknown"] = failures
+        _write_root_recovery_json(root, state_path, state)
+        raise RecoveryError(
+            f"recovery retained pre-child staging; root state remains: {failures[0]}"
+        )
+
+    manifest = _read_root_recovery_json(root, record.manifest_path, "run manifest")
+    manifest["lifecycle"] = "aborted"
+    _write_root_recovery_json(root, record.manifest_path, manifest)
+    coordinator["lifecycle"] = "aborted"
+    _write_root_recovery_json(root, state_path, state)
+
+    state.pop("coordinator_run", None)
+    _write_root_recovery_json(root, state_path, state)
+    return (
+        f"recovered run {record.run_id} as aborted; removed {removed} "
+        "owned staging shard(s)"
+    )
+
+
 def recover_run(
     root: Path,
     run_id: str,
@@ -593,6 +896,16 @@ def recover_run(
     root = root.resolve()
     state_path = root / STATE_DIRNAME / STATE_FILENAME
     state, record = _load_run_record(root, run_id)
+    if not record.shards:
+        return _recover_partial_staging(
+            root,
+            state_path,
+            state,
+            record,
+            force=force,
+            cleanup_owned_tree=cleanup_owned_tree,
+            output=output,
+        )
     preflight, liveness_leases = _build_preflight(record)
     try:
         if force:

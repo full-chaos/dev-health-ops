@@ -422,6 +422,353 @@ def _remove_owned_tree(root: Path, marker: Path, shard_index: int) -> None:
     shutil.rmtree(root)
 
 
+def _zero_shard_staging_fixture(
+    tmp_path: Path, *, empty: bool = False
+) -> tuple[Path, Path, Path | None, Path | None]:
+    root, shard, old_marker, old_liveness = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    temporary_root.chmod(0o700)
+    old_marker.unlink()
+    old_liveness.unlink()
+    marker: Path | None = None
+    if empty:
+        shard.rmdir()
+        shard_path: Path | None = None
+    else:
+        state_directory = shard / ".mutation-harness"
+        state_directory.mkdir()
+        marker = state_directory / "execution-tree-owner.json"
+        marker.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "run_id": "run-3807",
+                    "shard_index": 0,
+                    "source_manifest_digest": "source-digest",
+                    "plan_digest": "plan-digest",
+                }
+            ),
+            encoding="utf-8",
+        )
+        shard_path = shard
+
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    coordinator = state["coordinator_run"]
+    coordinator["lifecycle"] = "aborted"
+    coordinator["temporary_root"] = str(temporary_root)
+    coordinator["shards"] = []
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path = Path(coordinator["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["temporary_root"] = str(temporary_root)
+    manifest["requested_shards"] = 2
+    manifest["effective_shards"] = 2
+    manifest["shards"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return root, temporary_root, shard_path, marker
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_recorded_shards_recovers_owned_partial_staging_tree(
+    tmp_path: Path, force: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+
+    message = recover_run(
+        root,
+        "run-3807",
+        force=force,
+        cleanup_owned_tree=_remove_owned_tree,
+    )
+
+    assert message == (
+        "recovered run run-3807 as aborted; removed 1 owned staging shard(s)"
+    )
+    output = capsys.readouterr().out
+    if force:
+        assert output == (
+            "FORCE RECOVERY PREFLIGHT run-3807\n"
+            "REMOVE:\n"
+            f"  {shard}\n"
+            f"  {temporary_root}\n"
+            "LEAVE:\n"
+            "UNKNOWN:\n"
+        )
+    else:
+        assert output == ""
+    assert not shard.exists()
+    assert not temporary_root.exists()
+    state = json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
+    assert "coordinator_run" not in state
+
+
+def test_zero_recorded_shards_recovers_empty_private_root(tmp_path: Path) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path, empty=True)
+    assert shard is None
+
+    message = recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert message == (
+        "recovered run run-3807 as aborted; removed 0 owned staging shard(s)"
+    )
+    assert not temporary_root.exists()
+    state = json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
+    assert "coordinator_run" not in state
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_unowned_partial_even_with_force(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload["run_id"] = "foreign"
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="ownership marker run_id"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert shard.exists()
+    assert temporary_root.exists()
+    assert "coordinator_run" in json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_symlinked_partial_tree(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path, empty=True)
+    assert shard is None
+    outside = tmp_path / "outside-partial"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+    (temporary_root / "shard-0").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RecoveryError, match="partial shard.*symlink"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert temporary_root.exists()
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_extra_private_root_entry(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    extra = temporary_root / "unexpected.txt"
+    extra.write_text("do not remove", encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="unexpected private-root entry"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert extra.read_text(encoding="utf-8") == "do not remove"
+    assert shard.exists()
+
+
+def test_zero_shard_recovery_rejects_symlinked_ownership_marker(
+    tmp_path: Path,
+) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    payload = marker.read_bytes()
+    outside_marker = tmp_path / "outside-owner.json"
+    outside_marker.write_bytes(payload)
+    marker.unlink()
+    marker.symlink_to(outside_marker)
+
+    with pytest.raises(RecoveryError, match="ownership marker.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert outside_marker.read_bytes() == payload
+    assert shard.exists()
+    assert temporary_root.exists()
+
+
+def test_zero_shard_recovery_requires_durable_private_root_authority(
+    tmp_path: Path,
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state["coordinator_run"].pop("temporary_root")
+    manifest.pop("temporary_root")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="no durable temporary_root authority"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert temporary_root.exists()
+    assert shard.exists()
+
+
+def test_zero_shard_recovery_requires_matching_private_root_authority(
+    tmp_path: Path,
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["coordinator_run"]["temporary_root"] = str(tmp_path / "other-private")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="temporary_root values differ"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert temporary_root.exists()
+    assert shard.exists()
+
+
+def test_zero_shard_recovery_rejects_symlinked_private_root(tmp_path: Path) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    outside = tmp_path / "outside-private"
+    outside.mkdir(mode=0o700)
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+    linked = tmp_path / "linked-private"
+    linked.symlink_to(outside, target_is_directory=True)
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state["coordinator_run"]["temporary_root"] = str(linked)
+    manifest["temporary_root"] = str(linked)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="contains a symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert temporary_root.exists()
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_source_as_private_root(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state["coordinator_run"]["temporary_root"] = str(root.resolve())
+    manifest["temporary_root"] = str(root.resolve())
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="outside the private run boundary"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert temporary_root.exists()
+    assert shard.exists()
+
+
+def test_zero_shard_recovery_rejects_child_liveness_evidence(tmp_path: Path) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    liveness = marker.parent / "liveness.lock"
+    liveness.write_text("", encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="child liveness or unexpected state"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert liveness.exists()
+    assert shard.exists()
+    assert temporary_root.exists()
+
+
+def test_zero_shard_recovery_rejects_marker_with_extra_field(tmp_path: Path) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload["unexpected"] = True
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="exact field set"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert shard.exists()
+    assert temporary_root.exists()
+
+
+def test_zero_shard_recovery_rejects_partial_above_effective_bound(
+    tmp_path: Path,
+) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload["shard_index"] = 2
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    escaped_bound = temporary_root / "shard-2"
+    shard.rename(escaped_bound)
+
+    with pytest.raises(RecoveryError, match="exceeds effective shard bound"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert escaped_bound.exists()
+    assert temporary_root.exists()
+
+
+def test_zero_shard_root_state_is_cleared_after_partial_cleanup(
+    tmp_path: Path,
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    state_path = root / ".mutation-harness/state.json"
+    observed_lifecycle: list[str] = []
+
+    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+        assert marker.is_relative_to(partial)
+        assert shard_index == 0
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        observed_lifecycle.append(state["coordinator_run"]["lifecycle"])
+        shutil.rmtree(partial)
+
+    recover_run(root, "run-3807", cleanup_owned_tree=cleanup)
+
+    assert observed_lifecycle == ["recovering"]
+    assert not temporary_root.exists()
+    assert "coordinator_run" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+
 def test_reused_live_unrelated_pid_does_not_block_without_held_lock(
     tmp_path: Path,
 ) -> None:

@@ -160,12 +160,22 @@ class PartialShardRecord:
 
 
 @dataclass(frozen=True)
+class TemporaryRootIdentity:
+    """Filesystem identity bound when shard recovery preflight starts."""
+
+    device: int
+    inode: int
+    canonical_path: Path
+
+
+@dataclass(frozen=True)
 class RecoveryPreflight:
     """The exact manifest-bounded actions and unknown evidence."""
 
     remove: tuple[Path, ...]
     leave: tuple[Path, ...]
     unknown: tuple[str, ...]
+    temporary_root_identity: TemporaryRootIdentity | None
 
     def render(self, run_id: str) -> str:
         lines = [f"FORCE RECOVERY PREFLIGHT {run_id}", "REMOVE:"]
@@ -346,6 +356,14 @@ def _private_temporary_root(value: object, source_root: Path) -> Path:
     return resolved
 
 
+def _require_temporary_root_directory(info: os.stat_result, path: Path) -> None:
+    """Refuse a final temporary-root component that is not a directory."""
+
+    if not stat.S_ISDIR(info.st_mode):
+        kind = "a symlink" if stat.S_ISLNK(info.st_mode) else "not a directory"
+        raise RecoveryError(f"temporary_root {path} is {kind}; refusing recovery")
+
+
 def _private_temporary_root_path(value: object, source_root: Path) -> Path:
     """Validate the lexical private-root authority before resolving descendants."""
 
@@ -381,9 +399,7 @@ def _private_temporary_root_path(value: object, source_root: Path) -> Path:
         raise RecoveryError(
             f"temporary_root {path} could not be inspected: {exc}"
         ) from exc
-    if not stat.S_ISDIR(info.st_mode):
-        kind = "a symlink" if stat.S_ISLNK(info.st_mode) else "not a directory"
-        raise RecoveryError(f"temporary_root {path} is {kind}; refusing recovery")
+    _require_temporary_root_directory(info, path)
     try:
         resolved = path.resolve(strict=True)
     except OSError as exc:
@@ -410,13 +426,56 @@ def _missing_private_temporary_root(value: object, source_root: Path) -> Path | 
     return None
 
 
-def _require_existing_private_temporary_root(record: RunRecord) -> None:
-    """Recheck the root authority before using preflight paths for cleanup."""
+def _capture_private_temporary_root_identity(
+    record: RunRecord,
+) -> TemporaryRootIdentity:
+    """Bind one existing directory identity without authorizing descendants."""
 
     value = str(record.temporary_root) if record.temporary_root is not None else None
-    if _missing_private_temporary_root(value, record.source_root) is not None:
+    path = _private_temporary_root_path(value, record.source_root)
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
         raise RecoveryError(
             f"temporary_root {value} disappeared during recovery; root state remains"
+        ) from exc
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be inspected: {exc}"
+        ) from exc
+    _require_temporary_root_directory(before, path)
+    try:
+        canonical_path = path.resolve(strict=True)
+        after = path.lstat()
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be identity-checked: {exc}"
+        ) from exc
+    before_identity = (before.st_dev, before.st_ino)
+    after_identity = (after.st_dev, after.st_ino)
+    _require_temporary_root_directory(after, path)
+    if after_identity != before_identity:
+        raise RecoveryError(
+            f"temporary_root {path} identity changed during inspection; "
+            "root state remains"
+        )
+    return TemporaryRootIdentity(
+        device=before.st_dev,
+        inode=before.st_ino,
+        canonical_path=canonical_path,
+    )
+
+
+def _require_existing_private_temporary_root(
+    record: RunRecord, expected: TemporaryRootIdentity
+) -> None:
+    """Require the exact directory identity authorized by preflight."""
+
+    actual = _capture_private_temporary_root_identity(record)
+    if actual != expected:
+        raise RecoveryError(
+            f"temporary_root {record.temporary_root} identity changed after preflight; "
+            "root state remains"
         )
 
 
@@ -747,6 +806,7 @@ def _partial_staging_shards(record: RunRecord) -> tuple[PartialShardRecord, ...]
 
 
 def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, ...]]:
+    temporary_root_identity = _capture_private_temporary_root_identity(record)
     remove: list[Path] = []
     leave: list[Path] = []
     unknown: list[str] = []
@@ -776,7 +836,10 @@ def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, .
         remove.append(shard.root)
     return (
         RecoveryPreflight(
-            remove=tuple(remove), leave=tuple(leave), unknown=tuple(unknown)
+            remove=tuple(remove),
+            leave=tuple(leave),
+            unknown=tuple(unknown),
+            temporary_root_identity=temporary_root_identity,
         ),
         tuple(leases),
     )
@@ -879,11 +942,14 @@ def _default_cleanup_for(record: RunRecord) -> CleanupOwnedTree:
 
 
 def _recover_one(
+    record: RunRecord,
     shard: ShardRecord,
     *,
+    temporary_root_identity: TemporaryRootIdentity,
     restore_mutation: RestoreMutation,
     cleanup_owned_tree: CleanupOwnedTree,
 ) -> None:
+    _require_existing_private_temporary_root(record, temporary_root_identity)
     if _shard_has_applied_state(shard.root):
         try:
             restore_mutation(shard.root)
@@ -891,10 +957,12 @@ def _recover_one(
             raise RecoveryError(
                 f"{shard.root}: applied mutation restore failed: {exc}"
             ) from exc
+        _require_existing_private_temporary_root(record, temporary_root_identity)
         if _shard_has_applied_state(shard.root):
             raise RecoveryError(
                 f"{shard.root}: restore returned but applied state remains"
             )
+    _require_existing_private_temporary_root(record, temporary_root_identity)
     try:
         cleanup_owned_tree(shard.root, shard.ownership_marker, shard.shard_index)
     except Exception as exc:
@@ -927,6 +995,7 @@ def _recover_partial_staging(
         remove=tuple([*(partial.root for partial in partials), temporary_root]),
         leave=(),
         unknown=(),
+        temporary_root_identity=None,
     )
     if force:
         stream = output or sys.stdout
@@ -1081,7 +1150,10 @@ def recover_run(
         )
     preflight, liveness_leases = _build_preflight(record)
     try:
-        _require_existing_private_temporary_root(record)
+        temporary_root_identity = preflight.temporary_root_identity
+        if temporary_root_identity is None:
+            raise RecoveryError("recovery preflight has no temporary-root identity")
+        _require_existing_private_temporary_root(record, temporary_root_identity)
         if force:
             stream = output or sys.stdout
             stream.write(preflight.render(run_id))
@@ -1095,7 +1167,7 @@ def recover_run(
         coordinator["lifecycle"] = "recovering"
         _write_root_recovery_json(root, state_path, state)
 
-        _require_existing_private_temporary_root(record)
+        _require_existing_private_temporary_root(record, temporary_root_identity)
         restore_callback = restore_mutation or _default_restore
         cleanup_callback = cleanup_owned_tree or _default_cleanup_for(record)
         removable = set(preflight.remove)
@@ -1105,9 +1177,13 @@ def recover_run(
             if shard.root not in removable:
                 continue
             try:
-                _require_existing_private_temporary_root(record)
+                _require_existing_private_temporary_root(
+                    record, temporary_root_identity
+                )
                 _recover_one(
+                    record,
                     shard,
+                    temporary_root_identity=temporary_root_identity,
                     restore_mutation=restore_callback,
                     cleanup_owned_tree=cleanup_callback,
                 )

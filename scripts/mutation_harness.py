@@ -72,6 +72,7 @@ Usage:
     python3 scripts/mutation_harness.py accept --digest SHA256 [--root PATH]
     python3 scripts/mutation_harness.py run --plan PATH [--only M1,M2]
                                             [--assert-all-killed]
+                                            [--progress human|jsonl|none]
     python3 scripts/mutation_harness.py report [--root PATH]
 
 ``accept`` is the exit from a safe refusal. Several of ``restore``'s refusals
@@ -138,15 +139,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 STATE_DIRNAME = ".mutation-harness"
 STATE_FILENAME = "state.json"
 REPORT_FILENAME = "report.json"
 SNAPSHOT_DIRNAME = "snapshots"
 LOCK_DIRNAME = "lock"
+RUNS_DIRNAME = "runs"
+EVENT_LOG_FILENAME = "events.jsonl"
+RESULT_STREAM_FILENAME = "results.jsonl"
 SCHEMA_VERSION = 1
 
 # Test sources, for the self-referential-assertion warning. Deliberately broad:
@@ -229,6 +235,75 @@ class StagedExecutionTree:
     shard_index: int
 
 
+class _ProgressEmitter:
+    """Write one ordered progress stream to durable storage and stderr."""
+
+    def __init__(
+        self,
+        root: Path,
+        run_id: str,
+        progress: str,
+        *,
+        stream: TextIO | None = None,
+    ) -> None:
+        if progress not in {"human", "jsonl", "none"}:
+            raise HarnessError(f"unknown progress mode: {progress!r}")
+        self.run_id = run_id
+        self.progress = progress
+        self._stream = stream if stream is not None else sys.stderr
+        self._sequence = 0
+        self._started_ns = time.monotonic_ns()
+        self.run_directory = _run_directory(root, run_id)
+        self.event_log = self.run_directory / EVENT_LOG_FILENAME
+
+    def emit(
+        self,
+        event: str,
+        *,
+        completed: int,
+        active: int,
+        total: int,
+        shard_index: int | None = None,
+        plan_ordinal: int | None = None,
+        mutation_id: str | None = None,
+        phase: str | None = None,
+        verdict: str | None = None,
+    ) -> None:
+        self._sequence += 1
+        payload: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "sequence": self._sequence,
+            "run_id": self.run_id,
+            "event": event,
+        }
+        if shard_index is not None:
+            payload["shard_index"] = shard_index
+        if plan_ordinal is not None:
+            payload["plan_ordinal"] = plan_ordinal
+        if mutation_id is not None:
+            payload["mutation_id"] = mutation_id
+        if phase is not None:
+            payload["phase"] = phase
+        if verdict is not None:
+            payload["verdict"] = verdict
+        payload.update(
+            {
+                "completed": completed,
+                "active": active,
+                "total": total,
+                "elapsed_ms": (time.monotonic_ns() - self._started_ns) // 1_000_000,
+            }
+        )
+
+        encoded = json.dumps(payload, separators=(",", ":"))
+        _append_jsonl(self.event_log, encoded.encode("utf-8") + b"\n")
+        if self.progress == "none":
+            return
+        rendered = encoded if self.progress == "jsonl" else _human_progress(payload)
+        self._stream.write(rendered + "\n")
+        self._stream.flush()
+
+
 VERDICT_KILLED = "KILLED"
 VERDICT_SURVIVED = "SURVIVED"
 VERDICT_SURVIVED_DECLARED = "SURVIVED_DECLARED"
@@ -302,6 +377,85 @@ def _atomic_write(target: Path, data: bytes) -> None:
     finally:
         if temporary.exists():
             temporary.unlink(missing_ok=True)
+
+
+def _run_directory(root: Path, run_id: str) -> Path:
+    """Create a private run directory without following predictable links."""
+
+    if _sanitised_identifier(run_id) is None:
+        raise HarnessError(f"run id {run_id!r} is not a plain name")
+    runs = _state_dir(root) / RUNS_DIRNAME
+    if runs.is_symlink():
+        raise HarnessError(f"run directory parent {runs} is a symlink")
+    runs.mkdir(parents=True, exist_ok=True)
+    run_directory = runs / run_id
+    if run_directory.is_symlink():
+        raise HarnessError(f"run directory {run_directory} is a symlink")
+    try:
+        run_directory.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise HarnessError(f"run directory already exists: {run_directory}") from exc
+    return run_directory
+
+
+def _append_jsonl(target: Path, line: bytes) -> None:
+    """Atomically add one complete JSON line and make it durable before return."""
+
+    if not line.endswith(b"\n") or line.count(b"\n") != 1:
+        raise HarnessError("a JSONL record must be exactly one complete line")
+    try:
+        existing = target.read_bytes()
+    except FileNotFoundError:
+        existing = b""
+    except OSError as exc:
+        raise HarnessError(f"could not read durable stream {target}: {exc}") from exc
+    if existing and not existing.endswith(b"\n"):
+        raise HarnessError(f"durable stream {target} ends with a partial JSON line")
+    _atomic_write(target, existing + line)
+
+
+def _human_progress(payload: dict[str, Any]) -> str:
+    """Render stable progress fields without proof output or command tails."""
+
+    subject = str(payload["event"])
+    if "mutation_id" in payload:
+        subject += f" {payload['mutation_id']}"
+    elif "shard_index" in payload:
+        subject += f" shard={payload['shard_index']}"
+    return (
+        f"mutation harness: {subject} "
+        f"({payload['completed']}/{payload['total']} complete, "
+        f"{payload['active']} active)"
+    )
+
+
+def _result_fields(result: Result) -> dict[str, Any]:
+    """The stable result contract shared by reports and durable streams."""
+
+    return {
+        "id": result.identifier,
+        "verdict": result.verdict,
+        "detail": result.detail,
+        "failing_proof": result.failing_proof,
+        "warnings": result.warnings,
+    }
+
+
+def _write_result_record(
+    result_stream: Path, run_id: str, plan_ordinal: int, result: Result
+) -> None:
+    """Persist one measured result before another mutation may start."""
+
+    durable_result = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "plan_ordinal": plan_ordinal,
+        **_result_fields(result),
+    }
+    _append_jsonl(
+        result_stream,
+        json.dumps(durable_result, separators=(",", ":")).encode("utf-8") + b"\n",
+    )
 
 
 def _sanitised_identifier(candidate: str) -> str | None:
@@ -1470,6 +1624,10 @@ def run_plan(
     plan_path: Path,
     only: set[str] | None,
     assert_all_killed: bool,
+    *,
+    progress: str = "none",
+    run_id: str | None = None,
+    shard_index: int | None = None,
 ) -> tuple[list[Result], int]:
     blockers = verify(root)
     if blockers:
@@ -1485,58 +1643,142 @@ def run_plan(
     snapshot_dir = _snapshot_dir(root)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
+    selected_run_id = run_id or f"run-{uuid.uuid4().hex}"
+    emitter = _ProgressEmitter(root, selected_run_id, progress)
+    result_stream = emitter.run_directory / RESULT_STREAM_FILENAME
     results: list[Result] = []
     lock = acquire_lock(root)
     try:
-        for mutation in mutations:
-            results.append(_run_one(root, mutation, snapshot_dir))
-    finally:
-        release_lock(lock)
+        total = len(mutations)
+        emitter.emit(
+            "run_started",
+            completed=0,
+            active=0,
+            total=total,
+            shard_index=shard_index,
+            phase="running",
+        )
+        if shard_index is not None:
+            emitter.emit(
+                "shard_started",
+                completed=0,
+                active=0,
+                total=total,
+                shard_index=shard_index,
+                phase="running",
+            )
+        try:
+            for ordinal, mutation in enumerate(mutations):
+                emitter.emit(
+                    "mutation_started",
+                    completed=len(results),
+                    active=1,
+                    total=total,
+                    shard_index=shard_index,
+                    plan_ordinal=ordinal,
+                    mutation_id=mutation.identifier,
+                    phase="baseline",
+                )
+                result = _run_one(root, mutation, snapshot_dir)
+                results.append(result)
+                _write_result_record(result_stream, selected_run_id, ordinal, result)
+                emitter.emit(
+                    "mutation_finished",
+                    completed=len(results),
+                    active=0,
+                    total=total,
+                    shard_index=shard_index,
+                    plan_ordinal=ordinal,
+                    mutation_id=mutation.identifier,
+                    verdict=result.verdict,
+                )
+        except BaseException:
+            emitter.emit(
+                "run_stopping",
+                completed=len(results),
+                active=0,
+                total=total,
+                shard_index=shard_index,
+                phase="aborted",
+            )
+            if shard_index is not None:
+                emitter.emit(
+                    "shard_finished",
+                    completed=len(results),
+                    active=0,
+                    total=total,
+                    shard_index=shard_index,
+                    phase="aborted",
+                )
+            emitter.emit(
+                "run_finished",
+                completed=len(results),
+                active=0,
+                total=total,
+                shard_index=shard_index,
+                phase="aborted",
+            )
+            raise
 
-    report = {
-        "schema_version": SCHEMA_VERSION,
-        "plan": plan_name,
-        "plan_path": str(plan_path),
-        "results": [
-            {
-                "id": result.identifier,
-                "verdict": result.verdict,
-                "detail": result.detail,
-                "failing_proof": result.failing_proof,
-                "warnings": result.warnings,
+        if shard_index is not None:
+            emitter.emit(
+                "shard_finished",
+                completed=len(results),
+                active=0,
+                total=total,
+                shard_index=shard_index,
+                phase="complete",
+            )
+
+        report = {
+            "schema_version": SCHEMA_VERSION,
+            "plan": plan_name,
+            "plan_path": str(plan_path),
+            "results": [_result_fields(result) for result in results],
+            "run_id": selected_run_id,
+            "mode": "serial",
+            "event_log": str(emitter.event_log.relative_to(root)),
+            "result_stream": str(result_stream.relative_to(root)),
+        }
+        _state_dir(root).mkdir(parents=True, exist_ok=True)
+        _atomic_write(
+            _state_dir(root) / REPORT_FILENAME,
+            (json.dumps(report, indent=2) + "\n").encode("utf-8"),
+        )
+
+        exit_code = 0
+        # BASELINE_FAILED, INVALID, STALE_DECLARATION and PROOF_VACUOUS all mean a
+        # mutation was never measured. A drifted anchor, a doubled match, a
+        # comment-line anchor, or a proof selecting no test silently measures
+        # nothing, so exiting 0 would report a plan as verified while part of it did
+        # not run -- the same false pass this tool exists to catch.
+        if any(
+            result.verdict
+            in {
+                VERDICT_BASELINE_FAILED,
+                VERDICT_INVALID,
+                VERDICT_STALE_DECLARATION,
+                VERDICT_PROOF_VACUOUS,
+                VERDICT_PROOF_SKIPPED,
             }
             for result in results
-        ],
-    }
-    _state_dir(root).mkdir(parents=True, exist_ok=True)
-    _atomic_write(
-        _state_dir(root) / REPORT_FILENAME,
-        (json.dumps(report, indent=2) + "\n").encode("utf-8"),
-    )
-
-    exit_code = 0
-    # BASELINE_FAILED, INVALID, STALE_DECLARATION and PROOF_VACUOUS all mean a
-    # mutation was never measured. A drifted anchor, a doubled match, a
-    # comment-line anchor, or a proof selecting no test silently measures
-    # nothing, so exiting 0 would report a plan as verified while part of it did
-    # not run -- the same false pass this tool exists to catch.
-    if any(
-        result.verdict
-        in {
-            VERDICT_BASELINE_FAILED,
-            VERDICT_INVALID,
-            VERDICT_STALE_DECLARATION,
-            VERDICT_PROOF_VACUOUS,
-            VERDICT_PROOF_SKIPPED,
-        }
-        for result in results
-    ):
-        exit_code = 1
-    if assert_all_killed and any(
-        result.verdict == VERDICT_SURVIVED for result in results
-    ):
-        exit_code = 1
-    return results, exit_code
+        ):
+            exit_code = 1
+        if assert_all_killed and any(
+            result.verdict == VERDICT_SURVIVED for result in results
+        ):
+            exit_code = 1
+        emitter.emit(
+            "run_finished",
+            completed=len(results),
+            active=0,
+            total=total,
+            shard_index=shard_index,
+            phase="accepted" if exit_code == 0 else "unacceptable",
+        )
+        return results, exit_code
+    finally:
+        release_lock(lock)
 
 
 def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
@@ -1923,6 +2165,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="exit non-zero on any survivor lacking expected_survivor_reason",
     )
+    run_parser.add_argument(
+        "--progress",
+        choices=("human", "jsonl", "none"),
+        default="human",
+        help="stream progress to stderr (durable JSONL is always recorded)",
+    )
 
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
@@ -1952,7 +2200,11 @@ def main(argv: list[str] | None = None) -> int:
 
         only = {item.strip() for item in args.only.split(",") if item.strip()}
         results, exit_code = run_plan(
-            root, Path(args.plan), only or None, args.assert_all_killed
+            root,
+            Path(args.plan),
+            only or None,
+            args.assert_all_killed,
+            progress=str(args.progress),
         )
         print(_render(results))
         for result in results:

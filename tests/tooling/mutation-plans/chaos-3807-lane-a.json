@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3807 Lane A serial progress and result durability",
+  "$comment": "Lane A owns only serial progress and durable per-mutation results. These mutations disable the two new load-bearing writes and use the shared harness to prove the focused contract tests go green to red to green.",
+  "$limitation": "This plan does not claim sharded isolation, coordinator aggregation, recovery, plan opt-in, or liveness coverage. Those are owned by later CHAOS-3807 lanes. Event vocabulary, proof-output exclusion, stdout compatibility, and additive report fields are pinned by contract tests because they are data-shape and compatibility contracts rather than independent boolean guards.",
+  "build": [
+    ".venv/bin/python",
+    "-c",
+    "import sys; sys.dont_write_bytecode=True; import importlib.util as u; s=u.spec_from_file_location(\"mh_lane_a_build_check\",\"scripts/mutation_harness.py\"); m=u.module_from_spec(s); sys.modules[\"mh_lane_a_build_check\"]=m; s.loader.exec_module(m)"
+  ],
+  "mutations": [
+    {
+      "id": "A1_PROGRESS_FLUSH",
+      "file": "scripts/mutation_harness.py",
+      "find": "        self._stream.flush()",
+      "replace": "        if False:\n            self._stream.flush()",
+      "expect_occurrences": 1,
+      "rationale": "A progress write is not observable progress until the selected stderr stream is flushed. Buffered output delivered only when the harness exits recreates the silent-run defect.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "--confcutdir=tests/tooling",
+          "tests/tooling/test_mutation_harness.py::test_progress_flushes_the_selected_stderr_stream"
+        ]
+      ]
+    },
+    {
+      "id": "A2_RESULT_BEFORE_NEXT",
+      "file": "scripts/mutation_harness.py",
+      "find": "                _write_result_record(result_stream, selected_run_id, ordinal, result)",
+      "replace": "                if False:\n                    _write_result_record(result_stream, selected_run_id, ordinal, result)",
+      "expect_occurrences": 1,
+      "rationale": "Each completed measurement must reach the durable result stream before the next mutation begins, so an abort loses remaining work but never erases results already measured.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "--confcutdir=tests/tooling",
+          "tests/tooling/test_mutation_harness.py::test_result_stream_survives_an_abort_before_the_next_mutation"
+        ]
+      ]
+    }
+  ]
+}

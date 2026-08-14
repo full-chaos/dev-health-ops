@@ -347,7 +347,7 @@ def _private_temporary_root(value: object, source_root: Path) -> Path:
 
 
 def _private_temporary_root_path(value: object, source_root: Path) -> Path:
-    """Validate an existing or absent private-root path without following it."""
+    """Validate the lexical private-root authority before resolving descendants."""
 
     if not isinstance(value, str) or not value:
         raise RecoveryError("run manifest has no durable temporary_root authority")
@@ -364,13 +364,34 @@ def _private_temporary_root_path(value: object, source_root: Path) -> Path:
         raise RecoveryError(
             f"temporary_root {path} is outside the private run boundary"
         )
-    if path.is_relative_to(source_root) or source_root.is_relative_to(path):
-        raise RecoveryError(f"temporary_root {path} overlaps source_root {source_root}")
-
     current = temporary_base
     for component in path.relative_to(temporary_base).parts[:-1]:
         current /= component
         _trusted_authority_directory(current, "temporary-root parent")
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        if path.is_relative_to(source_root) or source_root.is_relative_to(path):
+            raise RecoveryError(
+                f"temporary_root {path} overlaps source_root {source_root}"
+            )
+        return path
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be inspected: {exc}"
+        ) from exc
+    if not stat.S_ISDIR(info.st_mode):
+        kind = "a symlink" if stat.S_ISLNK(info.st_mode) else "not a directory"
+        raise RecoveryError(f"temporary_root {path} is {kind}; refusing recovery")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be resolved: {exc}"
+        ) from exc
+    if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):
+        raise RecoveryError(f"temporary_root {path} overlaps source_root {source_root}")
     return path
 
 
@@ -387,6 +408,16 @@ def _missing_private_temporary_root(value: object, source_root: Path) -> Path | 
             f"temporary_root {path} could not be inspected: {exc}"
         ) from exc
     return None
+
+
+def _require_existing_private_temporary_root(record: RunRecord) -> None:
+    """Recheck the root authority before using preflight paths for cleanup."""
+
+    value = str(record.temporary_root) if record.temporary_root is not None else None
+    if _missing_private_temporary_root(value, record.source_root) is not None:
+        raise RecoveryError(
+            f"temporary_root {value} disappeared during recovery; root state remains"
+        )
 
 
 def _shard_authority(raw_shards: object, label: str) -> list[dict[str, object]]:
@@ -481,9 +512,9 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
     manifest_temporary_root = manifest.get("temporary_root")
     if coordinator.get("temporary_root") != manifest_temporary_root:
         raise RecoveryError("coordinator and manifest temporary_root values differ")
-    temporary_root: Path | None = None
+    recorded_temporary_root: Path | None = None
     if raw_shards:
-        temporary_root = _private_temporary_root_path(
+        recorded_temporary_root = _private_temporary_root_path(
             manifest_temporary_root, source_root
         )
     staging_temporary_root: Path | None = None
@@ -553,15 +584,15 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         if not isinstance(lock_value, str) or not lock_value:
             raise RecoveryError(f"run manifest shard {index} has incomplete paths")
         shard_root = Path(root_value).resolve()
-        temporary_root = Path(temporary_root_value).resolve()
-        if temporary_root in {
+        resolved_temporary_root = Path(temporary_root_value).resolve()
+        if resolved_temporary_root in {
             Path("/").resolve(),
             root,
             (root / STATE_DIRNAME).resolve(),
         }:
             raise RecoveryError(
                 f"run manifest shard {index} names unsafe temporary_root "
-                f"{temporary_root}"
+                f"{resolved_temporary_root}"
             )
         if shard_root in {Path("/").resolve(), root, (root / STATE_DIRNAME).resolve()}:
             raise RecoveryError(
@@ -569,12 +600,12 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
             )
         if shard_root in seen_roots:
             raise RecoveryError(f"run manifest repeats shard root {shard_root}")
-        if shard_root == temporary_root or not shard_root.is_relative_to(
-            temporary_root
+        if shard_root == resolved_temporary_root or not shard_root.is_relative_to(
+            resolved_temporary_root
         ):
             raise RecoveryError(
                 f"run manifest shard {index} root {shard_root} escapes temporary_root "
-                f"{temporary_root}"
+                f"{resolved_temporary_root}"
             )
         seen_roots.add(shard_root)
         marker = _contained_path(Path(marker_value), shard_root, "ownership marker")
@@ -583,7 +614,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
             ShardRecord(
                 shard_index=index,
                 root=shard_root,
-                temporary_root=temporary_root,
+                temporary_root=resolved_temporary_root,
                 ownership_marker=marker,
                 liveness_lock=lock,
             )
@@ -599,7 +630,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         diagnostic_pid=(
             coordinator.get("pid") if isinstance(coordinator.get("pid"), int) else None
         ),
-        temporary_root=temporary_root,
+        temporary_root=recorded_temporary_root,
         staging_temporary_root=staging_temporary_root,
         staging_shard_limit=staging_shard_limit,
         shards=tuple(shards),
@@ -1050,6 +1081,7 @@ def recover_run(
         )
     preflight, liveness_leases = _build_preflight(record)
     try:
+        _require_existing_private_temporary_root(record)
         if force:
             stream = output or sys.stdout
             stream.write(preflight.render(run_id))
@@ -1063,6 +1095,7 @@ def recover_run(
         coordinator["lifecycle"] = "recovering"
         _write_root_recovery_json(root, state_path, state)
 
+        _require_existing_private_temporary_root(record)
         restore_callback = restore_mutation or _default_restore
         cleanup_callback = cleanup_owned_tree or _default_cleanup_for(record)
         removable = set(preflight.remove)
@@ -1072,6 +1105,7 @@ def recover_run(
             if shard.root not in removable:
                 continue
             try:
+                _require_existing_private_temporary_root(record)
                 _recover_one(
                     shard,
                     restore_mutation=restore_callback,

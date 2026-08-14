@@ -421,6 +421,175 @@ def _recovery_fixture(
     return root, shard, ownership_marker, liveness_lock
 
 
+def _rewrite_recorded_temporary_root(root: Path, replacement: Path) -> None:
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for run_record in (state["coordinator_run"], manifest):
+        original = Path(run_record["temporary_root"])
+        run_record["temporary_root"] = str(replacement)
+        for shard_record in run_record["shards"]:
+            for field in ("root", "ownership_marker", "liveness_lock"):
+                relative = Path(shard_record[field]).relative_to(original)
+                shard_record[field] = str(replacement / relative)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _swap_temporary_root_for_symlink(temporary_root: Path, replacement: Path) -> None:
+    temporary_root.rename(replacement)
+    temporary_root.symlink_to(replacement, target_is_directory=True)
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_existing_symlinked_temporary_root_never_authorizes_replacement_cleanup(
+    tmp_path: Path, force: bool
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    replacement = tmp_path / "replacement-private-run"
+    _swap_temporary_root_for_symlink(temporary_root, replacement)
+    sentinel = replacement / "shard-0/sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+
+    with pytest.raises(RecoveryError, match="temporary_root.*symlink"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert temporary_root.is_symlink()
+    assert state_path.read_bytes() == state_before
+    assert manifest_path.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_existing_non_directory_temporary_root_is_refused_before_shard_resolution(
+    tmp_path: Path, force: bool
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    replacement = tmp_path / "replacement-private-run"
+    temporary_root.rename(replacement)
+    sentinel = replacement / "shard-0/sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    temporary_root.write_text("not a directory", encoding="utf-8")
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+
+    with pytest.raises(RecoveryError, match="temporary_root.*not a directory"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert temporary_root.read_text(encoding="utf-8") == "not a directory"
+    assert state_path.read_bytes() == state_before
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_temporary_root_parent_symlink_is_refused_before_shard_resolution(
+    tmp_path: Path, force: bool
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    moved_root = real_parent / temporary_root.name
+    temporary_root.rename(moved_root)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    recorded_root = linked_parent / temporary_root.name
+    _rewrite_recorded_temporary_root(root, recorded_root)
+    sentinel = moved_root / "shard-0/sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+
+    with pytest.raises(RecoveryError, match="temporary-root parent.*symlink"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert state_path.read_bytes() == state_before
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_existing_temporary_root_uses_canonical_source_overlap_check(
+    tmp_path: Path, force: bool
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    nested_root = root / "nested-private-run"
+    temporary_root.rename(nested_root)
+    _rewrite_recorded_temporary_root(root, nested_root)
+    sentinel = nested_root / "shard-0/sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="overlaps source_root"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert "coordinator_run" in json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_temporary_root_swapped_to_symlink_after_preflight_is_retained(
+    tmp_path: Path, force: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    replacement = tmp_path / "replacement-after-preflight"
+    sentinel = shard / "sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    original = recovery_backend._build_preflight
+
+    def swap_after_preflight(
+        record: recovery_backend.RunRecord,
+    ) -> tuple[recovery_backend.RecoveryPreflight, tuple[int, ...]]:
+        preflight = original(record)
+        _swap_temporary_root_for_symlink(temporary_root, replacement)
+        return preflight
+
+    monkeypatch.setattr(recovery_backend, "_build_preflight", swap_after_preflight)
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+
+    with pytest.raises(RecoveryError, match="temporary_root.*symlink"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    moved_sentinel = replacement / "shard-0/sentinel.txt"
+    assert moved_sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert state_path.read_bytes() == state_before
+
+
 @pytest.mark.parametrize("force", [False, True])
 @pytest.mark.parametrize("lifecycle", ["running", "recovering"])
 def test_missing_recorded_temporary_root_recovers_without_fabricating_results(

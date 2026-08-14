@@ -111,7 +111,7 @@ def _assert_harness_state_is_ignored(root: Path) -> None:
         "check-ignore",
         "--no-index",
         "--quiet",
-        ".mutation-harness/execution-tree-probe",
+        ".mutation-harness",
         check=False,
     )
     if check.returncode == 1:
@@ -122,6 +122,10 @@ def _assert_harness_state_is_ignored(root: Path) -> None:
     if check.returncode != 0:
         detail = check.stderr.decode(errors="replace").strip()
         raise HarnessError(f"could not verify .mutation-harness exclusion: {detail}")
+
+
+def _is_harness_state_path(relative: str) -> bool:
+    return PurePosixPath(relative).parts[0] == ".mutation-harness"
 
 
 def _entry_for_path(root: Path, relative: str, *, tracked: bool) -> SourceManifestEntry:
@@ -295,12 +299,23 @@ def build_source_manifest(source_root: Path) -> SourceManifest:
     )
     index_paths = _nul_paths(_git(root, "ls-files", "-z", "--cached").stdout)
     tracked_paths = head_paths | index_paths
+    tracked_harness_state = sorted(
+        relative for relative in tracked_paths if _is_harness_state_path(relative)
+    )
+    if tracked_harness_state:
+        raise HarnessError(
+            ".mutation-harness state is tracked and cannot be staged safely: "
+            + ", ".join(tracked_harness_state)
+        )
     untracked_paths = (
         _nul_paths(
             _git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout
         )
         - tracked_paths
     )
+    untracked_paths = {
+        relative for relative in untracked_paths if not _is_harness_state_path(relative)
+    }
 
     entries = tuple(
         _entry_for_path(
@@ -726,6 +741,20 @@ def cleanup_execution_tree(
     if stat.S_IMODE(private_root.stat().st_mode) != 0o700:
         raise HarnessError("execution-tree run root no longer has mode 0700")
 
+    state_directory = tree_root / ".mutation-harness"
+    try:
+        state_directory_metadata = state_directory.lstat()
+    except OSError as exc:
+        raise HarnessError(
+            f"execution-tree state directory is unreadable: {state_directory}"
+        ) from exc
+    if stat.S_ISLNK(state_directory_metadata.st_mode) or not stat.S_ISDIR(
+        state_directory_metadata.st_mode
+    ):
+        raise HarnessError(
+            f"execution-tree state directory is not a real directory: {state_directory}"
+        )
+
     canonical_marker = tree_root / OWNERSHIP_MARKER
     try:
         recorded_marker = staged.ownership_marker.resolve(strict=True)
@@ -754,10 +783,18 @@ def cleanup_execution_tree(
             f"shard {staged.shard_index} death is not proved; retaining {tree_root}"
         )
 
-    state_path = tree_root / ".mutation-harness/state.json"
-    if state_path.exists():
-        if state_path.is_symlink():
+    state_path = state_directory / "state.json"
+    try:
+        state_metadata = state_path.lstat()
+    except FileNotFoundError:
+        state_metadata = None
+    except OSError as exc:
+        raise HarnessError(f"shard state is unreadable: {state_path}") from exc
+    if state_metadata is not None:
+        if stat.S_ISLNK(state_metadata.st_mode):
             raise HarnessError(f"shard state is a symlink: {state_path}")
+        if not stat.S_ISREG(state_metadata.st_mode):
+            raise HarnessError(f"shard state is not a regular file: {state_path}")
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:

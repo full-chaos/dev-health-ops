@@ -2,6 +2,15 @@
   "schema_version": 1,
   "name": "GitLab feature-flags provider-local route (CHAOS-3702)",
   "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "sharding": {
+    "max_shards": 2,
+    "workspace_inputs": [".venv"],
+    "external_resources": "none",
+    "shared_mutable_resource_exclusions": [
+      "go-build-cache",
+      "go-module-cache"
+    ]
+  },
   "$limitation": "Provider-local mutation coverage only. The focused route suite proves the valid multi-page request sequence, physical request accounting, scope rows, three destinations, cap/no-watermark, non-list fail-closed behavior, qualified 403 classification, plain-403 terminal dataset classification, invalid configuration guards, project fallback, recovery policies, result identity, and evidence identity. The fresh live proof executes the pinned Python client, normalizers, worker edge block, and real WorkGraphBuilder methods with a capturing sink. Frozen tests do not contain malformed nested scope shapes, project HTTP/decode failures, duplicate scopes with different timestamps, or sub-millisecond timestamp precision cases; those unmeasurable mutations are intentionally excluded rather than overstating coverage. This plan intentionally excludes registry, matrix, scheduler, transport wiring, ClickHouse implementation, and the mutation harness itself.",
   "mutations": [
     {

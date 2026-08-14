@@ -117,6 +117,18 @@ def test_manifest_refuses_selective_harness_child_ignore(source_repo: Path) -> N
         build_source_manifest(source_repo)
 
 
+def test_manifest_accepts_directory_ignore_when_state_directory_is_absent(
+    source_repo: Path,
+) -> None:
+    state_directory = source_repo / ".mutation-harness"
+    shutil.rmtree(state_directory)
+
+    manifest = build_source_manifest(source_repo)
+
+    assert manifest.entries
+    assert not state_directory.exists()
+
+
 def _sha256(data: bytes) -> str:
     import hashlib
 

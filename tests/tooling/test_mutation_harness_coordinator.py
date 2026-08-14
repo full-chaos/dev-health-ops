@@ -22,11 +22,13 @@ from scripts.mutation_harness import HarnessError, Result, _read_state  # noqa: 
 from scripts.mutation_harness_coordinator import (  # noqa: E402
     AGGREGATE_CHILD_FAILED,
     AGGREGATE_COMPLETE,
+    AGGREGATE_INVALID,
     AGGREGATE_SOURCE_DRIFTED,
     AggregateRefusal,
     ChildSpec,
     DetailNormalizationError,
     ShardAssignment,
+    _validate_child_spec,
     aggregate_child_results,
     append_durable_jsonl,
     begin_coordinator_run,
@@ -271,10 +273,11 @@ def test_child_protocol_refuses_a_result_stream_in_the_source_root(
 ) -> None:
     children = tmp_path / "children"
     children.mkdir()
-    foreign_result = tmp_path / "child-result.jsonl"
+    source = tmp_path / "source"
+    foreign_result = source / "child-result.jsonl"
 
     def bad_factory(assignment: ShardAssignment, run_id: str) -> ChildSpec:
-        spec = _factory(children)(assignment, run_id)
+        spec = _factory(children, source_root=source)(assignment, run_id)
         return replace(spec, result_stream=foreign_result)
 
     with pytest.raises(HarnessError, match="result_stream escapes shard root"):
@@ -287,10 +290,30 @@ def _child_code(
     assignment: ShardAssignment,
     *,
     write_results: bool = True,
+    emit_events: bool = True,
+    event_sequence: Sequence[str] | None = None,
     exit_code: int = 0,
 ) -> str:
     selected = [
         (item.identifier, item.selected_ordinal) for item in assignment.mutations
+    ]
+    events = (
+        tuple(event_sequence)
+        if event_sequence is not None
+        else (("mutation_started", "mutation_finished") if emit_events else ())
+    )
+    event_lines = [
+        (
+            "    print(json.dumps({**common, 'event': "
+            f"{event!r}, "
+            + (
+                "'phase': 'baseline'"
+                if event == "mutation_started"
+                else "'verdict': 'KILLED'"
+            )
+            + "}), flush=True)"
+        )
+        for event in events
     ]
     return "\n".join(
         [
@@ -300,8 +323,7 @@ def _child_code(
             "result_path.parent.mkdir(parents=True, exist_ok=True)",
             "for mutation_id, ordinal in selected:",
             "    common = {'schema_version': 1, 'run_id': os.environ['MUTATION_HARNESS_RUN_ID'], 'shard_index': int(os.environ['MUTATION_HARNESS_SHARD_INDEX']), 'plan_ordinal': ordinal, 'mutation_id': mutation_id}",
-            "    print(json.dumps({**common, 'event': 'mutation_started', 'phase': 'baseline'}), flush=True)",
-            "    print(json.dumps({**common, 'event': 'mutation_finished', 'verdict': 'KILLED'}), flush=True)",
+            *event_lines,
             *(
                 [
                     "    record = {**common, 'plan_digest': os.environ['MUTATION_HARNESS_PLAN_DIGEST'], 'result': {'id': mutation_id, 'verdict': 'KILLED', 'detail': 'observed ' + mutation_id, 'failing_proof': 'proof', 'warnings': []}}",
@@ -322,7 +344,10 @@ def _factory(
     tmp_path: Path,
     *,
     write_results: bool = True,
+    emit_events: bool = True,
+    event_sequence: Sequence[str] | None = None,
     exit_code: int = 0,
+    source_root: Path | None = None,
     assert_root_locked: Path | None = None,
 ) -> Callable[[ShardAssignment, str], ChildSpec]:
     def build(assignment: ShardAssignment, run_id: str) -> ChildSpec:
@@ -339,7 +364,7 @@ def _factory(
         return ChildSpec(
             assignment=assignment,
             root=shard,
-            source_root=assert_root_locked or tmp_path.parent,
+            source_root=source_root or assert_root_locked or tmp_path.parent,
             temporary_root=tmp_path,
             argv=(
                 sys.executable,
@@ -347,6 +372,8 @@ def _factory(
                 _child_code(
                     assignment,
                     write_results=write_results,
+                    emit_events=emit_events,
+                    event_sequence=event_sequence,
                     exit_code=exit_code,
                 ),
             ),
@@ -366,12 +393,14 @@ def _coordinate(
     factory: Callable[[ShardAssignment, str], ChildSpec] | None = None,
     before_report: Callable[[], None] | None = None,
 ):
-    plan = tmp_path / "plan.json"
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    plan = source / "plan.json"
     plan.write_text("{}", encoding="utf-8")
     shards = tmp_path / "children"
     shards.mkdir(exist_ok=True)
     return coordinator_run(
-        tmp_path,
+        source,
         plan,
         "lane-c-plan",
         mutation_ids,
@@ -384,7 +413,7 @@ def _coordinate(
         source_manifest_digest=SOURCE_DIGEST,
         plan_digest=PLAN_DIGEST,
         source_manifest_reader=source_reader or (lambda: SOURCE_DIGEST),
-        child_factory=factory or _factory(shards, assert_root_locked=tmp_path),
+        child_factory=factory or _factory(shards, assert_root_locked=source),
         run_id=RUN_ID,
         before_report=before_report,
     )
@@ -427,10 +456,153 @@ def test_coordinator_resequences_events_orders_results_and_reports_after_childre
     assert [result["id"] for result in report["results"]] == ["M1", "M2", "M3"]
     assert report["canonical_projection"]["normalized"] == ["detail"]
     assert manifest["source_manifest"] == _source_manifest()
-    assert manifest["source_root"] == str(tmp_path)
+    assert manifest["source_root"] == str(tmp_path / "source")
     assert all(shard["temporary_root"] for shard in manifest["shards"])
     assert all(shard["liveness_lock"] for shard in manifest["shards"])
-    assert _read_state(tmp_path) is None
+    assert _read_state(tmp_path / "source") is None
+
+
+def test_complete_results_without_mutation_lifecycle_events_invalidate_aggregate(
+    tmp_path: Path,
+) -> None:
+    children = tmp_path / "children"
+    children.mkdir()
+
+    outcome = _coordinate(
+        tmp_path,
+        mutation_ids=("M1",),
+        factory=_factory(
+            children,
+            source_root=tmp_path / "source",
+            emit_events=False,
+        ),
+    )
+
+    assert outcome.aggregate_status == AGGREGATE_INVALID
+    assert outcome.exit_code == 1
+    report = json.loads(outcome.report_path.read_text(encoding="utf-8"))
+    assert report["aggregate_errors"] == [
+        "shard 0 missing mutation_started event for M1",
+        "shard 0 missing mutation_finished event for M1",
+    ]
+    events = [
+        json.loads(line)
+        for line in outcome.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[-1]["completed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("event_sequence", "error"),
+    [
+        (
+            ("mutation_started", "mutation_started", "mutation_finished"),
+            "duplicate or late mutation_started",
+        ),
+        (("mutation_finished",), "mutation_finished event without one prior"),
+    ],
+)
+def test_duplicate_or_invalid_mutation_lifecycle_events_invalidate_aggregate(
+    tmp_path: Path, event_sequence: tuple[str, ...], error: str
+) -> None:
+    children = tmp_path / "children"
+    children.mkdir()
+
+    outcome = _coordinate(
+        tmp_path,
+        mutation_ids=("M1",),
+        factory=_factory(
+            children,
+            source_root=tmp_path / "source",
+            event_sequence=event_sequence,
+        ),
+    )
+
+    assert outcome.aggregate_status == AGGREGATE_INVALID
+    assert outcome.exit_code == 1
+    report = json.loads(outcome.report_path.read_text(encoding="utf-8"))
+    assert any(error in item for item in report["aggregate_errors"])
+
+
+def test_partial_child_result_stream_still_writes_non_authoritative_report(
+    tmp_path: Path,
+) -> None:
+    children = tmp_path / "children"
+    children.mkdir()
+
+    def partial_factory(assignment: ShardAssignment, run_id: str) -> ChildSpec:
+        spec = _factory(children, source_root=tmp_path / "source")(assignment, run_id)
+        if assignment.shard_index == 1:
+            return spec
+        measured, partial = assignment.mutations
+        child = "\n".join(
+            [
+                "import json, os, pathlib, sys",
+                f"measured_id, measured_ordinal = {(measured.identifier, measured.selected_ordinal)!r}",
+                f"partial_id, partial_ordinal = {(partial.identifier, partial.selected_ordinal)!r}",
+                "path = pathlib.Path(os.environ['MUTATION_HARNESS_RESULT_STREAM'])",
+                "path.parent.mkdir(parents=True, exist_ok=True)",
+                "common = {'schema_version': 1, 'run_id': os.environ['MUTATION_HARNESS_RUN_ID'], 'shard_index': int(os.environ['MUTATION_HARNESS_SHARD_INDEX']), 'plan_ordinal': measured_ordinal, 'mutation_id': measured_id}",
+                "print(json.dumps({**common, 'event': 'mutation_started', 'phase': 'baseline'}), flush=True)",
+                "print(json.dumps({**common, 'event': 'mutation_finished', 'verdict': 'KILLED'}), flush=True)",
+                "record = {**common, 'plan_digest': os.environ['MUTATION_HARNESS_PLAN_DIGEST'], 'result': {'id': measured_id, 'verdict': 'KILLED', 'detail': 'observed ' + measured_id, 'failing_proof': 'proof', 'warnings': []}}",
+                "path.write_text(json.dumps(record) + '\\n', encoding='utf-8')",
+                "common = {'schema_version': 1, 'run_id': os.environ['MUTATION_HARNESS_RUN_ID'], 'shard_index': int(os.environ['MUTATION_HARNESS_SHARD_INDEX']), 'plan_ordinal': partial_ordinal, 'mutation_id': partial_id}",
+                "print(json.dumps({**common, 'event': 'mutation_started', 'phase': 'baseline'}), flush=True)",
+                "with path.open('a', encoding='utf-8') as handle: handle.write('{\"schema_version\":1')",
+                "sys.exit(9)",
+            ]
+        )
+        return replace(spec, argv=(sys.executable, "-c", child))
+
+    outcome = _coordinate(
+        tmp_path,
+        mutation_ids=("M1", "M2", "M3"),
+        factory=partial_factory,
+    )
+
+    assert outcome.aggregate_status == AGGREGATE_CHILD_FAILED
+    assert outcome.exit_code == 1
+    assert [result.identifier for result in outcome.results] == ["M1", "M2"]
+    assert outcome.unmeasured_ids == ("M3",)
+    assert outcome.measured_lost_ids == ()
+    report = json.loads(outcome.report_path.read_text(encoding="utf-8"))
+    assert report["unmeasured_mutation_ids"] == ["M3"]
+    assert any("partial JSON line" in error for error in report["aggregate_errors"])
+    assert any(
+        "missing mutation_finished" in error for error in report["aggregate_errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("temporary", "shard"),
+    [
+        ("source", "source/shard"),
+        ("source/temp", "source/temp/shard"),
+        (".", "execution"),
+        (".", "."),
+    ],
+)
+def test_child_paths_must_not_overlap_source_root(
+    tmp_path: Path, temporary: str, shard: str
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    temporary_root = (tmp_path / temporary).resolve()
+    shard_root = (tmp_path / shard).resolve()
+    spec = ChildSpec(
+        assignment=_assignments(["M1"], shards=1)[0],
+        root=shard_root,
+        source_root=source,
+        temporary_root=temporary_root,
+        argv=(sys.executable, "-c", "pass"),
+        result_stream=shard_root / "results.jsonl",
+        ownership_marker=shard_root / "owner.json",
+        liveness_lock=shard_root / "live.lock",
+    )
+
+    with pytest.raises(HarnessError, match="overlaps the invoking source root"):
+        _validate_child_spec(source, spec, set())
 
 
 def test_result_drop_after_finished_event_is_measured_lost_not_survivor(
@@ -441,7 +613,12 @@ def test_result_drop_after_finished_event_is_measured_lost_not_survivor(
     outcome = _coordinate(
         tmp_path,
         mutation_ids=("M1",),
-        factory=_factory(children, write_results=False, exit_code=7),
+        factory=_factory(
+            children,
+            source_root=tmp_path / "source",
+            write_results=False,
+            exit_code=7,
+        ),
     )
 
     assert outcome.aggregate_status == AGGREGATE_CHILD_FAILED
@@ -461,7 +638,7 @@ def test_child_crash_before_measurement_is_unmeasured_not_survivor(
     children.mkdir()
 
     def crash_factory(assignment: ShardAssignment, run_id: str) -> ChildSpec:
-        spec = _factory(children)(assignment, run_id)
+        spec = _factory(children, source_root=tmp_path / "source")(assignment, run_id)
         return ChildSpec(
             assignment=spec.assignment,
             root=spec.root,

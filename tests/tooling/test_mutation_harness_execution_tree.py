@@ -335,6 +335,49 @@ def test_python_workspace_is_relocated_and_probe_reads_shard_bytes(
     assert build_source_manifest(source_repo) == manifest
 
 
+def test_editable_direct_url_metadata_is_relocated_to_the_shard(
+    source_repo: Path,
+) -> None:
+    environment = _python_workspace(source_repo)
+    site_packages = next(environment.glob("lib/python*/site-packages"))
+    distribution = site_packages / "dev_health_ops-1.1.0.post572.dist-info"
+    distribution.mkdir()
+    direct_url = distribution / "direct_url.json"
+    direct_url.write_text(
+        json.dumps(
+            {
+                "dir_info": {"editable": True},
+                "url": source_repo.resolve().as_uri(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = build_source_manifest(source_repo)
+    temporary_root = source_repo.parent / "direct-url-private"
+    temporary_root.mkdir(mode=0o700)
+
+    staged = stage_execution_tree(
+        source_repo,
+        temporary_root / "shard",
+        run_id="run-direct-url",
+        shard_index=0,
+        source_manifest=manifest,
+        plan_digest="plan-digest",
+        workspace_inputs=(environment.name,),
+    )
+
+    relocated = json.loads(
+        (
+            staged.root / environment.name / direct_url.relative_to(environment)
+        ).read_text(encoding="utf-8")
+    )
+    assert relocated == {
+        "dir_info": {"editable": True},
+        "url": staged.root.resolve().as_uri(),
+    }
+    assert build_source_manifest(source_repo) == manifest
+
+
 def test_toolchain_probe_rejects_a_deliberately_unrelocated_copy(
     source_repo: Path,
 ) -> None:
@@ -392,6 +435,67 @@ def test_stage_probe_is_independent_from_the_relocation_pass(
             plan_digest="plan-digest",
             workspace_inputs=(environment.name,),
         )
+
+
+def test_staging_failure_after_marker_rolls_back_only_the_owned_partial_tree(
+    source_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = source_repo / "ignored-input"
+    workspace.mkdir()
+    (workspace / "payload.txt").write_text("workspace\n", encoding="utf-8")
+    manifest = build_source_manifest(source_repo)
+    index = source_repo / ".git/index"
+    index_before = index.read_bytes()
+    temporary_root = source_repo.parent / "rollback-private"
+    temporary_root.mkdir(mode=0o700)
+    destination = temporary_root / "shard-0"
+    outside_sentinel = temporary_root / "outside-sentinel.txt"
+    outside_sentinel.write_text("must survive\n", encoding="utf-8")
+
+    def fail_after_marker(
+        _source: Path, staged_root: Path, _workspace_inputs: tuple[str, ...]
+    ) -> None:
+        assert (staged_root / OWNERSHIP_MARKER).is_file()
+        raise HarnessError("deliberate post-marker staging failure")
+
+    monkeypatch.setattr(
+        execution_tree, "_materialize_workspace_inputs", fail_after_marker
+    )
+    with pytest.raises(HarnessError, match="deliberate post-marker staging failure"):
+        stage_execution_tree(
+            source_repo,
+            destination,
+            run_id="run-rollback",
+            shard_index=0,
+            source_manifest=manifest,
+            plan_digest="plan-digest",
+            workspace_inputs=("ignored-input",),
+        )
+
+    assert not destination.exists()
+    assert outside_sentinel.read_text(encoding="utf-8") == "must survive\n"
+    assert index.read_bytes() == index_before
+    assert build_source_manifest(source_repo) == manifest
+    assert (
+        str(destination)
+        not in _git(source_repo, "worktree", "list", "--porcelain").stdout
+    )
+
+    preexisting = temporary_root / "preexisting-shard"
+    preexisting.mkdir()
+    preexisting_sentinel = preexisting / "sentinel.txt"
+    preexisting_sentinel.write_text("preexisting\n", encoding="utf-8")
+    with pytest.raises(HarnessError, match="destination already exists"):
+        stage_execution_tree(
+            source_repo,
+            preexisting,
+            run_id="run-preexisting",
+            shard_index=1,
+            source_manifest=manifest,
+            plan_digest="plan-digest",
+            workspace_inputs=("ignored-input",),
+        )
+    assert preexisting_sentinel.read_text(encoding="utf-8") == "preexisting\n"
 
 
 def _stage_for_cleanup(source_repo: Path, temporary_root: Path) -> StagedExecutionTree:

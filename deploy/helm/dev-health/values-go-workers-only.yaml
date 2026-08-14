@@ -3,6 +3,8 @@
 # zero. Go profiles remain zero until an operator deliberately scales them.
 goWorkers:
   enabled: true
+  pgbouncer:
+    enabled: true
 worker: {enabled: false}
 workerIngest: {enabled: false}
 workerExternalIngest: {enabled: false}

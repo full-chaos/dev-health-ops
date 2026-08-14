@@ -1,0 +1,137 @@
+{{- /*
+Go runtime PostgreSQL topology. Domain state can use transaction pooling, but
+River queue control (LISTEN/cancel) and coordinator locks require stable
+sessions. These are separate services so each backend cap is auditable.
+*/ -}}
+{{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled }}
+{{- if not (contains "@sha256:" .Values.goWorkers.pgbouncer.image) }}
+{{- fail "goWorkers.pgbouncer.image must be pinned by immutable sha256 digest" }}
+{{- end }}
+{{- $secretName := include "dev-health.goPgbouncerSecretName" . }}
+{{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}
+{{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
+{{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
+{{- if .Values.goWorkers.pgbouncer.secret.create }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-pgbouncer" "context" $) | nindent 4 }}
+type: Opaque
+stringData:
+  RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
+  RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
+  RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
+  POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_DOMAIN_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port $postgresDatabase | quote }}
+  WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_QUEUE_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port $postgresDatabase | quote }}
+  COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port $postgresDatabase | quote }}
+---
+{{- end }}
+{{- $poolers := list
+  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD")
+  (dict "name" "queue-session" "component" "go-pgbouncer-queue-session" "port" .Values.goWorkers.pgbouncer.queueSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.queueSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.queueSession.maxClientConnections "role" .Values.config.RIVER_QUEUE_DATABASE_ROLE "passwordKey" "RIVER_QUEUE_DATABASE_PASSWORD")
+  (dict "name" "coordinator-session" "component" "go-pgbouncer-coordinator-session" "port" .Values.goWorkers.pgbouncer.coordinatorSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.coordinatorSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.coordinatorSession.maxClientConnections "role" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE "passwordKey" "RIVER_COORDINATOR_DATABASE_PASSWORD")
+}}
+{{- range $pooler := $poolers }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-pgbouncer-{{ $pooler.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" $pooler.component "context" $) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
+      # edoburu/pgbouncer runs as postgres (UID/GID 70) and writes its generated
+      # pgbouncer.ini and userlist.txt below /etc/pgbouncer at startup. Keep the
+      # root filesystem read-only, but give that exact path an fsGroup-owned
+      # ephemeral volume. The isolated compatibility harness starts this shape.
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: pgbouncer
+          image: {{ $.Values.goWorkers.pgbouncer.image | quote }}
+          imagePullPolicy: {{ $.Values.goWorkers.pgbouncer.pullPolicy }}
+          ports: [{name: pgbouncer, containerPort: {{ $pooler.port }}}]
+          env:
+            - {name: DB_HOST, value: {{ $postgresHost | quote }}}
+            - {name: DB_PORT, value: {{ $postgresPort | quote }}}
+            - {name: DB_NAME, value: {{ $postgresDatabase | quote }}}
+            - {name: DB_USER, value: {{ $pooler.role | quote }}}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $secretName }}, key: {{ $pooler.passwordKey }}}}
+            - {name: LISTEN_PORT, value: {{ $pooler.port | quote }}}
+            - {name: POOL_MODE, value: {{ $pooler.poolMode | quote }}}
+            - {name: AUTH_TYPE, value: scram-sha-256}
+            - {name: DEFAULT_POOL_SIZE, value: {{ $pooler.poolSize | quote }}}
+            - {name: MAX_CLIENT_CONN, value: {{ $pooler.maxClientConnections | quote }}}
+          readinessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 2, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 10, periodSeconds: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: generated-config, mountPath: /etc/pgbouncer}
+          resources:
+            {{- toYaml $.Values.goWorkers.pgbouncer.resources | nindent 12 }}
+      volumes:
+        - name: generated-config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-pgbouncer-{{ $pooler.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" $pooler.component "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 4 }}
+  ports:
+    - {name: pgbouncer, port: {{ $pooler.port }}, targetPort: pgbouncer}
+{{- if $.Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-pgbouncer-{{ $pooler.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" $pooler.component "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" $pooler.component "context" $) | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 14 }}
+      ports: [{protocol: TCP, port: {{ $pooler.port }}}]
+  egress:
+    {{- if $.Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" "postgresql" "context" $) | nindent 14 }}
+      ports: [{protocol: TCP, port: 5432}]
+    {{- else }}
+    - to:
+        - ipBlock: {cidr: {{ required "goWorkers.pgbouncer.postgres.networkPolicyCIDR is required for external PostgreSQL when networkPolicy.enabled" $.Values.goWorkers.pgbouncer.postgres.networkPolicyCIDR | quote }}}
+      ports: [{protocol: TCP, port: {{ $postgresPort }}}]
+    {{- end }}
+{{- end }}
+---
+{{- end }}
+{{- end }}

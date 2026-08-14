@@ -91,14 +91,27 @@
     {
       "id": "D7-clear-root-state-last",
       "file": "scripts/mutation_harness_recovery.py",
-      "find": "coordinator[\"lifecycle\"] = \"recovering\"\n        _atomic_write_json(state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
-      "replace": "coordinator[\"lifecycle\"] = \"recovering\"\n        state.pop(\"coordinator_run\", None)\n        _atomic_write_json(state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
+      "find": "coordinator[\"lifecycle\"] = \"recovering\"\n        _write_root_recovery_json(root, state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
+      "replace": "coordinator[\"lifecycle\"] = \"recovering\"\n        state.pop(\"coordinator_run\", None)\n        _write_root_recovery_json(root, state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
       "rationale": "the root coordinator record must remain present until every owned shard restore and cleanup is verified",
       "proof": [[
         ".venv/bin/pytest",
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_root_state_is_cleared_only_after_verified_cleanup"
+      ]]
+    },
+    {
+      "id": "D8-root-state-parent-symlink",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if stat.S_ISLNK(info.st_mode):\n        raise RecoveryError(\n            f\"root state directory {directory} is a symlink; refusing recovery\"\n        )",
+      "replace": "if stat.S_ISLNK(info.st_mode):\n        return directory",
+      "rationale": "recovery must reject a symlinked root state parent before any read or write can escape the repository",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_recovery_refuses_symlinked_root_state_directory"
       ]]
     }
   ]

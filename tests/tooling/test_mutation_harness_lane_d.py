@@ -389,6 +389,38 @@ def test_manifest_path_escape_is_refused(tmp_path: Path) -> None:
     assert shard.exists()
 
 
+def test_recovery_refuses_symlinked_root_state_directory(tmp_path: Path) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    state_directory = root / ".mutation-harness"
+    outside = tmp_path / "outside-state"
+    state_directory.rename(outside)
+    state_directory.symlink_to(outside, target_is_directory=True)
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+    state_path = outside / "state.json"
+    state_before = state_path.read_bytes()
+
+    with pytest.raises(RecoveryError, match="root state directory.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert state_path.read_bytes() == state_before
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert shard.exists()
+
+
+def test_recovery_refuses_non_directory_root_state_parent(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    state_parent = root / ".mutation-harness"
+    state_parent.write_text("not a directory", encoding="utf-8")
+    before = state_parent.read_bytes()
+
+    with pytest.raises(RecoveryError, match="root state directory.*not a directory"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert state_parent.read_bytes() == before
+
+
 def test_manifest_owned_path_cannot_escape_its_shard(tmp_path: Path) -> None:
     root, shard, _, _ = _recovery_fixture(tmp_path)
     sentinel = tmp_path / "outside-owner.json"

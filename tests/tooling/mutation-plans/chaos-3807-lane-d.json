@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, and the bounded whole-recorded-root ENOENT reboot path with a final absence recheck. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, the bounded whole-recorded-root ENOENT reboot path with a final absence recheck, and the recorded temporary-root final-component lexical type guard. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -91,8 +91,8 @@
     {
       "id": "D7-clear-root-state-last",
       "file": "scripts/mutation_harness_recovery.py",
-      "find": "coordinator[\"lifecycle\"] = \"recovering\"\n        _write_root_recovery_json(root, state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
-      "replace": "coordinator[\"lifecycle\"] = \"recovering\"\n        state.pop(\"coordinator_run\", None)\n        _write_root_recovery_json(root, state_path, state)\n\n        restore_callback = restore_mutation or _default_restore",
+      "find": "coordinator[\"lifecycle\"] = \"recovering\"\n        _write_root_recovery_json(root, state_path, state)\n\n        _require_existing_private_temporary_root(record)\n        restore_callback = restore_mutation or _default_restore",
+      "replace": "coordinator[\"lifecycle\"] = \"recovering\"\n        state.pop(\"coordinator_run\", None)\n        _write_root_recovery_json(root, state_path, state)\n\n        _require_existing_private_temporary_root(record)\n        restore_callback = restore_mutation or _default_restore",
       "rationale": "the root coordinator record must remain present until every owned shard restore and cleanup is verified",
       "proof": [[
         ".venv/bin/pytest",
@@ -157,8 +157,8 @@
     {
       "id": "D12-source-temporary-root-disjointness",
       "file": "scripts/mutation_harness_recovery.py",
-      "find": "if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
-      "replace": "if False and (resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved)):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
+      "find": "if resolved != path:\n        raise RecoveryError(\n            f\"temporary_root {path} is not canonical or contains a symlink\"\n        )\n    if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
+      "replace": "if resolved != path:\n        raise RecoveryError(\n            f\"temporary_root {path} is not canonical or contains a symlink\"\n        )\n    if False and (resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved)):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
       "rationale": "recovery must independently enforce source and temporary-root disjointness before a source descendant or ancestor can enter any cleanup preflight",
       "proof": [[
         ".venv/bin/pytest",
@@ -192,6 +192,19 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_missing_temporary_root_rechecks_absence_immediately_before_state_clear"
+      ]]
+    },
+    {
+      "id": "D15-temporary-root-final-component-type",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if not stat.S_ISDIR(info.st_mode):\n        kind = \"a symlink\" if stat.S_ISLNK(info.st_mode) else \"not a directory\"\n        raise RecoveryError(f\"temporary_root {path} is {kind}; refusing recovery\")",
+      "replace": "if False and not stat.S_ISDIR(info.st_mode):\n        kind = \"a symlink\" if stat.S_ISLNK(info.st_mode) else \"not a directory\"\n        raise RecoveryError(f\"temporary_root {path} is {kind}; refusing recovery\")",
+      "rationale": "the recorded temporary-root final component must be lstat-verified as a directory before recovery can resolve any shard or follow a replacement symlink",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_existing_symlinked_temporary_root_never_authorizes_replacement_cleanup"
       ]]
     }
   ]

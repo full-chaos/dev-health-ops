@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
@@ -2531,6 +2531,20 @@ async def trigger_sync_config_backfill(
 
     selector = payload.resolved_selector()
     structured_selector = payload.selector
+    if structured_selector is None:
+        # BackfillRequest validates the legacy pair. Preserve the explicit
+        # local narrowing so the route cannot accidentally reintroduce a
+        # date-only fallback for structured half-open selectors.
+        legacy_since = payload.since
+        legacy_before = payload.before
+        if legacy_since is None or legacy_before is None:
+            raise HTTPException(status_code=422, detail="Backfill dates are required")
+    else:
+        # These values are used only by the legacy response/history branches
+        # below. Keeping them concrete also makes the branch distinction
+        # explicit to static checking.
+        legacy_since = selector.since.date()
+        legacy_before = (selector.before - timedelta(microseconds=1)).date()
     requested_days = (selector.before - selector.since).days
 
     def _check_backfill_limit(sync_session) -> tuple[bool, str | None]:
@@ -2560,12 +2574,8 @@ async def trigger_sync_config_backfill(
                     triggered_by="backfill",
                     mode="backfill",
                     backfill_selector=SyncBackfillSelector(
-                        since=datetime.combine(
-                            selector.since, datetime.min.time(), tzinfo=timezone.utc
-                        ),
-                        before=datetime.combine(
-                            selector.before, datetime.max.time(), tzinfo=timezone.utc
-                        ),
+                        since=selector.since,
+                        before=selector.before,
                         source_ids=tuple(selector.source_ids)
                         if selector.source_ids is not None
                         else None,
@@ -2576,12 +2586,12 @@ async def trigger_sync_config_backfill(
                     if structured_selector is not None
                     else None,
                     since=datetime.combine(
-                        selector.since, datetime.min.time(), tzinfo=timezone.utc
+                        legacy_since, datetime.min.time(), tzinfo=timezone.utc
                     )
                     if structured_selector is None
                     else None,
                     before=datetime.combine(
-                        selector.before, datetime.max.time(), tzinfo=timezone.utc
+                        legacy_before, datetime.max.time(), tzinfo=timezone.utc
                     )
                     if structured_selector is None
                     else None,
@@ -2618,8 +2628,13 @@ async def trigger_sync_config_backfill(
             org_id=org_id,
             sync_config_id=uuid.UUID(config_id),
             status="pending",
-            since_date=selector.since,
-            before_date=selector.before,
+            # BackfillJob is the legacy, inclusive calendar-date history
+            # anchor. The linked SyncRunUnit rows retain the authoritative
+            # exact structured-selector boundaries used for coverage.
+            since_date=selector.since.date(),
+            before_date=(selector.before - timedelta(microseconds=1)).date()
+            if structured_selector is not None
+            else legacy_before,
             total_chunks=0,
         )
         session.add(backfill_job)
@@ -2637,8 +2652,12 @@ async def trigger_sync_config_backfill(
             "backfill_job_id": backfill_job_id,
             "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",
-            "since": selector.since.isoformat(),
-            "before": selector.before.isoformat(),
+            "since": selector.since.isoformat()
+            if structured_selector is not None
+            else legacy_since.isoformat(),
+            "before": selector.before.isoformat()
+            if structured_selector is not None
+            else legacy_before.isoformat(),
         }
     except HTTPException:
         raise

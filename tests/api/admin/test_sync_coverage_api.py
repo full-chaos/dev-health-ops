@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -792,33 +792,66 @@ async def test_sync_config_update_invalidates_coverage_projection(
     assert coverage.json()["projection_refreshing"] is True
 
 
-def test_canonical_backfill_windows_merge_after_inclusive_date_conversion():
-    dataset = sync_coverage_module._DatasetCoverage(
-        dataset_key="commits",
-        gaps=[
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
-            )
-        ],
-        failed_ranges=[
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 2, 13, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 2, 14, tzinfo=timezone.utc),
-            ),
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 3, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 4, tzinfo=timezone.utc),
-            ),
-        ],
-    )
+def test_canonical_backfill_windows_preserve_pair_scope_and_half_open_bounds():
+    """Coverage actions must not join adjacent gaps from different sources.
 
-    assert sync_coverage_module._canonical_backfill_windows([dataset]) == [
+    The focused-backfill dialog sends source and dataset scope back to the
+    planner. Joining these pair windows would quietly schedule a source over a
+    time period that coverage never marked as missing.
+    """
+    source_one = "11111111-1111-1111-1111-111111111111"
+    source_two = "22222222-2222-2222-2222-222222222222"
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_one,
+            dataset_key="commits",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                    source_ids=(source_one,),
+                )
+            ],
+        ),
+        sync_coverage_module._PairCoverage(
+            source_id=source_two,
+            dataset_key="commits",
+            failed_ranges=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 4, tzinfo=timezone.utc),
+                    source_ids=(source_two,),
+                )
+            ],
+        ),
+        sync_coverage_module._PairCoverage(
+            source_id=source_one,
+            dataset_key="deployments",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+                    source_ids=(source_one,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == [
         {
-            "since": date(2026, 1, 2),
-            "before": date(2026, 1, 3),
-            "reasons": ["failed", "gap"],
-        }
+            "since": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 3, tzinfo=timezone.utc),
+            "source_ids": [source_one],
+            "dataset_keys": ["commits"],
+            "reasons": ["gap"],
+        },
+        {
+            "since": datetime(2026, 1, 3, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 4, tzinfo=timezone.utc),
+            "source_ids": [source_two],
+            "dataset_keys": ["commits"],
+            "reasons": ["failed"],
+        },
     ]
 
 
@@ -933,7 +966,13 @@ async def test_sync_coverage_api_planned_units_create_requested_gap(
     assert data["coverage_since"] is None
     assert data["coverage_through"] is None
     assert data["backfill_windows"] == [
-        {"since": "2026-01-01", "before": "2026-01-01", "reasons": ["gap"]}
+        {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [scope["source_id"]],
+            "dataset_keys": ["commits"],
+            "reasons": ["gap"],
+        }
     ]
     assert data["overall"]["health"] == "gaps"
 

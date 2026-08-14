@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from typing import Any, Literal
 
 from pydantic import (
@@ -281,10 +281,25 @@ class DiscoveredReposResponse(BaseModel):
 
 
 class BackfillSelectorRequest(BaseModel):
-    since: date
-    before: date
+    """An exact, half-open focused-backfill selector.
+
+    The legacy top-level ``since`` and ``before`` fields remain calendar dates
+    with their established inclusive semantics. A structured selector is the
+    authoritative form used by coverage actions: ``since`` is inclusive and
+    ``before`` is exclusive so an advertised coverage interval can be submitted
+    without expanding it by a day.
+    """
+
+    since: AwareDatetime
+    before: AwareDatetime
     source_ids: list[str] | None = None
     dataset_keys: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_half_open_interval(self) -> BackfillSelectorRequest:
+        if self.since >= self.before:
+            raise ValueError("backfill selector before must be after since")
+        return self
 
 
 class BackfillRequest(BaseModel):
@@ -311,7 +326,13 @@ class BackfillRequest(BaseModel):
             return self.selector
         assert self.since is not None
         assert self.before is not None
-        return BackfillSelectorRequest(since=self.since, before=self.before)
+        # Legacy flat dates retain their inclusive calendar-date semantics.
+        # Construct the equivalent UTC datetimes without routing them through
+        # the exact half-open structured-selector validator.
+        return BackfillSelectorRequest.model_construct(
+            since=datetime.combine(self.since, time.min, tzinfo=timezone.utc),
+            before=datetime.combine(self.before, time.max, tzinfo=timezone.utc),
+        )
 
 
 JOB_RUN_STATUS_LABELS: dict[int, str] = {
@@ -392,8 +413,17 @@ class SyncCoverageSource(BaseModel):
 
 
 class SyncCoverageBackfillWindow(BaseModel):
-    since: date
-    before: date
+    """A server-authorized exact selector for a coverage gap or failure.
+
+    These are deliberately source and dataset scoped. Callers must not merge
+    adjacent windows, because the adjacent range can belong to another source
+    or dataset.
+    """
+
+    since: datetime
+    before: datetime
+    source_ids: list[str] = Field(default_factory=list)
+    dataset_keys: list[str] = Field(default_factory=list)
     reasons: list[Literal["gap", "failed"]] = Field(default_factory=list)
 
 

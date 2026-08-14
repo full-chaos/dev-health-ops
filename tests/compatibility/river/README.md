@@ -19,8 +19,8 @@ touch the repository's development PostgreSQL or ClickHouse data.
 - a Go installation with automatic toolchain selection enabled; the runner
   builds both CLIs with and asserts the exact candidate runtime Go 1.25.9;
 - `jq`;
-- a standalone Python 3.13.14 environment with `riverqueue`, SQLAlchemy, and
-  `asyncpg` installed at the exact versions below. This is intentionally
+- a standalone Python 3.13.14 environment with `riverqueue`, SQLAlchemy,
+  `asyncpg`, and `greenlet` installed at the exact versions below. This is intentionally
   independent of the repository's own virtual environment: the main project
   now requires Python >=3.14 (CHAOS-3419), so `.venv` at the repo root is a
   3.14 interpreter and `uv sync` against the repository lock can no longer
@@ -34,12 +34,13 @@ Prepare that exact interpreter and environment with:
 uv python install 3.13.14
 uv venv --python 3.13.14 .venv-river-compat
 uv pip install --python .venv-river-compat/bin/python \
-  asyncpg==0.31.0 riverqueue==0.7.0 SQLAlchemy==2.0.49
+  asyncpg==0.31.0 greenlet==3.5.0 riverqueue==0.7.0 SQLAlchemy==2.0.49
 ```
 
 (matches the pinned dependency install in `.github/workflows/go.yml`'s
 `river-compatibility` job). The runner fails closed if the Python patch
-version or the pinned `riverqueue`, SQLAlchemy, or `asyncpg` versions drift.
+version or the pinned `riverqueue`, SQLAlchemy, `asyncpg`, or `greenlet`
+versions drift.
 
 The default Python executable is `.venv/bin/python` at the repo root, which
 is now a 3.14 interpreter and will fail the runner's version check. Set
@@ -154,6 +155,12 @@ connection strings, remain in a mode-`0700` temporary directory and are
 deleted by the exit trap. The runner writes no raw logs or evidence files into
 the repository. Review the combined JSON before copying it into any committed
 evidence artifact.
+
+The same isolated run also starts a PgBouncer service that mirrors the Helm
+security contract: PostgreSQL UID/GID 70, read-only root filesystem, and only
+the generated `/etc/pgbouncer` configuration path writable. Its successful
+health check is recorded as `helm_pgbouncer_startup`; the Helm render test
+separately pins the equivalent Kubernetes `emptyDir` mount and `fsGroup`.
 
 ## Static validation
 

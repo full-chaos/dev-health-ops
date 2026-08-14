@@ -38,9 +38,72 @@
           }
         }
       }
+    },
+    "goWorkers": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "pgbouncer": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": { "type": "string" },
+            "postgres": {
+              "type": "object",
+              "properties": {
+                "host": { "type": "string" },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "database": { "type": "string" },
+                "networkPolicyCIDR": { "type": "string" }
+              }
+            },
+            "secret": {
+              "type": "object",
+              "properties": {
+                "create": { "type": "boolean" },
+                "externalSecretName": { "type": "string" },
+                "data": {
+                  "type": "object",
+                  "description": "Go PgBouncer secrets contain only role passwords and endpoint DSNs; migration DSNs are prohibited.",
+                  "not": {
+                    "anyOf": [
+                      { "required": ["MIGRATION_DATABASE_URI"] },
+                      { "required": ["MIGRATION_DATABASE_URI_FILE"] }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "goWorkers": {
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          }
+        },
+        "required": ["goWorkers"]
+      },
+      "then": {
+        "properties": {
+          "goWorkers": {
+            "properties": {
+              "pgbouncer": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["pgbouncer"]
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

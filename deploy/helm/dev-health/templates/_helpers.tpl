@@ -136,6 +136,36 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 {{- end }}
 {{- end }}
 
+{{/* Go PgBouncer topology helpers. The poolers have stable in-cluster Service
+names; role credentials and runtime DSNs remain Secret values. */}}
+{{- define "dev-health.goPgbouncerSecretName" -}}
+{{- if .Values.goWorkers.pgbouncer.secret.create }}
+{{- printf "%s-go-pgbouncer" (include "dev-health.fullname" .) }}
+{{- else }}
+{{- required "goWorkers.pgbouncer.secret.externalSecretName is required when goWorkers.pgbouncer.secret.create=false" .Values.goWorkers.pgbouncer.secret.externalSecretName }}
+{{- end }}
+{{- end }}
+
+{{- define "dev-health.goPgbouncerPostgresHost" -}}
+{{- if .Values.postgresql.enabled }}
+{{- printf "%s-postgresql" (include "dev-health.fullname" .) }}
+{{- else }}
+{{- required "goWorkers.pgbouncer.postgres.host is required for external PostgreSQL" .Values.goWorkers.pgbouncer.postgres.host }}
+{{- end }}
+{{- end }}
+
+{{- define "dev-health.goPgbouncerPostgresPort" -}}
+{{- if .Values.postgresql.enabled }}5432{{- else }}{{ required "goWorkers.pgbouncer.postgres.port is required for external PostgreSQL" .Values.goWorkers.pgbouncer.postgres.port }}{{- end }}
+{{- end }}
+
+{{- define "dev-health.goPgbouncerPostgresDatabase" -}}
+{{- if .Values.postgresql.enabled }}
+{{- .Values.postgresql.credentials.database }}
+{{- else }}
+{{- required "goWorkers.pgbouncer.postgres.database is required for external PostgreSQL" .Values.goWorkers.pgbouncer.postgres.database }}
+{{- end }}
+{{- end }}
+
 {{/*
 Worker operational bridge URL — the in-cluster API Service that serves the
 bridge the Go PagerDuty stream runner forwards reconciliation to. Auto-computed

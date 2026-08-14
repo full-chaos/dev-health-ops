@@ -1,6 +1,7 @@
 {{- /* Additive Go/River topology. `goWorkers.enabled` is false by default. */ -}}
 {{- if .Values.goWorkers.enabled }}
 {{- range $profile := .Values.goWorkers.profiles }}
+{{- $coordinator := has $profile.name (list "reconciler" "scheduler") }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,11 +40,27 @@ spec:
         - name: {{ $profile.name }}
           image: {{ $profile.image }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
-          {{- if $profile.runtimeProfile }}
-          env: [{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          {{- else }}
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          {{- end }}
+          env:
+            {{- if $profile.runtimeProfile }}
+            - {name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}
+            {{- end }}
+            - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            {{- if $.Values.goWorkers.pgbouncer.enabled }}
+            # Every Go profile uses the bounded domain transaction pool plus
+            # the River queue session pool. Only coordinator binaries receive
+            # the separate coordinator lock session endpoint.
+            - name: POSTGRES_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: POSTGRES_URI}}
+            - {name: PGBOUNCER_TRANSACTION_MODE, value: "true"}
+            - name: WORKER_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: WORKER_DATABASE_URI}}
+            - {name: WORKER_DATABASE_MODE, value: session}
+            {{- if $coordinator }}
+            - name: COORDINATOR_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}
+            - {name: COORDINATOR_DATABASE_MODE, value: session}
+            {{- end }}
+            {{- end }}
           envFrom:
             - configMapRef: {name: {{ include "dev-health.configMapName" $ }}}
             - secretRef: {name: {{ include "dev-health.secretName" $ }}}

@@ -8,6 +8,7 @@ HARNESS="${ROOT}/tests/compatibility/river/run.sh"
 RECORDER="${ROOT}/tests/compatibility/river/record.sh"
 COMPOSE_FILE="${ROOT}/tests/compatibility/river/compose.compatibility.yml"
 RESULTS="${ROOT}/ci/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
+GO_WORKFLOW="${ROOT}/.github/workflows/go.yml"
 
 for command_name in bash docker jq shellcheck; do
   command -v "${command_name}" >/dev/null 2>&1 || {
@@ -23,6 +24,23 @@ docker compose version >/dev/null 2>&1 || {
 bash -n "${HARNESS}"
 bash -n "${RECORDER}"
 shellcheck "${HARNESS}" "${RECORDER}" "${ROOT}/ci/check_go.sh" "${BASH_SOURCE[0]}"
+# shellcheck disable=SC2016 # This is a literal source-contract assertion.
+grep -F 'if $mode == "direct" or $mode == "session" then' "${HARNESS}" >/dev/null || {
+  printf 'ERROR: direct and session cancellation contracts must remain identical\n' >&2
+  exit 1
+}
+grep -F 'pgbouncer-session-helm-smoke' "${HARNESS}" >/dev/null || {
+  printf 'ERROR: the Helm PgBouncer startup smoke must run in the isolated harness\n' >&2
+  exit 1
+}
+grep -F 'GREENLET_VERSION="3.5.0"' "${HARNESS}" >/dev/null || {
+  printf 'ERROR: the Python async SQLAlchemy greenlet pin must remain preflight-validated\n' >&2
+  exit 1
+}
+grep -F 'greenlet==3.5.0' "${GO_WORKFLOW}" >/dev/null || {
+  printf 'ERROR: the hosted River compatibility job must install the greenlet pin explicitly\n' >&2
+  exit 1
+}
 docker compose \
   --project-name rivercompat-static-check \
   --file "${COMPOSE_FILE}" \
@@ -52,10 +70,28 @@ jq -e '
   and .versions.riverqueue_python == "0.7.0"
   and .versions.sqlalchemy == "2.0.49"
   and .versions.asyncpg == "0.31.0"
-  and (.gate_truth_table.direct | all(. == true))
-  and (.gate_truth_table.session | all(. == true))
+  and .versions.greenlet == "3.5.0"
+  and .gate_truth_table.direct.backend_connection_delta_at_most_six == true
+  and .gate_truth_table.direct.canceled_acquires_zero == true
+  and .gate_truth_table.direct.enqueue_p95_within_limit == true
+  and .gate_truth_table.direct.new_connections_at_most_six == true
+  and .gate_truth_table.direct.cross_client_running_cancel == true
+  and .gate_truth_table.direct.same_client_running_cancel == null
+  and .gate_truth_table.session.backend_connection_delta_at_most_six == true
+  and .gate_truth_table.session.canceled_acquires_zero == true
+  and .gate_truth_table.session.enqueue_p95_within_limit == true
+  and .gate_truth_table.session.new_connections_at_most_six == true
+  and .gate_truth_table.session.cross_client_running_cancel == true
+  and .gate_truth_table.session.same_client_running_cancel == null
   and .gate_truth_table.poll_only.cross_client_running_cancel == false
   and .gate_truth_table.poll_only.same_client_running_cancel == false
+  and .helm_pgbouncer_startup == {
+    status: "pass",
+    mode: "session",
+    container_identity: "postgres_uid_gid_70",
+    root_filesystem: "read_only",
+    writable_config_path: "/etc/pgbouncer"
+  }
   and all(.profiles[]; .python_transactions.scheduled_commit.job_contract.state == "scheduled")
   and .nested_n_minus_1.phases[1].current_insert.outcome == "inserted"
   and .nested_n_minus_1.phases[1].n_minus_one_consume.outcome == "completed"

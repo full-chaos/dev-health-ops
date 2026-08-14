@@ -18,6 +18,7 @@ PYTHON_VERSION="3.13.14"
 RIVERQUEUE_PYTHON_VERSION="0.7.0"
 SQLALCHEMY_VERSION="2.0.49"
 ASYNCPG_VERSION="0.31.0"
+GREENLET_VERSION="3.5.0"
 FETCH_POLL_INTERVAL="250ms"
 CRASH_CANDIDATE_JOB_TIMEOUT="30s"
 CRASH_CANDIDATE_RESCUE_AFTER="31s"
@@ -167,6 +168,8 @@ dump_bootstrap_diagnostics() {
     "${compose[@]}" logs --no-color --tail=40 postgres 2>&1
     printf -- '\n-- pgbouncer logs (tail 40) --\n'
     "${compose[@]}" logs --no-color --tail=40 pgbouncer 2>&1
+    printf -- '\n-- Helm PgBouncer security smoke logs (tail 40) --\n'
+    "${compose[@]}" logs --no-color --tail=40 pgbouncer-session-helm-smoke 2>&1
   } 2>&1 | redact_diagnostic_stream >"${status_file}" || true
 
   printf 'river compatibility harness: bootstrap diagnostics (sanitized) ----------\n' >&2
@@ -257,7 +260,9 @@ run_go_checked() {
 
   if ! RIVER_COMPAT_DATABASE_URL="${database_url}" "${GO_BINARY}" "$@" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    die "${label} failed; captured details were discarded"
+    progress "${label} failed; sanitized diagnostic follows"
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
   if ! assert_all_emitted_gates "${output_file}"; then
@@ -306,7 +311,7 @@ assert_matrix() {
       and .workload.execute_latency_ms.within_limit == true
       and .workload.cancel.state == "cancelled"
       and (
-        if $mode == "direct" then
+        if $mode == "direct" or $mode == "session" then
           .workload.cancel.outcome == "running_context_cancelled_cross_client"
           and .workload.running_cancellation.cross_client_context_cancelled == true
           and .workload.running_cancellation.same_client_attempted == false
@@ -327,7 +332,10 @@ assert_matrix() {
       and .workload.scheduled.state == "cancelled"
       and .workload.scheduled.scheduled == true
       and .workload.scheduled.outcome == "scheduled_state_observed"
-    ' "${output_file}" >/dev/null 2>&1 || die "${mode} matrix contract assertion failed"
+    ' "${output_file}" >/dev/null 2>&1 || {
+      report_gate_failure "${output_file}"
+      die "${mode} matrix contract assertion failed"
+    }
 }
 
 run_python_case() {
@@ -358,7 +366,9 @@ run_python_case() {
 
   if ! "${PYTHON_BIN}" "${PYTHON_CLI}" "${args[@]}" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    die "${label} failed; captured details were discarded"
+    progress "${label} failed; sanitized diagnostic follows"
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
 }
@@ -1015,6 +1025,7 @@ from importlib.metadata import version
 
 print(json.dumps({
     "asyncpg": version("asyncpg"),
+    "greenlet": version("greenlet"),
     "python": platform.python_version(),
     "riverqueue": version("riverqueue"),
     "sqlalchemy": version("SQLAlchemy"),
@@ -1028,11 +1039,13 @@ if ! jq -e \
   --arg python "${PYTHON_VERSION}" \
   --arg riverqueue "${RIVERQUEUE_PYTHON_VERSION}" \
   --arg sqlalchemy "${SQLALCHEMY_VERSION}" \
-  --arg asyncpg "${ASYNCPG_VERSION}" '
+  --arg asyncpg "${ASYNCPG_VERSION}" \
+  --arg greenlet "${GREENLET_VERSION}" '
     .python == $python
     and .riverqueue == $riverqueue
     and .sqlalchemy == $sqlalchemy
     and .asyncpg == $asyncpg
+    and .greenlet == $greenlet
   ' "${python_versions}" \
   >"${TEMP_DIR}/python-import.stdout" \
   2>"${TEMP_DIR}/python-version-check.stderr"; then
@@ -1060,7 +1073,7 @@ fi
 
 progress "starting the isolated pinned PostgreSQL and PgBouncer services"
 COMPOSE_ATTEMPTED=1
-if ! "${compose[@]}" up -d --wait postgres pgbouncer pgbouncer-session \
+if ! "${compose[@]}" up -d --wait postgres pgbouncer pgbouncer-session pgbouncer-session-helm-smoke \
   >"${TEMP_DIR}/compose-up.stdout" \
   2>"${TEMP_DIR}/compose-up.stderr"; then
   dump_bootstrap_diagnostics
@@ -1125,7 +1138,8 @@ jq -n \
       python: $python_versions[0].python,
       riverqueue_python: $python_versions[0].riverqueue,
       sqlalchemy: $python_versions[0].sqlalchemy,
-      asyncpg: $python_versions[0].asyncpg
+      asyncpg: $python_versions[0].asyncpg,
+      greenlet: $python_versions[0].greenlet
     },
     samples_per_mode: $samples,
     gate_truth_table: {
@@ -1153,6 +1167,13 @@ jq -n \
         cross_client_running_cancel: $session[0].matrix.gates.cross_client_running_cancel,
         same_client_running_cancel: $session[0].matrix.gates.same_client_running_cancel
       }
+    },
+    helm_pgbouncer_startup: {
+      status: "pass",
+      mode: "session",
+      container_identity: "postgres_uid_gid_70",
+      root_filesystem: "read_only",
+      writable_config_path: "/etc/pgbouncer"
     },
     profiles: [$direct[0], $poll[0], $session[0]],
     nested_n_minus_1: $n_minus_one[0],

@@ -207,6 +207,51 @@ workerHeavy:
 # to zero but retains their definitions and Valkey DB 0.
 goWorkers:
   enabled: false
+  # The production Go topology has three distinct PostgreSQL endpoints.
+  # Domain traffic uses a bounded transaction pool. River queue control and
+  # coordinator locks use independent session pools: those connections cannot
+  # switch backends between statements. The role passwords stay in the
+  # dedicated goWorkers.pgbouncer secret and are projected to each Go profile
+  # by individual secretKeyRef entries, never envFrom.
+  pgbouncer:
+    enabled: false
+    # Pinned to the compatibility-matrix image. Do not replace this with a
+    # mutable tag: the pooler controls the runtime's database semantics.
+    image: "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
+    pullPolicy: IfNotPresent
+    postgres:
+      # These values are required for an external PostgreSQL service. When the
+      # bundled StatefulSet is enabled, host/database/port are derived from it.
+      host: ""
+      port: 5432
+      database: ""
+      # Required for an external PostgreSQL service with networkPolicy.enabled.
+      # Use a narrowly-scoped CIDR, never a broad public range.
+      networkPolicyCIDR: ""
+    transaction:
+      port: 6432
+      poolSize: 20
+      maxClientConnections: 1000
+    queueSession:
+      port: 6433
+      poolSize: 18
+      maxClientConnections: 128
+    coordinatorSession:
+      port: 6434
+      poolSize: 10
+      maxClientConnections: 32
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 250m, memory: 256Mi}
+    secret:
+      # Set create=false and provide a pre-created Secret with the same six
+      # keys for externally managed credentials and DSNs.
+      create: true
+      externalSecretName: ""
+      data:
+        RIVER_DOMAIN_DATABASE_PASSWORD: ""
+        RIVER_QUEUE_DATABASE_PASSWORD: ""
+        RIVER_COORDINATOR_DATABASE_PASSWORD: ""
   profiles:
     - name: heavy
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
@@ -485,6 +530,7 @@ config:
   RIVER_DATABASE_SCHEMA: "river"
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
+  RIVER_COORDINATOR_DATABASE_ROLE: "devhealth_coordinator"
   # -- Worker operational bridge (CUT-04). The Go PagerDuty stream runner
   #    forwards reconciliation to the API bridge, so it cannot open readiness
   #    without a reachable endpoint. Empty auto-computes the in-cluster API

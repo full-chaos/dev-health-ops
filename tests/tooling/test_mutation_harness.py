@@ -14,10 +14,14 @@ run in milliseconds.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shlex
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +34,9 @@ from scripts.mutation_harness import (
     VERDICT_SURVIVED,
     VERDICT_SURVIVED_DECLARED,
     HarnessError,
+    Result,
     _load_sharding_plan,
+    _ProgressEmitter,
     accept_manual_repair,
     acquire_lock,
     coordinator_run,
@@ -143,6 +149,364 @@ def test_sharding_interfaces_are_explicit_unimplemented_seams(tree: Path) -> Non
         )
     with pytest.raises(NotImplementedError):
         recover_run(tree, "run-3807")
+
+
+def test_progress_flushes_the_selected_stderr_stream(tree: Path) -> None:
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="utf-8", line_buffering=False)
+    try:
+        emitter = _ProgressEmitter(tree, "flush-test", "human", stream=stream)
+        emitter.emit("run_started", completed=0, active=0, total=1, phase="running")
+
+        assert raw.getvalue() == (
+            b"mutation harness: run_started (0/1 complete, 0 active)\n"
+        )
+    finally:
+        stream.detach()
+
+
+def test_progress_modes_keep_events_off_stdout(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = _plan(tree, [_mutation()])
+
+    run_plan(tree, plan, None, assert_all_killed=False, progress="human")
+    human = capsys.readouterr()
+    assert human.out == ""
+    assert "mutation harness: mutation_started M1" in human.err
+
+    run_plan(tree, plan, None, assert_all_killed=False, progress="jsonl")
+    jsonl = capsys.readouterr()
+    assert jsonl.out == ""
+    stderr_events = [json.loads(line) for line in jsonl.err.splitlines()]
+    assert [event["sequence"] for event in stderr_events] == list(
+        range(1, len(stderr_events) + 1)
+    )
+    assert [event["event"] for event in stderr_events] == [
+        "run_started",
+        "mutation_started",
+        "mutation_finished",
+        "run_finished",
+    ]
+
+    run_plan(tree, plan, None, assert_all_killed=False, progress="none")
+    silent = capsys.readouterr()
+    assert silent.out == ""
+    assert silent.err == ""
+
+
+def test_events_exclude_captured_proof_output(tree: Path) -> None:
+    proof_secret = "proof-output-must-not-enter-events"
+    noisy_proof = [
+        sys.executable,
+        "-c",
+        (
+            "import pathlib,sys;"
+            f"print({proof_secret!r});"
+            f"text=pathlib.Path({SOURCE_NAME!r}).read_text();"
+            f"sys.exit(0 if {GUARD!r} in text else 1)"
+        ),
+    ]
+    plan = _plan(tree, [_mutation(proof=[noisy_proof])])
+
+    results, _ = run_plan(tree, plan, None, assert_all_killed=False)
+
+    assert proof_secret in results[0].detail
+    run_directory = next((tree / ".mutation-harness" / "runs").iterdir())
+    event_text = (run_directory / "events.jsonl").read_text(encoding="utf-8")
+    assert proof_secret not in event_text
+    events = [json.loads(line) for line in event_text.splitlines()]
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "mutation_started",
+        "mutation_finished",
+        "run_finished",
+    ]
+    assert events[0] | {"elapsed_ms": 0} == {
+        "schema_version": 1,
+        "sequence": 1,
+        "run_id": events[0]["run_id"],
+        "event": "run_started",
+        "phase": "running",
+        "completed": 0,
+        "active": 0,
+        "total": 1,
+        "elapsed_ms": 0,
+    }
+    assert events[1]["plan_ordinal"] == 0
+    assert events[1]["mutation_id"] == "M1"
+    assert (events[1]["completed"], events[1]["active"], events[1]["total"]) == (
+        0,
+        1,
+        1,
+    )
+    assert events[2]["verdict"] == "KILLED"
+    assert (events[2]["completed"], events[2]["active"], events[2]["total"]) == (
+        1,
+        0,
+        1,
+    )
+    assert all("shard_index" not in event for event in events)
+    assert all(
+        set(event)
+        <= {
+            "schema_version",
+            "sequence",
+            "run_id",
+            "event",
+            "shard_index",
+            "plan_ordinal",
+            "mutation_id",
+            "phase",
+            "verdict",
+            "completed",
+            "active",
+            "total",
+            "elapsed_ms",
+        }
+        for event in events
+    )
+
+
+def test_result_stream_survives_an_abort_before_the_next_mutation(
+    tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import scripts.mutation_harness as harness
+
+    plan = _plan(tree, [_mutation(id="M1"), _mutation(id="M2")])
+    calls = 0
+
+    def controlled_run(
+        _root: Path, mutation: object, _snapshot_directory: Path
+    ) -> Result:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Result("M1", VERDICT_KILLED, detail="measured before abort")
+        run_directory = next((tree / ".mutation-harness" / "runs").iterdir())
+        records = [
+            json.loads(line)
+            for line in (run_directory / "results.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [record["id"] for record in records] == ["M1"]
+        raise HarnessError("controlled abort before M2 completes")
+
+    monkeypatch.setattr(harness, "_run_one", controlled_run)
+
+    with pytest.raises(HarnessError, match="controlled abort"):
+        run_plan(tree, plan, None, assert_all_killed=False)
+
+    run_directory = next((tree / ".mutation-harness" / "runs").iterdir())
+    result_lines = (
+        (run_directory / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert len(result_lines) == 1
+    assert json.loads(result_lines[0]) == {
+        "schema_version": 1,
+        "run_id": run_directory.name,
+        "plan_ordinal": 0,
+        "id": "M1",
+        "verdict": "KILLED",
+        "detail": "measured before abort",
+        "failing_proof": None,
+        "warnings": [],
+    }
+    assert not (tree / ".mutation-harness" / "report.json").exists()
+
+
+def test_serial_report_preserves_result_fields_and_adds_stream_paths(
+    tree: Path,
+) -> None:
+    plan = _plan(
+        tree,
+        [
+            _mutation(
+                proof=[ALWAYS_PASSES_PROOF],
+                build=ALWAYS_PASSES_PROOF,
+            )
+        ],
+    )
+
+    run_plan(tree, plan, None, assert_all_killed=False)
+
+    report = json.loads(
+        (tree / ".mutation-harness" / "report.json").read_text(encoding="utf-8")
+    )
+    assert report["schema_version"] == 1
+    assert report["plan"] == "synthetic"
+    assert report["plan_path"] == str(plan)
+    assert report["results"] == [
+        {
+            "id": "M1",
+            "verdict": "SURVIVED",
+            "detail": (
+                "every proof command still passed with the mutation applied. Either "
+                "a test is missing, or this mutation is invalid (no-op, wrong target, "
+                "or asserted against the constant it mutates). Classify it by "
+                "declaring expected_survivor_reason, or add the missing test."
+            ),
+            "failing_proof": None,
+            "warnings": [],
+        }
+    ]
+    assert report["mode"] == "serial"
+    assert report["event_log"] == (
+        f".mutation-harness/runs/{report['run_id']}/events.jsonl"
+    )
+    assert report["result_stream"] == (
+        f".mutation-harness/runs/{report['run_id']}/results.jsonl"
+    )
+
+
+def test_serial_cli_stdout_is_byte_compatible_golden(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = _plan(
+        tree,
+        [
+            _mutation(
+                proof=[ALWAYS_PASSES_PROOF],
+                build=ALWAYS_PASSES_PROOF,
+            )
+        ],
+    )
+
+    assert (
+        main(
+            [
+                "--root",
+                str(tree),
+                "run",
+                "--plan",
+                str(plan),
+                "--progress",
+                "none",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == (
+        "\n"
+        "| mutation | verdict | detail |\n"
+        "| --- | --- | --- |\n"
+        "| M1 | SURVIVED | every proof command still passed with the mutation "
+        "applied. Either a test is missing, or this mutation is inva |\n"
+        "\n"
+        "\n"
+        "M1 SURVIVED:\n"
+        "every proof command still passed with the mutation applied. Either a "
+        "test is missing, or this mutation is invalid (no-op, wrong target, or "
+        "asserted against the constant it mutates). Classify it by declaring "
+        "expected_survivor_reason, or add the missing test.\n"
+    )
+
+
+def test_cli_progress_defaults_to_human(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = _plan(tree, [_mutation()])
+
+    assert main(["--root", str(tree), "run", "--plan", str(plan)]) == 0
+
+    captured = capsys.readouterr()
+    assert "| M1 | KILLED |" in captured.out
+    assert "mutation harness: run_started" in captured.err
+    assert "mutation harness: mutation_finished M1" in captured.err
+
+
+def test_durable_event_is_readable_while_the_proof_child_is_alive(
+    tree: Path,
+) -> None:
+    release = tree / "release-proof"
+    proof_pid = tree / "proof.pid"
+    blocking_proof = [
+        sys.executable,
+        "-c",
+        (
+            "import os\n"
+            "import pathlib\n"
+            "import time\n"
+            f"pathlib.Path({proof_pid.name!r}).write_text(str(os.getpid()))\n"
+            f"release = pathlib.Path({release.name!r})\n"
+            "while not release.exists():\n"
+            "    time.sleep(0.01)\n"
+            f"text = pathlib.Path({SOURCE_NAME!r}).read_text()\n"
+            f"raise SystemExit(0 if {GUARD!r} in text else 1)\n"
+        ),
+    ]
+    plan = _plan(tree, [_mutation(proof=[blocking_proof])])
+    script = Path(__file__).parents[2] / "scripts" / "mutation_harness.py"
+    stdout_path = tree / "harness.stdout"
+    stderr_path = tree / "harness.stderr"
+    with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(script),
+                "--root",
+                str(tree),
+                "run",
+                "--plan",
+                str(plan),
+                "--assert-all-killed",
+                "--progress",
+                "none",
+            ],
+            cwd=script.parents[1],
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+    assert process.stdout is None
+    assert process.stderr is None
+
+    try:
+        deadline = time.monotonic() + 10
+        live_event: dict[str, object] | None = None
+        while time.monotonic() < deadline:
+            event_logs = list(
+                (tree / ".mutation-harness" / "runs").glob("*/events.jsonl")
+            )
+            if proof_pid.exists() and event_logs:
+                child_pid = int(proof_pid.read_text(encoding="utf-8"))
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raw_lines = event_logs[0].read_text(encoding="utf-8").splitlines()
+                    parsed = [json.loads(line) for line in raw_lines]
+                    live_event = next(
+                        (
+                            event
+                            for event in parsed
+                            if event["event"] == "mutation_started"
+                        ),
+                        None,
+                    )
+                    if live_event is not None and process.poll() is None:
+                        break
+            time.sleep(0.01)
+
+        assert live_event is not None
+        assert live_event["mutation_id"] == "M1"
+        assert process.poll() is None
+        release.write_text("continue\n", encoding="utf-8")
+        assert process.wait(timeout=10) == 0
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+
+    event_log = next((tree / ".mutation-harness" / "runs").glob("*/events.jsonl"))
+    event_lines = event_log.read_text(encoding="utf-8").splitlines()
+    assert event_lines
+    assert all(isinstance(json.loads(line), dict) for line in event_lines)
 
 
 def test_a_mutation_the_proof_notices_is_killed(tree: Path) -> None:

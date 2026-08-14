@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -29,6 +30,7 @@ from scripts.mutation_harness_coordinator import (  # noqa: E402
     ChildSpec,
     DetailNormalizationError,
     ShardAssignment,
+    TemporaryRootClaim,
     _validate_child_spec,
     _write_manifest,
     aggregate_child_results,
@@ -226,6 +228,7 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
     plan = tmp_path / "plan.json"
     plan.write_text("{}", encoding="utf-8")
     temporary_root = (tmp_path.parent / f"{tmp_path.name}-private").resolve()
+    temporary_root.mkdir()
     first = begin_coordinator_run(
         tmp_path,
         run_id="first",
@@ -236,7 +239,9 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
         plan_digest=PLAN_DIGEST,
         requested_shards=2,
         effective_shards=2,
-        temporary_root_factory=lambda _run_id: temporary_root,
+        temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+            temporary_root
+        ),
     )
     try:
         state = _read_state(tmp_path)
@@ -254,7 +259,9 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
                 plan_digest=PLAN_DIGEST,
                 requested_shards=2,
                 effective_shards=2,
-                temporary_root_factory=lambda _run_id: temporary_root,
+                temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+                    temporary_root
+                ),
             )
     finally:
         first.clear_and_release()
@@ -396,7 +403,7 @@ def _coordinate(
     mutation_ids: Sequence[str] = ("M1", "M2", "M3"),
     source_reader: Callable[[], str] | None = None,
     factory: Callable[[ShardAssignment, str], ChildSpec] | None = None,
-    temporary_root_factory: Callable[[str], Path] | None = None,
+    temporary_root_factory: Callable[[str], TemporaryRootClaim] | None = None,
     before_report: Callable[[], None] | None = None,
 ):
     source = tmp_path / "source"
@@ -420,7 +427,7 @@ def _coordinate(
         plan_digest=PLAN_DIGEST,
         source_manifest_reader=source_reader or (lambda: SOURCE_DIGEST),
         temporary_root_factory=temporary_root_factory
-        or (lambda _run_id: shards.resolve()),
+        or (lambda _run_id: TemporaryRootClaim.borrowed(shards.resolve())),
         child_factory=factory or _factory(shards, assert_root_locked=source),
         run_id=RUN_ID,
         before_report=before_report,
@@ -465,7 +472,9 @@ def test_manifest_records_run_temporary_root_before_first_shard_staging_failure(
         _coordinate(
             tmp_path,
             factory=staging_failure,
-            temporary_root_factory=lambda _run_id: temporary_root,
+            temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+                temporary_root
+            ),
         )
 
     state = _read_state(source)
@@ -487,6 +496,7 @@ def test_run_temporary_root_must_not_overlap_source_before_manifest_write(
     plan = source / "plan.json"
     plan.write_text("{}", encoding="utf-8")
     temporary_root = (tmp_path / relative).resolve()
+    temporary_root.mkdir(exist_ok=True)
 
     with pytest.raises(HarnessError, match="overlaps the invoking source root"):
         begin_coordinator_run(
@@ -499,7 +509,9 @@ def test_run_temporary_root_must_not_overlap_source_before_manifest_write(
             plan_digest=PLAN_DIGEST,
             requested_shards=2,
             effective_shards=2,
-            temporary_root_factory=lambda _run_id: temporary_root,
+            temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+                temporary_root
+            ),
         )
 
     assert _read_state(source) is None
@@ -514,6 +526,7 @@ def test_manifest_serialization_rechecks_digests_and_run_root_binding(
     plan = source / "plan.json"
     plan.write_text("{}", encoding="utf-8")
     temporary_root = (tmp_path / "private-run").resolve()
+    temporary_root.mkdir()
     lease = begin_coordinator_run(
         source,
         run_id=RUN_ID,
@@ -524,7 +537,9 @@ def test_manifest_serialization_rechecks_digests_and_run_root_binding(
         plan_digest=PLAN_DIGEST,
         requested_shards=2,
         effective_shards=2,
-        temporary_root_factory=lambda _run_id: temporary_root,
+        temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+            temporary_root
+        ),
     )
     try:
         lease.state["source_manifest"]["digest"] = "tampered"
@@ -555,11 +570,11 @@ def test_startup_collision_precedes_private_root_creation_and_preserves_run_dir(
     temporary_root = tmp_path / "private-run"
     factory_called = False
 
-    def create_temporary_root(_run_id: str) -> Path:
+    def create_temporary_root(_run_id: str) -> TemporaryRootClaim:
         nonlocal factory_called
         factory_called = True
         temporary_root.mkdir()
-        return temporary_root
+        return TemporaryRootClaim.created(temporary_root)
 
     with pytest.raises(FileExistsError):
         begin_coordinator_run(
@@ -592,9 +607,9 @@ def test_manifest_initialization_failure_removes_only_call_owned_empty_artifacts
     plan.write_text("{}", encoding="utf-8")
     temporary_root = tmp_path / "private-run"
 
-    def create_temporary_root(_run_id: str) -> Path:
+    def create_temporary_root(_run_id: str) -> TemporaryRootClaim:
         temporary_root.mkdir()
-        return temporary_root
+        return TemporaryRootClaim.created(temporary_root)
 
     def fail_manifest(_lease: object) -> None:
         raise OSError("injected manifest write failure")
@@ -630,9 +645,9 @@ def test_state_initialization_failure_removes_manifest_and_call_owned_roots(
     plan.write_text("{}", encoding="utf-8")
     temporary_root = tmp_path / "private-run"
 
-    def create_temporary_root(_run_id: str) -> Path:
+    def create_temporary_root(_run_id: str) -> TemporaryRootClaim:
         temporary_root.mkdir()
-        return temporary_root
+        return TemporaryRootClaim.created(temporary_root)
 
     def fail_state(_root: Path, _state: object) -> None:
         raise OSError("injected state write failure")
@@ -655,6 +670,191 @@ def test_state_initialization_failure_removes_manifest_and_call_owned_roots(
 
     assert not temporary_root.exists()
     assert not (source / ".mutation-harness" / "runs" / RUN_ID).exists()
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_owned_private_root_is_removed_when_overlap_validation_fails(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = source / "private-run"
+
+    def create_overlapping_temporary_root(_run_id: str) -> TemporaryRootClaim:
+        temporary_root.mkdir()
+        return TemporaryRootClaim.created(temporary_root)
+
+    with pytest.raises(HarnessError, match="overlaps the invoking source root"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_overlapping_temporary_root,
+        )
+
+    assert not temporary_root.exists()
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_preexisting_empty_private_root_never_gains_cleanup_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = tmp_path / "preexisting-private-run"
+    temporary_root.mkdir()
+    original_identity = temporary_root.stat().st_dev, temporary_root.stat().st_ino
+
+    def fail_state(_root: Path, _state: object) -> None:
+        raise OSError("injected state write failure")
+
+    monkeypatch.setattr(coordinator_module, "_write_state", fail_state)
+
+    with pytest.raises(OSError, match="injected state write failure"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+                temporary_root
+            ),
+        )
+
+    assert temporary_root.is_dir()
+    assert (temporary_root.stat().st_dev, temporary_root.stat().st_ino) == (
+        original_identity
+    )
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_replaced_private_root_is_not_removed_by_stale_creation_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = tmp_path / "private-run"
+    foreign_root = tmp_path / "foreign-empty-root"
+    foreign_root.mkdir()
+    foreign_identity = foreign_root.stat().st_dev, foreign_root.stat().st_ino
+
+    def create_temporary_root(_run_id: str) -> TemporaryRootClaim:
+        temporary_root.mkdir()
+        return TemporaryRootClaim.created(temporary_root)
+
+    def fail_state(_root: Path, _state: object) -> None:
+        temporary_root.rmdir()
+        os.replace(foreign_root, temporary_root)
+        raise OSError("injected state write failure after root replacement")
+
+    monkeypatch.setattr(coordinator_module, "_write_state", fail_state)
+
+    with pytest.raises(OSError, match="after root replacement"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_temporary_root,
+        )
+
+    assert temporary_root.is_dir()
+    assert (
+        temporary_root.stat().st_dev,
+        temporary_root.stat().st_ino,
+    ) == foreign_identity
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+@pytest.mark.parametrize(
+    "tamper_kind", ["same_inode", "regular_replacement", "hardlink", "symlink"]
+)
+def test_manifest_cleanup_refuses_identity_or_content_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tamper_kind: str
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = tmp_path / "private-run"
+    manifest_path = source / ".mutation-harness" / "runs" / RUN_ID / "manifest.json"
+    run_sentinel = manifest_path.parent / "sentinel"
+    foreign = tmp_path / f"foreign-{tamper_kind}"
+    expected_bytes = f"foreign {tamper_kind}\n".encode()
+
+    def create_temporary_root(_run_id: str) -> TemporaryRootClaim:
+        temporary_root.mkdir()
+        return TemporaryRootClaim.created(temporary_root)
+
+    def fail_state(_root: Path, _state: object) -> None:
+        run_sentinel.write_bytes(b"preserve run evidence\n")
+        if tamper_kind == "same_inode":
+            manifest_path.write_bytes(expected_bytes)
+        elif tamper_kind == "regular_replacement":
+            foreign.write_bytes(expected_bytes)
+            os.replace(foreign, manifest_path)
+        elif tamper_kind == "hardlink":
+            foreign.write_bytes(expected_bytes)
+            manifest_path.unlink()
+            os.link(foreign, manifest_path)
+        else:
+            foreign.write_bytes(expected_bytes)
+            manifest_path.unlink()
+            manifest_path.symlink_to(foreign)
+        raise OSError("injected state write failure after manifest tamper")
+
+    monkeypatch.setattr(coordinator_module, "_write_state", fail_state)
+
+    with pytest.raises(OSError, match="after manifest tamper"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_temporary_root,
+        )
+
+    assert manifest_path.read_bytes() == expected_bytes
+    if tamper_kind == "symlink":
+        assert manifest_path.is_symlink()
+        assert manifest_path.readlink() == foreign
+    elif tamper_kind == "hardlink":
+        assert manifest_path.stat().st_ino == foreign.stat().st_ino
+    else:
+        assert not manifest_path.is_symlink()
+    assert run_sentinel.read_bytes() == b"preserve run evidence\n"
+    assert not temporary_root.exists()
     assert _read_state(source) is None
     assert not (source / ".mutation-harness" / "lock").exists()
 

@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -111,6 +113,56 @@ class AggregateRefusal(HarnessError):
 
 class DetailNormalizationError(HarnessError):
     """A detail contains run-varying bytes the normalizer does not understand."""
+
+
+_CREATED_TEMPORARY_ROOT_AUTHORITY = object()
+
+
+@dataclass(frozen=True)
+class TemporaryRootClaim:
+    """Captured directory identity and explicit startup-cleanup authority."""
+
+    path: Path
+    device: int
+    inode: int
+    _cleanup_authority: object | None = field(repr=False, compare=False)
+
+    @classmethod
+    def created(cls, path: Path) -> TemporaryRootClaim:
+        """Claim a directory that the current factory call just created."""
+
+        return cls._capture(path, authority=_CREATED_TEMPORARY_ROOT_AUTHORITY)
+
+    @classmethod
+    def borrowed(cls, path: Path) -> TemporaryRootClaim:
+        """Capture a pre-existing directory without cleanup authority."""
+
+        return cls._capture(path, authority=None)
+
+    @classmethod
+    def _capture(cls, path: Path, *, authority: object | None) -> TemporaryRootClaim:
+        canonical = path.resolve()
+        if not path.is_absolute() or path != canonical:
+            raise HarnessError(
+                f"run temporary_root claim is not canonical and absolute: {path}"
+            )
+        metadata = path.lstat()
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise HarnessError(f"run temporary_root is not a directory: {canonical}")
+        return cls(
+            path=canonical,
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            _cleanup_authority=authority,
+        )
+
+
+@dataclass(frozen=True)
+class _RegularFileClaim:
+    path: Path
+    device: int
+    inode: int
+    digest: str
 
 
 @dataclass(frozen=True)
@@ -549,35 +601,72 @@ def _validate_run_temporary_root(source_root: Path, temporary_root: Path) -> Pat
     return resolved_temporary
 
 
+def _remove_claimed_empty_directory(claim: TemporaryRootClaim | None) -> None:
+    if (
+        claim is None
+        or claim._cleanup_authority is not _CREATED_TEMPORARY_ROOT_AUTHORITY
+    ):
+        return
+    try:
+        metadata = claim.path.lstat()
+    except OSError:
+        return
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != claim.device
+        or metadata.st_ino != claim.inode
+    ):
+        return
+    try:
+        claim.path.rmdir()
+    except OSError:
+        pass
+
+
+def _remove_claimed_regular_file(claim: _RegularFileClaim | None) -> None:
+    if claim is None:
+        return
+    try:
+        before = claim.path.lstat()
+    except OSError:
+        return
+    if not stat.S_ISREG(before.st_mode) or (before.st_dev, before.st_ino) != (
+        claim.device,
+        claim.inode,
+    ):
+        return
+    try:
+        content = claim.path.read_bytes()
+        after = claim.path.lstat()
+    except OSError:
+        return
+    if (after.st_dev, after.st_ino) != (
+        claim.device,
+        claim.inode,
+    ) or hashlib.sha256(content).hexdigest() != claim.digest:
+        return
+    try:
+        claim.path.unlink()
+    except OSError:
+        pass
+
+
 def _cleanup_pre_authority_startup(
-    temporary_root: Path | None,
+    temporary_root_claim: TemporaryRootClaim | None,
     run_dir: Path,
     *,
     run_dir_created: bool,
-    manifest_written: bool,
+    manifest_claim: _RegularFileClaim | None,
 ) -> None:
     """Remove only empty artifacts created by this startup attempt."""
 
     if run_dir_created:
-        manifest_path = run_dir / MANIFEST_FILENAME
-        if (
-            manifest_written
-            and manifest_path.is_file()
-            and not manifest_path.is_symlink()
-        ):
-            try:
-                manifest_path.unlink()
-            except OSError:
-                pass
+        _remove_claimed_regular_file(manifest_claim)
         try:
             run_dir.rmdir()
         except OSError:
             pass
-    if temporary_root is not None:
-        try:
-            temporary_root.rmdir()
-        except OSError:
-            pass
+    _remove_claimed_empty_directory(temporary_root_claim)
 
 
 def begin_coordinator_run(
@@ -591,7 +680,7 @@ def begin_coordinator_run(
     plan_digest: str,
     requested_shards: int,
     effective_shards: int,
-    temporary_root_factory: Callable[[str], Path],
+    temporary_root_factory: Callable[[str], TemporaryRootClaim],
 ) -> CoordinatorLease:
     """Atomically claim the root, then write state before any staging callback."""
 
@@ -604,9 +693,9 @@ def begin_coordinator_run(
     lock = acquire_lock(root)
     run_dir = (_state_dir(root) / RUNS_DIRNAME / run_id).resolve()
     state_root = _state_dir(root).resolve()
-    temporary_root: Path | None = None
+    temporary_root_claim: TemporaryRootClaim | None = None
     run_dir_created = False
-    manifest_written = False
+    manifest_claim: _RegularFileClaim | None = None
     authority_persisted = False
     try:
         existing = _read_state(root)
@@ -621,9 +710,8 @@ def begin_coordinator_run(
             raise FileExistsError(
                 f"coordinator run directory already exists: {run_dir}"
             )
-        temporary_root = _validate_run_temporary_root(
-            root, temporary_root_factory(run_id)
-        )
+        temporary_root_claim = temporary_root_factory(run_id)
+        temporary_root = _validate_run_temporary_root(root, temporary_root_claim.path)
         run_dir.mkdir(parents=True, exist_ok=False)
         run_dir_created = True
         manifest_path = (run_dir / MANIFEST_FILENAME).resolve()
@@ -645,18 +733,17 @@ def begin_coordinator_run(
             "shards": [],
         }
         lease = CoordinatorLease(root, lock, state)
-        _write_manifest(lease)
-        manifest_written = True
+        manifest_claim = _write_manifest(lease)
         lease.persist()
         authority_persisted = True
         return lease
     except BaseException:
         if not authority_persisted:
             _cleanup_pre_authority_startup(
-                temporary_root,
+                temporary_root_claim,
                 run_dir,
                 run_dir_created=run_dir_created,
-                manifest_written=manifest_written,
+                manifest_claim=manifest_claim,
             )
         release_lock(lock)
         raise
@@ -813,11 +900,27 @@ def _manifest_payload(lease: CoordinatorLease) -> dict[str, Any]:
     }
 
 
-def _write_manifest(lease: CoordinatorLease) -> None:
+def _write_manifest(lease: CoordinatorLease) -> _RegularFileClaim:
     target = Path(lease.state["manifest_path"])
-    _atomic_write(
-        target,
-        (json.dumps(_manifest_payload(lease), indent=2) + "\n").encode("utf-8"),
+    content = (json.dumps(_manifest_payload(lease), indent=2) + "\n").encode("utf-8")
+    _atomic_write(target, content)
+    metadata = target.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise HarnessError(f"coordinator manifest is not a regular file: {target}")
+    written_content = target.read_bytes()
+    after = target.lstat()
+    if (after.st_dev, after.st_ino) != (
+        metadata.st_dev,
+        metadata.st_ino,
+    ) or written_content != content:
+        raise HarnessError(
+            "coordinator manifest changed while claiming startup ownership"
+        )
+    return _RegularFileClaim(
+        path=target,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        digest=hashlib.sha256(written_content).hexdigest(),
     )
 
 
@@ -1063,7 +1166,7 @@ def coordinator_run(
     source_manifest_digest: str,
     plan_digest: str,
     source_manifest_reader: Callable[[], str],
-    temporary_root_factory: Callable[[str], Path],
+    temporary_root_factory: Callable[[str], TemporaryRootClaim],
     child_factory: Callable[[ShardAssignment, str], ChildSpec],
     run_id: str | None = None,
     progress_stream: IO[str] | None = None,

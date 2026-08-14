@@ -1072,7 +1072,13 @@ def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
     assert dependencies["go-worker-migrate"]["condition"] == (
         "service_completed_successfully"
     )
-    assert dependencies["pgbouncer"]["condition"] == "service_started"
+    # The scheduler opens pooled connections immediately, so a started-but-not
+    # yet-accepting pooler is not good enough. Every pool it dials defines a
+    # healthcheck, so gate on all three rather than only the domain pool: the
+    # queue and coordinator pools were added later and were not asserted at
+    # all, which is how this pin went stale unnoticed.
+    for pool in ("pgbouncer", "pgbouncer-river-queue", "pgbouncer-river-coordinator"):
+        assert dependencies[pool]["condition"] == "service_healthy", pool
 
     ready = services["go-worker-ready"]
     ready_dependencies = ready.get("depends_on") or {}

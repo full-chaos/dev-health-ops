@@ -66,7 +66,9 @@ _SHARD_IMPORT_RE = re.compile(
     r"(?:^|\s)PYTHONPATH\s*=\s*(?:['\"])?\$PWD(?:/[^\s'\"]*)?"
 )
 _SHELL_GO_TEST_RE = re.compile(r"(?:^|[;&|()\s])go\s+test(?:\s|$)")
-_SHELL_COUNT_ONE_RE = re.compile(r"(?:^|\s)-count(?:=|\s+)1(?:\s|$)")
+_SHELL_COUNT_RE = re.compile(
+    r"(?:^|\s)-count(?:=(?P<equals>[^\s;&|]+)|\s+(?P<spaced>[^\s;&|]+))"
+)
 _SHELL_RUN_RE = re.compile(
     r"(?:^|\s)-run(?:=|\s+)(?P<pattern>'[^']*'|\"[^\"]*\"|[^\s;&|]+)"
 )
@@ -199,6 +201,35 @@ def _direct_flag(argv: tuple[str, ...], name: str) -> str | None:
     return None
 
 
+def _direct_flag_values(argv: tuple[str, ...], name: str) -> list[str]:
+    values: list[str] = []
+    for index, word in enumerate(argv):
+        prefix = f"{name}="
+        if word.startswith(prefix):
+            values.append(word[len(prefix) :])
+        elif word == name:
+            values.append(argv[index + 1] if index + 1 < len(argv) else "")
+    return values
+
+
+def _shell_count_values(text: str) -> list[str]:
+    values: list[str] = []
+    for match in _SHELL_COUNT_RE.finditer(text):
+        value = match.group("equals") or match.group("spaced") or ""
+        values.append(value.strip("'\""))
+    return values
+
+
+def _require_single_count_one(
+    identifier: str, pattern: str, count_values: list[str]
+) -> None:
+    if count_values != ["1"]:
+        raise PlanContractError(
+            f"{identifier}: named go test proof {pattern!r} must declare exactly "
+            "one unambiguous -count=1"
+        )
+
+
 def _validate_go_test_freshness(identifier: str, argv: tuple[str, ...]) -> bool:
     """Validate a named ``go test`` proof and report whether it uses Go."""
 
@@ -206,10 +237,9 @@ def _validate_go_test_freshness(identifier: str, argv: tuple[str, ...]) -> bool:
         pattern = _direct_flag(argv, "-run")
         if pattern is None or pattern == "^$":
             return True
-        if _direct_flag(argv, "-count") != "1":
-            raise PlanContractError(
-                f"{identifier}: named go test proof {pattern!r} must declare -count=1"
-            )
+        _require_single_count_one(
+            identifier, pattern, _direct_flag_values(argv, "-count")
+        )
         return True
 
     text = _command_text(argv)
@@ -219,10 +249,8 @@ def _validate_go_test_freshness(identifier: str, argv: tuple[str, ...]) -> bool:
     if run_match is None:
         return True
     pattern = run_match.group("pattern").strip("'\"")
-    if pattern != "^$" and not _SHELL_COUNT_ONE_RE.search(text):
-        raise PlanContractError(
-            f"{identifier}: named go test proof {pattern!r} must declare -count=1"
-        )
+    if pattern != "^$":
+        _require_single_count_one(identifier, pattern, _shell_count_values(text))
     return True
 
 

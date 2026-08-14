@@ -532,6 +532,23 @@ class CoordinatorLease:
         self.closed = True
 
 
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def _validate_run_temporary_root(source_root: Path, temporary_root: Path) -> Path:
+    """Return one canonical run root that cannot contain or be under the source."""
+
+    resolved_source = source_root.resolve()
+    resolved_temporary = temporary_root.resolve()
+    if _paths_overlap(resolved_source, resolved_temporary):
+        raise HarnessError(
+            f"run temporary_root {resolved_temporary} overlaps the invoking "
+            f"source root {resolved_source}"
+        )
+    return resolved_temporary
+
+
 def begin_coordinator_run(
     root: Path,
     *,
@@ -543,6 +560,7 @@ def begin_coordinator_run(
     plan_digest: str,
     requested_shards: int,
     effective_shards: int,
+    temporary_root_factory: Callable[[str], Path],
 ) -> CoordinatorLease:
     """Atomically claim the root, then write state before any staging callback."""
 
@@ -560,6 +578,9 @@ def begin_coordinator_run(
                 "root state exists after the coordinator acquired the lock; "
                 "recover it before staging"
             )
+        temporary_root = _validate_run_temporary_root(
+            root, temporary_root_factory(run_id)
+        )
         run_dir = (_state_dir(root) / RUNS_DIRNAME / run_id).resolve()
         state_root = _state_dir(root).resolve()
         if not run_dir.is_relative_to(state_root):
@@ -572,6 +593,7 @@ def begin_coordinator_run(
             "process_start_time": time.time_ns(),
             "lifecycle": "staging",
             "source_root": str(root.resolve()),
+            "temporary_root": str(temporary_root),
             "source_head": source_head,
             "source_manifest": json.loads(json.dumps(dict(source_manifest))),
             "source_manifest_digest": source_manifest_digest,
@@ -705,10 +727,31 @@ class EventWriter:
 
 def _manifest_payload(lease: CoordinatorLease) -> dict[str, Any]:
     state = lease.state
+    source_manifest = state["source_manifest"]
+    if (
+        not isinstance(source_manifest, Mapping)
+        or source_manifest.get("digest") != state["source_manifest_digest"]
+    ):
+        raise HarnessError(
+            "source manifest mapping digest does not match source_manifest_digest"
+        )
+    recorded_temporary = state.get("temporary_root")
+    if not isinstance(recorded_temporary, str):
+        raise HarnessError("coordinator state has no temporary_root")
+    temporary_root = Path(recorded_temporary)
+    if not temporary_root.is_absolute() or temporary_root.resolve() != temporary_root:
+        raise HarnessError("coordinator temporary_root is not canonical and absolute")
+    _validate_run_temporary_root(Path(state["source_root"]), temporary_root)
+    for shard in state["shards"]:
+        if shard.get("temporary_root") != recorded_temporary:
+            raise HarnessError(
+                "recorded shard temporary_root does not match the coordinator run"
+            )
     return {
         "schema_version": COORDINATOR_SCHEMA_VERSION,
         "run_id": state["run_id"],
         "source_root": state["source_root"],
+        "temporary_root": recorded_temporary,
         "source_head": state["source_head"],
         "source_manifest": state["source_manifest"],
         "source_manifest_digest": state["source_manifest_digest"],
@@ -746,22 +789,24 @@ def _record_child(lease: CoordinatorLease, spec: ChildSpec) -> None:
     lease.persist()
 
 
-def _paths_overlap(left: Path, right: Path) -> bool:
-    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
-
-
 def _validate_child_spec(
     source_root: Path,
+    temporary_root: Path,
     spec: ChildSpec,
     prior_roots: set[Path],
 ) -> None:
     """Keep every child-owned write and liveness token inside one unique shard."""
 
     resolved_source = source_root.resolve()
+    resolved_run_temporary = temporary_root.resolve()
     resolved_root = spec.root.resolve()
     resolved_temporary = spec.temporary_root.resolve()
     if spec.source_root.resolve() != resolved_source:
         raise HarnessError("child spec source_root does not match the coordinator root")
+    if resolved_temporary != resolved_run_temporary:
+        raise HarnessError(
+            "child temporary_root does not match the coordinator run temporary_root"
+        )
     if _paths_overlap(resolved_source, resolved_temporary):
         raise HarnessError(
             f"child temporary_root {resolved_temporary} overlaps the invoking "
@@ -968,6 +1013,7 @@ def coordinator_run(
     source_manifest_digest: str,
     plan_digest: str,
     source_manifest_reader: Callable[[], str],
+    temporary_root_factory: Callable[[str], Path],
     child_factory: Callable[[ShardAssignment, str], ChildSpec],
     run_id: str | None = None,
     progress_stream: IO[str] | None = None,
@@ -990,8 +1036,10 @@ def coordinator_run(
         plan_digest=plan_digest,
         requested_shards=requested_shards,
         effective_shards=effective_shards,
+        temporary_root_factory=temporary_root_factory,
     )
     run_dir = Path(lease.state["manifest_path"]).parent
+    temporary_root = Path(lease.state["temporary_root"])
     event_log = run_dir / EVENT_LOG_FILENAME
     report_path = _state_dir(root) / REPORT_FILENAME
     writer = EventWriter(
@@ -1024,7 +1072,7 @@ def coordinator_run(
                     f"child factory returned the wrong assignment for shard "
                     f"{assignment.shard_index}"
                 )
-            _validate_child_spec(root, spec, resolved_child_roots)
+            _validate_child_spec(root, temporary_root, spec, resolved_child_roots)
             children.append(spec)
             _record_child(lease, spec)
         if source_manifest_reader() != source_manifest_digest:

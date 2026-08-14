@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "CHAOS-3807 Lane C coordinator guards",
-  "$limitation": "Pins coordinator-only assignment, aggregation, source recheck, completion barrier, crash classification, root locking, event sequencing, and fail-closed normalization. Execution-tree ownership cleanup and recovery liveness decisions belong to Lanes B and D.",
+  "$limitation": "Pins coordinator-only assignment, aggregation, source recheck, completion barrier, crash classification, root locking, durable run-root authority, event sequencing, and fail-closed normalization. Execution-tree ownership cleanup and recovery liveness decisions belong to Lanes B and D.",
   "build": [
     ".venv/bin/python",
     "-m",
@@ -153,11 +153,21 @@
     {
       "id": "C15-source-and-temporary-roots-disjoint",
       "file": "scripts/mutation_harness_coordinator.py",
-      "find": "    if _paths_overlap(resolved_source, resolved_temporary):",
-      "replace": "    if False and _paths_overlap(resolved_source, resolved_temporary):",
+      "find": "    if _paths_overlap(resolved_source, resolved_temporary):\n        raise HarnessError(\n            f\"child temporary_root {resolved_temporary} overlaps the invoking \"",
+      "replace": "    if False and _paths_overlap(resolved_source, resolved_temporary):\n        raise HarnessError(\n            f\"child temporary_root {resolved_temporary} overlaps the invoking \"",
       "rationale": "The private temporary root must be disjoint from the invoking source root in both ancestry directions, so no shard can stage or mutate under the source tree.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "child_paths_must_not_overlap"]
+      ]
+    },
+    {
+      "id": "C16-durable-run-temporary-root",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        \"temporary_root\": recorded_temporary,",
+      "replace": "        \"temporary_root\": state[\"source_root\"],",
+      "rationale": "Recovery must receive the canonical run-level private root from durable manifest authority even when staging fails before the first shard is recorded.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "manifest_records_run_temporary_root"]
       ]
     }
   ]

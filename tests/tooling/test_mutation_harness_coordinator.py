@@ -29,6 +29,7 @@ from scripts.mutation_harness_coordinator import (  # noqa: E402
     DetailNormalizationError,
     ShardAssignment,
     _validate_child_spec,
+    _write_manifest,
     aggregate_child_results,
     append_durable_jsonl,
     begin_coordinator_run,
@@ -223,6 +224,7 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
 ) -> None:
     plan = tmp_path / "plan.json"
     plan.write_text("{}", encoding="utf-8")
+    temporary_root = (tmp_path.parent / f"{tmp_path.name}-private").resolve()
     first = begin_coordinator_run(
         tmp_path,
         run_id="first",
@@ -233,6 +235,7 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
         plan_digest=PLAN_DIGEST,
         requested_shards=2,
         effective_shards=2,
+        temporary_root_factory=lambda _run_id: temporary_root,
     )
     try:
         state = _read_state(tmp_path)
@@ -250,6 +253,7 @@ def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
                 plan_digest=PLAN_DIGEST,
                 requested_shards=2,
                 effective_shards=2,
+                temporary_root_factory=lambda _run_id: temporary_root,
             )
     finally:
         first.clear_and_release()
@@ -391,6 +395,7 @@ def _coordinate(
     mutation_ids: Sequence[str] = ("M1", "M2", "M3"),
     source_reader: Callable[[], str] | None = None,
     factory: Callable[[ShardAssignment, str], ChildSpec] | None = None,
+    temporary_root_factory: Callable[[str], Path] | None = None,
     before_report: Callable[[], None] | None = None,
 ):
     source = tmp_path / "source"
@@ -413,10 +418,126 @@ def _coordinate(
         source_manifest_digest=SOURCE_DIGEST,
         plan_digest=PLAN_DIGEST,
         source_manifest_reader=source_reader or (lambda: SOURCE_DIGEST),
+        temporary_root_factory=temporary_root_factory
+        or (lambda _run_id: shards.resolve()),
         child_factory=factory or _factory(shards, assert_root_locked=source),
         run_id=RUN_ID,
         before_report=before_report,
     )
+
+
+def test_manifest_records_run_temporary_root_before_first_shard_staging_failure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    temporary_root = (tmp_path / "private-run").resolve()
+    temporary_root.mkdir()
+
+    def staging_failure(_assignment: ShardAssignment, _run_id: str) -> ChildSpec:
+        state = _read_state(source)
+        assert state is not None
+        run_state = state["coordinator_run"]
+        assert run_state["lifecycle"] == "staging"
+        assert run_state["temporary_root"] == str(temporary_root)
+        manifest = json.loads(
+            Path(run_state["manifest_path"]).read_text(encoding="utf-8")
+        )
+        assert set(manifest) == {
+            "effective_shards",
+            "plan_digest",
+            "plan_path",
+            "requested_shards",
+            "run_id",
+            "schema_version",
+            "shards",
+            "source_head",
+            "source_manifest",
+            "source_manifest_digest",
+            "source_root",
+            "temporary_root",
+        }
+        assert manifest["temporary_root"] == str(temporary_root)
+        assert manifest["shards"] == []
+        raise HarnessError("staging failed before the first shard")
+
+    with pytest.raises(HarnessError, match="staging failed before the first shard"):
+        _coordinate(
+            tmp_path,
+            factory=staging_failure,
+            temporary_root_factory=lambda _run_id: temporary_root,
+        )
+
+    state = _read_state(source)
+    assert state is not None
+    run_state = state["coordinator_run"]
+    assert run_state["lifecycle"] == "aborted"
+    assert run_state["temporary_root"] == str(temporary_root)
+    manifest = json.loads(Path(run_state["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["temporary_root"] == str(temporary_root)
+    assert manifest["shards"] == []
+
+
+@pytest.mark.parametrize("relative", ["source/private-run", "."])
+def test_run_temporary_root_must_not_overlap_source_before_manifest_write(
+    tmp_path: Path, relative: str
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = (tmp_path / relative).resolve()
+
+    with pytest.raises(HarnessError, match="overlaps the invoking source root"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=lambda _run_id: temporary_root,
+        )
+
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_manifest_serialization_rechecks_digests_and_run_root_binding(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = (tmp_path / "private-run").resolve()
+    lease = begin_coordinator_run(
+        source,
+        run_id=RUN_ID,
+        source_head="head",
+        source_manifest=_source_manifest(),
+        source_manifest_digest=SOURCE_DIGEST,
+        plan_path=plan,
+        plan_digest=PLAN_DIGEST,
+        requested_shards=2,
+        effective_shards=2,
+        temporary_root_factory=lambda _run_id: temporary_root,
+    )
+    try:
+        lease.state["source_manifest"]["digest"] = "tampered"
+        with pytest.raises(HarnessError, match="mapping digest does not match"):
+            _write_manifest(lease)
+
+        lease.state["source_manifest"]["digest"] = SOURCE_DIGEST
+        lease.state["shards"].append(
+            {"temporary_root": str((tmp_path / "foreign-run").resolve())}
+        )
+        with pytest.raises(HarnessError, match="does not match the coordinator run"):
+            _write_manifest(lease)
+    finally:
+        lease.clear_and_release()
 
 
 def test_coordinator_resequences_events_orders_results_and_reports_after_children(
@@ -602,7 +723,7 @@ def test_child_paths_must_not_overlap_source_root(
     )
 
     with pytest.raises(HarnessError, match="overlaps the invoking source root"):
-        _validate_child_spec(source, spec, set())
+        _validate_child_spec(source, temporary_root, spec, set())
 
 
 def test_result_drop_after_finished_event_is_measured_lost_not_survivor(

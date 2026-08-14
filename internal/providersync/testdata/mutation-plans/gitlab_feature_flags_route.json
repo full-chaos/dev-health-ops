@@ -151,8 +151,8 @@
     {
       "id": "R24-x-next-page-authority",
       "file": "internal/providerfoundation/pagination.go",
-      "find": "if nextHeader != \"\" {",
-      "replace": "if false {",
+      "find": "\t\tnextHeader := strings.TrimSpace(response.Header.Get(\"X-Next-Page\"))\n\t\tif nextHeader != \"\" {\n\t\t\tnextPage, parseErr := strconv.Atoi(nextHeader)",
+      "replace": "\t\tnextHeader := strings.TrimSpace(response.Header.Get(\"X-Next-Page\"))\n\t\tif false {\n\t\t\tnextPage, parseErr := strconv.Atoi(nextHeader)",
       "rationale": "a nonempty X-Next-Page header is authoritative for GitLab traversal",
       "proof": [["bash", "-c", "proof_dir=$(mktemp -d \"${TMPDIR:-/tmp}/chaos3702-proof.XXXXXX\") && cache_dir=$(mktemp -d \"${TMPDIR:-/tmp}/chaos3702-cache.XXXXXX\") && trap 'rm -rf -- \"$proof_dir\" \"$cache_dir\"' EXIT && PYTHON=\"$PWD/.venv/bin/python\" DEV_HEALTH_PYTHON=\"$PWD/.venv/bin/python\" DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"$proof_dir\" PYTHONPATH=\"$PWD/src\" GOCACHE=\"$cache_dir\" go test -mod=readonly -count=1 -run '^TestGenericOracleMatchesLivePythonGitLabFeatureFlagsRoute$' ./internal/providersync/ && test \"$(cat \"$proof_dir/gitlab_feature_flags.py\")\" = executed"]]
     },

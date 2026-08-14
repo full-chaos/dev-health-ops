@@ -111,7 +111,7 @@ func (repository *PostgresRepository) PrepareChunk(
 	payload := chunk
 	payload.Ledger = EffectLedgerState{}
 	payloadRaw, err := encodedPreparedChunkPayload(payload)
-	if err != nil || len(payloadRaw) > maxPreparedRouteSnapshotBytes {
+	if err != nil || len(payloadRaw) > maxChunkPayloadBytes {
 		return PreparedProviderChunk{}, ErrChunkPolicyExceeded
 	}
 	chunk.PayloadBytes = len(payloadRaw)
@@ -120,10 +120,22 @@ func (repository *PostgresRepository) PrepareChunk(
 		return PreparedProviderChunk{}, ErrEffectRecoveryUnsafe
 	}
 	if chunk.Validate(claim, DefaultChunkPolicy()) != nil ||
-		len(payloadRaw)+len(ledgerRaw) > maxPreparedRouteSnapshotBytes {
+		len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
 		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
 	}
-	aggregateRaw, _ := json.Marshal(chunk.Result)
+	// A chunk with no aggregate must store SQL NULL, not the JSONB scalar
+	// `null`. Only the final chunk of a route carries a Result, so marshalling
+	// a nil map here would write `'null'::jsonb` for every earlier chunk — and
+	// `'null'::jsonb IS NULL` is FALSE, which would make the first-writer-wins
+	// guard in updateChunkPreparedSQL treat the aggregate as already set and
+	// silently drop the real one.
+	var aggregateRaw []byte
+	if chunk.Result != nil {
+		var marshalErr error
+		if aggregateRaw, marshalErr = json.Marshal(chunk.Result); marshalErr != nil {
+			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		}
+	}
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
 		return PreparedProviderChunk{}, ErrInvalidConfiguration
@@ -429,10 +441,15 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 			return ErrChunkCheckpointConflict
 		}
 	}
-	if _, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC()); err != nil {
+	// A sidecar left in 'writing' matches neither status in the statement. Let
+	// that surface as a conflict instead of silently advancing the checkpoint
+	// past a chunk this transaction never marked committed.
+	command, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC())
+	if err != nil || command.RowsAffected() != 1 {
 		return ErrChunkCheckpointConflict
 	}
-	if _, err := tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC()); err != nil {
+	command, err = tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC())
+	if err != nil || command.RowsAffected() != 1 {
 		return ErrChunkCheckpointConflict
 	}
 	return tx.Commit(ctx)
@@ -538,14 +555,25 @@ INSERT INTO public.sync_run_unit_effect_chunks
  cursor_after,inventory_complete,payload,ledger,payload_bytes,manifest_digest,status,created_at,updated_at)
 VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,'pending',$15,$16)`
 
+// next_cursor never regresses. A streaming emission that splits into several
+// prepared sub-chunks carries the provider continuation ONLY on its last
+// sub-chunk; the others hold "". Writing that empty value would reset the
+// route to the start of the inventory on the next resume, so an empty
+// continuation leaves the durable cursor untouched.
+//
+// aggregate_result is first-writer-wins for the same reason the sidecar
+// payload is: a digest-matching replay of the final ordinal must not leave the
+// checkpoint aggregate disagreeing with the sidecar it was derived from.
 const updateChunkPreparedSQL = `
 UPDATE public.sync_run_unit_chunk_checkpoints
 SET prepared_chunks=GREATEST(prepared_chunks,$4),
     total_chunks=CASE WHEN $6 THEN $5 ELSE total_chunks END,
     final_ordinal=CASE WHEN $6 THEN $4-1 ELSE final_ordinal END,
-    next_cursor=$7,
-    aggregate_result=CASE WHEN $6 THEN $8::jsonb ELSE aggregate_result END,
-    aggregate_digest=CASE WHEN $6 THEN $9 ELSE aggregate_digest END,
+    next_cursor=CASE WHEN $7 <> '' THEN $7 ELSE next_cursor END,
+    aggregate_result=CASE WHEN $6 AND (aggregate_result IS NULL OR jsonb_typeof(aggregate_result)='null')
+                          THEN $8::jsonb ELSE aggregate_result END,
+    aggregate_digest=CASE WHEN $6 AND (aggregate_result IS NULL OR jsonb_typeof(aggregate_result)='null')
+                          THEN $9 ELSE aggregate_digest END,
     updated_at=$10
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3`
 
@@ -560,9 +588,12 @@ SET status='committed', updated_at=$5
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4
   AND status IN ('pending','committed')`
 
+// See updateChunkPreparedSQL: an empty continuation must not reset the cursor.
 const advanceChunkCheckpointSQL = `
 UPDATE public.sync_run_unit_chunk_checkpoints
-SET next_ordinal=GREATEST(next_ordinal,$4), next_cursor=$5, updated_at=$6
+SET next_ordinal=GREATEST(next_ordinal,$4),
+    next_cursor=CASE WHEN $5 <> '' THEN $5 ELSE next_cursor END,
+    updated_at=$6
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3`
 
 const finalizePreparedChunksSQL = `

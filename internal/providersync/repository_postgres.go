@@ -345,6 +345,13 @@ func (repository *PostgresRepository) Fail(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
+	// resumable by a RUNNING unit of the same generation. Terminalizing the
+	// unit makes its sidecars unreachable, so keeping them would retain
+	// provider payloads that nothing can read and nothing else reclaims.
+	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
 		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
 	); err != nil {

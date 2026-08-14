@@ -52,10 +52,15 @@ func DefaultChunkPolicy() ChunkPolicy {
 	}
 }
 
+// maxChunkPayloadBytes mirrors ck_sync_chunk_payload_bytes in migration 0102.
+// A policy that allows a larger sidecar than the column check accepts would
+// only fail at INSERT, after the provider page has already been fetched.
+const maxChunkPayloadBytes = 2 << 20
+
 func (policy ChunkPolicy) Validate() error {
 	if policy.MaxSourceItems < 1 || policy.MaxSourceItems > 100_000 ||
 		policy.MaxEffectRows < 1 || policy.MaxEffectRows > maxEffectRows ||
-		policy.MaxPreparedBytes < 1 || policy.MaxPreparedBytes > maxPreparedRouteSnapshotBytes ||
+		policy.MaxPreparedBytes < 1 || policy.MaxPreparedBytes > maxChunkPayloadBytes ||
 		policy.MaxChunksPerAttempt < 1 || policy.MaxChunksPerAttempt > 1024 ||
 		policy.MaxWallTime <= 0 || policy.MaxWallTime > 15*time.Minute {
 		return ErrInvalidConfiguration
@@ -415,7 +420,13 @@ func cloneChunkResult(input map[string]any) map[string]any {
 	return result
 }
 
+// chunkResultDigest returns "" for an absent aggregate so the digest stays
+// paired with the SQL NULL that PrepareChunk stores. Hashing a nil map would
+// yield the digest of the four bytes `null` and read as a real aggregate.
 func chunkResultDigest(result map[string]any) string {
+	if result == nil {
+		return ""
+	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return ""

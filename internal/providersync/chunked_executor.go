@@ -39,6 +39,19 @@ func (executor CompleteRouteExecutor) executeChunked(
 		)
 		var totalChunks int
 		if checkpointErr == nil {
+			// This non-streaming path prepares every chunk of one collected
+			// batch inside a single attempt, so a checkpoint that survives with
+			// prepared_chunks < total_chunks means the process died mid-prepare.
+			// The generation is stable across attempts ("sync-unit:"+id), so the
+			// unit cannot re-collect and stays wedged until its attempts are
+			// exhausted and a later run creates a new unit.
+			//
+			// Every route that opts into Chunked today also implements
+			// ChunkedCompleteRouteHandler and is served by executeChunkedStreaming
+			// above, where each chunk is prepared AND committed before the next
+			// one, so the state is unreachable. A future route that opts in
+			// WITHOUT the streaming handler must first make this branch
+			// re-collect and re-prepare from checkpoint.PreparedChunks.
 			if checkpoint.TotalChunks < 1 || checkpoint.PreparedChunks != checkpoint.TotalChunks {
 				return ErrChunkCheckpointConflict
 			}
@@ -169,7 +182,8 @@ func (executor CompleteRouteExecutor) executeChunked(
 		final, loadErr := store.LoadPreparedChunk(
 			workContext, session.Claim, totalChunks-1, executor.now(),
 		)
-		if loadErr != nil || final.Ordinal != totalChunks-1 || final.TotalChunks != totalChunks {
+		if loadErr != nil || final.Ordinal != totalChunks-1 ||
+			final.TotalChunks != totalChunks || !final.InventoryComplete {
 			if loadErr != nil {
 				return loadErr
 			}

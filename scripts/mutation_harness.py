@@ -143,7 +143,18 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
+
+if TYPE_CHECKING:
+    from scripts.mutation_harness_execution_tree import (
+        StagedExecutionTree as ExecutionStagedTree,
+    )
+
+# Keep ``python scripts/mutation_harness.py`` compatible with package imports.
+# Direct script execution otherwise puts only ``scripts/`` on ``sys.path``.
+_REPOSITORY_IMPORT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPOSITORY_IMPORT_ROOT not in sys.path:
+    sys.path.insert(0, _REPOSITORY_IMPORT_ROOT)
 
 STATE_DIRNAME = ".mutation-harness"
 STATE_FILENAME = "state.json"
@@ -233,6 +244,43 @@ class StagedExecutionTree:
     root: Path
     ownership_marker: Path
     shard_index: int
+
+
+@dataclass(frozen=True)
+class _ChildProtocol:
+    """Coordinator-owned metadata for one internal shard child."""
+
+    run_id: str
+    shard_index: int
+    plan_digest: str
+    result_stream: Path
+    plan_ordinals: dict[str, int]
+    stream: TextIO
+
+    def emit(
+        self,
+        event: str,
+        mutation: Mutation,
+        *,
+        phase: str | None = None,
+        verdict: str | None = None,
+        started_ns: int,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": self.run_id,
+            "event": event,
+            "shard_index": self.shard_index,
+            "plan_ordinal": self.plan_ordinals[mutation.identifier],
+            "mutation_id": mutation.identifier,
+            "elapsed_ms": (time.monotonic_ns() - started_ns) // 1_000_000,
+        }
+        if phase is not None:
+            payload["phase"] = phase
+        if verdict is not None:
+            payload["verdict"] = verdict
+        self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        self.stream.flush()
 
 
 class _ProgressEmitter:
@@ -455,6 +503,83 @@ def _write_result_record(
     _append_jsonl(
         result_stream,
         json.dumps(durable_result, separators=(",", ":")).encode("utf-8") + b"\n",
+    )
+
+
+def _write_child_result_record(
+    protocol: _ChildProtocol, mutation: Mutation, result: Result
+) -> None:
+    """Write the coordinator child schema before the terminal child event."""
+
+    try:
+        from scripts.mutation_harness_coordinator import append_durable_jsonl
+    except ImportError as exc:
+        raise HarnessError("coordinator result-stream backend is unavailable") from exc
+    append_durable_jsonl(
+        protocol.result_stream,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": protocol.run_id,
+            "shard_index": protocol.shard_index,
+            "plan_digest": protocol.plan_digest,
+            "plan_ordinal": protocol.plan_ordinals[mutation.identifier],
+            "mutation_id": mutation.identifier,
+            "result": _result_fields(result),
+        },
+    )
+
+
+def _child_protocol_from_environment(root: Path) -> _ChildProtocol:
+    """Load the hidden coordinator-child contract and reject direct invocation."""
+
+    required = {
+        "run_id": os.environ.get("MUTATION_HARNESS_RUN_ID"),
+        "shard_index": os.environ.get("MUTATION_HARNESS_SHARD_INDEX"),
+        "plan_digest": os.environ.get("MUTATION_HARNESS_PLAN_DIGEST"),
+        "result_stream": os.environ.get("MUTATION_HARNESS_RESULT_STREAM"),
+        "plan_ordinals": os.environ.get("MUTATION_HARNESS_PLAN_ORDINALS"),
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise HarnessError(
+            "--internal-child requires coordinator-owned environment fields: "
+            + ", ".join(sorted(missing))
+        )
+    assert all(value is not None for value in required.values())
+    try:
+        shard_index = int(str(required["shard_index"]))
+    except ValueError as exc:
+        raise HarnessError("internal child shard index must be an integer") from exc
+    if shard_index < 0:
+        raise HarnessError("internal child shard index must be non-negative")
+    try:
+        loaded_ordinals = json.loads(str(required["plan_ordinals"]))
+    except json.JSONDecodeError as exc:
+        raise HarnessError("internal child plan ordinals are invalid JSON") from exc
+    if not isinstance(loaded_ordinals, dict) or not all(
+        isinstance(identifier, str)
+        and isinstance(ordinal, int)
+        and not isinstance(ordinal, bool)
+        and ordinal >= 0
+        for identifier, ordinal in loaded_ordinals.items()
+    ):
+        raise HarnessError(
+            "internal child plan ordinals must map mutation ids to non-negative integers"
+        )
+    result_stream = Path(str(required["result_stream"]))
+    if not result_stream.is_absolute():
+        raise HarnessError("internal child result stream must be an absolute path")
+    resolved_root = root.resolve()
+    resolved_stream = result_stream.resolve()
+    if not resolved_stream.is_relative_to(resolved_root / STATE_DIRNAME):
+        raise HarnessError("internal child result stream escapes shard state")
+    return _ChildProtocol(
+        run_id=str(required["run_id"]),
+        shard_index=shard_index,
+        plan_digest=str(required["plan_digest"]),
+        result_stream=resolved_stream,
+        plan_ordinals=dict(loaded_ordinals),
+        stream=sys.stdout,
     )
 
 
@@ -681,11 +806,23 @@ def _self_referential_warning(root: Path, mutation: Mutation) -> str | None:
 
 def _load_plan(path: Path) -> tuple[str, list[Mutation]]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HarnessError(f"could not read plan {path}: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise HarnessError(f"{path} must be a JSON object")
+        from scripts.mutation_harness_optin import (
+            PlanContractError,
+            load_plan_contract,
+        )
+
+        raw, _sharding = load_plan_contract(path)
+    except ImportError as exc:
+        raise HarnessError("sharding plan validation backend is unavailable") from exc
+    except PlanContractError as exc:
+        raise HarnessError(str(exc)) from exc
+
+    return _parse_plan(path, raw)
+
+
+def _parse_plan(path: Path, raw: dict[str, Any]) -> tuple[str, list[Mutation]]:
+    """Parse mutations after the closed plan vocabulary has been validated."""
+
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise HarnessError(
             f"{path} has schema_version {raw.get('schema_version')!r}, "
@@ -792,7 +929,25 @@ def _load_plan(path: Path) -> tuple[str, list[Mutation]]:
 def _load_sharding_plan(path: Path, raw: dict[str, Any]) -> ShardingPlan | None:
     """Load and validate the optional sharding plan contract."""
 
-    raise NotImplementedError
+    del raw  # The authoritative loader reads and validates the complete file.
+    try:
+        from scripts.mutation_harness_optin import (
+            PlanContractError,
+            load_plan_contract,
+        )
+
+        _loaded, contract = load_plan_contract(path)
+    except ImportError as exc:
+        raise HarnessError("sharding plan validation backend is unavailable") from exc
+    except PlanContractError as exc:
+        raise HarnessError(str(exc)) from exc
+    if contract is None:
+        return None
+    return ShardingPlan(
+        max_shards=contract.max_shards,
+        workspace_inputs=contract.workspace_inputs,
+        external_resources=contract.external_resources,
+    )
 
 
 def stage_execution_tree(
@@ -804,10 +959,28 @@ def stage_execution_tree(
     source_manifest_digest: str,
     plan_digest: str,
     workspace_inputs: tuple[str, ...],
-) -> StagedExecutionTree:
+    source_manifest: Any | None = None,
+) -> ExecutionStagedTree:
     """Create one isolated, owned execution tree for a mutation shard."""
 
-    raise NotImplementedError
+    try:
+        from scripts import mutation_harness_execution_tree as execution_tree
+    except ImportError as exc:
+        raise HarnessError("execution-tree backend is unavailable") from exc
+    frozen = source_manifest or execution_tree.build_source_manifest(source_root)
+    if frozen.digest != source_manifest_digest:
+        raise HarnessError(
+            "source manifest digest does not match the frozen execution-tree manifest"
+        )
+    return execution_tree.stage_execution_tree(
+        source_root,
+        destination,
+        run_id=run_id,
+        shard_index=shard_index,
+        source_manifest=frozen,
+        plan_digest=plan_digest,
+        workspace_inputs=workspace_inputs,
+    )
 
 
 def coordinator_run(
@@ -821,13 +994,153 @@ def coordinator_run(
 ) -> tuple[list[Result], int]:
     """Coordinate an opted-in sharded mutation run."""
 
-    raise NotImplementedError
+    try:
+        from scripts import mutation_harness_coordinator as coordinator
+        from scripts import mutation_harness_execution_tree as execution_tree
+        from scripts.mutation_harness_optin import (
+            PlanContractError,
+            external_resource_environment,
+            load_plan_contract,
+            validate_requested_shards,
+        )
+    except ImportError as exc:
+        raise HarnessError("sharded execution backend is unavailable") from exc
+
+    root = root.resolve()
+    plan_path = plan_path.resolve()
+    try:
+        raw, sharding = load_plan_contract(plan_path)
+        validate_requested_shards(sharding, requested_shards)
+    except PlanContractError as exc:
+        raise HarnessError(str(exc)) from exc
+    if sharding is None:
+        raise HarnessError("the plan does not opt in to sharding")
+    try:
+        relative_plan = plan_path.relative_to(root)
+    except ValueError as exc:
+        raise HarnessError(
+            "sharded plan must be inside the repository so every frozen execution "
+            "tree runs the same plan bytes"
+        ) from exc
+
+    plan_name, mutations = _parse_plan(plan_path, raw)
+    source_manifest = execution_tree.build_source_manifest(root)
+    source_manifest_mapping = execution_tree.source_manifest_to_dict(source_manifest)
+    plan_digest = _digest(plan_path.read_bytes())
+    temporary_root: Path | None = None
+    owned_roots: set[Path] = set()
+
+    def source_manifest_reader() -> str:
+        return execution_tree.build_source_manifest(root).digest
+
+    def child_factory(assignment: Any, run_id: str) -> Any:
+        nonlocal temporary_root
+        if temporary_root is None:
+            temporary_root = execution_tree.create_private_temp_root(
+                prefix=f"mutation-harness-{run_id}-"
+            )
+        staged = stage_execution_tree(
+            root,
+            temporary_root / f"shard-{assignment.shard_index}",
+            run_id=run_id,
+            shard_index=assignment.shard_index,
+            source_manifest_digest=source_manifest.digest,
+            plan_digest=plan_digest,
+            workspace_inputs=sharding.workspace_inputs,
+            source_manifest=source_manifest,
+        )
+        owned_roots.add(staged.root.resolve())
+        staged_plan = staged.root / relative_plan
+        if _digest(staged_plan.read_bytes()) != plan_digest:
+            raise HarnessError("staged plan bytes do not match the frozen plan digest")
+        selected_ids = [item.identifier for item in assignment.mutations]
+        plan_ordinals = {
+            item.identifier: item.selected_ordinal for item in assignment.mutations
+        }
+        environment = external_resource_environment(
+            sharding, run_id, assignment.shard_index
+        )
+        environment["MUTATION_HARNESS_PLAN_ORDINALS"] = json.dumps(
+            plan_ordinals, sort_keys=True, separators=(",", ":")
+        )
+        result_stream = (
+            staged.root / STATE_DIRNAME / RUNS_DIRNAME / run_id / RESULT_STREAM_FILENAME
+        )
+
+        def cleanup() -> None:
+            assert temporary_root is not None
+            execution_tree.cleanup_execution_tree(
+                staged,
+                temporary_root=temporary_root,
+                child_liveness_proven=True,
+            )
+            owned_roots.remove(staged.root.resolve())
+            if not owned_roots:
+                temporary_root.rmdir()
+
+        argv = [
+            sys.executable,
+            "-m",
+            "scripts.mutation_harness",
+            "--root",
+            ".",
+            "run",
+            "--plan",
+            str(relative_plan),
+            "--only",
+            ",".join(selected_ids),
+            "--shards",
+            "1",
+            "--progress",
+            "none",
+            "--internal-child",
+        ]
+        if assert_all_killed:
+            argv.append("--assert-all-killed")
+        return coordinator.ChildSpec(
+            assignment=assignment,
+            root=staged.root,
+            source_root=root,
+            temporary_root=temporary_root,
+            argv=tuple(argv),
+            result_stream=result_stream,
+            ownership_marker=staged.ownership_marker,
+            liveness_lock=staged.root / STATE_DIRNAME / "child.liveness",
+            environment=environment,
+            cleanup=cleanup,
+        )
+
+    outcome = coordinator.coordinator_run(
+        root,
+        plan_path,
+        plan_name,
+        [mutation.identifier for mutation in mutations],
+        only,
+        assert_all_killed,
+        requested_shards=requested_shards,
+        progress=progress,
+        source_head=source_manifest.head,
+        source_manifest=source_manifest_mapping,
+        source_manifest_digest=source_manifest.digest,
+        plan_digest=plan_digest,
+        source_manifest_reader=source_manifest_reader,
+        child_factory=child_factory,
+    )
+    return list(outcome.results), outcome.exit_code
 
 
 def recover_run(root: Path, run_id: str, *, force: bool = False) -> str:
     """Recover or retain the recorded execution trees for an aborted run."""
 
-    raise NotImplementedError
+    try:
+        from scripts.mutation_harness_recovery import RecoveryError
+        from scripts.mutation_harness_recovery import recover_run as recover_backend
+    except ImportError as exc:
+        raise HarnessError("recovery backend is unavailable") from exc
+    try:
+        return recover_backend(root, run_id, force=force)
+    except RecoveryError as exc:
+        raise HarnessError(str(exc)) from exc
 
 
 def acquire_lock(root: Path) -> Path:
@@ -1628,6 +1941,7 @@ def run_plan(
     progress: str = "none",
     run_id: str | None = None,
     shard_index: int | None = None,
+    child_protocol: _ChildProtocol | None = None,
 ) -> tuple[list[Result], int]:
     blockers = verify(root)
     if blockers:
@@ -1639,6 +1953,15 @@ def run_plan(
         if unknown:
             raise HarnessError(f"--only names unknown mutations: {sorted(unknown)}")
         mutations = [mutation for mutation in mutations if mutation.identifier in only]
+
+    if child_protocol is not None:
+        selected_ids = {mutation.identifier for mutation in mutations}
+        if set(child_protocol.plan_ordinals) != selected_ids:
+            raise HarnessError(
+                "internal child ordinal bindings do not exactly match selected mutations"
+            )
+        if run_id != child_protocol.run_id or shard_index != child_protocol.shard_index:
+            raise HarnessError("internal child run identity is inconsistent")
 
     snapshot_dir = _snapshot_dir(root)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -1669,29 +1992,54 @@ def run_plan(
             )
         try:
             for ordinal, mutation in enumerate(mutations):
+                event_ordinal = (
+                    child_protocol.plan_ordinals[mutation.identifier]
+                    if child_protocol is not None
+                    else ordinal
+                )
+                child_started_ns = time.monotonic_ns()
                 emitter.emit(
                     "mutation_started",
                     completed=len(results),
                     active=1,
                     total=total,
                     shard_index=shard_index,
-                    plan_ordinal=ordinal,
+                    plan_ordinal=event_ordinal,
                     mutation_id=mutation.identifier,
                     phase="baseline",
                 )
+                if child_protocol is not None:
+                    child_protocol.emit(
+                        "mutation_started",
+                        mutation,
+                        phase="baseline",
+                        started_ns=child_started_ns,
+                    )
                 result = _run_one(root, mutation, snapshot_dir)
                 results.append(result)
-                _write_result_record(result_stream, selected_run_id, ordinal, result)
+                if child_protocol is None:
+                    _write_result_record(
+                        result_stream, selected_run_id, ordinal, result
+                    )
+                else:
+                    _write_child_result_record(child_protocol, mutation, result)
                 emitter.emit(
                     "mutation_finished",
                     completed=len(results),
                     active=0,
                     total=total,
                     shard_index=shard_index,
-                    plan_ordinal=ordinal,
+                    plan_ordinal=event_ordinal,
                     mutation_id=mutation.identifier,
                     verdict=result.verdict,
                 )
+                if child_protocol is not None:
+                    child_protocol.emit(
+                        "mutation_finished",
+                        mutation,
+                        verdict=result.verdict,
+                        started_ns=child_started_ns,
+                    )
         except BaseException:
             emitter.emit(
                 "run_stopping",
@@ -2157,6 +2505,15 @@ def main(argv: list[str] | None = None) -> int:
         "the content you inspected",
     )
     sub.add_parser("report", help="print the last run's report")
+    recover_parser = sub.add_parser(
+        "recover-run", help="recover an incomplete sharded coordinator run"
+    )
+    recover_parser.add_argument("--run-id", required=True)
+    recover_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="continue safe cleanup of other owned shards after a recovery refusal",
+    )
     run_parser = sub.add_parser("run", help="execute a mutation plan")
     run_parser.add_argument("--plan", required=True)
     run_parser.add_argument("--only", default="")
@@ -2170,6 +2527,17 @@ def main(argv: list[str] | None = None) -> int:
         choices=("human", "jsonl", "none"),
         default="human",
         help="stream progress to stderr (durable JSONL is always recorded)",
+    )
+    run_parser.add_argument(
+        "--shards",
+        type=int,
+        default=1,
+        help="number of isolated shards (requires plan opt-in above 1)",
+    )
+    run_parser.add_argument(
+        "--internal-child",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
 
     args = parser.parse_args(argv)
@@ -2197,15 +2565,60 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(path.read_text(encoding="utf-8"), end="")
             return 0
+        if args.command == "recover-run":
+            print(recover_run(root, str(args.run_id), force=bool(args.force)))
+            return 0
 
         only = {item.strip() for item in args.only.split(",") if item.strip()}
-        results, exit_code = run_plan(
-            root,
-            Path(args.plan),
-            only or None,
-            args.assert_all_killed,
-            progress=str(args.progress),
-        )
+        plan_path = Path(args.plan)
+        try:
+            from scripts.mutation_harness_optin import (
+                PlanContractError,
+                load_plan_contract,
+                validate_requested_shards,
+            )
+
+            _raw, sharding = load_plan_contract(plan_path)
+            validate_requested_shards(sharding, int(args.shards))
+        except ImportError as exc:
+            raise HarnessError(
+                "sharding plan validation backend is unavailable"
+            ) from exc
+        except PlanContractError as exc:
+            raise HarnessError(str(exc)) from exc
+
+        if args.internal_child:
+            if int(args.shards) != 1:
+                raise HarnessError("internal children must execute exactly one shard")
+            child_protocol = _child_protocol_from_environment(root)
+            results, exit_code = run_plan(
+                root,
+                plan_path,
+                only or None,
+                args.assert_all_killed,
+                progress="none",
+                run_id=child_protocol.run_id,
+                shard_index=child_protocol.shard_index,
+                child_protocol=child_protocol,
+            )
+            return exit_code
+        if int(args.shards) == 1:
+            results, exit_code = run_plan(
+                root,
+                plan_path,
+                only or None,
+                args.assert_all_killed,
+                progress=str(args.progress),
+            )
+        else:
+            results, exit_code = coordinator_run(
+                root,
+                plan_path,
+                only or None,
+                args.assert_all_killed,
+                requested_shards=int(args.shards),
+                progress=str(args.progress),
+            )
         print(_render(results))
         for result in results:
             if result.verdict in {

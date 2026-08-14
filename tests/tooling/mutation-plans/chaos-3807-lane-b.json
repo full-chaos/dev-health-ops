@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3807 Lane B execution-tree guards",
+  "$limitation": "These mutations cover the Lane B execution-tree guards. Coordinator assignment, aggregation, root state, progress, plan opt-in, and recovery liveness-lock semantics belong to their owning lanes.",
+  "build": [
+    ".venv/bin/python",
+    "-m",
+    "py_compile",
+    "scripts/mutation_harness_execution_tree.py"
+  ],
+  "mutations": [
+    {
+      "id": "B1",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if workspace_inputs:\n        _materialize_workspace_inputs(source, destination, workspace_inputs)\n    verify_source_manifest(source, source_manifest)\n    return StagedExecutionTree(\n",
+      "replace": "    if workspace_inputs:\n        _materialize_workspace_inputs(source, destination, workspace_inputs)\n    if source_manifest.digest == \"disabled-final-recheck\":\n        verify_source_manifest(source, source_manifest)\n    return StagedExecutionTree(\n",
+      "rationale": "staging must recheck the invoking manifest after the last overlay byte is copied",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_stage_rechecks_invoking_manifest_after_the_overlay"
+      ]]
+    },
+    {
+      "id": "B2",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "            relocate_python_environment(\n                source_root=source_root,\n                shard_root=destination_root,\n                environment=destination,\n            )\n",
+      "replace": "            if False:\n                relocate_python_environment(\n                    source_root=source_root,\n                    shard_root=destination_root,\n                    environment=destination,\n                )\n",
+      "rationale": "a copied Python environment must be relocated before it can execute a shard proof",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_python_workspace_is_relocated_and_probe_reads_shard_bytes"
+      ]]
+    },
+    {
+      "id": "B3",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "            probe_python_toolchain_independence(\n                shard_root=destination_root,\n                environment=destination,\n            )\n",
+      "replace": "            if False:\n                probe_python_toolchain_independence(\n                    shard_root=destination_root,\n                    environment=destination,\n                )\n",
+      "rationale": "the pre-mutation probe must observe shard-only source bytes independently of relocation",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_stage_probe_is_independent_from_the_relocation_pass"
+      ]]
+    },
+    {
+      "id": "B4",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        shutil.copy2(source, destination, follow_symlinks=True)\n",
+      "replace": "        os.link(source, destination)\n",
+      "rationale": "regular workspace-input files must have independent inodes rather than hard links",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_copy_has_no_links_and_is_byte_independent"
+      ]]
+    },
+    {
+      "id": "B5",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        shutil.copy2(resolved, destination, follow_symlinks=True)\n",
+      "replace": "        os.symlink(os.readlink(source), destination)\n",
+      "rationale": "workspace-input symlinks must be materialized as independent regular files",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_copy_has_no_links_and_is_byte_independent"
+      ]]
+    },
+    {
+      "id": "B6",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if residue:\n        joined = \"\\n\".join(residue[:20])\n",
+      "replace": "    if False and residue:\n        joined = \"\\n\".join(residue[:20])\n",
+      "rationale": "an unknown absolute binding to the invoking root must fail relocation",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_relocation_refuses_unknown_invoking_root_residue"
+      ]]
+    },
+    {
+      "id": "B7",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if _read_marker(staged) != expected_marker:\n",
+      "replace": "    if False and _read_marker(staged) != expected_marker:\n",
+      "rationale": "cleanup must not delete a path whose ownership marker does not match the recorded shard",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_cleanup_refuses_escape_wrong_marker_live_holder_applied_and_dirty_source"
+      ]]
+    },
+    {
+      "id": "B8",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if not child_liveness_proven:\n",
+      "replace": "    if False and not child_liveness_proven:\n",
+      "rationale": "cleanup requires positive evidence that the shard child is dead",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_cleanup_refuses_escape_wrong_marker_live_holder_applied_and_dirty_source"
+      ]]
+    },
+    {
+      "id": "B9",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        if state.get(\"applied\") is not None:\n",
+      "replace": "        if state.get(\"applied\") is None:\n",
+      "rationale": "cleanup must retain a shard while its applied-mutation record exists",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_cleanup_refuses_escape_wrong_marker_live_holder_applied_and_dirty_source"
+      ]]
+    },
+    {
+      "id": "B10",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if observed != staged.source_manifest:\n",
+      "replace": "    if False and observed != staged.source_manifest:\n",
+      "rationale": "cleanup must prove the shard source manifest is restored before removal",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_cleanup_refuses_escape_wrong_marker_live_holder_applied_and_dirty_source"
+      ]]
+    },
+    {
+      "id": "B11",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if mode != 0o700:\n",
+      "replace": "    if False and mode != 0o700:\n",
+      "rationale": "execution-tree temporary roots must remain owner-only",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_private_temp_root_is_mode_0700_and_staging_rejects_wider_mode"
+      ]]
+    },
+    {
+      "id": "B12",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if check.returncode == 1:\n",
+      "replace": "    if False and check.returncode == 1:\n",
+      "rationale": "source manifests must fail if live mutation-harness state is not ignored",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_manifest_refuses_unignored_harness_state_and_damaged_recovery_record"
+      ]]
+    }
+  ]
+}

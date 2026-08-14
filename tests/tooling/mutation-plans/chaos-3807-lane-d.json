@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, and recovery of manifest-authorized pre-child staging with source/temporary-root disjointness. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, and the bounded whole-recorded-root ENOENT reboot path with a final absence recheck. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -166,6 +166,32 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_zero_shard_recovery_rejects_private_root_below_source",
         "tests/tooling/test_mutation_harness_lane_d.py::test_zero_shard_recovery_rejects_private_root_above_source"
+      ]]
+    },
+    {
+      "id": "D13-whole-temporary-root-absent-recovery",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if missing_temporary_root is not None:\n        return _recover_absent_temporary_root(",
+      "replace": "if False and missing_temporary_root is not None:\n        return _recover_absent_temporary_root(",
+      "rationale": "a reboot that removes the entire recorded private temporary root must take the bounded ENOENT recovery path instead of treating every missing descendant marker as independent UNKNOWN state",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_missing_recorded_temporary_root_recovers_without_fabricating_results"
+      ]]
+    },
+    {
+      "id": "D14-whole-temporary-root-absence-recheck",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if (\n        _missing_private_temporary_root(\n            coordinator.get(\"temporary_root\"), record.source_root\n        )\n        is None\n    ):",
+      "replace": "if False and (\n        _missing_private_temporary_root(\n            coordinator.get(\"temporary_root\"), record.source_root\n        )\n        is None\n    ):",
+      "rationale": "the recorded private root must still be absent immediately before clear-state-last so a path that appears or is replaced during recovery is retained as unauthorised state",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_missing_temporary_root_rechecks_absence_immediately_before_state_clear"
       ]]
     }
   ]

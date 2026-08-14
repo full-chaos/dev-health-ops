@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.mutation_harness_recovery as recovery_backend
 from scripts.mutation_harness_optin import (
     PlanContractError,
     ShardingPlan,
@@ -380,6 +381,7 @@ def _recovery_fixture(
         "source_manifest": {"head": "head", "entries": [], "digest": "source-digest"},
         "source_manifest_digest": "source-digest",
         "plan_digest": "plan-digest",
+        "temporary_root": str((tmp_path / "private-run").resolve()),
         "shards": [
             {
                 "shard_index": 0,
@@ -400,8 +402,11 @@ def _recovery_fixture(
         "pid": os.getpid(),
         "process_start_time": "unrelated-live-process",
         "lifecycle": "running",
+        "source_root": str(root.resolve()),
+        "source_manifest": manifest["source_manifest"],
         "source_manifest_digest": "source-digest",
         "plan_digest": "plan-digest",
+        "temporary_root": manifest["temporary_root"],
         "manifest_path": str(manifest_path.resolve()),
         "shards": manifest["shards"],
     }
@@ -414,6 +419,154 @@ def _recovery_fixture(
         encoding="utf-8",
     )
     return root, shard, ownership_marker, liveness_lock
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("lifecycle", ["running", "recovering"])
+def test_missing_recorded_temporary_root_recovers_without_fabricating_results(
+    tmp_path: Path,
+    force: bool,
+    lifecycle: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, shard, _, _ = _recovery_fixture(
+        tmp_path, state_overrides={"lifecycle": lifecycle}
+    )
+    temporary_root = shard.parent
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["unrelated"] = {"keep": True}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    source_manifest_before = json.loads(manifest_path.read_text(encoding="utf-8"))[
+        "source_manifest"
+    ]
+    lock_directory = root / ".mutation-harness/lock"
+    lock_directory.mkdir()
+    lock_pid = lock_directory / "pid"
+    lock_pid.write_text("2147483646\n", encoding="utf-8")
+    shutil.rmtree(temporary_root)
+
+    message = recover_run(root, "run-3807", force=force)
+
+    assert message == (
+        "recovered run run-3807 as aborted; recorded temporary root was absent; "
+        "removed 0 owned shard(s)"
+    )
+    assert capsys.readouterr().out == ""
+    recovered_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert recovered_state == {"schema_version": 1, "unrelated": {"keep": True}}
+    recovered_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert recovered_manifest["source_manifest"] == source_manifest_before
+    assert "results" not in recovered_manifest
+    assert lock_pid.read_text(encoding="utf-8") == "2147483646\n"
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("missing", ["marker", "shard"])
+def test_existing_temporary_root_with_missing_shard_or_marker_remains_blocked(
+    tmp_path: Path, force: bool, missing: str
+) -> None:
+    root, shard, marker, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    if missing == "marker":
+        marker.unlink()
+    else:
+        shutil.rmtree(shard)
+        (temporary_root / "keep.txt").write_text("keep", encoding="utf-8")
+    state_path = root / ".mutation-harness/state.json"
+
+    with pytest.raises(RecoveryError, match="ownership marker"):
+        recover_run(
+            root, "run-3807", force=force, cleanup_owned_tree=_remove_owned_tree
+        )
+
+    assert temporary_root.exists()
+    if missing == "marker":
+        assert shard.exists()
+    else:
+        assert (temporary_root / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert "coordinator_run" in json.loads(state_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("run_id", "other-run", "root state records run_id"),
+        ("source_root", "/other/source", "source roots differ"),
+        ("source_manifest_digest", "other-source", "source digests differ"),
+        ("plan_digest", "other-plan", "plan digests differ"),
+        ("temporary_root", "/tmp/other-private-root", "temporary_root values differ"),
+    ],
+)
+def test_missing_temporary_root_requires_matching_state_and_manifest_authority(
+    tmp_path: Path, field: str, replacement: str, message: str
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["coordinator_run"][field] = replacement
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    shutil.rmtree(shard.parent)
+
+    with pytest.raises(RecoveryError, match=message):
+        recover_run(root, "run-3807")
+
+    assert "coordinator_run" in json.loads(state_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("lifecycle", ["complete", "completed", "unknown"])
+def test_missing_temporary_root_refuses_non_incomplete_lifecycle(
+    tmp_path: Path, lifecycle: str
+) -> None:
+    root, shard, _, _ = _recovery_fixture(
+        tmp_path, state_overrides={"lifecycle": lifecycle}
+    )
+    shutil.rmtree(shard.parent)
+
+    with pytest.raises(RecoveryError, match="not an incomplete lifecycle"):
+        recover_run(root, "run-3807")
+
+    assert "coordinator_run" in json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
+
+
+def test_missing_temporary_root_rechecks_absence_immediately_before_state_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    shutil.rmtree(temporary_root)
+    checks = 0
+    original = recovery_backend._missing_private_temporary_root
+
+    def replace_before_second_check(value: object, source_root: Path) -> Path | None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            temporary_root.mkdir(mode=0o700)
+            (temporary_root / "replacement.txt").write_text(
+                "do not remove", encoding="utf-8"
+            )
+        return original(value, source_root)
+
+    monkeypatch.setattr(
+        recovery_backend,
+        "_missing_private_temporary_root",
+        replace_before_second_check,
+    )
+
+    with pytest.raises(RecoveryError, match="exists or was replaced"):
+        recover_run(root, "run-3807")
+
+    assert checks == 2
+    assert (temporary_root / "replacement.txt").read_text(encoding="utf-8") == (
+        "do not remove"
+    )
+    assert "coordinator_run" in json.loads(
+        (root / ".mutation-harness/state.json").read_text(encoding="utf-8")
+    )
 
 
 def _remove_owned_tree(root: Path, marker: Path, shard_index: int) -> None:
@@ -999,6 +1152,10 @@ def test_manifest_owned_path_cannot_escape_its_shard(tmp_path: Path) -> None:
     manifest_path = Path(state["coordinator_run"]["manifest_path"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["shards"][0]["ownership_marker"] = str(sentinel.resolve())
+    state["coordinator_run"]["shards"][0]["ownership_marker"] = str(sentinel.resolve())
+    (root / ".mutation-harness/state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(RecoveryError, match="escapes shard root"):
@@ -1042,17 +1199,18 @@ def test_force_preflight_is_exact_and_never_removes_unlisted_path(
     )
     foreign_lock = foreign / ".mutation-harness-liveness.lock"
     foreign_lock.write_text("", encoding="utf-8")
-    manifest["shards"].append(
-        {
-            "shard_index": 1,
-            "root": str(foreign.resolve()),
-            "source_root": str(root.resolve()),
-            "temporary_root": str((tmp_path / "private-run").resolve()),
-            "ownership_marker": str(foreign_marker.resolve()),
-            "liveness_lock": str(foreign_lock.resolve()),
-            "assigned_ordinals": [1],
-        }
-    )
+    foreign_record = {
+        "shard_index": 1,
+        "root": str(foreign.resolve()),
+        "source_root": str(root.resolve()),
+        "temporary_root": str((tmp_path / "private-run").resolve()),
+        "ownership_marker": str(foreign_marker.resolve()),
+        "liveness_lock": str(foreign_lock.resolve()),
+        "assigned_ordinals": [1],
+    }
+    manifest["shards"].append(foreign_record)
+    state["coordinator_run"]["shards"].append(foreign_record)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(RecoveryError, match="retained 1 shard"):

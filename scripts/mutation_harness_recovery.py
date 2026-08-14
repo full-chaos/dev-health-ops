@@ -23,6 +23,17 @@ SCHEMA_VERSION = 1
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _PARTIAL_SHARD_NAME = re.compile(r"shard-(0|[1-9][0-9]*)")
 _EXECUTION_TREE_MARKER = Path(STATE_DIRNAME) / "execution-tree-owner.json"
+_INCOMPLETE_COORDINATOR_LIFECYCLES = frozenset(
+    {"staging", "running", "stopping", "aborted", "recovering"}
+)
+_SHARD_AUTHORITY_KEYS = (
+    "shard_index",
+    "root",
+    "source_root",
+    "temporary_root",
+    "ownership_marker",
+    "liveness_lock",
+)
 
 RestoreMutation = Callable[[Path], str]
 CleanupOwnedTree = Callable[[Path, Path, int], None]
@@ -127,11 +138,13 @@ class RunRecord:
 
     run_id: str
     manifest_path: Path
+    manifest: dict[str, Any]
     source_root: Path
     source_manifest: dict[str, Any]
     source_manifest_digest: str
     plan_digest: str
     diagnostic_pid: int | None
+    temporary_root: Path | None
     staging_temporary_root: Path | None
     staging_shard_limit: int | None
     shards: tuple[ShardRecord, ...]
@@ -333,6 +346,60 @@ def _private_temporary_root(value: object, source_root: Path) -> Path:
     return resolved
 
 
+def _private_temporary_root_path(value: object, source_root: Path) -> Path:
+    """Validate an existing or absent private-root path without following it."""
+
+    if not isinstance(value, str) or not value:
+        raise RecoveryError("run manifest has no durable temporary_root authority")
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise RecoveryError(f"temporary_root {path} is not an absolute lexical path")
+    try:
+        temporary_base = Path(tempfile.gettempdir()).resolve(strict=True)
+    except OSError as exc:
+        raise RecoveryError(
+            f"system temporary root could not be resolved: {exc}"
+        ) from exc
+    if path == temporary_base or not path.is_relative_to(temporary_base):
+        raise RecoveryError(
+            f"temporary_root {path} is outside the private run boundary"
+        )
+    if path.is_relative_to(source_root) or source_root.is_relative_to(path):
+        raise RecoveryError(f"temporary_root {path} overlaps source_root {source_root}")
+
+    current = temporary_base
+    for component in path.relative_to(temporary_base).parts[:-1]:
+        current /= component
+        _trusted_authority_directory(current, "temporary-root parent")
+    return path
+
+
+def _missing_private_temporary_root(value: object, source_root: Path) -> Path | None:
+    """Return the safe recorded root only when its own lstat reports ENOENT."""
+
+    path = _private_temporary_root_path(value, source_root)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return path
+    except OSError as exc:
+        raise RecoveryError(
+            f"temporary_root {path} could not be inspected: {exc}"
+        ) from exc
+    return None
+
+
+def _shard_authority(raw_shards: object, label: str) -> list[dict[str, object]]:
+    if not isinstance(raw_shards, list):
+        raise RecoveryError(f"{label} shards must be a list")
+    projected: list[dict[str, object]] = []
+    for position, raw in enumerate(raw_shards):
+        if not isinstance(raw, dict):
+            raise RecoveryError(f"{label} shard {position} must be an object")
+        projected.append({key: raw.get(key) for key in _SHARD_AUTHORITY_KEYS})
+    return projected
+
+
 def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord]:
     if not _SAFE_RUN_ID.fullmatch(run_id):
         raise RecoveryError(f"run id {run_id!r} is not a plain name")
@@ -389,6 +456,8 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
     if not isinstance(source_root_value, str) or not source_root_value:
         raise RecoveryError("run manifest has no source_root")
     source_root = Path(source_root_value).resolve()
+    if coordinator.get("source_root") != source_root_value:
+        raise RecoveryError("coordinator and manifest source roots differ")
     if source_root != root:
         raise RecoveryError(
             f"run manifest source_root {source_root} does not match recovery root {root}"
@@ -399,10 +468,24 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         raise RecoveryError(
             "serialized source manifest digest does not match run metadata"
         )
+    if coordinator.get("source_manifest") != source_manifest:
+        raise RecoveryError("coordinator and manifest source manifests differ")
 
     raw_shards = manifest.get("shards")
     if not isinstance(raw_shards, list):
         raise RecoveryError("run manifest shards must be a list")
+    if _shard_authority(coordinator.get("shards"), "coordinator") != _shard_authority(
+        raw_shards, "run manifest"
+    ):
+        raise RecoveryError("coordinator and manifest shard authorities differ")
+    manifest_temporary_root = manifest.get("temporary_root")
+    if coordinator.get("temporary_root") != manifest_temporary_root:
+        raise RecoveryError("coordinator and manifest temporary_root values differ")
+    temporary_root: Path | None = None
+    if raw_shards:
+        temporary_root = _private_temporary_root_path(
+            manifest_temporary_root, source_root
+        )
     staging_temporary_root: Path | None = None
     staging_shard_limit: int | None = None
     if not raw_shards:
@@ -427,11 +510,6 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         ):
             raise RecoveryError(
                 "zero-shard run manifest has invalid requested/effective shard bounds"
-            )
-        manifest_temporary_root = manifest.get("temporary_root")
-        if coordinator.get("temporary_root") != manifest_temporary_root:
-            raise RecoveryError(
-                "zero-shard coordinator and manifest temporary_root values differ"
             )
         staging_temporary_root = _private_temporary_root(
             manifest_temporary_root, source_root
@@ -466,6 +544,10 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
             )
         if not isinstance(temporary_root_value, str) or not temporary_root_value:
             raise RecoveryError(f"run manifest shard {index} has incomplete paths")
+        if temporary_root_value != manifest_temporary_root:
+            raise RecoveryError(
+                f"run manifest shard {index} temporary_root differs from the run root"
+            )
         if not isinstance(marker_value, str) or not marker_value:
             raise RecoveryError(f"run manifest shard {index} has incomplete paths")
         if not isinstance(lock_value, str) or not lock_value:
@@ -509,6 +591,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
     return state, RunRecord(
         run_id=run_id,
         manifest_path=manifest_path,
+        manifest=manifest,
         source_root=source_root,
         source_manifest=source_manifest,
         source_manifest_digest=source_digest,
@@ -516,6 +599,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         diagnostic_pid=(
             coordinator.get("pid") if isinstance(coordinator.get("pid"), int) else None
         ),
+        temporary_root=temporary_root,
         staging_temporary_root=staging_temporary_root,
         staging_shard_limit=staging_shard_limit,
         shards=tuple(shards),
@@ -878,6 +962,51 @@ def _recover_partial_staging(
     )
 
 
+def _recover_absent_temporary_root(
+    root: Path,
+    state_path: Path,
+    state: dict[str, Any],
+    record: RunRecord,
+) -> str:
+    """Clear an incomplete run after the whole recorded private root vanished."""
+
+    coordinator = state.get("coordinator_run")
+    if not isinstance(coordinator, dict):
+        raise RecoveryError("coordinator state changed during recovery")
+    lifecycle = coordinator.get("lifecycle")
+    if lifecycle not in _INCOMPLETE_COORDINATOR_LIFECYCLES:
+        raise RecoveryError(
+            f"coordinator lifecycle {lifecycle!r} is not an incomplete lifecycle"
+        )
+
+    manifest = _read_root_recovery_json(root, record.manifest_path, "run manifest")
+    if manifest != record.manifest:
+        raise RecoveryError("run manifest changed during recovery")
+    manifest["lifecycle"] = "aborted"
+    _write_root_recovery_json(root, record.manifest_path, manifest)
+    coordinator["lifecycle"] = "aborted"
+    _write_root_recovery_json(root, state_path, state)
+
+    # This is deliberately the final observation before clear-state-last. A path
+    # that appeared after the first ENOENT is new, unauthorised filesystem state.
+    if (
+        _missing_private_temporary_root(
+            coordinator.get("temporary_root"), record.source_root
+        )
+        is None
+    ):
+        raise RecoveryError(
+            f"temporary_root {coordinator.get('temporary_root')} exists or was "
+            "replaced during recovery; root state remains"
+        )
+    state.pop("coordinator_run", None)
+    _write_root_recovery_json(root, state_path, state)
+    return (
+        f"recovered run {record.run_id} as aborted; recorded temporary root was "
+        "absent; removed 0 owned shard(s)"
+    )
+
+
 def recover_run(
     root: Path,
     run_id: str,
@@ -907,6 +1036,17 @@ def recover_run(
             force=force,
             cleanup_owned_tree=cleanup_owned_tree,
             output=output,
+        )
+    missing_temporary_root = _missing_private_temporary_root(
+        str(record.temporary_root) if record.temporary_root is not None else None,
+        record.source_root,
+    )
+    if missing_temporary_root is not None:
+        return _recover_absent_temporary_root(
+            root,
+            state_path,
+            state,
+            record,
         )
     preflight, liveness_leases = _build_preflight(record)
     try:

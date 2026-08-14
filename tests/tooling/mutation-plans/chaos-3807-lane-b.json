@@ -188,6 +188,36 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_execution_tree.py::test_manifest_refuses_unignored_harness_state_and_damaged_recovery_record"
       ]]
+    },
+    {
+      "id": "B13",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        \".mutation-harness\",\n        check=False,\n",
+      "replace": "        \".mutation-harness/execution-tree-probe\",\n        check=False,\n",
+      "rationale": "the ignore assertion must check the state directory as a whole rather than one selectively ignored child",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_manifest_refuses_selective_harness_child_ignore"
+      ]]
+    },
+    {
+      "id": "B14",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        state_metadata = state_path.lstat()\n",
+      "replace": "        state_metadata = state_path.stat()\n",
+      "rationale": "cleanup must inspect the lexical state path so a dangling symlink cannot look absent",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_cleanup_refuses_a_dangling_shard_state_symlink"
+      ]]
     }
   ]
 }

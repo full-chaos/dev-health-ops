@@ -1304,8 +1304,8 @@ def _backfill_windows(
 
     since = _as_utc(request.since)
     before = _as_utc(request.before)
-    if since > before:
-        raise ValueError("Backfill since must be before or equal to before")
+    if since >= before:
+        raise ValueError("Backfill since must be before")
 
     if _is_linear_work_item_family(provider, dataset_key):
         chunk_days = _linear_backfill_max_window_days()

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from croniter import croniter as Croniter
 from fastapi.encoders import jsonable_encoder
@@ -366,6 +366,34 @@ def merge_intervals(
             continue
         merged.append(interval)
     return merged
+
+
+def merge_intervals_by_source_scope(
+    intervals: Iterable[CoverageInterval],
+    *,
+    tolerance: timedelta = INTERVAL_ADJACENCY_TOLERANCE,
+) -> list[CoverageInterval]:
+    """Merge intervals only when their source scopes match exactly.
+
+    Dataset coverage is displayed as a union across sources. That remains
+    useful for reporting, but a row-level backfill action must keep the source
+    scope that produced the gap. Otherwise adjacent gaps from two sources turn
+    into one broad actionable range.
+    """
+
+    by_source_scope: dict[tuple[str, ...], list[CoverageInterval]] = defaultdict(list)
+    for interval in intervals:
+        source_scope = tuple(sorted(set(interval.source_ids)))
+        by_source_scope[source_scope].append(interval)
+
+    return sorted(
+        (
+            merged
+            for scoped_intervals in by_source_scope.values()
+            for merged in merge_intervals(scoped_intervals, tolerance=tolerance)
+        ),
+        key=lambda interval: (interval.since, interval.before, interval.source_ids),
+    )
 
 
 def subtract_intervals(
@@ -1514,44 +1542,62 @@ def _data_basis_for_config(config: SyncConfiguration, scope: EffectiveScope) -> 
 
 
 def _canonical_backfill_windows(
-    datasets: Sequence[_DatasetCoverage],
+    pair_coverages: Sequence[_PairCoverage],
 ) -> list[dict[str, Any]]:
-    """Return inclusive date windows the existing backfill action can submit.
+    """Return exact, source/dataset-scoped actionable coverage windows.
 
-    Coverage intervals are half-open datetimes while the backfill endpoint is
-    inclusive by calendar date. An exclusive midnight boundary therefore maps
-    to the preceding date; any later time maps to its own calendar date.
+    The focused-backfill form only accepts day boundaries. We therefore emit a
+    suggestion only when the half-open coverage range has exact UTC-midnight
+    boundaries. This keeps the server authoritative: an explicit empty list
+    means a displayed row is not safely representable by that selector.
     """
 
-    candidates: list[dict[str, Any]] = []
-    for dataset in datasets:
-        for interval, reason in (
-            *((interval, "gap") for interval in dataset.gaps),
-            *((interval, "failed") for interval in dataset.failed_ranges),
-        ):
-            inclusive_before = (
-                interval.before - timedelta(microseconds=1)
-                if interval.before.time() == time.min
-                else interval.before
+    candidates_by_scope: dict[
+        tuple[datetime, datetime, str, str], set[Literal["gap", "failed"]]
+    ] = defaultdict(set)
+    for pair in pair_coverages:
+        for interval in pair.gaps:
+            since = ensure_utc(interval.since)
+            before = ensure_utc(interval.before)
+            if since.time() != time.min or before.time() != time.min:
+                continue
+            candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
+                "gap"
             )
-            candidates.append(
-                {
-                    "since": interval.since.date(),
-                    "before": inclusive_before.date(),
-                    "reasons": [reason],
-                }
+        for interval in pair.failed_ranges:
+            since = ensure_utc(interval.since)
+            before = ensure_utc(interval.before)
+            if since.time() != time.min or before.time() != time.min:
+                continue
+            candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
+                "failed"
             )
-    candidates.sort(key=lambda item: (item["since"], item["before"]))
-    merged: list[dict[str, Any]] = []
-    for candidate in candidates:
-        if merged and candidate["since"] <= merged[-1]["before"] + timedelta(days=1):
-            merged[-1]["before"] = max(merged[-1]["before"], candidate["before"])
-            merged[-1]["reasons"] = sorted(
-                set(merged[-1]["reasons"]).union(candidate["reasons"])
-            )
-            continue
-        merged.append(candidate)
-    return merged
+
+    candidates = [
+        {
+            "since": since,
+            "before": before,
+            "source_ids": [source_id],
+            "dataset_keys": [dataset_key],
+            "reasons": sorted(reasons),
+        }
+        for (
+            since,
+            before,
+            source_id,
+            dataset_key,
+        ), reasons in candidates_by_scope.items()
+    ]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["since"],
+            item["before"],
+            item["dataset_keys"],
+            item["source_ids"],
+            item["reasons"],
+        ),
+    )
 
 
 def _sync_coverage_lock_name(org_id: str, sync_config_id: uuid.UUID) -> str:
@@ -1842,7 +1888,9 @@ def build_coverage_summary_payload(
         covered = merge_intervals(
             interval for pair in pairs for interval in pair.covered
         )
-        gaps = merge_intervals(interval for pair in pairs for interval in pair.gaps)
+        gaps = merge_intervals_by_source_scope(
+            interval for pair in pairs for interval in pair.gaps
+        )
         failed_ranges = merge_intervals(
             interval for pair in pairs for interval in pair.failed_ranges
         )
@@ -1992,7 +2040,7 @@ def build_coverage_summary_payload(
             for dataset_key in sorted(not_enabled_dataset_keys)
         ],
         "sources": source_payloads,
-        "backfill_windows": _canonical_backfill_windows(datasets),
+        "backfill_windows": _canonical_backfill_windows(pair_coverages),
     }
 
 

@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3807 Lane C coordinator guards",
+  "$limitation": "Pins coordinator-only assignment, aggregation, source recheck, completion barrier, crash classification, root locking, event sequencing, and fail-closed normalization. Execution-tree ownership cleanup and recovery liveness decisions belong to Lanes B and D.",
+  "build": [
+    ".venv/bin/python",
+    "-m",
+    "py_compile",
+    "scripts/mutation_harness_coordinator.py"
+  ],
+  "mutations": [
+    {
+      "id": "C01-root-lock-before-staging",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    lock = acquire_lock(root)",
+      "replace": "    lock = _state_dir(root) / \"lock\"",
+      "rationale": "The coordinator must atomically own the root lock before it writes staging state or calls a staging factory.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "root_lock"]
+      ]
+    },
+    {
+      "id": "C02-source-manifest-rechecks",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        if source_manifest_reader() != source_manifest_digest:",
+      "replace": "        if False and source_manifest_reader() != source_manifest_digest:",
+      "expect_occurrences": 3,
+      "rationale": "The source manifest must be checked before staging, after staging, and again before an aggregate can be authoritative.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "source_manifest_drift"]
+      ]
+    },
+    {
+      "id": "C03-missing-result-refusal",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    if missing:",
+      "replace": "    if False and missing:",
+      "rationale": "An absent selected mutation result is unmeasured and must invalidate the aggregate.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "malformed_child_results"]
+      ]
+    },
+    {
+      "id": "C04-duplicate-result-refusal",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    if duplicates:",
+      "replace": "    if False and duplicates:",
+      "rationale": "Two results for one selected mutation are ambiguous and must invalidate the aggregate.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "malformed_child_results"]
+      ]
+    },
+    {
+      "id": "C05-unknown-result-refusal",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        if binding is None:\n            unknown.add(record.mutation_id)\n            continue",
+      "replace": "        if binding is None:\n            continue",
+      "rationale": "A child cannot add a result for a mutation outside the coordinator's selected plan.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "malformed_child_results"]
+      ]
+    },
+    {
+      "id": "C06-plan-digest-binding",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        if record.plan_digest != plan_digest:",
+      "replace": "        if False and record.plan_digest != plan_digest:",
+      "rationale": "A durable child result is authoritative only for the exact selected plan digest.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "malformed_child_results"]
+      ]
+    },
+    {
+      "id": "C07-selected-plan-result-order",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    ordered_ids.sort(key=lambda identifier: expected[identifier][1])",
+      "replace": "    ordered_ids.reverse()",
+      "rationale": "Final results must follow selected plan ordinal and never shard completion or stream order.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "aggregate_reorders"]
+      ]
+    },
+    {
+      "id": "C08-all-children-before-report",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    if not all_children_complete:",
+      "replace": "    if False and not all_children_complete:",
+      "rationale": "A final aggregate cannot be written while any launched child can still produce events or results.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "final_report_refuses"]
+      ]
+    },
+    {
+      "id": "C09-child-crash-is-not-survivor",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        if any(code != 0 for code in exits.values()):",
+      "replace": "        if False and any(code != 0 for code in exits.values()):",
+      "rationale": "A crashed child makes the run terminally failed; its remaining assignments are unmeasured, never survivors.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "child_crash_before_measurement"]
+      ]
+    },
+    {
+      "id": "C10-streamed-result-drop-classification",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        measured_lost = tuple(sorted(set(unmeasured) & finished_ids))",
+      "replace": "        measured_lost = tuple(sorted(set(unmeasured) & set()))",
+      "rationale": "A terminal mutation event without its durable result is measured-and-lost, distinct from work never measured.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "result_drop_after_finished"]
+      ]
+    },
+    {
+      "id": "C11-event-monotonic-sequence",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        self.sequence += 1",
+      "replace": "        self.sequence += 0",
+      "rationale": "Only the coordinator assigns the root event log's strictly monotonic sequence.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "resequences_events"]
+      ]
+    },
+    {
+      "id": "C12-normalizer-unrecognised-path-refusal",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    absolute = _POSIX_ABSOLUTE_PATH_RE.search(normalized)",
+      "replace": "    absolute = None",
+      "rationale": "The canonical detail normalizer must expose an unknown absolute path as a comparison gap instead of erasing or accepting it.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_refuses"]
+      ]
+    }
+  ]
+}

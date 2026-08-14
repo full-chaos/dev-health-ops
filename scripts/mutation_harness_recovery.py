@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import re
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,6 +27,29 @@ CleanupOwnedTree = Callable[[Path, Path, int], None]
 
 class RecoveryError(RuntimeError):
     """Recovery could not prove that an intended action was safe."""
+
+
+def _trusted_root_state_directory(root: Path) -> Path:
+    """Return the lexical root state directory without following a link."""
+
+    directory = root / STATE_DIRNAME
+    try:
+        info = directory.lstat()
+    except FileNotFoundError as exc:
+        raise RecoveryError(f"root state directory {directory} does not exist") from exc
+    except OSError as exc:
+        raise RecoveryError(
+            f"root state directory {directory} could not be inspected: {exc}"
+        ) from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise RecoveryError(
+            f"root state directory {directory} is a symlink; refusing recovery"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        raise RecoveryError(
+            f"root state directory {directory} is not a directory; refusing recovery"
+        )
+    return directory
 
 
 @dataclass(frozen=True)
@@ -137,6 +161,13 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     return loaded
 
 
+def _read_root_recovery_json(root: Path, path: Path, label: str) -> dict[str, Any]:
+    """Recheck the root state parent immediately before each recovery read."""
+
+    _trusted_root_state_directory(root)
+    return _read_json(path, label)
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
@@ -168,6 +199,13 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _write_root_recovery_json(root: Path, path: Path, payload: dict[str, Any]) -> None:
+    """Recheck the root state parent immediately before each recovery write."""
+
+    _trusted_root_state_directory(root)
+    _atomic_write_json(path, payload)
+
+
 def _contained_path(path: Path, root: Path, label: str) -> Path:
     resolved = path.resolve()
     root_resolved = root.resolve()
@@ -180,8 +218,9 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
     if not _SAFE_RUN_ID.fullmatch(run_id):
         raise RecoveryError(f"run id {run_id!r} is not a plain name")
     root = root.resolve()
-    state_path = root / STATE_DIRNAME / STATE_FILENAME
-    state = _read_json(state_path, "root state")
+    state_directory = _trusted_root_state_directory(root)
+    state_path = state_directory / STATE_FILENAME
+    state = _read_root_recovery_json(root, state_path, "root state")
     coordinator = state.get("coordinator_run")
     if not isinstance(coordinator, dict):
         raise RecoveryError(f"root state does not record coordinator run {run_id}")
@@ -192,7 +231,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
         )
 
     expected_manifest = (
-        root / STATE_DIRNAME / RUNS_DIRNAME / run_id / MANIFEST_FILENAME
+        state_directory / RUNS_DIRNAME / run_id / MANIFEST_FILENAME
     ).resolve()
     manifest_value = coordinator.get("manifest_path")
     if not isinstance(manifest_value, str) or not manifest_value:
@@ -203,7 +242,7 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
             f"manifest path {manifest_path} is outside the recorded run boundary "
             f"{expected_manifest}"
         )
-    manifest = _read_json(manifest_path, "run manifest")
+    manifest = _read_root_recovery_json(root, manifest_path, "run manifest")
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RecoveryError(
             f"run manifest schema_version must be {SCHEMA_VERSION}, got "
@@ -510,7 +549,7 @@ def recover_run(
         if not isinstance(coordinator, dict):
             raise RecoveryError("coordinator state changed during recovery")
         coordinator["lifecycle"] = "recovering"
-        _atomic_write_json(state_path, state)
+        _write_root_recovery_json(root, state_path, state)
 
         restore_callback = restore_mutation or _default_restore
         cleanup_callback = cleanup_owned_tree or _default_cleanup_for(record)
@@ -537,7 +576,7 @@ def recover_run(
         if retained or failures or preflight.unknown:
             coordinator["lifecycle"] = "recovering"
             coordinator["recovery_unknown"] = [*preflight.unknown, *failures]
-            _atomic_write_json(state_path, state)
+            _write_root_recovery_json(root, state_path, state)
             detail = failures[0] if failures else preflight.unknown[0]
             raise RecoveryError(
                 f"recovery retained {retained} shard(s); root state remains: {detail}"
@@ -545,15 +584,15 @@ def recover_run(
 
         # The durable run record is updated before the root gate is cleared. The
         # coordinator state remains present during every restore and cleanup call.
-        manifest = _read_json(record.manifest_path, "run manifest")
+        manifest = _read_root_recovery_json(root, record.manifest_path, "run manifest")
         manifest["lifecycle"] = "aborted"
-        _atomic_write_json(record.manifest_path, manifest)
+        _write_root_recovery_json(root, record.manifest_path, manifest)
         coordinator["lifecycle"] = "aborted"
-        _atomic_write_json(state_path, state)
+        _write_root_recovery_json(root, state_path, state)
 
         # Clear the root coordinator record last. Preserve unrelated root state.
         state.pop("coordinator_run", None)
-        _atomic_write_json(state_path, state)
+        _write_root_recovery_json(root, state_path, state)
         return f"recovered run {run_id} as aborted; removed {removed} owned shard(s)"
     finally:
         for descriptor in liveness_leases:

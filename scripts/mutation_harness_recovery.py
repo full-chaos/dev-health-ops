@@ -304,10 +304,12 @@ def _private_temporary_root(value: object, source_root: Path) -> Path:
         raise RecoveryError(
             f"temporary_root {path} is not canonical or contains a symlink"
         )
+    if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):
+        raise RecoveryError(f"temporary_root {path} overlaps source_root {source_root}")
     if (
         resolved == temporary_base
         or not resolved.is_relative_to(temporary_base)
-        or resolved in {Path("/").resolve(), source_root, source_root / STATE_DIRNAME}
+        or resolved in {Path("/").resolve(), source_root / STATE_DIRNAME}
     ):
         raise RecoveryError(
             f"temporary_root {path} is outside the private run boundary"

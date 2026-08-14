@@ -689,7 +689,7 @@ def test_zero_shard_recovery_rejects_source_as_private_root(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(RecoveryError, match="outside the private run boundary"):
+    with pytest.raises(RecoveryError, match="overlaps source_root"):
         recover_run(
             root,
             "run-3807",
@@ -698,6 +698,83 @@ def test_zero_shard_recovery_rejects_source_as_private_root(
         )
 
     assert temporary_root.exists()
+    assert shard.exists()
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_private_root_below_source(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    nested = root / "nested"
+    nested.mkdir(mode=0o700)
+    nested_shard = nested / "shard-0"
+    shard.rename(nested_shard)
+    temporary_root.rmdir()
+    sentinel = nested_shard / "sentinel.txt"
+    sentinel.write_bytes(b"do not remove")
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state["coordinator_run"]["temporary_root"] = str(nested.resolve())
+    manifest["temporary_root"] = str(nested.resolve())
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    cleanup_calls: list[Path] = []
+
+    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+        del marker, shard_index
+        cleanup_calls.append(partial)
+
+    with pytest.raises(RecoveryError, match="overlaps source_root"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=cleanup,
+        )
+
+    assert cleanup_calls == []
+    assert sentinel.read_bytes() == b"do not remove"
+    assert nested_shard.exists()
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_zero_shard_recovery_rejects_private_root_above_source(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None
+    sentinel = shard / "sentinel.txt"
+    sentinel.write_bytes(b"do not remove")
+    temporary_root.chmod(0o700)
+    tmp_path.chmod(0o700)
+    state_path = root / ".mutation-harness/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    manifest_path = Path(state["coordinator_run"]["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    state["coordinator_run"]["temporary_root"] = str(tmp_path.resolve())
+    manifest["temporary_root"] = str(tmp_path.resolve())
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    cleanup_calls: list[Path] = []
+
+    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+        del marker, shard_index
+        cleanup_calls.append(partial)
+
+    with pytest.raises(RecoveryError, match="overlaps source_root"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=cleanup,
+        )
+
+    assert cleanup_calls == []
+    assert sentinel.read_bytes() == b"do not remove"
     assert shard.exists()
 
 

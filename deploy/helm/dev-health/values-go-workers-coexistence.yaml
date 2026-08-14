@@ -2,3 +2,5 @@
 # Celery fleet. Scale only a reviewed profile after it is healthy and observed.
 goWorkers:
   enabled: true
+  pgbouncer:
+    enabled: true

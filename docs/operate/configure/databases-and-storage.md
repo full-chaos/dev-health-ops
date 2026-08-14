@@ -54,6 +54,23 @@ The Go foundation uses three distinct responsibilities:
 
 Do not give long-running workers the migration DSN. Do not reuse the migration role for domain or queue-control access.
 
+### Helm Go-worker poolers
+
+The component chart keeps this topology disabled until `goWorkers.enabled` and
+`goWorkers.pgbouncer.enabled` are both set. It renders three in-cluster
+Services: a transaction endpoint for domain state, a queue session endpoint,
+and a coordinator session endpoint. The chart creates or references one
+dedicated PgBouncer Secret, but projects only the required DSN key to each Go
+pod: all profiles receive domain and queue endpoints; only `reconciler` and
+`scheduler` receive the coordinator endpoint. The migration hook never reads
+that Secret and continues to use direct PostgreSQL.
+
+For external PostgreSQL, set `goWorkers.pgbouncer.postgres.host`, `database`,
+and role-password Secret values. With `networkPolicy.enabled`, also set a
+narrow `goWorkers.pgbouncer.postgres.networkPolicyCIDR`; the chart fails to
+render rather than silently blocking PgBouncer egress. The chart requires a
+digest-pinned PgBouncer image and adds TCP readiness probes for each endpoint.
+
 ## Runtime roles
 
 Provision distinct unprivileged login roles for:

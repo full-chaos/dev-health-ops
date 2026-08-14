@@ -107,6 +107,16 @@ def test_manifest_refuses_unignored_harness_state_and_damaged_recovery_record(
         build_source_manifest(source_repo)
 
 
+def test_manifest_refuses_selective_harness_child_ignore(source_repo: Path) -> None:
+    (source_repo / ".gitignore").write_text(
+        ".mutation-harness/execution-tree-probe\nignored-input/\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HarnessError, match="not excluded by gitignore"):
+        build_source_manifest(source_repo)
+
+
 def _sha256(data: bytes) -> str:
     import hashlib
 
@@ -383,6 +393,20 @@ def _stage_for_cleanup(source_repo: Path, temporary_root: Path) -> StagedExecuti
         plan_digest="cleanup-plan",
         workspace_inputs=(),
     )
+
+
+def test_cleanup_refuses_a_dangling_shard_state_symlink(source_repo: Path) -> None:
+    temporary_root = source_repo.parent / "dangling-state-private"
+    temporary_root.mkdir(mode=0o700)
+    staged = _stage_for_cleanup(source_repo, temporary_root)
+    state = staged.root / ".mutation-harness/state.json"
+    os.symlink("missing-state-target.json", state)
+
+    with pytest.raises(HarnessError, match="state is a symlink"):
+        cleanup_execution_tree(
+            staged, temporary_root=temporary_root, child_liveness_proven=True
+        )
+    assert staged.root.exists()
 
 
 def test_cleanup_refuses_escape_wrong_marker_live_holder_applied_and_dirty_source(

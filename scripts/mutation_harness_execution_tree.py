@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
+from urllib.parse import unquote, urlsplit
 
 from scripts.mutation_harness import HarnessError
 
@@ -452,6 +453,126 @@ def _copy_manifest_entry(
     destination.chmod(entry.mode)
 
 
+def cleanup_partial_execution_tree(
+    source_root: Path,
+    destination: Path,
+    *,
+    temporary_root: Path,
+    run_id: str,
+    shard_index: int,
+    source_manifest: SourceManifest,
+    plan_digest: str,
+    child_liveness_proven: bool,
+) -> None:
+    """Remove a staging-only worktree after proving its narrow ownership."""
+
+    source = _assert_repository_root(source_root)
+    private_root = temporary_root.resolve(strict=True)
+    if stat.S_IMODE(private_root.stat().st_mode) != 0o700:
+        raise HarnessError("partial execution-tree run root no longer has mode 0700")
+    lexical_root = destination.absolute()
+    try:
+        root_metadata = lexical_root.lstat()
+    except OSError as exc:
+        raise HarnessError(
+            f"partial execution-tree path is unreadable: {lexical_root}"
+        ) from exc
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+        raise HarnessError(
+            f"partial execution-tree path is not a real directory: {lexical_root}"
+        )
+    tree_root = lexical_root.resolve(strict=True)
+    if tree_root.parent != private_root:
+        raise HarnessError(
+            f"partial execution-tree cleanup path escapes its run root: {tree_root}"
+        )
+
+    state_directory = tree_root / ".mutation-harness"
+    try:
+        state_directory_metadata = state_directory.lstat()
+    except OSError as exc:
+        raise HarnessError(
+            f"partial execution-tree state directory is unreadable: {state_directory}"
+        ) from exc
+    if stat.S_ISLNK(state_directory_metadata.st_mode) or not stat.S_ISDIR(
+        state_directory_metadata.st_mode
+    ):
+        raise HarnessError(
+            "partial execution-tree state directory is not a real directory: "
+            f"{state_directory}"
+        )
+
+    marker = tree_root / OWNERSHIP_MARKER
+    try:
+        marker_metadata = marker.lstat()
+    except OSError as exc:
+        raise HarnessError(
+            f"partial execution-tree ownership marker is unreadable: {marker}"
+        ) from exc
+    if stat.S_ISLNK(marker_metadata.st_mode) or not stat.S_ISREG(
+        marker_metadata.st_mode
+    ):
+        raise HarnessError(
+            f"partial execution-tree ownership marker is not a regular file: {marker}"
+        )
+    expected_marker = _marker_document(
+        run_id=run_id,
+        shard_index=shard_index,
+        source_manifest_digest=source_manifest.digest,
+        plan_digest=plan_digest,
+    )
+    try:
+        observed_marker = json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HarnessError(
+            f"partial execution-tree ownership marker is unreadable: {marker}"
+        ) from exc
+    if observed_marker != expected_marker:
+        raise HarnessError(
+            f"partial execution-tree ownership marker does not match shard {shard_index}"
+        )
+    if not child_liveness_proven:
+        raise HarnessError(
+            f"partial shard {shard_index} death is not proved; retaining {tree_root}"
+        )
+
+    state_path = state_directory / "state.json"
+    try:
+        state_metadata = state_path.lstat()
+    except FileNotFoundError:
+        state_metadata = None
+    except OSError as exc:
+        raise HarnessError(f"partial shard state is unreadable: {state_path}") from exc
+    if state_metadata is not None:
+        if stat.S_ISLNK(state_metadata.st_mode) or not stat.S_ISREG(
+            state_metadata.st_mode
+        ):
+            raise HarnessError(
+                f"partial shard state is not a regular file: {state_path}"
+            )
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise HarnessError(
+                f"partial shard state is unreadable: {state_path}"
+            ) from exc
+        if not isinstance(state, dict):
+            raise HarnessError(
+                f"partial shard state is not a JSON object: {state_path}"
+            )
+        if state.get("applied") is not None:
+            raise HarnessError(
+                f"partial shard {shard_index} has an applied mutation; retaining {tree_root}"
+            )
+
+    verify_source_manifest(source, source_manifest)
+    _git(source, "worktree", "remove", "--force", str(tree_root))
+    if lexical_root.exists() or lexical_root.is_symlink():
+        raise HarnessError(
+            f"partial execution tree still exists after removal: {tree_root}"
+        )
+
+
 def stage_execution_tree(
     source_root: Path,
     destination: Path,
@@ -466,41 +587,71 @@ def stage_execution_tree(
 
     source = _assert_repository_root(source_root)
     destination = destination.absolute()
-    _assert_private_parent(destination)
+    private_root = _assert_private_parent(destination)
     verify_source_manifest(source, source_manifest)
-
-    _git(source, "worktree", "add", "--detach", str(destination), source_manifest.head)
-    destination.chmod(0o700)
-    marker = _write_marker(
-        destination,
-        run_id=run_id,
-        shard_index=shard_index,
-        source_manifest_digest=source_manifest.digest,
-        plan_digest=plan_digest,
-    )
-
-    detached_head = os.fsdecode(_git(destination, "rev-parse", "HEAD").stdout).strip()
-    symbolic = _git(destination, "symbolic-ref", "-q", "HEAD", check=False)
-    if detached_head != source_manifest.head or symbolic.returncode == 0:
-        raise HarnessError(
-            f"execution tree is not detached at validated HEAD {source_manifest.head}"
+    created_by_call = False
+    try:
+        _git(
+            source,
+            "worktree",
+            "add",
+            "--detach",
+            str(destination),
+            source_manifest.head,
         )
+        created_by_call = True
+        marker = _write_marker(
+            destination,
+            run_id=run_id,
+            shard_index=shard_index,
+            source_manifest_digest=source_manifest.digest,
+            plan_digest=plan_digest,
+        )
+        destination.chmod(0o700)
 
-    for entry in source_manifest.entries:
-        _copy_manifest_entry(source, destination, entry)
+        detached_head = os.fsdecode(
+            _git(destination, "rev-parse", "HEAD").stdout
+        ).strip()
+        symbolic = _git(destination, "symbolic-ref", "-q", "HEAD", check=False)
+        if detached_head != source_manifest.head or symbolic.returncode == 0:
+            raise HarnessError(
+                f"execution tree is not detached at validated HEAD {source_manifest.head}"
+            )
 
-    if workspace_inputs:
-        _materialize_workspace_inputs(source, destination, workspace_inputs)
-    verify_source_manifest(source, source_manifest)
-    return StagedExecutionTree(
-        root=destination,
-        ownership_marker=marker,
-        shard_index=shard_index,
-        run_id=run_id,
-        source_root=source,
-        source_manifest=source_manifest,
-        plan_digest=plan_digest,
-    )
+        for entry in source_manifest.entries:
+            _copy_manifest_entry(source, destination, entry)
+
+        if workspace_inputs:
+            _materialize_workspace_inputs(source, destination, workspace_inputs)
+        verify_source_manifest(source, source_manifest)
+        return StagedExecutionTree(
+            root=destination,
+            ownership_marker=marker,
+            shard_index=shard_index,
+            run_id=run_id,
+            source_root=source,
+            source_manifest=source_manifest,
+            plan_digest=plan_digest,
+        )
+    except BaseException as staging_error:
+        if created_by_call:
+            try:
+                cleanup_partial_execution_tree(
+                    source,
+                    destination,
+                    temporary_root=private_root,
+                    run_id=run_id,
+                    shard_index=shard_index,
+                    source_manifest=source_manifest,
+                    plan_digest=plan_digest,
+                    child_liveness_proven=True,
+                )
+            except BaseException as cleanup_error:
+                raise HarnessError(
+                    f"execution-tree staging failed and owned partial cleanup "
+                    f"refused for {destination}: {cleanup_error}"
+                ) from staging_error
+        raise
 
 
 def _materialize_workspace_inputs(
@@ -609,6 +760,34 @@ def _replace_invoking_root(path: Path, invoking: bytes, shard: bytes) -> None:
     path.write_bytes(data.replace(invoking, shard))
 
 
+def _relocate_direct_url_metadata(
+    path: Path, *, source_root: Path, shard_root: Path
+) -> None:
+    """Relocate a PEP 610 editable-install file URI under the invoking root."""
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HarnessError(f"editable direct_url.json is unreadable: {path}") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("url"), str):
+        raise HarnessError(f"editable direct_url.json has no string URL: {path}")
+    url = cast(str, document["url"])
+    parsed = urlsplit(url)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        return
+    referenced = Path(unquote(parsed.path)).resolve(strict=False)
+    invoking = source_root.resolve(strict=True)
+    try:
+        relative = referenced.relative_to(invoking)
+    except ValueError:
+        return
+    document["url"] = (shard_root.resolve(strict=True) / relative).as_uri()
+    path.write_text(
+        json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
 def relocate_python_environment(
     *, source_root: Path, shard_root: Path, environment: Path
 ) -> None:
@@ -642,6 +821,14 @@ def relocate_python_environment(
     for editable in sorted(editable_files):
         if editable.is_file() and not editable.is_symlink():
             _replace_invoking_root(editable, invoking, shard)
+
+    for direct_url in sorted(environment.rglob("direct_url.json")):
+        if direct_url.parent.name.endswith(".dist-info") and direct_url.is_file():
+            _relocate_direct_url_metadata(
+                direct_url,
+                source_root=source_root,
+                shard_root=shard_root,
+            )
 
     # Bytecode embeds source filenames and can retain the invoking environment
     # path. It is a derived cache, so remove it and let the shard interpreter

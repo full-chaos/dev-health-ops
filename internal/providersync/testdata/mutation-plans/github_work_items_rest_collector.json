@@ -143,8 +143,8 @@
     {
       "id": "R16-later-page-errors-retain-earlier-successful-pages",
       "file": "internal/providerfoundation/pagination.go",
-      "find": "\t\tif err != nil {\n\t\t\treturn result, err\n\t\t}",
-      "replace": "\t\tif err != nil {\n\t\t\treturn PageCollection{}, err\n\t\t}",
+      "find": "\t\tif err != nil {\n\t\t\treturn result, err\n\t\t}\n\t\titems, decodeErr := decodePage(response, options.DataKey)\n\t\tif decodeErr != nil {\n\t\t\treturn result, decodeErr\n\t\t}\n\t\tresult.Pages++\n\t\tif options.StopAt == nil && options.MaxItems == 0 {",
+      "replace": "\t\tif err != nil {\n\t\t\treturn PageCollection{}, err\n\t\t}\n\t\titems, decodeErr := decodePage(response, options.DataKey)\n\t\tif decodeErr != nil {\n\t\t\treturn result, decodeErr\n\t\t}\n\t\tresult.Pages++\n\t\tif options.StopAt == nil && options.MaxItems == 0 {",
       "rationale": "a later GitHub page failure must return earlier decoded pages so optional Python-compatible collectors can retain already observed rows while marking typed degradation",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubLinkPaginationReturnsSuccessfulPagesBeforeLaterFailure$", "./internal/providerfoundation/"]]
     },

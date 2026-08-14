@@ -138,6 +138,13 @@ type UnitRepository interface {
 	) error
 }
 
+// ChunkContinuationRepository is optional so legacy repository test doubles
+// and older rolling binaries remain source-compatible. Production's
+// PostgresRepository implements it for the opt-in chunk route.
+type ChunkContinuationRepository interface {
+	DeferChunkContinuation(context.Context, providersync.Claim, time.Time, time.Time) error
+}
+
 type Handler struct {
 	Repository    UnitRepository
 	Switches      providersync.CompleteRouteSwitches
@@ -404,6 +411,26 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// A prepared chunk can be continued after a bounded number of commits.
+	// Persist the claimable not-before fence before returning an attempt-neutral
+	// River snooze. Do not call ReleaseForRetry: that would turn a healthy
+	// continuation into an ordinary failure attempt and erase the checkpoint's
+	// lease-generation context.
+	if delay, continuation := providersync.ChunkContinuationDelay(err); continuation {
+		deferrer, supported := handler.Repository.(ChunkContinuationRepository)
+		if !supported {
+			return jobruntime.Retryable(err)
+		}
+		availableAt := completedAt.Add(delay)
+		if deferErr := deferrer.DeferChunkContinuation(
+			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
+		); deferErr != nil {
+			return jobruntime.Retryable(deferErr)
+		}
+		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
+		return jobruntime.RetryableAfter(err, delay)
+	}
 	// A healthy shared request bucket can be full when sibling provider units
 	// overlap. That is scheduling contention, not an execution failure. Persist
 	// the domain deferral before returning River's attempt-neutral snooze so a

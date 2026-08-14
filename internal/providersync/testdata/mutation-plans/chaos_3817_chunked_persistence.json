@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3817 resumable chunk persistence guards",
+  "$limitation": "These clause-level mutations prove the bounded splitter and attempt-neutral continuation guards. Postgres transaction and lease fences require the real storage integration suites; the local providersync proof is the deterministic seam available without mutating a live database.",
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync"
+  ],
+  "mutations": [
+    {
+      "id": "M1-source-cap-is-enforced",
+      "file": "internal/providersync/chunked_persistence.go",
+      "find": "maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)",
+      "replace": "maxRows := policy.MaxEffectRows",
+      "rationale": "A chunk must respect both the provider source-item bound and the effect-row bound. Dropping the source cap lets one source page exceed the route's bounded-memory contract when it produces fewer effect destinations.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestChunkPolicyUsesTheSmallerSourceAndEffectBound$",
+          "./internal/providersync"
+        ]
+      ]
+    },
+    {
+      "id": "M2-continuation-cap-is-attempt-neutral",
+      "file": "internal/providersync/chunked_executor.go",
+      "find": "if (committedThisAttempt >= policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) && ordinal+1 < totalChunks {",
+      "replace": "if (committedThisAttempt > policy.MaxChunksPerAttempt || time.Since(attemptStarted) >= policy.MaxWallTime) && ordinal+1 < totalChunks {",
+      "rationale": "The first bounded attempt must stop after its configured number of committed chunks and return a durable continuation. Waiting for one extra chunk violates the cap and can consume a River attempt on a large provider unit.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestChunkedExecutorResumesPreparedChunksWithoutRecollection$",
+          "./internal/providersync"
+        ]
+      ]
+    }
+  ]
+}

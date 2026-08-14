@@ -49,6 +49,36 @@ type CompleteRouteHandler interface {
 	) (CompleteRouteBatch, error)
 }
 
+// ChunkRouteEmission is one bounded normalized page. A route may emit many
+// pages during one provider-unit execution; the executor persists each page
+// before requesting the next one. CursorAfter is intentionally opaque and is
+// persisted only on the final prepared subchunk for this emission. Final is a
+// metadata-only completion emission when the provider inventory is complete.
+type ChunkRouteEmission struct {
+	Batch        CompleteRouteBatch
+	CursorBefore string
+	CursorAfter  string
+	Final        bool
+}
+
+// ChunkedCompleteRouteHandler is the opt-in streaming contract for routes
+// that have a durable chunk policy. resumeCursor is the last cursor committed
+// to the checkpoint. Implementations must not retain provider pages after the
+// callback returns and must emit a final metadata emission before returning
+// nil. The callback may return ChunkContinuationError to stop at a durable
+// attempt boundary.
+type ChunkedCompleteRouteHandler interface {
+	CollectChunks(
+		context.Context,
+		Claim,
+		providerfoundation.Credential,
+		*providerfoundation.HTTPClient,
+		time.Time,
+		string,
+		func(ChunkRouteEmission) error,
+	) error
+}
+
 // RecoveringCompleteRouteHandler lets a route rebuild an in-flight provider
 // batch from durable effect identity before ordinary source reselection. Most
 // routes only need the stable normalization instant above. Bounded routes
@@ -156,6 +186,12 @@ func (executor CompleteRouteExecutor) Execute(
 	if descriptor.PreparedManifestRecovery &&
 		(descriptor.Provider != "github" || descriptor.RouteDataset != "work-items") {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+	}
+	if descriptor.Chunked && descriptor.PreparedManifestRecovery {
+		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+	}
+	if descriptor.Chunked && descriptor.RouteEnabled {
+		return executor.executeChunked(ctx, session, descriptor)
 	}
 	preparedLedger, preparedRecovery := executor.Committer.Ledger.(PreparedEffectLedger)
 	if descriptor.RouteEnabled && descriptor.PreparedManifestRecovery && !preparedRecovery {

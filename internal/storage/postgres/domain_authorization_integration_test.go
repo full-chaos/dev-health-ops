@@ -56,6 +56,8 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.sync_dispatch_transport_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_dispatch_outbox (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id bigint PRIMARY KEY, state text)",

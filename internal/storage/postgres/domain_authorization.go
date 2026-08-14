@@ -566,8 +566,14 @@ func domainPosture() RolePosture {
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},
-			// The only domain table carrying DELETE. Prepared recovery
-			// snapshots are transient state: written once when a route's
+			// Chunked provider routes write a small tenant/generation checkpoint
+			// and immutable prepared normalized sidecars. The checkpoint advances
+			// in place; sidecars transition pending -> writing -> committed and
+			// are deleted with the owning unit on successful completion.
+			{"sync_run_unit_chunk_checkpoints", true, true, true},
+			{"sync_run_unit_effect_chunks", true, true, true},
+			// Prepared recovery snapshots are transient state: written once when
+			// a route's
 			// manifest is prepared, read back on recovery, and cleared in the
 			// same transaction that completes the unit SUCCESSFULLY. A failed
 			// or retrying unit deliberately keeps its snapshot, so "cleared on

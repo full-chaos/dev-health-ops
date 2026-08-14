@@ -183,6 +183,7 @@ class ChildRuntime:
     spec: ChildSpec
     process: subprocess.Popen[str]
     stderr_handle: IO[str]
+    lifecycle_events: dict[str, str] = field(default_factory=dict)
     finished_events: set[str] = field(default_factory=set)
 
 
@@ -253,29 +254,33 @@ def append_durable_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
         os.close(descriptor)
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+def _load_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Load every complete durable record and report malformed residue."""
+
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
-        return []
+        return [], []
     except OSError as exc:
-        raise HarnessError(f"cannot read child result stream {path}: {exc}") from exc
-    if raw and not raw.endswith(b"\n"):
-        raise HarnessError(f"child result stream {path} ends with a partial JSON line")
+        return [], [f"cannot read child result stream {path}: {exc}"]
     records: list[dict[str, Any]] = []
-    for number, line in enumerate(raw.splitlines(), 1):
+    errors: list[str] = []
+    for number, line in enumerate(raw.splitlines(keepends=True), 1):
+        if not line.endswith(b"\n"):
+            errors.append(f"child result stream {path} ends with a partial JSON line")
+            continue
         try:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise HarnessError(
+            errors.append(
                 f"child result stream {path} line {number} is not JSON: {exc}"
-            ) from exc
-        if not isinstance(item, dict):
-            raise HarnessError(
-                f"child result stream {path} line {number} is not an object"
             )
+            continue
+        if not isinstance(item, dict):
+            errors.append(f"child result stream {path} line {number} is not an object")
+            continue
         records.append(item)
-    return records
+    return records, errors
 
 
 def parse_child_result(raw: Mapping[str, Any]) -> ChildResultRecord:
@@ -635,7 +640,12 @@ class EventWriter:
             self.stream.flush()
         return payload
 
-    def ingest_child(self, shard: ShardAssignment, raw: Mapping[str, Any]) -> None:
+    def ingest_child(
+        self,
+        shard: ShardAssignment,
+        raw: Mapping[str, Any],
+        lifecycle: dict[str, str],
+    ) -> None:
         allowed = {
             "schema_version",
             "run_id",
@@ -665,6 +675,21 @@ class EventWriter:
             raise HarnessError(f"child event names unassigned mutation {mutation_id!r}")
         if raw.get("plan_ordinal") != binding[mutation_id]:
             raise HarnessError(f"child event ordinal mismatch for {mutation_id}")
+        previous = lifecycle.get(mutation_id)
+        if event == "mutation_started":
+            if previous is not None:
+                raise HarnessError(
+                    f"shard {shard.shard_index} duplicate or late "
+                    f"mutation_started event for {mutation_id}"
+                )
+            lifecycle[mutation_id] = "started"
+        elif previous != "started":
+            raise HarnessError(
+                f"shard {shard.shard_index} mutation_finished event without "
+                f"one prior mutation_started event for {mutation_id}"
+            )
+        else:
+            lifecycle[mutation_id] = "finished"
         forwarded = {
             key: value
             for key, value in raw.items()
@@ -721,6 +746,10 @@ def _record_child(lease: CoordinatorLease, spec: ChildSpec) -> None:
     lease.persist()
 
 
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
+
+
 def _validate_child_spec(
     source_root: Path,
     spec: ChildSpec,
@@ -733,8 +762,16 @@ def _validate_child_spec(
     resolved_temporary = spec.temporary_root.resolve()
     if spec.source_root.resolve() != resolved_source:
         raise HarnessError("child spec source_root does not match the coordinator root")
-    if resolved_root == resolved_source:
-        raise HarnessError("a mutation shard cannot use the invoking source worktree")
+    if _paths_overlap(resolved_source, resolved_temporary):
+        raise HarnessError(
+            f"child temporary_root {resolved_temporary} overlaps the invoking "
+            f"source root {resolved_source}"
+        )
+    if _paths_overlap(resolved_source, resolved_root):
+        raise HarnessError(
+            f"child shard root {resolved_root} overlaps the invoking source root "
+            f"{resolved_source}"
+        )
     if resolved_root in prior_roots:
         raise HarnessError(
             f"two mutation shards resolved to the same root: {resolved_root}"
@@ -809,6 +846,21 @@ def _parse_child_event_line(runtime: ChildRuntime, line: str) -> dict[str, Any]:
     return raw
 
 
+def _append_missing_lifecycle_errors(runtime: ChildRuntime, errors: list[str]) -> None:
+    for item in runtime.spec.assignment.mutations:
+        lifecycle = runtime.lifecycle_events.get(item.identifier)
+        if lifecycle is None:
+            errors.append(
+                f"shard {runtime.spec.assignment.shard_index} missing "
+                f"mutation_started event for {item.identifier}"
+            )
+        if lifecycle != "finished":
+            errors.append(
+                f"shard {runtime.spec.assignment.shard_index} missing "
+                f"mutation_finished event for {item.identifier}"
+            )
+
+
 def _tail_children(
     runtimes: Sequence[ChildRuntime], writer: EventWriter
 ) -> tuple[dict[int, int], list[str]]:
@@ -832,7 +884,9 @@ def _tail_children(
                     continue
                 try:
                     raw = _parse_child_event_line(runtime, line)
-                    writer.ingest_child(runtime.spec.assignment, raw)
+                    writer.ingest_child(
+                        runtime.spec.assignment, raw, runtime.lifecycle_events
+                    )
                     if raw.get("event") == "mutation_finished":
                         mutation_id = raw.get("mutation_id")
                         if isinstance(mutation_id, str):
@@ -845,6 +899,7 @@ def _tail_children(
     for runtime in runtimes:
         exits[runtime.spec.assignment.shard_index] = runtime.process.wait()
         runtime.stderr_handle.close()
+        _append_missing_lifecycle_errors(runtime, errors)
         writer.emit(
             "shard_finished",
             shard_index=runtime.spec.assignment.shard_index,
@@ -992,9 +1047,11 @@ def coordinator_run(
                 "complete" if exits[spec.assignment.shard_index] == 0 else "aborted"
             )
         lease.persist()
-        raw_records = [
-            record for spec in children for record in _load_jsonl(spec.result_stream)
-        ]
+        raw_records: list[dict[str, Any]] = []
+        for spec in children:
+            stream_records, stream_errors = _load_jsonl(spec.result_stream)
+            raw_records.extend(stream_records)
+            protocol_errors.extend(stream_errors)
         try:
             aggregated = aggregate_child_results(
                 raw_records,

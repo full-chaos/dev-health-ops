@@ -129,6 +129,36 @@
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_refuses"]
       ]
+    },
+    {
+      "id": "C13-complete-lifecycle-events-required",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        _append_missing_lifecycle_errors(runtime, errors)",
+      "replace": "        if False: _append_missing_lifecycle_errors(runtime, errors)",
+      "rationale": "A durable result without exactly one mutation_started and mutation_finished pair is not a complete measurement and cannot yield an accepted aggregate.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "complete_results_without_mutation_lifecycle"]
+      ]
+    },
+    {
+      "id": "C14-partial-result-stream-still-reports",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        if not line.endswith(b\"\\n\"):\n            errors.append(f\"child result stream {path} ends with a partial JSON line\")\n            continue",
+      "replace": "        if not line.endswith(b\"\\n\"):\n            raise HarnessError(f\"child result stream {path} ends with a partial JSON line\")",
+      "rationale": "A malformed result tail is aggregate evidence, not permission to abort before the coordinator writes a non-authoritative report containing every earlier durable result.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "partial_child_result_stream"]
+      ]
+    },
+    {
+      "id": "C15-source-and-temporary-roots-disjoint",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    if _paths_overlap(resolved_source, resolved_temporary):",
+      "replace": "    if False and _paths_overlap(resolved_source, resolved_temporary):",
+      "rationale": "The private temporary root must be disjoint from the invoking source root in both ancestry directions, so no shard can stage or mutate under the source tree.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "child_paths_must_not_overlap"]
+      ]
     }
   ]
 }

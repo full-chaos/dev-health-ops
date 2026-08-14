@@ -143,6 +143,12 @@ func (repository *PostgresRepository) Complete(
 	); err != nil {
 		return ErrInvalidConfiguration
 	}
+	// The chunk tables are additive during rolling migration. Older test and
+	// deployment fixtures may terminalize a legacy unit before 0102 is
+	// installed, so probe the catalog before issuing the cleanup statement.
+	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
+		return err
+	}
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
 			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
@@ -278,6 +284,31 @@ func (repository *PostgresRepository) DeferForBudgetContention(
 	command, err := repository.Pool.Exec(
 		ctx, deferForBudgetContentionSQL,
 		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// DeferChunkContinuation keeps a prepared chunk unit claimable for the same
+// River job without consuming either River's attempt or the authoritative
+// sync-unit attempt. The durable checkpoint remains fenced by the generation;
+// the next claim resumes from its next ordinal.
+func (repository *PostgresRepository) DeferChunkContinuation(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > 15*time.Minute {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
+		now.UTC(), availableAt.UTC(),
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -611,6 +642,30 @@ SET status = 'dispatching',
     updated_at = $3
 FROM contention
 WHERE unit.id = contention.id
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const deferForChunkContinuationSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_unit_chunk_continuation',
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_unit_chunk_continuation',
+        'not_before', to_jsonb($4::timestamptz)
+      )
+    ),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_unit_chunk_continuation',
+    updated_at = $3
+WHERE unit.id = $1::uuid
   AND unit.status = 'running'
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL

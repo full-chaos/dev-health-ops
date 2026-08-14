@@ -138,8 +138,14 @@ type CompleteRouteDescriptor struct {
 	// before the first sink effect. It is currently reserved for GitHub's
 	// mutable, multi-source work-items composition and does not imply routing.
 	PreparedManifestRecovery bool
-	RouteReady               bool
-	RouteEnabled             bool
+	// Chunked opts a route into the additive durable checkpoint/sidecar path.
+	// It is independent from PreparedManifestRecovery: the former persists a
+	// sequence of bounded normalized chunks, while the latter persists one
+	// complete mutable-provider manifest.
+	Chunked      bool
+	ChunkPolicy  ChunkPolicy
+	RouteReady   bool
+	RouteEnabled bool
 }
 
 // ShadowDescriptor is a fixture/parity-only projection of the canonical
@@ -521,6 +527,14 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubTests ||
 			(switches.LocalAllRoutes && switches.GithubCICD)
+	}
+	// TestOps is the first opt-in chunked route family. The policy is fixed in
+	// code so all workers and recovery attempts agree on the same bounds; every
+	// other route retains the legacy one-batch persistence contract.
+	if (provider == "github" || provider == "gitlab") &&
+		(dataset == "cicd" || dataset == "tests") {
+		descriptor.Chunked = true
+		descriptor.ChunkPolicy = DefaultChunkPolicy()
 	}
 	return descriptor, true
 }

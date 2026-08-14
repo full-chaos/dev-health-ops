@@ -895,6 +895,8 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		// silently receives no grant and readiness reports the opaque
 		// "PostgreSQL readiness check failed".
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",

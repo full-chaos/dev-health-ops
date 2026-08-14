@@ -556,6 +556,29 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			CONSTRAINT uq_sync_run_units_org_id_id_effect_snapshots
 				UNIQUE (org_id, id)
 		)`,
+		`CREATE TABLE public.sync_run_unit_chunk_checkpoints (
+			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL, schema_version text NOT NULL DEFAULT 'v1', generation text NOT NULL,
+			provider text NOT NULL, dataset_key text NOT NULL, route_version text NOT NULL,
+			normalized_at timestamptz NOT NULL, next_cursor text NOT NULL DEFAULT '',
+			inventory_complete boolean NOT NULL DEFAULT false, next_ordinal integer NOT NULL DEFAULT 0,
+			prepared_chunks integer NOT NULL DEFAULT 0, total_chunks integer NOT NULL DEFAULT 0,
+			final_ordinal integer NOT NULL DEFAULT -1, aggregate_result jsonb,
+			aggregate_digest text, owner text NOT NULL, lease_expires_at timestamptz NOT NULL,
+			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			PRIMARY KEY (org_id, sync_run_unit_id, generation),
+			FOREIGN KEY (org_id, sync_run_unit_id) REFERENCES public.sync_run_units(org_id, id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE public.sync_run_unit_effect_chunks (
+			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL, schema_version text NOT NULL DEFAULT 'v1', generation text NOT NULL,
+			route_version text NOT NULL, ordinal integer NOT NULL, total_chunks integer NOT NULL DEFAULT 0,
+			cursor_before text NOT NULL DEFAULT '', cursor_after text NOT NULL DEFAULT '',
+			inventory_complete boolean NOT NULL DEFAULT false, payload jsonb NOT NULL, ledger jsonb NOT NULL,
+			payload_bytes integer NOT NULL, manifest_digest text NOT NULL,
+			status text NOT NULL DEFAULT 'pending', created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			PRIMARY KEY (org_id, sync_run_unit_id, generation, ordinal),
+			FOREIGN KEY (org_id, sync_run_unit_id, generation)
+				REFERENCES public.sync_run_unit_chunk_checkpoints(org_id, sync_run_unit_id, generation) ON DELETE CASCADE
+		)`,
 		// Must stay equivalent to the 0092+0093 snapshot schema. This fixture
 		// previously dropped all three CHECK constraints and widened
 		// content_digest to text, so every integration test here ran against a

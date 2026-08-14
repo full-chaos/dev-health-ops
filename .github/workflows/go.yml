@@ -317,7 +317,8 @@ jobs:
           jq -e '
             .status == "complete_with_architecture_blocker"
             and .nested_n_minus_1.status == "pass"
-            and (.profiles | length) == 2
+            and [.profiles[].mode] == ["direct", "poll-only", "session"]
+            and (.gate_truth_table | keys) == ["direct", "poll_only", "session"]
           ' "${RUNNER_TEMP}/river-compatibility.json" >/dev/null
 
       - name: Upload sanitized compatibility evidence

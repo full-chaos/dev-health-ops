@@ -37,7 +37,8 @@ jq -e '
   and .status == "complete_with_architecture_blocker"
   and .architecture_blocker == "poll_only_running_cancel_not_propagated"
   and (.profiles | type) == "array"
-  and (.profiles | length) == 2
+  and [.profiles[].mode] == ["direct", "poll-only", "session"]
+  and (.gate_truth_table | keys) == ["direct", "poll_only", "session"]
   and .nested_n_minus_1.status == "pass"
   and (.nested_n_minus_1.phases | length) == 2
   and .versions.go == "go1.25.9"
@@ -51,6 +52,10 @@ jq -e '
   and .versions.riverqueue_python == "0.7.0"
   and .versions.sqlalchemy == "2.0.49"
   and .versions.asyncpg == "0.31.0"
+  and (.gate_truth_table.direct | all(. == true))
+  and (.gate_truth_table.session | all(. == true))
+  and .gate_truth_table.poll_only.cross_client_running_cancel == false
+  and .gate_truth_table.poll_only.same_client_running_cancel == false
   and all(.profiles[]; .python_transactions.scheduled_commit.job_contract.state == "scheduled")
   and .nested_n_minus_1.phases[1].current_insert.outcome == "inserted"
   and .nested_n_minus_1.phases[1].n_minus_one_consume.outcome == "completed"

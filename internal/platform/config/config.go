@@ -47,9 +47,9 @@ const (
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
-// Phase 0 proved direct PostgreSQL. Session mode remains unavailable until it
-// passes the same compatibility matrix, and transaction mode cannot propagate
-// cancellation to a running River worker.
+// Direct PostgreSQL and PgBouncer session pooling preserve River's required
+// session semantics. Transaction pooling cannot propagate cancellation to a
+// running River worker.
 type QueueControlMode string
 
 const (
@@ -88,6 +88,7 @@ type Config struct {
 	PagerDutyOAuthSecret   secrets.Value
 
 	QueueDatabaseMode              QueueControlMode
+	CoordinatorDatabaseMode        QueueControlMode
 	RiverDatabaseSchema            string
 	DomainDatabaseRole             string
 	QueueDatabaseRole              string
@@ -562,6 +563,10 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.CoordinatorDatabaseMode, err = coordinatorDatabaseModeEnv(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg.PagerDutyWebhookTransport = strings.ToLower(strings.TrimSpace(envOrDefault(
 		lookup, "PAGERDUTY_WEBHOOK_TRANSPORT", PagerDutyTransportCelery,
 	)))
@@ -777,6 +782,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
 		slog.String("queue_database_mode", string(c.QueueDatabaseMode)),
+		slog.String("coordinator_database_mode", string(c.CoordinatorDatabaseMode)),
 		slog.String("river_database_schema", c.RiverDatabaseSchema),
 		slog.String("river_domain_database_role", c.DomainDatabaseRole),
 		slog.String("river_queue_database_role", c.QueueDatabaseRole),
@@ -877,12 +883,20 @@ func validateIdentifier(key, value string) error {
 }
 
 func queueControlModeEnv(lookup secrets.LookupEnv) (QueueControlMode, error) {
-	mode := QueueControlMode(strings.ToLower(envOrDefault(lookup, "WORKER_DATABASE_MODE", string(QueueControlDirect))))
+	return databaseModeEnv(lookup, "WORKER_DATABASE_MODE", QueueControlDirect)
+}
+
+func coordinatorDatabaseModeEnv(lookup secrets.LookupEnv) (QueueControlMode, error) {
+	return databaseModeEnv(lookup, "COORDINATOR_DATABASE_MODE", QueueControlDirect)
+}
+
+func databaseModeEnv(lookup secrets.LookupEnv, key string, fallback QueueControlMode) (QueueControlMode, error) {
+	mode := QueueControlMode(strings.ToLower(envOrDefault(lookup, key, string(fallback))))
 	switch mode {
 	case QueueControlDirect, QueueControlSession, QueueControlTransaction:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("WORKER_DATABASE_MODE must be direct, session, or transaction")
+		return "", fmt.Errorf("%s must be direct, session, or transaction", key)
 	}
 }
 

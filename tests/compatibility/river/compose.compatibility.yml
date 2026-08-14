@@ -51,3 +51,34 @@ services:
       retries: 3
     ports:
       - "127.0.0.1::6432"
+
+  pgbouncer-session:
+    image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMIN_USERS: river_compat
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: postgres
+      DB_NAME: river_compat
+      DB_PASSWORD: river_compat
+      DB_PORT: 5432
+      DB_USER: river_compat
+      DEFAULT_POOL_SIZE: 5
+      LISTEN_PORT: 6433
+      MAX_CLIENT_CONN: 50
+      POOL_MODE: session
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6433
+          -U $$DB_USER -d $$DB_NAME
+      interval: 30s
+      start_interval: 1s
+      start_period: 30s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "127.0.0.1::6433"

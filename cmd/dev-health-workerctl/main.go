@@ -52,6 +52,7 @@ type operatorRuntime struct {
 	lockTx                pgx.Tx
 	streamDeploymentState string
 	streams               []streamProfileStatus
+	queueControlMode      platformconfig.QueueControlMode
 }
 
 type streamProfileStatus struct {
@@ -126,12 +127,13 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if !ok {
 		return nil, writeError(stderr, "authentication_failed")
 	}
-	mode := platformconfig.QueueControlDirect
-	if raw, configured := lookup("WORKER_DATABASE_MODE"); configured && raw != "" {
-		mode = platformconfig.QueueControlMode(strings.ToLower(raw))
-	}
-	if mode != platformconfig.QueueControlDirect {
+	mode := databaseMode(lookup, "WORKER_DATABASE_MODE")
+	if !sessionSafeMode(mode) {
 		return nil, writeError(stderr, "queue_control_mode_unsupported")
+	}
+	coordinatorMode := databaseMode(lookup, "COORDINATOR_DATABASE_MODE")
+	if !sessionSafeMode(coordinatorMode) {
+		return nil, writeError(stderr, "coordinator_database_mode_unsupported")
 	}
 	domainRole := resolveName("RIVER_DOMAIN_DATABASE_ROLE", defaultDomainRole, lookup)
 	queueRole := resolveName("RIVER_QUEUE_DATABASE_ROLE", defaultQueueRole, lookup)
@@ -150,6 +152,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		domainURI.Reveal(), queueURI.Reveal(), domainRole, queueRole,
 	).WithCoordinator()
 	runtimeConfig.QueueControlMode = mode
+	runtimeConfig.CoordinatorMode = coordinatorMode
 	runtimeConfig.RiverSchema = schema
 	runtimeConfig.DomainTransactionPooler = domainTransactionPooler
 	runtimeConfig.DomainMaxConns = 2
@@ -293,8 +296,19 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	lockHeld = false
 	return &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
-		streamDeploymentState: manifest.DeploymentState, streams: streams,
+		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
 	}, 0
+}
+
+func databaseMode(lookup platformsecrets.LookupEnv, key string) platformconfig.QueueControlMode {
+	if raw, configured := lookup(key); configured && raw != "" {
+		return platformconfig.QueueControlMode(strings.ToLower(raw))
+	}
+	return platformconfig.QueueControlDirect
+}
+
+func sessionSafeMode(mode platformconfig.QueueControlMode) bool {
+	return mode == platformconfig.QueueControlDirect || mode == platformconfig.QueueControlSession
 }
 
 // newJobRouteController composes the only currently approved forward cutover:
@@ -353,7 +367,7 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 			return writeServiceError(stderr, err)
 		}
 		return writeResult(stdout, stderr, map[string]any{
-			"queue_control_mode":   "direct",
+			"queue_control_mode":   runtime.queueControlMode,
 			"river_schema_version": riverstore.PinnedSchemaVersion,
 			"status":               "ready",
 		})

@@ -10,12 +10,11 @@ import (
 )
 
 var (
-	ErrDomainDatabaseRequired        = errors.New("domain PostgreSQL configuration is required")
-	ErrQueueControlRequired          = errors.New("WORKER_DATABASE_URI is required for queue control")
-	ErrQueueControlTransactionMode   = errors.New("transaction-mode PgBouncer cannot be used for River queue control")
-	ErrQueueControlSessionUnverified = errors.New("session-mode queue control is unavailable until its compatibility matrix passes")
-	ErrRuntimeRolesNotSeparated      = errors.New("queue-control, coordinator, and domain PostgreSQL roles must be distinct")
-	ErrRuntimeRoleConfiguration      = errors.New("runtime PostgreSQL role configuration is invalid")
+	ErrDomainDatabaseRequired      = errors.New("domain PostgreSQL configuration is required")
+	ErrQueueControlRequired        = errors.New("WORKER_DATABASE_URI is required for queue control")
+	ErrQueueControlTransactionMode = errors.New("transaction-mode PgBouncer cannot be used for River queue control")
+	ErrRuntimeRolesNotSeparated    = errors.New("queue-control, coordinator, and domain PostgreSQL roles must be distinct")
+	ErrRuntimeRoleConfiguration    = errors.New("runtime PostgreSQL role configuration is invalid")
 	// ErrCoordinatorDatabaseRequired is deliberately its own sentinel rather
 	// than a reuse of ErrDomainDatabaseRequired: a coordinator binary that
 	// silently fell back to the domain pool would re-introduce CHAOS-3113
@@ -28,17 +27,18 @@ var (
 
 // RuntimeConfig describes the PostgreSQL trust boundaries used by River
 // processes. Domain traffic may traverse transaction-mode PgBouncer. Queue
-// control must use the bounded direct endpoint proved by the compatibility
-// matrix; session mode remains fail-closed until equivalent evidence exists.
+// control must use either a bounded direct PostgreSQL endpoint or a bounded
+// PgBouncer session endpoint. Transaction mode cannot preserve River's session
+// semantics and always fails closed.
 //
 // The coordinator boundary is the third role of the CHAOS-3033 Option B split
 // and is OPT-IN per binary via RequireCoordinator: binaries that do only domain
 // work (dev-health-worker, dev-health-stream-runner) must not be forced to
 // carry a coordinator DSN, while binaries that do coordinator work must fail
 // closed without one rather than fall back to the domain pool. Like queue
-// control — and unlike domain traffic — the coordinator connection is modeled
-// as a DIRECT, server-counted connection, never PgBouncer-pooled; see
-// deploymentcontract.BudgetSummary.DirectCoordinatorConnections.
+// control — and unlike domain traffic — the coordinator connection must retain
+// session semantics. It can use a bounded direct endpoint or the dedicated
+// PgBouncer session endpoint; see deploymentcontract.BudgetSummary.
 type RuntimeConfig struct {
 	DomainURI               string
 	QueueControlURI         string
@@ -48,6 +48,7 @@ type RuntimeConfig struct {
 	CoordinatorRole         string
 	RiverSchema             string
 	QueueControlMode        config.QueueControlMode
+	CoordinatorMode         config.QueueControlMode
 	DomainTransactionPooler bool
 	DomainMaxConns          int32
 	QueueMaxConns           int32
@@ -67,6 +68,7 @@ func DefaultRuntimeConfig(domainURI, queueControlURI, domainRole, queueRole stri
 		QueueRole:        queueRole,
 		RiverSchema:      "river",
 		QueueControlMode: config.QueueControlDirect,
+		CoordinatorMode:  config.QueueControlDirect,
 		DomainMaxConns:   4,
 		QueueMaxConns:    2,
 	}
@@ -82,6 +84,7 @@ func RuntimeConfigFromPlatform(configValue config.Config) RuntimeConfig {
 		CoordinatorRole:         configValue.CoordinatorDatabaseRole,
 		RiverSchema:             configValue.RiverDatabaseSchema,
 		QueueControlMode:        configValue.QueueDatabaseMode,
+		CoordinatorMode:         configValue.CoordinatorDatabaseMode,
 		DomainTransactionPooler: configValue.DomainTransactionPooler,
 		DomainMaxConns:          configValue.DomainDatabaseMaxConns,
 		QueueMaxConns:           configValue.QueueDatabaseMaxConns,
@@ -127,11 +130,9 @@ func (c RuntimeConfig) Validate() error {
 		}
 	}
 	switch c.QueueControlMode {
-	case config.QueueControlDirect:
+	case config.QueueControlDirect, config.QueueControlSession:
 	case config.QueueControlTransaction:
 		return ErrQueueControlTransactionMode
-	case config.QueueControlSession:
-		return ErrQueueControlSessionUnverified
 	default:
 		return ErrInvalidConfig
 	}
@@ -144,6 +145,15 @@ func (c RuntimeConfig) Validate() error {
 	// ceiling, not the PgBouncer-pooled domain ceiling of 16.
 	if c.RequireCoordinator && (c.CoordinatorMaxConns < 1 || c.CoordinatorMaxConns > 4) {
 		return ErrInvalidConfig
+	}
+	if c.RequireCoordinator {
+		switch c.CoordinatorMode {
+		case config.QueueControlDirect, config.QueueControlSession:
+		case config.QueueControlTransaction:
+			return ErrCoordinatorTransactionMode
+		default:
+			return ErrInvalidConfig
+		}
 	}
 	domainConfig, err := parseConfig(c.DomainURI)
 	if err != nil {
@@ -197,6 +207,7 @@ func (c RuntimeConfig) SafeAttributes() map[string]any {
 		"queue_database_role":           c.QueueRole,
 		"river_database_schema":         c.RiverSchema,
 		"queue_control_mode":            c.QueueControlMode,
+		"coordinator_mode":              c.CoordinatorMode,
 		"domain_transaction_pooler":     c.DomainTransactionPooler,
 		"domain_max_connections":        c.DomainMaxConns,
 		"queue_control_max_connections": c.QueueMaxConns,

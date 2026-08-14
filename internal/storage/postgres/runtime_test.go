@@ -9,7 +9,7 @@ import (
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
-func TestRuntimeConfigRequiresDirectSeparatedPools(t *testing.T) {
+func TestRuntimeConfigRequiresSeparatedSessionSafePools(t *testing.T) {
 	t.Parallel()
 
 	valid := DefaultRuntimeConfig(
@@ -30,7 +30,7 @@ func TestRuntimeConfigRequiresDirectSeparatedPools(t *testing.T) {
 		{name: "domain missing", mutate: func(c *RuntimeConfig) { c.DomainURI = "" }, want: ErrDomainDatabaseRequired},
 		{name: "queue missing", mutate: func(c *RuntimeConfig) { c.QueueControlURI = "" }, want: ErrQueueControlRequired},
 		{name: "transaction queue", mutate: func(c *RuntimeConfig) { c.QueueControlMode = platformconfig.QueueControlTransaction }, want: ErrQueueControlTransactionMode},
-		{name: "unverified session queue", mutate: func(c *RuntimeConfig) { c.QueueControlMode = platformconfig.QueueControlSession }, want: ErrQueueControlSessionUnverified},
+		{name: "session queue", mutate: func(c *RuntimeConfig) { c.QueueControlMode = platformconfig.QueueControlSession }, want: nil},
 		{name: "shared configured role", mutate: func(c *RuntimeConfig) { c.QueueRole = "domain_role" }, want: ErrRuntimeRolesNotSeparated},
 		{name: "domain DSN role mismatch", mutate: func(c *RuntimeConfig) { c.DomainRole = "other_role" }, want: ErrRuntimeRoleConfiguration},
 		{name: "queue DSN role mismatch", mutate: func(c *RuntimeConfig) { c.QueueControlURI = "postgres://other_role:other@postgres.internal/app" }, want: ErrRuntimeRoleConfiguration},
@@ -170,6 +170,16 @@ func TestRuntimeConfigValidatesTheCoordinatorBoundaryWhenRequired(t *testing.T) 
 			name:   "coordinator DSN unparseable",
 			mutate: func(c *RuntimeConfig) { c.CoordinatorURI = "postgres://coordinator_role:x@:notaport/app" },
 			want:   ErrInvalidConfig,
+		},
+		{
+			name:   "coordinator uses session endpoint",
+			mutate: func(c *RuntimeConfig) { c.CoordinatorMode = platformconfig.QueueControlSession },
+			want:   nil,
+		},
+		{
+			name:   "coordinator transaction mode",
+			mutate: func(c *RuntimeConfig) { c.CoordinatorMode = platformconfig.QueueControlTransaction },
+			want:   ErrCoordinatorTransactionMode,
 		},
 		{
 			// The coordinator holds SHARE ROW EXCLUSIVE table locks and FOR

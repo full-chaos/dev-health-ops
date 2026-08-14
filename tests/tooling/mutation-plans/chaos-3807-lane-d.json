@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, and clear-state-last behavior. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, and independent root and descendant authority-directory symlink refusals. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -112,6 +112,19 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_recovery_refuses_symlinked_root_state_directory"
+      ]]
+    },
+    {
+      "id": "D9-descendant-authority-directory-symlink",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if stat.S_ISLNK(info.st_mode):\n        raise RecoveryError(f\"{label} {path} is a symlink; refusing recovery\")\n    if not stat.S_ISDIR(info.st_mode):",
+      "replace": "if stat.S_ISLNK(info.st_mode):\n        return\n    if not stat.S_ISDIR(info.st_mode):",
+      "rationale": "recovery must lstat and reject symlinks in descendant authority directories before following them outside the root state tree",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_recovery_refuses_symlinked_runs_authority_directory"
       ]]
     }
   ]

@@ -71,6 +71,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/contractcheck/app/deploy/go-workers \
       /runtime/migrate/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
+    cp /out/dev-health-workerctl /runtime/worker/usr/local/bin/dev-health-workerctl; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/scheduler/app/deploy/go-workers/profiles.json; \

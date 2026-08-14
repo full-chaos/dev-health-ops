@@ -299,6 +299,16 @@ def test_go_worker_image_packages_work_item_semantic_config() -> None:
         assert staged in dockerfile
 
 
+def test_go_worker_image_packages_lifecycle_route_operator() -> None:
+    """The worker image must contain Compose's inherited stop-hook executable."""
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp /out/dev-health-workerctl "
+        "/runtime/worker/usr/local/bin/dev-health-workerctl;"
+    ) in dockerfile
+
+
 def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() -> None:
     """CHAOS-3052: every supported deploy surface renders an inert, hardened
     topology. It must never change the default Celery/Beat/Valkey deployment

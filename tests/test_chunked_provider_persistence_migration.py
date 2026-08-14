@@ -40,6 +40,9 @@ def test_0102_creates_fenced_checkpoint_and_chunk_sidecars() -> None:
                 "schema_version",
                 "generation",
                 "next_cursor",
+                # The only truthful record count at finalization: the route's
+                # completion metadata rides on a final chunk carrying no rows.
+                "committed_rows",
             } <= {
                 column["name"]
                 for column in inspector.get_columns("sync_run_unit_chunk_checkpoints")

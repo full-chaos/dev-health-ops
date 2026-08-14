@@ -86,6 +86,32 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			}
 			return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
 		}
+		// A committed final sidecar means the inventory scan already finished
+		// on an earlier attempt and only MarkInventoryComplete is outstanding.
+		// Finalize from durable state instead of calling the provider: the
+		// route's terminal cursor would otherwise re-enter pagination and
+		// refetch the whole final phase (CHAOS-3820).
+		if checkpoint.PreparedChunks > 0 && checkpoint.NextOrdinal == checkpoint.PreparedChunks {
+			final, finalErr := store.LoadPreparedChunk(
+				workContext, session.Claim, checkpoint.PreparedChunks-1, executor.now())
+			if finalErr != nil && !errors.Is(finalErr, ErrPreparedChunkNotFound) {
+				return finalErr
+			}
+			if finalErr == nil && final.InventoryComplete {
+				if err := store.MarkInventoryComplete(workContext, session.Claim, executor.now()); err != nil {
+					return err
+				}
+				checkpoint, checkpointErr = store.LoadChunkCheckpoint(workContext, session.Claim, executor.now())
+				if checkpointErr != nil || !checkpoint.InventoryComplete || checkpoint.TotalChunks < 1 {
+					if checkpointErr != nil {
+						return checkpointErr
+					}
+					return ErrChunkCheckpointConflict
+				}
+				return loadChunkedFinalResult(
+					workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+			}
+		}
 
 		credential, resolveErr := executor.Credentials.Resolve(
 			workContext, guard, session.Claim.TenantScope(),
@@ -186,13 +212,23 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					}
 					chunks[index].PayloadBytes = len(encoded)
 				}
+				// The whole emission is made durable BEFORE any of it reaches
+				// the sink. Preparing and committing one sub-chunk at a time
+				// left a window where committed rows existed for an emission
+				// the cursor had not advanced past, so recovery refetched the
+				// item and wrote those rows again (CHAOS-3821).
+				group := make([]PreparedProviderChunk, 0, len(chunks))
 				for _, candidate := range chunks {
-					candidate.Ordinal = nextOrdinal
+					candidate.Ordinal = nextOrdinal + len(group)
 					candidate.ManifestDigest = preparedChunkDigest(candidate)
-					prepared, prepareErr := store.PrepareChunk(workContext, session.Claim, candidate, executor.now())
-					if prepareErr != nil {
-						return prepareErr
-					}
+					group = append(group, candidate)
+				}
+				preparedGroup, prepareErr := store.PrepareChunkGroup(
+					workContext, session.Claim, group, executor.now())
+				if prepareErr != nil {
+					return prepareErr
+				}
+				for _, prepared := range preparedGroup {
 					commitResult, commitErr := commitPreparedChunk(
 						workContext, session.Claim, prepared, executor.Committer.Sink,
 						executor.Committer.Readback, executor.Committer.Now, store,
@@ -246,6 +282,11 @@ func checkpointTime(checkpoint ChunkCheckpoint, fallback time.Time) time.Time {
 	return fallback
 }
 
+// loadChunkedFinalResult publishes completion state from durable chunks. The
+// comparison's record counts come from the checkpoint's cumulative committed
+// row count, NOT from the final chunk: that chunk carries only metadata and no
+// rows, so comparing against it reported zero records for a sync of any size
+// and could not detect an omitted or duplicated chunk (CHAOS-3823).
 func loadChunkedFinalResult(
 	ctx context.Context,
 	claim Claim,
@@ -257,6 +298,10 @@ func loadChunkedFinalResult(
 	if total < 1 || result == nil {
 		return ErrChunkCheckpointConflict
 	}
+	checkpoint, checkpointErr := store.LoadChunkCheckpoint(ctx, claim, now)
+	if checkpointErr != nil {
+		return checkpointErr
+	}
 	final, err := store.LoadPreparedChunk(ctx, claim, total-1, now)
 	if err != nil || final.Ordinal != total-1 || final.TotalChunks != total || !final.InventoryComplete {
 		if err != nil {
@@ -266,6 +311,8 @@ func loadChunkedFinalResult(
 	}
 	result.Fetch, result.Result, result.Watermark = final.Evidence, final.Result, final.Watermark
 	result.Comparison = final.Comparison
+	result.Comparison.NativeRecords = int(checkpoint.CommittedRows)
+	result.Comparison.PythonRecords = int(checkpoint.CommittedRows)
 	result.WorklogObservations = final.WorklogObservations
 	return nil
 }

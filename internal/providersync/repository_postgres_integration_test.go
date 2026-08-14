@@ -563,8 +563,18 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			inventory_complete boolean NOT NULL DEFAULT false, next_ordinal integer NOT NULL DEFAULT 0,
 			prepared_chunks integer NOT NULL DEFAULT 0, total_chunks integer NOT NULL DEFAULT 0,
 			final_ordinal integer NOT NULL DEFAULT -1, aggregate_result jsonb,
-			aggregate_digest text, owner text NOT NULL, lease_expires_at timestamptz NOT NULL,
+			aggregate_digest text, committed_rows bigint NOT NULL DEFAULT 0,
+			owner text NOT NULL, lease_expires_at timestamptz NOT NULL,
 			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_sync_chunk_checkpoint_next_ordinal CHECK (next_ordinal >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_prepared_chunks CHECK (prepared_chunks >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_total_chunks CHECK (total_chunks >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_final_ordinal CHECK (final_ordinal >= -1),
+			CONSTRAINT ck_sync_chunk_checkpoint_cursor CHECK (length(next_cursor) <= 4096),
+			CONSTRAINT ck_sync_chunk_checkpoint_committed_rows CHECK (committed_rows >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_complete_fence CHECK (
+				inventory_complete = false OR
+				(total_chunks > 0 AND next_ordinal = total_chunks AND prepared_chunks = total_chunks)),
 			PRIMARY KEY (org_id, sync_run_unit_id, generation),
 			FOREIGN KEY (org_id, sync_run_unit_id) REFERENCES public.sync_run_units(org_id, id) ON DELETE CASCADE
 		)`,
@@ -575,6 +585,15 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			inventory_complete boolean NOT NULL DEFAULT false, payload jsonb NOT NULL, ledger jsonb NOT NULL,
 			payload_bytes integer NOT NULL, manifest_digest text NOT NULL,
 			status text NOT NULL DEFAULT 'pending', created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_sync_chunk_ordinal CHECK (ordinal >= 0),
+			CONSTRAINT ck_sync_chunk_total CHECK (total_chunks = 0 OR ordinal < total_chunks),
+			CONSTRAINT ck_sync_chunk_cursors CHECK (
+				length(cursor_before) <= 4096 AND length(cursor_after) <= 4096),
+			CONSTRAINT ck_sync_chunk_payload_bytes CHECK (
+				payload_bytes >= 1 AND payload_bytes <= 2097152),
+			CONSTRAINT ck_sync_chunk_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+			CONSTRAINT ck_sync_chunk_ledger_object CHECK (jsonb_typeof(ledger) = 'object'),
+			CONSTRAINT ck_sync_chunk_status CHECK (status IN ('pending', 'writing', 'committed')),
 			PRIMARY KEY (org_id, sync_run_unit_id, generation, ordinal),
 			FOREIGN KEY (org_id, sync_run_unit_id, generation)
 				REFERENCES public.sync_run_unit_chunk_checkpoints(org_id, sync_run_unit_id, generation) ON DELETE CASCADE

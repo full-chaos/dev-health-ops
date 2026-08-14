@@ -350,6 +350,7 @@ func mustTestEffectBatch(t *testing.T, destination string) EffectBatch {
 }
 
 type chunkMemoryStore struct {
+	committed  map[int]bool
 	mu         sync.Mutex
 	checkpoint ChunkCheckpoint
 	chunks     map[int]PreparedProviderChunk
@@ -432,6 +433,37 @@ func (store *chunkMemoryStore) PrepareChunk(
 	}
 	store.checkpoint.UpdatedAt = now
 	return input, nil
+}
+
+// PrepareChunkGroup mirrors the Postgres contract: all-or-nothing. The double
+// snapshots and restores its own state so a mid-group failure cannot leave a
+// partially prepared emission, exactly as the single transaction cannot.
+func (store *chunkMemoryStore) PrepareChunkGroup(
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+) ([]PreparedProviderChunk, error) {
+	if len(chunks) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	store.mu.Lock()
+	snapshotCheckpoint := store.checkpoint
+	snapshotChunks := make(map[int]PreparedProviderChunk, len(store.chunks))
+	for ordinal, chunk := range store.chunks {
+		snapshotChunks[ordinal] = chunk
+	}
+	store.mu.Unlock()
+
+	prepared := make([]PreparedProviderChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		out, err := store.PrepareChunk(ctx, claim, chunk, now)
+		if err != nil {
+			store.mu.Lock()
+			store.checkpoint, store.chunks = snapshotCheckpoint, snapshotChunks
+			store.mu.Unlock()
+			return nil, err
+		}
+		prepared = append(prepared, out)
+	}
+	return prepared, nil
 }
 
 func clonePreparedChunkForStore(input PreparedProviderChunk) PreparedProviderChunk {
@@ -538,6 +570,15 @@ func (store *chunkMemoryStore) MarkChunkCommitted(
 	for _, effect := range chunk.Ledger.Effects {
 		if effect.Status != GenerationBlockCommitted {
 			return ErrChunkCheckpointConflict
+		}
+	}
+	if store.committed == nil {
+		store.committed = map[int]bool{}
+	}
+	if !store.committed[ordinal] {
+		store.committed[ordinal] = true
+		for _, effect := range chunk.Effects {
+			store.checkpoint.CommittedRows += int64(len(effect.Rows))
 		}
 	}
 	store.checkpoint.NextOrdinal = ordinal + 1

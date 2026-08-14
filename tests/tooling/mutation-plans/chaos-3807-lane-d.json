@@ -65,8 +65,8 @@
     {
       "id": "D5-fresh-named-go-proof",
       "file": "scripts/mutation_harness_optin.py",
-      "find": "if _direct_flag(argv, \"-count\") != \"1\":",
-      "replace": "if False and _direct_flag(argv, \"-count\") != \"1\":",
+      "find": "_require_single_count_one(\n            identifier, pattern, _direct_flag_values(argv, \"-count\")\n        )",
+      "replace": "count_values = _direct_flag_values(argv, \"-count\")\n        if count_values:\n            _require_single_count_one(identifier, pattern, count_values)",
       "rationale": "a named Go proof must declare -count=1 before a plan can opt in to parallel measurement",
       "proof": [[
         ".venv/bin/pytest",
@@ -125,6 +125,20 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_recovery_refuses_symlinked_runs_authority_directory"
+      ]]
+    },
+    {
+      "id": "D10-unambiguous-go-count",
+      "file": "scripts/mutation_harness_optin.py",
+      "find": "if count_values != [\"1\"]:\n        raise PlanContractError(",
+      "replace": "if not count_values:\n        raise PlanContractError(",
+      "rationale": "a fresh named Go proof must contain exactly one effective -count declaration and it must be 1; later duplicate flags must not override the reviewed freshness gate",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_direct_named_go_test_rejects_duplicate_conflicting_count",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_shell_named_go_test_rejects_duplicate_conflicting_count"
       ]]
     }
   ]

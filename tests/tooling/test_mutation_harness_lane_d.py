@@ -238,8 +238,78 @@ def test_named_go_test_without_count_one_is_refused(tmp_path: Path) -> None:
         )
 
 
+def test_direct_named_go_test_rejects_duplicate_conflicting_count(
+    tmp_path: Path,
+) -> None:
+    proof = [
+        [
+            "go",
+            "test",
+            "-count=1",
+            "-count=0",
+            "-run",
+            "^TestNamed$",
+            "./...",
+        ]
+    ]
+    with pytest.raises(PlanContractError, match="exactly one.*-count=1"):
+        load_plan_contract(
+            _plan(tmp_path, mutation=_mutation(proof), sharding=_opt_in())
+        )
+
+
+def test_shell_named_go_test_rejects_duplicate_conflicting_count(
+    tmp_path: Path,
+) -> None:
+    proof = [
+        [
+            "bash",
+            "-c",
+            "go test -count=1 -count 0 -run '^TestNamed$' ./...",
+        ]
+    ]
+    with pytest.raises(PlanContractError, match="exactly one.*-count=1"):
+        load_plan_contract(
+            _plan(tmp_path, mutation=_mutation(proof), sharding=_opt_in())
+        )
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        [["go", "test", "-count", "1", "-count", "0", "-run", "^TestNamed$"]],
+        [["go", "test", "-count=1", "-count", "1", "-run", "^TestNamed$"]],
+        [["bash", "-c", "go test -count 1 -count=0 -run '^TestNamed$'"]],
+        [["bash", "-c", "go test -count=1 -count=1 -run '^TestNamed$'"]],
+    ],
+)
+def test_named_go_test_rejects_all_duplicate_count_forms(
+    tmp_path: Path, proof: list[list[str]]
+) -> None:
+    with pytest.raises(PlanContractError, match="exactly one.*-count=1"):
+        load_plan_contract(
+            _plan(tmp_path, mutation=_mutation(proof), sharding=_opt_in())
+        )
+
+
 def test_named_go_test_with_count_one_is_accepted(tmp_path: Path) -> None:
     proof = [["go", "test", "-count=1", "-run", "^TestGuard$", "./..."]]
+    _, contract = load_plan_contract(
+        _plan(tmp_path, mutation=_mutation(proof), sharding=_opt_in())
+    )
+    assert contract is not None
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        [["go", "test", "-count", "1", "-run", "^TestGuard$", "./..."]],
+        [["bash", "-c", "go test -count 1 -run '^TestGuard$' ./..."]],
+    ],
+)
+def test_named_go_test_accepts_one_spaced_count_one(
+    tmp_path: Path, proof: list[list[str]]
+) -> None:
     _, contract = load_plan_contract(
         _plan(tmp_path, mutation=_mutation(proof), sharding=_opt_in())
     )

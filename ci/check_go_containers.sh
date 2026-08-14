@@ -100,6 +100,15 @@ smoke_target() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "${target} did not report injected version metadata"
+  # The root Compose worker service inherits a pre-stop route rollback hook.
+  # It overrides the worker entrypoint with this binary, so package it in the
+  # worker target and prove that exact override is executable.
+  if [ "${target}" = "worker" ]; then
+    docker run --rm --entrypoint /usr/local/bin/dev-health-workerctl \
+      "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
+      | grep -F '"version":"phase1-ci"' >/dev/null \
+      || die "worker image does not package the Compose lifecycle operator"
+  fi
 
   ACTIVE_CONTAINER="${container_name}"
   # A profile is startup configuration, not a runtime dependency, so a target

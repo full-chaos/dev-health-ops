@@ -360,6 +360,52 @@ def test_projection_normalizes_only_the_explicit_go_toolchain_root(
 
     assert serial_projection == sharded_projection
     assert "<GOROOT>/src/testing/testing.go" in serial_projection[0]["detail"]
+    assert (
+        normalize_detail(
+            f"toolchain={serial_go_root}",
+            shard_roots=[],
+            temporary_roots=[],
+            go_root=serial_go_root,
+        )
+        == "toolchain=<GOROOT>"
+    )
+    assert (
+        normalize_detail(
+            f"frame=({serial_go_root}):1974",
+            shard_roots=[],
+            temporary_roots=[],
+            go_root=serial_go_root,
+        )
+        == "frame=(<GOROOT>):1974"
+    )
+    descendant = f"{serial_go_root}{os.sep}src{os.sep}runtime{os.sep}panic.go"
+    assert (
+        normalize_detail(
+            descendant,
+            shard_roots=[],
+            temporary_roots=[],
+            go_root=serial_go_root,
+        )
+        == f"<GOROOT>{os.sep}src{os.sep}runtime{os.sep}panic.go"
+    )
+    alternate_separator = "\\" if os.sep == "/" else "/"
+    unknown_paths = [
+        f"{serial_go_root}.suffix/src/testing/testing.go",
+        f"{serial_go_root}-sibling/src/testing/testing.go",
+        str(serial_go_root.parent / f"prefix-{serial_go_root.name}" / "src"),
+        str(serial_go_root.parent / f"embedded-{serial_go_root.name}-token" / "src"),
+        f"{serial_go_root}{alternate_separator}src{alternate_separator}testing.go",
+    ]
+    for unknown in unknown_paths:
+        with pytest.raises(
+            DetailNormalizationError, match="unrecognised absolute path"
+        ):
+            normalize_detail(
+                unknown,
+                shard_roots=[],
+                temporary_roots=[],
+                go_root=serial_go_root,
+            )
     with pytest.raises(DetailNormalizationError, match="unrecognised absolute path"):
         normalize_detail(
             "/tmp/lookalike/src/testing/testing.go:1974 +0x1a0",

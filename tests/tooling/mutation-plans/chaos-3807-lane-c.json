@@ -213,8 +213,8 @@
     {
       "id": "C21-explicit-go-toolchain-root",
       "file": "scripts/mutation_harness_coordinator.py",
-      "find": "        replacements.append((str(resolved_go_root), \"<GOROOT>\"))",
-      "replace": "        pass",
+      "find": "        normalized = _replace_bound_absolute_root(\n            normalized, resolved_go_root, \"<GOROOT>\"\n        )",
+      "replace": "        normalized = normalized",
       "rationale": "Only an explicitly caller-bound canonical Go toolchain root may normalize platform-specific Go stack-frame prefixes; suffix lookalikes remain unknown absolute paths.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "projection_normalizes_only_the_explicit_go_toolchain_root"]
@@ -258,6 +258,16 @@
       "rationale": "The Go test package summary duration is run-varying test time and must normalize only on an exact ok-or-FAIL tabular summary line.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "projection_normalizes_go_test_package_summary_duration"]
+      ]
+    },
+    {
+      "id": "C26-go-toolchain-root-token-boundary",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        + _absolute_root_right_boundary()",
+      "replace": "        + r\"(?=$|.)\"",
+      "rationale": "An explicit GOROOT may normalize only as a complete absolute-path token or before the platform path separator, never as the prefix of a sibling, suffix, or embedded token.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "projection_normalizes_only_the_explicit_go_toolchain_root"]
       ]
     }
   ]

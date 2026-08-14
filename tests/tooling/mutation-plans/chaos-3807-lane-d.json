@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, and recovery of manifest-authorized pre-child staging. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, and recovery of manifest-authorized pre-child staging with source/temporary-root disjointness. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -152,6 +152,20 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_zero_recorded_shards_recovers_owned_partial_staging_tree"
+      ]]
+    },
+    {
+      "id": "D12-source-temporary-root-disjointness",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
+      "replace": "if False and (resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved)):\n        raise RecoveryError(f\"temporary_root {path} overlaps source_root {source_root}\")",
+      "rationale": "recovery must independently enforce source and temporary-root disjointness before a source descendant or ancestor can enter any cleanup preflight",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_zero_shard_recovery_rejects_private_root_below_source",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_zero_shard_recovery_rejects_private_root_above_source"
       ]]
     }
   ]

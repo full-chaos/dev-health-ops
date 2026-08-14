@@ -52,6 +52,61 @@ def _trusted_root_state_directory(root: Path) -> Path:
     return directory
 
 
+def _trusted_authority_directory(path: Path, label: str) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise RecoveryError(f"{label} {path} does not exist") from exc
+    except OSError as exc:
+        raise RecoveryError(f"{label} {path} could not be inspected: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise RecoveryError(f"{label} {path} is a symlink; refusing recovery")
+    if not stat.S_ISDIR(info.st_mode):
+        raise RecoveryError(f"{label} {path} is not a directory; refusing recovery")
+
+
+def _trusted_authority_file(path: Path, label: str) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise RecoveryError(f"{label} {path} does not exist") from exc
+    except OSError as exc:
+        raise RecoveryError(f"{label} {path} could not be inspected: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise RecoveryError(f"{label} {path} is a symlink; refusing recovery")
+    if not stat.S_ISREG(info.st_mode):
+        raise RecoveryError(f"{label} {path} is not a regular file; refusing recovery")
+
+
+def _trusted_recovery_authority_file(root: Path, path: Path) -> None:
+    """Validate every lexical authority component without resolving links."""
+
+    state_directory = _trusted_root_state_directory(root)
+    if not path.is_absolute() or ".." in path.parts:
+        raise RecoveryError(f"recovery authority path is not lexical-safe: {path}")
+    try:
+        relative = path.relative_to(state_directory)
+    except ValueError as exc:
+        raise RecoveryError(
+            f"recovery authority path {path} escapes {state_directory}"
+        ) from exc
+    if relative.parts == (STATE_FILENAME,):
+        _trusted_authority_file(path, "root state file")
+        return
+    if (
+        len(relative.parts) == 3
+        and relative.parts[0] == RUNS_DIRNAME
+        and relative.parts[2] == MANIFEST_FILENAME
+    ):
+        runs_directory = state_directory / RUNS_DIRNAME
+        run_directory = runs_directory / relative.parts[1]
+        _trusted_authority_directory(runs_directory, "runs directory")
+        _trusted_authority_directory(run_directory, "run directory")
+        _trusted_authority_file(path, "run manifest")
+        return
+    raise RecoveryError(f"unrecognized recovery authority path: {path}")
+
+
 @dataclass(frozen=True)
 class ShardRecord:
     """One shard path and its recovery evidence from the run manifest."""
@@ -164,7 +219,7 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
 def _read_root_recovery_json(root: Path, path: Path, label: str) -> dict[str, Any]:
     """Recheck the root state parent immediately before each recovery read."""
 
-    _trusted_root_state_directory(root)
+    _trusted_recovery_authority_file(root, path)
     return _read_json(path, label)
 
 
@@ -202,7 +257,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 def _write_root_recovery_json(root: Path, path: Path, payload: dict[str, Any]) -> None:
     """Recheck the root state parent immediately before each recovery write."""
 
-    _trusted_root_state_directory(root)
+    _trusted_recovery_authority_file(root, path)
     _atomic_write_json(path, payload)
 
 
@@ -230,13 +285,15 @@ def _load_run_record(root: Path, run_id: str) -> tuple[dict[str, Any], RunRecord
             f"root state records run_id {recorded_run_id!r}, not {run_id!r}"
         )
 
-    expected_manifest = (
-        state_directory / RUNS_DIRNAME / run_id / MANIFEST_FILENAME
-    ).resolve()
+    expected_manifest = state_directory / RUNS_DIRNAME / run_id / MANIFEST_FILENAME
     manifest_value = coordinator.get("manifest_path")
     if not isinstance(manifest_value, str) or not manifest_value:
         raise RecoveryError("coordinator run has no manifest path")
-    manifest_path = Path(manifest_value).resolve()
+    manifest_path = Path(manifest_value)
+    if not manifest_path.is_absolute() or ".." in manifest_path.parts:
+        raise RecoveryError(
+            f"manifest path {manifest_path} is not an absolute lexical path"
+        )
     if manifest_path != expected_manifest:
         raise RecoveryError(
             f"manifest path {manifest_path} is outside the recorded run boundary "

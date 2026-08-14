@@ -421,6 +421,80 @@ def test_recovery_refuses_non_directory_root_state_parent(tmp_path: Path) -> Non
     assert state_parent.read_bytes() == before
 
 
+def test_recovery_refuses_symlinked_runs_authority_directory(tmp_path: Path) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    runs = root / ".mutation-harness/runs"
+    outside_runs = tmp_path / "outside-runs"
+    runs.rename(outside_runs)
+    runs.symlink_to(outside_runs, target_is_directory=True)
+    sentinel = outside_runs / "sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+    manifest = outside_runs / "run-3807/manifest.json"
+    manifest_before = manifest.read_bytes()
+
+    with pytest.raises(RecoveryError, match="runs directory.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert manifest.read_bytes() == manifest_before
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert shard.exists()
+
+
+def test_recovery_refuses_symlinked_run_id_authority_directory(tmp_path: Path) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    run_directory = root / ".mutation-harness/runs/run-3807"
+    outside_run = tmp_path / "outside-run-id"
+    run_directory.rename(outside_run)
+    run_directory.symlink_to(outside_run, target_is_directory=True)
+    sentinel = outside_run / "sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+    manifest = outside_run / "manifest.json"
+    manifest_before = manifest.read_bytes()
+
+    with pytest.raises(RecoveryError, match="run directory.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert manifest.read_bytes() == manifest_before
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert shard.exists()
+
+
+def test_recovery_refuses_symlinked_manifest_authority_file(tmp_path: Path) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    manifest = root / ".mutation-harness/runs/run-3807/manifest.json"
+    outside_manifest = tmp_path / "outside-manifest.json"
+    manifest.rename(outside_manifest)
+    manifest.symlink_to(outside_manifest)
+    manifest_before = outside_manifest.read_bytes()
+    sentinel = tmp_path / "outside-manifest-sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="run manifest.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert outside_manifest.read_bytes() == manifest_before
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert shard.exists()
+
+
+def test_recovery_refuses_symlinked_root_state_file(tmp_path: Path) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    state = root / ".mutation-harness/state.json"
+    outside_state = tmp_path / "outside-state.json"
+    state.rename(outside_state)
+    state.symlink_to(outside_state)
+    state_before = outside_state.read_bytes()
+    sentinel = tmp_path / "outside-state-sentinel.txt"
+    sentinel.write_text("do not change", encoding="utf-8")
+
+    with pytest.raises(RecoveryError, match="root state file.*symlink"):
+        recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+
+    assert outside_state.read_bytes() == state_before
+    assert sentinel.read_text(encoding="utf-8") == "do not change"
+    assert shard.exists()
+
+
 def test_manifest_owned_path_cannot_escape_its_shard(tmp_path: Path) -> None:
     root, shard, _, _ = _recovery_fixture(tmp_path)
     sentinel = tmp_path / "outside-owner.json"

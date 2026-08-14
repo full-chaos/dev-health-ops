@@ -392,6 +392,8 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		// silently receives no grant and readiness reports the opaque
 		// "PostgreSQL readiness check failed".
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",

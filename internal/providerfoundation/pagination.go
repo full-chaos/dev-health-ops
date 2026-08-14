@@ -33,11 +33,150 @@ type PageCollection struct {
 	CapReached bool
 }
 
+// PageVisit is the bounded page callback used by resumable provider routes.
+// Items contains only the current provider response; callers must not retain
+// it after returning. CursorBefore is the URL (or page token) used for the
+// request and CursorAfter is the opaque continuation supplied by the
+// provider. The cursor is deliberately opaque to this package so a route can
+// persist it with its own phase metadata.
+type PageVisit struct {
+	Items        []json.RawMessage
+	Pages        int
+	CursorBefore string
+	CursorAfter  string
+}
+
+// VisitGitHubLinkPages follows GitHub's opaque Link pagination without
+// accumulating prior pages. It is the streaming counterpart to
+// CollectGitHubLinkPages; a callback error stops before another request.
+func VisitGitHubLinkPages(
+	ctx context.Context,
+	client *HTTPClient,
+	options GitHubPageOptions,
+	visit func(PageVisit) error,
+) (PageCollection, error) {
+	if visit == nil {
+		return PageCollection{}, ErrPaginationInvalid
+	}
+	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" ||
+		options.MaxPages < 1 || options.MaxPages > maximumProviderPages ||
+		options.MaxItems < 0 {
+		return PageCollection{}, ErrPaginationInvalid
+	}
+	next := strings.TrimSpace(options.InitialURL)
+	if next == "" {
+		var err error
+		next, err = pageURL(options.Path, options.Query)
+		if err != nil {
+			return PageCollection{}, err
+		}
+	}
+	result := PageCollection{}
+	for next != "" {
+		if result.Pages >= options.MaxPages {
+			result.CapReached = true
+			return result, nil
+		}
+		cursorBefore := next
+		response, err := client.Do(ctx, http.MethodGet, next, nil)
+		if err != nil {
+			return result, err
+		}
+		items, decodeErr := decodePage(response, options.DataKey)
+		if decodeErr != nil {
+			return result, decodeErr
+		}
+		result.Pages++
+		next = githubNextLink(response.Header.Get("Link"))
+		if err := visit(PageVisit{
+			Items: items, Pages: result.Pages, CursorBefore: cursorBefore, CursorAfter: next,
+		}); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// VisitGitLabPageParamPages follows GitLab's page headers without retaining
+// previous pages. CursorBefore and CursorAfter are decimal page numbers; the
+// callback owns any higher-level phase encoding.
+func VisitGitLabPageParamPages(
+	ctx context.Context,
+	client *HTTPClient,
+	options GitLabPageOptions,
+	visit func(PageVisit) error,
+) (PageCollection, error) {
+	if visit == nil {
+		return PageCollection{}, ErrPaginationInvalid
+	}
+	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" ||
+		options.PerPage < 1 || options.PerPage > maximumGitLabPerPage ||
+		options.MaxPages < 1 || options.MaxPages > maximumProviderPages {
+		return PageCollection{}, ErrPaginationInvalid
+	}
+	page := options.InitialPage
+	if page < 1 {
+		page = 1
+	}
+	result := PageCollection{}
+	for page > 0 {
+		if result.Pages >= options.MaxPages {
+			result.CapReached = true
+			return result, nil
+		}
+		query := cloneValues(options.Query)
+		query.Set("page", strconv.Itoa(page))
+		if query.Get("per_page") == "" {
+			query.Set("per_page", strconv.Itoa(options.PerPage))
+		}
+		target, err := pageURL(options.Path, query)
+		if err != nil {
+			return PageCollection{}, err
+		}
+		response, err := client.Do(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return result, err
+		}
+		items, decodeErr := decodePage(response, "")
+		if decodeErr != nil {
+			return result, decodeErr
+		}
+		result.Pages++
+		nextPage := 0
+		if !options.SinglePage {
+			nextHeader := strings.TrimSpace(response.Header.Get("X-Next-Page"))
+			if nextHeader != "" {
+				nextPage, _ = strconv.Atoi(nextHeader)
+				if nextPage < 1 {
+					nextPage = 0
+				}
+			} else if len(items) >= options.PerPage {
+				nextPage = page + 1
+			}
+		}
+		if err := visit(PageVisit{
+			Items: items, Pages: result.Pages,
+			CursorBefore: strconv.Itoa(page), CursorAfter: strconv.Itoa(nextPage),
+		}); err != nil {
+			return result, err
+		}
+		if len(items) == 0 || options.SinglePage || nextPage == 0 {
+			return result, nil
+		}
+		page = nextPage
+	}
+	return result, nil
+}
+
 type GitHubPageOptions struct {
 	Path     string
 	Query    url.Values
 	DataKey  string
 	MaxPages int
+	// InitialURL resumes an opaque Link cursor. When set, Path and Query are
+	// ignored for the first request and the URL is followed exactly as
+	// provided by the prior page response.
+	InitialURL string
 	// MaxItems stops after appending exactly this many items, even when the
 	// current response advertises rel=next. Zero leaves the item count
 	// unbounded. This models provider APIs whose public iterator contract has
@@ -73,9 +212,13 @@ func CollectGitHubLinkPages(
 		options.MaxItems < 0 {
 		return PageCollection{}, ErrPaginationInvalid
 	}
-	next, err := pageURL(options.Path, options.Query)
-	if err != nil {
-		return PageCollection{}, err
+	next := strings.TrimSpace(options.InitialURL)
+	if next == "" {
+		var err error
+		next, err = pageURL(options.Path, options.Query)
+		if err != nil {
+			return PageCollection{}, err
+		}
 	}
 	result := PageCollection{}
 	for next != "" {
@@ -122,6 +265,8 @@ type GitLabPageOptions struct {
 	PerPage    int
 	MaxPages   int
 	SinglePage bool
+	// InitialPage resumes a page-number cursor. Zero starts at page one.
+	InitialPage int
 }
 
 // CollectGitLabPageParamPages mirrors Python's page/per_page paginator. A

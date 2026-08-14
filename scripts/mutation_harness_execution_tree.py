@@ -25,6 +25,13 @@ from scripts.mutation_harness import HarnessError
 
 OWNERSHIP_MARKER = ".mutation-harness/execution-tree-owner.json"
 OWNERSHIP_SCHEMA_VERSION = 1
+HARNESS_IGNORE_PROBES = (
+    ".mutation-harness/state.json",
+    ".mutation-harness/snapshots/execution-tree-probe",
+    ".mutation-harness/lock/pid",
+    ".mutation-harness/runs/execution-tree-probe/manifest.json",
+    OWNERSHIP_MARKER,
+)
 
 
 @dataclass(frozen=True)
@@ -106,22 +113,30 @@ def _assert_repository_root(root: Path) -> Path:
 
 
 def _assert_harness_state_is_ignored(root: Path) -> None:
-    check = _git(
-        root,
-        "check-ignore",
-        "--no-index",
-        "--quiet",
-        ".mutation-harness",
-        check=False,
-    )
-    if check.returncode == 1:
+    missing_probes: list[str] = []
+    for probe in HARNESS_IGNORE_PROBES:
+        check = _git(
+            root,
+            "check-ignore",
+            "--no-index",
+            "--quiet",
+            probe,
+            check=False,
+        )
+        if check.returncode == 1:
+            missing_probes.append(probe)
+            continue
+        if check.returncode != 0:
+            detail = check.stderr.decode(errors="replace").strip()
+            raise HarnessError(
+                f"could not verify .mutation-harness exclusion for {probe}: {detail}"
+            )
+    if missing_probes:
         raise HarnessError(
             ".mutation-harness is not excluded by gitignore; staging could copy "
-            "live mutation state into a shard"
+            "live mutation state into a shard. Unignored probes: "
+            + ", ".join(missing_probes)
         )
-    if check.returncode != 0:
-        detail = check.stderr.decode(errors="replace").strip()
-        raise HarnessError(f"could not verify .mutation-harness exclusion: {detail}")
 
 
 def _is_harness_state_path(relative: str) -> bool:

@@ -177,8 +177,8 @@
     {
       "id": "B12",
       "file": "scripts/mutation_harness_execution_tree.py",
-      "find": "    if check.returncode == 1:\n",
-      "replace": "    if False and check.returncode == 1:\n",
+      "find": "    if missing_probes:\n",
+      "replace": "    if False and missing_probes:\n",
       "rationale": "source manifests must fail if live mutation-harness state is not ignored",
       "proof": [[
         ".venv/bin/python",
@@ -192,8 +192,8 @@
     {
       "id": "B13",
       "file": "scripts/mutation_harness_execution_tree.py",
-      "find": "        \".mutation-harness\",\n        check=False,\n",
-      "replace": "        \".mutation-harness/execution-tree-probe\",\n        check=False,\n",
+      "find": "HARNESS_IGNORE_PROBES = (\n    \".mutation-harness/state.json\",\n    \".mutation-harness/snapshots/execution-tree-probe\",\n    \".mutation-harness/lock/pid\",\n    \".mutation-harness/runs/execution-tree-probe/manifest.json\",\n    OWNERSHIP_MARKER,\n)\n",
+      "replace": "HARNESS_IGNORE_PROBES = (\".mutation-harness/execution-tree-probe\",)\n",
       "rationale": "the ignore assertion must check the state directory as a whole rather than one selectively ignored child",
       "proof": [[
         ".venv/bin/python",

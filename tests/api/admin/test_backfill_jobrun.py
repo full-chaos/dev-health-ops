@@ -329,8 +329,8 @@ async def test_sync_config_backfill_accepts_nested_selector_and_resolves_integra
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
             json={
                 "selector": {
-                    "since": "2026-01-01",
-                    "before": "2026-01-08",
+                    "since": "2026-01-01T00:00:00Z",
+                    "before": "2026-01-08T00:00:00Z",
                     "source_ids": [source_id],
                     "dataset_keys": ["commits"],
                 }
@@ -341,6 +341,8 @@ async def test_sync_config_backfill_accepts_nested_selector_and_resolves_integra
     assert captured["integration_id"] == integration_id
     selector = captured["backfill_selector"]
     assert selector is not None
+    assert getattr(selector, "since") == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert getattr(selector, "before") == datetime(2026, 1, 8, tzinfo=timezone.utc)
     assert getattr(selector, "source_ids") == (source_id,)
     assert getattr(selector, "dataset_keys") == ("commits",)
 

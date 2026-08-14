@@ -14,6 +14,7 @@ import pytest
 from scripts.mutation_harness import main, verify
 from scripts.mutation_harness_coordinator import (
     ChildSpec,
+    TemporaryRootClaim,
     _record_child,
     _write_manifest,
     begin_coordinator_run,
@@ -314,7 +315,9 @@ def test_public_recovery_cleans_an_owned_incomplete_run_and_unblocks_verify(
         plan_digest=plan_digest,
         requested_shards=1,
         effective_shards=1,
-        temporary_root_factory=lambda _run_id: temporary_root,
+        temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+            temporary_root
+        ),
     )
     _write_manifest(lease)
     staged = stage_execution_tree(
@@ -374,7 +377,9 @@ def test_public_force_recovery_cleans_zero_recorded_staging_shards(
         plan_digest=plan_digest,
         requested_shards=2,
         effective_shards=2,
-        temporary_root_factory=lambda _run_id: temporary_root,
+        temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+            temporary_root
+        ),
     )
     _write_manifest(lease)
     staged = stage_execution_tree(

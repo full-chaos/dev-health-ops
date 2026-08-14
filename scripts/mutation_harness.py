@@ -211,6 +211,24 @@ class Result:
     failing_proof: str | None = None
 
 
+@dataclass(frozen=True)
+class ShardingPlan:
+    """Validated plan opt-in consumed by the sharded coordinator."""
+
+    max_shards: int
+    workspace_inputs: tuple[str, ...]
+    external_resources: str
+
+
+@dataclass(frozen=True)
+class StagedExecutionTree:
+    """One owned execution tree prepared for a mutation shard."""
+
+    root: Path
+    ownership_marker: Path
+    shard_index: int
+
+
 VERDICT_KILLED = "KILLED"
 VERDICT_SURVIVED = "SURVIVED"
 VERDICT_SURVIVED_DECLARED = "SURVIVED_DECLARED"
@@ -617,6 +635,47 @@ def _load_plan(path: Path) -> tuple[str, list[Mutation]]:
     return str(raw.get("name") or path.name), mutations
 
 
+def _load_sharding_plan(path: Path, raw: dict[str, Any]) -> ShardingPlan | None:
+    """Load and validate the optional sharding plan contract."""
+
+    raise NotImplementedError
+
+
+def stage_execution_tree(
+    source_root: Path,
+    destination: Path,
+    *,
+    run_id: str,
+    shard_index: int,
+    source_manifest_digest: str,
+    plan_digest: str,
+    workspace_inputs: tuple[str, ...],
+) -> StagedExecutionTree:
+    """Create one isolated, owned execution tree for a mutation shard."""
+
+    raise NotImplementedError
+
+
+def coordinator_run(
+    root: Path,
+    plan_path: Path,
+    only: set[str] | None,
+    assert_all_killed: bool,
+    *,
+    requested_shards: int,
+    progress: str,
+) -> tuple[list[Result], int]:
+    """Coordinate an opted-in sharded mutation run."""
+
+    raise NotImplementedError
+
+
+def recover_run(root: Path, run_id: str, *, force: bool = False) -> str:
+    """Recover or retain the recorded execution trees for an aborted run."""
+
+    raise NotImplementedError
+
+
 def acquire_lock(root: Path) -> Path:
     """Take an exclusive lock, or explain precisely how to break a stale one."""
 
@@ -717,6 +776,18 @@ def verify(root: Path) -> list[str]:
     """
 
     state = _read_state(root)
+    coordinator = (state or {}).get("coordinator_run")
+    if coordinator is not None:
+        if not isinstance(coordinator, dict):
+            raise HarnessError("coordinator_run state is not a JSON object")
+        run_id = coordinator.get("run_id", "unknown")
+        lifecycle = coordinator.get("lifecycle", "unknown")
+        return [
+            f"coordinator run {run_id} remains in lifecycle {lifecycle}. "
+            "No result from this tree is trustworthy until it is recovered. "
+            "Recover it with: python3 scripts/mutation_harness.py recover-run "
+            f"--run-id {shlex.quote(str(run_id))}"
+        ]
     applied = (state or {}).get("applied")
     live = _live_run(root)
 

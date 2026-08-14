@@ -30,11 +30,15 @@ from scripts.mutation_harness import (
     VERDICT_SURVIVED,
     VERDICT_SURVIVED_DECLARED,
     HarnessError,
+    _load_sharding_plan,
     accept_manual_repair,
     acquire_lock,
+    coordinator_run,
     main,
+    recover_run,
     restore,
     run_plan,
+    stage_execution_tree,
     verify,
 )
 
@@ -90,6 +94,55 @@ def _mutation(**overrides: object) -> dict[str, object]:
 
 def test_verify_passes_on_a_clean_tree(tree: Path) -> None:
     assert verify(tree) == []
+
+
+def test_coordinator_state_blocks_verify_until_recovery(tree: Path) -> None:
+    state = tree / ".mutation-harness"
+    state.mkdir()
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "coordinator_run": {
+                    "run_id": "run-3807",
+                    "lifecycle": "staging",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert verify(tree) == [
+        "coordinator run run-3807 remains in lifecycle staging. No result from "
+        "this tree is trustworthy until it is recovered. Recover it with: "
+        "python3 scripts/mutation_harness.py recover-run --run-id run-3807"
+    ]
+
+
+def test_sharding_interfaces_are_explicit_unimplemented_seams(tree: Path) -> None:
+    with pytest.raises(NotImplementedError):
+        _load_sharding_plan(tree / "plan.json", {})
+    with pytest.raises(NotImplementedError):
+        stage_execution_tree(
+            tree,
+            tree / "shard",
+            run_id="run-3807",
+            shard_index=0,
+            source_manifest_digest="source-digest",
+            plan_digest="plan-digest",
+            workspace_inputs=(),
+        )
+    with pytest.raises(NotImplementedError):
+        coordinator_run(
+            tree,
+            tree / "plan.json",
+            None,
+            False,
+            requested_shards=2,
+            progress="human",
+        )
+    with pytest.raises(NotImplementedError):
+        recover_run(tree, "run-3807")
 
 
 def test_a_mutation_the_proof_notices_is_killed(tree: Path) -> None:

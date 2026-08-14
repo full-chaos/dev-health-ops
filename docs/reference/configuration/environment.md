@@ -29,7 +29,8 @@ Document these as distinct responsibilities:
 | Family | Representative settings | Boundary |
 | --- | --- | --- |
 | Semantic PostgreSQL | `POSTGRES_URI`, pool settings, `PGBOUNCER_TRANSACTION_MODE` | API, Celery, and Go domain state; transaction-mode pooler is supported where configured |
-| River queue control | `WORKER_DATABASE_URI`, `WORKER_DATABASE_MODE`, `WORKER_DATABASE_MAX_CONNS` | Direct PostgreSQL for Go queue state; transaction mode is rejected |
+| River queue control | `WORKER_DATABASE_URI`, `WORKER_DATABASE_MODE`, `WORKER_DATABASE_MAX_CONNS` | Dedicated PgBouncer session endpoint or direct PostgreSQL; transaction mode is rejected |
+| River coordinator control | `COORDINATOR_DATABASE_URI`, `COORDINATOR_DATABASE_MODE`, `WORKER_COORDINATOR_DATABASE_MAX_CONNS` | Dedicated PgBouncer session endpoint or direct PostgreSQL; transaction mode is rejected |
 | Worker domain pool | `WORKER_DOMAIN_DATABASE_MAX_CONNS` | Bounds the Go domain-state pool using `POSTGRES_URI` |
 | One-shot migrations | `MIGRATION_DATABASE_URI`, role-name settings | Direct elevated connection; never injected into long-running workers |
 | ClickHouse | `CLICKHOUSE_URI` and connection/query settings | Provider facts, analytics, and materializations |

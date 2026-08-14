@@ -55,7 +55,7 @@ func runIntegrationProbe(t *testing.T, databaseURL string, mode Mode) {
 	if result.Workload.RunningCancellation == nil {
 		t.Fatal("running cancellation evidence is missing")
 	}
-	if mode == ModeDirect {
+	if mode == ModeDirect || mode == ModeSession {
 		if !result.Workload.RunningCancellation.CrossClientContextCancelled || result.Workload.RunningCancellation.ProbeReleaseUsed {
 			t.Fatalf("direct cancellation result = %#v", result.Workload.RunningCancellation)
 		}

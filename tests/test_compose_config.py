@@ -933,7 +933,6 @@ def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
         pytest.skip("platform compose.yml is only present in the monorepo checkout")
 
     services = _load_yaml(compose_path).get("services") or {}
-
     service_names = ["worker", "worker-ingest", "worker-heavy", "beat"]
     if "worker-wi" in services:
         service_names.append("worker-wi")
@@ -1404,3 +1403,44 @@ def test_go_profile_overlay_services_are_all_profile_gated() -> None:
         assert spec.get("profiles") == ["go"], (
             f'{name} must declare profiles: ["go"] so a default `up` never starts it'
         )
+
+
+def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    transaction_pool = services["pgbouncer"]
+    queue_pool = services["pgbouncer-river-queue"]
+    coordinator_pool = services["pgbouncer-river-coordinator"]
+    assert queue_pool["environment"].get("POOL_MODE") == "session"
+    assert coordinator_pool["environment"].get("POOL_MODE") == "session"
+    # PgBouncer budgets are per (database, user) pool. Each endpoint has one
+    # fixed River role and one database, so these are true backend ceilings.
+    assert (
+        queue_pool["environment"].get("DB_USER")
+        == "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}"
+    )
+    assert (
+        coordinator_pool["environment"].get("DB_USER")
+        == "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}"
+    )
+    assert queue_pool["environment"].get("DEFAULT_POOL_SIZE") == "18"
+    assert coordinator_pool["environment"].get("DEFAULT_POOL_SIZE") == "10"
+    assert transaction_pool["environment"].get("DEFAULT_POOL_SIZE") == "20"
+    assert "RESERVE_POOL_SIZE" not in transaction_pool["environment"]
+
+    for service_name in ("go-worker", "go-worker-heavy", "go-worker-ops"):
+        environment = services[service_name]["environment"]
+        assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
+        assert environment["WORKER_DATABASE_MODE"] == "session"
+        assert "COORDINATOR_DATABASE_URI" not in environment
+    for service_name in ("go-reconciler", "go-scheduler", "go-worker-route-activate"):
+        environment = services[service_name]["environment"]
+        assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
+        assert (
+            "@pgbouncer-river-coordinator:6434/"
+            in environment["COORDINATOR_DATABASE_URI"]
+        )
+        assert environment["COORDINATOR_DATABASE_MODE"] == "session"

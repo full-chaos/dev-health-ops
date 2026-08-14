@@ -114,14 +114,15 @@ services:
     environment: &go-worker-env
       DEV_HEALTH_HTTP_ADDR: ":8080"
       DEV_HEALTH_PROFILE: heavy
-      POSTGRES_URI: ${POSTGRES_URI:?direct domain PostgreSQL URI is required}
-      WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?queue-control PostgreSQL URI is required}
+      POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
+      WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?session-pooler queue-control PostgreSQL URI is required}
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
       VALKEY_URI: redis://valkey:6379/1
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
-      WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-direct}
+      WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-session}
+      COORDINATOR_DATABASE_MODE: ${COORDINATOR_DATABASE_MODE:-session}
       # The PagerDuty stream runner forwards reconciliation to the Python
       # worker bridge until the locked-graph port lands (CUT-20), so it
       # cannot open readiness without both values.
@@ -167,6 +168,7 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ""
+      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
 
   go-scheduler:
     <<: *go-worker
@@ -174,6 +176,7 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ""
+      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
 
   go-stream-external:
     <<: *go-worker

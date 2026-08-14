@@ -10,9 +10,13 @@
   "postgres_budget": {
     "server_max_connections": 100,
     "server_reserved_connections": 15,
-    "pgbouncer_default_pool_size": 25,
-    "pgbouncer_server_pool_count": 2,
-    "pgbouncer_max_client_connections": 1000
+    "pgbouncer_transaction_pool_size": 20,
+    "pgbouncer_transaction_server_pool_count": 2,
+    "pgbouncer_transaction_max_client_connections": 1000,
+    "pgbouncer_queue_session_pool_size": 18,
+    "pgbouncer_queue_session_max_client_connections": 128,
+    "pgbouncer_coordinator_session_pool_size": 10,
+    "pgbouncer_coordinator_session_max_client_connections": 32
   },
   "migration_job": {
     "name": "go-worker-migrations",
@@ -36,6 +40,7 @@
     "domain_max_connections": 2,
     "coordinator_max_connections": 2,
     "config_env": [
+      "COORDINATOR_DATABASE_MODE",
       "PGBOUNCER_TRANSACTION_MODE",
       "RIVER_COORDINATOR_DATABASE_ROLE",
       "RIVER_DATABASE_SCHEMA",

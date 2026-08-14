@@ -6,7 +6,7 @@ during coexistence: a checked-in process or queue does not route production
 work away from Celery.
 
 The manifest also budgets one concurrent `dev-health-workerctl` invocation
-with two domain and two direct queue-control connections. The operator is a
+with two domain and two queue-control session connections. The operator is a
 one-shot authenticated CLI, not a replica-bearing process, and its dedicated
 image target receives the operator token only when an operator invokes it.
 `runtime_role_env` is the shared non-secret identity contract for every future
@@ -35,7 +35,7 @@ The contract gate validates that:
 - the one-shot operator has an exact token/DSN/config surface and is included
   in both direct and PgBouncer client connection budgets;
 - every River/control process receives separate domain and queue-control DSNs;
-- maximum direct queue-control connections plus the PgBouncer server pool and
+- maximum River session-pool connections plus the transaction PgBouncer server pool and
   server reserve stay below PostgreSQL `max_connections`; the PgBouncer term
   multiplies `default_pool_size` by the declared `(database,user)` pool count;
   and
@@ -260,22 +260,22 @@ Two consequences worth knowing:
   it does mean "rename the project" is not the same as "the two stacks now
   coexist". Run one at a time, or drop the fixed names.
 
-### The coordinator DSN must be direct Postgres, never PgBouncer
+### River control DSNs must use session semantics
 
-`COORDINATOR_DATABASE_URI` (read by `go-reconciler` and by
+`COORDINATOR_DATABASE_URI` (read by `go-reconciler`, `go-scheduler`, and `dev-health-workerctl`) and
 `dev-health-worker-migrate`'s `MIGRATION_DATABASE_URI`, which is a distinct,
 more-privileged DSN — never reused as a coordinator runtime identity) must
-point at Postgres's own port (`5432` locally), never through PgBouncer's
-transaction-mode pool (`6432` locally). The coordinator holds
+point at the dedicated PgBouncer session endpoint (`6434` locally) or direct
+Postgres (`5432` locally), never the transaction-mode pool (`6432` locally). The coordinator holds
 cross-statement row and table locks (`FOR UPDATE`, `LOCK TABLE ... IN SHARE
 ROW EXCLUSIVE MODE`) that a transaction-mode pooler can hand to a different
 server session mid-transaction, silently breaking the lock. Startup rejects
 this explicitly: `internal/storage/postgres/runtime.go`'s
 `ErrCoordinatorTransactionMode` fires when the domain endpoint is
 PgBouncer-pooled and the coordinator DSN resolves to that same endpoint. The
-domain DSN (`POSTGRES_URI`) may continue through PgBouncer, as the Python
-API/Celery processes' `DATABASE_URI` already does; the queue-control DSN
-(`WORKER_DATABASE_URI`) must also be direct, for the same reason.
+domain DSN (`POSTGRES_URI`) continues through transaction-mode PgBouncer. The
+queue-control DSN (`WORKER_DATABASE_URI`) uses the dedicated session endpoint
+(`6433` locally) or direct PostgreSQL for the same session-semantics reason.
 
 ### ClickHouse: the Go worker needs the native port, not the HTTP port
 

@@ -209,7 +209,7 @@ assert_all_emitted_gates() {
     and (
       if ($cancel_gates | length) == 0 then
         all($gates[]; .value == true)
-      elif .mode == "direct" then
+      elif .mode == "direct" or .mode == "session" then
         all($gates[]; .value == true)
       elif .mode == "poll-only" then
         all(
@@ -1060,7 +1060,7 @@ fi
 
 progress "starting the isolated pinned PostgreSQL and PgBouncer services"
 COMPOSE_ATTEMPTED=1
-if ! "${compose[@]}" up -d --wait postgres pgbouncer \
+if ! "${compose[@]}" up -d --wait postgres pgbouncer pgbouncer-session \
   >"${TEMP_DIR}/compose-up.stdout" \
   2>"${TEMP_DIR}/compose-up.stderr"; then
   dump_bootstrap_diagnostics
@@ -1069,13 +1069,17 @@ fi
 
 postgres_port="$(resolve_local_port postgres 5432)"
 pgbouncer_port="$(resolve_local_port pgbouncer 6432)"
+pgbouncer_session_port="$(resolve_local_port pgbouncer-session 6433)"
 direct_database_url="postgresql://river_compat:river_compat@127.0.0.1:${postgres_port}/river_compat"
 poll_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_port}/river_compat"
+session_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_session_port}/river_compat"
 
 direct_profile="${TEMP_DIR}/direct-profile.json"
 poll_profile="${TEMP_DIR}/poll-only-profile.json"
+session_profile="${TEMP_DIR}/session-profile.json"
 direct_matrix="${TEMP_DIR}/direct-matrix.stdout"
 poll_matrix="${TEMP_DIR}/poll-only-matrix.stdout"
+session_matrix="${TEMP_DIR}/session-matrix.stdout"
 n_minus_one_before="${TEMP_DIR}/n-minus-one-before-upgrade.json"
 n_minus_one_after="${TEMP_DIR}/n-minus-one-after-upgrade.json"
 n_minus_one="${TEMP_DIR}/n-minus-one.json"
@@ -1091,15 +1095,18 @@ run_nested_n_minus_one after-v0.40-upgrade "${direct_database_url}" "${n_minus_o
 # Keep the second measured matrix as close to service startup as the required
 # N/N-1 migration-prefix order permits, minimizing pg_isready contamination.
 run_mode_matrix poll-only "${poll_database_url}" true chaos3034-poll-only "${poll_matrix}"
+run_mode_matrix session "${session_database_url}" false chaos3034-session "${session_matrix}"
 
 run_profile direct "${direct_database_url}" false direct_postgresql "${direct_matrix}" "${direct_profile}"
 run_profile poll-only "${poll_database_url}" true pgbouncer_transaction_poll_only "${poll_matrix}" "${poll_profile}"
+run_profile session "${session_database_url}" false pgbouncer_session "${session_matrix}" "${session_profile}"
 combine_nested_n_minus_one "${n_minus_one_before}" "${n_minus_one_after}" "${n_minus_one}"
 
 jq -n \
   --argjson samples "${SAMPLES}" \
   --slurpfile direct "${direct_profile}" \
   --slurpfile poll "${poll_profile}" \
+  --slurpfile session "${session_profile}" \
   --slurpfile n_minus_one "${n_minus_one}" \
   --slurpfile python_versions "${python_versions}" '{
     schema_version: 1,
@@ -1137,9 +1144,17 @@ jq -n \
         new_connections_at_most_six: $poll[0].matrix.gates.new_connections_at_most_six,
         cross_client_running_cancel: $poll[0].matrix.gates.cross_client_running_cancel,
         same_client_running_cancel: $poll[0].matrix.gates.same_client_running_cancel
+      },
+      session: {
+        backend_connection_delta_at_most_six: $session[0].matrix.gates.backend_connection_delta_at_most_six,
+        canceled_acquires_zero: $session[0].matrix.gates.canceled_acquires_zero,
+        enqueue_p95_within_limit: $session[0].matrix.gates.enqueue_p95_within_limit,
+        new_connections_at_most_six: $session[0].matrix.gates.new_connections_at_most_six,
+        cross_client_running_cancel: $session[0].matrix.gates.cross_client_running_cancel,
+        same_client_running_cancel: $session[0].matrix.gates.same_client_running_cancel
       }
     },
-    profiles: [$direct[0], $poll[0]],
+    profiles: [$direct[0], $poll[0], $session[0]],
     nested_n_minus_1: $n_minus_one[0],
     redaction: {
       contains_raw_logs: false,

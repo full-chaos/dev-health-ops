@@ -1033,12 +1033,18 @@ def coordinator_run(
     def source_manifest_reader() -> str:
         return execution_tree.build_source_manifest(root).digest
 
-    def child_factory(assignment: Any, run_id: str) -> Any:
+    def temporary_root_factory(run_id: str) -> Path:
         nonlocal temporary_root
+        if temporary_root is not None:
+            raise HarnessError("coordinator requested more than one temporary root")
+        temporary_root = execution_tree.create_private_temp_root(
+            prefix=f"mutation-harness-{run_id}-"
+        )
+        return temporary_root
+
+    def child_factory(assignment: Any, run_id: str) -> Any:
         if temporary_root is None:
-            temporary_root = execution_tree.create_private_temp_root(
-                prefix=f"mutation-harness-{run_id}-"
-            )
+            raise HarnessError("coordinator did not create the recorded temporary root")
         staged = stage_execution_tree(
             root,
             temporary_root / f"shard-{assignment.shard_index}",
@@ -1124,6 +1130,7 @@ def coordinator_run(
         source_manifest_digest=source_manifest.digest,
         plan_digest=plan_digest,
         source_manifest_reader=source_manifest_reader,
+        temporary_root_factory=temporary_root_factory,
         child_factory=child_factory,
     )
     return list(outcome.results), outcome.exit_code

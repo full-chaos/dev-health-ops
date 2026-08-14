@@ -30,8 +30,8 @@
     {
       "id": "A2_RESULT_BEFORE_NEXT",
       "file": "scripts/mutation_harness.py",
-      "find": "                    _write_result_record(result_stream, selected_run_id, ordinal, result)",
-      "replace": "                    if False:\n                        _write_result_record(result_stream, selected_run_id, ordinal, result)",
+      "find": "                    _write_result_record(\n                        result_stream, selected_run_id, ordinal, result\n                    )",
+      "replace": "                    if False:\n                        _write_result_record(\n                            result_stream, selected_run_id, ordinal, result\n                        )",
       "expect_occurrences": 1,
       "rationale": "Each completed measurement must reach the durable result stream before the next mutation begins, so an abort loses remaining work but never erases results already measured.",
       "proof": [

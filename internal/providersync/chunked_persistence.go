@@ -87,10 +87,14 @@ type ChunkCheckpoint struct {
 	FinalOrdinal      int            `json:"final_ordinal"`
 	AggregateResult   map[string]any `json:"aggregate_result,omitempty"`
 	AggregateDigest   string         `json:"aggregate_digest,omitempty"`
-	Owner             string         `json:"owner"`
-	LeaseExpiresAt    time.Time      `json:"lease_expires_at"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	// CommittedRows counts sink rows across every committed chunk. The route's
+	// completion metadata rides on a final chunk with no rows, so this is the
+	// only truthful record count available at finalization (CHAOS-3823).
+	CommittedRows  int64     `json:"committed_rows"`
+	Owner          string    `json:"owner"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (checkpoint ChunkCheckpoint) Validate(claim Claim) error {
@@ -198,6 +202,10 @@ func encodedPreparedChunkPayload(chunk PreparedProviderChunk) ([]byte, error) {
 type ChunkedEffectStore interface {
 	LoadChunkCheckpoint(context.Context, Claim, time.Time) (ChunkCheckpoint, error)
 	PrepareChunk(context.Context, Claim, PreparedProviderChunk, time.Time) (PreparedProviderChunk, error)
+	// PrepareChunkGroup must persist every sub-chunk of one provider emission
+	// atomically. A partially prepared emission is unrecoverable without
+	// refetching the provider item, which duplicates rows (CHAOS-3821).
+	PrepareChunkGroup(context.Context, Claim, []PreparedProviderChunk, time.Time) ([]PreparedProviderChunk, error)
 	LoadPreparedChunk(context.Context, Claim, int, time.Time) (PreparedProviderChunk, error)
 	BeginChunkEffect(context.Context, Claim, int, int, string, time.Time) error
 	CommitChunkEffect(context.Context, Claim, int, int, string, time.Time) error

@@ -19,7 +19,7 @@ SELECT checkpoint.schema_version, checkpoint.org_id, checkpoint.sync_run_unit_id
        checkpoint.inventory_complete, checkpoint.next_ordinal,
        checkpoint.prepared_chunks, checkpoint.total_chunks, checkpoint.final_ordinal,
        COALESCE(checkpoint.aggregate_result::text, ''), checkpoint.aggregate_digest,
-       checkpoint.owner, checkpoint.lease_expires_at,
+       checkpoint.committed_rows, checkpoint.owner, checkpoint.lease_expires_at,
        checkpoint.created_at, checkpoint.updated_at
 FROM public.sync_run_unit_chunk_checkpoints AS checkpoint
 JOIN public.sync_run_units AS unit
@@ -72,7 +72,7 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 		&checkpoint.RouteVersion, &checkpoint.NormalizedAt, &checkpoint.NextCursor,
 		&checkpoint.InventoryComplete, &checkpoint.NextOrdinal,
 		&checkpoint.PreparedChunks, &checkpoint.TotalChunks, &checkpoint.FinalOrdinal,
-		&aggregateRaw, &checkpoint.AggregateDigest, &checkpoint.Owner,
+		&aggregateRaw, &checkpoint.AggregateDigest, &checkpoint.CommittedRows, &checkpoint.Owner,
 		&checkpoint.LeaseExpiresAt, &checkpoint.CreatedAt, &checkpoint.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -92,17 +92,88 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 	return checkpoint, nil
 }
 
+// PrepareChunk prepares one chunk. It is PrepareChunkGroup of one, so both
+// paths share every guard.
 func (repository *PostgresRepository) PrepareChunk(
 	ctx context.Context, claim Claim, chunk PreparedProviderChunk, now time.Time,
 ) (PreparedProviderChunk, error) {
+	group, err := repository.PrepareChunkGroup(
+		ctx, claim, []PreparedProviderChunk{chunk}, now)
+	if err != nil {
+		return PreparedProviderChunk{}, err
+	}
+	if len(group) != 1 {
+		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+	}
+	return group[0], nil
+}
+
+// PrepareChunkGroup makes ONE provider emission the durable unit of recovery.
+// Every sub-chunk of the emission is inserted, and the checkpoint advanced, in
+// a single transaction, so an interruption leaves either the whole emission
+// durable or none of it.
+//
+// Preparing sub-chunks one transaction at a time was not safe: a non-final
+// sub-chunk carries no CursorAfter, so a crash partway through left the cursor
+// pointing before the provider item while some of its sub-chunks were already
+// committed to the sink. Recovery re-fetched that item and wrote its rows a
+// second time under fresh ordinals with pending ledgers, bypassing readback
+// entirely (CHAOS-3821).
+func (repository *PostgresRepository) PrepareChunkGroup(
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+) ([]PreparedProviderChunk, error) {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
-		claim.Validate() != nil || now.IsZero() || chunk.Ordinal < 0 ||
-		chunk.TotalChunks < 0 || chunk.RouteVersion == "" {
-		return PreparedProviderChunk{}, ErrInvalidConfiguration
+		claim.Validate() != nil || now.IsZero() || len(chunks) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	materials := make([]preparedChunkMaterial, 0, len(chunks))
+	for _, chunk := range chunks {
+		material, err := buildPreparedChunkMaterial(claim, chunk, now)
+		if err != nil {
+			return nil, err
+		}
+		materials = append(materials, material)
+	}
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, ErrInvalidConfiguration
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := assertChunkClaimTx(ctx, tx, claim, now.UTC()); err != nil {
+		return nil, err
+	}
+	prepared := make([]PreparedProviderChunk, 0, len(materials))
+	for _, material := range materials {
+		out, err := prepareChunkInTx(ctx, tx, claim, material, now)
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, out)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, ErrInvalidConfiguration
+	}
+	return prepared, nil
+}
+
+// preparedChunkMaterial is one chunk encoded and validated outside the
+// transaction, so the transaction holds locks only for the writes.
+type preparedChunkMaterial struct {
+	chunk      PreparedProviderChunk
+	payloadRaw []byte
+	ledgerRaw  []byte
+	aggregate  []byte
+}
+
+func buildPreparedChunkMaterial(
+	claim Claim, chunk PreparedProviderChunk, now time.Time,
+) (preparedChunkMaterial, error) {
+	if chunk.Ordinal < 0 || chunk.TotalChunks < 0 || chunk.RouteVersion == "" {
+		return preparedChunkMaterial{}, ErrInvalidConfiguration
 	}
 	state, err := NewEffectLedgerState(claim, chunk.Effects, now.UTC())
 	if err != nil {
-		return PreparedProviderChunk{}, err
+		return preparedChunkMaterial{}, err
 	}
 	chunk.Ledger = state
 	if chunk.ManifestDigest == "" {
@@ -112,16 +183,16 @@ func (repository *PostgresRepository) PrepareChunk(
 	payload.Ledger = EffectLedgerState{}
 	payloadRaw, err := encodedPreparedChunkPayload(payload)
 	if err != nil || len(payloadRaw) > maxChunkPayloadBytes {
-		return PreparedProviderChunk{}, ErrChunkPolicyExceeded
+		return preparedChunkMaterial{}, ErrChunkPolicyExceeded
 	}
 	chunk.PayloadBytes = len(payloadRaw)
 	ledgerRaw := encodeEffectLedgerState(state)
 	if len(ledgerRaw) == 0 {
-		return PreparedProviderChunk{}, ErrEffectRecoveryUnsafe
+		return preparedChunkMaterial{}, ErrEffectRecoveryUnsafe
 	}
 	if chunk.Validate(claim, DefaultChunkPolicy()) != nil ||
 		len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return preparedChunkMaterial{}, ErrChunkCheckpointConflict
 	}
 	// A chunk with no aggregate must store SQL NULL, not the JSONB scalar
 	// `null`. Only the final chunk of a route carries a Result, so marshalling
@@ -133,17 +204,21 @@ func (repository *PostgresRepository) PrepareChunk(
 	if chunk.Result != nil {
 		var marshalErr error
 		if aggregateRaw, marshalErr = json.Marshal(chunk.Result); marshalErr != nil {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return preparedChunkMaterial{}, ErrChunkCheckpointConflict
 		}
 	}
-	tx, err := repository.Pool.Begin(ctx)
-	if err != nil {
-		return PreparedProviderChunk{}, ErrInvalidConfiguration
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := assertChunkClaimTx(ctx, tx, claim, now.UTC()); err != nil {
-		return PreparedProviderChunk{}, err
-	}
+	return preparedChunkMaterial{
+		chunk: chunk, payloadRaw: payloadRaw, ledgerRaw: ledgerRaw, aggregate: aggregateRaw,
+	}, nil
+}
+
+// prepareChunkInTx performs one chunk's insert and checkpoint advance inside a
+// caller-owned transaction. It never commits.
+func prepareChunkInTx(
+	ctx context.Context, tx pgx.Tx, claim Claim, material preparedChunkMaterial, now time.Time,
+) (PreparedProviderChunk, error) {
+	chunk, payloadRaw, ledgerRaw := material.chunk, material.payloadRaw, material.ledgerRaw
+	aggregateRaw := material.aggregate
 	checkpoint, err := loadChunkCheckpointTx(ctx, tx, claim, now.UTC(), true)
 	if errors.Is(err, ErrChunkCheckpointNotFound) {
 		finalOrdinal := -1
@@ -154,7 +229,7 @@ func (repository *PostgresRepository) PrepareChunk(
 			SchemaVersion: chunkCheckpointSchemaVersion, OrgID: claim.OrgID,
 			UnitID: claim.ID, Generation: claim.GenerationKey(),
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			RouteVersion: chunk.RouteVersion, NormalizedAt: state.CreatedAt,
+			RouteVersion: chunk.RouteVersion, NormalizedAt: chunk.Ledger.CreatedAt,
 			NextOrdinal: 0, PreparedChunks: 0, TotalChunks: chunk.TotalChunks,
 			FinalOrdinal: finalOrdinal, AggregateResult: chunk.Result,
 			AggregateDigest: chunkResultDigest(chunk.Result), Owner: claim.Owner,
@@ -206,9 +281,6 @@ func (repository *PostgresRepository) PrepareChunk(
 		if loadErr != nil {
 			return PreparedProviderChunk{}, loadErr
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return PreparedProviderChunk{}, ErrInvalidConfiguration
-		}
 		return persisted, nil
 	}
 	if _, err := tx.Exec(ctx, updateChunkPreparedSQL,
@@ -217,9 +289,6 @@ func (repository *PostgresRepository) PrepareChunk(
 		chunk.Result, chunkResultDigest(chunk.Result), now.UTC(),
 	); err != nil {
 		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return PreparedProviderChunk{}, ErrInvalidConfiguration
 	}
 	return chunk, nil
 }
@@ -441,14 +510,28 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 			return ErrChunkCheckpointConflict
 		}
 	}
-	// A sidecar left in 'writing' matches neither status in the statement. Let
-	// that surface as a conflict instead of silently advancing the checkpoint
-	// past a chunk this transaction never marked committed.
+	// The statement matches only a PENDING sidecar, so RowsAffected separates a
+	// real transition from an idempotent replay. Rows are added on the
+	// transition alone; a replay must not inflate the count, and a sidecar in
+	// any other state must not silently advance the checkpoint.
 	command, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC())
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
 		return ErrChunkCheckpointConflict
 	}
-	command, err = tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC())
+	rows := int64(0)
+	if command.RowsAffected() == 1 {
+		for _, effect := range chunk.Effects {
+			rows += int64(len(effect.Rows))
+		}
+	} else {
+		var status string
+		if scanErr := tx.QueryRow(ctx, chunkStatusSQL,
+			claim.OrgID, claim.ID, claim.GenerationKey(), ordinal).Scan(&status); scanErr != nil ||
+			status != "committed" {
+			return ErrChunkCheckpointConflict
+		}
+	}
+	command, err = tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC(), rows)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrChunkCheckpointConflict
 	}
@@ -524,7 +607,7 @@ func loadChunkCheckpointTx(ctx context.Context, tx pgx.Tx, claim Claim, now time
 		&checkpoint.RouteVersion, &checkpoint.NormalizedAt, &checkpoint.NextCursor,
 		&checkpoint.InventoryComplete, &checkpoint.NextOrdinal,
 		&checkpoint.PreparedChunks, &checkpoint.TotalChunks, &checkpoint.FinalOrdinal,
-		&aggregateRaw, &checkpoint.AggregateDigest, &checkpoint.Owner,
+		&aggregateRaw, &checkpoint.AggregateDigest, &checkpoint.CommittedRows, &checkpoint.Owner,
 		&checkpoint.LeaseExpiresAt, &checkpoint.CreatedAt, &checkpoint.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -546,8 +629,8 @@ const insertChunkCheckpointSQL = `
 INSERT INTO public.sync_run_unit_chunk_checkpoints
 (org_id,sync_run_unit_id,schema_version,generation,provider,dataset_key,route_version,normalized_at,
  next_cursor,inventory_complete,next_ordinal,prepared_chunks,total_chunks,final_ordinal,
- aggregate_result,aggregate_digest,owner,lease_expires_at,created_at,updated_at)
-VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20)`
+ aggregate_result,aggregate_digest,owner,lease_expires_at,created_at,updated_at,committed_rows)
+VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,0)`
 
 const insertPreparedChunkSQL = `
 INSERT INTO public.sync_run_unit_effect_chunks
@@ -582,17 +665,24 @@ UPDATE public.sync_run_unit_effect_chunks
 SET ledger=$5::jsonb, updated_at=$6
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4`
 
+// Matches ONLY a pending sidecar, so the caller can tell a real transition
+// from an idempotent replay and add the chunk's rows exactly once.
 const markChunkCommittedSQL = `
 UPDATE public.sync_run_unit_effect_chunks
 SET status='committed', updated_at=$5
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4
-  AND status IN ('pending','committed')`
+  AND status='pending'`
+
+const chunkStatusSQL = `
+SELECT status FROM public.sync_run_unit_effect_chunks
+WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4`
 
 // See updateChunkPreparedSQL: an empty continuation must not reset the cursor.
 const advanceChunkCheckpointSQL = `
 UPDATE public.sync_run_unit_chunk_checkpoints
 SET next_ordinal=GREATEST(next_ordinal,$4),
     next_cursor=CASE WHEN $5 <> '' THEN $5 ELSE next_cursor END,
+    committed_rows=committed_rows+$7,
     updated_at=$6
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3`
 

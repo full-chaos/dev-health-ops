@@ -56,6 +56,13 @@ def upgrade() -> None:
         sa.Column("final_ordinal", sa.Integer(), nullable=False, server_default="-1"),
         sa.Column("aggregate_result", _JSONB, nullable=True),
         sa.Column("aggregate_digest", sa.String(length=64), nullable=True),
+        # Cumulative sink rows across every committed chunk. The route's own
+        # completion metadata rides on a final chunk that carries no rows, so
+        # without this the shadow comparison counts zero records for a sync of
+        # any size and cannot detect an omitted or duplicated chunk.
+        sa.Column(
+            "committed_rows", sa.BigInteger(), nullable=False, server_default="0"
+        ),
         sa.Column("owner", sa.Text(), nullable=False),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -74,6 +81,9 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "length(next_cursor) <= 4096", name="ck_sync_chunk_checkpoint_cursor"
+        ),
+        sa.CheckConstraint(
+            "committed_rows >= 0", name="ck_sync_chunk_checkpoint_committed_rows"
         ),
         sa.CheckConstraint(
             "inventory_complete = false OR (total_chunks > 0 AND next_ordinal = total_chunks AND prepared_chunks = total_chunks)",

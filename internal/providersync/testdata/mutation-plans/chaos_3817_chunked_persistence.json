@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "CHAOS-3817 resumable chunk persistence guards",
-  "$limitation": "These clause-level mutations prove the bounded splitter and attempt-neutral continuation guards. Postgres transaction and lease fences require the real storage integration suites; the local providersync proof is the deterministic seam available without mutating a live database.",
+  "$limitation": "These clause-level mutations prove the bounded splitter, the attempt-neutral continuation guard, the terminal-cursor short-circuit, the cumulative page budget, and the cumulative record count. Postgres transaction and lease fences require the real storage integration suites; in particular the emission-atomicity guard (CHAOS-3821) rests on a single PrepareChunkGroup transaction and is proven by TestChunkedExecutorSubchunkCrashDoesNotDuplicateRows plus the tagged Postgres suite, not by a local mutation. The local providersync proofs below are the deterministic seam available without mutating a live database.",
   "build": [
     "go",
     "test",
@@ -40,6 +40,57 @@
           "-count=1",
           "-run",
           "^TestChunkedExecutorResumesPreparedChunksWithoutRecollection$",
+          "./internal/providersync"
+        ]
+      ]
+    },
+    {
+      "id": "M3-terminal-cursor-does-not-refetch",
+      "file": "internal/providersync/github_tests_chunked_route.go",
+      "find": "if cursor.Phase == \"done\" {",
+      "replace": "if false {",
+      "rationale": "A cursor in the terminal phase means the inventory scan already finished on an earlier attempt. Re-entering pagination there refetches the whole final phase, re-downloads artifacts, and double-counts the counters the cursor itself carries (CHAOS-3820).",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsChunkRouteTerminalCursorDoesNotRefetch$",
+          "./internal/providersync"
+        ]
+      ]
+    },
+    {
+      "id": "M5-page-budget-is-cumulative",
+      "file": "internal/providersync/github_tests_chunked_route.go",
+      "find": "if spent >= budget {",
+      "replace": "if spent > budget {",
+      "rationale": "An exhausted inventory budget must refuse the next page, not grant one more. The paginator's own cap is local to one invocation, so an off-by-one here lets an attempt-neutral continuation cross the route's page limit without ever reporting ErrPaginationCapExceeded (CHAOS-3822).",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubTestsChunkRoutePageBudgetIsCumulative$",
+          "./internal/providersync"
+        ]
+      ]
+    },
+    {
+      "id": "M6-record-count-is-cumulative",
+      "file": "internal/providersync/chunked_stream_executor.go",
+      "find": "result.Comparison.NativeRecords = int(checkpoint.CommittedRows)",
+      "replace": "result.Comparison.NativeRecords = final.Comparison.NativeRecords",
+      "rationale": "The final chunk carries completion metadata and no rows, so a comparison built from it reports zero records for a sync of any size and cannot detect an omitted or duplicated earlier chunk (CHAOS-3823).",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestChunkedExecutorReportsCumulativeRecordCount$",
           "./internal/providersync"
         ]
       ]

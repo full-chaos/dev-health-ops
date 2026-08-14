@@ -215,8 +215,8 @@
     {
       "id": "M10-domain-attempt-remains-consumed",
       "file": "internal/providersync/repository_postgres.go",
-      "find": "    attempts = GREATEST(unit.attempts - 1, 0),\n",
-      "replace": "    attempts = unit.attempts,\n",
+      "find": "    attempts = GREATEST(unit.attempts - 1, 0),\n    available_at = $4,\n    error = 'provider_budget_contention',",
+      "replace": "    attempts = unit.attempts,\n    available_at = $4,\n    error = 'provider_budget_contention',",
       "expect_occurrences": 1,
       "rationale": "Healthy sibling contention must restore the SyncRunUnit attempt claimed for this execution, as well as River's transport attempt.",
       "proof": [

@@ -229,7 +229,8 @@ services:
       DEV_HEALTH_PROFILE: sync
       POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
       PGBOUNCER_TRANSACTION_MODE: "true"
-      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@postgres:5432/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
       # Native protocol port 9000, NOT the HTTP port 8123 every Python service
       # in this file uses. internal/storage/clickhouse opens with
       # ClickHouse/clickhouse-go/v2, which speaks the native wire protocol and
@@ -310,7 +311,7 @@ services:
 
   # Relays worker_job_outbox rows into River and observes the sync-dispatch
   # outbox. This is a coordinator-role binary, so COORDINATOR_DATABASE_URI is
-  # required and MUST be direct postgres:5432 — transaction-mode pooling cannot
+  # required and MUST use the dedicated session pool — transaction-mode pooling cannot
   # hold the cross-statement row and table locks the coordinator takes, and the
   # process rejects a pooled coordinator DSN at startup rather than risking
   # them silently spanning connections. It declares no deployment profile, so
@@ -331,8 +332,10 @@ services:
     environment:
       POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
       PGBOUNCER_TRANSACTION_MODE: "true"
-      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@postgres:5432/${POSTGRES_DB:-devhealth}
-      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@postgres:5432/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}

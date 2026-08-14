@@ -929,7 +929,6 @@ func (dependencies *workerDependencies) queueControlConfigReady(context.Context)
 	for _, configurationError := range []error{
 		postgres.ErrQueueControlRequired,
 		postgres.ErrQueueControlTransactionMode,
-		postgres.ErrQueueControlSessionUnverified,
 		postgres.ErrRuntimeRolesNotSeparated,
 		postgres.ErrRuntimeRoleConfiguration,
 	} {

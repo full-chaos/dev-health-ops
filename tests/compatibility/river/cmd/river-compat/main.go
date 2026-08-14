@@ -45,7 +45,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		getenv("RIVER_COMPAT_DATABASE_URL"),
 		"PostgreSQL DSN (or set RIVER_COMPAT_DATABASE_URL)",
 	)
-	mode := flags.String("mode", string(rivercompat.ModeDirect), "direct or poll-only")
+	mode := flags.String("mode", string(rivercompat.ModeDirect), "direct, session, or poll-only")
 	operation := flags.String(
 		"operation",
 		operationMatrix,

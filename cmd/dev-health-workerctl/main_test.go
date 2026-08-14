@@ -264,10 +264,28 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 		t.Fatal(err)
 	}
 	return &operatorRuntime{
-		service: service,
+		service:          service,
+		queueControlMode: "direct",
 		principal: joboperator.Principal{
 			Type: "service_credential",
 			ID:   "00000000-0000-4000-8000-000000000303",
 		},
+	}
+}
+
+func TestSessionSafeModeRejectsTransactionAndUnknownModes(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		mode string
+		want bool
+	}{
+		{mode: "direct", want: true},
+		{mode: "session", want: true},
+		{mode: "transaction", want: false},
+		{mode: "invalid", want: false},
+	} {
+		if got := sessionSafeMode(databaseMode(func(key string) (string, bool) { return test.mode, true }, "ignored")); got != test.want {
+			t.Fatalf("mode %q allowed=%t, want %t", test.mode, got, test.want)
+		}
 	}
 }

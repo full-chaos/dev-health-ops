@@ -228,6 +228,9 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	if cfg.QueueDatabaseMode != QueueControlDirect {
 		t.Fatalf("queue mode = %q, want direct", cfg.QueueDatabaseMode)
 	}
+	if cfg.CoordinatorDatabaseMode != QueueControlDirect {
+		t.Fatalf("coordinator mode = %q, want direct", cfg.CoordinatorDatabaseMode)
+	}
 	if cfg.RiverDatabaseSchema != "river" {
 		t.Fatalf("River schema = %q, want river", cfg.RiverDatabaseSchema)
 	}

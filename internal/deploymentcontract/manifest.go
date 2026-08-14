@@ -26,11 +26,15 @@ var (
 )
 
 type PostgresBudget struct {
-	ServerMaxConnections          int `json:"server_max_connections"`
-	ServerReservedConnections     int `json:"server_reserved_connections"`
-	PgBouncerDefaultPoolSize      int `json:"pgbouncer_default_pool_size"`
-	PgBouncerServerPoolCount      int `json:"pgbouncer_server_pool_count"`
-	PgBouncerMaxClientConnections int `json:"pgbouncer_max_client_connections"`
+	ServerMaxConnections                            int `json:"server_max_connections"`
+	ServerReservedConnections                       int `json:"server_reserved_connections"`
+	PgBouncerTransactionPoolSize                    int `json:"pgbouncer_transaction_pool_size"`
+	PgBouncerTransactionServerPoolCount             int `json:"pgbouncer_transaction_server_pool_count"`
+	PgBouncerTransactionMaxClientConnections        int `json:"pgbouncer_transaction_max_client_connections"`
+	PgBouncerQueueSessionPoolSize                   int `json:"pgbouncer_queue_session_pool_size"`
+	PgBouncerQueueSessionMaxClientConnections       int `json:"pgbouncer_queue_session_max_client_connections"`
+	PgBouncerCoordinatorSessionPoolSize             int `json:"pgbouncer_coordinator_session_pool_size"`
+	PgBouncerCoordinatorSessionMaxClientConnections int `json:"pgbouncer_coordinator_session_max_client_connections"`
 }
 
 type MigrationJob struct {
@@ -88,10 +92,10 @@ type Manifest struct {
 }
 
 type BudgetSummary struct {
-	DirectQueueControlConnections int
-	DirectCoordinatorConnections  int
-	DomainClientConnections       int
-	ServerConnectionFootprint     int
+	QueueSessionClientConnections       int
+	CoordinatorSessionClientConnections int
+	DomainTransactionClientConnections  int
+	ServerConnectionFootprint           int
 }
 
 func Load(path string, registry jobcontract.Registry) (Manifest, BudgetSummary, error) {
@@ -157,11 +161,11 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	queueOwners := make(map[string]string)
 	previousName := ""
 	summary := BudgetSummary{
-		DirectQueueControlConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
+		QueueSessionClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
 			manifest.OperatorCLI.QueueControlMaxConnections,
-		DirectCoordinatorConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
+		CoordinatorSessionClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
 			manifest.OperatorCLI.CoordinatorMaxConnections,
-		DomainClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
+		DomainTransactionClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
 			manifest.OperatorCLI.DomainMaxConnections,
 	}
 
@@ -178,9 +182,9 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
 
-		summary.DirectQueueControlConnections += process.MaxReplicas * process.QueueControlMaxConnections
-		summary.DirectCoordinatorConnections += process.MaxReplicas * process.CoordinatorMaxConnections
-		summary.DomainClientConnections += process.MaxReplicas * process.DomainMaxConnections
+		summary.QueueSessionClientConnections += process.MaxReplicas * process.QueueControlMaxConnections
+		summary.CoordinatorSessionClientConnections += process.MaxReplicas * process.CoordinatorMaxConnections
+		summary.DomainTransactionClientConnections += process.MaxReplicas * process.DomainMaxConnections
 
 		if process.Runtime != "river" {
 			continue
@@ -211,9 +215,9 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		}
 	}
 	summary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +
-		manifest.PostgresBudget.PgBouncerDefaultPoolSize*manifest.PostgresBudget.PgBouncerServerPoolCount +
-		summary.DirectQueueControlConnections +
-		summary.DirectCoordinatorConnections
+		manifest.PostgresBudget.PgBouncerTransactionPoolSize*manifest.PostgresBudget.PgBouncerTransactionServerPoolCount +
+		manifest.PostgresBudget.PgBouncerQueueSessionPoolSize +
+		manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize
 	if summary.ServerConnectionFootprint > manifest.PostgresBudget.ServerMaxConnections {
 		return BudgetSummary{}, fmt.Errorf(
 			"PostgreSQL server connection budget exceeded: %d > %d",
@@ -221,12 +225,20 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			manifest.PostgresBudget.ServerMaxConnections,
 		)
 	}
-	if summary.DomainClientConnections > manifest.PostgresBudget.PgBouncerMaxClientConnections {
+	if summary.DomainTransactionClientConnections > manifest.PostgresBudget.PgBouncerTransactionMaxClientConnections {
 		return BudgetSummary{}, fmt.Errorf(
-			"PgBouncer client connection budget exceeded: %d > %d",
-			summary.DomainClientConnections,
-			manifest.PostgresBudget.PgBouncerMaxClientConnections,
+			"transaction PgBouncer client connection budget exceeded: %d > %d",
+			summary.DomainTransactionClientConnections,
+			manifest.PostgresBudget.PgBouncerTransactionMaxClientConnections,
 		)
+	}
+	if summary.QueueSessionClientConnections > manifest.PostgresBudget.PgBouncerQueueSessionMaxClientConnections ||
+		summary.QueueSessionClientConnections > manifest.PostgresBudget.PgBouncerQueueSessionPoolSize {
+		return BudgetSummary{}, errors.New("queue session PgBouncer budget cannot serve every declared River queue connection")
+	}
+	if summary.CoordinatorSessionClientConnections > manifest.PostgresBudget.PgBouncerCoordinatorSessionMaxClientConnections ||
+		summary.CoordinatorSessionClientConnections > manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize {
+		return BudgetSummary{}, errors.New("coordinator session PgBouncer budget cannot serve every declared coordinator connection")
 	}
 	return summary, nil
 }
@@ -260,14 +272,18 @@ func expectedCoverage(registry jobcontract.Registry) map[string]profileCoverage 
 func validatePostgresBudget(budget PostgresBudget) error {
 	if budget.ServerMaxConnections < 1 || budget.ServerMaxConnections > 10000 ||
 		budget.ServerReservedConnections < 1 ||
-		budget.PgBouncerDefaultPoolSize < 1 ||
-		budget.PgBouncerServerPoolCount < 1 || budget.PgBouncerServerPoolCount > 128 ||
-		budget.PgBouncerMaxClientConnections < 1 {
+		budget.PgBouncerTransactionPoolSize < 1 ||
+		budget.PgBouncerTransactionServerPoolCount < 1 || budget.PgBouncerTransactionServerPoolCount > 128 ||
+		budget.PgBouncerTransactionMaxClientConnections < 1 ||
+		budget.PgBouncerQueueSessionPoolSize < 1 || budget.PgBouncerQueueSessionMaxClientConnections < 1 ||
+		budget.PgBouncerCoordinatorSessionPoolSize < 1 || budget.PgBouncerCoordinatorSessionMaxClientConnections < 1 {
 		return errors.New("deployment PostgreSQL budget has invalid bounds")
 	}
 	if budget.ServerReservedConnections+
-		budget.PgBouncerDefaultPoolSize*budget.PgBouncerServerPoolCount >= budget.ServerMaxConnections {
-		return errors.New("deployment PostgreSQL budget leaves no direct queue-control capacity")
+		budget.PgBouncerTransactionPoolSize*budget.PgBouncerTransactionServerPoolCount+
+		budget.PgBouncerQueueSessionPoolSize+
+		budget.PgBouncerCoordinatorSessionPoolSize > budget.ServerMaxConnections {
+		return errors.New("deployment PostgreSQL budget exceeds the server connection limit")
 	}
 	return nil
 }
@@ -295,9 +311,8 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		operator.QueueControlMaxConnections > 4 || operator.DomainMaxConnections < 1 ||
 		operator.DomainMaxConnections > 16 ||
 		// workerctl is one of the three coordinator profiles (with reconciler
-		// and scheduler) under the Option B split — see the "control" runtime
-		// case in validateProcess for why this is a direct, server-counted
-		// connection rather than a PgBouncer-pooled one.
+		// and scheduler) under the Option B split. Their dedicated PgBouncer
+		// session endpoint is server-counted, while preserving River semantics.
 		operator.CoordinatorMaxConnections < 1 || operator.CoordinatorMaxConnections > 4 {
 		return errors.New("worker operator deployment identity or connection budget is invalid")
 	}
@@ -308,6 +323,7 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	// anything at all, so the deployment contract refuses to describe it as
 	// deployable without one.
 	if !equalStrings(operator.ConfigEnv, []string{
+		"COORDINATOR_DATABASE_MODE",
 		"PGBOUNCER_TRANSACTION_MODE",
 		"RIVER_COORDINATOR_DATABASE_ROLE",
 		"RIVER_DATABASE_SCHEMA",
@@ -383,10 +399,8 @@ func validateProcess(process Process) error {
 			len(process.QueueWorkers) != 0 ||
 			// Control-runtime processes are the coordinator role's own worker
 			// pool under the Option B split — their control-plane database
-			// access is direct (server-counted), the same shape
-			// QueueControlMaxConnections already models for River's own
-			// queue-control access, not PgBouncer-pooled like
-			// DomainMaxConnections. See BudgetSummary.DirectCoordinatorConnections.
+			// access uses a dedicated PgBouncer session pool. It is server-counted
+			// in the shared budget but preserves control-plane session semantics.
 			process.CoordinatorMaxConnections < 1 ||
 			// A coordinator budget without the coordinator DSN would describe a
 			// process that reserves connections it cannot open: the binary calls

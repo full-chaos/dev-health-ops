@@ -1,6 +1,6 @@
 ---
 page_id: op-db
-summary: Configure Postgres semantic state, direct River queue control, ClickHouse analytics, Valkey coordination, migrations, retention, and recovery boundaries.
+summary: Configure Postgres semantic state, session-pooled River control, ClickHouse analytics, Valkey coordination, migrations, retention, and recovery boundaries.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
@@ -46,10 +46,11 @@ The Go foundation uses three distinct responsibilities:
 | Purpose | Setting | Default maximum | Required endpoint |
 | --- | --- | ---: | --- |
 | Domain state | `POSTGRES_URI` | `WORKER_DOMAIN_DATABASE_MAX_CONNS=4` | Transaction-mode PgBouncer is supported |
-| River queue control | `WORKER_DATABASE_URI` | `WORKER_DATABASE_MAX_CONNS=2` | Direct PostgreSQL |
+| River queue control | `WORKER_DATABASE_URI` | `WORKER_DATABASE_MAX_CONNS=2` | Dedicated PgBouncer session endpoint or direct PostgreSQL |
+| Coordinator control | `COORDINATOR_DATABASE_URI` | `WORKER_COORDINATOR_DATABASE_MAX_CONNS=2` | Dedicated PgBouncer session endpoint or direct PostgreSQL |
 | One-shot migrations | `MIGRATION_DATABASE_URI` | 2 migration connections | Direct PostgreSQL with the migration role |
 
-`WORKER_DATABASE_MODE` defaults to `direct`. Transaction mode is rejected for River queue control because cancellation and listener behavior are not compatible with that pooling model. Session mode remains unsupported until it passes the same compatibility evidence.
+`WORKER_DATABASE_MODE` and `COORDINATOR_DATABASE_MODE` default to `direct`. Use `session` for the dedicated River endpoints. Transaction mode is rejected because River listener/cancellation and coordinator locks require session semantics. PgBouncer pools are per `(database, user)` pair, so dedicate one fixed role to each session endpoint and size its pool for every declared client connection. Go pools use `MinConns=0` and a bounded idle timeout; idle clients do not permanently pin all session backends.
 
 Do not give long-running workers the migration DSN. Do not reuse the migration role for domain or queue-control access.
 
@@ -95,7 +96,7 @@ Size pools against the maximum deployment topology, not current replicas. Accoun
 
 - SQLAlchemy pools across API and Celery processes;
 - PgBouncer server pools per database/user pair;
-- direct River queue-control connections;
+- River queue-control and coordinator session pools;
 - operator CLI invocations;
 - migration and administrative reserve.
 

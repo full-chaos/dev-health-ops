@@ -272,6 +272,7 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         # carries a coordinator budget and requires the coordinator DSN.
         "coordinator_max_connections": 2,
         "config_env": [
+            "COORDINATOR_DATABASE_MODE",
             "PGBOUNCER_TRANSACTION_MODE",
             "RIVER_COORDINATOR_DATABASE_ROLE",
             "RIVER_DATABASE_SCHEMA",
@@ -598,17 +599,17 @@ def test_profile_pgbouncer_budget_matches_production_compose_defaults() -> None:
 
     assert pgbouncer["profiles"] == ["pooler"]
     environment = pgbouncer["environment"]
-    assert manifest["postgres_budget"]["pgbouncer_max_client_connections"] == (
-        _compose_default(environment["MAX_CLIENT_CONN"], "PGBOUNCER_MAX_CLIENT_CONN")
-    )
-    assert manifest["postgres_budget"]["pgbouncer_default_pool_size"] == (
+    assert manifest["postgres_budget"][
+        "pgbouncer_transaction_max_client_connections"
+    ] == (_compose_default(environment["MAX_CLIENT_CONN"], "PGBOUNCER_MAX_CLIENT_CONN"))
+    assert manifest["postgres_budget"]["pgbouncer_transaction_pool_size"] == (
         _compose_default(
             environment["DEFAULT_POOL_SIZE"], "PGBOUNCER_DEFAULT_POOL_SIZE"
         )
     )
     # Existing Celery/application traffic and the new Go domain role create
     # distinct (database,user) server pools in PgBouncer.
-    assert manifest["postgres_budget"]["pgbouncer_server_pool_count"] == 2
+    assert manifest["postgres_budget"]["pgbouncer_transaction_server_pool_count"] == 2
 
 
 @pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])

@@ -30,6 +30,7 @@ type Mode string
 
 const (
 	ModeDirect   Mode = "direct"
+	ModeSession  Mode = "session"
 	ModePollOnly Mode = "poll-only"
 )
 
@@ -796,8 +797,8 @@ func normalizedOptions(opts Options) (Options, error) {
 	if opts.Mode == "" {
 		opts.Mode = ModeDirect
 	}
-	if opts.Mode != ModeDirect && opts.Mode != ModePollOnly {
-		return Options{}, fmt.Errorf("mode must be %q or %q", ModeDirect, ModePollOnly)
+	if opts.Mode != ModeDirect && opts.Mode != ModeSession && opts.Mode != ModePollOnly {
+		return Options{}, fmt.Errorf("mode must be %q, %q, or %q", ModeDirect, ModeSession, ModePollOnly)
 	}
 	if opts.FetchPollInterval == 0 {
 		opts.FetchPollInterval = 250 * time.Millisecond

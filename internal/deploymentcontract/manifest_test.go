@@ -30,21 +30,21 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.DirectQueueControlConnections != 18 {
-		t.Fatalf("direct queue-control connections = %d", summary.DirectQueueControlConnections)
+	if summary.QueueSessionClientConnections != 18 {
+		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
 	// The three coordinator profiles under the Option B split — reconciler
 	// and scheduler at two replicas each (2×2 + 2×2 = 8), plus workerctl's
-	// single invocation (1×2) — contribute 10 direct, server-counted
+	// single invocation (1×2) — contribute 10 session-pool client
 	// connections alongside (not instead of) their existing domain pools.
-	if summary.DirectCoordinatorConnections != 10 {
-		t.Fatalf("direct coordinator connections = %d", summary.DirectCoordinatorConnections)
+	if summary.CoordinatorSessionClientConnections != 10 {
+		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
 	// stream-pagerduty adds two replicas of a four-connection domain pool.
-	if summary.DomainClientConnections != 50 {
-		t.Fatalf("domain client connections = %d", summary.DomainClientConnections)
+	if summary.DomainTransactionClientConnections != 50 {
+		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
 	}
-	if summary.ServerConnectionFootprint != 93 {
+	if summary.ServerConnectionFootprint != 83 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
 }
@@ -78,7 +78,7 @@ func TestManifestRejectsQueueWorkerCoverageDrift(t *testing.T) {
 func TestManifestRejectsConnectionBudgetOverflow(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)
-	manifest.PostgresBudget.ServerMaxConnections = 92
+	manifest.PostgresBudget.ServerMaxConnections = 82
 	if _, err := manifest.Validate(registry); err == nil {
 		t.Fatal("expected server connection budget overflow")
 	}

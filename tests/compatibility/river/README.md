@@ -1,8 +1,8 @@
 # River compatibility harness
 
 This directory contains the isolated Phase 0 compatibility proof for River
-v0.40.0. It exercises River against direct PostgreSQL and against PgBouncer in
-transaction mode with River `PollOnly`. The Python path is a compatibility
+v0.40.0. It exercises River against direct PostgreSQL, PgBouncer in session
+mode, and PgBouncer in transaction mode with River `PollOnly`. The Python path is a compatibility
 probe for the rejected `riverqueue` production option; it is not a production
 enqueue adapter.
 
@@ -82,7 +82,7 @@ startup, ahead of the next steady-state Compose health check where possible so
 `pg_isready` sessions do not contaminate the load deltas. The required N/N-1
 migration-prefix steps remain ordered around the direct v0.40 matrix.
 
-For each of `direct` and `poll-only`, it:
+For each of `direct`, `session`, and `poll-only`, it:
 
 1. runs a 20-sample execute/cancel/retry/scheduled-job matrix;
 2. asserts every Boolean emitted under `gates` against the mode-specific truth
@@ -130,7 +130,8 @@ The combined document has this shape:
   "samples_per_mode": 20,
   "profiles": [
     {"mode": "direct"},
-    {"mode": "poll-only"}
+    {"mode": "poll-only"},
+    {"mode": "session"}
   ],
   "nested_n_minus_1": {"status": "pass"},
   "redaction": {

@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Protocol, cast
+from urllib.parse import unquote
 
 try:
     from scripts.mutation_harness import (
@@ -78,10 +79,62 @@ AGGREGATE_CLEANUP_FAILED = "CLEANUP_FAILED"
 
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _DURATION_RE = re.compile(r"\((?:\d+(?:\.\d+)?)(?:ns|us|µs|ms|s|m|h)\)")
+_GO_TEST_PACKAGE_DURATION_RE = re.compile(
+    r"(?m)(?P<prefix>^[ \t]*(?:ok|FAIL)\t[^\t\r\n]+\t)\d+(?:\.\d+)?s(?=\r?$)"
+)
 _POSIX_ABSOLUTE_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_.>:/\-])/(?:[^\s\]\[(){}<>:'\"]+/)*[^\s\]\[(){}<>:'\",;]*"
+    r"(?<![A-Za-z0-9_.>:/\-])/(?:[^\s\]\[(){}<>:'\"`]+/)*"
+    r"[^\s\]\[(){}<>:'\"`,;]*"
 )
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"\b[A-Za-z]:\\[^\s\]\[(){}<>:'\",;]+")
+_REQUEST_TARGET_CONTEXT_RE = re.compile(
+    r"""
+    (?<![A-Za-z0-9_-])
+    (?:request(?:[ -]target)?|url|get|head|post|put|patch|delete|options|trace)
+    (?![A-Za-z0-9_-])
+    (?:[ \t]+|[ \t]*[:=][ \t]*)
+    (?:
+        "(?P<double>/[^"\r\n]*)"
+        |'(?P<single>/[^'\r\n]*)'
+        |`(?P<backtick>/[^`\r\n]*)`
+        |(?P<bare>/[^\s<>"'`]+)
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_INDEXED_REQUEST_ASSERTION_RE = re.compile(
+    r"""
+    (?<![A-Za-z0-9_-])request\[(?:0|[1-9][0-9]*)\][ \t]*=[ \t]*
+    (?:(?P<actual_double>"/[^"\r\n]*")|(?P<actual_single>'/[^'\r\n]*'))
+    [ \t]+want[ \t]*=[ \t]*
+    (?:(?P<want_double>"/[^"\r\n]*")|(?P<want_single>'/[^'\r\n]*'))
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_STRUCTURED_REQUEST_FIELD_RE = re.compile(
+    r"""
+    (?<![A-Za-z0-9_-])field[ \t]+["']requests["'][ \t]*:
+    [^\r\n]{0,512}?["']v["'][ \t]*:[ \t]*
+    (?:(?P<value_double>"/[^"\r\n]*"?)|(?P<value_single>'/[^'\r\n]*'?))
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_SHELL_TEMP_TEMPLATE_RE = re.compile(
+    r"""
+    (?<![A-Za-z0-9_-])mktemp[ \t]+-d[ \t]+
+    (?P<quote>["'])\$\{TMPDIR:-/tmp\}/[A-Za-z0-9._-]*XXXXXX(?P=quote)
+    """,
+    re.VERBOSE,
+)
+_ORIGIN_FORM_REQUEST_TARGET_RE = re.compile(
+    r"""
+    /(?!/)
+    (?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2}|/)*
+    (?:\?(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*)?
+    """,
+    re.VERBOSE,
+)
+_TRAVERSAL_SEGMENT_RE = re.compile(r"(?:^|[/?&=])\.{1,2}(?=$|[/?&#=])")
 
 _CHILD_EVENTS = frozenset({"mutation_started", "mutation_finished"})
 _RESULT_FIELDS = frozenset({"id", "verdict", "detail", "failing_proof", "warnings"})
@@ -488,8 +541,9 @@ def normalize_detail(
     *,
     shard_roots: Sequence[Path],
     temporary_roots: Sequence[Path],
+    go_root: Path | None = None,
 ) -> str:
-    """Normalize only named shard roots, named temporary roots, and durations."""
+    """Normalize explicitly bound roots and known run-varying duration forms."""
 
     normalized = detail
     replacements: list[tuple[str, str]] = []
@@ -497,12 +551,39 @@ def normalize_detail(
         replacements.append((str(path.resolve()), "<SHARD_ROOT>"))
     for path in temporary_roots:
         replacements.append((str(path.resolve()), "<TMP>"))
+    if go_root is not None:
+        resolved_go_root = go_root.resolve()
+        if (
+            not go_root.is_absolute()
+            or go_root != resolved_go_root
+            or resolved_go_root == Path(resolved_go_root.anchor)
+            or not resolved_go_root.is_dir()
+        ):
+            raise DetailNormalizationError(
+                f"go_root is not a canonical, existing toolchain directory: {go_root}"
+            )
+        replacements.append((str(resolved_go_root), "<GOROOT>"))
     for original, marker in sorted(
         replacements, key=lambda item: len(item[0]), reverse=True
     ):
         normalized = normalized.replace(original, marker)
     normalized = _DURATION_RE.sub("<DURATION>", normalized)
-    absolute = _POSIX_ABSOLUTE_PATH_RE.search(normalized)
+    normalized = _GO_TEST_PACKAGE_DURATION_RE.sub(r"\g<prefix><DURATION>", normalized)
+    request_target_spans = _contextual_request_target_spans(normalized)
+    allowed_absolute_spans = request_target_spans + _shell_temp_template_spans(
+        normalized
+    )
+    absolute = next(
+        (
+            match
+            for match in _POSIX_ABSOLUTE_PATH_RE.finditer(normalized)
+            if not any(
+                start <= match.start() and match.end() <= end
+                for start, end in allowed_absolute_spans
+            )
+        ),
+        None,
+    )
     windows = _WINDOWS_ABSOLUTE_PATH_RE.search(normalized)
     if absolute is not None or windows is not None:
         match = absolute if absolute is not None else windows
@@ -513,11 +594,87 @@ def normalize_detail(
     return normalized
 
 
+def _contextual_request_target_spans(detail: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    for match in _REQUEST_TARGET_CONTEXT_RE.finditer(detail):
+        group = next(
+            name
+            for name in ("double", "single", "backtick", "bare")
+            if match.group(name) is not None
+        )
+        target = match.group(group)
+        if _is_origin_form_request_target(target):
+            spans.append(match.span(group))
+    spans.extend(_indexed_request_assertion_spans(detail))
+    spans.extend(_structured_request_field_spans(detail))
+    return tuple(spans)
+
+
+def _indexed_request_assertion_spans(detail: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    for match in _INDEXED_REQUEST_ASSERTION_RE.finditer(detail):
+        candidates = (
+            ("actual_double", '"'),
+            ("actual_single", "'"),
+            ("want_double", '"'),
+            ("want_single", "'"),
+        )
+        targets = [
+            (name, quote) for name, quote in candidates if match.group(name) is not None
+        ]
+        if len(targets) != 2:
+            continue
+        for name, quote in targets:
+            target = match.group(name).removeprefix(quote).removesuffix(quote)
+            if not _is_origin_form_request_target(target):
+                break
+        else:
+            spans.extend(
+                (match.start(name) + 1, match.end(name) - 1) for name, _quote in targets
+            )
+    return tuple(spans)
+
+
+def _structured_request_field_spans(detail: str) -> tuple[tuple[int, int], ...]:
+    spans: list[tuple[int, int]] = []
+    for match in _STRUCTURED_REQUEST_FIELD_RE.finditer(detail):
+        name = (
+            "value_double"
+            if match.group("value_double") is not None
+            else "value_single"
+        )
+        quoted = match.group(name)
+        quote = quoted[0]
+        target = quoted.removeprefix(quote).removesuffix(quote)
+        if _is_origin_form_request_target(target):
+            spans.append((match.start(name) + 1, match.start(name) + 1 + len(target)))
+    return tuple(spans)
+
+
+def _shell_temp_template_spans(detail: str) -> tuple[tuple[int, int], ...]:
+    return tuple(match.span() for match in _SHELL_TEMP_TEMPLATE_RE.finditer(detail))
+
+
+def _is_origin_form_request_target(target: str) -> bool:
+    if _ORIGIN_FORM_REQUEST_TARGET_RE.fullmatch(target) is None:
+        return False
+    decoded = target
+    for _ in range(len(target) + 1):
+        expanded = unquote(decoded)
+        if expanded == decoded:
+            break
+        decoded = expanded
+    if "\\" in decoded:
+        return False
+    return _TRAVERSAL_SEGMENT_RE.search(decoded) is None
+
+
 def canonical_result_projection(
     results: Sequence[Result | Mapping[str, Any]],
     *,
     shard_roots: Sequence[Path],
     temporary_roots: Sequence[Path],
+    go_root: Path | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Return the normative serial/sharded differential projection."""
 
@@ -543,6 +700,7 @@ def canonical_result_projection(
                     str(detail),
                     shard_roots=shard_roots,
                     temporary_roots=temporary_roots,
+                    go_root=go_root,
                 ),
                 "failing_proof": failing_proof,
                 "warnings": list(warnings),

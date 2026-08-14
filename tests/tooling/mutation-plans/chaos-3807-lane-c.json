@@ -123,8 +123,8 @@
     {
       "id": "C12-normalizer-unrecognised-path-refusal",
       "file": "scripts/mutation_harness_coordinator.py",
-      "find": "    absolute = _POSIX_ABSOLUTE_PATH_RE.search(normalized)",
-      "replace": "    absolute = None",
+      "find": "            for match in _POSIX_ABSOLUTE_PATH_RE.finditer(normalized)",
+      "replace": "            for match in ()",
       "rationale": "The canonical detail normalizer must expose an unknown absolute path as a comparison gap instead of erasing or accepting it.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_refuses"]
@@ -198,6 +198,66 @@
       "rationale": "Rollback may unlink only the exact regular manifest inode with the exact bytes written by this startup attempt.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "manifest_cleanup_refuses_identity_or_content_tampering"]
+      ]
+    },
+    {
+      "id": "C20-contextual-origin-form-request-target",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    request_target_spans = _contextual_request_target_spans(normalized)",
+      "replace": "    request_target_spans: tuple[tuple[int, int], ...] = ()",
+      "rationale": "Canonical comparison must preserve a syntactically valid origin-form request target only when an explicit immediate request, URL, or HTTP-method context identifies it as non-filesystem text.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "serial_and_sharded_projection_match_with_origin_form_request_target"]
+      ]
+    },
+    {
+      "id": "C21-explicit-go-toolchain-root",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "        replacements.append((str(resolved_go_root), \"<GOROOT>\"))",
+      "replace": "        pass",
+      "rationale": "Only an explicitly caller-bound canonical Go toolchain root may normalize platform-specific Go stack-frame prefixes; suffix lookalikes remain unknown absolute paths.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "projection_normalizes_only_the_explicit_go_toolchain_root"]
+      ]
+    },
+    {
+      "id": "C22-indexed-request-assertion-targets",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    spans.extend(_indexed_request_assertion_spans(detail))",
+      "replace": "    spans.extend(())",
+      "rationale": "Both quoted origin-form values in a bounded request[index]=actual want=expected assertion are request targets, not filesystem paths.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_preserves_indexed_request_assertion_targets"]
+      ]
+    },
+    {
+      "id": "C23-structured-request-field-target",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    spans.extend(_structured_request_field_spans(detail))",
+      "replace": "    spans.extend(())",
+      "rationale": "A syntactically valid origin-form value under the bounded generic-oracle requests field remains comparable even when the diagnostic tail truncates its closing quote.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_preserves_structured_request_field_target"]
+      ]
+    },
+    {
+      "id": "C24-shell-temporary-template",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    allowed_absolute_spans = request_target_spans + _shell_temp_template_spans(\n        normalized\n    )",
+      "replace": "    allowed_absolute_spans = request_target_spans",
+      "rationale": "The literal mktemp -d ${TMPDIR:-/tmp}/name.XXXXXX command template is deterministic shell syntax, not an unclassified runtime absolute path.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "normalizer_preserves_only_explicit_shell_temp_templates"]
+      ]
+    },
+    {
+      "id": "C25-go-test-package-summary-duration",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "    normalized = _GO_TEST_PACKAGE_DURATION_RE.sub(r\"\\g<prefix><DURATION>\", normalized)",
+      "replace": "    normalized = normalized",
+      "rationale": "The Go test package summary duration is run-varying test time and must normalize only on an exact ok-or-FAIL tabular summary line.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "projection_normalizes_go_test_package_summary_duration"]
       ]
     }
   ]

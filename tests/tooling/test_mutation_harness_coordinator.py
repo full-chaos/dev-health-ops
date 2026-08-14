@@ -222,6 +222,208 @@ def test_normalizer_refuses_an_unrecognised_absolute_path(tmp_path: Path) -> Non
         )
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        (
+            "gitlab_feature_flags_route.go:42: unexpected request "
+            "/api/v4/projects/123/feature_flags?page=1&per_page=100"
+        ),
+        'failed URL="/api/v4/projects/a%20b/feature_flags?name=%2Fready",',
+        "request-target: '/api/v4/projects/123/feature_flags?enabled=true'.",
+        "GET `/api/v4/projects/123/feature_flags?page=1` HTTP/1.1",
+    ],
+)
+def test_normalizer_preserves_contextual_origin_form_request_targets(
+    tmp_path: Path,
+    detail: str,
+) -> None:
+    assert (
+        normalize_detail(
+            detail,
+            shard_roots=[tmp_path / "shard"],
+            temporary_roots=[tmp_path / "temp"],
+        )
+        == detail
+    )
+
+
+def test_normalizer_preserves_indexed_request_assertion_targets() -> None:
+    detail = (
+        'request[0]="/api/v4/projects/group%2Fproject/feature-flags?page=1" '
+        'want="/api/v4/projects/group%2Fproject/feature_flags?page=1"'
+    )
+
+    assert normalize_detail(detail, shard_roots=[], temporary_roots=[]) == detail
+
+
+def test_normalizer_preserves_structured_request_field_target() -> None:
+    detail = (
+        'field "requests": python=[]interface {}{map[string]interface {}'
+        '{"t":"str", "v":"/api/v4/pro'
+    )
+
+    assert normalize_detail(detail, shard_roots=[], temporary_roots=[]) == detail
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "failure /api/v4/projects/123/feature_flags?page=1",
+        "prerequest /api/v4/projects/123/feature_flags?page=1",
+        "requesting /api/v4/projects/123/feature_flags?page=1",
+        "request failed at /api/v4/projects/123/feature_flags?page=1",
+        "unexpected request /api/v4/projects/../secrets?page=1",
+        "unexpected request /api/v4/projects/%2e%2e/secrets?page=1",
+        "unexpected request /api/v4/projects/%252e%252e/secrets?page=1",
+        "unexpected request //server/share?page=1",
+        "unexpected request /api/v4/projects/%ZZ?page=1",
+        "unexpected request /api/v4/projects/123#fragment",
+        'request[0]="/api/v4/projects/123" got="/api/v4/projects/123"',
+        'field "request_count": value={"v":"/api/v4/projects/123"}',
+    ],
+)
+def test_normalizer_refuses_non_contextual_or_traversal_lookalikes(
+    tmp_path: Path,
+    detail: str,
+) -> None:
+    with pytest.raises(DetailNormalizationError, match="unrecognised absolute path"):
+        normalize_detail(
+            detail,
+            shard_roots=[tmp_path / "shard"],
+            temporary_roots=[tmp_path / "temp"],
+        )
+
+
+def test_serial_and_sharded_projection_match_with_origin_form_request_target(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    shard_root = tmp_path / "private" / "shard-0"
+    serial = Result(
+        "R2-claim-validate-guard",
+        "KILLED",
+        f"{source_root}/gitlab_feature_flags_route.go:42: unexpected request "
+        "/api/v4/projects/123/feature_flags?page=1&per_page=100 (0.31s)",
+        failing_proof="go test",
+    )
+    sharded = Result(
+        "R2-claim-validate-guard",
+        "KILLED",
+        f"{shard_root}/gitlab_feature_flags_route.go:42: unexpected request "
+        "/api/v4/projects/123/feature_flags?page=1&per_page=100 (1.22s)",
+        failing_proof="go test",
+    )
+
+    serial_projection = canonical_result_projection(
+        [serial], shard_roots=[source_root], temporary_roots=[]
+    )
+    sharded_projection = canonical_result_projection(
+        [sharded], shard_roots=[shard_root], temporary_roots=[]
+    )
+
+    assert serial_projection == sharded_projection
+
+
+def test_projection_normalizes_only_the_explicit_go_toolchain_root(
+    tmp_path: Path,
+) -> None:
+    serial_go_root = tmp_path / "serial-toolchain" / "go"
+    sharded_go_root = tmp_path / "sharded-toolchain" / "go"
+    serial_go_root.mkdir(parents=True)
+    sharded_go_root.mkdir(parents=True)
+    serial = Result(
+        "M1",
+        "KILLED",
+        f"{serial_go_root}/src/testing/testing.go:1974 +0x1a0",
+        failing_proof="go test",
+    )
+    sharded = Result(
+        "M1",
+        "KILLED",
+        f"{sharded_go_root}/src/testing/testing.go:1974 +0x1a0",
+        failing_proof="go test",
+    )
+
+    serial_projection = canonical_result_projection(
+        [serial],
+        shard_roots=[],
+        temporary_roots=[],
+        go_root=serial_go_root,
+    )
+    sharded_projection = canonical_result_projection(
+        [sharded],
+        shard_roots=[],
+        temporary_roots=[],
+        go_root=sharded_go_root,
+    )
+
+    assert serial_projection == sharded_projection
+    assert "<GOROOT>/src/testing/testing.go" in serial_projection[0]["detail"]
+    with pytest.raises(DetailNormalizationError, match="unrecognised absolute path"):
+        normalize_detail(
+            "/tmp/lookalike/src/testing/testing.go:1974 +0x1a0",
+            shard_roots=[],
+            temporary_roots=[],
+            go_root=serial_go_root,
+        )
+    with pytest.raises(DetailNormalizationError, match="existing toolchain directory"):
+        normalize_detail(
+            "failure /opt/foreign/state.txt",
+            shard_roots=[],
+            temporary_roots=[],
+            go_root=Path("/"),
+        )
+
+
+def test_projection_normalizes_go_test_package_summary_duration() -> None:
+    serial = Result(
+        "M1",
+        "KILLED",
+        "    FAIL\tgithub.com/full-chaos/dev-health-ops/internal/providersync\t0.363s\nFAIL",
+        failing_proof="go test",
+    )
+    sharded = Result(
+        "M1",
+        "KILLED",
+        "    FAIL\tgithub.com/full-chaos/dev-health-ops/internal/providersync\t0.362s\nFAIL",
+        failing_proof="go test",
+    )
+
+    serial_projection = canonical_result_projection(
+        [serial], shard_roots=[], temporary_roots=[]
+    )
+    sharded_projection = canonical_result_projection(
+        [sharded], shard_roots=[], temporary_roots=[]
+    )
+
+    assert serial_projection == sharded_projection
+    assert "\t<DURATION>\n" in serial_projection[0]["detail"]
+    assert (
+        normalize_detail(
+            "latency\t0.363s",
+            shard_roots=[],
+            temporary_roots=[],
+        )
+        == "latency\t0.363s"
+    )
+
+
+def test_normalizer_preserves_only_explicit_shell_temp_templates() -> None:
+    detail = (
+        'proof_dir=$(mktemp -d "${TMPDIR:-/tmp}/chaos3702-proof.XXXXXX") '
+        'cache_dir=$(mktemp -d "${TMPDIR:-/tmp}/chaos3702-cache.XXXXXX")'
+    )
+
+    assert normalize_detail(detail, shard_roots=[], temporary_roots=[]) == detail
+    with pytest.raises(DetailNormalizationError, match="unrecognised absolute path"):
+        normalize_detail(
+            "proof_dir=/chaos3702-proof.XXXXXX",
+            shard_roots=[],
+            temporary_roots=[],
+        )
+
+
 def test_root_lock_is_owned_before_staging_and_is_mutually_exclusive(
     tmp_path: Path,
 ) -> None:

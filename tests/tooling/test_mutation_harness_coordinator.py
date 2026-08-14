@@ -18,6 +18,7 @@ Path(cache_from_source("scripts/mutation_harness_coordinator.py")).unlink(
     missing_ok=True
 )
 
+import scripts.mutation_harness_coordinator as coordinator_module  # noqa: E402
 from scripts.mutation_harness import HarnessError, Result, _read_state  # noqa: E402
 from scripts.mutation_harness_coordinator import (  # noqa: E402
     AGGREGATE_CHILD_FAILED,
@@ -538,6 +539,124 @@ def test_manifest_serialization_rechecks_digests_and_run_root_binding(
             _write_manifest(lease)
     finally:
         lease.clear_and_release()
+
+
+def test_startup_collision_precedes_private_root_creation_and_preserves_run_dir(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    run_dir = source / ".mutation-harness" / "runs" / RUN_ID
+    run_dir.mkdir(parents=True)
+    sentinel = run_dir / "sentinel"
+    sentinel.write_bytes(b"pre-existing run evidence\n")
+    temporary_root = tmp_path / "private-run"
+    factory_called = False
+
+    def create_temporary_root(_run_id: str) -> Path:
+        nonlocal factory_called
+        factory_called = True
+        temporary_root.mkdir()
+        return temporary_root
+
+    with pytest.raises(FileExistsError):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_temporary_root,
+        )
+
+    assert not factory_called
+    assert not temporary_root.exists()
+    assert sentinel.read_bytes() == b"pre-existing run evidence\n"
+    assert sorted(path.name for path in run_dir.iterdir()) == ["sentinel"]
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_manifest_initialization_failure_removes_only_call_owned_empty_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = tmp_path / "private-run"
+
+    def create_temporary_root(_run_id: str) -> Path:
+        temporary_root.mkdir()
+        return temporary_root
+
+    def fail_manifest(_lease: object) -> None:
+        raise OSError("injected manifest write failure")
+
+    monkeypatch.setattr(coordinator_module, "_write_manifest", fail_manifest)
+
+    with pytest.raises(OSError, match="injected manifest write failure"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_temporary_root,
+        )
+
+    assert not temporary_root.exists()
+    assert not (source / ".mutation-harness" / "runs" / RUN_ID).exists()
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
+
+
+def test_state_initialization_failure_removes_manifest_and_call_owned_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    plan = source / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    temporary_root = tmp_path / "private-run"
+
+    def create_temporary_root(_run_id: str) -> Path:
+        temporary_root.mkdir()
+        return temporary_root
+
+    def fail_state(_root: Path, _state: object) -> None:
+        raise OSError("injected state write failure")
+
+    monkeypatch.setattr(coordinator_module, "_write_state", fail_state)
+
+    with pytest.raises(OSError, match="injected state write failure"):
+        begin_coordinator_run(
+            source,
+            run_id=RUN_ID,
+            source_head="head",
+            source_manifest=_source_manifest(),
+            source_manifest_digest=SOURCE_DIGEST,
+            plan_path=plan,
+            plan_digest=PLAN_DIGEST,
+            requested_shards=2,
+            effective_shards=2,
+            temporary_root_factory=create_temporary_root,
+        )
+
+    assert not temporary_root.exists()
+    assert not (source / ".mutation-harness" / "runs" / RUN_ID).exists()
+    assert _read_state(source) is None
+    assert not (source / ".mutation-harness" / "lock").exists()
 
 
 def test_coordinator_resequences_events_orders_results_and_reports_after_children(

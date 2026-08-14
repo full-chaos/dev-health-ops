@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "CHAOS-3807 Lane C coordinator guards",
-  "$limitation": "Pins coordinator-only assignment, aggregation, source recheck, completion barrier, crash classification, root locking, durable run-root authority, event sequencing, and fail-closed normalization. Execution-tree ownership cleanup and recovery liveness decisions belong to Lanes B and D.",
+  "$limitation": "Pins coordinator-only assignment, aggregation, source recheck, completion barrier, crash classification, root locking, transactional startup, durable run-root authority, event sequencing, and fail-closed normalization. Execution-tree ownership cleanup and recovery liveness decisions belong to Lanes B and D.",
   "build": [
     ".venv/bin/python",
     "-m",
@@ -168,6 +168,16 @@
       "rationale": "Recovery must receive the canonical run-level private root from durable manifest authority even when staging fails before the first shard is recorded.",
       "proof": [
         [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "manifest_records_run_temporary_root"]
+      ]
+    },
+    {
+      "id": "C17-pre-authority-private-root-cleanup",
+      "file": "scripts/mutation_harness_coordinator.py",
+      "find": "            temporary_root.rmdir()",
+      "replace": "            pass",
+      "rationale": "A startup failure before durable root-state authority must not orphan the empty private run root created by this coordinator call.",
+      "proof": [
+        [".venv/bin/python", "-m", "pytest", "-q", "--confcutdir=tests/tooling", "tests/tooling/test_mutation_harness_coordinator.py", "-k", "state_initialization_failure"]
       ]
     }
   ]

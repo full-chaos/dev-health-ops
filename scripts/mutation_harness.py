@@ -146,6 +146,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 if TYPE_CHECKING:
+    from scripts.mutation_harness_coordinator import TemporaryRootClaim
     from scripts.mutation_harness_execution_tree import (
         StagedExecutionTree as ExecutionStagedTree,
     )
@@ -1033,14 +1034,14 @@ def coordinator_run(
     def source_manifest_reader() -> str:
         return execution_tree.build_source_manifest(root).digest
 
-    def temporary_root_factory(run_id: str) -> Path:
+    def temporary_root_factory(run_id: str) -> TemporaryRootClaim:
         nonlocal temporary_root
         if temporary_root is not None:
             raise HarnessError("coordinator requested more than one temporary root")
         temporary_root = execution_tree.create_private_temp_root(
             prefix=f"mutation-harness-{run_id}-"
         )
-        return temporary_root
+        return coordinator.TemporaryRootClaim.created(temporary_root)
 
     def child_factory(assignment: Any, run_id: str) -> Any:
         if temporary_root is None:

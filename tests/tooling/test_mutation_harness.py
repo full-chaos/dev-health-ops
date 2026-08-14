@@ -125,10 +125,11 @@ def test_coordinator_state_blocks_verify_until_recovery(tree: Path) -> None:
     ]
 
 
-def test_sharding_interfaces_are_explicit_unimplemented_seams(tree: Path) -> None:
-    with pytest.raises(NotImplementedError):
-        _load_sharding_plan(tree / "plan.json", {})
-    with pytest.raises(NotImplementedError):
+def test_sharding_interfaces_are_wired_fail_closed_seams(tree: Path) -> None:
+    plan = _plan(tree, [_mutation()])
+
+    assert _load_sharding_plan(plan, {}) is None
+    with pytest.raises(HarnessError, match="git rev-parse"):
         stage_execution_tree(
             tree,
             tree / "shard",
@@ -138,16 +139,16 @@ def test_sharding_interfaces_are_explicit_unimplemented_seams(tree: Path) -> Non
             plan_digest="plan-digest",
             workspace_inputs=(),
         )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(HarnessError, match="does not opt in to sharding"):
         coordinator_run(
             tree,
-            tree / "plan.json",
+            plan,
             None,
             False,
             requested_shards=2,
             progress="human",
         )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(HarnessError, match="state"):
         recover_run(tree, "run-3807")
 
 
@@ -360,8 +361,11 @@ def test_serial_report_preserves_result_fields_and_adds_stream_paths(
     )
 
 
+@pytest.mark.parametrize("shard_arguments", [[], ["--shards", "1"]])
 def test_serial_cli_stdout_is_byte_compatible_golden(
-    tree: Path, capsys: pytest.CaptureFixture[str]
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+    shard_arguments: list[str],
 ) -> None:
     plan = _plan(
         tree,
@@ -383,6 +387,7 @@ def test_serial_cli_stdout_is_byte_compatible_golden(
                 str(plan),
                 "--progress",
                 "none",
+                *shard_arguments,
             ]
         )
         == 0

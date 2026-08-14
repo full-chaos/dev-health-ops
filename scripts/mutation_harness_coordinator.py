@@ -549,6 +549,37 @@ def _validate_run_temporary_root(source_root: Path, temporary_root: Path) -> Pat
     return resolved_temporary
 
 
+def _cleanup_pre_authority_startup(
+    temporary_root: Path | None,
+    run_dir: Path,
+    *,
+    run_dir_created: bool,
+    manifest_written: bool,
+) -> None:
+    """Remove only empty artifacts created by this startup attempt."""
+
+    if run_dir_created:
+        manifest_path = run_dir / MANIFEST_FILENAME
+        if (
+            manifest_written
+            and manifest_path.is_file()
+            and not manifest_path.is_symlink()
+        ):
+            try:
+                manifest_path.unlink()
+            except OSError:
+                pass
+        try:
+            run_dir.rmdir()
+        except OSError:
+            pass
+    if temporary_root is not None:
+        try:
+            temporary_root.rmdir()
+        except OSError:
+            pass
+
+
 def begin_coordinator_run(
     root: Path,
     *,
@@ -571,6 +602,12 @@ def begin_coordinator_run(
             "source manifest mapping digest does not match source_manifest_digest"
         )
     lock = acquire_lock(root)
+    run_dir = (_state_dir(root) / RUNS_DIRNAME / run_id).resolve()
+    state_root = _state_dir(root).resolve()
+    temporary_root: Path | None = None
+    run_dir_created = False
+    manifest_written = False
+    authority_persisted = False
     try:
         existing = _read_state(root)
         if existing:
@@ -578,14 +615,17 @@ def begin_coordinator_run(
                 "root state exists after the coordinator acquired the lock; "
                 "recover it before staging"
             )
+        if not run_dir.is_relative_to(state_root):
+            raise HarnessError("coordinator run directory escapes the state root")
+        if run_dir.exists() or run_dir.is_symlink():
+            raise FileExistsError(
+                f"coordinator run directory already exists: {run_dir}"
+            )
         temporary_root = _validate_run_temporary_root(
             root, temporary_root_factory(run_id)
         )
-        run_dir = (_state_dir(root) / RUNS_DIRNAME / run_id).resolve()
-        state_root = _state_dir(root).resolve()
-        if not run_dir.is_relative_to(state_root):
-            raise HarnessError("coordinator run directory escapes the state root")
         run_dir.mkdir(parents=True, exist_ok=False)
+        run_dir_created = True
         manifest_path = (run_dir / MANIFEST_FILENAME).resolve()
         state: dict[str, Any] = {
             "run_id": run_id,
@@ -605,9 +645,19 @@ def begin_coordinator_run(
             "shards": [],
         }
         lease = CoordinatorLease(root, lock, state)
+        _write_manifest(lease)
+        manifest_written = True
         lease.persist()
+        authority_persisted = True
         return lease
     except BaseException:
+        if not authority_persisted:
+            _cleanup_pre_authority_startup(
+                temporary_root,
+                run_dir,
+                run_dir_created=run_dir_created,
+                manifest_written=manifest_written,
+            )
         release_lock(lock)
         raise
 

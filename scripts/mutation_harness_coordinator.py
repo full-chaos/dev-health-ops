@@ -547,6 +547,7 @@ def normalize_detail(
 
     normalized = detail
     replacements: list[tuple[str, str]] = []
+    resolved_go_root: Path | None = None
     for path in shard_roots:
         replacements.append((str(path.resolve()), "<SHARD_ROOT>"))
     for path in temporary_roots:
@@ -562,11 +563,14 @@ def normalize_detail(
             raise DetailNormalizationError(
                 f"go_root is not a canonical, existing toolchain directory: {go_root}"
             )
-        replacements.append((str(resolved_go_root), "<GOROOT>"))
     for original, marker in sorted(
         replacements, key=lambda item: len(item[0]), reverse=True
     ):
         normalized = normalized.replace(original, marker)
+    if resolved_go_root is not None:
+        normalized = _replace_bound_absolute_root(
+            normalized, resolved_go_root, "<GOROOT>"
+        )
     normalized = _DURATION_RE.sub("<DURATION>", normalized)
     normalized = _GO_TEST_PACKAGE_DURATION_RE.sub(r"\g<prefix><DURATION>", normalized)
     request_target_spans = _contextual_request_target_spans(normalized)
@@ -592,6 +596,19 @@ def normalize_detail(
             f"unrecognised absolute path in result detail: {match.group(0)!r}"
         )
     return normalized
+
+
+def _replace_bound_absolute_root(detail: str, root: Path, marker: str) -> str:
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9_.>:/\\-])"
+        + re.escape(str(root))
+        + _absolute_root_right_boundary()
+    )
+    return pattern.sub(marker, detail)
+
+
+def _absolute_root_right_boundary() -> str:
+    return r"(?=$|" + re.escape(os.sep) + r"|[\s\]\[(){}<>:'\"`,;])"
 
 
 def _contextual_request_target_spans(detail: str) -> tuple[tuple[int, int], ...]:

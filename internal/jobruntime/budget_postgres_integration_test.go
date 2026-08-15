@@ -291,6 +291,51 @@ func TestPostgresConcurrencyBudgetIsFleetWideAcrossOSProcesses(t *testing.T) {
 	}
 }
 
+func TestPostgresConcurrencyBudgetSignalsLostLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE public.worker_concurrency_leases (
+			id uuid PRIMARY KEY, budget_key varchar(320) NOT NULL,
+			job_kind varchar(96) NOT NULL, concurrency_scope varchar(16) NOT NULL,
+			organization_id uuid NULL, owner_token uuid NOT NULL UNIQUE,
+			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := NewPostgresConcurrencyBudget(pool, nil)
+	store.leaseDuration = time.Second
+	lease, err := store.Acquire(ctx, BudgetRequest{
+		Kind: "system.heartbeat", ConcurrencyScope: "fleet", ConcurrencyLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	owned, ok := lease.(interface{ Lost() <-chan struct{} })
+	if !ok {
+		t.Fatal("lease does not expose a loss signal")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM public.worker_concurrency_leases`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-owned.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease loss was not signaled after fenced renewal affected zero rows")
+	}
+}
+
 func TestPostgresConcurrencyBudgetProcessWorker(t *testing.T) {
 	if os.Getenv("CHAOS3844_PROCESS_WORKER") != "1" {
 		t.Skip("child process entry point")

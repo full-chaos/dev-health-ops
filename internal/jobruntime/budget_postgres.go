@@ -168,6 +168,7 @@ func (store *PostgresConcurrencyBudget) tryAcquire(
 		leaseDuration: store.leaseDuration,
 		stopRenewal:   make(chan struct{}),
 		renewalDone:   make(chan struct{}),
+		lost:          make(chan struct{}),
 	}
 	go lease.renew()
 	return lease, leased + 1, deleted.RowsAffected(), nil
@@ -180,6 +181,8 @@ type postgresConcurrencyLease struct {
 	leaseDuration time.Duration
 	stopRenewal   chan struct{}
 	renewalDone   chan struct{}
+	lost          chan struct{}
+	lostOnce      sync.Once
 	once          sync.Once
 }
 
@@ -201,6 +204,22 @@ func (lease *postgresConcurrencyLease) Release() {
 	})
 }
 
+// Lost closes when the lease can no longer be renewed. Consumers must cancel
+// the running handler context when this signal fires.
+func (lease *postgresConcurrencyLease) Lost() <-chan struct{} {
+	if lease == nil {
+		return nil
+	}
+	return lease.lost
+}
+
+func (lease *postgresConcurrencyLease) markLost() {
+	if lease == nil || lease.lost == nil {
+		return
+	}
+	lease.lostOnce.Do(func() { close(lease.lost) })
+}
+
 func (lease *postgresConcurrencyLease) renew() {
 	interval := lease.leaseDuration / 3
 	if interval < 100*time.Millisecond {
@@ -215,13 +234,17 @@ func (lease *postgresConcurrencyLease) renew() {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), renewalQueryTimeout(interval))
-			_, _ = lease.pool.Exec(ctx, `
+			result, err := lease.pool.Exec(ctx, `
 				UPDATE public.worker_concurrency_leases
 				SET lease_expires_at = statement_timestamp() + ($3::bigint * interval '1 second'),
 					updated_at = statement_timestamp()
 				WHERE id = $1 AND owner_token = $2 AND lease_expires_at > statement_timestamp()`,
 				lease.id, lease.token, int64(lease.leaseDuration/time.Second))
 			cancel()
+			if err != nil || result.RowsAffected() != 1 {
+				lease.markLost()
+				return
+			}
 		}
 	}
 }

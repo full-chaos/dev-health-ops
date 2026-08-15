@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "name": "chaos-3845 connection budgets",
+  "$limitation": "Pins the reviewed fleet budget arithmetic in internal/deploymentcontract/manifest.go and the checked-in singleton restriction for stream-external. This plan does not duplicate the manifest math in the tests; it relies on the existing contract assertions for the exact totals and the explicit one-replica check for the singleton guard.",
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/deploymentcontract"
+  ],
+  "mutations": [
+    {
+      "id": "CB01-queue-session-replica-multiplier",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tsummary.QueueSessionClientConnections += process.MaxReplicas * process.QueueControlMaxConnections",
+      "replace": "\t\tsummary.QueueSessionClientConnections += process.QueueControlMaxConnections",
+      "expect_occurrences": 1,
+      "rationale": "Queue session clients must scale with the reviewed replica count, not the per-process connection limit alone.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB02-domain-transaction-replica-multiplier",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tsummary.DomainTransactionClientConnections += process.MaxReplicas * process.DomainMaxConnections",
+      "replace": "\t\tsummary.DomainTransactionClientConnections += process.DomainMaxConnections",
+      "expect_occurrences": 1,
+      "rationale": "Domain transaction clients must scale with the reviewed replica count, not the per-process connection limit alone.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB03-coordinator-session-replica-multiplier",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tsummary.CoordinatorSessionClientConnections += process.MaxReplicas * process.CoordinatorMaxConnections",
+      "replace": "\t\tsummary.CoordinatorSessionClientConnections += process.CoordinatorMaxConnections",
+      "expect_occurrences": 1,
+      "rationale": "Coordinator session clients must scale with the reviewed replica count, not the per-process connection limit alone.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB04-server-reserved-clause",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\tsummary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +",
+      "replace": "\tsummary.ServerConnectionFootprint = 0 +",
+      "expect_occurrences": 1,
+      "rationale": "The fleet footprint must include the reserved PostgreSQL connections, or the server budget can drift above the reviewed ceiling.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB05-server-transaction-pool-clause",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tmanifest.PostgresBudget.PgBouncerTransactionPoolSize*manifest.PostgresBudget.PgBouncerTransactionServerPoolCount +",
+      "replace": "\t\tmanifest.PostgresBudget.PgBouncerTransactionPoolSize +",
+      "expect_occurrences": 1,
+      "rationale": "The fleet footprint must include the transaction pool fanout, not only the base pool size.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB06-server-queue-pool-clause",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tmanifest.PostgresBudget.PgBouncerQueueSessionPoolSize +",
+      "replace": "\t\t0 +",
+      "expect_occurrences": 1,
+      "rationale": "The fleet footprint must include the queue session pool, or the server budget will over-admit queue clients.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB07-server-coordinator-pool-clause",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tmanifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize",
+      "replace": "\t\t0",
+      "expect_occurrences": 1,
+      "rationale": "The fleet footprint must include the coordinator session pool, or the control-plane budget becomes undercounted.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCheckedInManifestIsValidAndBounded$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    },
+    {
+      "id": "CB08-stream-external-singleton",
+      "file": "internal/deploymentcontract/manifest.go",
+      "find": "\t\tif process.Name == \"stream-external\" && process.MaxReplicas != 1 {",
+      "replace": "\t\tif process.Name == \"stream-external\" && process.MaxReplicas != 2 {",
+      "expect_occurrences": 1,
+      "rationale": "The external stream must remain a one-replica singleton until a separate partitioning design proves another topology.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestManifestKeepsExternalStreamSingleton$",
+          "./internal/deploymentcontract"
+        ]
+      ]
+    }
+  ]
+}

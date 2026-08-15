@@ -210,9 +210,7 @@ func (c RuntimeConfig) SafeAttributes() map[string]any {
 		"coordinator_mode":              c.CoordinatorMode,
 		"domain_transaction_pooler":     c.DomainTransactionPooler,
 		"domain_max_connections":        c.DomainMaxConns,
-		"domain_max_headroom":           16 - c.DomainMaxConns,
 		"queue_control_max_connections": c.QueueMaxConns,
-		"queue_control_max_headroom":    4 - c.QueueMaxConns,
 		"coordinator_required":          c.RequireCoordinator,
 		"total_max_connections":         c.DomainMaxConns + c.QueueMaxConns,
 	}
@@ -223,7 +221,6 @@ func (c RuntimeConfig) SafeAttributes() map[string]any {
 		attributes["coordinator_configured"] = c.CoordinatorURI != ""
 		attributes["coordinator_database_role"] = c.CoordinatorRole
 		attributes["coordinator_max_connections"] = c.CoordinatorMaxConns
-		attributes["coordinator_max_headroom"] = 4 - c.CoordinatorMaxConns
 		attributes["total_max_connections"] = c.DomainMaxConns + c.QueueMaxConns + c.CoordinatorMaxConns
 	}
 	return attributes

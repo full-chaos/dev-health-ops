@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, the bounded whole-recorded-root ENOENT reboot path with a final absence recheck, the recorded temporary-root final-component lexical type guard, preflight-to-cleanup temporary-root identity binding, per-shard root, owner-marker, and leased-lock identity binding, fail-closed default refusal of any still-existing recorded Git shard, and the trusted-test-only fd capability boundary with an exit identity recheck. Default recovery never invokes Git porcelain or moves an existing shard. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, the bounded whole-recorded-root ENOENT reboot path with a final absence recheck, the recorded temporary-root final-component lexical type guard, preflight-to-cleanup temporary-root identity binding, per-shard root, owner-marker, and leased-lock identity binding, fail-closed default refusal of any still-existing recorded or partially staged Git shard before output or durable-state mutation, and the trusted-test-only fd capability boundary with an exit identity recheck. Default recovery never invokes Git porcelain or moves an existing shard. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -258,6 +258,19 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_cleanup_callback_rechecks_every_open_capability_at_exit"
+      ]]
+    },
+    {
+      "id": "D20-default-partial-git-refusal-before-state-change",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "    if partials and cleanup_owned_tree is None:\n        raise RecoveryError(\n            \"default recovery refuses an existing staged Git tree; \"",
+      "replace": "    if False and partials and cleanup_owned_tree is None:\n        raise RecoveryError(\n            \"default recovery refuses an existing staged Git tree; \"",
+      "rationale": "default public recovery must refuse a still-existing partial Git shard before force preflight output, lifecycle mutation, durable-state writes, cleanup, or loss of retry semantics",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_default_partial_recovery_refuses_before_output_or_state_change"
       ]]
     }
   ]

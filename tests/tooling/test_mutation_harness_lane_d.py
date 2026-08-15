@@ -1313,6 +1313,97 @@ def _zero_shard_staging_fixture(
 
 
 @pytest.mark.parametrize("force", [False, True])
+def test_default_partial_recovery_refuses_before_output_or_state_change(
+    tmp_path: Path, force: bool
+) -> None:
+    root, temporary_root, shard, marker = _zero_shard_staging_fixture(tmp_path)
+    assert shard is not None and marker is not None
+    marker_bytes = marker.read_bytes()
+    shutil.rmtree(shard)
+    _git(root, "init", "-q")
+    source_sentinel = root / "source-sentinel.txt"
+    source_sentinel.write_text("do not change source", encoding="utf-8")
+    _git(root, "add", source_sentinel.name)
+    _git(
+        root,
+        "-c",
+        "user.name=Mutation Harness Test",
+        "-c",
+        "user.email=mutation-harness@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    _git(root, "worktree", "add", "-q", "--detach", str(shard), "HEAD")
+    marker.parent.mkdir()
+    marker.write_bytes(marker_bytes)
+    sentinel = shard / "real-git-partial-sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    temporary_root.chmod(0o700)
+
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    tree_before = _tree_file_bytes(shard)
+    tree_identity_before = shard.stat().st_dev, shard.stat().st_ino
+    private_root_identity_before = (
+        temporary_root.stat().st_dev,
+        temporary_root.stat().st_ino,
+    )
+    source_sentinel_before = source_sentinel.read_bytes()
+    source_status_before = _git(
+        root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    ).stdout
+    registration_before = _git(root, "worktree", "list", "--porcelain").stdout
+    output = StringIO()
+    errors: list[str] = []
+
+    for _ in range(2):
+        try:
+            recover_run(root, "run-3807", force=force, output=output)
+        except RecoveryError as exc:
+            errors.append(str(exc))
+
+    expected_error = (
+        "default recovery refuses an existing staged Git tree; "
+        "private tree and root state remain"
+    )
+    assert {
+        "errors": errors,
+        "output": output.getvalue(),
+        "state": state_path.read_bytes(),
+        "manifest": manifest_path.read_bytes(),
+        "tree": _tree_file_bytes(shard),
+        "tree_identity": (shard.stat().st_dev, shard.stat().st_ino),
+        "private_root_identity": (
+            temporary_root.stat().st_dev,
+            temporary_root.stat().st_ino,
+        ),
+        "private_root_mode": stat.S_IMODE(temporary_root.stat().st_mode),
+        "source_sentinel": source_sentinel.read_bytes(),
+        "source_status": _git(
+            root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ).stdout,
+        "registration": _git(root, "worktree", "list", "--porcelain").stdout,
+    } == {
+        "errors": [expected_error, expected_error],
+        "output": "",
+        "state": state_before,
+        "manifest": manifest_before,
+        "tree": tree_before,
+        "tree_identity": tree_identity_before,
+        "private_root_identity": private_root_identity_before,
+        "private_root_mode": 0o700,
+        "source_sentinel": source_sentinel_before,
+        "source_status": source_status_before,
+        "registration": registration_before,
+    }
+
+
+@pytest.mark.parametrize("force", [False, True])
 def test_zero_recorded_shards_recovers_owned_partial_staging_tree(
     tmp_path: Path, force: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:

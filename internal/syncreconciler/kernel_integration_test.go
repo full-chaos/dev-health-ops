@@ -931,6 +931,7 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
 		`CREATE TABLE public.sync_dispatch_transport_routes (
 			kind text PRIMARY KEY,
 			transport text NOT NULL,

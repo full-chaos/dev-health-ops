@@ -110,7 +110,7 @@ func buildReportWorker(
 		clickhouseConnection,
 		jobruntime.Dependencies{
 			Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
-			Budget: newOperationalBudget(), Idempotency: idempotency,
+			Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 		},
 	)
 	if err != nil {

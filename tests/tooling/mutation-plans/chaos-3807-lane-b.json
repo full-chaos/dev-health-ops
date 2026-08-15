@@ -57,8 +57,8 @@
     {
       "id": "B4",
       "file": "scripts/mutation_harness_execution_tree.py",
-      "find": "        shutil.copy2(source, destination, follow_symlinks=True)\n",
-      "replace": "        os.link(source, destination)\n",
+      "find": "            shutil.copy2(source, destination, follow_symlinks=True)\n",
+      "replace": "            os.link(source, destination)\n",
       "rationale": "regular workspace-input files must have independent inodes rather than hard links",
       "proof": [[
         ".venv/bin/python",
@@ -72,8 +72,8 @@
     {
       "id": "B5",
       "file": "scripts/mutation_harness_execution_tree.py",
-      "find": "        shutil.copy2(resolved, destination, follow_symlinks=True)\n",
-      "replace": "        os.symlink(os.readlink(source), destination)\n",
+      "find": "            shutil.copy2(source_target, destination, follow_symlinks=True)\n",
+      "replace": "            os.symlink(os.readlink(source), destination)\n",
       "rationale": "workspace-input symlinks must be materialized as independent regular files",
       "proof": [[
         ".venv/bin/python",
@@ -247,6 +247,51 @@
         "-q",
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_execution_tree.py::test_staging_failure_after_marker_rolls_back_only_the_owned_partial_tree"
+      ]]
+    },
+    {
+      "id": "B17",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "        try:\n            resolved_source.relative_to(source_root.resolve(strict=True))\n        except ValueError:\n            raise HarnessError(\n                f\"workspace input resolves outside repository: {relative}\"\n            ) from None\n",
+      "replace": "        _ = source_root\n",
+      "rationale": "a declared top-level workspace input must not resolve outside the invoking repository",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_refuses_a_top_level_link_outside_the_repository"
+      ]]
+    },
+    {
+      "id": "B18",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "            try:\n                resolved.relative_to(directory_root)\n            except ValueError:\n                raise HarnessError(\n                    f\"workspace input directory link escapes workspace input: {source}\"\n                ) from None\n",
+      "replace": "            _ = directory_root\n",
+      "rationale": "a nested directory link must remain inside its declared workspace-input tree",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_refuses_an_external_directory_symlink"
+      ]]
+    },
+    {
+      "id": "B19",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    if identity in active_directories:\n        raise HarnessError(f\"workspace input directory link cycle: {source}\")\n",
+      "replace": "    if False and identity in active_directories:\n        raise HarnessError(f\"workspace input directory link cycle: {source}\")\n",
+      "rationale": "directory aliases must not recursively revisit an active source inode",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_refuses_a_directory_symlink_cycle"
       ]]
     }
   ]

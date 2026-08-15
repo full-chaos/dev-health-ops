@@ -665,8 +665,31 @@ def _materialize_workspace_inputs(
         destination = destination_root / relative
         if not source.exists() and not source.is_symlink():
             raise HarnessError(f"workspace input does not exist: {relative}")
-        _copy_workspace_path(source, destination)
-        _assert_independent_copy(source, destination)
+        try:
+            resolved_source = source.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise HarnessError(
+                f"workspace input cannot be resolved: {relative}"
+            ) from exc
+        try:
+            resolved_source.relative_to(source_root.resolve(strict=True))
+        except ValueError:
+            raise HarnessError(
+                f"workspace input resolves outside repository: {relative}"
+            ) from None
+        directory_root = (
+            resolved_source if resolved_source.is_dir() else resolved_source.parent
+        )
+        _copy_workspace_path(
+            source,
+            destination,
+            directory_root=directory_root,
+        )
+        _assert_independent_copy(
+            source,
+            destination,
+            directory_root=directory_root,
+        )
         if destination.is_dir() and (destination / "pyvenv.cfg").is_file():
             relocate_python_environment(
                 source_root=source_root,
@@ -700,46 +723,98 @@ def _validated_workspace_input(source_root: Path, raw: str) -> str:
     return relative
 
 
-def _copy_workspace_path(source: Path, destination: Path) -> None:
+def _workspace_source_target(
+    source: Path, *, directory_root: Path
+) -> tuple[Path, os.stat_result]:
+    """Resolve one source path and contain directory links to the input root."""
+
     metadata = source.lstat()
     if stat.S_ISLNK(metadata.st_mode):
-        resolved = source.resolve(strict=True)
-        resolved_mode = resolved.stat().st_mode
-        if stat.S_ISREG(resolved_mode):
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(resolved, destination, follow_symlinks=True)
-            return
-        if stat.S_ISDIR(resolved_mode):
-            _copy_workspace_path(resolved, destination)
-            return
-        if not resolved.is_file():
+        try:
+            resolved = source.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
             raise HarnessError(
-                f"workspace input link must resolve to a regular file or directory: {source}"
-            )
-    if stat.S_ISREG(metadata.st_mode):
+                f"workspace input link cannot be resolved: {source}"
+            ) from exc
+        resolved_metadata = resolved.stat()
+        if stat.S_ISDIR(resolved_metadata.st_mode):
+            try:
+                resolved.relative_to(directory_root)
+            except ValueError:
+                raise HarnessError(
+                    f"workspace input directory link escapes workspace input: {source}"
+                ) from None
+        return resolved, resolved_metadata
+    return source, metadata
+
+
+def _enter_workspace_directory(
+    source: Path,
+    metadata: os.stat_result,
+    active_directories: frozenset[tuple[int, int]],
+) -> frozenset[tuple[int, int]]:
+    identity = (metadata.st_dev, metadata.st_ino)
+    if identity in active_directories:
+        raise HarnessError(f"workspace input directory link cycle: {source}")
+    return active_directories | {identity}
+
+
+def _copy_workspace_path(
+    source: Path,
+    destination: Path,
+    *,
+    directory_root: Path,
+    active_directories: frozenset[tuple[int, int]] = frozenset(),
+) -> None:
+    source_target, target_metadata = _workspace_source_target(
+        source,
+        directory_root=directory_root,
+    )
+    if stat.S_ISREG(target_metadata.st_mode):
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination, follow_symlinks=True)
+        if source_target == source:
+            shutil.copy2(source, destination, follow_symlinks=True)
+        else:
+            shutil.copy2(source_target, destination, follow_symlinks=True)
         return
-    if not stat.S_ISDIR(metadata.st_mode):
+    if not stat.S_ISDIR(target_metadata.st_mode):
         raise HarnessError(f"workspace input has unsupported type: {source}")
 
+    active = _enter_workspace_directory(
+        source_target,
+        target_metadata,
+        active_directories,
+    )
     destination.mkdir(parents=True)
-    shutil.copystat(source, destination, follow_symlinks=True)
-    for child in sorted(source.iterdir(), key=lambda path: path.name):
-        _copy_workspace_path(child, destination / child.name)
+    shutil.copystat(source_target, destination, follow_symlinks=True)
+    for child in sorted(source_target.iterdir(), key=lambda path: path.name):
+        _copy_workspace_path(
+            child,
+            destination / child.name,
+            directory_root=directory_root,
+            active_directories=active,
+        )
 
 
-def _assert_independent_copy(source: Path, destination: Path) -> None:
-    source_metadata = source.lstat()
+def _assert_independent_copy(
+    source: Path,
+    destination: Path,
+    *,
+    directory_root: Path,
+    active_directories: frozenset[tuple[int, int]] = frozenset(),
+) -> None:
+    source_target, source_target_metadata = _workspace_source_target(
+        source,
+        directory_root=directory_root,
+    )
     destination_metadata = destination.lstat()
     if stat.S_ISLNK(destination_metadata.st_mode):
         raise HarnessError(f"workspace input copy contains a symlink: {destination}")
-    source_target = (
-        source.resolve(strict=True) if stat.S_ISLNK(source_metadata.st_mode) else source
-    )
-    source_target_metadata = source_target.stat()
     if stat.S_ISREG(destination_metadata.st_mode):
-        source_identity = (source_target.stat().st_dev, source_target.stat().st_ino)
+        source_identity = (
+            source_target_metadata.st_dev,
+            source_target_metadata.st_ino,
+        )
         destination_identity = (
             destination_metadata.st_dev,
             destination_metadata.st_ino,
@@ -753,12 +828,22 @@ def _assert_independent_copy(source: Path, destination: Path) -> None:
         raise HarnessError(
             f"workspace input copy changed filesystem type: {destination}"
         )
+    active = _enter_workspace_directory(
+        source_target,
+        source_target_metadata,
+        active_directories,
+    )
     source_children = {child.name: child for child in source_target.iterdir()}
     destination_children = {child.name: child for child in destination.iterdir()}
     if source_children.keys() != destination_children.keys():
         raise HarnessError(f"workspace input copy is incomplete: {destination}")
     for name, source_child in source_children.items():
-        _assert_independent_copy(source_child, destination_children[name])
+        _assert_independent_copy(
+            source_child,
+            destination_children[name],
+            directory_root=directory_root,
+            active_directories=active,
+        )
 
 
 def _replace_invoking_root(path: Path, invoking: bytes, shard: bytes) -> None:

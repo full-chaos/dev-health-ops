@@ -169,6 +169,26 @@ class TemporaryRootIdentity:
 
 
 @dataclass(frozen=True)
+class FilesystemIdentity:
+    """Stable identity for one preflight-authorized filesystem object."""
+
+    device: int
+    inode: int
+    canonical_path: Path
+
+
+@dataclass(frozen=True)
+class ShardCleanupAuthority:
+    """Every filesystem identity that authorizes one shard cleanup."""
+
+    shard_index: int
+    root: Path
+    root_identity: FilesystemIdentity
+    ownership_marker_identity: FilesystemIdentity
+    liveness_lock_identity: FilesystemIdentity
+
+
+@dataclass(frozen=True)
 class RecoveryPreflight:
     """The exact manifest-bounded actions and unknown evidence."""
 
@@ -176,6 +196,7 @@ class RecoveryPreflight:
     leave: tuple[Path, ...]
     unknown: tuple[str, ...]
     temporary_root_identity: TemporaryRootIdentity | None
+    shard_authorities: tuple[ShardCleanupAuthority, ...]
 
     def render(self, run_id: str) -> str:
         lines = [f"FORCE RECOVERY PREFLIGHT {run_id}", "REMOVE:"]
@@ -201,21 +222,36 @@ def hold_liveness_lock(path: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
-def _acquire_liveness_lease(path: Path) -> int | None:
+def _acquire_liveness_lease(
+    path: Path, expected_identity: FilesystemIdentity
+) -> int | None:
     """Hold the shard lock through cleanup, or return None for a live child."""
 
-    if path.is_symlink():
-        raise RecoveryError(f"liveness lock {path} is a symlink")
+    flags = os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+        descriptor = os.open(path, flags)
     except OSError as exc:
         raise RecoveryError(f"liveness lock {path} could not be opened: {exc}") from exc
     try:
+        opened = os.fstat(descriptor)
+        opened_identity = (opened.st_dev, opened.st_ino)
+        expected = (expected_identity.device, expected_identity.inode)
+        if not stat.S_ISREG(opened.st_mode) or opened_identity != expected:
+            raise RecoveryError(
+                f"liveness lock {path} identity changed while it was opened"
+            )
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(descriptor)
             return None
+        if (
+            _capture_filesystem_identity(path, "liveness lock", expect_directory=False)
+            != expected_identity
+        ):
+            raise RecoveryError(
+                f"liveness lock {path} identity changed while acquiring its lease"
+            )
         return descriptor
     except Exception:
         os.close(descriptor)
@@ -479,6 +515,36 @@ def _require_existing_private_temporary_root(
         )
 
 
+def _capture_filesystem_identity(
+    path: Path, label: str, *, expect_directory: bool
+) -> FilesystemIdentity:
+    """Capture one canonical non-symlink object with a stable lstat identity."""
+
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise RecoveryError(f"{label} {path} could not be inspected: {exc}") from exc
+    expected_type = stat.S_ISDIR if expect_directory else stat.S_ISREG
+    expected_name = "directory" if expect_directory else "regular file"
+    if not expected_type(before.st_mode):
+        kind = "symlink" if stat.S_ISLNK(before.st_mode) else "wrong type"
+        raise RecoveryError(f"{label} {path} is a {kind}, expected {expected_name}")
+    try:
+        canonical_path = path.resolve(strict=True)
+        after = path.lstat()
+    except OSError as exc:
+        raise RecoveryError(f"{label} {path} could not be resolved: {exc}") from exc
+    before_identity = (before.st_dev, before.st_ino)
+    after_identity = (after.st_dev, after.st_ino)
+    if not expected_type(after.st_mode) or after_identity != before_identity:
+        raise RecoveryError(f"{label} {path} identity changed during inspection")
+    return FilesystemIdentity(
+        device=before.st_dev,
+        inode=before.st_ino,
+        canonical_path=canonical_path,
+    )
+
+
 def _shard_authority(raw_shards: object, label: str) -> list[dict[str, object]]:
     if not isinstance(raw_shards, list):
         raise RecoveryError(f"{label} shards must be a list")
@@ -717,6 +783,77 @@ def _marker_error(record: RunRecord, shard: ShardRecord) -> str | None:
     return None
 
 
+def _capture_shard_cleanup_authority(
+    record: RunRecord,
+    shard: ShardRecord,
+    temporary_root_identity: TemporaryRootIdentity,
+) -> ShardCleanupAuthority:
+    """Capture every path identity used to authorize one shard cleanup."""
+
+    _require_existing_private_temporary_root(record, temporary_root_identity)
+    root_identity = _capture_filesystem_identity(
+        shard.root, "shard root", expect_directory=True
+    )
+    marker_identity = _capture_filesystem_identity(
+        shard.ownership_marker, "ownership marker", expect_directory=False
+    )
+    lock_identity = _capture_filesystem_identity(
+        shard.liveness_lock, "liveness lock", expect_directory=False
+    )
+    if root_identity.canonical_path != shard.root:
+        raise RecoveryError(f"shard root {shard.root} is not canonical")
+    if marker_identity.canonical_path != shard.ownership_marker:
+        raise RecoveryError(
+            f"ownership marker {shard.ownership_marker} is not canonical"
+        )
+    if lock_identity.canonical_path != shard.liveness_lock:
+        raise RecoveryError(f"liveness lock {shard.liveness_lock} is not canonical")
+    _require_existing_private_temporary_root(record, temporary_root_identity)
+    return ShardCleanupAuthority(
+        shard_index=shard.shard_index,
+        root=shard.root,
+        root_identity=root_identity,
+        ownership_marker_identity=marker_identity,
+        liveness_lock_identity=lock_identity,
+    )
+
+
+def _require_shard_cleanup_authority(
+    record: RunRecord,
+    shard: ShardRecord,
+    temporary_root_identity: TemporaryRootIdentity,
+    expected: ShardCleanupAuthority,
+) -> None:
+    """Require the exact shard, marker, and lock identities bound by preflight."""
+
+    actual = _capture_shard_cleanup_authority(record, shard, temporary_root_identity)
+    if actual != expected:
+        if actual.root_identity != expected.root_identity:
+            label = f"shard root {shard.root}"
+        elif actual.ownership_marker_identity != expected.ownership_marker_identity:
+            label = f"ownership marker {shard.ownership_marker}"
+        else:
+            label = f"liveness lock {shard.liveness_lock}"
+        raise RecoveryError(f"{label} identity changed after preflight")
+
+
+def _require_preflight_shard_authorities(
+    record: RunRecord,
+    preflight: RecoveryPreflight,
+    temporary_root_identity: TemporaryRootIdentity,
+) -> None:
+    """Recheck all destructive targets before recovery changes durable state."""
+
+    shards = {(shard.shard_index, shard.root): shard for shard in record.shards}
+    for authority in preflight.shard_authorities:
+        shard = shards.get((authority.shard_index, authority.root))
+        if shard is None:
+            raise RecoveryError("recovery preflight names an unknown shard authority")
+        _require_shard_cleanup_authority(
+            record, shard, temporary_root_identity, authority
+        )
+
+
 def _partial_staging_shards(record: RunRecord) -> tuple[PartialShardRecord, ...]:
     """Validate every entry before authorizing any pre-child staging cleanup."""
 
@@ -811,14 +948,42 @@ def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, .
     leave: list[Path] = []
     unknown: list[str] = []
     leases: list[int] = []
+    authorities: list[ShardCleanupAuthority] = []
     for shard in record.shards:
+        try:
+            marker_identity = _capture_filesystem_identity(
+                shard.ownership_marker,
+                "ownership marker",
+                expect_directory=False,
+            )
+            root_identity = _capture_filesystem_identity(
+                shard.root, "shard root", expect_directory=True
+            )
+        except RecoveryError as exc:
+            leave.append(shard.root)
+            unknown.append(str(exc))
+            continue
         marker_error = _marker_error(record, shard)
         if marker_error is not None:
             leave.append(shard.root)
             unknown.append(marker_error)
             continue
         try:
-            lease = _acquire_liveness_lease(shard.liveness_lock)
+            authority = _capture_shard_cleanup_authority(
+                record, shard, temporary_root_identity
+            )
+            if authority.ownership_marker_identity != marker_identity:
+                raise RecoveryError(
+                    f"ownership marker {shard.ownership_marker} identity changed "
+                    "during preflight"
+                )
+            if authority.root_identity != root_identity:
+                raise RecoveryError(
+                    f"shard root {shard.root} identity changed during preflight"
+                )
+            lease = _acquire_liveness_lease(
+                shard.liveness_lock, authority.liveness_lock_identity
+            )
         except RecoveryError as exc:
             leave.append(shard.root)
             unknown.append(str(exc))
@@ -832,7 +997,18 @@ def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, .
             continue
         if lease is None:
             raise RecoveryError("liveness decision and acquired lease disagree")
+        try:
+            _require_shard_cleanup_authority(
+                record, shard, temporary_root_identity, authority
+            )
+        except RecoveryError as exc:
+            fcntl.flock(lease, fcntl.LOCK_UN)
+            os.close(lease)
+            leave.append(shard.root)
+            unknown.append(str(exc))
+            continue
         leases.append(lease)
+        authorities.append(authority)
         remove.append(shard.root)
     return (
         RecoveryPreflight(
@@ -840,6 +1016,7 @@ def _build_preflight(record: RunRecord) -> tuple[RecoveryPreflight, tuple[int, .
             leave=tuple(leave),
             unknown=tuple(unknown),
             temporary_root_identity=temporary_root_identity,
+            shard_authorities=tuple(authorities),
         ),
         tuple(leases),
     )
@@ -946,10 +1123,13 @@ def _recover_one(
     shard: ShardRecord,
     *,
     temporary_root_identity: TemporaryRootIdentity,
+    shard_authority: ShardCleanupAuthority,
     restore_mutation: RestoreMutation,
     cleanup_owned_tree: CleanupOwnedTree,
 ) -> None:
-    _require_existing_private_temporary_root(record, temporary_root_identity)
+    _require_shard_cleanup_authority(
+        record, shard, temporary_root_identity, shard_authority
+    )
     if _shard_has_applied_state(shard.root):
         try:
             restore_mutation(shard.root)
@@ -957,12 +1137,16 @@ def _recover_one(
             raise RecoveryError(
                 f"{shard.root}: applied mutation restore failed: {exc}"
             ) from exc
-        _require_existing_private_temporary_root(record, temporary_root_identity)
+        _require_shard_cleanup_authority(
+            record, shard, temporary_root_identity, shard_authority
+        )
         if _shard_has_applied_state(shard.root):
             raise RecoveryError(
                 f"{shard.root}: restore returned but applied state remains"
             )
-    _require_existing_private_temporary_root(record, temporary_root_identity)
+    _require_shard_cleanup_authority(
+        record, shard, temporary_root_identity, shard_authority
+    )
     try:
         cleanup_owned_tree(shard.root, shard.ownership_marker, shard.shard_index)
     except Exception as exc:
@@ -996,6 +1180,7 @@ def _recover_partial_staging(
         leave=(),
         unknown=(),
         temporary_root_identity=None,
+        shard_authorities=(),
     )
     if force:
         stream = output or sys.stdout
@@ -1154,6 +1339,7 @@ def recover_run(
         if temporary_root_identity is None:
             raise RecoveryError("recovery preflight has no temporary-root identity")
         _require_existing_private_temporary_root(record, temporary_root_identity)
+        _require_preflight_shard_authorities(record, preflight, temporary_root_identity)
         if force:
             stream = output or sys.stdout
             stream.write(preflight.render(run_id))
@@ -1168,22 +1354,33 @@ def recover_run(
         _write_root_recovery_json(root, state_path, state)
 
         _require_existing_private_temporary_root(record, temporary_root_identity)
+        _require_preflight_shard_authorities(record, preflight, temporary_root_identity)
         restore_callback = restore_mutation or _default_restore
         cleanup_callback = cleanup_owned_tree or _default_cleanup_for(record)
         removable = set(preflight.remove)
+        shard_authorities = {
+            (authority.shard_index, authority.root): authority
+            for authority in preflight.shard_authorities
+        }
         failures: list[str] = []
         removed = 0
         for shard in record.shards:
             if shard.root not in removable:
                 continue
             try:
-                _require_existing_private_temporary_root(
-                    record, temporary_root_identity
+                shard_authority = shard_authorities.get((shard.shard_index, shard.root))
+                if shard_authority is None:
+                    raise RecoveryError(
+                        f"shard {shard.shard_index} has no preflight cleanup authority"
+                    )
+                _require_shard_cleanup_authority(
+                    record, shard, temporary_root_identity, shard_authority
                 )
                 _recover_one(
                     record,
                     shard,
                     temporary_root_identity=temporary_root_identity,
+                    shard_authority=shard_authority,
                     restore_mutation=restore_callback,
                     cleanup_owned_tree=cleanup_callback,
                 )

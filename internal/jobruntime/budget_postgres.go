@@ -161,25 +161,76 @@ func (store *PostgresConcurrencyBudget) tryAcquire(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, -1, 0, errConcurrencyBudgetUnavailable
 	}
-	return &postgresConcurrencyLease{pool: store.pool, id: id, token: token}, leased + 1, deleted.RowsAffected(), nil
+	lease := &postgresConcurrencyLease{
+		pool:          store.pool,
+		id:            id,
+		token:         token,
+		leaseDuration: store.leaseDuration,
+		stopRenewal:   make(chan struct{}),
+		renewalDone:   make(chan struct{}),
+	}
+	go lease.renew()
+	return lease, leased + 1, deleted.RowsAffected(), nil
 }
 
 type postgresConcurrencyLease struct {
-	pool  *pgxpool.Pool
-	id    uuid.UUID
-	token uuid.UUID
-	once  sync.Once
+	pool          *pgxpool.Pool
+	id            uuid.UUID
+	token         uuid.UUID
+	leaseDuration time.Duration
+	stopRenewal   chan struct{}
+	renewalDone   chan struct{}
+	once          sync.Once
 }
 
+// Release fences the owner token and stops renewal before deleting the row.
+// Renewal only extends a still-live row, so a crashed worker's expired lease
+// cannot be resurrected by a delayed renewal attempt.
 func (lease *postgresConcurrencyLease) Release() {
 	if lease == nil || lease.pool == nil || lease.id == uuid.Nil || lease.token == uuid.Nil {
 		return
 	}
 	lease.once.Do(func() {
+		if lease.stopRenewal != nil {
+			close(lease.stopRenewal)
+			<-lease.renewalDone
+		}
 		_, _ = lease.pool.Exec(context.Background(), `
 			DELETE FROM public.worker_concurrency_leases
 			WHERE id = $1 AND owner_token = $2`, lease.id, lease.token)
 	})
+}
+
+func (lease *postgresConcurrencyLease) renew() {
+	interval := lease.leaseDuration / 3
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	defer close(lease.renewalDone)
+	for {
+		select {
+		case <-lease.stopRenewal:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), renewalQueryTimeout(interval))
+			_, _ = lease.pool.Exec(ctx, `
+				UPDATE public.worker_concurrency_leases
+				SET lease_expires_at = statement_timestamp() + ($3::bigint * interval '1 second'),
+					updated_at = statement_timestamp()
+				WHERE id = $1 AND owner_token = $2 AND lease_expires_at > statement_timestamp()`,
+				lease.id, lease.token, int64(lease.leaseDuration/time.Second))
+			cancel()
+		}
+	}
+}
+
+func renewalQueryTimeout(interval time.Duration) time.Duration {
+	if interval < 2*time.Second {
+		return interval
+	}
+	return 2 * time.Second
 }
 
 func (store *PostgresConcurrencyBudget) observeCapacity(labels ConcurrencyBudgetLabels, capacity int) error {

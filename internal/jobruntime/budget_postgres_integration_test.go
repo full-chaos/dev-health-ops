@@ -4,6 +4,10 @@ package jobruntime
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -179,5 +183,154 @@ func TestPostgresConcurrencyBudgetReleaseRequiresOwnerToken(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("wrong-token release removed %d rows, want one retained lease", 1-count)
 	}
+	lease.Release()
+}
+
+func TestPostgresConcurrencyBudgetRenewsLongRunningLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE public.worker_concurrency_leases (
+			id uuid PRIMARY KEY, budget_key varchar(320) NOT NULL,
+			job_kind varchar(96) NOT NULL, concurrency_scope varchar(16) NOT NULL,
+			organization_id uuid NULL, owner_token uuid NOT NULL UNIQUE,
+			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := NewPostgresConcurrencyBudget(pool, nil)
+	second, _ := NewPostgresConcurrencyBudget(pool, nil)
+	first.leaseDuration = time.Second
+	second.leaseDuration = time.Second
+	request := BudgetRequest{Kind: "system.heartbeat", ConcurrencyScope: "fleet", ConcurrencyLimit: 1}
+	lease, err := first.Acquire(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	time.Sleep(1200 * time.Millisecond)
+	blockedCtx, blockedCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer blockedCancel()
+	if _, err := second.Acquire(blockedCtx, request); err == nil {
+		t.Fatal("long-running lease expired while its worker was still active")
+	}
+}
+
+func TestPostgresConcurrencyBudgetIsFleetWideAcrossOSProcesses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE public.worker_concurrency_leases (
+			id uuid PRIMARY KEY, budget_key varchar(320) NOT NULL,
+			job_kind varchar(96) NOT NULL, concurrency_scope varchar(16) NOT NULL,
+			organization_id uuid NULL, owner_token uuid NOT NULL UNIQUE,
+			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	startFile := filepath.Join(dir, "start")
+	commands := make([]*exec.Cmd, 0, 2)
+	for i := 0; i < 2; i++ {
+		resultFile := filepath.Join(dir, "result-"+strconv.Itoa(i))
+		command := exec.Command(os.Args[0], "-test.run", "^TestPostgresConcurrencyBudgetProcessWorker$", "-test.v")
+		command.Env = append(os.Environ(),
+			"CHAOS3844_PROCESS_WORKER=1",
+			"CHAOS3844_DATABASE_URI="+instance.URI,
+			"CHAOS3844_START_FILE="+startFile,
+			"CHAOS3844_RESULT_FILE="+resultFile,
+		)
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, command)
+	}
+	if err := os.WriteFile(startFile, []byte("start"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		if err := command.Wait(); err != nil {
+			t.Fatalf("worker process failed: %v", err)
+		}
+	}
+	acquired := 0
+	for i := 0; i < 2; i++ {
+		resultFile := filepath.Join(dir, "result-"+strconv.Itoa(i))
+		result, err := os.ReadFile(resultFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(result) == "acquired" {
+			acquired++
+		}
+	}
+	if acquired != 1 {
+		t.Fatalf("independent OS workers acquired %d leases at fleet limit one", acquired)
+	}
+}
+
+func TestPostgresConcurrencyBudgetProcessWorker(t *testing.T) {
+	if os.Getenv("CHAOS3844_PROCESS_WORKER") != "1" {
+		t.Skip("child process entry point")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, os.Getenv("CHAOS3844_DATABASE_URI"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := NewPostgresConcurrencyBudget(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(os.Getenv("CHAOS3844_START_FILE")); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	acquireCtx, acquireCancel := context.WithTimeout(ctx, time.Second)
+	defer acquireCancel()
+	lease, err := store.Acquire(acquireCtx, BudgetRequest{
+		Kind: "system.heartbeat", ConcurrencyScope: "fleet", ConcurrencyLimit: 1,
+	})
+	if err != nil {
+		if writeErr := os.WriteFile(os.Getenv("CHAOS3844_RESULT_FILE"), []byte("blocked"), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return
+	}
+	if err := os.WriteFile(os.Getenv("CHAOS3844_RESULT_FILE"), []byte("acquired"), 0o600); err != nil {
+		lease.Release()
+		t.Fatal(err)
+	}
+	time.Sleep(3 * time.Second)
 	lease.Release()
 }

@@ -22,6 +22,7 @@ from scripts.mutation_harness_coordinator import (
 )
 from scripts.mutation_harness_execution_tree import (
     build_source_manifest,
+    cleanup_execution_tree,
     create_private_temp_root,
     source_manifest_to_dict,
     stage_execution_tree,
@@ -37,7 +38,7 @@ INTEGRATED_SCRIPTS = (
 )
 
 
-def _git(root: Path, *arguments: str) -> None:
+def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         ["git", *arguments],
         cwd=root,
@@ -46,6 +47,15 @@ def _git(root: Path, *arguments: str) -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+    return completed
+
+
+def _tree_file_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
 
 
 def _integration_repository(tmp_path: Path) -> tuple[Path, Path]:
@@ -296,8 +306,9 @@ def test_public_cli_applies_only_before_effective_shard_assignment(
     assert [item["id"] for item in report["results"]] == ["M2"]
 
 
-def test_public_recovery_cleans_an_owned_incomplete_run_and_unblocks_verify(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("force", [False, True])
+def test_public_recovery_clears_an_incomplete_run_when_recorded_temporary_root_is_absent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], force: bool
 ) -> None:
     root, plan = _integration_repository(tmp_path)
     source_manifest = build_source_manifest(root)
@@ -347,20 +358,176 @@ def test_public_recovery_cleans_an_owned_incomplete_run_and_unblocks_verify(
     lease.transition("running")
     lease.retain_and_release()
 
-    assert main(["--root", str(root), "verify"]) == 1
-    assert main(["--root", str(root), "recover-run", "--run-id", run_id]) == 0
-
-    assert not staged.root.exists()
-    assert verify(root) == []
-    captured = capsys.readouterr()
-    assert (
-        "No result from this tree is trustworthy until it is recovered" in captured.err
+    state_path = root / ".mutation-harness" / "state.json"
+    manifest_path = Path(
+        json.loads(state_path.read_text(encoding="utf-8"))["coordinator_run"][
+            "manifest_path"
+        ]
     )
-    assert "recovered run run-lane-e-recovery as aborted" in captured.out
+    cleanup_execution_tree(
+        staged,
+        temporary_root=temporary_root,
+        child_liveness_proven=True,
+    )
+    temporary_root.rmdir()
+    assert not temporary_root.exists()
+
+    assert main(["--root", str(root), "verify"]) == 1
+    verify_failure = capsys.readouterr()
+    assert verify_failure.out == ""
+    assert "No result from this tree is trustworthy until it is recovered" in (
+        verify_failure.err
+    )
+
+    recover_arguments = ["--root", str(root), "recover-run", "--run-id", run_id]
+    if force:
+        recover_arguments.append("--force")
+    assert main(recover_arguments) == 0
+
+    recovered = capsys.readouterr()
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"schema_version": 1}
+    recovered_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert recovered_manifest["lifecycle"] == "aborted"
+    assert "results" not in recovered_manifest
+    assert not (root / ".mutation-harness" / "report.json").exists()
+    assert main(["--root", str(root), "verify"]) == 0
+    verify_success = capsys.readouterr()
+    assert verify_success.err == ""
+    assert (
+        verify_success.out == "mutation harness: tree is clean, no mutation applied\n"
+    )
+    assert recovered.err == ""
+    assert recovered.out == (
+        "recovered run run-lane-e-recovery as aborted; recorded temporary root "
+        "was absent; removed 0 owned shard(s)\n"
+    )
 
 
-def test_public_force_recovery_cleans_zero_recorded_staging_shards(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("force", [False, True])
+def test_public_recovery_refuses_a_surviving_recorded_git_tree_before_changes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], force: bool
+) -> None:
+    root, plan = _integration_repository(tmp_path)
+    source_manifest = build_source_manifest(root)
+    plan_digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+    run_id = "run-lane-e-recorded-refusal"
+    assignment = select_and_assign(["M1"], None, 1)[0]
+    temporary_root = create_private_temp_root(prefix="mutation-harness-refusal-")
+    lease = begin_coordinator_run(
+        root,
+        run_id=run_id,
+        source_head=source_manifest.head,
+        source_manifest=source_manifest_to_dict(source_manifest),
+        source_manifest_digest=source_manifest.digest,
+        plan_path=plan,
+        plan_digest=plan_digest,
+        requested_shards=1,
+        effective_shards=1,
+        temporary_root_factory=lambda _run_id: TemporaryRootClaim.borrowed(
+            temporary_root
+        ),
+    )
+    _write_manifest(lease)
+    staged = stage_execution_tree(
+        root,
+        temporary_root / "shard-0",
+        run_id=run_id,
+        shard_index=0,
+        source_manifest=source_manifest,
+        plan_digest=plan_digest,
+        workspace_inputs=(),
+    )
+    liveness_lock = staged.root / ".mutation-harness" / "child.liveness"
+    liveness_lock.touch()
+    _record_child(
+        lease,
+        ChildSpec(
+            assignment=assignment,
+            root=staged.root,
+            source_root=root,
+            temporary_root=temporary_root,
+            argv=("unused",),
+            result_stream=staged.root / ".mutation-harness" / "results.jsonl",
+            ownership_marker=staged.ownership_marker,
+            liveness_lock=liveness_lock,
+        ),
+    )
+    lease.transition("running")
+    lease.retain_and_release()
+
+    state_path = root / ".mutation-harness" / "state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    tree_before = _tree_file_bytes(staged.root)
+    tree_identity_before = (staged.root.stat().st_dev, staged.root.stat().st_ino)
+    temporary_root_identity_before = (
+        temporary_root.stat().st_dev,
+        temporary_root.stat().st_ino,
+    )
+    source_status_before = _git(
+        root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    ).stdout
+    registration_before = _git(root, "worktree", "list", "--porcelain").stdout
+
+    try:
+        recover_arguments = [
+            "--root",
+            str(root),
+            "recover-run",
+            "--run-id",
+            run_id,
+        ]
+        if force:
+            recover_arguments.append("--force")
+        assert main(recover_arguments) == 2
+
+        refusal = capsys.readouterr()
+        assert refusal.out == ""
+        assert refusal.err == (
+            "mutation harness: default recovery refuses existing recorded Git shard "
+            "trees; private tree, root state, and run manifest remain\n"
+        )
+        assert state_path.read_bytes() == state_before
+        assert manifest_path.read_bytes() == manifest_before
+        assert _tree_file_bytes(staged.root) == tree_before
+        assert (staged.root.stat().st_dev, staged.root.stat().st_ino) == (
+            tree_identity_before
+        )
+        assert (temporary_root.stat().st_dev, temporary_root.stat().st_ino) == (
+            temporary_root_identity_before
+        )
+        assert (
+            _git(
+                root,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ).stdout
+            == source_status_before
+        )
+        assert _git(root, "worktree", "list", "--porcelain").stdout == (
+            registration_before
+        )
+        assert main(["--root", str(root), "verify"]) == 1
+        blocked = capsys.readouterr()
+        assert blocked.out == ""
+        assert "No result from this tree is trustworthy until it is recovered" in (
+            blocked.err
+        )
+    finally:
+        cleanup_execution_tree(
+            staged,
+            temporary_root=temporary_root,
+            child_liveness_proven=True,
+        )
+        temporary_root.rmdir()
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_public_recovery_refuses_a_surviving_zero_recorded_partial_git_tree_before_changes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], force: bool
 ) -> None:
     root, plan = _integration_repository(tmp_path)
     source_manifest = build_source_manifest(root)
@@ -394,29 +561,72 @@ def test_public_force_recovery_cleans_zero_recorded_staging_shards(
     lease.transition("aborted")
     lease.retain_and_release()
 
-    assert (
-        json.loads(
-            (root / ".mutation-harness" / "state.json").read_text(encoding="utf-8")
-        )["coordinator_run"]["shards"]
-        == []
+    state_path = root / ".mutation-harness" / "state.json"
+    state_before = state_path.read_bytes()
+    assert json.loads(state_before)["coordinator_run"]["shards"] == []
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    tree_before = _tree_file_bytes(staged.root)
+    tree_identity_before = (staged.root.stat().st_dev, staged.root.stat().st_ino)
+    temporary_root_identity_before = (
+        temporary_root.stat().st_dev,
+        temporary_root.stat().st_ino,
     )
-    assert (
-        main(
-            [
-                "--root",
-                str(root),
-                "recover-run",
-                "--run-id",
-                run_id,
-                "--force",
-            ]
-        )
-        == 0
-    )
+    source_status_before = _git(
+        root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    ).stdout
+    registration_before = _git(root, "worktree", "list", "--porcelain").stdout
 
-    assert not staged.root.exists()
-    assert not temporary_root.exists()
-    assert verify(root) == []
-    captured = capsys.readouterr()
-    assert "FORCE RECOVERY PREFLIGHT run-lane-e-zero-shard" in captured.out
-    assert "removed 1 owned staging shard(s)" in captured.out
+    try:
+        recover_arguments = [
+            "--root",
+            str(root),
+            "recover-run",
+            "--run-id",
+            run_id,
+        ]
+        if force:
+            recover_arguments.append("--force")
+        assert main(recover_arguments) == 2
+
+        refusal = capsys.readouterr()
+        assert refusal.out == ""
+        assert refusal.err == (
+            "mutation harness: default recovery refuses an existing staged Git tree; "
+            "private tree and root state remain\n"
+        )
+        assert state_path.read_bytes() == state_before
+        assert manifest_path.read_bytes() == manifest_before
+        assert _tree_file_bytes(staged.root) == tree_before
+        assert (staged.root.stat().st_dev, staged.root.stat().st_ino) == (
+            tree_identity_before
+        )
+        assert (temporary_root.stat().st_dev, temporary_root.stat().st_ino) == (
+            temporary_root_identity_before
+        )
+        assert (
+            _git(
+                root,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ).stdout
+            == source_status_before
+        )
+        assert _git(root, "worktree", "list", "--porcelain").stdout == (
+            registration_before
+        )
+        assert main(["--root", str(root), "verify"]) == 1
+        blocked = capsys.readouterr()
+        assert blocked.out == ""
+        assert "No result from this tree is trustworthy until it is recovered" in (
+            blocked.err
+        )
+    finally:
+        cleanup_execution_tree(
+            staged,
+            temporary_root=temporary_root,
+            child_liveness_proven=True,
+        )
+        temporary_root.rmdir()

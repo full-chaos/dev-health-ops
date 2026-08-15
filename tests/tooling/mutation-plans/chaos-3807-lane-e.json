@@ -51,7 +51,7 @@
         "pytest",
         "-q",
         "--confcutdir=tests/tooling",
-        "tests/tooling/test_mutation_harness_integration.py::test_public_recovery_cleans_an_owned_incomplete_run_and_unblocks_verify"
+        "tests/tooling/test_mutation_harness_integration.py::test_public_recovery_clears_an_incomplete_run_when_recorded_temporary_root_is_absent"
       ]]
     },
     {

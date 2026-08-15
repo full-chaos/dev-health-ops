@@ -10,6 +10,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -520,9 +521,19 @@ def test_stage_probe_is_independent_from_the_relocation_pass(
     manifest = build_source_manifest(source_repo)
     temporary_root = source_repo.parent / "probe-private"
     temporary_root.mkdir(mode=0o700)
+    observed_environment: dict[str, str] = {}
+    real_run = execution_tree.subprocess.run
+
+    def observe_probe(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        environment_variables = kwargs.get("env")
+        if isinstance(environment_variables, dict):
+            observed_environment.update(environment_variables)
+        return real_run(*args, **kwargs)
+
     monkeypatch.setattr(
         execution_tree, "relocate_python_environment", lambda **_kwargs: None
     )
+    monkeypatch.setattr(execution_tree.subprocess, "run", observe_probe)
 
     with pytest.raises(HarnessError, match="did not read shard-only bytes"):
         stage_execution_tree(
@@ -534,6 +545,9 @@ def test_stage_probe_is_independent_from_the_relocation_pass(
             plan_digest="plan-digest",
             workspace_inputs=(environment.name,),
         )
+
+    assert observed_environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert not (source_repo / "src/probe_pkg/__pycache__").exists()
 
 
 def test_staging_failure_after_marker_rolls_back_only_the_owned_partial_tree(

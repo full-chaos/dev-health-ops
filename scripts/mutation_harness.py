@@ -1067,6 +1067,7 @@ def coordinator_run(
         environment = external_resource_environment(
             sharding, run_id, assignment.shard_index
         )
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["MUTATION_HARNESS_PLAN_ORDINALS"] = json.dumps(
             plan_ordinals, sort_keys=True, separators=(",", ":")
         )

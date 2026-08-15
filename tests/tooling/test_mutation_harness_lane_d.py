@@ -1009,7 +1009,7 @@ def test_cleanup_boundary_rechecks_root_after_opening_its_descriptor(
     def open_with_root_replacement(
         path: str | bytes | Path,
         flags: int,
-        mode: int = 0o777,
+        mode: int = 0o600,
         *,
         dir_fd: int | None = None,
     ) -> int:

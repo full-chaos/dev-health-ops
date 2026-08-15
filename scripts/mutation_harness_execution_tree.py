@@ -704,13 +704,18 @@ def _copy_workspace_path(source: Path, destination: Path) -> None:
     metadata = source.lstat()
     if stat.S_ISLNK(metadata.st_mode):
         resolved = source.resolve(strict=True)
+        resolved_mode = resolved.stat().st_mode
+        if stat.S_ISREG(resolved_mode):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(resolved, destination, follow_symlinks=True)
+            return
+        if stat.S_ISDIR(resolved_mode):
+            _copy_workspace_path(resolved, destination)
+            return
         if not resolved.is_file():
             raise HarnessError(
-                f"workspace input link must resolve to a regular file: {source}"
+                f"workspace input link must resolve to a regular file or directory: {source}"
             )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(resolved, destination, follow_symlinks=True)
-        return
     if stat.S_ISREG(metadata.st_mode):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination, follow_symlinks=True)
@@ -729,8 +734,11 @@ def _assert_independent_copy(source: Path, destination: Path) -> None:
     destination_metadata = destination.lstat()
     if stat.S_ISLNK(destination_metadata.st_mode):
         raise HarnessError(f"workspace input copy contains a symlink: {destination}")
+    source_target = (
+        source.resolve(strict=True) if stat.S_ISLNK(source_metadata.st_mode) else source
+    )
+    source_target_metadata = source_target.stat()
     if stat.S_ISREG(destination_metadata.st_mode):
-        source_target = source.resolve(strict=True) if source.is_symlink() else source
         source_identity = (source_target.stat().st_dev, source_target.stat().st_ino)
         destination_identity = (
             destination_metadata.st_dev,
@@ -741,11 +749,11 @@ def _assert_independent_copy(source: Path, destination: Path) -> None:
         return
     if not stat.S_ISDIR(destination_metadata.st_mode):
         raise HarnessError(f"workspace input copy has unsupported type: {destination}")
-    if not stat.S_ISDIR(source_metadata.st_mode):
+    if not stat.S_ISDIR(source_target_metadata.st_mode):
         raise HarnessError(
             f"workspace input copy changed filesystem type: {destination}"
         )
-    source_children = {child.name: child for child in source.iterdir()}
+    source_children = {child.name: child for child in source_target.iterdir()}
     destination_children = {child.name: child for child in destination.iterdir()}
     if source_children.keys() != destination_children.keys():
         raise HarnessError(f"workspace input copy is incomplete: {destination}")

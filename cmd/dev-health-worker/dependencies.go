@@ -267,26 +267,34 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 
 func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
 
-type profileDrainComponent struct{ presence *jobruntime.ProfilePresence }
-
-func (profileDrainComponent) Name() string                { return "worker-profile-drain" }
-func (profileDrainComponent) Start(context.Context) error { return nil }
-func (component profileDrainComponent) Shutdown(ctx context.Context) error {
-	if component.presence == nil {
-		return errWorkerDependencyUnavailable
-	}
-	return component.presence.BeginDrain(ctx)
-}
-
 type workerProfileComponent struct {
 	components []lifecycle.Component
 	budget     time.Duration
+	presence   profilePresenceLifecycle
+}
+
+type profilePresenceLifecycle interface {
+	Start(context.Context) error
+	BeginDrain(context.Context) error
+	Shutdown(context.Context) error
+	Errors() <-chan error
 }
 
 func (workerProfileComponent) Name() string                            { return "river-profile-workers" }
 func (component workerProfileComponent) ShutdownBudget() time.Duration { return component.budget }
+func (component workerProfileComponent) Errors() <-chan error {
+	if component.presence == nil {
+		return nil
+	}
+	return component.presence.Errors()
+}
 
 func (component workerProfileComponent) Start(ctx context.Context) error {
+	if component.presence != nil {
+		if err := component.presence.Start(ctx); err != nil {
+			return err
+		}
+	}
 	started := make([]lifecycle.Component, 0, len(component.components))
 	for _, child := range component.components {
 		if err := child.Start(ctx); err != nil {
@@ -302,6 +310,11 @@ func (component workerProfileComponent) Start(ctx context.Context) error {
 					rollback = append(rollback, stopErr)
 				}
 			}
+			if component.presence != nil {
+				if stopErr := component.presence.Shutdown(rollbackCtx); stopErr != nil {
+					rollback = append(rollback, stopErr)
+				}
+			}
 			return errors.Join(err, errors.Join(rollback...))
 		}
 		started = append(started, child)
@@ -310,13 +323,23 @@ func (component workerProfileComponent) Start(ctx context.Context) error {
 }
 
 func (component workerProfileComponent) Shutdown(ctx context.Context) error {
+	var shutdownErrors []error
+	if component.presence != nil {
+		if err := component.presence.BeginDrain(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
 	results := make(chan error, len(component.components))
 	for _, child := range component.components {
 		go func(child lifecycle.Component) { results <- child.Shutdown(ctx) }(child)
 	}
-	var shutdownErrors []error
 	for range component.components {
 		if err := <-results; err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
+	if component.presence != nil {
+		if err := component.presence.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)
 		}
 	}
@@ -499,15 +522,13 @@ func configureWorkerDependenciesWithSources(
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
-		components = append(components, presence)
 	}
 	if len(workerComponents) > 0 {
 		components = append(components, workerProfileComponent{
-			components: workerComponents, budget: dependencies.workerDrainBudget,
+			components: workerComponents, budget: dependencies.workerDrainBudget, presence: presence,
 		})
-	}
-	if presence != nil {
-		components = append(components, profileDrainComponent{presence: presence})
+	} else if presence != nil {
+		components = append(components, presence)
 	}
 	return components, nil
 }

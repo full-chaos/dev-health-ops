@@ -114,6 +114,45 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	}
 }
 
+func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+	for index := range manifest.Processes {
+		if manifest.Processes[index].Name == "heavy" || manifest.Processes[index].Name == "ops" {
+			manifest.Processes[index].MaxReplicas = 1
+		}
+	}
+
+	summary, err := manifest.Validate(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.QueueSessionClientConnections != 18 {
+		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
+	}
+	if summary.QueueSessionHeadroom != 4 {
+		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
+	}
+	if summary.CoordinatorSessionClientConnections != 10 {
+		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
+	}
+	if summary.CoordinatorSessionHeadroom != 0 {
+		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
+	}
+	if summary.DomainTransactionClientConnections != 50 {
+		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
+	}
+	if summary.DomainTransactionHeadroom != 950 {
+		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
+	}
+	if summary.ServerConnectionFootprint != 87 {
+		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
+	}
+	if summary.ServerConnectionHeadroom != 13 {
+		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
+	}
+}
+
 func TestManifestRejectsHeavyOrOpsReplicaBudgetXPlusOne(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

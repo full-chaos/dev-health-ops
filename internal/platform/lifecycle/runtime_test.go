@@ -43,6 +43,22 @@ type nonCooperativeComponent struct {
 	exited  chan struct{}
 }
 
+type budgetedComponent struct {
+	*recordingComponent
+	budget    time.Duration
+	remaining time.Duration
+}
+
+func (component *budgetedComponent) ShutdownBudget() time.Duration { return component.budget }
+func (component *budgetedComponent) Shutdown(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("shutdown deadline is missing")
+	}
+	component.remaining = time.Until(deadline)
+	return component.recordingComponent.Shutdown(ctx)
+}
+
 func (c *nonCooperativeComponent) Name() string { return c.name }
 
 func (c *nonCooperativeComponent) Start(context.Context) error { return nil }
@@ -223,5 +239,25 @@ func TestShutdownBoundsNonCooperativeComponentsAndAttemptsAllInReverse(t *testin
 		case <-time.After(time.Second):
 			t.Fatalf("component %s did not exit after release", component.name)
 		}
+	}
+}
+
+func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {
+	t.Parallel()
+	record := func(string) {}
+	reserved := &budgetedComponent{
+		recordingComponent: &recordingComponent{name: "reserved", record: record},
+		budget:             80 * time.Millisecond,
+	}
+	tail := &recordingComponent{name: "tail", record: record}
+	runtime, err := New(Options{ShutdownTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.shutdown(context.Background(), []Component{tail, reserved}); err != nil {
+		t.Fatal(err)
+	}
+	if reserved.remaining < 70*time.Millisecond {
+		t.Fatalf("reserved shutdown budget = %s, want approximately 80ms", reserved.remaining)
 	}
 }

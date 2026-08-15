@@ -52,6 +52,7 @@ type operatorRuntime struct {
 	lockTx                pgx.Tx
 	streamDeploymentState string
 	streams               []streamProfileStatus
+	profileStatusSource   workerProfileStatusSource
 	queueControlMode      platformconfig.QueueControlMode
 }
 
@@ -63,9 +64,139 @@ type streamProfileStatus struct {
 	MaxReplicas      int    `json:"max_replicas"`
 }
 
+// workerProfileStatus is the operator view for River worker profiles. It is
+// separate from streamProfileStatus because stream runners have a different
+// ownership contract, while River profiles share queues and scale separately.
+type workerProfileStatus struct {
+	Profile         string `json:"profile"`
+	DesiredReplicas int    `json:"desired_replicas"`
+	LiveReplicas    int    `json:"live_replicas"`
+	MaxReplicas     int    `json:"max_replicas"`
+	QueueBacklog    int64  `json:"queue_backlog"`
+	ActiveJobs      int64  `json:"active_jobs"`
+	DrainState      string `json:"drain_state"`
+}
+
+type workerProfileStatusSource interface {
+	Status(context.Context) (workerProfileStatusResponse, error)
+}
+
+type workerProfileStatusSourceFunc func(context.Context) (workerProfileStatusResponse, error)
+
+func (source workerProfileStatusSourceFunc) Status(ctx context.Context) (workerProfileStatusResponse, error) {
+	return source(ctx)
+}
+
 type streamStatusResponse struct {
 	DeploymentState string                `json:"deployment_state"`
 	Profiles        []streamProfileStatus `json:"profiles"`
+}
+
+type workerProfileStatusResponse struct {
+	DeploymentState  string                        `json:"deployment_state"`
+	ConnectionBudget profileConnectionBudgetStatus `json:"connection_budget"`
+	Profiles         []workerProfileStatus         `json:"profiles"`
+}
+
+type connectionBudgetStatus struct {
+	Used     int `json:"used"`
+	Limit    int `json:"limit"`
+	Headroom int `json:"headroom"`
+}
+
+type profileConnectionBudgetStatus struct {
+	QueueSession       connectionBudgetStatus `json:"queue_session"`
+	CoordinatorSession connectionBudgetStatus `json:"coordinator_session"`
+	DomainTransaction  connectionBudgetStatus `json:"domain_transaction"`
+	Server             connectionBudgetStatus `json:"server"`
+}
+
+type manifestProfileStatusSource struct {
+	service   *joboperator.Service
+	principal joboperator.Principal
+	manifest  deploymentcontract.Manifest
+	budget    deploymentcontract.BudgetSummary
+	presence  func(context.Context) ([]jobruntime.ProfilePresenceSummary, error)
+}
+
+func (source manifestProfileStatusSource) Status(ctx context.Context) (workerProfileStatusResponse, error) {
+	if source.service == nil || source.presence == nil {
+		return workerProfileStatusResponse{}, errors.New("profile status source is unavailable")
+	}
+	presenceRows, err := source.presence(ctx)
+	if err != nil {
+		return workerProfileStatusResponse{}, err
+	}
+	presence := make(map[string]jobruntime.ProfilePresenceSummary, len(presenceRows))
+	for _, summary := range presenceRows {
+		if _, duplicate := presence[summary.Profile]; duplicate {
+			return workerProfileStatusResponse{}, errors.New("duplicate profile presence summary")
+		}
+		presence[summary.Profile] = summary
+	}
+	profiles := make([]workerProfileStatus, 0, 3)
+	for _, process := range source.manifest.Processes {
+		if process.Runtime != "river" || process.RegistryProfile == nil {
+			continue
+		}
+		profile := *process.RegistryProfile
+		queues, err := source.service.Queues(ctx, source.principal, profile)
+		if err != nil {
+			return workerProfileStatusResponse{}, err
+		}
+		status := workerProfileStatus{
+			Profile: profile, DesiredReplicas: process.DesiredReplicas,
+			MaxReplicas: process.MaxReplicas, DrainState: "inactive",
+		}
+		if summary, ok := presence[profile]; ok {
+			status.LiveReplicas = summary.Live
+			if summary.Draining > 0 {
+				status.DrainState = "draining"
+			} else {
+				status.DrainState = "active"
+			}
+			delete(presence, profile)
+		}
+		for _, queue := range queues {
+			status.QueueBacklog += queue.Available + queue.Retryable + queue.Scheduled
+			status.ActiveJobs += queue.Running
+			if queue.Paused {
+				status.DrainState = "draining"
+			}
+		}
+		profiles = append(profiles, status)
+	}
+	if len(profiles) == 0 || len(presence) != 0 {
+		return workerProfileStatusResponse{}, errors.New("profile presence is outside the deployment contract")
+	}
+	return workerProfileStatusResponse{
+		DeploymentState: source.manifest.DeploymentState,
+		ConnectionBudget: profileConnectionBudgetStatus{
+			QueueSession: connectionBudgetStatus{
+				Used: source.budget.QueueSessionClientConnections,
+				Limit: min(source.manifest.PostgresBudget.PgBouncerQueueSessionMaxClientConnections,
+					source.manifest.PostgresBudget.PgBouncerQueueSessionPoolSize),
+				Headroom: source.budget.QueueSessionHeadroom,
+			},
+			CoordinatorSession: connectionBudgetStatus{
+				Used: source.budget.CoordinatorSessionClientConnections,
+				Limit: min(source.manifest.PostgresBudget.PgBouncerCoordinatorSessionMaxClientConnections,
+					source.manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize),
+				Headroom: source.budget.CoordinatorSessionHeadroom,
+			},
+			DomainTransaction: connectionBudgetStatus{
+				Used:     source.budget.DomainTransactionClientConnections,
+				Limit:    source.manifest.PostgresBudget.PgBouncerTransactionMaxClientConnections,
+				Headroom: source.budget.DomainTransactionHeadroom,
+			},
+			Server: connectionBudgetStatus{
+				Used:     source.budget.ServerConnectionFootprint,
+				Limit:    source.manifest.PostgresBudget.ServerMaxConnections,
+				Headroom: source.budget.ServerConnectionHeadroom,
+			},
+		},
+		Profiles: profiles,
+	}, nil
 }
 
 func (runtime *operatorRuntime) close() {
@@ -224,7 +355,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
-	manifest, _, err := deploymentcontract.Load("deploy/go-workers/profiles.json", contractRegistry)
+	manifest, budget, err := deploymentcontract.Load("deploy/go-workers/profiles.json", contractRegistry)
 	if err != nil {
 		return nil, writeError(stderr, "deployment_contract_invalid")
 	}
@@ -294,10 +425,17 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	}
 	failed = false
 	lockHeld = false
-	return &operatorRuntime{
+	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
-	}, 0
+	}
+	runtime.profileStatusSource = manifestProfileStatusSource{
+		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
+		presence: func(ctx context.Context) ([]jobruntime.ProfilePresenceSummary, error) {
+			return jobruntime.ReadProfilePresence(ctx, pools.Domain)
+		},
+	}
+	return runtime, 0
 }
 
 func databaseMode(lookup platformsecrets.LookupEnv, key string) platformconfig.QueueControlMode {
@@ -394,6 +532,18 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 			DeploymentState: runtime.streamDeploymentState,
 			Profiles:        runtime.streams,
 		})
+	case "profiles":
+		if len(args) != 2 || args[1] != "status" || runtime.profileStatusSource == nil {
+			return writeError(stderr, "invalid_request")
+		}
+		if err := runtime.service.Status(ctx, runtime.principal); err != nil {
+			return writeServiceError(stderr, err)
+		}
+		status, err := runtime.profileStatusSource.Status(ctx)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		return writeResult(stdout, stderr, status)
 	default:
 		return writeError(stderr, "invalid_request")
 	}

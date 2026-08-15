@@ -369,6 +369,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			status text NOT NULL
 		)`,
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_profile_instances (instance_id uuid PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_routes (
 			job_kind text PRIMARY KEY,
 			transport text NOT NULL,

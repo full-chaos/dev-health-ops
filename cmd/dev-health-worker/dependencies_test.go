@@ -14,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -33,6 +35,20 @@ func TestWorkerSpecConfiguresDependencies(t *testing.T) {
 	}
 	if workerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("worker dependency configuration is not wired")
+	}
+}
+
+func TestRiverClientsShareOneProcessIdentityWithDistinctFamilySuffixes(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{WorkerInstanceID: "11111111-1111-4111-8111-111111111111"}
+	if got := riverClientID(cfg, "operational"); got != cfg.WorkerInstanceID+"-operational" {
+		t.Fatalf("operational client ID = %q", got)
+	}
+	if got := riverClientID(cfg, "daily"); got != cfg.WorkerInstanceID+"-daily" {
+		t.Fatalf("daily client ID = %q", got)
+	}
+	if got := riverClientID(config.Config{}, "daily"); got != "" {
+		t.Fatalf("test client ID = %q, want River default", got)
 	}
 }
 
@@ -595,9 +611,9 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
 	}
-	if len(components) != 2 || components[0].Name() != "postgres-runtime-pools" ||
-		components[1].Name() != "queue-health-monitor" {
-		t.Fatalf("components = %#v, want pool lifecycle and queue health monitor", components)
+	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "queue-health-monitor" || components[2].Name() != "preclaim-readiness" {
+		t.Fatalf("components = %#v, want pools, telemetry, and preclaim readiness", components)
 	}
 	if err := components[0].Start(context.Background()); err != nil {
 		t.Fatalf("start pool lifecycle: %v", err)
@@ -716,9 +732,16 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 4 || components[2].Name() != "reports" ||
-		components[3].Name() != "daily" {
+	if len(components) != 4 || components[2].Name() != "preclaim-readiness" ||
+		components[3].Name() != "river-profile-workers" {
 		t.Fatalf("composed components = %#v", components)
+	}
+	profileWorkers, ok := components[3].(workerProfileComponent)
+	if !ok || len(profileWorkers.components) != 2 ||
+		profileWorkers.components[0].Name() != "reports" ||
+		profileWorkers.components[1].Name() != "daily" ||
+		profileWorkers.ShutdownBudget() != 7_200*time.Second {
+		t.Fatalf("profile workers = %#v", components[3])
 	}
 }
 
@@ -875,12 +898,53 @@ func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
-		components[2].Name() != "river-operational-worker" {
+	if len(components) != 6 || components[0].Name() != "postgres-runtime-pools" ||
+		components[2].Name() != "preclaim-readiness" ||
+		components[3].Name() != "worker-profile-presence" ||
+		components[4].Name() != "river-profile-workers" ||
+		components[5].Name() != "worker-profile-drain" {
 		t.Fatalf("production components = %#v", components)
 	}
 	if err := components[0].Shutdown(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerProfileRejectsProcessShutdownTimeoutBelowContract(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	profile := "ops"
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	sources.loadDeployment = func(
+		string, jobcontract.Registry,
+	) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error) {
+		return deploymentcontract.Manifest{Processes: []deploymentcontract.Process{{
+			Name: "ops", Runtime: "river", RegistryProfile: &profile,
+			ShutdownGraceSeconds: 960,
+		}}}, deploymentcontract.BudgetSummary{}, nil
+	}
+	dependencies := buildWorkerDependencies(context.Background(), config.Config{
+		Profile: "ops", ShutdownTimeout: 959 * time.Second,
+	}, sources)
+	defer dependencies.close()
+	if !errors.Is(dependencies.startupErr, errWorkerDependencyUnavailable) {
+		t.Fatalf("startup error = %v, want shutdown contract refusal", dependencies.startupErr)
+	}
+}
+
+func TestPreclaimReadinessRefusesFailedDependenciesBeforeConsumersStart(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(time.Second)
+	if err := registry.RegisterRequired("database", func(context.Context) error {
+		return errors.New("database unavailable")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	component := preclaimReadinessComponent{registry: registry}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
 	}
 }
 
@@ -1049,6 +1113,87 @@ type namedComponent string
 func (component namedComponent) Name() string         { return string(component) }
 func (namedComponent) Start(context.Context) error    { return nil }
 func (namedComponent) Shutdown(context.Context) error { return nil }
+
+type blockingShutdownComponent struct {
+	name    string
+	entered chan struct{}
+	release chan struct{}
+}
+
+type failingStartComponent struct{ err error }
+
+func (failingStartComponent) Name() string                          { return "failing" }
+func (component failingStartComponent) Start(context.Context) error { return component.err }
+func (failingStartComponent) Shutdown(context.Context) error        { return nil }
+
+type deadlineShutdownComponent struct{ deadline chan time.Time }
+
+func (*deadlineShutdownComponent) Name() string                { return "started" }
+func (*deadlineShutdownComponent) Start(context.Context) error { return nil }
+func (component *deadlineShutdownComponent) Shutdown(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("rollback context has no deadline")
+	}
+	component.deadline <- deadline
+	return nil
+}
+
+func TestWorkerProfileStartRollbackUsesReviewedShutdownBudget(t *testing.T) {
+	t.Parallel()
+	started := &deadlineShutdownComponent{deadline: make(chan time.Time, 1)}
+	budget := time.Second
+	component := workerProfileComponent{
+		components: []lifecycle.Component{
+			started,
+			failingStartComponent{err: errors.New("start failed")},
+		},
+		budget: budget,
+	}
+	before := time.Now()
+	if err := component.Start(context.Background()); err == nil {
+		t.Fatal("Start() succeeded after a child start failure")
+	}
+	deadline := <-started.deadline
+	if deadline.Before(before) || deadline.After(before.Add(budget+100*time.Millisecond)) {
+		t.Fatalf("rollback deadline = %v, want within reviewed budget", deadline)
+	}
+}
+
+func (component *blockingShutdownComponent) Name() string      { return component.name }
+func (*blockingShutdownComponent) Start(context.Context) error { return nil }
+func (component *blockingShutdownComponent) Shutdown(context.Context) error {
+	close(component.entered)
+	<-component.release
+	return nil
+}
+
+func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testing.T) {
+	t.Parallel()
+	first := &blockingShutdownComponent{
+		name: "first", entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	second := &blockingShutdownComponent{
+		name: "second", entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	component := workerProfileComponent{
+		components: []lifecycle.Component{first, second}, budget: time.Minute,
+	}
+	done := make(chan error, 1)
+	go func() { done <- component.Shutdown(context.Background()) }()
+	for _, entered := range []<-chan struct{}{first.entered, second.entered} {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("River clients did not enter shutdown concurrently")
+		}
+	}
+	close(first.release)
+	close(second.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func fakeHandlerBuilder(
 	name string,

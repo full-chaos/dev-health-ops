@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -18,13 +19,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/riverqueue/river"
 )
 
 const (
-	defaultContractRoot      = "contracts/jobs/v1"
-	defaultDeploymentProfile = "deploy/go-workers/profiles.json"
+	defaultContractRoot       = "contracts/jobs/v1"
+	defaultDeploymentProfile  = "deploy/go-workers/profiles.json"
+	profileFinalizationBuffer = 60 * time.Second
 )
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
@@ -53,6 +55,13 @@ type postgresWorkerDatabase struct {
 	domainRole  string
 	queueRole   string
 	riverSchema string
+}
+
+func (database *postgresWorkerDatabase) NewProfilePresence(profile, instanceID string) (*jobruntime.ProfilePresence, error) {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	return jobruntime.NewProfilePresence(database.pools.Domain, profile, instanceID)
 }
 
 // githubProjectsV2DurableConfigReader is deliberately narrower than
@@ -217,7 +226,14 @@ var productionWorkerDependencySources = workerDependencySources{
 }
 
 func defaultRiverClientID() string {
-	return (&river.Config{}).WithDefaults().ID
+	return uuid.NewString()
+}
+
+func riverClientID(cfg config.Config, family string) string {
+	if cfg.WorkerInstanceID == "" || family == "" {
+		return ""
+	}
+	return cfg.WorkerInstanceID + "-" + family
 }
 
 type workerDependencies struct {
@@ -233,6 +249,78 @@ type workerDependencies struct {
 	queueTelemetry         queueTelemetrySampler
 	queueTelemetryErr      error
 	queueTelemetryRequired bool
+	instanceID             string
+	shutdownGrace          time.Duration
+	workerDrainBudget      time.Duration
+}
+
+type preclaimReadinessComponent struct{ registry *health.Registry }
+
+func (preclaimReadinessComponent) Name() string { return "preclaim-readiness" }
+
+func (component preclaimReadinessComponent) Start(ctx context.Context) error {
+	if component.registry == nil || !component.registry.CheckRequired(ctx).Ready {
+		return errWorkerDependencyUnavailable
+	}
+	return nil
+}
+
+func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
+
+type profileDrainComponent struct{ presence *jobruntime.ProfilePresence }
+
+func (profileDrainComponent) Name() string                { return "worker-profile-drain" }
+func (profileDrainComponent) Start(context.Context) error { return nil }
+func (component profileDrainComponent) Shutdown(ctx context.Context) error {
+	if component.presence == nil {
+		return errWorkerDependencyUnavailable
+	}
+	return component.presence.BeginDrain(ctx)
+}
+
+type workerProfileComponent struct {
+	components []lifecycle.Component
+	budget     time.Duration
+}
+
+func (workerProfileComponent) Name() string                            { return "river-profile-workers" }
+func (component workerProfileComponent) ShutdownBudget() time.Duration { return component.budget }
+
+func (component workerProfileComponent) Start(ctx context.Context) error {
+	started := make([]lifecycle.Component, 0, len(component.components))
+	for _, child := range component.components {
+		if err := child.Start(ctx); err != nil {
+			rollbackCtx := context.WithoutCancel(ctx)
+			if component.budget > 0 {
+				var rollbackCancel context.CancelFunc
+				rollbackCtx, rollbackCancel = context.WithTimeout(rollbackCtx, component.budget)
+				defer rollbackCancel()
+			}
+			var rollback []error
+			for index := len(started) - 1; index >= 0; index-- {
+				if stopErr := started[index].Shutdown(rollbackCtx); stopErr != nil {
+					rollback = append(rollback, stopErr)
+				}
+			}
+			return errors.Join(err, errors.Join(rollback...))
+		}
+		started = append(started, child)
+	}
+	return nil
+}
+
+func (component workerProfileComponent) Shutdown(ctx context.Context) error {
+	results := make(chan error, len(component.components))
+	for _, child := range component.components {
+		go func(child lifecycle.Component) { results <- child.Shutdown(ctx) }(child)
+	}
+	var shutdownErrors []error
+	for range component.components {
+		if err := <-results; err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
+	return errors.Join(shutdownErrors...)
 }
 
 func configureWorkerDependencies(
@@ -270,6 +358,7 @@ func configureWorkerDependenciesWithSources(
 		logger = loggers[0]
 	}
 	dependencies := buildWorkerDependencies(ctx, cfg, sources)
+	cfg.WorkerInstanceID = dependencies.instanceID
 	if registry == nil {
 		dependencies.close()
 		return nil, errWorkerDependencyUnavailable
@@ -326,6 +415,7 @@ func configureWorkerDependenciesWithSources(
 	); monitor != nil {
 		components = append(components, monitor)
 	}
+	workerComponents := make([]lifecycle.Component, 0, 4)
 	var active workerFamily
 	build := func(family workerFamily, err error) error {
 		if err != nil {
@@ -336,7 +426,7 @@ func configureWorkerDependenciesWithSources(
 			return err
 		}
 		if family.component != nil {
-			components = append(components, family.component)
+			workerComponents = append(workerComponents, family.component)
 		}
 		return nil
 	}
@@ -399,6 +489,25 @@ func configureWorkerDependenciesWithSources(
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
+	}
+	components = append(components, preclaimReadinessComponent{registry: registry})
+	var presence *jobruntime.ProfilePresence
+	if database, ok := dependencies.database.(*postgresWorkerDatabase); ok {
+		var presenceErr error
+		presence, presenceErr = database.NewProfilePresence(cfg.Profile, dependencies.instanceID)
+		if presenceErr != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		components = append(components, presence)
+	}
+	if len(workerComponents) > 0 {
+		components = append(components, workerProfileComponent{
+			components: workerComponents, budget: dependencies.workerDrainBudget,
+		})
+	}
+	if presence != nil {
+		components = append(components, profileDrainComponent{presence: presence})
 	}
 	return components, nil
 }
@@ -708,6 +817,12 @@ func buildWorkerDependencies(
 	sources workerDependencySources,
 ) *workerDependencies {
 	dependencies := &workerDependencies{}
+	if sources.newRiverClientID == nil {
+		dependencies.startupErr = errWorkerDependencyUnavailable
+		dependencies.instanceID = ""
+	} else {
+		dependencies.instanceID = sources.newRiverClientID()
+	}
 	if sources.openDatabase == nil {
 		dependencies.databaseErr = errWorkerDependencyUnavailable
 	} else {
@@ -749,6 +864,16 @@ func buildWorkerDependencies(
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
+	dependencies.shutdownGrace = time.Duration(process.ShutdownGraceSeconds) * time.Second
+	dependencies.workerDrainBudget = dependencies.shutdownGrace - profileFinalizationBuffer
+	if dependencies.workerDrainBudget <= 0 {
+		dependencies.startupErr = errWorkerDependencyUnavailable
+		return dependencies
+	}
+	if cfg.ShutdownTimeout > 0 && cfg.ShutdownTimeout < dependencies.shutdownGrace {
+		dependencies.startupErr = errWorkerDependencyUnavailable
+		return dependencies
+	}
 	// Queues and Handlers stay empty here on purpose: they are filled in only by
 	// concretely constructed handler families. Everything the manifest declares
 	// is an expectation to prove against, never a capability claim.
@@ -784,7 +909,7 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 		return
 	}
 	dependencies.queueTelemetryRequired = true
-	if dependencies.databaseErr != nil || dependencies.database == nil || sources.newRiverClientID == nil {
+	if dependencies.databaseErr != nil || dependencies.database == nil || dependencies.instanceID == "" {
 		dependencies.queueTelemetryErr = errWorkerDependencyUnavailable
 		return
 	}
@@ -804,7 +929,7 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 		riverstore.QueueTelemetryConfig{
 			Schema:   cfg.RiverDatabaseSchema,
 			Profile:  cfg.Profile,
-			ClientID: sources.newRiverClientID(),
+			ClientID: dependencies.instanceID,
 			Queues:   queues,
 			Jobs:     jobs,
 		},

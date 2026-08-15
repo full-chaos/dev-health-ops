@@ -28,12 +28,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}}
     spec:
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 7260
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: heavy}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: heavy}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 7260s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -54,12 +54,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}}
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 960
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: ops}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: ops}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 960s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -80,12 +80,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync, dev-health.io/queue: sync_provider}}
     spec:
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 960
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: sync}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: sync}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 960s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -103,11 +103,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: reconciler
           image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -125,11 +126,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: scheduler
           image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -147,11 +149,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: external}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: external}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -169,11 +172,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: ingest}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: ingest}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -191,11 +195,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: pagerduty}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          env: [{name: DEV_HEALTH_PROFILE, value: pagerduty}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -212,7 +217,7 @@ metadata: {name: dev-health-go-worker-heavy, namespace: dev-health}
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-heavy}
   minReplicas: 0
-  maxReplicas: 1
+  maxReplicas: 2
   metrics:
     - type: External
       external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "1"}}
@@ -220,6 +225,21 @@ spec:
       external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "60"}}
     - type: External
       external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "800m"}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: dev-health-go-worker-ops, namespace: dev-health}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-ops}
+  minReplicas: 0
+  maxReplicas: 2
+  metrics:
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: ops}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: ops}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: ops}}}, target: {type: AverageValue, averageValue: "800m"}}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

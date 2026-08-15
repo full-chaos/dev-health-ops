@@ -31,6 +31,7 @@ x-go-worker: &go-worker
     PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
     WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-session}
     COORDINATOR_DATABASE_MODE: ${COORDINATOR_DATABASE_MODE:-session}
+    PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-true}
     DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
     AUTO_RUN_MIGRATIONS: "false"
   networks: [dev-health-internal]
@@ -47,34 +48,44 @@ x-go-worker: &go-worker
 services:
   go-worker-heavy:
     <<: *go-worker
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: heavy}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: heavy, DEV_HEALTH_SHUTDOWN_TIMEOUT: 7260s}
+    stop_grace_period: 7260s
   go-worker-ops:
     <<: *go-worker
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ops}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ops, DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s}
+    stop_grace_period: 960s
   go-worker-sync-provider:
     <<: *go-worker
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: sync}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: sync, DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s}
+    stop_grace_period: 960s
   go-reconciler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
     environment:
       <<: *go-worker-env
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
       COORDINATOR_DATABASE_URI: "${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}"
+    stop_grace_period: 60s
   go-scheduler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
     environment:
       <<: *go-worker-env
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
       COORDINATOR_DATABASE_URI: "${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}"
+    stop_grace_period: 60s
   go-stream-external:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: external}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: external, DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s}
+    stop_grace_period: 60s
   go-stream-ingest:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ingest}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ingest, DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s}
+    stop_grace_period: 60s
   go-stream-pagerduty:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: pagerduty}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: pagerduty, DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s}
+    stop_grace_period: 60s

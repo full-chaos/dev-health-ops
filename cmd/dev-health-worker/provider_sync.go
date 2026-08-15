@@ -820,7 +820,7 @@ func constructProviderSyncWorkerWithDependencies(
 		registry, spec, handler, jobruntime.Dependencies{
 			Logger: logger, Observer: observer,
 			TenantScope: providerUnitTenantScope{},
-			Budget:      newOperationalBudget(),
+			Budget:      newOperationalBudget(postgresDatabase.pools.Domain, observer),
 			Idempotency: providerunit.AuthoritativeIdempotency{},
 		},
 	)

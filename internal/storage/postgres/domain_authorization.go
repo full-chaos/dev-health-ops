@@ -619,6 +619,10 @@ func domainPosture() RolePosture {
 			{"saved_reports", false, true, false},
 			{"webhook_deliveries", false, false, false},
 			{"worker_job_runs", true, true, false},
+			// Durable organization/fleet concurrency leases are domain-owned. The
+			// lease row contains policy identity and expiry only; queue and
+			// coordinator roles must not reach it.
+			{"worker_concurrency_leases", true, true, true},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"worker_job_completion_fences", "completion_key", "SELECT"},

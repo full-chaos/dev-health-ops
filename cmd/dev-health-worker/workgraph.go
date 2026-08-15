@@ -70,7 +70,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(), Idempotency: idempotency}
+	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency}
 	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {

@@ -19,7 +19,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -49,6 +49,10 @@ usage() {
          `fast` and `all` because the report has no other delivery channel: the
          test that produces it uses t.Log, and `go test` without -v discards a
          passing package'\''s output.
+  multi-replica-workers
+         Run the production ops-profile multi-replica claim, drain, and restart
+         gate against real PostgreSQL with `-count=1`. Requires a non-zero
+         measured-job proof artifact. Included in `fast` and `all`.
   integration-vet
          Compile-check every package under the integration build tag, across
          the WHOLE tree. No Docker required. This is what would have caught a
@@ -1155,6 +1159,42 @@ check_integration() {
   done
 }
 
+check_multi_replica_workers() {
+  local proof_dir proof_file measured result
+  proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-multi-replica.XXXXXX")"
+  proof_file="${proof_dir}/measured-jobs"
+  result=0
+  (
+    cd "${ROOT}"
+    GOWORK=off \
+      DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
+      go test -mod=readonly -tags=integration -count=1 -timeout=5m \
+        -run '^TestOperationalProfileMultiReplicaClaimDrainRestart$' \
+        ./cmd/dev-health-worker
+  ) || result=$?
+  if [ "${result}" -ne 0 ]; then
+    rm -rf -- "${proof_dir}"
+    return "${result}"
+  fi
+  if [ ! -f "${proof_file}" ]; then
+    rm -rf -- "${proof_dir}"
+    die "multi-replica worker gate produced no measured-job proof"
+  fi
+  measured="$(tr -d '[:space:]' < "${proof_file}")"
+  case "${measured}" in
+    ""|*[!0-9]*)
+      rm -rf -- "${proof_dir}"
+      die "multi-replica worker gate produced an invalid measured-job proof"
+      ;;
+  esac
+  if [ "${measured}" -le 0 ]; then
+    rm -rf -- "${proof_dir}"
+    die "multi-replica worker gate measured zero jobs"
+  fi
+  printf 'multi-replica worker gate: measured %s terminal jobs\n' "${measured}"
+  rm -rf -- "${proof_dir}"
+}
+
 # check_integration_vet compiles every package under the integration tag,
 # across the WHOLE tree, in every Go module, unconditionally -- no discovery,
 # no denylist. check_integration_coverage's discovery answers "which packages
@@ -1198,6 +1238,10 @@ case "${1:-all}" in
   grant-advisory)
     check_grant_advisory
     ;;
+  multi-replica-workers)
+    [ "$#" -eq 1 ] || die "multi-replica-workers accepts no arguments"
+    check_multi_replica_workers
+    ;;
   integration-vet)
     check_integration_vet
     ;;
@@ -1231,6 +1275,7 @@ case "${1:-all}" in
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
+    check_multi_replica_workers
     check_grant_advisory
     ;;
   all)
@@ -1244,6 +1289,7 @@ case "${1:-all}" in
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
+    check_multi_replica_workers
     check_grant_advisory
     ;;
   -h|--help|help)

@@ -61,6 +61,20 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	}
 }
 
+func TestManifestKeepsExternalStreamSingleton(t *testing.T) {
+	t.Parallel()
+	manifest, _ := loadFixture(t)
+	for _, process := range manifest.Processes {
+		if process.Name == "stream-external" {
+			if process.MaxReplicas != 1 {
+				t.Fatalf("stream-external max replicas = %d", process.MaxReplicas)
+			}
+			return
+		}
+	}
+	t.Fatal("stream-external process not found")
+}
+
 func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)

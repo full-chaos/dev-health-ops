@@ -30,8 +30,11 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 18 {
+	if summary.QueueSessionClientConnections != 22 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
+	}
+	if summary.QueueSessionHeadroom != 0 {
+		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	// The three coordinator profiles under the Option B split — reconciler
 	// and scheduler at two replicas each (2×2 + 2×2 = 8), plus workerctl's
@@ -40,12 +43,87 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
+	if summary.CoordinatorSessionHeadroom != 0 {
+		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
+	}
 	// stream-pagerduty adds two replicas of a four-connection domain pool.
-	if summary.DomainTransactionClientConnections != 50 {
+	if summary.DomainTransactionClientConnections != 58 {
 		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
 	}
-	if summary.ServerConnectionFootprint != 83 {
+	if summary.DomainTransactionHeadroom != 942 {
+		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
+	}
+	if summary.ServerConnectionFootprint != 87 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
+	}
+	if summary.ServerConnectionHeadroom != 13 {
+		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
+	}
+}
+
+func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+	for index := range manifest.Processes {
+		if manifest.Processes[index].Name == "heavy" || manifest.Processes[index].Name == "ops" {
+			manifest.Processes[index].MaxReplicas = 2
+		}
+	}
+
+	summary, err := manifest.Validate(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.QueueSessionClientConnections != 22 {
+		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
+	}
+	if summary.QueueSessionHeadroom != 0 {
+		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
+	}
+	if summary.CoordinatorSessionClientConnections != 10 {
+		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
+	}
+	if summary.CoordinatorSessionHeadroom != 0 {
+		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
+	}
+	if summary.DomainTransactionClientConnections != 58 {
+		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
+	}
+	if summary.DomainTransactionHeadroom != 942 {
+		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
+	}
+	if summary.ServerConnectionFootprint != 87 {
+		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
+	}
+	if summary.ServerConnectionHeadroom != 13 {
+		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
+	}
+}
+
+func TestManifestRejectsHeavyOrOpsReplicaBudgetXPlusOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		changed string
+	}{
+		{name: "heavy", changed: "heavy"},
+		{name: "ops", changed: "ops"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			manifest, registry := loadFixture(t)
+			for index := range manifest.Processes {
+				if manifest.Processes[index].Name == "heavy" || manifest.Processes[index].Name == "ops" {
+					manifest.Processes[index].MaxReplicas = 2
+				}
+				if manifest.Processes[index].Name == tc.changed {
+					manifest.Processes[index].MaxReplicas = 3
+				}
+			}
+			if _, err := manifest.Validate(registry); err == nil {
+				t.Fatalf("expected %s at three replicas to fail validation", tc.changed)
+			}
+		})
 	}
 }
 

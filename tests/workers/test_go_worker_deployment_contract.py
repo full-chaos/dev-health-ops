@@ -259,6 +259,11 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         and "MIGRATION_DATABASE_URI" not in process["secret_env"]
         for process in manifest["processes"]
     )
+    assert {
+        process["name"]: process["max_replicas"]
+        for process in manifest["processes"]
+        if process["name"] in {"heavy", "ops"}
+    } == {"heavy": 2, "ops": 2}
     operator = manifest["operator_cli"]
     assert operator == {
         "name": "worker-operator",

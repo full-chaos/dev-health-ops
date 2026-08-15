@@ -234,7 +234,7 @@ goWorkers:
       maxClientConnections: 1000
     queueSession:
       port: 6433
-      poolSize: 18
+      poolSize: 22
       maxClientConnections: 128
     coordinatorSession:
       port: 6434
@@ -259,14 +259,14 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 120
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: ops
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       runtimeProfile: ops
       replicas: 0
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: sync
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       runtimeProfile: sync

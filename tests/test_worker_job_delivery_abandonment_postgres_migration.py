@@ -200,4 +200,4 @@ def test_0099_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert sa.inspect(migrated_to_0098.engine).has_table(_TABLE)
-    assert _revisions(migrated_to_0098.engine) == {"0102"}
+    assert _revisions(migrated_to_0098.engine) == {"0104"}

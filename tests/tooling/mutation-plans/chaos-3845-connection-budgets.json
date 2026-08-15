@@ -121,8 +121,8 @@
     {
       "id": "CB07-server-coordinator-pool-clause",
       "file": "internal/deploymentcontract/manifest.go",
-      "find": "\t\tmanifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize",
-      "replace": "\t\t0",
+      "find": "\tsummary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +\n\t\tmanifest.PostgresBudget.PgBouncerTransactionPoolSize*manifest.PostgresBudget.PgBouncerTransactionServerPoolCount +\n\t\tmanifest.PostgresBudget.PgBouncerQueueSessionPoolSize +\n\t\tmanifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize",
+      "replace": "\tsummary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +\n\t\tmanifest.PostgresBudget.PgBouncerTransactionPoolSize*manifest.PostgresBudget.PgBouncerTransactionServerPoolCount +\n\t\tmanifest.PostgresBudget.PgBouncerQueueSessionPoolSize +\n\t\t0",
       "expect_occurrences": 1,
       "rationale": "The fleet footprint must include the coordinator session pool, or the control-plane budget becomes undercounted.",
       "proof": [

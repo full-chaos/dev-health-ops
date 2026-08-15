@@ -412,9 +412,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + domainRole + "; END IF; END $$",
-		// The only DELETE the domain role holds. Prepared recovery snapshots
-		// are transient state cleared in the same transaction that
-		// terminalizes their unit, never updated in place, so no UPDATE.
+		// Prepared recovery snapshots are transient state cleared in the same
+		// transaction that terminalizes their unit, never updated in place, so
+		// they receive DELETE but no UPDATE. Worker lifecycle tables have their
+		// own bounded DELETE grants below.
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL THEN GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",

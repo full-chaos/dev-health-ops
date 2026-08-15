@@ -192,6 +192,26 @@
       "rationale": "An expired runtime shutdown attempt must not delete profile presence while a non-cooperative child may only just have exited; the draining row must expire naturally.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
       "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "RC20-local-concurrency-lease-grant",
+      "file": "docker/init-extra-dbs.sh",
+      "find": "      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO %I',",
+      "replace": "      'GRANT SELECT ON TABLE public.worker_concurrency_leases TO %I',",
+      "expect_occurrences": 1,
+      "rationale": "The local PostgreSQL bootstrap must give the domain role the same complete lease authority as the production grant path.",
+      "build": ["bash", "-n", "docker/init-extra-dbs.sh"],
+      "proof": [["pytest", "-q", "tests/test_compose_config.py", "-k", "local_postgres_bootstraps_distinct_go_runtime_roles"]]
+    },
+    {
+      "id": "RC21-local-profile-presence-grant",
+      "file": "docker/init-extra-dbs.sh",
+      "find": "      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_profile_instances TO %I',",
+      "replace": "      'GRANT SELECT ON TABLE public.worker_profile_instances TO %I',",
+      "expect_occurrences": 1,
+      "rationale": "The local PostgreSQL bootstrap must give the domain role the same complete profile-presence authority as the production grant path.",
+      "build": ["bash", "-n", "docker/init-extra-dbs.sh"],
+      "proof": [["pytest", "-q", "tests/test_compose_config.py", "-k", "local_postgres_bootstraps_distinct_go_runtime_roles"]]
     }
   ]
 }

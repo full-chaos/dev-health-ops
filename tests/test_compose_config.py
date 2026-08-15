@@ -512,12 +512,11 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
         "DELETE ON ALL TABLES",
     ):
         assert forbidden not in domain_script
-    # Scoped claim: within the provisioning scripts' DOMAIN SECTION, the
-    # snapshot table is the only per-table DELETE. The domain ROLE holds DELETE
-    # on more than that -- dev_conversations, external_ingest_batches,
-    # external_ingest_batch_payloads and provider_rate_limit_observations are
-    # granted it in domainPosture() -- they are simply not granted by these
-    # scripts. Stating it unscoped would be false.
+    # Scoped claim: within the provisioning scripts' DOMAIN SECTION, only the
+    # snapshot and reviewed worker-lifecycle tables receive per-table DELETE.
+    # The domain ROLE holds DELETE on more tables through domainPosture(); they
+    # are simply not granted by these scripts. Stating this unscoped would be
+    # false.
     #
     # Assert the exact set rather than banning one spelling: admitting the
     # snapshot grant meant relaxing a blanket "DELETE ON TABLE" ban, and a
@@ -525,7 +524,9 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     # `public.%I` DELETE block surfaces here as the literal "%I" and so
     # cannot slip through this equality either.
     assert _tables_for_delete_grants(domain_script) == {
-        "sync_run_unit_effect_snapshots"
+        "sync_run_unit_effect_snapshots",
+        "worker_concurrency_leases",
+        "worker_profile_instances",
     }
 
 

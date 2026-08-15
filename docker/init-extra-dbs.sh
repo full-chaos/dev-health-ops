@@ -87,6 +87,18 @@ psql \
       WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
     \gexec
     SELECT format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO %I',
+      :'domain_role'
+    )
+      WHERE to_regclass('public.worker_concurrency_leases') IS NOT NULL
+    \gexec
+    SELECT format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_profile_instances TO %I',
+      :'domain_role'
+    )
+      WHERE to_regclass('public.worker_profile_instances') IS NOT NULL
+    \gexec
+    SELECT format(
       'GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO %I',
       :'domain_role'
     )

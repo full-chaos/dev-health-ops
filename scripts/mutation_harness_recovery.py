@@ -1457,6 +1457,11 @@ def _recover_partial_staging(
     import sys
 
     partials = _partial_staging_shards(record)
+    if partials and cleanup_owned_tree is None:
+        raise RecoveryError(
+            "default recovery refuses an existing staged Git tree; "
+            "private tree and root state remain"
+        )
     temporary_root = record.staging_temporary_root
     if temporary_root is None:
         raise RecoveryError("partial recovery has no temporary_root")
@@ -1479,11 +1484,6 @@ def _recover_partial_staging(
     _write_root_recovery_json(root, state_path, state)
 
     cleanup_callback = cleanup_owned_tree
-    if partials and cleanup_callback is None:
-        raise RecoveryError(
-            "default recovery refuses an existing staged Git tree; "
-            "private tree and root state remain"
-        )
     failures: list[str] = []
     removed = 0
     for partial in partials:

@@ -68,6 +68,21 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_integration.py::test_public_cli_runs_two_isolated_shards_and_restores_source"
       ]]
+    },
+    {
+      "id": "E5-child-python-bytecode-suppression",
+      "file": "scripts/mutation_harness.py",
+      "find": "        environment[\"PYTHONDONTWRITEBYTECODE\"] = \"1\"\n",
+      "replace": "        environment.pop(\"PYTHONDONTWRITEBYTECODE\", None)\n",
+      "rationale": "Harness-owned Python children must not create untracked bytecode that turns a restored shard into a cleanup failure on hosts without global Python ignore rules.",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_integration.py::test_public_sharded_children_suppress_python_bytecode"
+      ]]
     }
   ]
 }

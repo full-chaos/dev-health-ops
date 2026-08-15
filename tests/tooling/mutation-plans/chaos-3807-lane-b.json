@@ -293,6 +293,21 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_execution_tree.py::test_workspace_input_refuses_a_directory_symlink_cycle"
       ]]
+    },
+    {
+      "id": "B20",
+      "file": "scripts/mutation_harness_execution_tree.py",
+      "find": "    environment_variables[\"PYTHONDONTWRITEBYTECODE\"] = \"1\"\n",
+      "replace": "    environment_variables.pop(\"PYTHONDONTWRITEBYTECODE\", None)\n",
+      "rationale": "A failed independence probe must not write Python bytecode into the invoking source tree and then mask the real relocation refusal as source drift.",
+      "proof": [[
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_execution_tree.py::test_stage_probe_is_independent_from_the_relocation_pass"
+      ]]
     }
   ]
 }

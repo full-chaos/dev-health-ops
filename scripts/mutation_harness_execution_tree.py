@@ -976,6 +976,11 @@ def probe_python_toolchain_independence(*, shard_root: Path, environment: Path) 
         sentinel.unlink(missing_ok=True)
         raise HarnessError(f"Python workspace input has no interpreter: {interpreter}")
     environment_variables = os.environ.copy()
+    # The probe intentionally exercises the failure path where the copied
+    # interpreter still resolves imports from the invoking workspace.  Keep that
+    # path read-only so a failing probe cannot leave bytecode behind in the
+    # source tree and poison the cleanup manifest check.
+    environment_variables["PYTHONDONTWRITEBYTECODE"] = "1"
     environment_variables.pop("PYTHONPATH", None)
     try:
         completed = subprocess.run(

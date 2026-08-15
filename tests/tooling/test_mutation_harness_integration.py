@@ -306,6 +306,40 @@ def test_public_cli_applies_only_before_effective_shard_assignment(
     assert [item["id"] for item in report["results"]] == ["M2"]
 
 
+def test_public_sharded_children_suppress_python_bytecode(tmp_path: Path) -> None:
+    root, plan = _integration_repository(tmp_path)
+    raw = json.loads(plan.read_text(encoding="utf-8"))
+    raw["mutations"][0]["proof"] = [
+        [
+            "bash",
+            "-c",
+            'test "$PYTHONDONTWRITEBYTECODE" = 1 && '
+            "grep -q guard-one=enabled widget.txt",
+        ]
+    ]
+    plan.write_text(json.dumps(raw), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--root",
+            str(root),
+            "run",
+            "--plan",
+            str(plan),
+            "--only",
+            "M1",
+            "--shards",
+            "2",
+            "--assert-all-killed",
+            "--progress",
+            "none",
+        ]
+    )
+
+    assert exit_code == 0
+    assert verify(root) == []
+
+
 @pytest.mark.parametrize("force", [False, True])
 def test_public_recovery_clears_an_incomplete_run_when_recorded_temporary_root_is_absent(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], force: bool

@@ -16,6 +16,7 @@ PUBLIC_VERBS = (
     "build",
     "contract",
     "grant-advisory",
+    "multi-replica-workers",
     "integration-vet",
     "integration-coverage",
     "integration-shard-plan",
@@ -56,3 +57,14 @@ def test_help_completes_and_documents_every_public_verb() -> None:
         if line.startswith("  ") and line.strip()
     }
     assert set(PUBLIC_VERBS) <= documented_verbs
+
+
+def test_multi_replica_gate_is_cold_measured_and_required() -> None:
+    source = (ROOT / "ci" / "check_go.sh").read_text(encoding="utf-8")
+    function = source.split("check_multi_replica_workers() {", 1)[1].split("\n}", 1)[0]
+
+    assert "-tags=integration -count=1" in function
+    assert "DEV_HEALTH_MULTI_REPLICA_PROOF" in function
+    assert "measured zero jobs" in function
+    # One public verb plus the required fast and all paths.
+    assert source.count("    check_multi_replica_workers\n") == 3

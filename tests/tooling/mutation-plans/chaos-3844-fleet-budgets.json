@@ -34,6 +34,26 @@
       "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetRenewsLongRunningLease$", "./internal/jobruntime/"]]
     },
     {
+      "id": "CFB07-zero-row-loss-detection",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "if err != nil || result.RowsAffected() != 1 {",
+      "replace": "if err != nil || result.RowsAffected() < 0 {",
+      "expect_occurrences": 1,
+      "rationale": "A fenced renewal that updates zero rows means the lease is gone or owned by another worker and must cancel the current handler.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetSignalsLostLease$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB08-handler-loss-cancellation",
+      "file": "internal/jobruntime/adapter.go",
+      "find": "if !ok || lostLease.Lost() == nil {",
+      "replace": "if true || !ok || lostLease.Lost() == nil {",
+      "expect_occurrences": 1,
+      "rationale": "The adapter must bind an optional fenced lease-loss signal to the handler context; otherwise a lost lease leaves the running job active.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-count=1", "-run", "^TestWithBudgetLeaseLossCancelsHandlerContext$", "./internal/jobruntime/"]]
+    },
+    {
       "id": "CFB03-expiry-recovery",
       "file": "internal/jobruntime/budget_postgres.go",
       "find": "WHERE budget_key = $1 AND lease_expires_at <= statement_timestamp()",

@@ -8,7 +8,7 @@
     "scripts/mutation_harness_optin.py",
     "scripts/mutation_harness_recovery.py"
   ],
-  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, the bounded whole-recorded-root ENOENT reboot path with a final absence recheck, the recorded temporary-root final-component lexical type guard, preflight-to-cleanup temporary-root identity binding, and per-shard root, owner-marker, and leased-lock identity binding. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
+  "$limitation": "Pins Lane D closed schema, opt-in limits, Python resolution, fresh named Go proofs, advisory-lock liveness, clear-state-last behavior, independent root and descendant authority-directory symlink refusals, recovery of manifest-authorized pre-child staging with source/temporary-root disjointness, the bounded whole-recorded-root ENOENT reboot path with a final absence recheck, the recorded temporary-root final-component lexical type guard, preflight-to-cleanup temporary-root identity binding, per-shard root, owner-marker, and leased-lock identity binding, fail-closed default refusal of any still-existing recorded Git shard, and the trusted-test-only fd capability boundary with an exit identity recheck. Default recovery never invokes Git porcelain or moves an existing shard. Authority-file symlinks are redundantly rejected by the lexical component validator and JSON reader and are covered by direct regressions rather than a compound mutation. Execution-tree ownership and coordinator aggregation guards belong to their owning lane plans.",
   "mutations": [
     {
       "id": "D1-closed-plan-keys",
@@ -208,23 +208,23 @@
       ]]
     },
     {
-      "id": "D16-temporary-root-preflight-identity",
+      "id": "D16-temporary-root-cleanup-descriptor-identity",
       "file": "scripts/mutation_harness_recovery.py",
-      "find": "actual = _capture_private_temporary_root_identity(record)\n    if actual != expected:\n        raise RecoveryError(\n            f\"temporary_root {record.temporary_root} identity changed after preflight; \"\n            \"root state remains\"\n        )",
-      "replace": "actual = _capture_private_temporary_root_identity(record)\n    if False and actual != expected:\n        raise RecoveryError(\n            f\"temporary_root {record.temporary_root} identity changed after preflight; \"\n            \"root state remains\"\n        )",
-      "rationale": "cleanup must retain a matching-marker directory that replaced the device and inode authorized by preflight at the same lexical temporary-root path",
+      "find": "        _require_shard_cleanup_authority(\n            record, shard, temporary_root_identity, shard_authority\n        )\n        os.rename(",
+      "replace": "        if False:\n            _require_shard_cleanup_authority(\n                record, shard, temporary_root_identity, shard_authority\n            )\n        os.rename(",
+      "rationale": "cleanup must recheck the recorded temporary-root identity after opening its bound descriptor and before the fd-relative quarantine rename",
       "proof": [[
         ".venv/bin/pytest",
         "-q",
         "--confcutdir=tests/tooling",
-        "tests/tooling/test_mutation_harness_lane_d.py::test_temporary_root_identity_change_with_original_shard_is_retained"
+        "tests/tooling/test_mutation_harness_lane_d.py::test_cleanup_boundary_rechecks_root_after_opening_its_descriptor"
       ]]
     },
     {
       "id": "D17-shard-cleanup-authority-identity",
       "file": "scripts/mutation_harness_recovery.py",
-      "find": "actual = _capture_shard_cleanup_authority(record, shard, temporary_root_identity)\n    if actual != expected:",
-      "replace": "actual = _capture_shard_cleanup_authority(record, shard, temporary_root_identity)\n    if False and actual != expected:",
+      "find": "    try:\n        actual = _capture_shard_cleanup_authority(\n            record, shard, temporary_root_identity\n        )\n    except RecoveryError as exc:\n        raise RecoveryAuthorityChanged(str(exc)) from exc\n    if actual != expected:",
+      "replace": "    try:\n        actual = _capture_shard_cleanup_authority(\n            record, shard, temporary_root_identity\n        )\n    except RecoveryError as exc:\n        raise RecoveryAuthorityChanged(str(exc)) from exc\n    if False and actual != expected:",
       "rationale": "cleanup must retain a shard when its root, ownership marker, or leased liveness lock no longer has the device and inode authorized by preflight",
       "proof": [[
         ".venv/bin/pytest",
@@ -232,6 +232,32 @@
         "--confcutdir=tests/tooling",
         "tests/tooling/test_mutation_harness_lane_d.py::test_shard_same_path_directory_replacement_is_retained",
         "tests/tooling/test_mutation_harness_lane_d.py::test_shard_authority_file_replacement_after_preflight_is_retained"
+      ]]
+    },
+    {
+      "id": "D18-default-existing-git-shard-refusal",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "    if cleanup_owned_tree is None:\n        raise RecoveryError(\n            \"default recovery refuses existing recorded Git shard trees; \"",
+      "replace": "    if False and cleanup_owned_tree is None:\n        raise RecoveryError(\n            \"default recovery refuses existing recorded Git shard trees; \"",
+      "rationale": "default public recovery must refuse every still-existing recorded Git shard before preflight, quarantine, restore, repair, cleanup, or durable-state mutation",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_default_recovery_refuses_a_real_registered_git_shard_without_mutation"
+      ]]
+    },
+    {
+      "id": "D19-cleanup-capability-exit-identity",
+      "file": "scripts/mutation_harness_recovery.py",
+      "find": "        cleanup_owned_tree(capability)\n        capability.require_unchanged()\n        try:",
+      "replace": "        cleanup_owned_tree(capability)\n        _ = capability\n        try:",
+      "rationale": "a trusted injected cleanup callback must not be able to replace any open quarantine, shard, marker, or leased-lock descriptor without an exit identity refusal",
+      "proof": [[
+        ".venv/bin/pytest",
+        "-q",
+        "--confcutdir=tests/tooling",
+        "tests/tooling/test_mutation_harness_lane_d.py::test_cleanup_callback_rechecks_every_open_capability_at_exit"
       ]]
     }
   ]

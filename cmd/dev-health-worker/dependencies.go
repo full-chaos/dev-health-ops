@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
@@ -820,6 +821,7 @@ func buildWorkerMetrics(
 		derived, err := jobruntime.DimensionsForProfile(
 			runtimeRegistry, cfg.Profile, nil,
 			budgetDimensionsForProfile(cfg.Profile), syncLeaseDimensionsForProfile(cfg.Profile),
+			concurrencyBudgetDimensionsForProfile(runtimeRegistry, cfg.Profile),
 		)
 		if err != nil {
 			return nil, err
@@ -839,6 +841,32 @@ func buildWorkerMetrics(
 		return nil, err
 	}
 	return collector, nil
+}
+
+func concurrencyBudgetDimensionsForProfile(registry *jobruntime.Registry, profile string) []jobruntime.ConcurrencyBudgetLabels {
+	if registry == nil {
+		return nil
+	}
+	seen := make(map[jobruntime.ConcurrencyBudgetLabels]struct{})
+	var labels []jobruntime.ConcurrencyBudgetLabels
+	for _, descriptor := range registry.Profile(profile) {
+		if descriptor.ConcurrencyScope != "fleet" && descriptor.ConcurrencyScope != "organization" {
+			continue
+		}
+		label := jobruntime.ConcurrencyBudgetLabels{Kind: descriptor.Kind, Scope: descriptor.ConcurrencyScope}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		if labels[i].Kind == labels[j].Kind {
+			return labels[i].Scope < labels[j].Scope
+		}
+		return labels[i].Kind < labels[j].Kind
+	})
+	return labels
 }
 
 // syncLeaseDimensionsForProfile registers the frozen provider/dataset matrix

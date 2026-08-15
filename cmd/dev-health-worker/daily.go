@@ -108,7 +108,7 @@ func buildDailyWorker(
 	}
 	dailyDependencies := jobruntime.Dependencies{
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
-		Budget: newOperationalBudget(), Idempotency: idempotency,
+		Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 	}
 	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(dailySpecs)+len(remainingSpecs))

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3844 durable fleet concurrency budgets",
+  "$limitation": "The real PostgreSQL proofs require Docker and are run with the integration build tag. The plan covers identity, atomic cross-process admission, expiry recovery, owner fencing, and payload-free persistence.",
+  "mutations": [
+    {
+      "id": "CFB01-organization-identity",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "\tif request.ConcurrencyScope != \"organization\" || request.OrganizationID == nil {",
+      "replace": "\tif request.ConcurrencyScope != \"organization\" {",
+      "expect_occurrences": 1,
+      "rationale": "Organization budgets must require an organization identity; accepting a missing identity must fail the focused key contract.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-count=1", "-run", "^TestConcurrencyBudgetKeyScopesIdentityWithoutPayload$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB02-atomic-advisory-lock",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      "replace": "SELECT 1",
+      "expect_occurrences": 1,
+      "rationale": "The lease count and insert must be serialized across independent PostgreSQL clients so a limit of one cannot admit two concurrent holders.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetAcquireIsAtomicAcrossConcurrentStores$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB03-expiry-recovery",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "WHERE budget_key = $1 AND lease_expires_at <= statement_timestamp()",
+      "replace": "WHERE budget_key = $1 AND lease_expires_at >= statement_timestamp()",
+      "expect_occurrences": 1,
+      "rationale": "Expired capacity must be reclaimed after a worker crash while live leases must remain protected.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetIsFleetWideAndRecoversExpiredLease$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB04-owner-release-fence",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "WHERE id = $1 AND owner_token = $2",
+      "replace": "WHERE id = $1 AND owner_token <> $2",
+      "expect_occurrences": 1,
+      "rationale": "Only the lease owner may release capacity; a stale or competing token must not release another worker's lease.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetReleaseRequiresOwnerToken$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB05-payload-free-record",
+      "file": "src/dev_health_ops/alembic/versions/0103_add_worker_concurrency_leases.py",
+      "find": "sa.Column(\"owner_token\", UUID(as_uuid=True), nullable=False),",
+      "replace": "sa.Column(\"payload\", UUID(as_uuid=True), nullable=False),",
+      "expect_occurrences": 1,
+      "rationale": "Coordination rows must contain only stable policy identity and lease state, never payload-shaped fields.",
+      "build": ["env", "PYTHONPATH=src", "python", "-m", "py_compile", "src/dev_health_ops/alembic/versions/0103_add_worker_concurrency_leases.py"],
+      "proof": [["env", "PYTHONPATH=src", "python", "-c", "import importlib, sqlalchemy as sa; from alembic.migration import MigrationContext; from alembic.operations import Operations; m=importlib.import_module('dev_health_ops.alembic.versions.0103_add_worker_concurrency_leases'); e=sa.create_engine('sqlite://'); c=e.connect(); m.op=Operations(MigrationContext.configure(c)); m.upgrade(); names={x['name'] for x in sa.inspect(c).get_columns('worker_concurrency_leases')}; assert 'owner_token' in names and 'payload' not in names"]]
+    }
+  ]
+}

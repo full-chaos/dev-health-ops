@@ -13,7 +13,7 @@
     "pgbouncer_transaction_pool_size": 20,
     "pgbouncer_transaction_server_pool_count": 2,
     "pgbouncer_transaction_max_client_connections": 1000,
-    "pgbouncer_queue_session_pool_size": 18,
+    "pgbouncer_queue_session_pool_size": 22,
     "pgbouncer_queue_session_max_client_connections": 128,
     "pgbouncer_coordinator_session_pool_size": 10,
     "pgbouncer_coordinator_session_max_client_connections": 32
@@ -63,7 +63,7 @@
       "registry_profile": "heavy",
       "enabled_by_default": false,
       "min_replicas": 0,
-      "max_replicas": 1,
+      "max_replicas": 2,
       "queues": [
         "investment",
         "metrics",
@@ -127,7 +127,7 @@
       "registry_profile": "ops",
       "enabled_by_default": false,
       "min_replicas": 0,
-      "max_replicas": 1,
+      "max_replicas": 2,
       "queues": [
         "coverage",
         "heartbeat",

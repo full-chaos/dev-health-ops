@@ -1432,7 +1432,7 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         coordinator_pool["environment"].get("DB_USER")
         == "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}"
     )
-    assert queue_pool["environment"].get("DEFAULT_POOL_SIZE") == "18"
+    assert queue_pool["environment"].get("DEFAULT_POOL_SIZE") == "22"
     assert coordinator_pool["environment"].get("DEFAULT_POOL_SIZE") == "10"
     assert transaction_pool["environment"].get("DEFAULT_POOL_SIZE") == "20"
     assert "RESERVE_POOL_SIZE" not in transaction_pool["environment"]

@@ -268,6 +268,105 @@ def test_workspace_input_copy_has_no_links_and_is_byte_independent(
     assert build_source_manifest(source_repo) == manifest
 
 
+def test_workspace_input_materializes_an_internal_directory_symlink(
+    source_repo: Path,
+) -> None:
+    workspace = source_repo / "ignored-input"
+    library = workspace / "lib"
+    library.mkdir(parents=True)
+    (library / "payload.bin").write_bytes(b"internal directory target\n")
+    os.symlink("lib", workspace / "lib64")
+    manifest = build_source_manifest(source_repo)
+    temporary_root = source_repo.parent / "directory-link-private"
+    temporary_root.mkdir(mode=0o700)
+
+    staged = stage_execution_tree(
+        source_repo,
+        temporary_root / "shard",
+        run_id="run-directory-link",
+        shard_index=0,
+        source_manifest=manifest,
+        plan_digest="plan-digest",
+        workspace_inputs=("ignored-input",),
+    )
+
+    copied_alias = staged.root / "ignored-input/lib64"
+    assert copied_alias.is_dir()
+    assert not copied_alias.is_symlink()
+    assert (copied_alias / "payload.bin").read_bytes() == b"internal directory target\n"
+
+
+def test_workspace_input_refuses_an_external_directory_symlink(
+    source_repo: Path,
+) -> None:
+    workspace = source_repo / "ignored-input"
+    workspace.mkdir()
+    outside = source_repo.parent / "outside-workspace-input"
+    outside.mkdir()
+    (outside / "secret.bin").write_bytes(b"must not be copied\n")
+    os.symlink(outside, workspace / "external")
+    manifest = build_source_manifest(source_repo)
+    temporary_root = source_repo.parent / "external-link-private"
+    temporary_root.mkdir(mode=0o700)
+
+    with pytest.raises(HarnessError, match="directory link escapes workspace input"):
+        stage_execution_tree(
+            source_repo,
+            temporary_root / "shard",
+            run_id="run-external-directory-link",
+            shard_index=0,
+            source_manifest=manifest,
+            plan_digest="plan-digest",
+            workspace_inputs=("ignored-input",),
+        )
+
+
+def test_workspace_input_refuses_a_top_level_link_outside_the_repository(
+    source_repo: Path,
+) -> None:
+    with (source_repo / ".gitignore").open("a", encoding="utf-8") as handle:
+        handle.write("ignored-input\n")
+    outside = source_repo.parent / "outside-workspace-input"
+    outside.mkdir()
+    (outside / "secret.bin").write_bytes(b"must not be copied\n")
+    os.symlink(outside, source_repo / "ignored-input")
+    manifest = build_source_manifest(source_repo)
+    temporary_root = source_repo.parent / "top-level-link-private"
+    temporary_root.mkdir(mode=0o700)
+
+    with pytest.raises(HarnessError, match="resolves outside repository"):
+        stage_execution_tree(
+            source_repo,
+            temporary_root / "shard",
+            run_id="run-top-level-directory-link",
+            shard_index=0,
+            source_manifest=manifest,
+            plan_digest="plan-digest",
+            workspace_inputs=("ignored-input",),
+        )
+
+
+def test_workspace_input_refuses_a_directory_symlink_cycle(source_repo: Path) -> None:
+    workspace = source_repo / "ignored-input"
+    nested = workspace / "nested"
+    nested.mkdir(parents=True)
+    os.symlink("..", nested / "cycle")
+    manifest = build_source_manifest(source_repo)
+    temporary_root = source_repo.parent / "cycle-link-private"
+    temporary_root.mkdir(mode=0o700)
+
+    with pytest.raises(HarnessError, match="directory link cycle"):
+        stage_execution_tree(
+            source_repo,
+            temporary_root / "shard",
+            run_id="run-directory-link-cycle",
+            shard_index=0,
+            source_manifest=manifest,
+            plan_digest="plan-digest",
+            workspace_inputs=("ignored-input",),
+        )
+
+
 def _python_workspace(source_repo: Path) -> Path:
     with (source_repo / ".gitignore").open("a", encoding="utf-8") as handle:
         handle.write(".venv-probe/\n")

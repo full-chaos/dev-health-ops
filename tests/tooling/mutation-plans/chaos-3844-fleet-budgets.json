@@ -21,7 +21,17 @@
       "expect_occurrences": 1,
       "rationale": "The lease count and insert must be serialized across independent PostgreSQL clients so a limit of one cannot admit two concurrent holders.",
       "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetAcquireIsAtomicAcrossConcurrentStores$", "./internal/jobruntime/"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetIsFleetWideAcrossOSProcesses$", "./internal/jobruntime/"]]
+    },
+    {
+      "id": "CFB06-lease-renewal",
+      "file": "internal/jobruntime/budget_postgres.go",
+      "find": "SET lease_expires_at = statement_timestamp() + ($3::bigint * interval '1 second'),",
+      "replace": "SET lease_expires_at = statement_timestamp(),",
+      "expect_occurrences": 1,
+      "rationale": "Long-running jobs must renew their lease before expiry; otherwise a second worker can acquire the same capacity while the first is still active.",
+      "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresConcurrencyBudgetRenewsLongRunningLease$", "./internal/jobruntime/"]]
     },
     {
       "id": "CFB03-expiry-recovery",
@@ -36,8 +46,8 @@
     {
       "id": "CFB04-owner-release-fence",
       "file": "internal/jobruntime/budget_postgres.go",
-      "find": "WHERE id = $1 AND owner_token = $2",
-      "replace": "WHERE id = $1 AND owner_token <> $2",
+      "find": "DELETE FROM public.worker_concurrency_leases\n\t\t\tWHERE id = $1 AND owner_token = $2",
+      "replace": "DELETE FROM public.worker_concurrency_leases\n\t\t\tWHERE id = $1 AND owner_token <> $2",
       "expect_occurrences": 1,
       "rationale": "Only the lease owner may release capacity; a stale or competing token must not release another worker's lease.",
       "build": ["env", "GOCACHE=/tmp/chaos3844-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime/"],

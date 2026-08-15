@@ -6,6 +6,9 @@ import fcntl
 import json
 import os
 import shutil
+import stat
+import subprocess
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -421,6 +424,25 @@ def _recovery_fixture(
     return root, shard, ownership_marker, liveness_lock
 
 
+def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+    completed = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    return completed
+
+
+def _tree_file_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+
+
 def _rewrite_recorded_temporary_root(root: Path, replacement: Path) -> None:
     state_path = root / ".mutation-harness/state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -830,6 +852,260 @@ def test_shard_authority_file_replacement_after_preflight_is_retained(
 
 
 @pytest.mark.parametrize("force", [False, True])
+def test_default_recovery_refuses_a_real_registered_git_shard_without_mutation(
+    tmp_path: Path, force: bool
+) -> None:
+    root, shard, marker, liveness = _recovery_fixture(tmp_path)
+    marker_bytes = marker.read_bytes()
+    liveness_bytes = liveness.read_bytes()
+    shutil.rmtree(shard)
+    _git(root, "init", "-q")
+    source_sentinel = root / "source-sentinel.txt"
+    source_sentinel.write_text("do not change source", encoding="utf-8")
+    _git(root, "add", source_sentinel.name)
+    _git(
+        root,
+        "-c",
+        "user.name=Mutation Harness Test",
+        "-c",
+        "user.email=mutation-harness@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    _git(root, "worktree", "add", "-q", "--detach", str(shard), "HEAD")
+    marker.write_bytes(marker_bytes)
+    liveness.write_bytes(liveness_bytes)
+    sentinel = shard / "real-git-shard-sentinel.txt"
+    sentinel.write_text("do not remove", encoding="utf-8")
+    shard.parent.chmod(0o700)
+
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    tree_before = _tree_file_bytes(shard)
+    tree_identity_before = shard.stat().st_dev, shard.stat().st_ino
+    private_root_identity_before = (
+        shard.parent.stat().st_dev,
+        shard.parent.stat().st_ino,
+    )
+    source_sentinel_before = source_sentinel.read_bytes()
+    source_status_before = _git(
+        root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    ).stdout
+    registration_before = _git(root, "worktree", "list", "--porcelain").stdout
+    output = StringIO()
+
+    with pytest.raises(
+        RecoveryError, match="default recovery refuses existing recorded Git shard"
+    ):
+        recover_run(root, "run-3807", force=force, output=output)
+
+    assert output.getvalue() == ""
+    assert sentinel.read_text(encoding="utf-8") == "do not remove"
+    assert _tree_file_bytes(shard) == tree_before
+    assert (shard.stat().st_dev, shard.stat().st_ino) == tree_identity_before
+    assert (shard.parent.stat().st_dev, shard.parent.stat().st_ino) == (
+        private_root_identity_before
+    )
+    assert stat.S_IMODE(shard.parent.stat().st_mode) == 0o700
+    assert source_sentinel.read_bytes() == source_sentinel_before
+    assert state_path.read_bytes() == state_before
+    assert manifest_path.read_bytes() == manifest_before
+    assert (
+        _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
+        == source_status_before
+    )
+    assert _git(root, "worktree", "list", "--porcelain").stdout == (registration_before)
+
+
+@pytest.mark.parametrize(
+    "capability_name",
+    [
+        "quarantine",
+        "shard",
+        "ownership_marker",
+        "liveness_lock",
+    ],
+)
+@pytest.mark.parametrize("force", [False, True])
+def test_cleanup_callback_rechecks_every_open_capability_at_exit(
+    tmp_path: Path,
+    force: bool,
+    capability_name: str,
+) -> None:
+    root, _, _, _ = _recovery_fixture(tmp_path)
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    original_sentinel: Path | None = None
+    replacement = tmp_path / f"replacement-{capability_name}"
+
+    def cleanup_at_boundary(
+        capability: recovery_backend.QuarantinedShard,
+    ) -> None:
+        nonlocal original_sentinel
+        selected = getattr(capability, capability_name)
+        original_sentinel = capability.shard.path / "original-sentinel.txt"
+        original_sentinel.write_text("do not remove original", encoding="utf-8")
+        if selected.file_type == stat.S_IFDIR:
+            replacement.mkdir(mode=0o700)
+            replacement_descriptor = os.open(
+                replacement,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        else:
+            replacement.write_text("do not remove replacement", encoding="utf-8")
+            replacement_descriptor = os.open(
+                replacement,
+                os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            )
+        try:
+            os.dup2(replacement_descriptor, selected.descriptor)
+        finally:
+            os.close(replacement_descriptor)
+
+    with pytest.raises(RecoveryError, match="capability identity changed"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=cleanup_at_boundary,
+        )
+
+    assert original_sentinel is not None
+    assert original_sentinel.read_text(encoding="utf-8") == "do not remove original"
+    assert replacement.exists()
+    assert state_path.read_bytes() == state_before
+    assert manifest_path.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_cleanup_boundary_rechecks_root_after_opening_its_descriptor(
+    tmp_path: Path, force: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, shard, _, _ = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    moved_original = tmp_path / "descriptor-race-original-root"
+    quarantine_name = (
+        f".mutation-harness-recovery-run-3807-shard-0-{shard.stat().st_ino}"
+    )
+    replacement_sentinel = temporary_root / "replacement-root-sentinel.txt"
+    original_sentinel = moved_original / "original-root-sentinel.txt"
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    real_open = os.open
+    swapped = False
+
+    def open_with_root_replacement(
+        path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if os.fsdecode(path) == quarantine_name and dir_fd is not None and not swapped:
+            swapped = True
+            _replace_temporary_root_around_original_shard(
+                temporary_root, moved_original
+            )
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(recovery_backend.os, "open", open_with_root_replacement)
+
+    with pytest.raises(RecoveryError, match="temporary_root.*identity changed"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert replacement_sentinel.read_text(encoding="utf-8") == (
+        "do not remove replacement root"
+    )
+    assert (
+        original_sentinel.read_text(encoding="utf-8") == "do not remove original root"
+    )
+    assert state_path.read_bytes() == state_before
+    assert manifest_path.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_quarantine_rename_refuses_a_replaced_shard_without_deleting_it(
+    tmp_path: Path, force: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, shard, marker, liveness = _recovery_fixture(tmp_path)
+    temporary_root = shard.parent
+    moved_original = tmp_path / "rename-race-original-shard"
+    original_inode = shard.stat().st_ino
+    quarantine_root = temporary_root / (
+        f".mutation-harness-recovery-run-3807-shard-0-{original_inode}"
+    )
+    replacement_sentinel = quarantine_root / "shard-0/replacement-sentinel.txt"
+    original_sentinel = moved_original / "original-sentinel.txt"
+    state_path = root / ".mutation-harness/state.json"
+    state_before = state_path.read_bytes()
+    manifest_path = Path(json.loads(state_before)["coordinator_run"]["manifest_path"])
+    manifest_before = manifest_path.read_bytes()
+    real_rename = os.rename
+    swapped = False
+
+    def rename_with_replacement(
+        source: str | bytes,
+        destination: str | bytes,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped
+        if src_dir_fd is not None and dst_dir_fd is not None and not swapped:
+            swapped = True
+            real_rename(shard, moved_original)
+            shard.mkdir(mode=0o700)
+            real_rename(moved_original / marker.name, marker)
+            real_rename(moved_original / liveness.name, liveness)
+            (shard / replacement_sentinel.name).write_text(
+                "do not remove replacement", encoding="utf-8"
+            )
+            original_sentinel.write_text("do not remove original", encoding="utf-8")
+        real_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(recovery_backend.os, "rename", rename_with_replacement)
+
+    with pytest.raises(RecoveryError, match="shard root.*during quarantine"):
+        recover_run(
+            root,
+            "run-3807",
+            force=force,
+            cleanup_owned_tree=_remove_owned_tree,
+        )
+
+    assert temporary_root.is_dir()
+    assert replacement_sentinel.read_text(encoding="utf-8") == (
+        "do not remove replacement"
+    )
+    assert original_sentinel.read_text(encoding="utf-8") == "do not remove original"
+    assert state_path.read_bytes() == state_before
+    assert manifest_path.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("force", [False, True])
 @pytest.mark.parametrize("lifecycle", ["running", "recovering"])
 def test_missing_recorded_temporary_root_recovers_without_fabricating_results(
     tmp_path: Path,
@@ -977,7 +1253,13 @@ def test_missing_temporary_root_rechecks_absence_immediately_before_state_clear(
     )
 
 
-def _remove_owned_tree(root: Path, marker: Path, shard_index: int) -> None:
+def _remove_owned_tree(capability: recovery_backend.QuarantinedShard) -> None:
+    assert capability.shard_index == 0
+    capability.require_unchanged()
+    shutil.rmtree(capability.shard.path)
+
+
+def _remove_partial_tree(root: Path, marker: Path, shard_index: int) -> None:
     assert marker.is_relative_to(root)
     assert shard_index == 0
     shutil.rmtree(root)
@@ -1041,7 +1323,7 @@ def test_zero_recorded_shards_recovers_owned_partial_staging_tree(
         root,
         "run-3807",
         force=force,
-        cleanup_owned_tree=_remove_owned_tree,
+        cleanup_owned_tree=_remove_partial_tree,
     )
 
     assert message == (
@@ -1071,7 +1353,7 @@ def test_zero_recorded_shards_recovers_empty_private_root(tmp_path: Path) -> Non
     root, temporary_root, shard, _ = _zero_shard_staging_fixture(tmp_path, empty=True)
     assert shard is None
 
-    message = recover_run(root, "run-3807", cleanup_owned_tree=_remove_owned_tree)
+    message = recover_run(root, "run-3807", cleanup_owned_tree=_remove_partial_tree)
 
     assert message == (
         "recovered run run-3807 as aborted; removed 0 owned staging shard(s)"
@@ -1285,7 +1567,11 @@ def test_zero_shard_recovery_rejects_private_root_below_source(
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     cleanup_calls: list[Path] = []
 
-    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+    def cleanup(
+        partial: Path,
+        marker: Path,
+        shard_index: int,
+    ) -> None:
         del marker, shard_index
         cleanup_calls.append(partial)
 
@@ -1322,7 +1608,11 @@ def test_zero_shard_recovery_rejects_private_root_above_source(
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     cleanup_calls: list[Path] = []
 
-    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+    def cleanup(
+        partial: Path,
+        marker: Path,
+        shard_index: int,
+    ) -> None:
         del marker, shard_index
         cleanup_calls.append(partial)
 
@@ -1393,7 +1683,11 @@ def test_zero_shard_root_state_is_cleared_after_partial_cleanup(
     state_path = root / ".mutation-harness/state.json"
     observed_lifecycle: list[str] = []
 
-    def cleanup(partial: Path, marker: Path, shard_index: int) -> None:
+    def cleanup(
+        partial: Path,
+        marker: Path,
+        shard_index: int,
+    ) -> None:
         assert marker.is_relative_to(partial)
         assert shard_index == 0
         state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1649,10 +1943,12 @@ def test_root_state_is_cleared_only_after_verified_cleanup(tmp_path: Path) -> No
     root, _, _, _ = _recovery_fixture(tmp_path)
     state_path = root / ".mutation-harness/state.json"
 
-    def cleanup(shard: Path, marker: Path, shard_index: int) -> None:
+    def cleanup(
+        capability: recovery_backend.QuarantinedShard,
+    ) -> None:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["coordinator_run"]["lifecycle"] == "recovering"
-        _remove_owned_tree(shard, marker, shard_index)
+        _remove_owned_tree(capability)
 
     recover_run(root, "run-3807", cleanup_owned_tree=cleanup)
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1664,14 +1960,17 @@ def test_recovery_holds_the_acquired_liveness_lock_through_cleanup(
 ) -> None:
     root, _, _, liveness_lock = _recovery_fixture(tmp_path)
 
-    def cleanup(shard: Path, marker: Path, shard_index: int) -> None:
-        descriptor = os.open(liveness_lock, os.O_RDWR | os.O_CLOEXEC)
+    def cleanup(
+        capability: recovery_backend.QuarantinedShard,
+    ) -> None:
+        assert capability.liveness_lock.path.name == liveness_lock.name
+        descriptor = os.open(capability.liveness_lock.path, os.O_RDWR | os.O_CLOEXEC)
         try:
             with pytest.raises(BlockingIOError):
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             os.close(descriptor)
-        _remove_owned_tree(shard, marker, shard_index)
+        _remove_owned_tree(capability)
 
     recover_run(root, "run-3807", cleanup_owned_tree=cleanup)
 

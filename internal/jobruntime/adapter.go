@@ -68,6 +68,10 @@ type BudgetLease interface {
 	Release()
 }
 
+type budgetLeaseLoss interface {
+	Lost() <-chan struct{}
+}
+
 type Budget interface {
 	Supports(string, int) bool
 	Acquire(context.Context, BudgetRequest) (BudgetLease, error)
@@ -354,6 +358,8 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	if lease == nil {
 		return choice, envelope, errors.New("budget returned nil lease")
 	}
+	ctx, cancelLeaseLoss := withBudgetLeaseLoss(ctx, lease)
+	defer cancelLeaseLoss()
 	defer lease.Release()
 
 	claim, err = adapter.idempotency.Begin(ctx, ClaimRequest{
@@ -415,6 +421,22 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 		return choice, envelope, err
 	}
 	return choice, envelope, handlerErr
+}
+
+func withBudgetLeaseLoss(ctx context.Context, lease BudgetLease) (context.Context, context.CancelFunc) {
+	lostLease, ok := lease.(budgetLeaseLoss)
+	if !ok || lostLease.Lost() == nil {
+		return ctx, func() {}
+	}
+	leaseContext, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-lostLease.Lost():
+			cancel()
+		case <-leaseContext.Done():
+		}
+	}()
+	return leaseContext, cancel
 }
 
 func finishClaim(ctx context.Context, claim IdempotencyClaim, completion Completion) error {

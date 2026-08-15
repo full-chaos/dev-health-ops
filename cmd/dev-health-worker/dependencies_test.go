@@ -898,12 +898,14 @@ func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 6 || components[0].Name() != "postgres-runtime-pools" ||
+	if len(components) != 4 || components[0].Name() != "postgres-runtime-pools" ||
 		components[2].Name() != "preclaim-readiness" ||
-		components[3].Name() != "worker-profile-presence" ||
-		components[4].Name() != "river-profile-workers" ||
-		components[5].Name() != "worker-profile-drain" {
+		components[3].Name() != "river-profile-workers" {
 		t.Fatalf("production components = %#v", components)
+	}
+	profileWorkers, ok := components[3].(workerProfileComponent)
+	if !ok || profileWorkers.presence == nil {
+		t.Fatalf("production profile lifecycle = %#v", components[3])
 	}
 	if err := components[0].Shutdown(ctx); err != nil {
 		t.Fatal(err)
@@ -1120,6 +1122,38 @@ type blockingShutdownComponent struct {
 	release chan struct{}
 }
 
+type recordingProfilePresence struct {
+	started  chan struct{}
+	draining chan struct{}
+	removed  chan struct{}
+}
+
+func newRecordingProfilePresence() *recordingProfilePresence {
+	return &recordingProfilePresence{
+		started: make(chan struct{}), draining: make(chan struct{}), removed: make(chan struct{}),
+	}
+}
+
+func (presence *recordingProfilePresence) Start(context.Context) error {
+	close(presence.started)
+	return nil
+}
+
+func (presence *recordingProfilePresence) BeginDrain(context.Context) error {
+	close(presence.draining)
+	return nil
+}
+
+func (presence *recordingProfilePresence) Shutdown(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	close(presence.removed)
+	return nil
+}
+
+func (*recordingProfilePresence) Errors() <-chan error { return nil }
+
 type failingStartComponent struct{ err error }
 
 func (failingStartComponent) Name() string                          { return "failing" }
@@ -1192,6 +1226,91 @@ func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testi
 	close(second.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerProfilePresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
+	t.Parallel()
+	child := &blockingShutdownComponent{
+		name: "child", entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	presence := newRecordingProfilePresence()
+	component := workerProfileComponent{
+		components: []lifecycle.Component{child}, budget: time.Minute, presence: presence,
+	}
+	done := make(chan error, 1)
+	go func() { done <- component.Shutdown(context.Background()) }()
+
+	select {
+	case <-presence.draining:
+	case <-time.After(time.Second):
+		t.Fatal("profile presence was not marked draining")
+	}
+	select {
+	case <-child.entered:
+	case <-time.After(time.Second):
+		t.Fatal("worker child did not enter shutdown")
+	}
+	select {
+	case <-presence.removed:
+		t.Fatal("profile presence was removed while a worker child was running")
+	default:
+	}
+	close(child.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-presence.removed:
+	case <-time.After(time.Second):
+		t.Fatal("profile presence was not removed after the worker child stopped")
+	}
+}
+
+func TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
+	t.Parallel()
+	child := &blockingShutdownComponent{
+		name: "child", entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	presence := newRecordingProfilePresence()
+	component := workerProfileComponent{
+		components: []lifecycle.Component{child}, budget: time.Minute, presence: presence,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- component.Shutdown(ctx) }()
+
+	select {
+	case <-presence.draining:
+	case <-time.After(time.Second):
+		t.Fatal("profile presence was not marked draining")
+	}
+	select {
+	case <-child.entered:
+	case <-time.After(time.Second):
+		t.Fatal("worker child did not enter shutdown")
+	}
+	<-ctx.Done()
+	select {
+	case <-done:
+		t.Fatal("profile shutdown returned while a worker child was running")
+	default:
+	}
+	select {
+	case <-presence.removed:
+		t.Fatal("profile presence was removed after the shutdown attempt expired")
+	default:
+	}
+
+	close(child.release)
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-presence.removed:
+		t.Fatal("expired shutdown attempt deleted profile presence")
+	default:
 	}
 }
 

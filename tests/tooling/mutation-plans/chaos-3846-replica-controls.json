@@ -66,10 +66,10 @@
     {
       "id": "RC07-drain-component-wiring",
       "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "\tif presence != nil {\n\t\tcomponents = append(components, profileDrainComponent{presence: presence})",
-      "replace": "\tif false && presence != nil {\n\t\tcomponents = append(components, profileDrainComponent{presence: presence})",
+      "find": "\t\t\tcomponents: workerComponents, budget: dependencies.workerDrainBudget, presence: presence,",
+      "replace": "\t\t\tcomponents: workerComponents, budget: dependencies.workerDrainBudget, presence: nil,",
       "expect_occurrences": 1,
-      "rationale": "Production replicas must mark themselves draining before their River clients stop during reverse-order shutdown.",
+      "rationale": "Production replicas must bind presence to the worker composite so draining starts before claims stop and removal cannot run before every worker child exits.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
       "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh$", "./cmd/dev-health-worker"]]
     },
@@ -182,6 +182,16 @@
       "rationale": "The durable fleet lease table needs the complete least-privilege grant set used by its atomic admission, renewal, and fenced release operations.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/domaingrants"],
       "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestDomainGrantSurfaceMatchesQuerySurface$", "./internal/domaingrants"]]
+    },
+    {
+      "id": "RC19-expired-shutdown-keeps-presence",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tif err := component.presence.Shutdown(ctx); err != nil {",
+      "replace": "\t\tif err := component.presence.Shutdown(context.Background()); err != nil {",
+      "expect_occurrences": 1,
+      "rationale": "An expired runtime shutdown attempt must not delete profile presence while a non-cooperative child may only just have exited; the draining row must expire naturally.",
+      "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt$", "./cmd/dev-health-worker"]]
     }
   ]
 }

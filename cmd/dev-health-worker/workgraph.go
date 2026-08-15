@@ -90,7 +90,10 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	for _, budget := range budgets {
 		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
 	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers})
+	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
+		ID: riverClientID(cfg, "workgraph"), Logger: logger, Queues: queues,
+		Schema: cfg.RiverDatabaseSchema, Workers: workers,
+	})
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}

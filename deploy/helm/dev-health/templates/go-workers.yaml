@@ -45,6 +45,7 @@ spec:
             - {name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}
             {{- end }}
             - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $profile.terminationGracePeriodSeconds) | quote }}}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go profile uses the bounded domain transaction pool plus
             # the River queue session pool. Only coordinator binaries receive

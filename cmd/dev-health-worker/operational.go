@@ -218,7 +218,8 @@ func buildOperationalWorker(
 		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
-		Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers,
+		ID: riverClientID(cfg, "operational"), Logger: logger, Queues: queues,
+		Schema: cfg.RiverDatabaseSchema, Workers: workers,
 	})
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable

@@ -231,7 +231,13 @@ func (r *Registry) Readiness(ctx context.Context) Readiness {
 	if !r.ready.Load() {
 		return Readiness{Ready: false, Failed: []string{"runtime"}}
 	}
+	return r.CheckRequired(ctx)
+}
 
+// CheckRequired runs required dependency checks without opening the public
+// readiness gate. Worker processes use it before starting River consumers so
+// a replica cannot claim work before its dependencies pass.
+func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	r.mu.RLock()
 	checks := make(map[string]*requiredCheck, len(r.required))
 	for name, check := range r.required {

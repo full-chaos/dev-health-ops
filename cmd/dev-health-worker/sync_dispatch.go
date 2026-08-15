@@ -332,6 +332,7 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
+		ID:     riverClientID(cfg, "sync-coordinator"),
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
 			syncCoordinatorQueue: {MaxWorkers: syncCoordinatorQueueWorkers},

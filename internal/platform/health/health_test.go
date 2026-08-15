@@ -66,6 +66,21 @@ func TestReadinessFailsClosedForGateAndRequiredChecks(t *testing.T) {
 	}
 }
 
+func TestRequiredChecksCanPassBeforePublicReadinessGateOpens(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(time.Second)
+	if err := registry.RegisterRequired("database", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if status := registry.CheckRequired(context.Background()); !status.Ready || len(status.Failed) != 0 {
+		t.Fatalf("preclaim check = %#v", status)
+	}
+	if status := registry.Readiness(context.Background()); status.Ready ||
+		!slices.Equal(status.Failed, []string{"runtime"}) {
+		t.Fatalf("public readiness opened early: %#v", status)
+	}
+}
+
 func TestReadinessTimesOutAndContainsPanics(t *testing.T) {
 	t.Parallel()
 

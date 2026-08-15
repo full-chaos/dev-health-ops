@@ -357,6 +357,13 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         assert service["user"] == "65532:65532"
         assert "no-new-privileges:true" in service["security_opt"]
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
+        assert (
+            _compose_variable_default(
+                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+                "PGBOUNCER_TRANSACTION_MODE",
+            )
+            == "true"
+        )
     assert (
         compose["go-worker-sync-provider"]["environment"]["DEV_HEALTH_PROFILE"]
         == "sync"
@@ -368,6 +375,13 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         assert service["read_only"] is True
         assert service["user"] == "65532:65532"
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
+        assert (
+            _compose_variable_default(
+                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+                "PGBOUNCER_TRANSACTION_MODE",
+            )
+            == "true"
+        )
         assert service["deploy"]["replicas"] == 0
         assert service["deploy"]["update_config"]["order"] == "start-first"
 
@@ -414,6 +428,82 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     ).read_text(encoding="utf-8")
 
 
+def test_profile_replica_and_drain_contract_matches_every_renderer() -> None:
+    manifest = {
+        process["name"]: process for process in _load_json(_PROFILES)["processes"]
+    }
+    services = {
+        "heavy": "go-worker-heavy",
+        "ops": "go-worker-ops",
+        "reconciler": "go-reconciler",
+        "scheduler": "go-scheduler",
+        "stream-external": "go-stream-external",
+        "stream-ingest": "go-stream-ingest",
+        "stream-pagerduty": "go-stream-pagerduty",
+        "sync": "go-worker-sync-provider",
+    }
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    kubernetes = {
+        document["metadata"]["labels"].get("dev-health.io/profile"): document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+    horizontal_scalers = {
+        document["spec"]["scaleTargetRef"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "HorizontalPodAutoscaler"
+    }
+    helm = {
+        profile["name"]: profile
+        for profile in _load_yaml(_HELM_CHART / "values.yaml")["goWorkers"]["profiles"]
+    }
+    for profile, service_name in services.items():
+        contract = manifest[profile]
+        desired = contract["desired_replicas"]
+        grace = contract["shutdown_grace_seconds"]
+        assert compose[service_name]["deploy"]["replicas"] == desired
+        assert compose[service_name]["stop_grace_period"] == f"{grace}s"
+        assert (
+            compose[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+            == f"{grace}s"
+        )
+        assert swarm[service_name]["deploy"]["replicas"] == desired
+        assert swarm[service_name]["stop_grace_period"] == f"{grace}s"
+        assert (
+            swarm[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+            == f"{grace}s"
+        )
+        assert kubernetes[profile]["spec"]["replicas"] == desired
+        pod_spec = kubernetes[profile]["spec"]["template"]["spec"]
+        assert pod_spec["terminationGracePeriodSeconds"] == grace
+        shutdown = next(
+            item
+            for item in pod_spec["containers"][0]["env"]
+            if item["name"] == "DEV_HEALTH_SHUTDOWN_TIMEOUT"
+        )
+        assert shutdown["value"] == f"{grace}s"
+        assert helm[profile]["replicas"] == desired
+        assert helm[profile]["terminationGracePeriodSeconds"] == grace
+        if contract["runtime"] == "river":
+            target = kubernetes[profile]["metadata"]["name"]
+            assert (
+                horizontal_scalers[target]["spec"]["minReplicas"]
+                == contract["min_replicas"]
+            )
+            assert (
+                horizontal_scalers[target]["spec"]["maxReplicas"]
+                == contract["max_replicas"]
+            )
+            assert (
+                helm[profile]["autoscaling"]["maxReplicas"] == contract["max_replicas"]
+            )
+    helm_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "DEV_HEALTH_SHUTDOWN_TIMEOUT" in helm_template
+
+
 def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> None:
     services = _load_yaml(_GO_COMPOSE)["services"]
 
@@ -427,6 +517,9 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
     provision_command = _command_string(provision)
     assert "psql" in provision_command
     assert "provision_river_roles.sql" in provision_command
+    assert "--set=coordinator_role" in provision_command
+    assert "--set=coordinator_password" in provision_command
+    assert "RIVER_COORDINATOR_DATABASE_PASSWORD" in provision["environment"]
     assert any(
         str(volume).endswith(
             "scripts/worker/provision_river_roles.sql:"

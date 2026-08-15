@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -22,6 +24,15 @@ func (authorizer commandAuthorizer) Authorize(context.Context, joboperator.Autho
 }
 
 type commandBackend struct{}
+
+type profileStatusBackend struct {
+	commandBackend
+	queues []joboperator.QueueSummary
+}
+
+func (backend profileStatusBackend) Queues(context.Context, string) ([]joboperator.QueueSummary, error) {
+	return append([]joboperator.QueueSummary(nil), backend.queues...), nil
+}
 
 func (commandBackend) Get(context.Context, int64) (joboperator.JobSummary, error) {
 	return joboperator.JobSummary{}, errors.New("unused")
@@ -210,6 +221,100 @@ func TestDispatchStreamsStatusIsAuthorizedBoundedCoexistenceState(t *testing.T) 
 	want := "{\"deployment_state\":\"coexistence_disabled\",\"profiles\":[{\"profile\":\"stream-external\",\"owner\":\"celery\",\"enabled_by_default\":false,\"min_replicas\":0,\"max_replicas\":1},{\"profile\":\"stream-ingest\",\"owner\":\"celery\",\"enabled_by_default\":false,\"min_replicas\":0,\"max_replicas\":1}]}\n"
 	if stdout.String() != want || strings.Contains(stdout.String(), "secret") {
 		t.Fatalf("streams status output=%q", stdout.String())
+	}
+}
+
+func TestDispatchProfilesStatusIncludesExactReplicaAndBudgetTelemetry(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.profileStatusSource = workerProfileStatusSourceFunc(func(context.Context) (workerProfileStatusResponse, error) {
+		return workerProfileStatusResponse{
+			DeploymentState: "coexistence_disabled",
+			ConnectionBudget: profileConnectionBudgetStatus{
+				QueueSession:       connectionBudgetStatus{Used: 22, Limit: 22, Headroom: 0},
+				CoordinatorSession: connectionBudgetStatus{Used: 10, Limit: 10, Headroom: 0},
+				DomainTransaction:  connectionBudgetStatus{Used: 58, Limit: 1000, Headroom: 942},
+				Server:             connectionBudgetStatus{Used: 87, Limit: 100, Headroom: 13},
+			},
+			Profiles: []workerProfileStatus{{
+				Profile: "sync", DesiredReplicas: 2, LiveReplicas: 2, MaxReplicas: 2,
+				QueueBacklog: 7, ActiveJobs: 2, DrainState: "active",
+			}},
+		}, nil
+	})
+	var stdout, stderr bytes.Buffer
+	if code := dispatch(context.Background(), runtime, []string{"profiles", "status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("profiles status code=%d stderr=%s", code, stderr.String())
+	}
+	want := "{\"deployment_state\":\"coexistence_disabled\",\"connection_budget\":{\"queue_session\":{\"used\":22,\"limit\":22,\"headroom\":0},\"coordinator_session\":{\"used\":10,\"limit\":10,\"headroom\":0},\"domain_transaction\":{\"used\":58,\"limit\":1000,\"headroom\":942},\"server\":{\"used\":87,\"limit\":100,\"headroom\":13}},\"profiles\":[{\"profile\":\"sync\",\"desired_replicas\":2,\"live_replicas\":2,\"max_replicas\":2,\"queue_backlog\":7,\"active_jobs\":2,\"drain_state\":\"active\"}]}\n"
+	if stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("profiles status stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestManifestProfileStatusSourceCombinesFreshQueueAndPresenceState(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	contractRegistry, err := jobcontract.LoadRegistry("contracts/jobs/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, budget, err := deploymentcontract.Load("deploy/go-workers/profiles.json", contractRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var syncProcess deploymentcontract.Process
+	for _, process := range manifest.Processes {
+		if process.Name == "sync" {
+			syncProcess = process
+			syncProcess.DesiredReplicas = 2
+			break
+		}
+	}
+	manifest.Processes = []deploymentcontract.Process{syncProcess}
+	runtimeRegistry, err := jobruntime.Load("contracts/jobs/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenQueues := map[string]bool{}
+	queues := make([]joboperator.QueueSummary, 0)
+	for _, descriptor := range runtimeRegistry.Profile("sync") {
+		if seenQueues[descriptor.Queue] {
+			continue
+		}
+		seenQueues[descriptor.Queue] = true
+		queues = append(queues, joboperator.QueueSummary{Name: descriptor.Queue, Profile: "sync"})
+	}
+	queues[0].Available = 4
+	queues[0].Retryable = 2
+	queues[0].Scheduled = 1
+	queues[0].Running = 2
+	service, err := joboperator.New(joboperator.Dependencies{
+		Registry: runtimeRegistry, Backend: profileStatusBackend{queues: queues},
+		Authorizer: commandAuthorizer{}, DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		RouteController: commandRouteController{}, JobRouteController: commandJobRouteController{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := joboperator.Principal{Type: "service_credential", ID: "00000000-0000-4000-8000-000000000303"}
+	source := manifestProfileStatusSource{
+		service: service, principal: principal, manifest: manifest, budget: budget,
+		presence: func(context.Context) ([]jobruntime.ProfilePresenceSummary, error) {
+			return []jobruntime.ProfilePresenceSummary{{Profile: "sync", Live: 2, Draining: 1}}, nil
+		},
+	}
+	status, err := source.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Profiles) != 1 || status.Profiles[0] != (workerProfileStatus{
+		Profile: "sync", DesiredReplicas: 2, LiveReplicas: 2, MaxReplicas: 2,
+		QueueBacklog: 7, ActiveJobs: 2, DrainState: "draining",
+	}) {
+		t.Fatalf("profile status = %#v", status.Profiles)
+	}
+	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 22, Limit: 22, Headroom: 0}) ||
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 87, Limit: 100, Headroom: 13}) {
+		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }
 

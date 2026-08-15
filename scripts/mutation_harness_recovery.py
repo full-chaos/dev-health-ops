@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fcntl
-import importlib
 import json
 import os
 import re
@@ -13,7 +12,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 STATE_DIRNAME = ".mutation-harness"
 STATE_FILENAME = "state.json"
@@ -36,11 +35,14 @@ _SHARD_AUTHORITY_KEYS = (
 )
 
 RestoreMutation = Callable[[Path], str]
-CleanupOwnedTree = Callable[[Path, Path, int], None]
 
 
 class RecoveryError(RuntimeError):
     """Recovery could not prove that an intended action was safe."""
+
+
+class RecoveryAuthorityChanged(RecoveryError):
+    """A destructive target no longer has its preflight filesystem identity."""
 
 
 def _trusted_root_state_directory(root: Path) -> Path:
@@ -189,6 +191,58 @@ class ShardCleanupAuthority:
 
 
 @dataclass(frozen=True)
+class OpenFilesystemCapability:
+    """One open object; ``path`` is diagnostic and must never authorize I/O."""
+
+    path: Path
+    descriptor: int
+    device: int
+    inode: int
+    file_type: int
+
+    def require_unchanged(self) -> None:
+        """Verify this open descriptor without reopening a mutable path."""
+
+        try:
+            actual = os.fstat(self.descriptor)
+        except OSError as exc:
+            raise RecoveryAuthorityChanged(
+                f"{self.path} capability could not be inspected: {exc}"
+            ) from exc
+        if (
+            actual.st_dev,
+            actual.st_ino,
+            stat.S_IFMT(actual.st_mode),
+        ) != (self.device, self.inode, self.file_type):
+            raise RecoveryAuthorityChanged(
+                f"{self.path} capability identity changed during cleanup"
+            )
+
+
+@dataclass(frozen=True)
+class QuarantinedShard:
+    """Open capabilities for one atomically isolated cleanup target."""
+
+    shard_index: int
+    quarantine: OpenFilesystemCapability
+    shard: OpenFilesystemCapability
+    ownership_marker: OpenFilesystemCapability
+    liveness_lock: OpenFilesystemCapability
+
+    def require_unchanged(self) -> None:
+        """Recheck every capability without resolving a mutable path."""
+
+        self.quarantine.require_unchanged()
+        self.shard.require_unchanged()
+        self.ownership_marker.require_unchanged()
+        self.liveness_lock.require_unchanged()
+
+
+CleanupOwnedTree = Callable[[QuarantinedShard], None]
+PartialCleanupOwnedTree = Callable[[Path, Path, int], None]
+
+
+@dataclass(frozen=True)
 class RecoveryPreflight:
     """The exact manifest-bounded actions and unknown evidence."""
 
@@ -296,7 +350,7 @@ def _read_root_recovery_json(root: Path, path: Path, label: str) -> dict[str, An
     return _read_json(path, label)
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise RecoveryError(f"state path {path} is a symlink")
@@ -314,7 +368,6 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     if temporary is None:
         raise RecoveryError(f"could not allocate an atomic state file beside {path}")
     try:
-        data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
         with os.fdopen(descriptor, "wb", closefd=True) as stream:
             descriptor = -1
             stream.write(data)
@@ -327,11 +380,33 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _atomic_write_bytes(path, data)
+
+
 def _write_root_recovery_json(root: Path, path: Path, payload: dict[str, Any]) -> None:
     """Recheck the root state parent immediately before each recovery write."""
 
     _trusted_recovery_authority_file(root, path)
     _atomic_write_json(path, payload)
+
+
+def _read_root_recovery_bytes(root: Path, path: Path) -> bytes:
+    """Read exact root-state bytes after validating the recovery authority."""
+
+    _trusted_recovery_authority_file(root, path)
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise RecoveryError(f"root state {path} could not be read: {exc}") from exc
+
+
+def _write_root_recovery_bytes(root: Path, path: Path, payload: bytes) -> None:
+    """Restore exact root-state bytes after validating the recovery authority."""
+
+    _trusted_recovery_authority_file(root, path)
+    _atomic_write_bytes(path, payload)
 
 
 def _contained_path(path: Path, root: Path, label: str) -> Path:
@@ -507,9 +582,12 @@ def _require_existing_private_temporary_root(
 ) -> None:
     """Require the exact directory identity authorized by preflight."""
 
-    actual = _capture_private_temporary_root_identity(record)
+    try:
+        actual = _capture_private_temporary_root_identity(record)
+    except RecoveryError as exc:
+        raise RecoveryAuthorityChanged(str(exc)) from exc
     if actual != expected:
-        raise RecoveryError(
+        raise RecoveryAuthorityChanged(
             f"temporary_root {record.temporary_root} identity changed after preflight; "
             "root state remains"
         )
@@ -826,7 +904,12 @@ def _require_shard_cleanup_authority(
 ) -> None:
     """Require the exact shard, marker, and lock identities bound by preflight."""
 
-    actual = _capture_shard_cleanup_authority(record, shard, temporary_root_identity)
+    try:
+        actual = _capture_shard_cleanup_authority(
+            record, shard, temporary_root_identity
+        )
+    except RecoveryError as exc:
+        raise RecoveryAuthorityChanged(str(exc)) from exc
     if actual != expected:
         if actual.root_identity != expected.root_identity:
             label = f"shard root {shard.root}"
@@ -834,7 +917,7 @@ def _require_shard_cleanup_authority(
             label = f"ownership marker {shard.ownership_marker}"
         else:
             label = f"liveness lock {shard.liveness_lock}"
-        raise RecoveryError(f"{label} identity changed after preflight")
+        raise RecoveryAuthorityChanged(f"{label} identity changed after preflight")
 
 
 def _require_preflight_shard_authorities(
@@ -1040,82 +1123,273 @@ def _shard_has_applied_state(root: Path) -> bool:
     return True
 
 
+def _open_capability(
+    descriptor: int,
+    *,
+    path: Path,
+    expected_device: int,
+    expected_inode: int,
+    expected_file_type: int,
+    label: str,
+) -> OpenFilesystemCapability:
+    """Bind an already-open descriptor to an expected filesystem identity."""
+
+    try:
+        actual = os.fstat(descriptor)
+    except OSError as exc:
+        raise RecoveryAuthorityChanged(
+            f"{label} capability could not be inspected: {exc}"
+        ) from exc
+    if (
+        actual.st_dev,
+        actual.st_ino,
+        stat.S_IFMT(actual.st_mode),
+    ) != (expected_device, expected_inode, expected_file_type):
+        raise RecoveryAuthorityChanged(f"{label} identity changed during quarantine")
+    return OpenFilesystemCapability(
+        path=path,
+        descriptor=descriptor,
+        device=expected_device,
+        inode=expected_inode,
+        file_type=expected_file_type,
+    )
+
+
+def _open_relative_no_follow(
+    root_descriptor: int,
+    relative: Path,
+    *,
+    label: str,
+    expect_directory: bool,
+) -> int:
+    """Open a descendant through directory descriptors without following links."""
+
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise RecoveryAuthorityChanged(f"{label} relative path is unsafe: {relative}")
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    current = os.dup(root_descriptor)
+    try:
+        for component in relative.parts[:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=current,
+            )
+            os.close(current)
+            current = next_descriptor
+        final_flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        if expect_directory:
+            final_flags |= getattr(os, "O_DIRECTORY", 0)
+        return os.open(relative.parts[-1], final_flags, dir_fd=current)
+    except OSError as exc:
+        raise RecoveryAuthorityChanged(
+            f"{label} could not be opened through its bound shard: {exc}"
+        ) from exc
+    finally:
+        os.close(current)
+
+
+def _verified_quarantine_cleanup(
+    record: RunRecord,
+    shard: ShardRecord,
+    temporary_root_identity: TemporaryRootIdentity,
+    shard_authority: ShardCleanupAuthority,
+    liveness_lease: int,
+    cleanup_owned_tree: CleanupOwnedTree,
+) -> None:
+    """Give a trusted injected callback only stable, open capabilities."""
+
+    _require_shard_cleanup_authority(
+        record, shard, temporary_root_identity, shard_authority
+    )
+    temporary_root = record.temporary_root
+    if temporary_root is None:
+        raise RecoveryError("shard cleanup has no recorded temporary_root")
+    quarantine_name = (
+        f".mutation-harness-recovery-{record.run_id}-shard-"
+        f"{shard.shard_index}-{shard_authority.root_identity.inode}"
+    )
+    quarantine_root = temporary_root / quarantine_name
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    temporary_descriptor = -1
+    quarantine_descriptor = -1
+    shard_descriptor = -1
+    marker_descriptor = -1
+    moved_lock_descriptor = -1
+    quarantine_created = False
+    renamed = False
+    try:
+        temporary_descriptor = os.open(temporary_root, directory_flags)
+        opened_root = os.fstat(temporary_descriptor)
+        if not stat.S_ISDIR(opened_root.st_mode) or (
+            opened_root.st_dev,
+            opened_root.st_ino,
+        ) != (temporary_root_identity.device, temporary_root_identity.inode):
+            raise RecoveryAuthorityChanged(
+                f"temporary_root {temporary_root} identity changed at cleanup boundary"
+            )
+        try:
+            os.stat(
+                quarantine_name,
+                dir_fd=temporary_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RecoveryError(
+                f"cleanup quarantine {quarantine_root} could not be inspected: {exc}"
+            ) from exc
+        else:
+            raise RecoveryError(f"cleanup quarantine {quarantine_root} already exists")
+        os.mkdir(quarantine_name, mode=0o700, dir_fd=temporary_descriptor)
+        quarantine_created = True
+        created_quarantine = os.stat(
+            quarantine_name,
+            dir_fd=temporary_descriptor,
+            follow_symlinks=False,
+        )
+        quarantine_descriptor = os.open(
+            quarantine_name,
+            directory_flags,
+            dir_fd=temporary_descriptor,
+        )
+        quarantine_capability = _open_capability(
+            quarantine_descriptor,
+            path=quarantine_root,
+            expected_device=created_quarantine.st_dev,
+            expected_inode=created_quarantine.st_ino,
+            expected_file_type=stat.S_IFDIR,
+            label=f"cleanup quarantine {quarantine_root}",
+        )
+        _require_shard_cleanup_authority(
+            record, shard, temporary_root_identity, shard_authority
+        )
+        os.rename(
+            shard.root.name,
+            shard.root.name,
+            src_dir_fd=temporary_descriptor,
+            dst_dir_fd=quarantine_descriptor,
+        )
+        renamed = True
+
+        quarantined_root = quarantine_root / shard.root.name
+        marker_relative = shard.ownership_marker.relative_to(shard.root)
+        lock_relative = shard.liveness_lock.relative_to(shard.root)
+        quarantined_marker = quarantined_root / marker_relative
+        quarantined_lock = quarantined_root / lock_relative
+        shard_descriptor = _open_relative_no_follow(
+            quarantine_descriptor,
+            Path(shard.root.name),
+            label=f"shard root {shard.root}",
+            expect_directory=True,
+        )
+        shard_capability = _open_capability(
+            shard_descriptor,
+            path=quarantined_root,
+            expected_device=shard_authority.root_identity.device,
+            expected_inode=shard_authority.root_identity.inode,
+            expected_file_type=stat.S_IFDIR,
+            label=f"shard root {shard.root}",
+        )
+        marker_descriptor = _open_relative_no_follow(
+            shard_descriptor,
+            marker_relative,
+            label=f"ownership marker {shard.ownership_marker}",
+            expect_directory=False,
+        )
+        marker_capability = _open_capability(
+            marker_descriptor,
+            path=quarantined_marker,
+            expected_device=shard_authority.ownership_marker_identity.device,
+            expected_inode=shard_authority.ownership_marker_identity.inode,
+            expected_file_type=stat.S_IFREG,
+            label=f"ownership marker {shard.ownership_marker}",
+        )
+        moved_lock_descriptor = _open_relative_no_follow(
+            shard_descriptor,
+            lock_relative,
+            label=f"liveness lock {shard.liveness_lock}",
+            expect_directory=False,
+        )
+        moved_lock_capability = _open_capability(
+            moved_lock_descriptor,
+            path=quarantined_lock,
+            expected_device=shard_authority.liveness_lock_identity.device,
+            expected_inode=shard_authority.liveness_lock_identity.inode,
+            expected_file_type=stat.S_IFREG,
+            label=f"liveness lock {shard.liveness_lock}",
+        )
+        lease_capability = _open_capability(
+            liveness_lease,
+            path=quarantined_lock,
+            expected_device=shard_authority.liveness_lock_identity.device,
+            expected_inode=shard_authority.liveness_lock_identity.inode,
+            expected_file_type=stat.S_IFREG,
+            label=f"leased liveness lock {shard.liveness_lock}",
+        )
+        moved_lock_capability.require_unchanged()
+        capability = QuarantinedShard(
+            shard_index=shard.shard_index,
+            quarantine=quarantine_capability,
+            shard=shard_capability,
+            ownership_marker=marker_capability,
+            liveness_lock=lease_capability,
+        )
+        capability.require_unchanged()
+        cleanup_owned_tree(capability)
+        capability.require_unchanged()
+        try:
+            os.stat(
+                shard.root.name,
+                dir_fd=quarantine_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RecoveryError(
+                f"{quarantined_root}: cleanup result could not be inspected: {exc}"
+            ) from exc
+        else:
+            raise RecoveryError(
+                f"{quarantined_root}: cleanup returned but the quarantined shard "
+                "still exists"
+            )
+        os.rmdir(quarantine_name, dir_fd=temporary_descriptor)
+        quarantine_created = False
+    finally:
+        if quarantine_created and not renamed and temporary_descriptor >= 0:
+            try:
+                os.rmdir(quarantine_name, dir_fd=temporary_descriptor)
+            except OSError:
+                pass
+        if moved_lock_descriptor >= 0:
+            os.close(moved_lock_descriptor)
+        if marker_descriptor >= 0:
+            os.close(marker_descriptor)
+        if shard_descriptor >= 0:
+            os.close(shard_descriptor)
+        if quarantine_descriptor >= 0:
+            os.close(quarantine_descriptor)
+        if temporary_descriptor >= 0:
+            os.close(temporary_descriptor)
+
+
 def _default_restore(root: Path) -> str:
     from scripts.mutation_harness import restore
 
     return restore(root)
-
-
-def _default_cleanup_for(record: RunRecord) -> CleanupOwnedTree:
-    try:
-        module = importlib.import_module("scripts.mutation_harness_execution_tree")
-    except ImportError as exc:
-        raise RecoveryError(
-            "execution-tree cleanup backend is unavailable; retain the owned shard"
-        ) from exc
-    cleanup = getattr(module, "cleanup_execution_tree", None)
-    cleanup_partial = getattr(module, "cleanup_partial_execution_tree", None)
-    manifest_from_dict = getattr(module, "source_manifest_from_dict", None)
-    staged_type = getattr(module, "StagedExecutionTree", None)
-    if not callable(manifest_from_dict):
-        raise RecoveryError(
-            "execution-tree cleanup backend has no recovery-safe cleanup entry point"
-        )
-    if record.shards and (not callable(cleanup) or staged_type is None):
-        raise RecoveryError(
-            "execution-tree cleanup backend has no completed-shard cleanup entry point"
-        )
-    if not record.shards and not callable(cleanup_partial):
-        raise RecoveryError(
-            "execution-tree cleanup backend has no partial-staging cleanup entry point"
-        )
-
-    try:
-        source_manifest = manifest_from_dict(record.source_manifest)
-    except Exception as exc:
-        raise RecoveryError(f"serialized source manifest is invalid: {exc}") from exc
-
-    def cleanup_one(root: Path, marker: Path, shard_index: int) -> None:
-        if not record.shards:
-            temporary_root = record.staging_temporary_root
-            if temporary_root is None:
-                raise RecoveryError("partial cleanup has no temporary_root")
-            if marker != root / _EXECUTION_TREE_MARKER:
-                raise RecoveryError("partial cleanup marker path changed")
-            assert callable(cleanup_partial)
-            cleanup_partial(
-                record.source_root,
-                root,
-                temporary_root=temporary_root,
-                run_id=record.run_id,
-                shard_index=shard_index,
-                source_manifest=source_manifest,
-                plan_digest=record.plan_digest,
-                child_liveness_proven=True,
-            )
-            return
-        assert staged_type is not None
-        assert callable(cleanup)
-        staged = staged_type(
-            root=root,
-            ownership_marker=marker,
-            shard_index=shard_index,
-            run_id=record.run_id,
-            source_root=record.source_root,
-            source_manifest=source_manifest,
-            plan_digest=record.plan_digest,
-        )
-        cleanup(
-            staged,
-            temporary_root=next(
-                shard.temporary_root
-                for shard in record.shards
-                if shard.root == root and shard.shard_index == shard_index
-            ),
-            child_liveness_proven=True,
-        )
-
-    return cleanup_one
 
 
 def _recover_one(
@@ -1124,6 +1398,7 @@ def _recover_one(
     *,
     temporary_root_identity: TemporaryRootIdentity,
     shard_authority: ShardCleanupAuthority,
+    liveness_lease: int,
     restore_mutation: RestoreMutation,
     cleanup_owned_tree: CleanupOwnedTree,
 ) -> None:
@@ -1147,8 +1422,18 @@ def _recover_one(
     _require_shard_cleanup_authority(
         record, shard, temporary_root_identity, shard_authority
     )
+
     try:
-        cleanup_owned_tree(shard.root, shard.ownership_marker, shard.shard_index)
+        _verified_quarantine_cleanup(
+            record,
+            shard,
+            temporary_root_identity,
+            shard_authority,
+            liveness_lease,
+            cleanup_owned_tree,
+        )
+    except RecoveryAuthorityChanged:
+        raise
     except Exception as exc:
         raise RecoveryError(f"{shard.root}: verified cleanup failed: {exc}") from exc
     if shard.root.exists():
@@ -1164,7 +1449,7 @@ def _recover_partial_staging(
     record: RunRecord,
     *,
     force: bool,
-    cleanup_owned_tree: CleanupOwnedTree | None,
+    cleanup_owned_tree: PartialCleanupOwnedTree | None,
     output: TextIO | None,
 ) -> str:
     """Recover staging that aborted after ownership marking but before children."""
@@ -1195,7 +1480,10 @@ def _recover_partial_staging(
 
     cleanup_callback = cleanup_owned_tree
     if partials and cleanup_callback is None:
-        cleanup_callback = _default_cleanup_for(record)
+        raise RecoveryError(
+            "default recovery refuses an existing staged Git tree; "
+            "private tree and root state remain"
+        )
     failures: list[str] = []
     removed = 0
     for partial in partials:
@@ -1298,7 +1586,7 @@ def recover_run(
     *,
     force: bool = False,
     restore_mutation: RestoreMutation | None = None,
-    cleanup_owned_tree: CleanupOwnedTree | None = None,
+    cleanup_owned_tree: CleanupOwnedTree | PartialCleanupOwnedTree | None = None,
     output: TextIO | None = None,
 ) -> str:
     """Recover only manifest-owned shards, then clear root state last.
@@ -1312,6 +1600,7 @@ def recover_run(
     root = root.resolve()
     state_path = root / STATE_DIRNAME / STATE_FILENAME
     state, record = _load_run_record(root, run_id)
+    state_bytes_before = _read_root_recovery_bytes(root, state_path)
     if not record.shards:
         return _recover_partial_staging(
             root,
@@ -1319,7 +1608,7 @@ def recover_run(
             state,
             record,
             force=force,
-            cleanup_owned_tree=cleanup_owned_tree,
+            cleanup_owned_tree=cast(PartialCleanupOwnedTree | None, cleanup_owned_tree),
             output=output,
         )
     missing_temporary_root = _missing_private_temporary_root(
@@ -1333,6 +1622,12 @@ def recover_run(
             state,
             record,
         )
+    if cleanup_owned_tree is None:
+        raise RecoveryError(
+            "default recovery refuses existing recorded Git shard trees; "
+            "private tree, root state, and run manifest remain"
+        )
+    cleanup_callback = cast(CleanupOwnedTree, cleanup_owned_tree)
     preflight, liveness_leases = _build_preflight(record)
     try:
         temporary_root_identity = preflight.temporary_root_identity
@@ -1356,11 +1651,16 @@ def recover_run(
         _require_existing_private_temporary_root(record, temporary_root_identity)
         _require_preflight_shard_authorities(record, preflight, temporary_root_identity)
         restore_callback = restore_mutation or _default_restore
-        cleanup_callback = cleanup_owned_tree or _default_cleanup_for(record)
         removable = set(preflight.remove)
         shard_authorities = {
             (authority.shard_index, authority.root): authority
             for authority in preflight.shard_authorities
+        }
+        shard_leases = {
+            (authority.shard_index, authority.root): lease
+            for authority, lease in zip(
+                preflight.shard_authorities, liveness_leases, strict=True
+            )
         }
         failures: list[str] = []
         removed = 0
@@ -1373,6 +1673,11 @@ def recover_run(
                     raise RecoveryError(
                         f"shard {shard.shard_index} has no preflight cleanup authority"
                     )
+                liveness_lease = shard_leases.get((shard.shard_index, shard.root))
+                if liveness_lease is None:
+                    raise RecoveryError(
+                        f"shard {shard.shard_index} has no held liveness lease"
+                    )
                 _require_shard_cleanup_authority(
                     record, shard, temporary_root_identity, shard_authority
                 )
@@ -1381,9 +1686,14 @@ def recover_run(
                     shard,
                     temporary_root_identity=temporary_root_identity,
                     shard_authority=shard_authority,
+                    liveness_lease=liveness_lease,
                     restore_mutation=restore_callback,
                     cleanup_owned_tree=cleanup_callback,
                 )
+            except RecoveryAuthorityChanged:
+                if removed == 0:
+                    _write_root_recovery_bytes(root, state_path, state_bytes_before)
+                raise
             except RecoveryError as exc:
                 failures.append(str(exc))
                 if not force:

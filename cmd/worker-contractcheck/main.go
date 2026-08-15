@@ -72,11 +72,15 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "worker contracts valid")
 	fmt.Fprintf(
 		stdout,
-		"deployment profiles valid: queue_session_clients=%d coordinator_session_clients=%d domain_transaction_clients=%d server_footprint=%d\n",
+		"deployment profiles valid: queue_session_clients=%d queue_session_headroom=%d coordinator_session_clients=%d coordinator_session_headroom=%d domain_transaction_clients=%d domain_transaction_headroom=%d server_footprint=%d server_headroom=%d\n",
 		budget.QueueSessionClientConnections,
+		budget.QueueSessionHeadroom,
 		budget.CoordinatorSessionClientConnections,
+		budget.CoordinatorSessionHeadroom,
 		budget.DomainTransactionClientConnections,
+		budget.DomainTransactionHeadroom,
 		budget.ServerConnectionFootprint,
+		budget.ServerConnectionHeadroom,
 	)
 	return 0
 }

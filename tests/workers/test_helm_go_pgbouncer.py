@@ -29,7 +29,7 @@ _PROFILE_NAMES = {
 _COORDINATOR_PROFILES = {"reconciler", "scheduler"}
 _POOLERS = {
     "transaction": (6432, "transaction", 20, 1000, "devhealth_domain"),
-    "queue-session": (6433, "session", 18, 128, "devhealth_queue"),
+    "queue-session": (6433, "session", 22, 128, "devhealth_queue"),
     "coordinator-session": (6434, "session", 10, 32, "devhealth_coordinator"),
 }
 _ROLE_SECRET_KEYS = {

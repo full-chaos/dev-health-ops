@@ -73,7 +73,7 @@ func TestRuntimeConfigSafeSurfaceContainsOnlyBudgets(t *testing.T) {
 			t.Fatalf("safe surface exposed %q: %s", forbidden, surface)
 		}
 	}
-	for _, expected := range []string{"domain_database_role:domain_role", "queue_database_role:queue_role", "river_database_schema:river", "domain_max_connections:4", "queue_control_max_connections:2", "total_max_connections:6"} {
+	for _, expected := range []string{"domain_database_role:domain_role", "queue_database_role:queue_role", "river_database_schema:river", "domain_max_connections:4", "domain_max_headroom:12", "queue_control_max_connections:2", "queue_control_max_headroom:2", "total_max_connections:6"} {
 		if !strings.Contains(surface, expected) {
 			t.Fatalf("safe surface missing %q: %s", expected, surface)
 		}
@@ -265,6 +265,7 @@ func TestRuntimeConfigSafeSurfaceReportsTheCoordinatorBudgetWithoutItsSecret(t *
 		"coordinator_configured:true",
 		"coordinator_database_role:coordinator_role",
 		"coordinator_max_connections:2",
+		"coordinator_max_headroom:2",
 		// 4 domain + 2 queue + 2 coordinator.
 		"total_max_connections:8",
 	} {

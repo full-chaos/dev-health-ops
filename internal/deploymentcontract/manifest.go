@@ -93,9 +93,13 @@ type Manifest struct {
 
 type BudgetSummary struct {
 	QueueSessionClientConnections       int
+	QueueSessionHeadroom                int
 	CoordinatorSessionClientConnections int
+	CoordinatorSessionHeadroom          int
 	DomainTransactionClientConnections  int
+	DomainTransactionHeadroom           int
 	ServerConnectionFootprint           int
+	ServerConnectionHeadroom            int
 }
 
 func Load(path string, registry jobcontract.Registry) (Manifest, BudgetSummary, error) {
@@ -240,7 +244,28 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		summary.CoordinatorSessionClientConnections > manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize {
 		return BudgetSummary{}, errors.New("coordinator session PgBouncer budget cannot serve every declared coordinator connection")
 	}
+	queueSessionLimit := minInt(
+		manifest.PostgresBudget.PgBouncerQueueSessionMaxClientConnections,
+		manifest.PostgresBudget.PgBouncerQueueSessionPoolSize,
+	)
+	coordinatorSessionLimit := minInt(
+		manifest.PostgresBudget.PgBouncerCoordinatorSessionMaxClientConnections,
+		manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize,
+	)
+	summary.QueueSessionHeadroom = queueSessionLimit - summary.QueueSessionClientConnections
+	summary.CoordinatorSessionHeadroom = coordinatorSessionLimit - summary.CoordinatorSessionClientConnections
+	summary.DomainTransactionHeadroom = manifest.PostgresBudget.PgBouncerTransactionMaxClientConnections -
+		summary.DomainTransactionClientConnections
+	summary.ServerConnectionHeadroom = manifest.PostgresBudget.ServerMaxConnections -
+		summary.ServerConnectionFootprint
 	return summary, nil
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 type profileCoverage struct {

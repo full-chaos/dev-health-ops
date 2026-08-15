@@ -46,6 +46,16 @@ default, so enabling the complete declared topology cannot silently exceed the
 checked-in ceiling. Phase 1 keeps every `min_replicas` at zero until its
 readiness dependencies, ownership route, and canary evidence are approved.
 
+`desired_replicas` is the one reviewed replica request for each process.
+Validation rejects a desired count outside `min_replicas..max_replicas`, and
+the deployment tests require Compose, Swarm, Kubernetes, and Helm to render
+that same value. Change the manifest and all renderer outputs in one review.
+
+River profiles also declare `shutdown_grace_seconds`. It must cover the
+longest registered job timeout for that profile plus 60 seconds for terminal
+claim finalization. The reviewed values are 7,260 seconds for `heavy` and 960
+seconds for `ops` and `sync`.
+
 ### River maintenance and premature terminal delivery recovery
 
 Queue separation controls execution only. River's maintenance election is
@@ -138,16 +148,25 @@ sections.
    allowing an autoscaler or adding a second replica. Swarm has no native HPA;
    use the same signals for a manual one-at-a-time scale and wait through its
    start-first rolling update.
-4. Scrape `/metrics` and alert on all three capacity signals before proceeding:
+4. Run `dev-health-workerctl profiles status`. Confirm `desired_replicas`,
+   expiring `live_replicas`, `queue_backlog`, `active_jobs`, and
+   `drain_state`. The response also includes the reviewed queue,
+   coordinator, domain, and server connection budgets.
+5. Scrape `/metrics` and alert on all three capacity signals before proceeding:
    `worker_jobs_available` (depth), `worker_job_oldest_age_seconds` (oldest
    age), and `worker_execution_saturation_ratio` (configured worker capacity).
    The Kubernetes/Helm HPAs require a Prometheus Adapter mapping those exact
    metric names; they stay at zero if the adapter cannot read them. Also watch
    `worker_database_pool_saturation_ratio` and the checked-in Go-worker
    Grafana dashboard.
-5. Keep Celery consumers and Beat running during coexistence. A failed Go
+6. Keep Celery consumers and Beat running during coexistence. A failed Go
    readiness, queue age threshold, or saturation threshold means scale the Go
    profile back to zero; do not reroute work as a recovery action.
+
+Normal replica shutdown is process-local: mark that instance draining, stop
+its River clients, then remove its presence row. Do not use the profile queue
+drain command for an ordinary rollout or downscale because it pauses the
+queues shared by every replica in that profile.
 
 ### Go-only is a release gate, not a switch
 

@@ -68,7 +68,9 @@ type Process struct {
 	RegistryProfile            *string       `json:"registry_profile,omitempty"`
 	EnabledByDefault           bool          `json:"enabled_by_default"`
 	MinReplicas                int           `json:"min_replicas"`
+	DesiredReplicas            int           `json:"desired_replicas"`
 	MaxReplicas                int           `json:"max_replicas"`
+	ShutdownGraceSeconds       int           `json:"shutdown_grace_seconds"`
 	Queues                     []string      `json:"queues"`
 	QueueWorkers               []QueueWorker `json:"queue_workers"`
 	JobKinds                   []string      `json:"job_kinds"`
@@ -182,7 +184,7 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			return BudgetSummary{}, fmt.Errorf("duplicate deployment process %s", process.Name)
 		}
 		seenNames[process.Name] = struct{}{}
-		if err := validateProcess(process); err != nil {
+		if err := validateProcess(process, registry); err != nil {
 			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
 
@@ -366,9 +368,10 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	return nil
 }
 
-func validateProcess(process Process) error {
+func validateProcess(process Process, registry jobcontract.Registry) error {
 	if !namePattern.MatchString(process.Name) || process.EnabledByDefault || process.MinReplicas != 0 ||
-		process.MaxReplicas < 1 || process.MaxReplicas > 8 {
+		process.DesiredReplicas < process.MinReplicas || process.DesiredReplicas > process.MaxReplicas ||
+		process.MaxReplicas < 1 || process.MaxReplicas > 8 || process.ShutdownGraceSeconds < 60 {
 		return errors.New("identity or coexistence replica policy is invalid")
 	}
 	if process.DomainMaxConnections < 1 || process.DomainMaxConnections > 16 ||
@@ -412,6 +415,15 @@ func validateProcess(process Process) error {
 		}
 		if !equalStrings(queueWorkerNames, process.Queues) {
 			return errors.New("River queue worker limits drift from queue coverage")
+		}
+		longestTimeout := 0
+		for _, job := range registry.Jobs {
+			if job.Profile == *process.RegistryProfile && job.TimeoutSeconds > longestTimeout {
+				longestTimeout = job.TimeoutSeconds
+			}
+		}
+		if longestTimeout == 0 || process.ShutdownGraceSeconds < longestTimeout+60 {
+			return errors.New("River shutdown grace cannot cover the longest claim and finalization")
 		}
 	case "control":
 		expectedBinary := map[string]string{

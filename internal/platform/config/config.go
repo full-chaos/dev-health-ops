@@ -70,8 +70,11 @@ type Spec struct {
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
 // which redacts itself from formatting, slog, and JSON.
 type Config struct {
-	Service            string
-	Profile            string
+	Service string
+	Profile string
+	// WorkerInstanceID is generated once inside the process. Every River
+	// client in that process derives its attempted_by identity from it.
+	WorkerInstanceID   string
 	HTTPAddress        string
 	ShutdownTimeout    time.Duration
 	HealthCheckTimeout time.Duration

@@ -23,8 +23,10 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
     entrypoint:
       - /bin/sh
       - -ec
@@ -35,8 +37,10 @@ services:
           --dbname="${POSTGRES_DB:-devhealth}" \
           --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
           --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
           --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
           --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
           --file=/opt/dev-health/provision_river_roles.sql
     volumes:
       - ../../scripts/worker/provision_river_roles.sql:/opt/dev-health/provision_river_roles.sql:ro
@@ -114,6 +118,7 @@ services:
     environment: &go-worker-env
       DEV_HEALTH_HTTP_ADDR: ":8080"
       DEV_HEALTH_PROFILE: heavy
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 7260s
       POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
       WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?session-pooler queue-control PostgreSQL URI is required}
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
@@ -123,6 +128,7 @@ services:
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-session}
       COORDINATOR_DATABASE_MODE: ${COORDINATOR_DATABASE_MODE:-session}
+      PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-true}
       # The PagerDuty stream runner forwards reconciliation to the Python
       # worker bridge until the locked-graph port lands (CUT-20), so it
       # cannot open readiness without both values.
@@ -139,10 +145,12 @@ services:
       DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
       AUTO_RUN_MIGRATIONS: "false"
     networks: [dev-health]
+    stop_grace_period: 7260s
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
     deploy: &go-worker-resources
+      replicas: 0
       resources:
         limits: {cpus: "1.0", memory: 1G}
         reservations: {cpus: "0.25", memory: 256M}
@@ -152,6 +160,8 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ops
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s
+    stop_grace_period: 960s
 
   # Runtime profile remains `sync`; its provider-unit handler consumes the
   # separately-owned River queue `sync_provider` once the provider contract
@@ -161,6 +171,8 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: sync
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s
+    stop_grace_period: 960s
 
   go-reconciler:
     <<: *go-worker
@@ -168,7 +180,9 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ""
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
       COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
+    stop_grace_period: 60s
 
   go-scheduler:
     <<: *go-worker
@@ -176,7 +190,9 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ""
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
       COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
+    stop_grace_period: 60s
 
   go-stream-external:
     <<: *go-worker
@@ -184,6 +200,8 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: external
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+    stop_grace_period: 60s
 
   go-stream-ingest:
     <<: *go-worker
@@ -191,6 +209,8 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ingest
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+    stop_grace_period: 60s
 
   # PagerDuty webhook delivery is independently routable from dataset sync, so
   # it runs as its own stream family rather than sharing the external runner.
@@ -200,3 +220,5 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: pagerduty
+      DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
+    stop_grace_period: 60s

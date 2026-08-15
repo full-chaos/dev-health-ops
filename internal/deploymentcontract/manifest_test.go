@@ -75,6 +75,40 @@ func TestManifestKeepsExternalStreamSingleton(t *testing.T) {
 	t.Fatal("stream-external process not found")
 }
 
+func TestManifestRejectsReplicaRequestOrShutdownWindowOutsideProfileContract(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		mutate func(*Process)
+	}{
+		{
+			name: "desired replicas exceed reviewed maximum",
+			mutate: func(process *Process) {
+				process.DesiredReplicas = process.MaxReplicas + 1
+			},
+		},
+		{
+			name: "shutdown cannot cover longest claim and finalization",
+			mutate: func(process *Process) {
+				process.ShutdownGraceSeconds = 7_259
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest, registry := loadFixture(t)
+			for index := range manifest.Processes {
+				if manifest.Processes[index].Name == "heavy" {
+					test.mutate(&manifest.Processes[index])
+					break
+				}
+			}
+			if _, err := manifest.Validate(registry); err == nil {
+				t.Fatal("invalid profile replica contract was accepted")
+			}
+		})
+	}
+}
+
 func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)

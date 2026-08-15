@@ -25,6 +25,13 @@ type ErrorSource interface {
 	Errors() <-chan error
 }
 
+// ShutdownBudgetSource reserves a reviewed part of the global shutdown
+// deadline for a component. Later components are still attempted if it uses
+// the remaining deadline.
+type ShutdownBudgetSource interface {
+	ShutdownBudget() time.Duration
+}
+
 type Options struct {
 	Logger          *slog.Logger
 	ShutdownTimeout time.Duration
@@ -146,6 +153,9 @@ func (r *Runtime) shutdown(parent context.Context, started []Component) error {
 		attemptBudget := time.Duration(0)
 		if remainingBudget > 0 {
 			attemptBudget = remainingBudget / time.Duration(remainingComponents)
+		}
+		if source, ok := component.(ShutdownBudgetSource); ok && source.ShutdownBudget() > attemptBudget {
+			attemptBudget = min(source.ShutdownBudget(), remainingBudget)
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(shutdownCtx, attemptBudget)
 		result, dispatched := dispatchShutdown(attemptCtx, component)

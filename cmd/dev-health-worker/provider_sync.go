@@ -837,11 +837,13 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	clientConfig := providerSyncRiverConfig(
+		logger, workers, cfg.RiverDatabaseSchema,
+	)
+	clientConfig.ID = riverClientID(cfg, "provider-sync")
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		providerSyncRiverConfig(
-			logger, workers, cfg.RiverDatabaseSchema,
-		),
+		clientConfig,
 	)
 	if err != nil {
 		closeDependencies()

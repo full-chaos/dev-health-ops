@@ -134,6 +134,7 @@ func buildReportWorker(
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
 		&river.Config{
+			ID:     riverClientID(cfg, "reports"),
 			Logger: logger,
 			Queues: map[string]river.QueueConfig{
 				reportsQueue: {MaxWorkers: reportsQueueWorkers},

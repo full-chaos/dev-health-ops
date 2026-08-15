@@ -263,6 +263,7 @@ func buildDailyWorker(
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
 		&river.Config{
+			ID:     riverClientID(cfg, "daily"),
 			Logger: logger,
 			Queues: map[string]river.QueueConfig{
 				metricsQueue: {MaxWorkers: metricsQueueWorkers},

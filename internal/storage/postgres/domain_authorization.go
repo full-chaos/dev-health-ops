@@ -623,6 +623,9 @@ func domainPosture() RolePosture {
 			// lease row contains policy identity and expiry only; queue and
 			// coordinator roles must not reach it.
 			{"worker_concurrency_leases", true, true, true},
+			// Expiring process liveness is domain-owned. The operator reads only
+			// bounded profile counts through its domain pool.
+			{"worker_profile_instances", true, true, true},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"worker_job_completion_fences", "completion_key", "SELECT"},

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -18,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
@@ -132,7 +132,7 @@ func buildOperationalWorker(
 	}
 	dependencies := jobruntime.Dependencies{
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
-		Budget: newOperationalBudget(), Idempotency: idempotency,
+		Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 	}
 	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
@@ -251,47 +251,19 @@ func (operationalTenantScope) Resolve(ctx context.Context, request jobruntime.Sc
 	return ctx, nil
 }
 
-type operationalBudget struct {
-	mu     sync.Mutex
-	limits map[string]chan struct{}
-}
-
-func newOperationalBudget() *operationalBudget {
-	return &operationalBudget{limits: make(map[string]chan struct{})}
-}
-
-func (*operationalBudget) Supports(scope string, limit int) bool {
-	return (scope == "organization" || scope == "fleet") && limit > 0 && limit <= 32
-}
-
-func (budget *operationalBudget) Acquire(ctx context.Context, request jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
-	if budget == nil || !budget.Supports(request.ConcurrencyScope, request.ConcurrencyLimit) {
-		return nil, errors.New("operational budget is unavailable")
+func newOperationalBudget(pool *pgxpool.Pool, observer jobruntime.Observer) jobruntime.Budget {
+	metrics, _ := observer.(jobruntime.ConcurrencyBudgetObserver)
+	budget, err := jobruntime.NewPostgresConcurrencyBudget(pool, metrics)
+	if err != nil {
+		return unavailableOperationalBudget{}
 	}
-	key := "global"
-	if request.OrganizationID != nil {
-		key = *request.OrganizationID
-	}
-	budget.mu.Lock()
-	semaphore, ok := budget.limits[key]
-	if !ok {
-		semaphore = make(chan struct{}, request.ConcurrencyLimit)
-		budget.limits[key] = semaphore
-	}
-	budget.mu.Unlock()
-	select {
-	case semaphore <- struct{}{}:
-		return &operationalBudgetLease{release: func() { <-semaphore }}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return budget
 }
 
-type operationalBudgetLease struct {
-	once    sync.Once
-	release func()
-}
+type unavailableOperationalBudget struct{}
 
-func (lease *operationalBudgetLease) Release() {
-	lease.once.Do(lease.release)
+func (unavailableOperationalBudget) Supports(string, int) bool { return false }
+
+func (unavailableOperationalBudget) Acquire(context.Context, jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
+	return nil, errors.New("operational budget is unavailable")
 }

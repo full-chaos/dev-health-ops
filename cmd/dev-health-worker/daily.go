@@ -15,39 +15,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// metricsQueue and its worker budget must match the deployment manifest entry
-// for the heavy process; exact startup validation compares the two.
-const (
-	metricsQueue        = "metrics"
-	metricsQueueWorkers = 2
-)
-
-type metricsWorkerComponent struct {
-	client     *river.Client[pgx.Tx]
-	clickhouse driver.Conn
-}
-
-func (component metricsWorkerComponent) Name() string { return "river-heavy-metrics-worker" }
-func (component metricsWorkerComponent) Start(ctx context.Context) error {
-	return component.client.Start(ctx)
-}
-func (component metricsWorkerComponent) Shutdown(ctx context.Context) error {
-	if component.client == nil {
-		return nil
-	}
-	result := component.client.Stop(ctx)
-	if component.clickhouse != nil {
-		if err := component.clickhouse.Close(); result == nil {
-			result = err
-		}
-	}
-	return result
-}
+const metricsQueue = "metrics"
 
 func buildDailyWorker(
 	cfg config.Config,
@@ -55,9 +26,13 @@ func buildDailyWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
-	if cfg.Profile != "heavy" || registry == nil {
+	if !queueSelected(cfg.Queues, metricsQueue) || registry == nil {
 		return workerFamily{}, nil
+	}
+	if workers == nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dailyKinds := []string{
 		jobcontract.KindDailyMetricsDispatch,
@@ -110,7 +85,6 @@ func buildDailyWorker(
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
 		Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 	}
-	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(dailySpecs)+len(remainingSpecs))
 	var metricsClickHouse driver.Conn
 	if len(dailySpecs) > 0 {
@@ -260,28 +234,16 @@ func buildDailyWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 
-	client, err := river.NewClient(
-		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		&river.Config{
-			ID:     riverClientID(cfg, "daily"),
-			Logger: logger,
-			Queues: map[string]river.QueueConfig{
-				metricsQueue: {MaxWorkers: metricsQueueWorkers},
-			},
-			Schema:  cfg.RiverDatabaseSchema,
-			Workers: workers,
-		},
-	)
-	if err != nil {
-		if metricsClickHouse != nil {
-			_ = metricsClickHouse.Close()
-		}
-		return workerFamily{}, errWorkerDependencyUnavailable
+	var cleanups []func() error
+	if metricsClickHouse != nil {
+		cleanups = append(cleanups, metricsClickHouse.Close)
 	}
 	return workerFamily{
-		component: metricsWorkerComponent{client: client, clickhouse: metricsClickHouse},
-		handlers:  registered,
-		queues:    []jobruntime.QueueBudget{{Queue: metricsQueue, MaxWorkers: metricsQueueWorkers}},
+		handlers: registered,
+		queues: selectedQueueBudgets(
+			cfg.Queues, []string{metricsQueue}, cfg.WorkerQueueConcurrency,
+		),
+		cleanups: cleanups,
 	}, nil
 }
 
@@ -309,8 +271,7 @@ func validateRemainingFamilyDescriptor(
 	family remaining.Family,
 	descriptor jobruntime.Descriptor,
 ) error {
-	if descriptor.Kind != family.RouteKey || descriptor.Profile != family.Profile ||
-		descriptor.Queue != "metrics" ||
+	if descriptor.Kind != family.RouteKey || descriptor.Queue != "metrics" ||
 		descriptor.ConcurrencyScope != "organization" ||
 		descriptor.ConcurrencyLimit != family.MaxConcurrency ||
 		descriptor.Idempotency != "remaining_metrics_partition" ||

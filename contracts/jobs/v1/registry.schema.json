@@ -16,7 +16,7 @@
       "properties": {
         "compatibility": {"const": "additive_optional_only"},
         "minimum_consumer_window": {"const": 2},
-        "same_version_rollout": {"const": "schema_digest_all_live_profiles"}
+        "same_version_rollout": {"const": "schema_digest_all_live_queues"}
       }
     },
     "jobs": {
@@ -30,7 +30,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "kind", "current_version", "supported_versions", "profile", "queue",
+        "kind", "current_version", "supported_versions", "queue",
         "handler_owner", "execution_mode", "priority", "timeout_seconds",
         "max_attempts", "retry_policy", "cancellation", "delivery",
         "idempotency", "concurrency", "sensitive_fields", "domain_link",
@@ -40,7 +40,6 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "maxLength": 96},
         "current_version": {"type": "integer", "minimum": 1},
         "supported_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
-        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "maxLength": 32},
         "queue": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 96},
         "handler_owner": {"type": "string", "pattern": "^internal/jobs/[a-z0-9_/]+$", "maxLength": 128},
         "execution_mode": {"enum": ["command", "coordinator"]},

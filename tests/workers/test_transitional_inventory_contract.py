@@ -303,7 +303,10 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
                 },
                 "dispatch_mechanism": "celery_task_decorator",
                 "owner_role": "primary",
-                "target_owner": {"type": "native_process", "value": "Go ops profile"},
+                "target_owner": {
+                    "type": "native_process",
+                    "value": "Go worker consuming the webhooks queue",
+                },
                 "target_kind_id": "task:health_check",
                 "current_implementation_state": "celery_only",
                 "verification_status": "verified",
@@ -1042,7 +1045,10 @@ def test_gate_catches_content_drift_when_the_dispatched_task_is_swapped(tmp_path
                 },
                 "dispatch_mechanism": "literal_dispatch_call",
                 "owner_role": "contributor",
-                "target_owner": {"type": "native_process", "value": "Go ops profile"},
+                "target_owner": {
+                    "type": "native_process",
+                    "value": "Go worker consuming the webhooks queue",
+                },
                 "target_kind_id": None,
                 "current_implementation_state": "celery_only",
                 "verification_status": "verified",

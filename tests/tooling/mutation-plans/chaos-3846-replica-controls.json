@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "CHAOS-3846 worker profile replica controls",
+  "name": "CHAOS-3846 worker replica controls",
   "$limitation": "The plan proves the declarative replica and drain contract, pre-claim readiness, process identity, expiring presence, operator telemetry, renderer parity, and bounded concurrent shutdown. The real multi-process River claim and restart proof belongs to CHAOS-3847.",
   "mutations": [
     {
@@ -9,9 +9,9 @@
       "find": "\t\tprocess.DesiredReplicas < process.MinReplicas || process.DesiredReplicas > process.MaxReplicas ||",
       "replace": "\t\tprocess.DesiredReplicas < process.MinReplicas || false ||",
       "expect_occurrences": 1,
-      "rationale": "A requested profile size must not exceed its reviewed maximum or its connection and concurrency budgets become false.",
+      "rationale": "A requested group size must not exceed its reviewed maximum or its connection and concurrency budgets become false.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/deploymentcontract"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestRejectsReplicaRequestOrShutdownWindowOutsideProfileContract$", "./internal/deploymentcontract"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestRejectsReplicaRequestOrShutdownWindowOutsideGroupContract$", "./internal/deploymentcontract"]]
     },
     {
       "id": "RC02-longest-claim-drain-buffer",
@@ -21,7 +21,7 @@
       "expect_occurrences": 1,
       "rationale": "The orchestrator grace period must cover the longest claim plus the reviewed finalization buffer.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/deploymentcontract"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestRejectsReplicaRequestOrShutdownWindowOutsideProfileContract$", "./internal/deploymentcontract"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestRejectsReplicaRequestOrShutdownWindowOutsideGroupContract$", "./internal/deploymentcontract"]]
     },
     {
       "id": "RC03-preclaim-readiness",
@@ -36,12 +36,12 @@
     {
       "id": "RC04-process-shutdown-contract",
       "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "\tif cfg.ShutdownTimeout > 0 && cfg.ShutdownTimeout < dependencies.shutdownGrace {",
-      "replace": "\tif cfg.ShutdownTimeout > 0 && cfg.ShutdownTimeout > dependencies.shutdownGrace {",
+      "find": "\tif dependencies.workerDrainBudget < longestTimeout {",
+      "replace": "\tif false {",
       "expect_occurrences": 1,
-      "rationale": "A process must refuse a configured shutdown deadline shorter than its profile drain contract.",
+      "rationale": "A process must refuse a configured shutdown deadline shorter than its selected queues' claim contract.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProfileRejectsProcessShutdownTimeoutBelowContract$", "./cmd/dev-health-worker"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerQueueSelectionRejectsProcessShutdownTimeoutBelowContract$", "./cmd/dev-health-worker"]]
     },
     {
       "id": "RC05-concurrent-client-shutdown",
@@ -49,29 +49,29 @@
       "find": "\t\tgo func(child lifecycle.Component) { results <- child.Shutdown(ctx) }(child)",
       "replace": "\t\tfunc(child lifecycle.Component) { results <- child.Shutdown(ctx) }(child)",
       "expect_occurrences": 1,
-      "rationale": "Independent River clients in one profile must drain concurrently so their claim timeouts do not add together.",
+      "rationale": "Worker child components must drain concurrently so their shutdown work does not add together.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently$", "./cmd/dev-health-worker"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProcessComponentStopsChildrenConcurrently$", "./cmd/dev-health-worker"]]
     },
     {
       "id": "RC06-expired-presence-is-not-live",
-      "file": "internal/jobruntime/profile_presence.go",
+      "file": "internal/jobruntime/worker_presence.go",
       "find": "\t\tWHERE expires_at > statement_timestamp()",
       "replace": "\t\tWHERE expires_at < statement_timestamp()",
       "expect_occurrences": 1,
       "rationale": "A crashed replica must disappear from the live count after its presence lease expires.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-count=1", "-run", "^TestProfilePresenceCountsIndependentReplicasAndDrainExpiry$", "./internal/jobruntime"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-count=1", "-run", "^TestWorkerPresenceCountsIndependentReplicasAndDrainExpiry$", "./internal/jobruntime"]]
     },
     {
       "id": "RC07-drain-component-wiring",
       "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "\t\t\tcomponents: workerComponents, budget: dependencies.workerDrainBudget, presence: presence,",
-      "replace": "\t\t\tcomponents: workerComponents, budget: dependencies.workerDrainBudget, presence: nil,",
+      "find": "\tcomponents = append(components, workerProcessComponent{\n\t\tcomponents: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,",
+      "replace": "\t_ = presence\n\tcomponents = append(components, workerProcessComponent{\n\t\tcomponents: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: nil,",
       "expect_occurrences": 1,
       "rationale": "Production replicas must bind presence to the worker composite so draining starts before claims stop and removal cannot run before every worker child exits.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh$", "./cmd/dev-health-worker"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh$", "./cmd/dev-health-worker"]]
     },
     {
       "id": "RC08-operator-scheduled-backlog",
@@ -81,37 +81,27 @@
       "expect_occurrences": 1,
       "rationale": "Operator backlog must include scheduled jobs so scaling decisions do not under-report queued work.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-workerctl"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestProfileStatusSourceCombinesFreshQueueAndPresenceState$", "./cmd/dev-health-workerctl"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState$", "./cmd/dev-health-workerctl"]]
     },
     {
-      "id": "RC09-kubernetes-profile-maxima",
+      "id": "RC09-kubernetes-group-maxima",
       "file": "deploy/kubernetes/go-workers.yaml",
       "find": "metadata: {name: dev-health-go-worker-ops, namespace: dev-health}\nspec:\n  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-ops}\n  minReplicas: 0\n  maxReplicas: 2",
       "replace": "metadata: {name: dev-health-go-worker-ops, namespace: dev-health}\nspec:\n  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-ops}\n  minReplicas: 0\n  maxReplicas: 1",
       "expect_occurrences": 1,
-      "rationale": "The Kubernetes autoscaler maximum must come from the same reviewed profile contract as every other renderer.",
+      "rationale": "The Kubernetes autoscaler maximum must come from the same reviewed deployment-group contract as every other renderer.",
       "build": ["python", "-m", "py_compile", "tests/workers/test_go_worker_deployment_contract.py"],
-      "proof": [["pytest", "-q", "--confcutdir=tests/workers", "tests/workers/test_go_worker_deployment_contract.py", "-k", "profile_replica_and_drain_contract_matches_every_renderer"]]
+      "proof": [["pytest", "-q", "--confcutdir=tests/workers", "tests/workers/test_go_worker_deployment_contract.py", "-k", "group_replica_and_drain_contract_matches_every_renderer"]]
     },
     {
       "id": "RC10-presence-schema-is-payload-free",
-      "file": "src/dev_health_ops/alembic/versions/0104_add_worker_profile_instances.py",
+      "file": "src/dev_health_ops/alembic/versions/0104_add_worker_instances.py",
       "find": "        sa.Column(\"heartbeat_at\", sa.DateTime(timezone=True), nullable=False),",
       "replace": "        sa.Column(\"payload\", sa.DateTime(timezone=True), nullable=False),",
       "expect_occurrences": 1,
       "rationale": "Replica presence stores bounded identity and liveness only; it must never grow a payload-shaped field.",
-      "build": ["env", "PYTHONPATH=src", "python", "-m", "py_compile", "src/dev_health_ops/alembic/versions/0104_add_worker_profile_instances.py"],
-      "proof": [["pytest", "-q", "--confcutdir=tests", "tests/test_worker_profile_instances_migration.py"]]
-    },
-    {
-      "id": "RC11-one-process-identity",
-      "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "\treturn cfg.WorkerInstanceID + \"-\" + family",
-      "replace": "\treturn family",
-      "expect_occurrences": 1,
-      "rationale": "All River clients in one process need a common process identity prefix for claim attribution while keeping family IDs distinct.",
-      "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestRiverClientsShareOneProcessIdentityWithDistinctFamilySuffixes$", "./cmd/dev-health-worker"]]
+      "build": ["env", "PYTHONPATH=src", "python", "-m", "py_compile", "src/dev_health_ops/alembic/versions/0104_add_worker_instances.py"],
+      "proof": [["pytest", "-q", "--confcutdir=tests", "tests/test_worker_instances_migration.py"]]
     },
     {
       "id": "RC12-reviewed-runtime-shutdown-budget",
@@ -119,29 +109,29 @@
       "find": "\t\t\tattemptBudget = min(source.ShutdownBudget(), remainingBudget)",
       "replace": "\t\t\tattemptBudget = remainingBudget / time.Duration(remainingComponents)",
       "expect_occurrences": 1,
-      "rationale": "The profile worker composite must receive its reviewed claim-drain budget instead of the generic equal component share.",
+      "rationale": "The worker process must receive its reviewed claim-drain budget instead of the generic equal component share.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/lifecycle"],
       "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestShutdownHonorsReviewedComponentBudget$", "./internal/platform/lifecycle"]]
     },
     {
       "id": "RC13-draining-presence-state",
-      "file": "internal/jobruntime/profile_presence.go",
+      "file": "internal/jobruntime/worker_presence.go",
       "find": "\t\tSET state = 'draining', heartbeat_at = statement_timestamp(),",
       "replace": "\t\tSET state = 'active', heartbeat_at = statement_timestamp(),",
       "expect_occurrences": 1,
       "rationale": "A replica must publish draining before it stops claiming so operators can distinguish rollout drain from a crash.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-run", "^$", "./internal/jobruntime"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-count=1", "-run", "^TestProfilePresenceCountsIndependentReplicasAndDrainExpiry$", "./internal/jobruntime"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-tags=integration", "-count=1", "-run", "^TestWorkerPresenceCountsIndependentReplicasAndDrainExpiry$", "./internal/jobruntime"]]
     },
     {
       "id": "RC14-finalization-budget-reserve",
       "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "\tdependencies.workerDrainBudget = dependencies.shutdownGrace - profileFinalizationBuffer",
+      "find": "\tdependencies.workerDrainBudget = dependencies.shutdownGrace - workerFinalizationBuffer",
       "replace": "\tdependencies.workerDrainBudget = dependencies.shutdownGrace",
       "expect_occurrences": 1,
       "rationale": "River clients may use the reviewed claim window, but the final 60 seconds must remain available for presence and database cleanup.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestHeavyProfileComposesMultipleBuilderFamilies$", "./cmd/dev-health-worker"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestSelectedQueuesComposeMultipleBuilderFamilies$", "./cmd/dev-health-worker"]]
     },
     {
       "id": "RC15-noninteractive-coordinator-provisioning",
@@ -156,20 +146,20 @@
     {
       "id": "RC16-compose-transaction-pooler-mode",
       "file": "deploy/docker-compose/compose.go-workers.yml",
-      "find": "      PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-true}",
-      "replace": "      PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-false}",
+      "find": "  PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-true}",
+      "replace": "  PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-false}",
       "expect_occurrences": 1,
       "rationale": "Compose describes POSTGRES_URI as the domain transaction-pool endpoint, so the runtime must enable the transaction-pool safety path by default.",
       "build": ["python", "-m", "py_compile", "tests/workers/test_go_worker_deployment_contract.py"],
-      "proof": [["pytest", "-q", "--confcutdir=tests/workers", "tests/workers/test_go_worker_deployment_contract.py", "-k", "go_deployment_surfaces_are_additive_default_off_and_profile_complete"]]
+      "proof": [["pytest", "-q", "--confcutdir=tests/workers", "tests/workers/test_go_worker_deployment_contract.py", "-k", "go_deployment_surfaces_are_additive_default_off_and_group_complete"]]
     },
     {
-      "id": "RC17-profile-presence-runtime-grant",
+      "id": "RC17-worker-presence-runtime-grant",
       "file": "internal/storage/river/migrate.go",
-      "find": "\t\t\"DO $$ BEGIN IF to_regclass('public.worker_profile_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_profile_instances TO \" + domainRole + \"; END IF; END $$\",",
-      "replace": "\t\t\"DO $$ BEGIN IF to_regclass('public.worker_profile_instances') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_profile_instances TO \" + domainRole + \"; END IF; END $$\",",
+      "find": "\t\t\"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO \" + domainRole + \"; END IF; END $$\",",
+      "replace": "\t\t\"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_instances TO \" + domainRole + \"; END IF; END $$\",",
       "expect_occurrences": 1,
-      "rationale": "The domain runtime role must receive the same profile-presence privileges that the production SQL surface and readiness posture require.",
+      "rationale": "The domain runtime role must receive the same worker-presence privileges that the production SQL surface and readiness posture require.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/domaingrants"],
       "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestDomainGrantSurfaceMatchesQuerySurface$", "./internal/domaingrants"]]
     },
@@ -189,9 +179,9 @@
       "find": "\t\tif err := component.presence.Shutdown(ctx); err != nil {",
       "replace": "\t\tif err := component.presence.Shutdown(context.Background()); err != nil {",
       "expect_occurrences": 1,
-      "rationale": "An expired runtime shutdown attempt must not delete profile presence while a non-cooperative child may only just have exited; the draining row must expire naturally.",
+      "rationale": "An expired runtime shutdown attempt must not delete worker presence while a non-cooperative child may only just have exited; the draining row must expire naturally.",
       "build": ["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
-      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt$", "./cmd/dev-health-worker"]]
+      "proof": [["env", "GOCACHE=/tmp/chaos3846-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerPresenceSurvivesExpiredShutdownAttempt$", "./cmd/dev-health-worker"]]
     },
     {
       "id": "RC20-local-concurrency-lease-grant",
@@ -204,12 +194,12 @@
       "proof": [["pytest", "-q", "tests/test_compose_config.py", "-k", "local_postgres_bootstraps_distinct_go_runtime_roles"]]
     },
     {
-      "id": "RC21-local-profile-presence-grant",
+      "id": "RC21-local-worker-presence-grant",
       "file": "docker/init-extra-dbs.sh",
-      "find": "      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_profile_instances TO %I',",
-      "replace": "      'GRANT SELECT ON TABLE public.worker_profile_instances TO %I',",
+      "find": "\t  'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO %I',",
+      "replace": "\t  'GRANT SELECT ON TABLE public.worker_instances TO %I',",
       "expect_occurrences": 1,
-      "rationale": "The local PostgreSQL bootstrap must give the domain role the same complete profile-presence authority as the production grant path.",
+      "rationale": "The local PostgreSQL bootstrap must give the domain role the same complete worker-presence authority as the production grant path.",
       "build": ["bash", "-n", "docker/init-extra-dbs.sh"],
       "proof": [["pytest", "-q", "tests/test_compose_config.py", "-k", "local_postgres_bootstraps_distinct_go_runtime_roles"]]
     }

@@ -92,7 +92,7 @@ Run the complete static Go family:
 make go:check
 ```
 
-Run integration and container checks when the change affects PostgreSQL, River compatibility, process composition, images, or deployment profiles:
+Run integration and container checks when the change affects PostgreSQL, River compatibility, process composition, images, or the deployment manifest:
 
 ```bash
 make go:integration
@@ -113,11 +113,11 @@ go vet ./...
 go build ./cmd/...
 ```
 
-Use the Make/CI contract before review because it also validates checked-in job contracts, deployment profiles, and container behavior.
+Use the Make/CI contract before review because it also validates checked-in job contracts, the deployment manifest, and container behavior.
 
 ## Inspect job and route contracts
 
-Versioned job envelopes and deployment profiles live under `contracts/jobs/v1/`; sync transport ownership lives under `contracts/sync-dispatch/v1/`.
+Versioned job envelopes and the deployment manifest schema live under `contracts/jobs/v1/`; sync transport ownership lives under `contracts/sync-dispatch/v1/`.
 
 Run the contract family after changing a job kind, version, route, handler, profile, or migration state:
 

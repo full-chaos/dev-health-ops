@@ -45,7 +45,6 @@ _REGISTRY_JOB_FIELDS = {
     "kind",
     "current_version",
     "supported_versions",
-    "profile",
     "queue",
     "handler_owner",
     "execution_mode",
@@ -68,7 +67,7 @@ _MIGRATION_JOB_FIELDS = {
     "state",
     "producer_version",
     "consumer_versions",
-    "required_profiles",
+    "required_queues",
     "route",
     "rollback_route",
     "evidence",
@@ -92,7 +91,6 @@ class RegisteredContract:
     kind: str
     current_version: int
     supported_versions: tuple[int, ...]
-    profile: str
     queue: str
     priority: int
     max_attempts: int
@@ -121,16 +119,24 @@ class ContractCapability:
 
 @dataclass(frozen=True, slots=True)
 class CapabilityReport:
-    profile: str
     contracts: tuple[ContractCapability, ...]
+    queues: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "queues", _sorted_unique_strings(self.queues))
 
 
 @dataclass(frozen=True, slots=True)
 class MigrationJob:
     kind: str
     producer_version: int
-    required_profiles: tuple[str, ...]
+    required_queues: tuple[str, ...]
     route: str = "celery"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "required_queues", _sorted_unique_strings(self.required_queues)
+        )
 
 
 def default_contract_root() -> Path:
@@ -162,7 +168,7 @@ def load_registry(root: Path | None = None) -> Registry:
     if document["version_policy"] != {
         "compatibility": "additive_optional_only",
         "minimum_consumer_window": 2,
-        "same_version_rollout": "schema_digest_all_live_profiles",
+        "same_version_rollout": "schema_digest_all_live_queues",
     }:
         raise ContractDecodeError("registry version policy is unsupported")
     jobs = document["jobs"]
@@ -177,7 +183,6 @@ def load_registry(root: Path | None = None) -> Registry:
         current = _required_int(raw, "current_version")
         supported = _version_tuple(raw.get("supported_versions"))
         _validate_version_window(current, supported)
-        profile = _required_string(raw, "profile")
         queue = _required_string(raw, "queue")
         priority = _required_int(raw, "priority")
         max_attempts = _required_int(raw, "max_attempts")
@@ -207,7 +212,6 @@ def load_registry(root: Path | None = None) -> Registry:
                 kind=kind,
                 current_version=current,
                 supported_versions=supported,
-                profile=profile,
                 queue=queue,
                 priority=priority,
                 max_attempts=max_attempts,
@@ -274,11 +278,13 @@ def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
     for raw in raw_jobs:
         if not isinstance(raw, dict) or set(raw) != _MIGRATION_JOB_FIELDS:
             raise ContractDecodeError("migration job must be an object")
-        profiles = raw.get("required_profiles")
-        if not isinstance(profiles, list) or not all(
-            isinstance(profile, str) and profile for profile in profiles
+        required_queues = raw.get("required_queues")
+        if (
+            not isinstance(required_queues, list)
+            or not required_queues
+            or not all(isinstance(queue, str) and queue for queue in required_queues)
         ):
-            raise ContractDecodeError("required_profiles is invalid")
+            raise ContractDecodeError("required_queues is invalid")
         route = _required_string(raw, "route")
         rollback_route = _required_string(raw, "rollback_route")
         state = _required_string(raw, "state")
@@ -293,7 +299,7 @@ def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
             MigrationJob(
                 kind=_required_string(raw, "kind"),
                 producer_version=_required_int(raw, "producer_version"),
-                required_profiles=tuple(profiles),
+                required_queues=tuple(required_queues),
                 route=route,
             )
         )
@@ -302,7 +308,16 @@ def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
     return tuple(jobs)
 
 
-def capabilities_for_profile(registry: Registry, profile: str) -> CapabilityReport:
+def capabilities_for_queues(
+    registry: Registry, queues: tuple[str, ...] | list[str]
+) -> CapabilityReport:
+    if (
+        not isinstance(queues, (list, tuple))
+        or not queues
+        or not all(isinstance(queue, str) and queue for queue in queues)
+    ):
+        raise ContractDecodeError("queues are invalid")
+    queue_names = _sorted_unique_strings(queues)
     contracts = tuple(
         ContractCapability(
             kind=contract.kind,
@@ -323,11 +338,11 @@ def capabilities_for_profile(registry: Registry, profile: str) -> CapabilityRepo
             ),
         )
         for contract in registry.contracts
-        if contract.profile == profile
+        if contract.queue in queue_names
     )
     if not contracts:
-        raise ContractDecodeError("profile has no registered contracts")
-    return CapabilityReport(profile=profile, contracts=contracts)
+        raise ContractDecodeError("queues have no registered contracts")
+    return CapabilityReport(contracts=contracts, queues=queue_names)
 
 
 def check_rollout_capabilities(
@@ -335,29 +350,33 @@ def check_rollout_capabilities(
     reports: tuple[CapabilityReport, ...],
     expected_reports: tuple[CapabilityReport, ...],
 ) -> None:
-    """Fail if any live report for a required profile lacks producer support."""
+    """Fail if any live report for a required queue lacks producer support."""
 
-    by_profile: dict[str, list[CapabilityReport]] = {}
+    by_queue: dict[str, list[CapabilityReport]] = {}
     for report in reports:
-        by_profile.setdefault(report.profile, []).append(report)
-    expected_by_profile = {report.profile: report for report in expected_reports}
+        for queue in report.queues:
+            by_queue.setdefault(queue, []).append(report)
+    expected_by_queue: dict[str, CapabilityReport] = {}
+    for report in expected_reports:
+        for queue in report.queues:
+            expected_by_queue.setdefault(queue, report)
     for job in jobs:
-        for profile in job.required_profiles:
-            expected = expected_by_profile.get(profile)
+        for queue in job.required_queues:
+            expected = expected_by_queue.get(queue)
             if expected is None:
-                raise ContractDecodeError("required profile has no expected capability")
+                raise ContractDecodeError("required queue has no expected capability")
             expected_digest = _find_digest(expected, job.kind, job.producer_version)
             if expected_digest is None:
                 raise ContractDecodeError("expected capability lacks producer support")
-            profile_reports = by_profile.get(profile, [])
-            if not profile_reports:
-                raise ContractDecodeError("required profile has no capability report")
-            for report in profile_reports:
+            queue_reports = by_queue.get(queue, [])
+            if not queue_reports:
+                raise ContractDecodeError("required queue has no capability report")
+            for report in queue_reports:
                 if (
                     _find_digest(report, job.kind, job.producer_version)
                     != expected_digest
                 ):
-                    raise ContractDecodeError("live profile lacks producer support")
+                    raise ContractDecodeError("live queue lacks producer support")
 
 
 def _find_digest(report: CapabilityReport, kind: str, version: int) -> str | None:
@@ -408,6 +427,14 @@ def _contract_schema_digest(envelope_schema: bytes, payload_schema: bytes) -> st
     digest.update(b"\x00")
     digest.update(payload_schema)
     return digest.hexdigest()
+
+
+def _sorted_unique_strings(
+    values: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
+    if not values:
+        return ()
+    return tuple(sorted({value for value in values if value}))
 
 
 def _required_string(document: dict[str, Any], key: str) -> str:

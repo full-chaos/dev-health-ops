@@ -15,58 +15,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
 
 const (
-	// providerUnitQueue and its worker budget must match the deployment manifest
-	// entry for the sync process; exact startup validation compares the two.
 	providerUnitQueue         = "sync_provider"
-	providerUnitQueueWorkers  = 2
 	providerUnitLeaseDuration = 2 * time.Minute
 	providerUnitHeartbeat     = 30 * time.Second
 	providerUnitBudgetTTL     = 15 * time.Minute
 )
-
-type providerSyncWorkerComponent struct {
-	client     *river.Client[pgx.Tx]
-	clickhouse driver.Conn
-	valkey     valkeygo.Client
-}
-
-func (component *providerSyncWorkerComponent) Name() string {
-	return "river-provider-sync-worker"
-}
-
-func (component *providerSyncWorkerComponent) Start(ctx context.Context) error {
-	if component == nil || component.client == nil {
-		return errWorkerDependencyUnavailable
-	}
-	return component.client.Start(ctx)
-}
-
-func (component *providerSyncWorkerComponent) Shutdown(ctx context.Context) error {
-	if component == nil {
-		return nil
-	}
-	var result error
-	if component.client != nil {
-		result = component.client.Stop(ctx)
-	}
-	if component.valkey != nil {
-		component.valkey.Close()
-	}
-	if component.clickhouse != nil {
-		if err := component.clickhouse.Close(); result == nil {
-			result = err
-		}
-	}
-	return result
-}
 
 // budgetWaitObserver bridges providerfoundation's credential-free
 // BudgetWaitObserver to the process's shared MetricsCollector. It is a value
@@ -118,6 +77,7 @@ type providerSyncWorkerConstructor func(
 	*jobruntime.Registry,
 	jobruntime.Observer,
 	*slog.Logger,
+	*river.Workers,
 ) (workerFamily, error)
 
 var constructProviderSyncWorker providerSyncWorkerConstructor = constructProviderSyncWorkerWithDependencies
@@ -719,6 +679,7 @@ func buildProviderSyncWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
 	// Construct the family when ANY route switch is on, not launchdarkly's
 	// alone: (github, repo-metadata) became routable in CHAOS-3123,
@@ -726,10 +687,10 @@ func buildProviderSyncWorker(
 	// A process that dispatches either provider's units while refusing to build
 	// the handler for them would strand every unit at a worker with nothing
 	// registered.
-	if cfg.Profile != "sync" || !providerSyncWorkerEnabled(cfg) {
+	if !queueSelected(cfg.Queues, providerUnitQueue) || !providerSyncWorkerEnabled(cfg) {
 		return workerFamily{}, nil
 	}
-	return constructProviderSyncWorker(ctx, cfg, database, registry, observer, logger)
+	return constructProviderSyncWorker(ctx, cfg, database, registry, observer, logger, workers)
 }
 
 func constructProviderSyncWorkerWithDependencies(
@@ -739,9 +700,10 @@ func constructProviderSyncWorkerWithDependencies(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
 	if registry == nil || observer == nil || logger == nil ||
-		!cfg.SettingsEncryptionKey.Configured() {
+		workers == nil || !cfg.SettingsEncryptionKey.Configured() {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	spec, ok := registry.Descriptor(jobcontract.KindSyncProviderUnit)
@@ -828,7 +790,6 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	workers := river.NewWorkers()
 	if err := river.AddWorkerSafely(workers, adapter); err != nil {
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -837,25 +798,17 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	clientConfig := providerSyncRiverConfig(
-		logger, workers, cfg.RiverDatabaseSchema,
-	)
-	clientConfig.ID = riverClientID(cfg, "provider-sync")
-	client, err := river.NewClient(
-		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		clientConfig,
-	)
-	if err != nil {
-		closeDependencies()
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
-		component: &providerSyncWorkerComponent{
-			client: client, clickhouse: clickhouseConnection, valkey: valkeyClient,
-		},
 		handlers: []jobruntime.HandlerSpec{adapter.Spec()},
-		queues: []jobruntime.QueueBudget{
-			{Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers},
+		queues: selectedQueueBudgets(
+			cfg.Queues, []string{providerUnitQueue}, cfg.WorkerQueueConcurrency,
+		),
+		cleanups: []func() error{
+			clickhouseConnection.Close,
+			func() error {
+				valkeyClient.Close()
+				return nil
+			},
 		},
 		metricsSource: providerMetrics,
 	}, nil
@@ -899,21 +852,6 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerPagerDutySchedulesEnabled ||
 		cfg.WorkerPagerDutyOnCallsEnabled || cfg.WorkerPagerDutyUsersEnabled ||
 		cfg.WorkerPagerDutyTeamsEnabled || cfg.WorkerPagerDutyIncidentsEnabled
-}
-
-func providerSyncRiverConfig(
-	logger *slog.Logger,
-	workers *river.Workers,
-	schema string,
-) *river.Config {
-	return &river.Config{
-		Logger: logger,
-		Queues: map[string]river.QueueConfig{
-			providerUnitQueue: {MaxWorkers: providerUnitQueueWorkers},
-		},
-		Schema:  schema,
-		Workers: workers,
-	}
 }
 
 type providerUnitTenantScope struct{}

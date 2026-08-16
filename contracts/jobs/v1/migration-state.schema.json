@@ -13,13 +13,13 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "state", "producer_version", "consumer_versions", "required_profiles", "route", "rollback_route", "evidence"],
+        "required": ["kind", "state", "producer_version", "consumer_versions", "required_queues", "route", "rollback_route", "evidence"],
         "properties": {
           "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"},
           "state": {"enum": ["inventory", "contract_frozen", "go_implemented", "shadow", "canary", "go_default", "celery_fallback_only", "celery_removed"]},
           "producer_version": {"type": "integer", "minimum": 1},
           "consumer_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
-          "required_profiles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}},
+          "required_queues": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 96}},
           "route": {"enum": ["celery", "shadow", "river_canary", "river", "removed"]},
           "rollback_route": {"enum": ["celery", "river", "none"]},
           "evidence": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}

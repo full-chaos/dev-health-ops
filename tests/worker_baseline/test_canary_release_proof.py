@@ -275,13 +275,45 @@ def test_baseline_authority_gaps_and_gate_are_independent_threshold_blockers() -
     assert artifact["result"]["failures"] == ["thresholds_unapproved"]
 
 
-def test_cross_document_kind_version_and_profile_drift_rejects_evaluation() -> None:
+def test_registry_validation_rejects_profile_field() -> None:
+    result = approved_documents()
+    registry = copy.deepcopy(result["registry"].value)
+    matching = next(
+        job for job in registry["jobs"] if job["kind"] == "sync.provider_unit"
+    )
+    matching["profile"] = "sync"
+    result["registry"] = proof.PinnedDocument(
+        result["registry"].path,
+        result["registry"].sha256,
+        registry,
+    )
+    with pytest.raises(proof.ProofError, match="registry_invalid"):
+        proof.validate_documents(result)
+
+
+def test_migration_state_validation_rejects_required_profiles_field() -> None:
     result = approved_documents()
     migration_state = copy.deepcopy(result["migration_state"].value)
     matching = next(
         job for job in migration_state["jobs"] if job["kind"] == "sync.provider_unit"
     )
-    matching["required_profiles"] = ["heavy"]
+    matching["required_profiles"] = ["sync"]
+    result["migration_state"] = proof.PinnedDocument(
+        result["migration_state"].path,
+        result["migration_state"].sha256,
+        migration_state,
+    )
+    with pytest.raises(proof.ProofError, match="migration_state_invalid"):
+        proof.validate_documents(result)
+
+
+def test_cross_document_kind_version_mismatch_rejects_evaluation() -> None:
+    result = approved_documents()
+    migration_state = copy.deepcopy(result["migration_state"].value)
+    matching = next(
+        job for job in migration_state["jobs"] if job["kind"] == "sync.provider_unit"
+    )
+    matching["producer_version"] = matching["producer_version"] + 1
     result["migration_state"] = proof.PinnedDocument(
         result["migration_state"].path,
         result["migration_state"].sha256,

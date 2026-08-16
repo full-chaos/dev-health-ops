@@ -37,7 +37,7 @@ import (
 
 const multiReplicaRetryAttempts = 3
 
-func TestOperationalProfileMultiReplicaClaimDrainRestart(t *testing.T) {
+func TestExplicitQueueMultiReplicaClaimDrainRestart(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
@@ -66,10 +66,10 @@ func TestOperationalProfileMultiReplicaClaimDrainRestart(t *testing.T) {
 	first := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
 	second := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
 	t.Cleanup(func() { first.close(t); second.close(t) })
-	assertReplicaProfileParity(t, first, second)
+	assertReplicaQueueParity(t, first, second)
 	first.start(t, ctx)
 	second.start(t, ctx)
-	assertProfilePresence(t, ctx, admin, 2, 0)
+	assertWorkerPresence(t, ctx, admin, "operations-shared", []string{"coverage", "heartbeat", "retention", "webhooks"}, 2, 0)
 
 	firstHeartbeat := insertHeartbeat(t, ctx, first.client, 1)
 	secondHeartbeat := insertHeartbeat(t, ctx, first.client, 2)
@@ -105,9 +105,9 @@ func TestOperationalProfileMultiReplicaClaimDrainRestart(t *testing.T) {
 
 	restarted := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
 	t.Cleanup(func() { restarted.close(t) })
-	assertReplicaProfileParity(t, activeReplica, restarted)
+	assertReplicaQueueParity(t, activeReplica, restarted)
 	restarted.start(t, ctx)
-	assertProfilePresence(t, ctx, admin, 2, 0)
+	assertWorkerPresence(t, ctx, admin, "operations-shared", []string{"coverage", "heartbeat", "retention", "webhooks"}, 2, 0)
 	waitFor(t, 20*time.Second, func() (bool, error) {
 		row, err := readRiverJob(ctx, admin, waitingJobID)
 		return err == nil && row.Attempt >= 2 && slices.Contains(row.AttemptedBy, restarted.client.ID()), err
@@ -173,7 +173,7 @@ func TestOperationalProfileMultiReplicaClaimDrainRestart(t *testing.T) {
 			t.Fatalf("drained job %d attribution = %v", jobID, row.AttemptedBy)
 		}
 	}
-	assertProfilePresence(t, ctx, admin, 1, 0)
+	assertWorkerPresence(t, ctx, admin, "operations-shared", []string{"coverage", "heartbeat", "retention", "webhooks"}, 1, 0)
 
 	var claims, successfulClaims, effectRows, remainingLeases int
 	if err := admin.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE status = 'succeeded' AND attempt_count = 1) FROM public.worker_job_runs`).Scan(&claims, &successfulClaims); err != nil {
@@ -195,13 +195,15 @@ func TestOperationalProfileMultiReplicaClaimDrainRestart(t *testing.T) {
 }
 
 type operationalReplica struct {
-	database  *postgresWorkerDatabase
-	component operationalWorkerComponent
-	family    workerFamily
-	metrics   *jobruntime.MetricsCollector
-	presence  *jobruntime.ProfilePresence
-	client    *river.Client[pgx.Tx]
-	active    bool
+	database *postgresWorkerDatabase
+	family   workerFamily
+	process  riverWorkerProcess
+	metrics  *jobruntime.MetricsCollector
+	presence *jobruntime.WorkerPresence
+	client   *river.Client[pgx.Tx]
+	group    string
+	queues   []string
+	active   bool
 }
 
 func newOperationalReplica(
@@ -225,8 +227,9 @@ func newOperationalReplica(
 	database := &postgresWorkerDatabase{pools: &postgresstore.RuntimePools{Domain: domain, QueueControl: queue}}
 	instanceID := uuid.NewString()
 	cfg := config.Config{
-		Service: "dev-health-worker", Profile: "ops", WorkerInstanceID: instanceID,
-		RiverDatabaseSchema: "river", OperationalBridgeURL: bridgeURL,
+		Service: "dev-health-worker", Queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, WorkerInstanceID: instanceID,
+		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+		RiverDatabaseSchema:    "river", OperationalBridgeURL: bridgeURL,
 		OperationalBridgeToken:   secrets.NewValue("multi-replica-token"),
 		OperationalBridgeTimeout: 20 * time.Second,
 	}
@@ -235,28 +238,35 @@ func newOperationalReplica(
 		database.Close()
 		t.Fatal(err)
 	}
-	family, err := buildOperationalWorker(cfg, database, registry, metrics, logger)
+	workers := river.NewWorkers()
+	family, err := buildOperationalWorker(cfg, database, registry, metrics, logger, workers)
 	if err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
-	component, ok := family.component.(operationalWorkerComponent)
-	if !ok || component.client == nil {
-		database.Close()
-		t.Fatal("production ops builder did not construct its River component")
-	}
-	presence, err := jobruntime.NewProfilePresence(domain, "ops", instanceID)
+	component, err := newRiverWorkerProcess(cfg, database, workers, family, logger)
 	if err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
-	if component.client.ID() != instanceID+"-operational" {
+	process, ok := component.(riverWorkerProcess)
+	if !ok || process.client == nil {
 		database.Close()
-		t.Fatalf("River client identity = %q", component.client.ID())
+		t.Fatal("production explicit-queue builder did not construct its River process")
+	}
+	presence, err := jobruntime.NewWorkerPresence(domain, "operations-shared", cfg.Queues, instanceID)
+	if err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if process.client.ID() != instanceID {
+		database.Close()
+		t.Fatalf("River client identity = %q", process.client.ID())
 	}
 	return &operationalReplica{
-		database: database, component: component, family: family,
-		metrics: metrics, presence: presence, client: component.client,
+		database: database, family: family, process: process,
+		metrics: metrics, presence: presence, client: process.client,
+		group: "operations-shared", queues: append([]string(nil), cfg.Queues...),
 	}
 }
 
@@ -265,7 +275,7 @@ func (replica *operationalReplica) start(t *testing.T, ctx context.Context) {
 	if err := replica.presence.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := replica.component.Start(ctx); err != nil {
+	if err := replica.process.Start(ctx); err != nil {
 		_ = replica.presence.Shutdown(ctx)
 		t.Fatal(err)
 	}
@@ -280,7 +290,7 @@ func (replica *operationalReplica) stopGracefully(t *testing.T, ctx context.Cont
 	if err := replica.presence.BeginDrain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := replica.component.Shutdown(ctx); err != nil {
+	if err := replica.process.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := replica.presence.Shutdown(ctx); err != nil {
@@ -297,6 +307,9 @@ func (replica *operationalReplica) stopAndCancel(t *testing.T, ctx context.Conte
 	if err := replica.client.StopAndCancel(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := closeWorkerFamily(replica.family); err != nil {
+		t.Fatal(err)
+	}
 	if err := replica.presence.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +323,7 @@ func (replica *operationalReplica) close(t *testing.T) {
 	}
 	if replica.active {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := replica.client.StopAndCancel(ctx); err != nil {
+		if err := replica.process.Shutdown(ctx); err != nil {
 			t.Errorf("stop replica: %v", err)
 		}
 		if err := replica.presence.Shutdown(ctx); err != nil {
@@ -325,7 +338,7 @@ func (replica *operationalReplica) close(t *testing.T) {
 	}
 }
 
-func assertReplicaProfileParity(t *testing.T, replicas ...*operationalReplica) {
+func assertReplicaQueueParity(t *testing.T, replicas ...*operationalReplica) {
 	t.Helper()
 	wantKinds := []string{
 		jobcontract.KindBillingNotification,
@@ -338,18 +351,26 @@ func assertReplicaProfileParity(t *testing.T, replicas ...*operationalReplica) {
 	for _, replica := range replicas {
 		gotKinds := make([]string, 0, len(replica.family.handlers))
 		for _, handler := range replica.family.handlers {
-			if handler.Profile != "ops" {
-				t.Fatalf("handler %s profile = %q", handler.Kind, handler.Profile)
-			}
 			gotKinds = append(gotKinds, handler.Kind)
 		}
 		slices.Sort(gotKinds)
 		if !slices.Equal(gotKinds, wantKinds) {
-			t.Fatalf("production ops coverage = %v, want %v", gotKinds, wantKinds)
+			t.Fatalf("production operational coverage = %v, want %v", gotKinds, wantKinds)
 		}
 	}
 	if !slices.Equal(replicas[0].family.queues, replicas[1].family.queues) {
 		t.Fatalf("replica queue sets differ: %#v %#v", replicas[0].family.queues, replicas[1].family.queues)
+	}
+	for _, replica := range replicas {
+		if replica.process.client != replica.client {
+			t.Fatal("worker process did not retain its single River client")
+		}
+		if !slices.Equal(replica.queues, []string{"coverage", "heartbeat", "retention", "webhooks"}) {
+			t.Fatalf("selected queues = %v", replica.queues)
+		}
+		if replica.group != "operations-shared" {
+			t.Fatalf("worker group = %q", replica.group)
+		}
 	}
 }
 
@@ -573,14 +594,22 @@ func (bridge *multiReplicaBridge) effects() map[string]int {
 	}
 }
 
-func assertProfilePresence(t *testing.T, ctx context.Context, pool *pgxpool.Pool, live, draining int) {
+func assertWorkerPresence(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workerGroup string,
+	queues []string,
+	live, draining int,
+) {
 	t.Helper()
-	summary, err := jobruntime.ReadProfilePresence(ctx, pool)
+	summary, err := jobruntime.ReadWorkerPresence(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(summary) != 1 || summary[0].Profile != "ops" || summary[0].Live != live || summary[0].Draining != draining {
-		t.Fatalf("profile presence = %#v, want ops live=%d draining=%d", summary, live, draining)
+	if len(summary) != 1 || summary[0].WorkerGroup != workerGroup ||
+		!slices.Equal(summary[0].Queues, queues) || summary[0].Live != live || summary[0].Draining != draining {
+		t.Fatalf("worker presence = %#v, want group=%s queues=%v live=%d draining=%d", summary, workerGroup, queues, live, draining)
 	}
 }
 
@@ -650,9 +679,10 @@ func prepareMultiReplicaDatabase(t *testing.T, ctx context.Context, pool *pgxpoo
 			lease_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL
 		);
-		CREATE TABLE public.worker_profile_instances (
-			instance_id uuid PRIMARY KEY, profile varchar(32) NOT NULL,
-			state varchar(16) NOT NULL CHECK (state IN ('active', 'draining')),
+		CREATE TABLE public.worker_instances (
+			instance_id uuid PRIMARY KEY, worker_group varchar(64) NOT NULL,
+			queues text NOT NULL CHECK (length(queues) > 2),
+			state varchar(16) NOT NULL CHECK (state IN ('accepting', 'draining')),
 			started_at timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL,
 			expires_at timestamptz NOT NULL
 		);

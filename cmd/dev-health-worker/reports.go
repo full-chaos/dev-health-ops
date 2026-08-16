@@ -4,51 +4,20 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/report"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// reportsQueue and its worker budget must match the deployment manifest entry
-// for the heavy process; exact startup validation compares the two.
-const (
-	reportsQueue        = "reports"
-	reportsQueueWorkers = 2
-)
-
-type reportWorkerComponent struct {
-	client     *river.Client[pgx.Tx]
-	clickhouse driver.Conn
-}
-
-func (component reportWorkerComponent) Name() string { return "river-report-worker" }
-
-func (component reportWorkerComponent) Start(ctx context.Context) error {
-	return component.client.Start(ctx)
-}
-
-// Shutdown stops fetching before releasing the ClickHouse connection: a report
-// still rendering must keep its query connection until River drains it.
-func (component reportWorkerComponent) Shutdown(ctx context.Context) error {
-	err := component.client.Stop(ctx)
-	if component.clickhouse != nil {
-		if closeErr := component.clickhouse.Close(); err == nil {
-			err = closeErr
-		}
-	}
-	return err
-}
+const reportsQueue = "reports"
 
 // buildReportWorker constructs the production report runtime. Before CUT-03 no
 // binary constructed internal/jobs/report at all, so both report kinds were
 // advertised by a compiled-kind list while nothing could execute them. The
-// adapters are built here or the heavy profile does not become ready.
+// adapters are built here or the selected reports queue does not become ready.
 func buildReportWorker(
 	ctx context.Context,
 	cfg config.Config,
@@ -56,9 +25,13 @@ func buildReportWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
-	if cfg.Profile != "heavy" || registry == nil {
+	if !queueSelected(cfg.Queues, reportsQueue) || registry == nil {
 		return workerFamily{}, nil
+	}
+	if workers == nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	kinds := []string{
 		jobcontract.KindReportExecuteOnDemand,
@@ -117,7 +90,6 @@ func buildReportWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	workers := river.NewWorkers()
 	if err := adapters.Register(workers); err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -131,29 +103,11 @@ func buildReportWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	client, err := river.NewClient(
-		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		&river.Config{
-			ID:     riverClientID(cfg, "reports"),
-			Logger: logger,
-			Queues: map[string]river.QueueConfig{
-				reportsQueue: {MaxWorkers: reportsQueueWorkers},
-			},
-			Schema:  cfg.RiverDatabaseSchema,
-			Workers: workers,
-		},
-	)
-	if err != nil {
-		closeClickHouse()
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
-		component: reportWorkerComponent{
-			client: client, clickhouse: clickhouseConnection,
-		},
 		handlers: specs,
-		queues: []jobruntime.QueueBudget{
-			{Queue: reportsQueue, MaxWorkers: reportsQueueWorkers},
-		},
+		queues: selectedQueueBudgets(
+			cfg.Queues, []string{reportsQueue}, cfg.WorkerQueueConcurrency,
+		),
+		cleanups: []func() error{clickhouseConnection.Close},
 	}, nil
 }

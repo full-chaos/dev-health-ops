@@ -28,7 +28,7 @@ func queueHealthRecords(t *testing.T, sampler queueTelemetrySampler) []map[strin
 	t.Helper()
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	monitor := newQueueHealthMonitor(sampler, logger, "ops")
+	monitor := newQueueHealthMonitor(sampler, logger)
 	if monitor == nil {
 		t.Fatal("queue health monitor was not constructed")
 	}
@@ -69,16 +69,14 @@ func TestQueueHealthPreservesCeleryAlertConditions(t *testing.T) {
 		{
 			name: "empty queues are not reported",
 			snapshot: riverstore.QueueTelemetrySnapshot{
-				Profile: "ops",
-				Jobs:    []riverstore.QueueJobTelemetry{{Queue: "retention", Kind: "system.retention_cleanup"}},
-				Queues:  []riverstore.QueueAgeTelemetry{{Queue: "retention"}},
+				Jobs:   []riverstore.QueueJobTelemetry{{Queue: "retention", Kind: "system.retention_cleanup"}},
+				Queues: []riverstore.QueueAgeTelemetry{{Queue: "retention"}},
 			},
 			want: []string{},
 		},
 		{
 			name: "healthy queue reports depth only",
 			snapshot: riverstore.QueueTelemetrySnapshot{
-				Profile: "ops",
 				Jobs: []riverstore.QueueJobTelemetry{
 					{Queue: "webhooks", Kind: "operational.webhook_delivery", Available: 12},
 				},
@@ -89,7 +87,6 @@ func TestQueueHealthPreservesCeleryAlertConditions(t *testing.T) {
 		{
 			name: "depth above the Celery threshold escalates",
 			snapshot: riverstore.QueueTelemetrySnapshot{
-				Profile: "ops",
 				Jobs: []riverstore.QueueJobTelemetry{
 					{Queue: "webhooks", Kind: "operational.webhook_delivery", Available: 120},
 					{Queue: "webhooks", Kind: "operational.billing_notification", Available: 81},
@@ -101,7 +98,6 @@ func TestQueueHealthPreservesCeleryAlertConditions(t *testing.T) {
 		{
 			name: "age above the Celery threshold escalates a shallow queue",
 			snapshot: riverstore.QueueTelemetrySnapshot{
-				Profile: "ops",
 				Jobs: []riverstore.QueueJobTelemetry{
 					{Queue: "heartbeat", Kind: "system.heartbeat", Available: 1},
 				},
@@ -114,8 +110,9 @@ func TestQueueHealthPreservesCeleryAlertConditions(t *testing.T) {
 		{
 			name: "saturation is reported without a backlog",
 			snapshot: riverstore.QueueTelemetrySnapshot{
-				Profile:             "ops",
-				ExecutionSaturation: 0.95,
+				QueueCapacities: []riverstore.QueueCapacityTelemetry{{
+					Queue: "webhooks", Capacity: 4, Running: 4, Saturation: 0.95,
+				}},
 			},
 			want: []string{"queue_saturation"},
 		},
@@ -141,7 +138,6 @@ func TestQueueHealthDepthAggregatesEveryKindOnOneQueue(t *testing.T) {
 	t.Parallel()
 	records := queueHealthRecords(t, queueHealthSampler{
 		snapshot: riverstore.QueueTelemetrySnapshot{
-			Profile: "ops",
 			Jobs: []riverstore.QueueJobTelemetry{
 				{Queue: "webhooks", Kind: "operational.webhook_delivery", Available: 5},
 				{Queue: "webhooks", Kind: "operational.billing_notification", Available: 7},
@@ -174,20 +170,17 @@ func TestQueueHealthSamplerFailureStaysBounded(t *testing.T) {
 func TestQueueHealthMonitorRequiresCompleteConstruction(t *testing.T) {
 	t.Parallel()
 	logger := slog.Default()
-	if newQueueHealthMonitor(nil, logger, "ops") != nil {
+	if newQueueHealthMonitor(nil, logger) != nil {
 		t.Fatal("monitor constructed without a telemetry sampler")
 	}
-	if newQueueHealthMonitor(queueHealthSampler{}, nil, "ops") != nil {
+	if newQueueHealthMonitor(queueHealthSampler{}, nil) != nil {
 		t.Fatal("monitor constructed without a logger")
-	}
-	if newQueueHealthMonitor(queueHealthSampler{}, logger, "") != nil {
-		t.Fatal("monitor constructed without a profile")
 	}
 }
 
 func TestQueueHealthMonitorStopsOnShutdown(t *testing.T) {
 	t.Parallel()
-	monitor := newQueueHealthMonitor(queueHealthSampler{}, slog.Default(), "ops")
+	monitor := newQueueHealthMonitor(queueHealthSampler{}, slog.Default())
 	if err := monitor.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -208,12 +201,12 @@ func TestQueueHealthShutdownIsSafeWithoutStartAndWhenRepeated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	neverStarted := newQueueHealthMonitor(queueHealthSampler{}, slog.Default(), "ops")
+	neverStarted := newQueueHealthMonitor(queueHealthSampler{}, slog.Default())
 	if err := neverStarted.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown without start = %v, want nil", err)
 	}
 
-	started := newQueueHealthMonitor(queueHealthSampler{}, slog.Default(), "ops")
+	started := newQueueHealthMonitor(queueHealthSampler{}, slog.Default())
 	if err := started.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

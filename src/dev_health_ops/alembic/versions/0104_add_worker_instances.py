@@ -1,4 +1,4 @@
-"""Add expiring Go worker profile process registrations.
+"""Add expiring Go worker-instance registrations.
 
 Revision ID: 0104
 Revises: 0103
@@ -23,30 +23,38 @@ depends_on: str | Sequence[str] | None = None
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
-_TABLE = "worker_profile_instances"
-_INDEX = "ix_worker_profile_instances_profile_expiry"
+_TABLE = "worker_instances"
+_INDEX = "ix_worker_instances_group_expiry"
 
 
 def upgrade() -> None:
     op.create_table(
         _TABLE,
         sa.Column("instance_id", UUID(as_uuid=True), nullable=False),
-        sa.Column("profile", sa.String(length=32), nullable=False),
+        sa.Column("worker_group", sa.String(length=64), nullable=False),
+        # The application stores a canonical, sorted, unique JSON queue array.
+        # The migration only enforces that the value is non-empty because the
+        # queue contract is owned by the Go worker boundary.
+        sa.Column("queues", sa.Text(), nullable=False),
         sa.Column("state", sa.String(length=16), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
-            "length(profile) BETWEEN 1 AND 32",
-            name="ck_worker_profile_instance_profile",
+            "length(worker_group) BETWEEN 1 AND 64",
+            name="ck_worker_instance_worker_group",
         ),
         sa.CheckConstraint(
-            "state IN ('active', 'draining')",
-            name="ck_worker_profile_instance_state",
+            "length(queues) > 2",
+            name="ck_worker_instance_queues",
+        ),
+        sa.CheckConstraint(
+            "state IN ('accepting', 'draining')",
+            name="ck_worker_instance_state",
         ),
         sa.PrimaryKeyConstraint("instance_id"),
     )
-    op.create_index(_INDEX, _TABLE, ["profile", "expires_at"])
+    op.create_index(_INDEX, _TABLE, ["worker_group", "expires_at"])
 
 
 def downgrade() -> None:

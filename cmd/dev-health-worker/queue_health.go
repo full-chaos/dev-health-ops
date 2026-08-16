@@ -34,7 +34,6 @@ const (
 type queueHealthMonitor struct {
 	sampler  queueTelemetrySampler
 	logger   *slog.Logger
-	profile  string
 	interval time.Duration
 	start    sync.Once
 	stop     sync.Once
@@ -46,15 +45,13 @@ type queueHealthMonitor struct {
 func newQueueHealthMonitor(
 	sampler queueTelemetrySampler,
 	logger *slog.Logger,
-	profile string,
 ) *queueHealthMonitor {
-	if sampler == nil || logger == nil || profile == "" {
+	if sampler == nil || logger == nil {
 		return nil
 	}
 	return &queueHealthMonitor{
 		sampler:  sampler,
 		logger:   logger,
-		profile:  profile,
 		interval: queueHealthInterval,
 		done:     make(chan struct{}),
 		stopped:  make(chan struct{}),
@@ -112,7 +109,7 @@ func (monitor *queueHealthMonitor) sample() {
 	if err != nil {
 		// The underlying error may have originated at a DSN boundary, so only
 		// the bounded category is logged.
-		monitor.logger.WarnContext(ctx, queueHealthFailureLogging, "profile", monitor.profile)
+		monitor.logger.WarnContext(ctx, queueHealthFailureLogging)
 		return
 	}
 	monitor.report(ctx, snapshot)
@@ -146,7 +143,6 @@ func (monitor *queueHealthMonitor) report(
 		}
 		age := ages[queue]
 		attributes := []any{
-			"profile", monitor.profile,
 			"queue", queue,
 			"depth", depth,
 			"oldest_age_seconds", age.Seconds(),
@@ -160,10 +156,13 @@ func (monitor *queueHealthMonitor) report(
 	// worker's capacity was already committed. It is the earliest signal that a
 	// queue is about to build a backlog, so it is reported independently of
 	// depth.
-	if snapshot.ExecutionSaturation > queueSaturationWarnRatio {
+	for _, capacity := range snapshot.QueueCapacities {
+		if capacity.Saturation <= queueSaturationWarnRatio {
+			continue
+		}
 		monitor.logger.WarnContext(ctx, "queue_saturation",
-			"profile", monitor.profile,
-			"execution_saturation", snapshot.ExecutionSaturation,
+			"queue", capacity.Queue,
+			"execution_saturation", capacity.Saturation,
 		)
 	}
 }

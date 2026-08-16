@@ -67,7 +67,7 @@ type RetentionHandler struct {
 
 // NewRetentionHandler binds each supported policy to its owning store. Every
 // contract-declared policy must be present; a partially wired handler would
-// let the ops profile look ready while one retention family never ran.
+// let the retention queue look ready while one retention family never ran.
 func NewRetentionHandler(stores map[string]RetentionStore) (*RetentionHandler, error) {
 	if len(stores) == 0 {
 		return nil, errors.New("retention stores are required")

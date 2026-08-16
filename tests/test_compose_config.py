@@ -172,7 +172,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
-_GO_PROFILE_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-profile.yml"
+_GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.yml"
 _GO_CONFIG = _REPO_ROOT / "internal" / "platform" / "config" / "config.go"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
@@ -285,7 +285,7 @@ def test_platform_go_worker_drain_contract_matches_profiles() -> None:
     services = _load_yaml(compose_path)["services"]
     manifest = {
         process["name"]: process
-        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/profiles.json")[
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
             "processes"
         ]
     }
@@ -550,7 +550,7 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     assert _tables_for_delete_grants(domain_script) == {
         "sync_run_unit_effect_snapshots",
         "worker_concurrency_leases",
-        "worker_profile_instances",
+        "worker_instances",
     }
 
 
@@ -1354,7 +1354,7 @@ def test_route_switches_default_off_for_producer_gate() -> None:
 
     # The additive Go profile carries the exact same inactive switches and
     # worker-only paths. This is configuration, not profile activation.
-    go_worker_env = _load_yaml(_GO_PROFILE_OVERLAY)["services"]["go-worker"][
+    go_worker_env = _load_yaml(_GO_WORKER_OVERLAY)["services"]["go-worker"][
         "environment"
     ]
     for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
@@ -1398,7 +1398,7 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
     `migrate: {condition: service_completed_successfully}` to
     go-worker-migrate's depends_on fails this test.
     """
-    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
     go_services = {
         name: spec for name, spec in services.items() if name.startswith("go-")
     }
@@ -1429,11 +1429,46 @@ def test_go_profile_overlay_services_are_all_profile_gated() -> None:
     Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
     go-* service fails this test.
     """
-    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
     for name, spec in services.items():
         assert spec.get("profiles") == ["go"], (
             f'{name} must declare profiles: ["go"] so a default `up` never starts it'
         )
+
+
+def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profile() -> (
+    None
+):
+    """CHAOS-3851: the local River worker uses the registered sync queues.
+
+    Compose's `go` activation profile is a deployment opt-in and is unrelated
+    to the worker's removed runtime profile contract.
+    """
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    worker = services["go-worker"]
+    environment = worker["environment"]
+    assert "DEV_HEALTH_PROFILE" not in environment
+    sync_queues = next(
+        process["queues"]
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
+            "processes"
+        ]
+        if process["name"] == "sync"
+    )
+    assert environment["DEV_HEALTH_QUEUES"] == ",".join(sync_queues)
+    sync_process = next(
+        process
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
+            "processes"
+        ]
+        if process["name"] == "sync"
+    )
+    assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"] == ",".join(
+        f"{entry['queue']}={entry['max_workers']}"
+        for entry in sync_process["queue_workers"]
+    )
+    assert environment["DEV_HEALTH_WORKER_GROUP"] == "sync"
+    assert worker["profiles"] == ["go"]
 
 
 def test_platform_go_runtime_uses_bounded_session_poolers() -> None:

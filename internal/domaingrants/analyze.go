@@ -128,7 +128,7 @@ type DerivedSurface struct {
 type PoolRole string
 
 const (
-	// RoleDomain is the pool every always-on worker profile uses.
+	// RoleDomain is the pool every always-on worker group uses.
 	RoleDomain PoolRole = "domain"
 	// RoleCoordinator is the control-plane pool the reconciler, scheduler and
 	// workerctl binaries use (CHAOS-3114).

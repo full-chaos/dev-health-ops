@@ -142,7 +142,7 @@ groups:
     rules:
       - alert: GoWorkerOldestAvailableJobHigh
         expr: |
-          max by (profile, queue) (worker_job_oldest_age_seconds) > 300
+          max by (queue) (worker_job_oldest_age_seconds) > 300
         for: 10m
         labels:
           severity: warning
@@ -150,21 +150,21 @@ groups:
         annotations:
           summary: "Go worker queue {{ $labels.queue }} is delayed"
           description: |
-            The oldest available job for profile {{ $labels.profile }} and queue
-            {{ $labels.queue }} is {{ $value | humanizeDuration }} old.
+            The oldest available job for queue {{ $labels.queue }} is
+            {{ $value | humanizeDuration }} old.
 
       - alert: GoWorkerExecutionSaturated
         expr: |
-          max by (profile) (worker_execution_saturation_ratio) > 0.9
+          max by (queue) (worker_execution_saturation_ratio) > 0.9
         for: 10m
         labels:
           severity: warning
           team: platform
         annotations:
-          summary: "Go worker profile {{ $labels.profile }} is saturated"
+          summary: "Go worker queue {{ $labels.queue }} is saturated"
           description: |
             Active work has consumed more than 90% of the declared concurrency
-            budget for profile {{ $labels.profile }}.
+            budget for queue {{ $labels.queue }}.
 
       - alert: GoWorkerAttemptFailureRateHigh
         expr: |

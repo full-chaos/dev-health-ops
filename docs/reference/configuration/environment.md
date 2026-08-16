@@ -62,7 +62,7 @@ Generate current entries for:
 - leases, stale detection, retries, and backoff;
 - synchronization windows, watermarks, provider budgets, and deferrals;
 - scheduler ownership;
-- Go job registry, migration state, deployment profiles, health, operator token, River schema, retention, and pool limits.
+- Go job registry, migration state, deployment manifest, health, operator token, River schema, retention, and pool limits.
 
 Deferral exhaustion on the dispatcher uses three non-secret, restart-loaded
 caps. Two bound a single budget-deferral episode: `SYNC_BUDGET_MAX_DEFERRALS`

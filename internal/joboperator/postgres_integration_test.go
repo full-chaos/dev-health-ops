@@ -233,7 +233,9 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil || len(jobs) != 1 || jobs[0].ID != jobID {
 		t.Fatalf("List() = %+v, %v", jobs, err)
 	}
-	queues, err := service.Queues(ctx, principal, "ops")
+	queues, err := service.Queues(ctx, principal, "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	})
 	if err != nil || len(queues) != 4 {
 		t.Fatalf("Queues() = %+v, %v", queues, err)
 	}
@@ -258,7 +260,9 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err := service.PauseQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-pause"); err != nil {
 		t.Fatalf("PauseQueue: %v", err)
 	}
-	queues, err = service.Queues(ctx, principal, "ops")
+	queues, err = service.Queues(ctx, principal, "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	})
 	if err != nil || len(queues) != 4 || queues[1].Name != "heartbeat" || !queues[1].Paused {
 		t.Fatalf("paused Queues() = %+v, %v", queues, err)
 	}
@@ -369,7 +373,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			status text NOT NULL
 		)`,
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.worker_profile_instances (instance_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_routes (
 			job_kind text PRIMARY KEY,
 			transport text NOT NULL,

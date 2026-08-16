@@ -23,8 +23,8 @@
       "id": 1,
       "targets": [
         {
-          "expr": "max by (profile, queue) (worker_job_oldest_age_seconds)",
-          "legendFormat": "{{profile}} / {{queue}}",
+          "expr": "max by (queue) (worker_job_oldest_age_seconds)",
+          "legendFormat": "{{queue}}",
           "refId": "A"
         }
       ],
@@ -38,13 +38,13 @@
       "id": 2,
       "targets": [
         {
-          "expr": "sum by (profile, queue) (worker_jobs_available)",
-          "legendFormat": "available {{profile}} / {{queue}}",
+          "expr": "sum by (queue) (worker_jobs_available)",
+          "legendFormat": "available {{queue}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (profile, queue) (worker_jobs_running)",
-          "legendFormat": "running {{profile}} / {{queue}}",
+          "expr": "sum by (queue) (worker_jobs_running)",
+          "legendFormat": "running {{queue}}",
           "refId": "B"
         }
       ],
@@ -58,8 +58,8 @@
       "id": 3,
       "targets": [
         {
-          "expr": "max by (profile) (worker_execution_saturation_ratio)",
-          "legendFormat": "{{profile}}",
+          "expr": "max by (queue) (worker_execution_saturation_ratio)",
+          "legendFormat": "{{queue}}",
           "refId": "A"
         }
       ],
@@ -88,8 +88,8 @@
       "id": 5,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, profile, queue, kind) (rate(worker_job_duration_seconds_bucket[10m])))",
-          "legendFormat": "{{profile}} / {{queue}} / {{kind}}",
+          "expr": "histogram_quantile(0.95, sum by (le, queue, kind) (rate(worker_job_duration_seconds_bucket[10m])))",
+          "legendFormat": "{{queue}} / {{kind}}",
           "refId": "A"
         }
       ],

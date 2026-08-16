@@ -26,7 +26,6 @@ import (
 // exercises (Provider: "launchdarkly", Dataset: "feature-flags").
 func leaseSyncDimensions() jobruntime.MetricDimensions {
 	return jobruntime.MetricDimensions{
-		Profiles: []string{"sync"},
 		SyncLeases: []jobruntime.SyncLeaseLabels{
 			{Provider: "launchdarkly", DatasetFamily: "feature-flags"},
 		},

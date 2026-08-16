@@ -63,7 +63,7 @@ The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/
 
 ## Current worker ownership
 
-Celery remains the production owner of all current jobs and schedules. The checked-in Go worker profiles under [`deploy/go-workers/`](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/go-workers) are disabled coexistence foundations:
+Celery remains the production owner of all current jobs and schedules. The checked-in Go worker deployment groups under [`deploy/go-workers/`](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/go-workers) are disabled coexistence foundations:
 
 - minimum replicas are zero;
 - current routes remain `celery`;

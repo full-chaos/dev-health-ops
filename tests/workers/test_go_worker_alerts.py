@@ -36,6 +36,33 @@ def test_go_worker_alerts_cover_phase_one_runtime_signals() -> None:
         assert metric in alerts[alert]
 
 
+def test_go_worker_alerts_use_runtime_metric_dimensions() -> None:
+    rules = _go_worker_rules()
+    alerts = {str(rule["alert"]): str(rule["expr"]) for rule in rules}
+
+    assert (
+        "max by (queue) (worker_job_oldest_age_seconds)"
+        in alerts["GoWorkerOldestAvailableJobHigh"]
+    )
+    assert (
+        "max by (queue) (worker_execution_saturation_ratio)"
+        in alerts["GoWorkerExecutionSaturated"]
+    )
+    assert (
+        "max by (job, instance) (worker_stream_lag)" in alerts["GoWorkerStreamLagHigh"]
+    )
+    assert (
+        "max by (job, instance) (worker_stream_oldest_pending_seconds)"
+        in alerts["GoWorkerStreamPendingTooOld"]
+    )
+
+
+def test_go_worker_alerts_have_no_fixed_worker_profile_label() -> None:
+    serialized = yaml.safe_dump(_go_worker_rules(), sort_keys=True)
+    assert "profile" not in serialized.lower()
+    assert "worker_group" not in serialized.lower()
+
+
 def test_go_worker_alerts_keep_labels_low_cardinality_and_payload_free() -> None:
     rules = _go_worker_rules()
     serialized = yaml.safe_dump(rules, sort_keys=True)

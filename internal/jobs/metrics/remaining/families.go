@@ -35,7 +35,6 @@ type Family struct {
 	Name                  string   `json:"name"`
 	PythonSources         []string `json:"python_sources"`
 	Writes                []string `json:"writes"`
-	Profile               string   `json:"profile"`
 	MaxConcurrency        int      `json:"max_concurrency"`
 	ClickHouseReadBudget  int      `json:"clickhouse_read_budget"`
 	ClickHouseWriteBudget int      `json:"clickhouse_write_budget"`
@@ -67,7 +66,7 @@ func (inventory Inventory) Validate() error {
 	for _, family := range inventory.Families {
 		names = append(names, family.Name)
 		if family.Name == "" || len(family.PythonSources) == 0 || len(family.Writes) == 0 ||
-			family.Profile != "heavy" || family.MaxConcurrency < 1 || family.MaxConcurrency > 4 ||
+			family.MaxConcurrency < 1 || family.MaxConcurrency > 4 ||
 			family.ClickHouseReadBudget < 1 || family.ClickHouseReadBudget > 2 ||
 			family.ClickHouseWriteBudget < 1 || family.ClickHouseWriteBudget > 2 ||
 			!validRoutePair(family.Route, family.RollbackRoute) ||

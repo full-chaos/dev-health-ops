@@ -11,7 +11,7 @@ import (
 // riverRoutedRegistry promotes every checked-in kind to a River route so
 // startup validation can be exercised against the real contract. Every kind is
 // already checked in at go_default/river, so this fixture is a no-op over the
-// real registry today, but it still guards profile-coverage assertions against
+// real registry today, but it still guards queue-coverage assertions against
 // a future rollback that moves some kinds back to Celery, which would make the
 // executable set partial and some of these cases pass vacuously.
 func riverRoutedRegistry(t *testing.T) *Registry {
@@ -51,12 +51,12 @@ func opsStartup(registry *Registry) StartupSpec {
 		}
 	}
 	return StartupSpec{
-		Profile:             "ops",
-		Queues:              queues(),
-		ManifestQueues:      queues(),
-		Handlers:            []HandlerSpec{billing, webhook, heartbeat, retention, coverage},
-		Connections:         ConnectionBudget{QueueControl: 2, Domain: 4},
-		ManifestConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
+		SelectedQueues:        []string{"coverage", "heartbeat", "retention", "webhooks"},
+		Queues:                queues(),
+		ConfiguredQueues:      queues(),
+		Handlers:              []HandlerSpec{billing, webhook, heartbeat, retention, coverage},
+		Connections:           ConnectionBudget{QueueControl: 2, Domain: 4},
+		ConfiguredConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
 	}
 }
 
@@ -79,7 +79,6 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 		{"supported_versions", func(spec *HandlerSpec) {
 			spec.SupportedVersions = append(append([]int(nil), spec.SupportedVersions...), 99)
 		}},
-		{"profile", func(spec *HandlerSpec) { spec.Profile = "heavy" }},
 		{"queue", func(spec *HandlerSpec) { spec.Queue = "other" }},
 		{"execution_mode", func(spec *HandlerSpec) { spec.ExecutionMode = "coordinator" }},
 		{"priority", func(spec *HandlerSpec) { spec.Priority++ }},
@@ -119,7 +118,7 @@ func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testin
 		t.Fatalf("Load: %v", err)
 	}
 	promoted := riverRoutedRegistry(t)
-	handlers := promoted.Profile("heavy")
+	handlers := promoted.Queue("investment")
 	queueSet := make(map[string]struct{})
 	for _, handler := range handlers {
 		queueSet[handler.Queue] = struct{}{}
@@ -129,17 +128,17 @@ func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testin
 		queues = append(queues, QueueBudget{Queue: queue, MaxWorkers: 2})
 	}
 	if err := promoted.ValidateStartup(StartupSpec{
-		Profile:             "heavy",
-		Queues:              queues,
-		ManifestQueues:      queues,
-		Handlers:            handlers,
-		Connections:         ConnectionBudget{QueueControl: 2, Domain: 4},
-		ManifestConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
+		SelectedQueues:        []string{"investment"},
+		Queues:                queues,
+		ConfiguredQueues:      queues,
+		Handlers:              handlers,
+		Connections:           ConnectionBudget{QueueControl: 2, Domain: 4},
+		ConfiguredConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
 	}); err != nil {
 		t.Fatalf("ValidateStartup: %v", err)
 	}
 	var dispatch Descriptor
-	for _, handler := range registry.Profile("heavy") {
+	for _, handler := range registry.Queue("investment") {
 		if handler.Kind == jobcontract.KindInvestmentDispatch {
 			dispatch = handler
 		}
@@ -176,10 +175,11 @@ func TestRegistryValidateStartupRejectsCoverageDrift(t *testing.T) {
 		{"duplicate handler", func(spec *StartupSpec) {
 			spec.Handlers = []HandlerSpec{heartbeat, heartbeat, heartbeat, heartbeat}
 		}},
-		{"unknown profile", func(spec *StartupSpec) { spec.Profile = "unknown" }},
+		{"unknown selected queue", func(spec *StartupSpec) { spec.SelectedQueues = []string{"unknown"} }},
+		{"duplicate selected queue", func(spec *StartupSpec) { spec.SelectedQueues = []string{"coverage", "coverage"} }},
 		{"zero queue budget", func(spec *StartupSpec) { spec.Queues[0].MaxWorkers = 0 }},
 		{"queue budget drift", func(spec *StartupSpec) { spec.Queues[0].MaxWorkers = 3 }},
-		{"unbudgeted queue", func(spec *StartupSpec) { spec.ManifestQueues = spec.ManifestQueues[1:] }},
+		{"unbudgeted queue", func(spec *StartupSpec) { spec.ConfiguredQueues = spec.ConfiguredQueues[1:] }},
 		{"missing connection budget", func(spec *StartupSpec) { spec.Connections = ConnectionBudget{} }},
 		{"connection budget drift", func(spec *StartupSpec) { spec.Connections.Domain = 8 }},
 	}
@@ -194,23 +194,28 @@ func TestRegistryValidateStartupRejectsCoverageDrift(t *testing.T) {
 	}
 }
 
-// TestRegistryValidateStartupRejectsUnexecutableProfile pins the CUT-02 rule
-// that a profile with nothing routed to River cannot start. It is the check
-// that made the empty latency profile unrepresentable.
-func TestRegistryValidateStartupRejectsUnexecutableProfile(t *testing.T) {
+// TestRegistryValidateStartupRejectsUnexecutableSelection pins the rule that a
+// missing or unknown queue selection cannot start.
+func TestRegistryValidateStartupRejectsUnexecutableSelection(t *testing.T) {
 	t.Parallel()
 	registry, err := Load("../../contracts/jobs/v1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(registry.ExecutableProfile("ops")) != 0 {
-		t.Skip("ops profile has been promoted; rule is covered elsewhere")
+	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
+	heartbeatStartup := opsStartup(registry)
+	heartbeatStartup.SelectedQueues = []string{"heartbeat"}
+	heartbeatStartup.Queues = []QueueBudget{{Queue: "heartbeat", MaxWorkers: 1}}
+	heartbeatStartup.ConfiguredQueues = heartbeatStartup.Queues
+	heartbeatStartup.Handlers = []HandlerSpec{heartbeat}
+	if err := registry.ValidateStartup(heartbeatStartup); err != nil {
+		t.Fatalf("heartbeat queue should pass startup validation: %v", err)
 	}
-	if err := registry.ValidateStartup(opsStartup(registry)); err == nil {
-		t.Fatal("celery-routed profile unexpectedly passed startup validation")
+	if err := registry.ValidateStartup(StartupSpec{}); err == nil {
+		t.Fatal("empty queue selection unexpectedly passed startup validation")
 	}
-	if err := registry.ValidateStartup(StartupSpec{Profile: "latency"}); err == nil {
-		t.Fatal("empty profile unexpectedly passed startup validation")
+	if err := registry.ValidateStartup(StartupSpec{SelectedQueues: []string{"latency"}}); err == nil {
+		t.Fatal("unknown queue selection unexpectedly passed startup validation")
 	}
 }
 
@@ -291,11 +296,11 @@ func testContractRegistry() jobcontract.Registry {
 		SchemaVersion: 1, ContractFamily: "dev-health.jobs", EnvelopeSchema: "envelope.schema.json",
 		VersionPolicy: jobcontract.VersionPolicy{
 			Compatibility: "additive_optional_only", MinimumConsumerWindow: 2,
-			SameVersionRollout: "schema_digest_all_live_profiles",
+			SameVersionRollout: "schema_digest_all_live_queues",
 		},
 		Jobs: []jobcontract.JobDefinition{{
 			Kind: jobcontract.KindRetentionCleanup, CurrentVersion: 2, SupportedVersions: []int{1, 2, 3},
-			Profile: "ops", Queue: "retention", ExecutionMode: "command", Priority: 3,
+			Queue: "retention", ExecutionMode: "command", Priority: 3,
 			TimeoutSeconds: 300, MaxAttempts: 3, RetryPolicy: "bounded_exponential_jitter",
 			Cancellation: "cooperative_checkpoint", Delivery: "guarded_at_least_once",
 			Idempotency: "maintenance_run_checkpoint",
@@ -310,8 +315,9 @@ func testMigrationState() jobcontract.MigrationState {
 		SchemaVersion: 1,
 		Jobs: []jobcontract.MigrationJob{{
 			Kind: jobcontract.KindRetentionCleanup, State: "canary", ProducerVersion: 2,
-			ConsumerVersions: []int{1, 2, 3}, RequiredProfiles: []string{"ops"},
-			Route: "river_canary", RollbackRoute: "celery", Evidence: []string{"contract_schema"},
+			ConsumerVersions: []int{1, 2, 3},
+			RequiredQueues:   []string{"retention"},
+			Route:            "river_canary", RollbackRoute: "celery", Evidence: []string{"contract_schema"},
 		}},
 	}
 }

@@ -132,7 +132,7 @@ unknown family flags and direct aliases are refused before either River outbox
 or Celery staging. The shared provider-unit switch is the single-writer
 boundary: forward selection stops the Python writer before Go can execute;
 rollback disables Go routing before the valid canonical Python claim becomes
-admissible again. This changes no deployment profile, scheduler, or cutover
+admissible again. This changes no deployment group, scheduler, or cutover
 ownership: every checked-in switch remains default-off.
 
 The native route requires explicit,

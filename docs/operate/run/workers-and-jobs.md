@@ -42,19 +42,23 @@ dev-hops workers start-worker \
 ### Start a Go worker group
 
 `dev-health-worker` requires an explicit, static set of registered queues. The
-deployment may pass a comma-separated list or repeat `--queues`; the equivalent
-`DEV_HEALTH_QUEUES` value is useful in a container manifest. The process sorts
-and validates the set before readiness and constructs one River client for all
-selected queues.
+deployment passes process topology as command arguments. Queue and concurrency
+arguments may be comma-separated or repeated. The process sorts and validates
+the set before readiness and constructs one River client for all selected
+queues.
 
 ```bash
-DEV_HEALTH_QUEUES=sync,sync_provider \
-  dev-health-worker
-
 dev-health-worker \
-  --queues metrics,reports \
-  --queues webhooks
+  --queues sync,sync_provider \
+  --queue-concurrency sync=4,sync_provider=2 \
+  --worker-group sync \
+  --shutdown-timeout 960s
 ```
+
+`DEV_HEALTH_QUEUES`, `DEV_HEALTH_QUEUE_CONCURRENCY`,
+`DEV_HEALTH_WORKER_GROUP`, and `DEV_HEALTH_SHUTDOWN_TIMEOUT` remain supported as
+fallbacks for existing supervisors. Do not set a fallback together with its
+command argument; ambiguous input fails before readiness.
 
 The deployment owns the worker group name, replicas, resources, autoscaling,
 shutdown budget, and per-queue concurrency. The binary owns neither a named

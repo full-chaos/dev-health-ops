@@ -41,6 +41,19 @@ def _container_command_string(service: dict) -> str:
     return " ".join(parts)
 
 
+def _go_worker_arguments(service: dict) -> dict[str, str]:
+    command = service.get("command") or []
+    assert isinstance(command, list), "Go worker command must use list form"
+    arguments: dict[str, str] = {}
+    for item in command:
+        name, separator, value = str(item).partition("=")
+        assert separator and name.startswith("--"), (
+            f"invalid Go worker argument: {item}"
+        )
+        arguments[name] = value
+    return arguments
+
+
 def test_compose_workers_cover_every_celery_queue() -> None:
     """CHAOS-2278: the union of -Q lists across all compose celery worker
     services must cover every queue declared in workers.config.task_queues.
@@ -277,7 +290,7 @@ def _assert_compose_beat_singleton(path: Path) -> None:
         assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
 
 
-def test_platform_go_worker_drain_contract_matches_profiles() -> None:
+def test_platform_go_worker_drain_contract_matches_groups() -> None:
     compose_path = _platform_go_compose_path()
     if compose_path is None:
         pytest.skip("platform compose checkout is unavailable")
@@ -297,7 +310,7 @@ def test_platform_go_worker_drain_contract_matches_profiles() -> None:
     for service_name, profile in service_profiles.items():
         grace = manifest[profile]["shutdown_grace_seconds"]
         service = services[service_name]
-        assert service["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"] == f"{grace}s"
+        assert _go_worker_arguments(service)["--shutdown-timeout"] == f"{grace}s"
         assert service["stop_grace_period"] == f"{grace}s"
 
 
@@ -1448,6 +1461,10 @@ def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profi
     worker = services["go-worker"]
     environment = worker["environment"]
     assert "DEV_HEALTH_PROFILE" not in environment
+    assert "DEV_HEALTH_QUEUES" not in environment
+    assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+    assert "DEV_HEALTH_WORKER_GROUP" not in environment
+    arguments = _go_worker_arguments(worker)
     sync_queues = next(
         process["queues"]
         for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
@@ -1455,7 +1472,7 @@ def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profi
         ]
         if process["name"] == "sync"
     )
-    assert environment["DEV_HEALTH_QUEUES"] == ",".join(sync_queues)
+    assert arguments["--queues"] == ",".join(sync_queues)
     sync_process = next(
         process
         for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
@@ -1463,11 +1480,11 @@ def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profi
         ]
         if process["name"] == "sync"
     )
-    assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"] == ",".join(
+    assert arguments["--queue-concurrency"] == ",".join(
         f"{entry['queue']}={entry['max_workers']}"
         for entry in sync_process["queue_workers"]
     )
-    assert environment["DEV_HEALTH_WORKER_GROUP"] == "sync"
+    assert arguments["--worker-group"] == "sync"
     assert worker["profiles"] == ["go"]
 
 

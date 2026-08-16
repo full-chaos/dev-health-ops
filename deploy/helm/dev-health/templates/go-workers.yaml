@@ -40,25 +40,25 @@ spec:
         - name: {{ $group.name }}
           image: {{ $group.image }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if $group.queues }}
+          {{- $parts := list }}
+          {{- range $queue := $group.queues }}
+          {{- $parts = append $parts (printf "%s=%v" $queue (index $group.queueConcurrency $queue)) }}
+          {{- end }}
+          args:
+            - {{ printf "--queues=%s" (join "," $group.queues) | quote }}
+            - {{ printf "--queue-concurrency=%s" (join "," $parts) | quote }}
+            - {{ printf "--worker-group=%s" $group.name | quote }}
+            - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
+          {{- end }}
           env:
-            {{- with $group.queues }}
-            - {name: DEV_HEALTH_QUEUES, value: {{ join "," . | quote }}}
-            {{- end }}
-            {{- if $group.queueConcurrency }}
-            {{- $parts := list }}
-            {{- range $queue := $group.queues }}
-            {{- $parts = append $parts (printf "%s=%v" $queue (index $group.queueConcurrency $queue)) }}
-            {{- end }}
-            - {name: DEV_HEALTH_QUEUE_CONCURRENCY, value: {{ join "," $parts | quote }}}
-            {{- end }}
-            {{- if $group.queues }}
-            - {name: DEV_HEALTH_WORKER_GROUP, value: {{ $group.name | quote }}}
-            {{- end }}
             {{- if $group.runtimeProfile }}
             - {name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}
             {{- end }}
             - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            {{- if not $group.queues }}
             - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $group.terminationGracePeriodSeconds) | quote }}}
+            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool plus
             # the River queue session pool. Only coordinator binaries receive

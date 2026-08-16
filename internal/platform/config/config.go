@@ -18,6 +18,7 @@ import (
 const (
 	defaultHTTPAddress       = ":8080"
 	defaultShutdownTimeout   = 30 * time.Second
+	maximumShutdownTimeout   = 3 * time.Hour
 	defaultHealthCheckTimout = 2 * time.Second
 	defaultDomainMaxConns    = 4
 	defaultQueueMaxConns     = 2
@@ -243,7 +244,7 @@ func Load(spec Spec) (Config, error) {
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT",
 		defaultShutdownTimeout,
 		500*time.Millisecond,
-		5*time.Minute,
+		maximumShutdownTimeout,
 	)
 	if err != nil {
 		return Config{}, err

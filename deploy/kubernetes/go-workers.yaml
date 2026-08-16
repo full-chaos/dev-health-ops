@@ -33,7 +33,8 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_QUEUES, value: "investment,metrics,reports,workgraph"}, {name: DEV_HEALTH_QUEUE_CONCURRENCY, value: "investment=1,metrics=2,reports=2,workgraph=1"}, {name: DEV_HEALTH_WORKER_GROUP, value: heavy}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 7260s}]
+          args: ["--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -59,7 +60,8 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_QUEUES, value: "coverage,heartbeat,retention,webhooks"}, {name: DEV_HEALTH_QUEUE_CONCURRENCY, value: "coverage=1,heartbeat=1,retention=1,webhooks=4"}, {name: DEV_HEALTH_WORKER_GROUP, value: ops}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 960s}]
+          args: ["--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -85,7 +87,8 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_QUEUES, value: "sync,sync_provider"}, {name: DEV_HEALTH_QUEUE_CONCURRENCY, value: "sync=4,sync_provider=2"}, {name: DEV_HEALTH_WORKER_GROUP, value: sync}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 960s}]
+          args: ["--queues=sync,sync_provider", "--queue-concurrency=sync=4,sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

@@ -62,13 +62,16 @@ const (
 
 // Spec describes the immutable configuration surface of one executable.
 type Spec struct {
-	Service        string
-	Profiles       []string
-	DefaultProfile string
-	Profile        string
-	RequireQueues  bool
-	Queues         []string
-	LookupEnv      secrets.LookupEnv
+	Service          string
+	Profiles         []string
+	DefaultProfile   string
+	Profile          string
+	RequireQueues    bool
+	Queues           []string
+	QueueConcurrency []string
+	WorkerGroup      string
+	ShutdownTimeout  string
+	LookupEnv        secrets.LookupEnv
 }
 
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
@@ -232,8 +235,9 @@ const (
 	PagerDutyTransportRiver  = "river"
 )
 
-// Load reads and validates the process environment. CLI profile selection, if
-// supplied by Spec.Profile, takes precedence over DEV_HEALTH_PROFILE.
+// Load reads and validates explicit process arguments plus environment-backed
+// dependencies. A command argument and its environment fallback may not both
+// be set.
 func Load(spec Spec) (Config, error) {
 	lookup := spec.LookupEnv
 	if lookup == nil {
@@ -251,7 +255,8 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	var err error
-	cfg.ShutdownTimeout, err = durationEnv(
+	cfg.ShutdownTimeout, err = durationArgumentOrEnv(
+		spec.ShutdownTimeout,
 		lookup,
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT",
 		defaultShutdownTimeout,
@@ -975,6 +980,31 @@ func durationEnv(
 	return value, nil
 }
 
+func durationArgumentOrEnv(
+	argument string,
+	lookup secrets.LookupEnv,
+	key string,
+	fallback, minimum, maximum time.Duration,
+) (time.Duration, error) {
+	argument = strings.TrimSpace(argument)
+	environment, environmentSet := lookup(key)
+	environment = strings.TrimSpace(environment)
+	if argument != "" && environmentSet && environment != "" {
+		return 0, fmt.Errorf("--shutdown-timeout conflicts with %s", key)
+	}
+	if argument == "" {
+		return durationEnv(lookup, key, fallback, minimum, maximum)
+	}
+	value, err := time.ParseDuration(argument)
+	if err != nil {
+		return 0, errors.New("--shutdown-timeout must be a duration")
+	}
+	if value < minimum || value > maximum {
+		return 0, fmt.Errorf("--shutdown-timeout must be between %s and %s", minimum, maximum)
+	}
+	return value, nil
+}
+
 func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	value := strings.ToLower(envOrDefault(lookup, "DEV_HEALTH_LOG_LEVEL", "info"))
 	switch value {
@@ -1056,39 +1086,60 @@ func workerQueueRuntime(spec Spec, lookup secrets.LookupEnv, queues []string) (s
 	encoded, concurrencySet := lookup("DEV_HEALTH_QUEUE_CONCURRENCY")
 	group = strings.TrimSpace(group)
 	encoded = strings.TrimSpace(encoded)
+	argumentGroup := strings.TrimSpace(spec.WorkerGroup)
+	argumentConcurrency := append([]string(nil), spec.QueueConcurrency...)
 	if !spec.RequireQueues {
-		if (groupSet && group != "") || (concurrencySet && encoded != "") {
+		if argumentGroup != "" || len(argumentConcurrency) > 0 ||
+			(groupSet && group != "") || (concurrencySet && encoded != "") {
 			return "", nil, fmt.Errorf("%s does not accept worker queue runtime settings", spec.Service)
 		}
 		return "", nil, nil
+	}
+	if argumentGroup != "" && groupSet && group != "" {
+		return "", nil, errors.New("--worker-group conflicts with DEV_HEALTH_WORKER_GROUP")
+	}
+	if len(argumentConcurrency) > 0 && concurrencySet && encoded != "" {
+		return "", nil, errors.New("--queue-concurrency conflicts with DEV_HEALTH_QUEUE_CONCURRENCY")
+	}
+	if argumentGroup != "" {
+		group = argumentGroup
+	}
+	groupSetting := "DEV_HEALTH_WORKER_GROUP"
+	if argumentGroup != "" {
+		groupSetting = "--worker-group"
 	}
 	if group == "" {
 		group = "worker"
 	}
 	if len(group) > 64 {
-		return "", nil, errors.New("DEV_HEALTH_WORKER_GROUP exceeds 64 characters")
+		return "", nil, fmt.Errorf("%s exceeds 64 characters", groupSetting)
 	}
-	if err := validateName("DEV_HEALTH_WORKER_GROUP", group); err != nil {
+	if err := validateName(groupSetting, group); err != nil {
 		return "", nil, err
 	}
-	if encoded == "" {
-		return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY is required")
+	if len(argumentConcurrency) == 0 && encoded != "" {
+		argumentConcurrency = []string{encoded}
+	}
+	if len(argumentConcurrency) == 0 {
+		return "", nil, errors.New("queue concurrency is required")
 	}
 	concurrency := make(map[string]int)
-	for _, item := range strings.Split(encoded, ",") {
-		parts := strings.Split(item, "=")
-		if len(parts) != 2 {
-			return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY must use queue=workers entries")
+	for _, raw := range argumentConcurrency {
+		for _, item := range strings.Split(raw, ",") {
+			parts := strings.Split(item, "=")
+			if len(parts) != 2 {
+				return "", nil, errors.New("queue concurrency must use queue=workers entries")
+			}
+			queue := strings.TrimSpace(parts[0])
+			workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
+				return "", nil, errors.New("queue concurrency has an invalid entry")
+			}
+			if _, duplicate := concurrency[queue]; duplicate {
+				return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
+			}
+			concurrency[queue] = workers
 		}
-		queue := strings.TrimSpace(parts[0])
-		workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
-			return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY has an invalid entry")
-		}
-		if _, duplicate := concurrency[queue]; duplicate {
-			return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
-		}
-		concurrency[queue] = workers
 	}
 	if len(concurrency) != len(queues) {
 		return "", nil, errors.New("queue concurrency must cover the selected queues exactly")

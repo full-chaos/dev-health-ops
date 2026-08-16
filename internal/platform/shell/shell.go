@@ -91,11 +91,20 @@ func Execute(
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
 	var selectedProfile *string
 	var selectedQueues repeatedStringFlag
+	var queueConcurrency repeatedStringFlag
+	var workerGroup, shutdownTimeout string
 	if len(spec.Profiles) > 0 {
 		selectedProfile = flags.String("profile", "", "runtime profile")
 	}
 	if spec.RequireQueues {
 		flags.Var(&selectedQueues, "queues", "registered queues to consume (comma-separated or repeatable)")
+		flags.Var(
+			&queueConcurrency,
+			"queue-concurrency",
+			"queue worker budgets as queue=workers entries (comma-separated or repeatable)",
+		)
+		flags.StringVar(&workerGroup, "worker-group", "", "stable worker group label for logs and metrics")
+		flags.StringVar(&shutdownTimeout, "shutdown-timeout", "", "graceful shutdown timeout")
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -129,7 +138,12 @@ func Execute(
 		Profile:        profile,
 		RequireQueues:  spec.RequireQueues,
 		Queues:         append([]string(nil), selectedQueues...),
-		LookupEnv:      lookup,
+		QueueConcurrency: append(
+			[]string(nil), queueConcurrency...,
+		),
+		WorkerGroup:     workerGroup,
+		ShutdownTimeout: shutdownTimeout,
+		LookupEnv:       lookup,
 	})
 	if err != nil {
 		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))

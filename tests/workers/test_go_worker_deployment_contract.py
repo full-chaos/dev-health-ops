@@ -101,6 +101,18 @@ def _queue_concurrency_env(process: dict) -> str:
     )
 
 
+def _process_arguments(container: dict) -> dict[str, str]:
+    raw = container.get("command") or container.get("args") or []
+    assert isinstance(raw, list), "worker process arguments must use list form"
+    arguments: dict[str, str] = {}
+    for item in raw:
+        name, separator, value = str(item).partition("=")
+        assert separator and name.startswith("--"), f"invalid process argument: {item}"
+        assert name not in arguments, f"duplicate process argument: {name}"
+        arguments[name] = value
+    return arguments
+
+
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -388,9 +400,8 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
             )
             == "true"
         )
-    assert (
-        compose["go-worker-sync-provider"]["environment"]["DEV_HEALTH_QUEUES"]
-        == "sync,sync_provider"
+    assert _process_arguments(compose["go-worker-sync-provider"])["--queues"] == (
+        "sync,sync_provider"
     )
 
     swarm = _load_yaml(_GO_SWARM)["services"]
@@ -473,9 +484,13 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
             assert "DEV_HEALTH_PROFILE" not in environment, (
                 f"{renderer_name} {service_name} must select queues explicitly"
             )
-            assert _queue_env(environment["DEV_HEALTH_QUEUES"]) == expected
-            assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"] == expected_concurrency
-            assert environment["DEV_HEALTH_WORKER_GROUP"] == group
+            assert "DEV_HEALTH_QUEUES" not in environment
+            assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+            assert "DEV_HEALTH_WORKER_GROUP" not in environment
+            arguments = _process_arguments(services[service_name])
+            assert _queue_env(arguments["--queues"]) == expected
+            assert arguments["--queue-concurrency"] == expected_concurrency
+            assert arguments["--worker-group"] == group
 
     deployments = {
         document["metadata"]["name"]: document
@@ -492,11 +507,13 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
             item["name"]: item.get("value") for item in container.get("env", [])
         }
         assert "DEV_HEALTH_PROFILE" not in environment
-        assert _queue_env(environment["DEV_HEALTH_QUEUES"]) == river[group]["queues"]
-        assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"] == _queue_concurrency_env(
-            river[group]
-        )
-        assert environment["DEV_HEALTH_WORKER_GROUP"] == group
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        arguments = _process_arguments(container)
+        assert _queue_env(arguments["--queues"]) == river[group]["queues"]
+        assert arguments["--queue-concurrency"] == _queue_concurrency_env(river[group])
+        assert arguments["--worker-group"] == group
 
     horizontal_scalers = [
         document
@@ -602,25 +619,39 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
         grace = contract["shutdown_grace_seconds"]
         assert compose[service_name]["deploy"]["replicas"] == desired
         assert compose[service_name]["stop_grace_period"] == f"{grace}s"
-        assert (
-            compose[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
-            == f"{grace}s"
-        )
         assert swarm[service_name]["deploy"]["replicas"] == desired
         assert swarm[service_name]["stop_grace_period"] == f"{grace}s"
-        assert (
-            swarm[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
-            == f"{grace}s"
-        )
         assert kubernetes[profile]["spec"]["replicas"] == desired
         pod_spec = kubernetes[profile]["spec"]["template"]["spec"]
         assert pod_spec["terminationGracePeriodSeconds"] == grace
-        shutdown = next(
-            item
-            for item in pod_spec["containers"][0]["env"]
-            if item["name"] == "DEV_HEALTH_SHUTDOWN_TIMEOUT"
-        )
-        assert shutdown["value"] == f"{grace}s"
+        if contract["runtime"] == "river":
+            assert (
+                _process_arguments(compose[service_name])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+            assert (
+                _process_arguments(swarm[service_name])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+            assert (
+                _process_arguments(pod_spec["containers"][0])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+        else:
+            assert (
+                compose[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                == f"{grace}s"
+            )
+            assert (
+                swarm[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                == f"{grace}s"
+            )
+            shutdown = next(
+                item
+                for item in pod_spec["containers"][0]["env"]
+                if item["name"] == "DEV_HEALTH_SHUTDOWN_TIMEOUT"
+            )
+            assert shutdown["value"] == f"{grace}s"
         assert helm[profile]["replicas"] == desired
         assert helm[profile]["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
@@ -639,7 +670,7 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
     helm_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
         encoding="utf-8"
     )
-    assert "DEV_HEALTH_SHUTDOWN_TIMEOUT" in helm_template
+    assert "--shutdown-timeout=" in helm_template
 
 
 def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> None:

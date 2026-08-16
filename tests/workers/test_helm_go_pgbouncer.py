@@ -286,11 +286,15 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         environment = _env(container)
         assert "DEV_HEALTH_PROFILE" not in environment
-        assert environment["DEV_HEALTH_QUEUES"]["value"] == ",".join(process["queues"])
-        assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"][
-            "value"
-        ] == _queue_concurrency(process)
-        assert environment["DEV_HEALTH_WORKER_GROUP"]["value"] == group
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        assert container["args"] == [
+            f"--queues={','.join(process['queues'])}",
+            f"--queue-concurrency={_queue_concurrency(process)}",
+            f"--worker-group={group}",
+            f"--shutdown-timeout={process['shutdown_grace_seconds']}s",
+        ]
 
         scaler = next(
             doc

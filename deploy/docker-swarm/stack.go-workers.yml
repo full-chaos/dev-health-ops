@@ -50,19 +50,19 @@ services:
     <<: *go-worker
     labels:
       dev-health.io/worker-group: heavy
-    environment: {<<: *go-worker-env-base, DEV_HEALTH_QUEUES: "investment,metrics,reports,workgraph", DEV_HEALTH_QUEUE_CONCURRENCY: "investment=1,metrics=2,reports=2,workgraph=1", DEV_HEALTH_WORKER_GROUP: heavy, DEV_HEALTH_SHUTDOWN_TIMEOUT: 7260s}
+    command: ["--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s"]
     stop_grace_period: 7260s
   go-worker-ops:
     <<: *go-worker
     labels:
       dev-health.io/worker-group: ops
-    environment: {<<: *go-worker-env-base, DEV_HEALTH_QUEUES: "coverage,heartbeat,retention,webhooks", DEV_HEALTH_QUEUE_CONCURRENCY: "coverage=1,heartbeat=1,retention=1,webhooks=4", DEV_HEALTH_WORKER_GROUP: ops, DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s}
+    command: ["--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s"]
     stop_grace_period: 960s
   go-worker-sync-provider:
     <<: *go-worker
     labels:
       dev-health.io/worker-group: sync
-    environment: {<<: *go-worker-env-base, DEV_HEALTH_QUEUES: "sync,sync_provider", DEV_HEALTH_QUEUE_CONCURRENCY: "sync=4,sync_provider=2", DEV_HEALTH_WORKER_GROUP: sync, DEV_HEALTH_SHUTDOWN_TIMEOUT: 960s}
+    command: ["--queues=sync,sync_provider", "--queue-concurrency=sync=4,sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s"]
     stop_grace_period: 960s
   go-reconciler:
     <<: *go-worker

@@ -194,6 +194,49 @@ func TestWorkerQueueSelectionRejectsInvalidOrAmbiguousInput(t *testing.T) {
 	}
 }
 
+func TestWorkerProcessArgumentsRejectEnvironmentConflicts(t *testing.T) {
+	t.Parallel()
+
+	for name, spec := range map[string]Spec{
+		"queue concurrency": {
+			Service:          "dev-health-worker",
+			RequireQueues:    true,
+			Queues:           []string{"heartbeat"},
+			QueueConcurrency: []string{"heartbeat=1"},
+			LookupEnv: lookup(map[string]string{
+				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=2",
+			}),
+		},
+		"worker group": {
+			Service:          "dev-health-worker",
+			RequireQueues:    true,
+			Queues:           []string{"heartbeat"},
+			QueueConcurrency: []string{"heartbeat=1"},
+			WorkerGroup:      "command-group",
+			LookupEnv: lookup(map[string]string{
+				"DEV_HEALTH_WORKER_GROUP": "environment-group",
+			}),
+		},
+		"shutdown timeout": {
+			Service:          "dev-health-worker",
+			RequireQueues:    true,
+			Queues:           []string{"heartbeat"},
+			QueueConcurrency: []string{"heartbeat=1"},
+			ShutdownTimeout:  "30s",
+			LookupEnv: lookup(map[string]string{
+				"DEV_HEALTH_SHUTDOWN_TIMEOUT": "60s",
+			}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(spec); err == nil {
+				t.Fatal("expected command argument and environment conflict to fail")
+			}
+		})
+	}
+}
+
 func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	t.Parallel()
 

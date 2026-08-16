@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "name": "CHAOS-3851 explicit queue selection",
-  "$limitation": "The plan proves required and exact queue concurrency input, propagation into the constructed startup budget, one process-level River client, independent groups with identical queue sets, worker-group label neutrality, visibility of live custom groups, and renderer emission of queue concurrency. It does not prove live multi-process claim distribution or autoscaler behavior; those require the integration and deployment environments.",
+  "$limitation": "The plan proves required and exact queue concurrency input, CLI propagation and environment conflict refusal for worker process arguments, propagation into the constructed startup budget, one process-level River client, independent groups with identical queue sets, worker-group label neutrality, visibility of live custom groups, and renderer emission of queue concurrency. It does not prove live multi-process claim distribution or autoscaler behavior; those require the integration and deployment environments.",
   "mutations": [
     {
       "id": "QS01-required-queue-concurrency",
       "file": "internal/platform/config/config.go",
-      "find": "\tif encoded == \"\" {\n\t\treturn \"\", nil, errors.New(\"DEV_HEALTH_QUEUE_CONCURRENCY is required\")\n\t}",
-      "replace": "\tif encoded == \"\" {\n\t\treturn group, map[string]int{}, nil\n\t}",
+      "find": "\tif len(argumentConcurrency) == 0 {\n\t\treturn \"\", nil, errors.New(\"queue concurrency is required\")\n\t}",
+      "replace": "\tif len(argumentConcurrency) == 0 {\n\t\treturn group, map[string]int{}, nil\n\t}",
       "expect_occurrences": 1,
       "rationale": "A River worker must fail closed when deployment does not provide per-queue concurrency; accepting an empty budget would create a queue-selected process with no reviewed capacity.",
       "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
@@ -76,12 +76,72 @@
     {
       "id": "QS08-renderer-emits-queue-concurrency",
       "file": "deploy/docker-compose/compose.go-workers.yml",
-      "find": "      DEV_HEALTH_QUEUE_CONCURRENCY: sync=4,sync_provider=2",
+      "find": "      - --queue-concurrency=sync=4,sync_provider=2",
       "replace": "",
       "expect_occurrences": 1,
       "rationale": "The Compose renderer must pass the deployment's queue concurrency to every Go worker; omitting it causes the process to fail closed or lose the reviewed capacity contract.",
       "build": ["python", "-m", "py_compile", "tests/workers/test_go_worker_deployment_contract.py"],
       "proof": [["pytest", "-q", "--confcutdir=tests/workers", "tests/workers/test_go_worker_deployment_contract.py", "-k", "test_river_worker_renderers_select_manifest_queues_without_profiles"]]
+    },
+    {
+      "id": "QS09-cli-queue-concurrency-propagation",
+      "file": "internal/platform/shell/shell.go",
+      "find": "\t\tQueueConcurrency: append(\n\t\t\t[]string(nil), queueConcurrency...,\n\t\t),",
+      "replace": "\t\tQueueConcurrency: nil,",
+      "expect_occurrences": 1,
+      "rationale": "The worker CLI must pass every --queue-concurrency value to typed configuration; accepting the flag while discarding it would make the visible command disagree with River capacity.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerCommandPassesProcessArgumentsToDependencyConstruction$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "QS10-cli-worker-group-propagation",
+      "file": "internal/platform/shell/shell.go",
+      "find": "\t\tWorkerGroup:     workerGroup,",
+      "replace": "\t\tWorkerGroup:     \"\",",
+      "expect_occurrences": 1,
+      "rationale": "The worker group argument is the process observability identity; silently dropping it would collapse independently deployed groups into the default label.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerCommandPassesProcessArgumentsToDependencyConstruction$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "QS11-cli-shutdown-timeout-propagation",
+      "file": "internal/platform/shell/shell.go",
+      "find": "\t\tShutdownTimeout: shutdownTimeout,",
+      "replace": "\t\tShutdownTimeout: \"\",",
+      "expect_occurrences": 1,
+      "rationale": "The process shutdown argument must reach lifecycle construction; dropping it would expose a reviewed drain window in the manifest while the binary uses its short default.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerCommandPassesProcessArgumentsToDependencyConstruction$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "QS12-cli-concurrency-env-conflict",
+      "file": "internal/platform/config/config.go",
+      "find": "\tif len(argumentConcurrency) > 0 && concurrencySet && encoded != \"\" {",
+      "replace": "\tif false && len(argumentConcurrency) > 0 && concurrencySet && encoded != \"\" {",
+      "expect_occurrences": 1,
+      "rationale": "A command and environment value for queue concurrency are two authorities; accepting both would make the effective topology depend on undocumented precedence.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProcessArgumentsRejectEnvironmentConflicts$", "./internal/platform/config"]]
+    },
+    {
+      "id": "QS13-cli-group-env-conflict",
+      "file": "internal/platform/config/config.go",
+      "find": "\tif argumentGroup != \"\" && groupSet && group != \"\" {",
+      "replace": "\tif false && argumentGroup != \"\" && groupSet && group != \"\" {",
+      "expect_occurrences": 1,
+      "rationale": "A worker group command argument must not silently override an ambient group environment value because logs and fleet status would have two competing deployment identities.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProcessArgumentsRejectEnvironmentConflicts$", "./internal/platform/config"]]
+    },
+    {
+      "id": "QS14-cli-shutdown-env-conflict",
+      "file": "internal/platform/config/config.go",
+      "find": "\tif argument != \"\" && environmentSet && environment != \"\" {",
+      "replace": "\tif false && argument != \"\" && environmentSet && environment != \"\" {",
+      "expect_occurrences": 1,
+      "rationale": "Shutdown authority must be unambiguous; allowing both the command and environment setting makes the drain contract opaque during incident response.",
+      "build": ["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
+      "proof": [["env", "GOCACHE=/tmp/chaos3851-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestWorkerProcessArgumentsRejectEnvironmentConflicts$", "./internal/platform/config"]]
     }
   ]
 }

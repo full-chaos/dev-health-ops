@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -64,18 +66,18 @@ func TestWorkerCommandUsesExplicitQueuesInsteadOfProfiles(t *testing.T) {
 	}
 }
 
-func TestWorkerCommandPassesCanonicalQueuesToDependencyConstruction(t *testing.T) {
+func TestWorkerCommandPassesProcessArgumentsToDependencyConstruction(t *testing.T) {
 	t.Parallel()
 
 	spec := workerSpec
-	var received []string
+	var received config.Config
 	spec.ConfigureDependenciesWithLogger = func(
 		_ context.Context,
 		cfg config.Config,
 		_ *health.Registry,
 		_ *slog.Logger,
 	) ([]lifecycle.Component, error) {
-		received = append([]string(nil), cfg.Queues...)
+		received = cfg
 		return nil, errors.New("stop after observing queue selection")
 	}
 
@@ -83,20 +85,32 @@ func TestWorkerCommandPassesCanonicalQueuesToDependencyConstruction(t *testing.T
 	code := shell.Execute(
 		context.Background(),
 		spec,
-		[]string{"--queues", "webhooks,heartbeat", "--queues", "retention"},
-		func(key string) (string, bool) {
-			if key == "DEV_HEALTH_QUEUE_CONCURRENCY" {
-				return "heartbeat=1,retention=2,webhooks=4", true
-			}
-			return "", false
+		[]string{
+			"--queues", "webhooks,heartbeat",
+			"--queues", "retention",
+			"--queue-concurrency", "heartbeat=1,retention=2",
+			"--queue-concurrency", "webhooks=4",
+			"--worker-group", "api-workers",
+			"--shutdown-timeout", "17m",
 		},
+		func(string) (string, bool) { return "", false },
 		shell.IO{Stdout: &stdout, Stderr: &stderr},
 	)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want dependency failure; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	want := []string{"heartbeat", "retention", "webhooks"}
-	if !slices.Equal(received, want) {
-		t.Fatalf("dependency queues = %v, want %v", received, want)
+	if !slices.Equal(received.Queues, want) {
+		t.Fatalf("dependency queues = %v, want %v", received.Queues, want)
+	}
+	wantConcurrency := map[string]int{"heartbeat": 1, "retention": 2, "webhooks": 4}
+	if !maps.Equal(received.WorkerQueueConcurrency, wantConcurrency) {
+		t.Fatalf("queue concurrency = %v, want %v", received.WorkerQueueConcurrency, wantConcurrency)
+	}
+	if received.WorkerGroup != "api-workers" {
+		t.Fatalf("worker group = %q, want api-workers", received.WorkerGroup)
+	}
+	if received.ShutdownTimeout != 17*time.Minute {
+		t.Fatalf("shutdown timeout = %s, want 17m", received.ShutdownTimeout)
 	}
 }

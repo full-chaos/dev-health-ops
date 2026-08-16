@@ -5,11 +5,12 @@ connection-budget checks, and stack renderers. Its River entries are deployment
 groups. They select registered queues; they are not application worker types
 and do not change the canonical job-kind-to-queue mapping.
 
-Each `dev-health-worker` process receives an explicit, static queue set through
-`--queues` or `DEV_HEALTH_QUEUES`. The set is normalized and checked against
-the registry before readiness. Empty, unknown, duplicate, malformed, or
-conflicting selections fail closed. Runtime queue reconfiguration is not
-supported.
+Each `dev-health-worker` process receives its explicit, static queue set,
+per-queue concurrency, group label, and shutdown budget as command arguments.
+The set is normalized and checked against the registry before readiness. Empty,
+unknown, duplicate, malformed, or conflicting selections fail closed. Runtime
+queue reconfiguration is not supported. Environment equivalents remain
+fallbacks for existing supervisors and conflict with the matching argument.
 
 The deployment owns the group name, queue concurrency, replica count, resource
 limits, autoscaling policy, and shutdown budget. A worker process constructs one
@@ -364,10 +365,11 @@ be served by the handlers it actually constructed. A deployment that selects
 both queues; a worker that selects only `sync` must not claim `sync_provider`.
 The same exact queue and handler checks apply to every group.
 
-Use `--queues` or `DEV_HEALTH_QUEUES` to select the queues. Do not use a named
-worker preset or rely on a service name to select them. The process reports
-the canonical queue set, per-queue concurrency, worker identity, one River
-client, and effective database limits in its startup and readiness evidence.
+Use `--queues`, `--queue-concurrency`, `--worker-group`, and
+`--shutdown-timeout` to declare the process topology. Do not use a named worker
+preset or rely on a service name to select queues. The process reports the
+canonical queue set, per-queue concurrency, worker identity, one River client,
+and effective database limits in its startup and readiness evidence.
 
 The `sync.team_autoimport` handler still needs
 `WORKER_OPERATIONAL_BRIDGE_URL` and `WORKER_OPERATIONAL_BRIDGE_TOKEN` when the

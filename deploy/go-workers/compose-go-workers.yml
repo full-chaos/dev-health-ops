@@ -225,10 +225,12 @@ services:
       # secret_env, so it is required, not optional.
       - path: ./ops/.env
         required: false
+    command:
+      - --queues=sync,sync_provider
+      - --queue-concurrency=sync=4,sync_provider=2
+      - --worker-group=sync
+      - --shutdown-timeout=960s
     environment:
-      DEV_HEALTH_QUEUES: sync,sync_provider
-      DEV_HEALTH_QUEUE_CONCURRENCY: sync=4,sync_provider=2
-      DEV_HEALTH_WORKER_GROUP: sync
       POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
       PGBOUNCER_TRANSACTION_MODE: "true"
       WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}

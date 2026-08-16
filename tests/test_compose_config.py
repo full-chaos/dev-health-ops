@@ -277,6 +277,30 @@ def _assert_compose_beat_singleton(path: Path) -> None:
         assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
 
 
+def test_platform_go_worker_drain_contract_matches_profiles() -> None:
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose checkout is unavailable")
+
+    services = _load_yaml(compose_path)["services"]
+    manifest = {
+        process["name"]: process
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/profiles.json")[
+            "processes"
+        ]
+    }
+    service_profiles = {
+        "go-worker": "sync",
+        "go-worker-heavy": "heavy",
+        "go-worker-ops": "ops",
+    }
+    for service_name, profile in service_profiles.items():
+        grace = manifest[profile]["shutdown_grace_seconds"]
+        service = services[service_name]
+        assert service["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"] == f"{grace}s"
+        assert service["stop_grace_period"] == f"{grace}s"
+
+
 def test_production_compose_has_one_shot_migrate_service() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
     migrate = services.get("migrate")

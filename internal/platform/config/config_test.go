@@ -130,6 +130,38 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	}
 }
 
+func TestShutdownTimeoutSupportsDeploymentGraceWindows(t *testing.T) {
+	t.Parallel()
+
+	for name, raw := range map[string]string{
+		"sync and ops": "960s",
+		"heavy":        "7260s",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(workerSpec(map[string]string{
+				"DEV_HEALTH_SHUTDOWN_TIMEOUT": raw,
+			}))
+			if err != nil {
+				t.Fatalf("Load() rejected deployment shutdown timeout %s: %v", raw, err)
+			}
+			want, err := time.ParseDuration(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ShutdownTimeout != want {
+				t.Fatalf("shutdown timeout = %s, want %s", cfg.ShutdownTimeout, want)
+			}
+		})
+	}
+
+	if _, err := Load(workerSpec(map[string]string{
+		"DEV_HEALTH_SHUTDOWN_TIMEOUT": "3h0m1s",
+	})); err == nil {
+		t.Fatal("expected shutdown timeout above the safety ceiling to fail")
+	}
+}
+
 func TestLoadSettingsEncryptionSalt(t *testing.T) {
 	t.Parallel()
 	cfg, err := Load(workerSpec(map[string]string{

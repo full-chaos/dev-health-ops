@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -65,6 +66,8 @@ type Spec struct {
 	Profiles       []string
 	DefaultProfile string
 	Profile        string
+	RequireQueues  bool
+	Queues         []string
 	LookupEnv      secrets.LookupEnv
 }
 
@@ -73,6 +76,7 @@ type Spec struct {
 type Config struct {
 	Service string
 	Profile string
+	Queues  []string
 	// WorkerInstanceID is generated once inside the process. Every River
 	// client in that process derives its attempted_by identity from it.
 	WorkerInstanceID   string
@@ -498,6 +502,10 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.Queues, err = queueSelection(spec, lookup)
+	if err != nil {
+		return Config{}, err
+	}
 
 	secretTargets := []struct {
 		name   string
@@ -858,6 +866,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 	if c.Profile != "" {
 		attrs = append(attrs, slog.String("profile", c.Profile))
 	}
+	if len(c.Queues) > 0 {
+		attrs = append(attrs, slog.String("queues", strings.Join(c.Queues, ",")))
+	}
 	return attrs
 }
 
@@ -977,6 +988,63 @@ func profile(spec Spec, lookup secrets.LookupEnv) (string, error) {
 		return "", fmt.Errorf("profile must be one of %s", strings.Join(spec.Profiles, ", "))
 	}
 	return selected, nil
+}
+
+func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
+	if !spec.RequireQueues {
+		if len(spec.Queues) > 0 {
+			return nil, fmt.Errorf("%s does not accept queue selection", spec.Service)
+		}
+		return nil, nil
+	}
+	if len(spec.Profiles) > 0 || spec.Profile != "" || spec.DefaultProfile != "" {
+		return nil, fmt.Errorf("%s cannot combine queue selection with profiles", spec.Service)
+	}
+
+	environment, environmentSet := lookup("DEV_HEALTH_QUEUES")
+	environment = strings.TrimSpace(environment)
+	if len(spec.Queues) > 0 && environmentSet && environment != "" {
+		return nil, errors.New("DEV_HEALTH_QUEUES conflicts with --queues")
+	}
+	rawValues := append([]string(nil), spec.Queues...)
+	if len(rawValues) == 0 && environment != "" {
+		rawValues = []string{environment}
+	}
+	if len(rawValues) == 0 {
+		return nil, errors.New("at least one worker queue is required")
+	}
+
+	seen := make(map[string]struct{})
+	queues := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		for _, item := range strings.Split(raw, ",") {
+			queue := strings.TrimSpace(item)
+			if !validQueueName(queue) {
+				return nil, fmt.Errorf("worker queue %q is not a valid registered queue name", queue)
+			}
+			if _, duplicate := seen[queue]; duplicate {
+				return nil, fmt.Errorf("worker queue %q is selected more than once", queue)
+			}
+			seen[queue] = struct{}{}
+			queues = append(queues, queue)
+		}
+	}
+	slices.Sort(queues)
+	return queues, nil
+}
+
+func validQueueName(value string) bool {
+	if len(value) == 0 || len(value) > 96 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, char := range value[1:] {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') ||
+			char == '.' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateName(kind, value string) error {

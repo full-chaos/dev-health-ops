@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/riverqueue/river"
 )
 
 func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwitch(t *testing.T) {
@@ -33,7 +34,7 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 	if err != nil {
 		t.Fatal(err)
 	}
-	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{Profiles: []string{"sync"}})
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,23 +70,24 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := config.Config{
-				Profile:               "sync",
-				RiverDatabaseSchema:   "river",
-				SettingsEncryptionKey: secrets.NewValue("test-encryption-key"),
-				ClickHouseURI:         secrets.NewValue(clickhouse.URI),
-				ValkeyURI:             secrets.NewValue(valkey.URI),
+				Queues:                 []string{"sync", "sync_provider"},
+				WorkerQueueConcurrency: map[string]int{"sync": 3, "sync_provider": 9},
+				RiverDatabaseSchema:    "river",
+				SettingsEncryptionKey:  secrets.NewValue("test-encryption-key"),
+				ClickHouseURI:          secrets.NewValue(clickhouse.URI),
+				ValkeyURI:              secrets.NewValue(valkey.URI),
 			}
 			enable(&cfg)
 			family, err := buildProviderSyncWorker(
-				ctx, cfg, reportBuilderDatabase(t), registry, collector, slog.Default(),
+				ctx, cfg, reportBuilderDatabase(t), registry, collector, slog.Default(), river.NewWorkers(),
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if family.component == nil || len(family.handlers) != 1 || len(family.queues) != 1 {
+			if len(family.handlers) != 1 || len(family.queues) != 1 || family.queues[0].MaxWorkers != 9 {
 				t.Fatalf("provider sync family=%#v", family)
 			}
-			if err := family.component.Shutdown(ctx); err != nil {
+			if err := closeWorkerFamily(family); err != nil {
 				t.Fatal(err)
 			}
 		})

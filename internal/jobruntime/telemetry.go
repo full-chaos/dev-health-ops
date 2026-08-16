@@ -15,7 +15,7 @@ import (
 
 const (
 	maxMetricJobs               = 512
-	maxMetricProfiles           = 32
+	maxMetricQueues             = 32
 	maxMetricDomains            = 128
 	maxMetricSyncLeases         = 128
 	maxMetricStreams            = 64
@@ -83,10 +83,10 @@ type SyncLeaseLabels struct {
 }
 
 // MetricDimensions is the complete low-cardinality vocabulary accepted by a
-// MetricsCollector. Jobs normally come from Registry.Profile; sync-lease,
-// stream, and budget pairs come from static deployment configuration.
+// MetricsCollector. Jobs normally come from registry-selected queues;
+// sync-lease, stream, and budget pairs come from static deployment
+// configuration.
 type MetricDimensions struct {
-	Profiles           []string
 	Jobs               []JobLabels
 	DomainTypes        []string
 	SyncLeases         []SyncLeaseLabels
@@ -96,8 +96,7 @@ type MetricDimensions struct {
 }
 
 type queueLabels struct {
-	Profile string
-	Queue   string
+	Queue string
 }
 
 type jobResultLabels struct {
@@ -163,7 +162,6 @@ type MetricsCollector struct {
 	allowedJobs               map[JobLabels]struct{}
 	allowedQueues             map[queueLabels]struct{}
 	allowedKinds              map[string]struct{}
-	allowedProfiles           map[string]struct{}
 	allowedDomains            map[string]struct{}
 	allowedSyncLeases         map[SyncLeaseLabels]struct{}
 	allowedStreams            map[StreamLabels]struct{}
@@ -175,7 +173,7 @@ type MetricsCollector struct {
 	jobsAvailable         map[JobLabels]int64
 	jobOldestAge          map[queueLabels]float64
 	jobsRunning           map[JobLabels]int64
-	executionSaturation   map[string]float64
+	executionSaturation   map[queueLabels]float64
 	jobWait               map[JobLabels]*histogram
 	jobDuration           map[jobResultLabels]*histogram
 	jobAttempts           map[attemptLabels]uint64
@@ -205,7 +203,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	if len(dimensions.Jobs) > maxMetricJobs {
 		return nil, errors.New("metric job dimensions exceed bounds")
 	}
-	if len(dimensions.Profiles) > maxMetricProfiles || len(dimensions.DomainTypes) > maxMetricDomains ||
+	if len(dimensions.DomainTypes) > maxMetricDomains ||
 		len(dimensions.SyncLeases) > maxMetricSyncLeases || len(dimensions.Streams) > maxMetricStreams ||
 		len(dimensions.Budgets) > maxMetricBudgets || len(dimensions.ConcurrencyBudgets) > maxMetricConcurrencyBudgets {
 		return nil, errors.New("metric dimensions exceed cardinality bounds")
@@ -215,7 +213,6 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		allowedJobs:               make(map[JobLabels]struct{}, len(dimensions.Jobs)),
 		allowedQueues:             make(map[queueLabels]struct{}),
 		allowedKinds:              make(map[string]struct{}),
-		allowedProfiles:           make(map[string]struct{}),
 		allowedDomains:            make(map[string]struct{}, len(dimensions.DomainTypes)),
 		allowedSyncLeases:         make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
 		allowedStreams:            make(map[StreamLabels]struct{}, len(dimensions.Streams)),
@@ -224,7 +221,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		jobsAvailable:             make(map[JobLabels]int64, len(dimensions.Jobs)),
 		jobOldestAge:              make(map[queueLabels]float64),
 		jobsRunning:               make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation:       make(map[string]float64),
+		executionSaturation:       make(map[queueLabels]float64),
 		jobWait:                   make(map[JobLabels]*histogram, len(dimensions.Jobs)),
 		jobDuration:               make(map[jobResultLabels]*histogram),
 		jobAttempts:               make(map[attemptLabels]uint64),
@@ -244,17 +241,6 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		poolSaturation:            map[string]float64{poolDomain: 0, poolQueueControl: 0},
 		poolAcquire:               make(map[poolAcquireLabels]*histogram, 8),
 	}
-	for _, profile := range dimensions.Profiles {
-		if !metricIdentifier(profile, 32) {
-			return nil, errors.New("invalid metric profile dimension")
-		}
-		if _, duplicate := collector.allowedProfiles[profile]; duplicate {
-			return nil, errors.New("duplicate metric profile dimension")
-		}
-		collector.allowedProfiles[profile] = struct{}{}
-		collector.executionSaturation[profile] = 0
-	}
-
 	for _, labels := range dimensions.Jobs {
 		if err := validateJobLabels(labels); err != nil {
 			return nil, err
@@ -263,26 +249,20 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 			return nil, errors.New("duplicate metric job dimensions")
 		}
 		collector.allowedJobs[labels] = struct{}{}
-		collector.allowedQueues[queueLabels{Profile: labels.Profile, Queue: labels.Queue}] = struct{}{}
+		queue := queueLabels{Queue: labels.Queue}
+		collector.allowedQueues[queue] = struct{}{}
 		collector.allowedKinds[labels.Kind] = struct{}{}
-		if len(dimensions.Profiles) > 0 {
-			if _, ok := collector.allowedProfiles[labels.Profile]; !ok {
-				return nil, errors.New("metric job profile is not registered")
-			}
-		} else {
-			collector.allowedProfiles[labels.Profile] = struct{}{}
-			collector.executionSaturation[labels.Profile] = 0
-		}
+		collector.executionSaturation[queue] = 0
 		collector.jobsAvailable[labels] = 0
 		collector.jobsRunning[labels] = 0
 		collector.jobWait[labels] = newHistogram()
 		collector.jobPanics[labels.Kind] = 0
 	}
-	if len(collector.allowedProfiles) == 0 {
-		return nil, errors.New("at least one metric profile dimension is required")
-	}
 	for labels := range collector.allowedQueues {
 		collector.jobOldestAge[labels] = 0
+	}
+	if len(collector.allowedQueues) > maxMetricQueues {
+		return nil, errors.New("metric queue dimensions exceed bounds")
 	}
 	for _, domainType := range dimensions.DomainTypes {
 		if !metricIdentifier(domainType, 64) {
@@ -355,20 +335,22 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	return collector, nil
 }
 
-// DimensionsForProfile derives job and domain dimensions from the validated
+// DimensionsForQueues derives job and domain dimensions from the validated
 // runtime registry. Sync-lease, stream, and budget pairs remain explicit
 // inputs here since they come from static deployment configuration rather
 // than the job registry.
-func DimensionsForProfile(registry *Registry, profile string, streams []StreamLabels, budgets []BudgetLabels, syncLeases []SyncLeaseLabels, concurrencyBudgets ...[]ConcurrencyBudgetLabels) (MetricDimensions, error) {
+func DimensionsForQueues(registry *Registry, queues []string, streams []StreamLabels, budgets []BudgetLabels, syncLeases []SyncLeaseLabels, concurrencyBudgets ...[]ConcurrencyBudgetLabels) (MetricDimensions, error) {
 	if registry == nil {
 		return MetricDimensions{}, errors.New("runtime registry is required")
 	}
-	descriptors := registry.Profile(profile)
+	descriptors, err := registry.SelectedQueues(queues)
+	if err != nil {
+		return MetricDimensions{}, err
+	}
 	if len(descriptors) == 0 {
-		return MetricDimensions{}, errors.New("runtime profile has no registered jobs")
+		return MetricDimensions{}, errors.New("runtime queues have no registered jobs")
 	}
 	dimensions := MetricDimensions{
-		Profiles:   []string{profile},
 		Streams:    append([]StreamLabels(nil), streams...),
 		Budgets:    append([]BudgetLabels(nil), budgets...),
 		SyncLeases: append([]SyncLeaseLabels(nil), syncLeases...),
@@ -379,9 +361,8 @@ func DimensionsForProfile(registry *Registry, profile string, streams []StreamLa
 	domains := make(map[string]struct{})
 	for _, descriptor := range descriptors {
 		dimensions.Jobs = append(dimensions.Jobs, JobLabels{
-			Profile: descriptor.Profile,
-			Queue:   descriptor.Queue,
-			Kind:    descriptor.Kind,
+			Queue: descriptor.Queue,
+			Kind:  descriptor.Kind,
 		})
 		domains[descriptor.DomainLink] = struct{}{}
 	}
@@ -393,14 +374,11 @@ func DimensionsForProfile(registry *Registry, profile string, streams []StreamLa
 }
 
 func (collector *MetricsCollector) RuntimeRegistered(_ context.Context, info RuntimeInfo) {
-	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) || !boundedIdentity(info.Profile, 32) {
+	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) {
 		return
 	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if _, ok := collector.allowedProfiles[info.Profile]; !ok {
-		return
-	}
 	copy := info
 	collector.runtimeInfo = &copy
 }
@@ -481,11 +459,11 @@ func (collector *MetricsCollector) SetJobsAvailable(labels JobLabels, count int6
 	return nil
 }
 
-func (collector *MetricsCollector) SetJobOldestAge(profile, queue string, age time.Duration) error {
+func (collector *MetricsCollector) SetJobOldestAge(queue string, age time.Duration) error {
 	if age < 0 {
 		return errors.New("oldest job age cannot be negative")
 	}
-	labels := queueLabels{Profile: profile, Queue: queue}
+	labels := queueLabels{Queue: queue}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if _, ok := collector.allowedQueues[labels]; !ok {
@@ -544,16 +522,17 @@ func (collector *MetricsCollector) ObserveReportRunLeaseExpired(result ReportRun
 	return nil
 }
 
-func (collector *MetricsCollector) SetExecutionSaturation(profile string, ratio float64) error {
+func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
 	}
+	labels := queueLabels{Queue: queue}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if _, ok := collector.allowedProfiles[profile]; !ok {
-		return errors.New("execution saturation profile is not registered")
+	if _, ok := collector.allowedQueues[labels]; !ok {
+		return errors.New("execution saturation queue is not registered")
 	}
-	collector.executionSaturation[profile] = ratio
+	collector.executionSaturation[labels] = ratio
 	return nil
 }
 
@@ -718,37 +697,36 @@ func (collector *MetricsCollector) WritePrometheus(output io.Writer) error {
 }
 
 func (collector *MetricsCollector) writeRuntime(output *strings.Builder) {
-	writeMetadata(output, "worker_runtime_info", "Build and profile identity for this worker runtime.", "gauge")
+	writeMetadata(output, "worker_runtime_info", "Build identity for this worker runtime.", "gauge")
 	if collector.runtimeInfo != nil {
 		writeFloatSample(output, "worker_runtime_info", []metricLabel{
 			{"version", collector.runtimeInfo.Version},
 			{"commit", collector.runtimeInfo.Commit},
-			{"profile", collector.runtimeInfo.Profile},
 		}, 1)
 	}
 }
 
 func (collector *MetricsCollector) writeJobs(output *strings.Builder) {
 	jobs := sortedJobs(collector.allowedJobs)
-	writeMetadata(output, "worker_jobs_available", "Current jobs available to the worker by profile, queue, and kind.", "gauge")
+	writeMetadata(output, "worker_jobs_available", "Current jobs available to the worker by queue and kind.", "gauge")
 	for _, labels := range jobs {
 		writeIntSample(output, "worker_jobs_available", jobMetricLabels(labels), collector.jobsAvailable[labels])
 	}
 
 	queues := sortedQueues(collector.allowedQueues)
-	writeMetadata(output, "worker_job_oldest_age_seconds", "Age of the oldest available job by profile and queue.", "gauge")
+	writeMetadata(output, "worker_job_oldest_age_seconds", "Age of the oldest available job by queue.", "gauge")
 	for _, labels := range queues {
 		writeFloatSample(output, "worker_job_oldest_age_seconds", queueMetricLabels(labels), collector.jobOldestAge[labels])
 	}
 
-	writeMetadata(output, "worker_jobs_running", "Current jobs executing by profile, queue, and kind.", "gauge")
+	writeMetadata(output, "worker_jobs_running", "Current jobs executing by queue and kind.", "gauge")
 	for _, labels := range jobs {
 		writeIntSample(output, "worker_jobs_running", jobMetricLabels(labels), collector.jobsRunning[labels])
 	}
 
 	writeMetadata(output, "worker_execution_saturation_ratio", "Fraction of configured worker execution capacity currently in use.", "gauge")
-	for _, profile := range sortedStrings(collector.allowedProfiles) {
-		writeFloatSample(output, "worker_execution_saturation_ratio", []metricLabel{{"profile", profile}}, collector.executionSaturation[profile])
+	for _, labels := range queues {
+		writeFloatSample(output, "worker_execution_saturation_ratio", queueMetricLabels(labels), collector.executionSaturation[labels])
 	}
 
 	writeMetadata(output, "worker_job_wait_seconds", "Time from job availability to execution start.", "histogram")
@@ -987,11 +965,11 @@ func formatMetricFloat(value float64) string {
 }
 
 func jobMetricLabels(labels JobLabels) []metricLabel {
-	return []metricLabel{{"profile", labels.Profile}, {"queue", labels.Queue}, {"kind", labels.Kind}}
+	return []metricLabel{{"queue", labels.Queue}, {"kind", labels.Kind}}
 }
 
 func queueMetricLabels(labels queueLabels) []metricLabel {
-	return []metricLabel{{"profile", labels.Profile}, {"queue", labels.Queue}}
+	return []metricLabel{{"queue", labels.Queue}}
 }
 
 func streamMetricLabels(labels StreamLabels) []metricLabel {
@@ -999,7 +977,7 @@ func streamMetricLabels(labels StreamLabels) []metricLabel {
 }
 
 func validateJobLabels(labels JobLabels) error {
-	if !metricIdentifier(labels.Profile, 32) || !metricIdentifier(labels.Queue, 96) || !metricIdentifier(labels.Kind, 96) {
+	if !metricIdentifier(labels.Queue, 96) || !metricIdentifier(labels.Kind, 96) {
 		return errors.New("invalid metric job dimensions")
 	}
 	return nil
@@ -1075,9 +1053,6 @@ func sortedJobs(values map[JobLabels]struct{}) []JobLabels {
 }
 
 func compareJobs(left, right JobLabels) int {
-	if left.Profile != right.Profile {
-		return strings.Compare(left.Profile, right.Profile)
-	}
 	if left.Queue != right.Queue {
 		return strings.Compare(left.Queue, right.Queue)
 	}
@@ -1090,9 +1065,6 @@ func sortedQueues(values map[queueLabels]struct{}) []queueLabels {
 		result = append(result, value)
 	}
 	sort.Slice(result, func(left, right int) bool {
-		if result[left].Profile != result[right].Profile {
-			return result[left].Profile < result[right].Profile
-		}
 		return result[left].Queue < result[right].Queue
 	})
 	return result

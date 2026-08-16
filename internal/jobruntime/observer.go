@@ -6,20 +6,18 @@ import (
 	"time"
 )
 
-// RuntimeInfo drives worker_runtime_info{version,commit,profile}. All fields
-// are deployment identity, not job or tenant data.
+// RuntimeInfo drives worker_runtime_info{version,commit}. All fields are
+// deployment identity, not job or tenant data.
 type RuntimeInfo struct {
 	Version string
 	Commit  string
-	Profile string
 }
 
 // JobLabels are the only dimensions exposed to metrics. They intentionally
 // exclude job IDs, organizations, correlations, domains, payloads, and errors.
 type JobLabels struct {
-	Profile string
-	Queue   string
-	Kind    string
+	Queue string
+	Kind  string
 }
 
 // Observer maps runtime decisions to the TRD metric family:
@@ -29,7 +27,7 @@ type JobLabels struct {
 // worker_job_wait_seconds is sampled per-handler execution from the River
 // row's ScheduledAt, since that is the only place the adapter observes both
 // the job's availability time and its execution start. Deployment sampling
-// sets worker_execution_saturation_ratio{profile} directly from configured
+// sets worker_execution_saturation_ratio{queue} directly from configured
 // worker capacity and active executions.
 //
 // Pool adapters use worker_database_pool_saturation_ratio{pool} and
@@ -72,7 +70,7 @@ func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) e
 	if observer == nil {
 		return errors.New("runtime observer is required")
 	}
-	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) || !boundedIdentity(info.Profile, 32) {
+	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) {
 		return errors.New("runtime identity is invalid")
 	}
 	observer.RuntimeRegistered(ctx, info)

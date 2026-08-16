@@ -42,7 +42,6 @@ func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 	t.Cleanup(client.Close)
 
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
-		Profiles: []string{"sync"},
 		Budgets: []jobruntime.BudgetLabels{
 			{Provider: "github", CostClass: "medium"},
 		},

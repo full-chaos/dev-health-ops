@@ -236,9 +236,8 @@ func NextRetryAt(descriptor Descriptor, job *rivertype.JobRow) time.Time {
 func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error {
 	started := time.Now()
 	labels := JobLabels{
-		Profile: adapter.descriptor.Profile,
-		Queue:   adapter.descriptor.Queue,
-		Kind:    adapter.descriptor.Kind,
+		Queue: adapter.descriptor.Queue,
+		Kind:  adapter.descriptor.Kind,
 	}
 	// ScheduledAt is River's own "available to be worked" timestamp, so the gap
 	// to this Work() entry is exactly the availability-to-execution-start wait
@@ -464,7 +463,6 @@ func (adapter *Adapter[T]) logStart(ctx context.Context, job *river.Job[T], enve
 		"job_id", job.ID,
 		"kind", adapter.descriptor.Kind,
 		"contract_version", envelope.ContractVersion,
-		"profile", adapter.descriptor.Profile,
 		"queue", adapter.descriptor.Queue,
 		"attempt", job.Attempt,
 		"correlation_id", envelope.CorrelationID,
@@ -476,7 +474,6 @@ func (adapter *Adapter[T]) logStart(ctx context.Context, job *river.Job[T], enve
 func (adapter *Adapter[T]) logFinish(ctx context.Context, job *river.Job[T], envelope jobcontract.Envelope, choice decision, started time.Time) {
 	attributes := []any{
 		"kind", adapter.descriptor.Kind,
-		"profile", adapter.descriptor.Profile,
 		"queue", adapter.descriptor.Queue,
 		"result", choice.result,
 		"error_category", choice.category,

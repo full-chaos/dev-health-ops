@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/riverqueue/river"
 )
 
 func TestPostSyncRemainingScopeMatchesBoundedFamilyContract(t *testing.T) {
@@ -86,7 +86,6 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 		name      string
 		promote   []string
 		wantKinds []string
-		wantQueue bool
 	}{
 		{
 			name:      "celery routed kind is not consumed at all",
@@ -96,7 +95,6 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 			name:      "promoted kind is registered and reported",
 			promote:   []string{jobcontract.KindTeamAutoimport},
 			wantKinds: []string{jobcontract.KindTeamAutoimport},
-			wantQueue: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -112,7 +110,8 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 			}
 			family, err := buildSyncCoordinatorWorker(
 				config.Config{
-					Profile:                        "sync",
+					Queues:                         []string{"sync", "sync_provider"},
+					WorkerQueueConcurrency:         map[string]int{"sync": 13, "sync_provider": 7},
 					RiverDatabaseSchema:            "river",
 					OperationalBridgeURL:           "http://localhost",
 					OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
@@ -123,12 +122,13 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 				registry,
 				reportTestObserver(t),
 				slog.Default(),
+				river.NewWorkers(),
 			)
 			if err != nil {
 				t.Fatalf("buildSyncCoordinatorWorker: %v", err)
 			}
-			if family.component == nil {
-				t.Fatal("coordinator did not construct its River client")
+			if len(family.queues) == 0 {
+				t.Fatal("coordinator did not declare its selected queue")
 			}
 			if len(family.handlers) != len(test.wantKinds) {
 				t.Fatalf("reported handlers = %#v, want %v", family.handlers, test.wantKinds)
@@ -138,45 +138,13 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 					t.Fatalf("reported handler %d = %s, want %s", index, family.handlers[index].Kind, kind)
 				}
 			}
-			// The sync queue enters registry queue coverage exactly when a
-			// registry kind depends on it, never merely because the
-			// coordinator's unregistered kinds also use it.
-			if test.wantQueue {
-				if len(family.queues) != 1 || family.queues[0].Queue != syncCoordinatorQueue ||
-					family.queues[0].MaxWorkers != syncCoordinatorQueueWorkers {
-					t.Fatalf("reported queues = %#v", family.queues)
-				}
-			} else if len(family.queues) != 0 {
-				t.Fatalf("celery-routed kind claimed queue coverage: %#v", family.queues)
+			// The coordinator's native, non-registry dispatch handlers also
+			// consume the sync queue. Its queue budget remains present even
+			// while team auto-import still routes to Celery.
+			if len(family.queues) != 1 || family.queues[0].Queue != syncCoordinatorQueue ||
+				family.queues[0].MaxWorkers != 13 {
+				t.Fatalf("reported queues = %#v", family.queues)
 			}
 		})
 	}
-}
-
-// TestSyncCoordinatorQueueBudgetMatchesDeploymentManifest keeps the
-// coordinator's constructed capacity pinned to the reviewed capacity plan.
-func TestSyncCoordinatorQueueBudgetMatchesDeploymentManifest(t *testing.T) {
-	t.Chdir(filepath.Join("..", ".."))
-	contracts, err := jobcontract.LoadRegistry(defaultContractRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, _, err := deploymentcontract.Load(defaultDeploymentProfile, contracts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	process, ok := riverProcessForProfile(manifest, "sync")
-	if !ok {
-		t.Fatal("sync process is missing from the deployment manifest")
-	}
-	for _, queue := range process.QueueWorkers {
-		if queue.Queue != syncCoordinatorQueue {
-			continue
-		}
-		if queue.MaxWorkers != syncCoordinatorQueueWorkers {
-			t.Fatalf("sync queue budget = %d, constructed %d", queue.MaxWorkers, syncCoordinatorQueueWorkers)
-		}
-		return
-	}
-	t.Fatal("deployment manifest does not budget the sync queue")
 }

@@ -8,7 +8,7 @@ source_of_truth:
   - src/dev_health_ops/licensing/registry.py
   - src/dev_health_ops/alembic/versions/0073_seed_ask_dev_wave_3_1_feature_flag.py
   - docs/architecture/licensing.md
-  - deploy/go-workers/profiles.json
+  - deploy/go-workers/deployment.json
 applicability: current
 lifecycle: active
 ---
@@ -94,17 +94,24 @@ expiry, deletion, and purge continue for content already stored.
 
 ## Go worker migration routes
 
-The Go worker foundation is controlled by versioned migration state and deployment profiles rather than one generic user-facing feature flag.
+The Go worker foundation is controlled by versioned migration state and the
+deployment-selected queue contract rather than one generic user-facing feature
+flag.
 
 Current state:
 
-- all Go profiles have zero minimum replicas;
+- each Go worker process must receive an explicit registered queue set;
+- deployment groups own queue concurrency, replicas, resources, and autoscaling;
+- one River client serves all selected queues in one worker process;
 - registered job kinds remain Celery-routed;
 - no production job is admitted to River solely because a binary or container is present;
 - readiness requires compatible roles, schema, registry, contracts, and complete compiled handlers;
-- future route values such as shadow, canary, or River require job-specific parity and rollback evidence.
+- future route values such as shadow, canary, or River require job-specific parity and rollback evidence;
+- groups may consume disjoint queues or intentionally overlap on a queue.
 
-Document the checked-in route and profile state as availability. Do not describe a dormant process as an enabled production feature.
+Document the checked-in route and deployment-group state as availability. Do
+not describe a dormant process as an enabled production feature. A selected
+queue set is not a feature flag and cannot remap a job kind to another queue.
 
 ## Preview and reserved features
 

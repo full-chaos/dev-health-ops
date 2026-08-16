@@ -1,9 +1,31 @@
-# Go worker deployment profiles
+# Go worker deployment
 
-`profiles.json` is the Phase 1 deployment source of truth shared by contract,
-connection-budget, and future stack renderers. It is deliberately disabled
-during coexistence: a checked-in process or queue does not route production
-work away from Celery.
+`deployment.json` is the deployment manifest shared by the job contract,
+connection-budget checks, and stack renderers. Its River entries are deployment
+groups. They select registered queues; they are not application worker types
+and do not change the canonical job-kind-to-queue mapping.
+
+Each `dev-health-worker` process receives an explicit, static queue set through
+`--queues` or `DEV_HEALTH_QUEUES`. The set is normalized and checked against
+the registry before readiness. Empty, unknown, duplicate, malformed, or
+conflicting selections fail closed. Runtime queue reconfiguration is not
+supported.
+
+The deployment owns the group name, queue concurrency, replica count, resource
+limits, autoscaling policy, and shutdown budget. A worker process constructs one
+River client for all of its selected queues. If a separate process boundary is
+needed, deploy another group; do not hide another client inside the process.
+
+Groups can be disjoint or intentionally overlap:
+
+```text
+sync-workers      -> sync, sync_provider
+analytics-workers -> investment, metrics, reports, workgraph
+metrics-overflow  -> metrics, webhooks   (overlaps metrics intentionally)
+```
+
+River distributes claims safely among all consumers of an overlapping queue.
+There is no global unique-queue-owner requirement.
 
 The manifest also budgets one concurrent `dev-health-workerctl` invocation
 with two domain and two queue-control session connections. The operator is a
@@ -14,19 +36,19 @@ Go workload renderer: runtime DSN usernames must match both declared role names
 before a process can become ready.
 
 The default Compose, Swarm, Kubernetes, and Helm stacks still render only the
-Celery topology. Additive Go workload overlays now render the declared
-`processes` at zero replicas and require an explicit coexistence or Go-only
-selection. Static deployment-contract tests bind those overlays, the shared
-PgBouncer budget, and one-shot migration wiring to the real manifests.
+Celery topology. Additive Go workload overlays render the declared deployment
+groups at zero replicas and require explicit deployment selection. Static
+deployment-contract tests bind those overlays, the shared PgBouncer budget,
+and one-shot migration wiring to the real manifests.
 
 The contract gate validates that:
 
-- every registered River job kind and queue appears in exactly one matching
-  worker profile;
-- undeclared queues and kinds cannot appear in a River profile;
-- every River queue has one explicit `queue_workers` capacity, and the queue
-  telemetry denominator must use that same value when a River client is
-  composed;
+- every registered River job kind keeps its canonical queue mapping;
+- every deployment group selects only registered queues;
+- every selected queue has explicit deployment-owned `queue_workers` capacity,
+  and queue telemetry uses that same denominator;
+- disjoint and overlapping queue groups both validate;
+- each worker process has exactly one River client;
 - every started River client registers type-only rescue workers for every
   bounded job kind it does not execute. River elects one maintenance leader
   per schema, not per queue, so a partial registry can otherwise discard
@@ -41,20 +63,21 @@ The contract gate validates that:
   and
 - maximum domain client connections stay below the PgBouncer client budget.
 
-The budget is calculated from `max_replicas`, including profiles disabled by
-default, so enabling the complete declared topology cannot silently exceed the
-checked-in ceiling. Phase 1 keeps every `min_replicas` at zero until its
-readiness dependencies, ownership route, and canary evidence are approved.
+The budget is calculated from each group's `max_replicas`, including groups
+disabled by default, and one client per process. Enabling the complete declared
+topology cannot silently exceed the checked-in ceiling. Groups may remain at
+zero replicas until their readiness dependencies, ownership route, and canary
+evidence are approved.
 
-`desired_replicas` is the one reviewed replica request for each process.
+`desired_replicas` is the reviewed replica request for each deployment group.
 Validation rejects a desired count outside `min_replicas..max_replicas`, and
 the deployment tests require Compose, Swarm, Kubernetes, and Helm to render
 that same value. Change the manifest and all renderer outputs in one review.
 
-River profiles also declare `shutdown_grace_seconds`. It must cover the
-longest registered job timeout for that profile plus 60 seconds for terminal
-claim finalization. The reviewed values are 7,260 seconds for `heavy` and 960
-seconds for `ops` and `sync`.
+River groups also declare `shutdown_grace_seconds`. It must cover the longest
+registered job timeout for that group plus 60 seconds for terminal claim
+finalization. Set it per group; do not inherit it from a fixed application
+topology.
 
 ### River maintenance and premature terminal delivery recovery
 
@@ -85,19 +108,27 @@ transfer a job, queue, or scheduler marker to Go.
 ### Images and topology
 
 Publish one immutable image per target in `docker/go-worker.Dockerfile`:
-`dev-health-go-worker` (sync, heavy, ops),
+`dev-health-go-worker` (deployment-selected queue groups),
 `dev-health-go-reconciler`, `dev-health-go-scheduler`, and
 `dev-health-go-stream-runner` (external, ingest). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root
 filesystem, and expose only the operator HTTP surface on port 8080:
 `/healthz`, `/readyz`, and `/metrics`.
 
-The separately deployable `sync-provider` topology starts the checked-in
-`sync` runtime profile and consumes the isolated `sync_provider` River queue
-when the provider-unit contract/handler release is present. It must never be
-combined with the coordinator's `sync` queue: the two clients have disjoint
-handlers. Both queues and all provider routes remain Celery-owned unless a
-reviewed route release says otherwise.
+The separately deployable `sync-workers` group can consume `sync`,
+`sync_provider`, or both, as selected by deployment. A group that consumes both
+queues uses one River client and must have handlers for every selected queue.
+Two groups may instead select disjoint queues, or may intentionally overlap a
+queue when River claim sharing and the combined capacity budget are reviewed.
+Both queues and all provider routes remain Celery-owned unless a reviewed route
+release says otherwise.
+
+### Stream-runner profiles remain separate
+
+`dev-health-go-stream-runner` keeps its existing runtime profiles. The
+`external`, `ingest`, and `pagerduty` stream profiles are separate process
+roles, use stream-specific configuration, and are not queue groups. Do not use
+their profile setting to configure `dev-health-worker`.
 
 Porting a provider/dataset pair to a `route_ready` Go complete-route handler
 (the `CompleteRouteHandler`/`EffectSink` pattern `launchdarkly/feature-flags`,
@@ -116,14 +147,14 @@ sections.
    canonical `migrate` (Alembic and ClickHouse), `go-river-provision`
    (idempotent post-Alembic runtime-role grants), `go-river-migrate` (the
    pinned River migration followed by `dev-health-worker-migrate --check`),
-   then `go-contractcheck` (the embedded job registry and deployment
-   profile). Every edge requires `service_completed_successfully`; a failed
+   then `go-contractcheck` (the embedded job registry and deployment groups).
+   Every edge requires `service_completed_successfully`; a failed
    one-shot leaves the Go services unstarted. The elevated DSN is confined to
    `go-river-migrate` as `GO_WORKER_MIGRATION_DATABASE_URI`; a Go workload
    receives `POSTGRES_URI` and `WORKER_DATABASE_URI`, never
    `MIGRATION_DATABASE_URI`.
-2. Verify the deployed immutable image contains the matching
-   `profiles.json` and `contracts/jobs/v1/registry.json`; then deploy the
+2. Verify the deployed immutable image contains the matching deployment
+   manifest and `contracts/jobs/v1/registry.json`; then deploy the
    coexistence topology:
 
    ```bash
@@ -143,15 +174,15 @@ sections.
    provision step is what grants access to tables that did not exist when
    `/docker-entrypoint-initdb.d` originally ran.
 
-3. Scale one reviewed profile only, never above `profiles.json.max_replicas`.
-   Wait for `/readyz` and confirm its build metadata and profile labels before
-   allowing an autoscaler or adding a second replica. Swarm has no native HPA;
-   use the same signals for a manual one-at-a-time scale and wait through its
-   start-first rolling update.
-4. Run `dev-health-workerctl profiles status`. Confirm `desired_replicas`,
-   expiring `live_replicas`, `queue_backlog`, `active_jobs`, and
-   `drain_state`. The response also includes the reviewed queue,
-   coordinator, domain, and server connection budgets.
+3. Scale each reviewed group independently, never above its declared maximum.
+   Wait for `/readyz` and confirm its selected queue set, per-queue
+   concurrency, worker identity, one-client count, and connection budgets
+   before allowing an autoscaler or adding a second replica. Swarm has no
+   native HPA; use the same signals for a manual one-at-a-time scale and wait
+   through its start-first rolling update.
+4. Run `dev-health-workerctl workers queues status`. Confirm each group's
+   `queues`, `desired_replicas`, expiring `live_replicas`, `queue_backlog`,
+   `active_jobs`, `drain_state`, and connection-budget headroom.
 5. Scrape `/metrics` and alert on all three capacity signals before proceeding:
    `worker_jobs_available` (depth), `worker_job_oldest_age_seconds` (oldest
    age), and `worker_execution_saturation_ratio` (configured worker capacity).
@@ -160,13 +191,30 @@ sections.
    `worker_database_pool_saturation_ratio` and the checked-in Go-worker
    Grafana dashboard.
 6. Keep Celery consumers and Beat running during coexistence. A failed Go
-   readiness, queue age threshold, or saturation threshold means scale the Go
-   profile back to zero; do not reroute work as a recovery action.
+   readiness, queue age threshold, or saturation threshold means scale the
+   affected group back to zero; do not reroute work as a recovery action.
 
 Normal replica shutdown is process-local: mark that instance draining, stop
-its River clients, then remove its presence row. Do not use the profile queue
-drain command for an ordinary rollout or downscale because it pauses the
-queues shared by every replica in that profile.
+its River client, then remove its presence row. Do not use a queue-set drain
+for an ordinary rollout or downscale because it pauses the named queues for
+the whole group.
+
+Use an explicit queue set for a deliberate drain or resume. The group and every
+queue are required, and the action is audited:
+
+```bash
+dev-health-workerctl workers queues drain \
+  --group analytics-workers \
+  --queue metrics --queue reports \
+  --reason deploy_drain \
+  --correlation-id rollout-2026-08-15
+
+dev-health-workerctl workers queues undrain \
+  --group analytics-workers \
+  --queue metrics --queue reports \
+  --reason deploy_resume \
+  --correlation-id rollout-2026-08-15
+```
 
 ### Go-only is a release gate, not a switch
 
@@ -307,56 +355,27 @@ the HTTP port fails immediately with `ClickHouse readiness check failed`
 (`internal/storage/clickhouse.ErrUnavailable`) — the two processes' env var
 has the same name but must resolve to a different port.
 
-### With both route switches off, `go-worker`'s `sync` profile fails closed at startup
+### Explicit queue selection fails closed when the selected handlers are incomplete
 
-This is intentional, not a bug, and it is worth expecting before you hit it:
-with `POSTGRES_URI` and `WORKER_DATABASE_URI` both configured (as they must
-be to do anything useful) and `DEV_HEALTH_PROFILE=sync`,
-`cmd/dev-health-worker` unconditionally constructs the
-`sync.team_autoimport` handler the moment the domain DSN is present
-(`buildSyncCoordinatorWorker` gates only on `profile == "sync"`, not on
-either route switch). Startup then requires an **exact match** between what
-was actually constructed and the full job-kind/queue set the `sync`
-deployment profile declares
-(`cmd/dev-health-worker/dependencies.go`'s `profileReady` — the CUT-02
-"exact startup validation" gate) — which also declares
-`sync.provider_unit`. With `WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED`,
-`WORKER_GITHUB_REPO_METADATA_ENABLED`, and
-`WORKER_GITLAB_REPO_METADATA_ENABLED`, and
-`WORKER_GITLAB_COMMITS_ENABLED`, and
-`WORKER_GITLAB_COMMIT_STATS_ENABLED`, and the mutually exclusive
-`WORKER_GITLAB_CICD_ENABLED` / `WORKER_GITLAB_TESTS_ENABLED` aliases all at
-their secure default of `false`,
-`sync.provider_unit` is never constructed, the match fails, and the
-process exits non-zero — which crash-loops under `restart: unless-stopped`.
-The container never binds `:8080`, so `/readyz` never even becomes reachable
-to show *why*; the reason is in the container's own log line:
-`{"level":"ERROR","msg":"configure runtime dependencies","error_category":"dependency_configuration_failed"}`.
+This is intentional. With `POSTGRES_URI` and `WORKER_DATABASE_URI` configured,
+`dev-health-worker` still refuses readiness when its selected queue set cannot
+be served by the handlers it actually constructed. A deployment that selects
+`sync,sync_provider`, for example, must construct every admitted handler for
+both queues; a worker that selects only `sync` must not claim `sync_provider`.
+The same exact queue and handler checks apply to every group.
 
-This is fail-closed by design — a worker dispatching a route-ready provider
-unit into River while refusing to build its handler would strand every one of
-those units, which is worse than not starting at all. **To get `go-worker`'s
-`sync` profile to a ready state, set one of the route switches
-to `true`** (for example `WORKER_GITHUB_REPO_METADATA_ENABLED=true`) in
-whatever environment file feeds that compose project. The default stays
-`false` in every checked-in file; this is a per-environment operator choice,
-made alongside enabling the matching route in a reviewed release, never a
-default flip.
+Use `--queues` or `DEV_HEALTH_QUEUES` to select the queues. Do not use a named
+worker preset or rely on a service name to select them. The process reports
+the canonical queue set, per-queue concurrency, worker identity, one River
+client, and effective database limits in its startup and readiness evidence.
 
-### The `sync.team_autoimport` bridge needs `WORKER_OPERATIONAL_BRIDGE_*` even though `profiles.json` doesn't say so
-
-`deploy/go-workers/profiles.json`'s `sync` process entry does not list
-`WORKER_OPERATIONAL_BRIDGE_URL`/`WORKER_OPERATIONAL_BRIDGE_TOKEN` in its
-`secret_env`, but `buildSyncCoordinatorWorker` constructs an HTTP bridge
-(`syncdispatchruntime.NewHTTPBridge`) unconditionally for the `sync` profile
-once the domain DSN is configured, and that constructor fails closed on an
-empty `BaseURL` or `BearerToken`. Set `WORKER_OPERATIONAL_BRIDGE_URL` (an
-HTTP(S) origin reachable from the Go worker's container — typically the
-Python `api` service) and a non-empty `WORKER_OPERATIONAL_BRIDGE_TOKEN`; if
-the origin is plain HTTP rather than HTTPS, also set
-`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`, matching the pattern
-`deploy/docker-compose/compose.go-workers.yml`'s `go-worker-heavy` service
-already uses.
+The `sync.team_autoimport` handler still needs
+`WORKER_OPERATIONAL_BRIDGE_URL` and `WORKER_OPERATIONAL_BRIDGE_TOKEN` when the
+selected queue requires that bridge. The constructor fails closed on an empty
+origin or token. If the origin is plain HTTP rather than HTTPS, also set
+`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`, matching the deployment
+examples. These settings are dependency requirements for the selected queue;
+they are not queue-selection aliases.
 
 ### Provider credentials the Go executor can decrypt
 

@@ -5,12 +5,12 @@
 // PostgreSQL. It cannot receive a command, metric rows, SQL, credentials, or
 // caller-selected Python module.
 //
-// All three kinds deliberately use the existing heavy/metrics profile. Celery's
+// All three kinds deliberately use the registered metrics queue. Celery's
 // current all-org fanout is lightweight and uses default, but this dispatcher
 // owns durable run/partition publication and must share the same bounded
-// ClickHouse-facing topology as its partitions/finalizer. It does not create a
-// new profile, and the checked-in route remains Celery until this topology and
-// its compatibility executor are fully audited.
+// ClickHouse-facing queue as its partitions and finalizer. The checked-in route
+// remains Celery until this topology and its compatibility executor are fully
+// audited.
 package daily
 
 import (
@@ -34,7 +34,7 @@ type Run struct {
 	Generation     string
 	Status         string
 	// RepositoryDiscoveryRequired is true only for the fixed daily fan-out
-	// generation while it has no durable partitions. The heavy worker owns the
+	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.
 	RepositoryDiscoveryRequired bool
 }

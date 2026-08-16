@@ -52,12 +52,12 @@ Readiness remains closed when:
 
 - the domain or queue database role is over-privileged or mismatched;
 - `WORKER_DATABASE_URI` uses an unsupported pooling mode;
-- the job registry or deployment profile is invalid;
+- the job registry or deployment manifest is invalid;
 - an admitted contract version has no compiled handler;
 - the River schema is incompatible;
 - a required dependency cannot be sampled.
 
-A Go process may be healthy while its deployment profile remains disabled and Celery retains route ownership. That is expected during coexistence.
+A Go process may be healthy while its deployment group remains disabled and Celery retains route ownership. That is expected during coexistence.
 
 ## Data-progress checks
 

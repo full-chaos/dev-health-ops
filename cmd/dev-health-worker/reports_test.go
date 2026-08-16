@@ -10,13 +10,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 // promotedContractRoot copies the checked-in contract tree and routes exactly
@@ -137,16 +137,17 @@ func TestReportBuilderStaysDormantWhileRoutesAreCelery(t *testing.T) {
 	)
 	family, err := buildReportWorker(
 		context.Background(),
-		config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+		config.Config{Queues: []string{"investment", "metrics", "reports", "workgraph"}, RiverDatabaseSchema: "river"},
 		reportBuilderDatabase(t),
 		registry,
 		reportTestObserver(t),
 		slog.Default(),
+		river.NewWorkers(),
 	)
 	if err != nil {
 		t.Fatalf("dormant report builder error = %v", err)
 	}
-	if family.component != nil || len(family.handlers) != 0 || len(family.queues) != 0 {
+	if len(family.handlers) != 0 || len(family.queues) != 0 || len(family.cleanups) != 0 {
 		t.Fatalf("celery-routed report kinds constructed a runtime: %#v", family)
 	}
 }
@@ -157,7 +158,7 @@ func TestReportBuilderRefusesPartialRoutePromotion(t *testing.T) {
 	_, err := buildReportWorker(
 		context.Background(),
 		config.Config{
-			Profile:             "heavy",
+			Queues:              []string{"investment", "metrics", "reports", "workgraph"},
 			RiverDatabaseSchema: "river",
 			ClickHouseURI:       secrets.NewValue("clickhouse://127.0.0.1:1/default"),
 		},
@@ -165,6 +166,7 @@ func TestReportBuilderRefusesPartialRoutePromotion(t *testing.T) {
 		registry,
 		reportTestObserver(t),
 		slog.Default(),
+		river.NewWorkers(),
 	)
 	if !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("half-promoted report pair error = %v, want unavailable", err)
@@ -172,7 +174,7 @@ func TestReportBuilderRefusesPartialRoutePromotion(t *testing.T) {
 }
 
 // TestReportBuilderRequiresClickHouse proves the report runtime cannot be
-// half-constructed: without its query backend the heavy profile closes rather
+// half-constructed: without its query backend the selected queue group closes rather
 // than registering adapters that would fail every fetch.
 func TestReportBuilderRequiresClickHouse(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
@@ -182,50 +184,21 @@ func TestReportBuilderRequiresClickHouse(t *testing.T) {
 	)
 	_, err := buildReportWorker(
 		context.Background(),
-		config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+		config.Config{Queues: []string{"investment", "metrics", "reports", "workgraph"}, RiverDatabaseSchema: "river"},
 		reportBuilderDatabase(t),
 		registry,
 		reportTestObserver(t),
 		slog.Default(),
+		river.NewWorkers(),
 	)
 	if !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("missing ClickHouse error = %v, want unavailable", err)
 	}
 }
 
-// TestReportQueueBudgetMatchesDeploymentManifest keeps the constructed River
-// budget and the reviewed capacity plan from drifting apart silently.
-func TestReportQueueBudgetMatchesDeploymentManifest(t *testing.T) {
-	t.Chdir(filepath.Join("..", ".."))
-	contracts, err := jobcontract.LoadRegistry(defaultContractRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, _, err := deploymentcontract.Load(defaultDeploymentProfile, contracts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	process, ok := riverProcessForProfile(manifest, "heavy")
-	if !ok {
-		t.Fatal("heavy process is missing from the deployment manifest")
-	}
-	for _, queue := range process.QueueWorkers {
-		if queue.Queue != reportsQueue {
-			continue
-		}
-		if queue.MaxWorkers != reportsQueueWorkers {
-			t.Fatalf("reports queue budget = %d, constructed %d", queue.MaxWorkers, reportsQueueWorkers)
-		}
-		return
-	}
-	t.Fatal("deployment manifest does not budget the reports queue")
-}
-
 func reportTestObserver(t *testing.T) jobruntime.Observer {
 	t.Helper()
-	collector, err := jobruntime.NewMetricsCollector(
-		jobruntime.MetricDimensions{Profiles: []string{"heavy"}},
-	)
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}

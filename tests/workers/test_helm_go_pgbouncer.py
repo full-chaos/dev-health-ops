@@ -7,6 +7,7 @@ cannot prove the rendered Secret references stay role-scoped.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,7 @@ import yaml
 
 _CHART = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "dev-health"
 _RELEASE = "pool-contract"
+_DEPLOYMENT = _CHART.parents[1] / "go-workers" / "deployment.json"
 _PROFILE_NAMES = {
     "heavy",
     "ops",
@@ -26,7 +28,7 @@ _PROFILE_NAMES = {
     "stream-ingest",
     "stream-pagerduty",
 }
-_COORDINATOR_PROFILES = {"reconciler", "scheduler"}
+_COORDINATOR_GROUPS = {"reconciler", "scheduler"}
 _POOLERS = {
     "transaction": (6432, "transaction", 20, 1000, "devhealth_domain"),
     "queue-session": (6433, "session", 22, 128, "devhealth_queue"),
@@ -74,6 +76,21 @@ def _go_values(*extra: str) -> list[str]:
 
 def _env(container: dict) -> dict[str, dict]:
     return {item["name"]: item for item in container["env"]}
+
+
+def _river_groups() -> dict[str, dict]:
+    manifest = json.loads(_DEPLOYMENT.read_text(encoding="utf-8"))
+    return {
+        process["name"]: process
+        for process in manifest["processes"]
+        if process["runtime"] == "river" and process["binary"] == "dev-health-worker"
+    }
+
+
+def _queue_concurrency(process: dict) -> str:
+    return ",".join(
+        f"{entry['queue']}={entry['max_workers']}" for entry in process["queue_workers"]
+    )
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
@@ -166,7 +183,7 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
         }
 
     workers = {
-        doc["metadata"]["labels"]["dev-health.io/profile"]: doc
+        doc["metadata"]["labels"]["dev-health.io/worker-group"]: doc
         for doc in documents
         if doc["kind"] == "Deployment"
         and doc["metadata"]["labels"].get("app.kubernetes.io/component") == "go-worker"
@@ -187,7 +204,7 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
         assert environment["PGBOUNCER_TRANSACTION_MODE"]["value"] == "true"
         assert "MIGRATION_DATABASE_URI" not in environment
         assert "MIGRATION_DATABASE_URI_FILE" not in environment
-        if profile in _COORDINATOR_PROFILES:
+        if profile in _COORDINATOR_GROUPS:
             assert (
                 environment["COORDINATOR_DATABASE_URI"]["valueFrom"]["secretKeyRef"][
                     "key"
@@ -247,3 +264,52 @@ def test_go_pgbouncer_network_policy_pins_bundled_and_external_postgres_paths() 
     )
     assert rejected.returncode != 0
     assert "networkPolicyCIDR" in rejected.stderr
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
+    documents = _render(*_go_values())
+    river = _river_groups()
+    workers = {
+        doc["metadata"]["labels"]["dev-health.io/worker-group"]: doc
+        for doc in documents
+        if doc["kind"] == "Deployment"
+        and doc["metadata"]["labels"].get("app.kubernetes.io/component") == "go-worker"
+        and doc["metadata"]["labels"].get("dev-health.io/worker-group") in river
+        and "dev-health.io/worker-group" in doc["metadata"]["labels"]
+    }
+    assert set(workers) == set(river)
+    for group, process in river.items():
+        deployment = workers[group]
+        labels = deployment["metadata"]["labels"]
+        assert "dev-health.io/profile" not in labels
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        environment = _env(container)
+        assert "DEV_HEALTH_PROFILE" not in environment
+        assert environment["DEV_HEALTH_QUEUES"]["value"] == ",".join(process["queues"])
+        assert environment["DEV_HEALTH_QUEUE_CONCURRENCY"][
+            "value"
+        ] == _queue_concurrency(process)
+        assert environment["DEV_HEALTH_WORKER_GROUP"]["value"] == group
+
+        scaler = next(
+            doc
+            for doc in documents
+            if doc["kind"] == "HorizontalPodAutoscaler"
+            and doc["spec"]["scaleTargetRef"]["name"] == deployment["metadata"]["name"]
+        )
+        selectors = [
+            metric["external"]["metric"]["selector"]["matchLabels"]
+            for metric in scaler["spec"]["metrics"]
+        ]
+        assert all("profile" not in selector for selector in selectors)
+        assert {selector["queue"] for selector in selectors} == set(process["queues"])
+
+    for deployment in workers.values():
+        group = deployment["metadata"]["labels"]["dev-health.io/worker-group"]
+        if group in river:
+            continue
+        environment = _env(deployment["spec"]["template"]["spec"]["containers"][0])
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment

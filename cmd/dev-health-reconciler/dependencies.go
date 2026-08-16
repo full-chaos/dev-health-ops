@@ -56,7 +56,7 @@ type postgresReconcilerDatabase struct {
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
-	// The reconciler is a coordinator binary: deploy/go-workers/profiles.json
+	// The reconciler is a coordinator binary: deploy/go-workers/deployment.json
 	// gives its "control" runtime coordinator_max_connections >= 1, and its
 	// always-constructed outbox relay reads worker_job_routes, which is
 	// coordinator-exclusive. WithCoordinator makes the coordinator DSN a
@@ -154,7 +154,7 @@ type reconcilerDependencySources struct {
 }
 
 // reconcilerActivation is a source-reviewed composition seam. It is
-// deliberately not configurable through environment or deployment profiles:
+// deliberately not configurable through environment or deployment groups:
 // changing from observation to mutation must retain concrete River delivery
 // capabilities in the same reviewed source change.
 type reconcilerActivation struct {

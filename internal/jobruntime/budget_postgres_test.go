@@ -36,7 +36,7 @@ func TestConcurrencyBudgetKeyScopesIdentityWithoutPayload(t *testing.T) {
 func TestConcurrencyBudgetMetricsExposeCapacityLeaseWaitAndRecovery(t *testing.T) {
 	labels := ConcurrencyBudgetLabels{Kind: "investment.chunk", Scope: "organization"}
 	collector, err := NewMetricsCollector(MetricDimensions{
-		Profiles: []string{"heavy"}, ConcurrencyBudgets: []ConcurrencyBudgetLabels{labels},
+		ConcurrencyBudgets: []ConcurrencyBudgetLabels{labels},
 	})
 	if err != nil {
 		t.Fatal(err)

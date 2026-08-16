@@ -24,7 +24,6 @@ type Descriptor struct {
 	// route may emit. Reading it from migration state keeps producer activation
 	// tied to the rollout authority rather than inferred from schema support.
 	ProducerVersion   int
-	Profile           string
 	Queue             string
 	ExecutionMode     string
 	Priority          int
@@ -50,46 +49,46 @@ type Descriptor struct {
 type HandlerSpec = Descriptor
 
 // QueueBudget is one River queue consumer and its worker limit. Startup
-// validation compares the limits a binary actually constructed with the limits
-// the deployment manifest budgeted, so a process cannot quietly consume more
-// or fewer workers than the reviewed capacity plan.
+// validation compares the limits a binary actually constructed with the
+// deployment-selected configuration, so a process cannot quietly consume more
+// or fewer workers than the operator requested.
 type QueueBudget struct {
 	Queue      string
 	MaxWorkers int
 }
 
 // ConnectionBudget is the per-process database connection budget. Both values
-// are compared with the deployment manifest because connection footprint is a
-// fleet-wide safety property, not a per-process preference.
+// are compared with the deployment-selected configuration because connection
+// footprint is a fleet-wide safety property, not a hidden runtime preference.
 type ConnectionBudget struct {
 	QueueControl int
 	Domain       int
 }
 
-// StartupSpec is the profile contract proven before a River client starts
+// StartupSpec is the selected-queue contract proven before a River client starts
 // fetching. Every field describes something the binary actually constructed or
-// something the reviewed deployment manifest declared; nothing in it is a
-// standalone capability claim. Queues and handlers must cover the profile's
-// executable kinds exactly, with no duplicates or undeclared extras.
+// something the deployment configuration declared; nothing in it is a
+// standalone capability claim. Queues and handlers must cover the selected
+// queues' executable kinds exactly, with no duplicates or undeclared extras.
 type StartupSpec struct {
-	Profile string
+	SelectedQueues []string
 	// Queues is the River queue configuration the process actually built.
 	Queues []QueueBudget
-	// ManifestQueues is the deployment-manifest worker budget for the process.
+	// ConfiguredQueues is the deployment-selected worker budget for the process.
 	// It may cover queues whose kinds are not yet executable.
-	ManifestQueues []QueueBudget
+	ConfiguredQueues []QueueBudget
 	// Handlers is the set of concretely constructed handler adapters.
 	Handlers []HandlerSpec
 	// Connections is the connection budget the process actually configured.
 	Connections ConnectionBudget
-	// ManifestConnections is the deployment-manifest connection budget.
-	ManifestConnections ConnectionBudget
+	// ConfiguredConnections is the deployment-selected connection budget.
+	ConfiguredConnections ConnectionBudget
 }
 
 // Registry is immutable after construction and safe for concurrent reads.
 type Registry struct {
-	byKind    map[string]Descriptor
-	byProfile map[string][]Descriptor
+	byKind  map[string]Descriptor
+	byQueue map[string][]Descriptor
 }
 
 // Load reads the checked-in contract and migration artifacts.
@@ -119,8 +118,8 @@ func newRegistry(contracts jobcontract.Registry, migration jobcontract.Migration
 	}
 
 	registry := &Registry{
-		byKind:    make(map[string]Descriptor, len(contracts.Jobs)),
-		byProfile: make(map[string][]Descriptor),
+		byKind:  make(map[string]Descriptor, len(contracts.Jobs)),
+		byQueue: make(map[string][]Descriptor),
 	}
 	for _, contract := range contracts.Jobs {
 		policy, ok := migrations[contract.Kind]
@@ -135,7 +134,6 @@ func newRegistry(contracts jobcontract.Registry, migration jobcontract.Migration
 			CurrentVersion:    contract.CurrentVersion,
 			SupportedVersions: append([]int(nil), contract.SupportedVersions...),
 			ProducerVersion:   policy.ProducerVersion,
-			Profile:           contract.Profile,
 			Queue:             contract.Queue,
 			ExecutionMode:     contract.ExecutionMode,
 			Priority:          contract.Priority,
@@ -155,11 +153,11 @@ func newRegistry(contracts jobcontract.Registry, migration jobcontract.Migration
 			RollbackRoute:     policy.RollbackRoute,
 		}
 		registry.byKind[descriptor.Kind] = descriptor
-		registry.byProfile[descriptor.Profile] = append(registry.byProfile[descriptor.Profile], descriptor)
+		registry.byQueue[descriptor.Queue] = append(registry.byQueue[descriptor.Queue], descriptor)
 	}
-	for profile := range registry.byProfile {
-		sort.Slice(registry.byProfile[profile], func(left, right int) bool {
-			return registry.byProfile[profile][left].Kind < registry.byProfile[profile][right].Kind
+	for queue := range registry.byQueue {
+		sort.Slice(registry.byQueue[queue], func(left, right int) bool {
+			return registry.byQueue[queue][left].Kind < registry.byQueue[queue][right].Kind
 		})
 	}
 	return registry, nil
@@ -221,12 +219,12 @@ func (registry *Registry) Descriptors() []Descriptor {
 	return descriptors
 }
 
-// Profile returns sorted defensive copies of the profile's job policies.
-func (registry *Registry) Profile(profile string) []Descriptor {
+// Queue returns sorted defensive copies of one queue's job policies.
+func (registry *Registry) Queue(queue string) []Descriptor {
 	if registry == nil {
 		return nil
 	}
-	descriptors := registry.byProfile[profile]
+	descriptors := registry.byQueue[queue]
 	result := make([]Descriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		copy, _ := registry.Descriptor(descriptor.Kind)
@@ -235,27 +233,70 @@ func (registry *Registry) Profile(profile string) []Descriptor {
 	return result
 }
 
-// ExecutableProfile returns the profile's registered policies whose migration
-// route permits River execution. Startup validation is scoped to this set:
-// a kind whose durable route is still Celery must not be consumed, and a kind
-// whose route already permits River must have a constructed handler.
-func (registry *Registry) ExecutableProfile(profile string) []Descriptor {
+// Queues returns deterministic registered queue names.
+func (registry *Registry) Queues() []string {
 	if registry == nil {
 		return nil
 	}
-	descriptors := registry.Profile(profile)
+	queues := make([]string, 0, len(registry.byQueue))
+	for queue := range registry.byQueue {
+		queues = append(queues, queue)
+	}
+	sort.Strings(queues)
+	return queues
+}
+
+// SelectedQueues returns sorted defensive copies of the selected queues' job
+// policies. Queue selection is deterministic and duplicate selections fail
+// closed.
+func (registry *Registry) SelectedQueues(queues []string) ([]Descriptor, error) {
+	if registry == nil {
+		return nil, errors.New("runtime registry is required")
+	}
+	seen := make(map[string]struct{}, len(queues))
+	result := make([]Descriptor, 0)
+	for _, queue := range queues {
+		if queue == "" {
+			return nil, errors.New("selected queues cannot be empty")
+		}
+		if _, duplicate := seen[queue]; duplicate {
+			return nil, fmt.Errorf("duplicate selected queue %s", queue)
+		}
+		seen[queue] = struct{}{}
+		descriptors, ok := registry.byQueue[queue]
+		if !ok {
+			return nil, fmt.Errorf("selected queue %s is not registered", queue)
+		}
+		for _, descriptor := range descriptors {
+			copy, _ := registry.Descriptor(descriptor.Kind)
+			result = append(result, copy)
+		}
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Queue != result[right].Queue {
+			return result[left].Queue < result[right].Queue
+		}
+		return result[left].Kind < result[right].Kind
+	})
+	return result, nil
+}
+
+// ExecutableQueues returns the selected queues' registered policies whose
+// migration route permits River execution. Startup validation is scoped to this
+// set: a kind whose durable route is still Celery must not be consumed, and a
+// kind whose route already permits River must have a constructed handler.
+func (registry *Registry) ExecutableQueues(queues []string) ([]Descriptor, error) {
+	descriptors, err := registry.SelectedQueues(queues)
+	if err != nil {
+		return nil, err
+	}
 	executable := make([]Descriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		if descriptor.Executable() {
 			executable = append(executable, descriptor)
 		}
 	}
-	return executable
-}
-
-// HasProfile reports whether profile has at least one registered job.
-func (registry *Registry) HasProfile(profile string) bool {
-	return registry != nil && len(registry.byProfile[profile]) > 0
+	return executable, nil
 }
 
 // HasQueue reports whether at least one registered kind uses queue. Multiple
@@ -292,7 +333,6 @@ func (registry *Registry) ValidateHandler(handler HandlerSpec) error {
 	}{
 		{"current_version", handler.CurrentVersion == expected.CurrentVersion},
 		{"supported_versions", reflect.DeepEqual(handler.SupportedVersions, expected.SupportedVersions)},
-		{"profile", handler.Profile == expected.Profile},
 		{"queue", handler.Queue == expected.Queue},
 		{"execution_mode", handler.ExecutionMode == expected.ExecutionMode},
 		{"priority", handler.Priority == expected.Priority},
@@ -319,47 +359,55 @@ func (registry *Registry) ValidateHandler(handler HandlerSpec) error {
 	return nil
 }
 
-// ValidateStartup proves exact profile, queue, handler, and budget coverage
+// ValidateStartup proves exact selected queue, queue, handler, and budget coverage
 // before a River client starts fetching. It is the production readiness
 // dependency: a process that cannot pass it must never report ready.
 //
-// Coverage is scoped to the profile's executable kinds. A profile with nothing
-// executable cannot start, so an empty placeholder profile is unrepresentable
+// Coverage is scoped to the selected queues' executable kinds. A selection with
+// nothing executable cannot start, so an empty placeholder selection is
+// unrepresentable
 // rather than permanently unready.
 func (registry *Registry) ValidateStartup(startup StartupSpec) error {
 	if registry == nil {
 		return errors.New("runtime registry is required")
 	}
-	expected := registry.ExecutableProfile(startup.Profile)
-	if len(expected) == 0 {
-		return fmt.Errorf("profile %q has no executable registered jobs", startup.Profile)
+	selected, err := registry.SelectedQueues(startup.SelectedQueues)
+	if err != nil {
+		return err
 	}
-
+	if len(selected) == 0 {
+		return errors.New("selected queues are required")
+	}
+	executable, err := registry.ExecutableQueues(startup.SelectedQueues)
+	if err != nil {
+		return err
+	}
+	if len(executable) == 0 {
+		return fmt.Errorf("selected queues %v have no executable registered jobs", startup.SelectedQueues)
+	}
+	selectedQueues := make(map[string]struct{}, len(startup.SelectedQueues))
+	for _, queue := range startup.SelectedQueues {
+		selectedQueues[queue] = struct{}{}
+	}
 	queueSet, err := queueBudgetSet("constructed queue", startup.Queues)
 	if err != nil {
 		return err
 	}
-	expectedQueues := make(map[string]struct{})
-	for _, descriptor := range expected {
-		expectedQueues[descriptor.Queue] = struct{}{}
+	constructedQueues := queueNames(queueSet)
+	if !reflect.DeepEqual(constructedQueues, selectedQueues) {
+		return fmt.Errorf("selected queues %v do not match constructed queues", startup.SelectedQueues)
 	}
-	if !reflect.DeepEqual(queueNames(queueSet), expectedQueues) {
-		return fmt.Errorf("profile %s queue coverage drifts from registry", startup.Profile)
-	}
-	if err := validateQueueBudget(startup.Profile, queueSet, startup.ManifestQueues); err != nil {
+	if err := validateQueueBudget(startup.SelectedQueues, queueSet, startup.ConfiguredQueues); err != nil {
 		return err
 	}
 	if err := validateConnectionBudget(
-		startup.Profile, startup.Connections, startup.ManifestConnections,
+		startup.SelectedQueues, startup.Connections, startup.ConfiguredConnections,
 	); err != nil {
 		return err
 	}
 
 	handlers := make(map[string]struct{}, len(startup.Handlers))
 	for _, handler := range startup.Handlers {
-		if handler.Profile != startup.Profile {
-			return fmt.Errorf("handler %s belongs to profile %s, not %s", handler.Kind, handler.Profile, startup.Profile)
-		}
 		if _, duplicate := handlers[handler.Kind]; duplicate {
 			return fmt.Errorf("duplicate handler kind %s", handler.Kind)
 		}
@@ -368,12 +416,12 @@ func (registry *Registry) ValidateStartup(startup StartupSpec) error {
 			return err
 		}
 	}
-	if len(handlers) != len(expected) {
-		return fmt.Errorf("profile %s handler coverage drifts from registry", startup.Profile)
+	if len(handlers) != len(executable) {
+		return fmt.Errorf("selected queues %v handler coverage drifts from registry", startup.SelectedQueues)
 	}
-	for _, descriptor := range expected {
+	for _, descriptor := range executable {
 		if _, ok := handlers[descriptor.Kind]; !ok {
-			return fmt.Errorf("profile %s is missing handler %s", startup.Profile, descriptor.Kind)
+			return fmt.Errorf("selected queues %v are missing handler %s", startup.SelectedQueues, descriptor.Kind)
 		}
 	}
 	return nil
@@ -407,7 +455,7 @@ func queueNames(budgets map[string]int) map[string]struct{} {
 // validateQueueBudget proves every constructed consumer runs at the reviewed
 // capacity. The manifest may budget queues whose kinds are not executable yet,
 // so it is a superset lookup rather than an equality check.
-func validateQueueBudget(profile string, constructed map[string]int, manifest []QueueBudget) error {
+func validateQueueBudget(selectedQueues []string, constructed map[string]int, manifest []QueueBudget) error {
 	budgeted, err := queueBudgetSet("deployment queue", manifest)
 	if err != nil {
 		return err
@@ -415,21 +463,24 @@ func validateQueueBudget(profile string, constructed map[string]int, manifest []
 	for queue, workers := range constructed {
 		budget, ok := budgeted[queue]
 		if !ok {
-			return fmt.Errorf("profile %s queue %s is not budgeted by the deployment manifest", profile, queue)
+			return fmt.Errorf("selected queues %v queue %s is not budgeted by the deployment manifest", selectedQueues, queue)
 		}
 		if budget != workers {
-			return fmt.Errorf("profile %s queue %s worker budget drifts from the deployment manifest", profile, queue)
+			return fmt.Errorf("selected queues %v queue %s worker budget drifts from the deployment manifest", selectedQueues, queue)
 		}
+	}
+	if !reflect.DeepEqual(queueNames(budgeted), queueNames(constructed)) {
+		return fmt.Errorf("selected queues %v do not match deployment queue budgets", selectedQueues)
 	}
 	return nil
 }
 
-func validateConnectionBudget(profile string, constructed, manifest ConnectionBudget) error {
+func validateConnectionBudget(selectedQueues []string, constructed, manifest ConnectionBudget) error {
 	if constructed.QueueControl <= 0 || constructed.Domain <= 0 {
-		return fmt.Errorf("profile %s did not configure a connection budget", profile)
+		return fmt.Errorf("selected queues %v did not configure a connection budget", selectedQueues)
 	}
 	if constructed != manifest {
-		return fmt.Errorf("profile %s connection budget drifts from the deployment manifest", profile)
+		return fmt.Errorf("selected queues %v connection budget drifts from the deployment manifest", selectedQueues)
 	}
 	return nil
 }

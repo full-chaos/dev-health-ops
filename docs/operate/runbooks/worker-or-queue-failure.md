@@ -22,7 +22,7 @@ Record:
 
 - environment, organization, job or sync-run identity;
 - expected runtime owner and checked-in route;
-- queue, worker class, and deployment profile;
+- queue, worker class, and deployment group;
 - oldest eligible age and last successful progress;
 - retry, lease, timeout, or terminal error;
 - downstream Postgres or ClickHouse effect;
@@ -59,7 +59,7 @@ Do not increase worker count when the provider budget, database, queue, or downs
 
 ## Go coexistence recovery
 
-A Go process may be deployed for health or parity evidence without owning production work. First inspect the checked-in job migration state and deployment profile.
+A Go process may be deployed for health or parity evidence without owning production work. First inspect the checked-in job migration state and deployment manifest.
 
 For readiness failure, distinguish:
 

@@ -40,6 +40,7 @@ const (
 	ActionPauseQueue   Action = "queues.pause"
 	ActionResumeQueue  Action = "queues.resume"
 	ActionDrain        Action = "workers.drain"
+	ActionUndrain      Action = "workers.undrain"
 	ActionInspectRoute Action = "routes.inspect"
 	// Sync-dispatch and provider job routes share the same bounded audited
 	// action. ResourceType distinguishes sync_route from worker_job_route while
@@ -83,7 +84,7 @@ type ListFilter struct {
 // queue identity only, never jobs or serialized arguments.
 type QueueSummary struct {
 	Name              string     `json:"name"`
-	Profile           string     `json:"profile"`
+	Group             string     `json:"group"`
 	Paused            bool       `json:"paused"`
 	Available         int64      `json:"available"`
 	Running           int64      `json:"running"`
@@ -125,7 +126,7 @@ type Mutation struct {
 }
 
 type DrainResult struct {
-	Profile        string `json:"profile"`
+	Group          string `json:"group"`
 	QueuesPaused   int    `json:"queues_paused"`
 	RunningAtStart int    `json:"running_at_start"`
 }
@@ -133,7 +134,7 @@ type DrainResult struct {
 type ContractSummary struct {
 	Kind           string `json:"kind"`
 	CurrentVersion int    `json:"current_version"`
-	Profile        string `json:"profile"`
+	Group          string `json:"group"`
 	Queue          string `json:"queue"`
 	MigrationState string `json:"migration_state"`
 	Route          string `json:"route"`
@@ -147,12 +148,13 @@ type ContractSummary struct {
 type Backend interface {
 	Get(context.Context, int64) (JobSummary, error)
 	List(context.Context, ListFilter) ([]JobSummary, error)
-	Queues(context.Context, string) ([]QueueSummary, error)
+	Queues(context.Context, []string) ([]QueueSummary, error)
 	Cancel(context.Context, int64, Mutation) (JobSummary, error)
 	Retry(context.Context, int64, Mutation) (JobSummary, error)
 	PauseQueue(context.Context, string, Mutation) error
 	ResumeQueue(context.Context, string, Mutation) error
-	Drain(context.Context, string, Mutation) (DrainResult, error)
+	Drain(context.Context, []string, Mutation) (DrainResult, error)
+	Undrain(context.Context, []string, Mutation) (DrainResult, error)
 	SupportsRunningCancellation() bool
 }
 
@@ -229,9 +231,11 @@ type Service struct {
 // operator transport to evolve independently.
 type RuntimeRegistry interface {
 	Descriptor(string) (jobruntime.Descriptor, bool)
-	Profile(string) []jobruntime.Descriptor
-	HasProfile(string) bool
 	HasQueue(string) bool
+}
+
+type descriptorEnumerator interface {
+	Descriptors() []jobruntime.Descriptor
 }
 
 func New(dependencies Dependencies) (*Service, error) {
@@ -287,7 +291,8 @@ func (service *Service) ApplyCheckedInJobRoute(
 		ReasonCode: reasonCode, CorrelationID: correlationID,
 	}
 	var state jobroute.State
-	err := service.mutate(ctx, mutation, func() error {
+	var err error
+	err = service.mutate(ctx, mutation, func() error {
 		var operationErr error
 		state, operationErr = service.jobRoutes.ApplyCheckedIn(ctx, kind)
 		return operationErr
@@ -313,7 +318,8 @@ func (service *Service) RollbackJobRoute(
 		ReasonCode: reasonCode, CorrelationID: correlationID,
 	}
 	var state jobroute.State
-	err := service.mutate(ctx, mutation, func() error {
+	var err error
+	err = service.mutate(ctx, mutation, func() error {
 		var operationErr error
 		state, operationErr = service.jobRoutes.Rollback(ctx, kind)
 		return operationErr
@@ -392,7 +398,8 @@ func (service *Service) routeMutation(
 		ReasonCode: reasonCode, CorrelationID: correlationID,
 	}
 	var state syncroute.RouteState
-	err := service.mutate(ctx, mutation, func() error {
+	var err error
+	err = service.mutate(ctx, mutation, func() error {
 		var operationErr error
 		state, operationErr = operation()
 		return operationErr
@@ -484,29 +491,39 @@ func (service *Service) List(ctx context.Context, principal Principal, filter Li
 	return jobs, nil
 }
 
-func (service *Service) Queues(ctx context.Context, principal Principal, profile string) ([]QueueSummary, error) {
-	if err := validatePrincipal(principal); err != nil || !service.registry.HasProfile(profile) {
+func (service *Service) Queues(ctx context.Context, principal Principal, group string, queues []string) ([]QueueSummary, error) {
+	if err := validatePrincipal(principal); err != nil || !isValidWorkerGroup(group) {
 		return nil, serviceError(CodeInvalid, err)
 	}
-	if err := service.authorize(ctx, principal, ActionInspect, "profile_queues", profile); err != nil {
+	queueSet, err := normalizeQueueSet(queues)
+	if err != nil {
+		return nil, serviceError(CodeInvalid, err)
+	}
+	for _, queue := range queueSet {
+		if !service.hasQueue(queue) {
+			return nil, serviceError(CodeInvalid, errors.New("queue is not registered"))
+		}
+	}
+	if err := service.authorize(ctx, principal, ActionInspect, "worker_group", group); err != nil {
 		return nil, err
 	}
-	summaries, err := service.backend.Queues(ctx, profile)
+	summaries, err := service.backend.Queues(ctx, queueSet)
 	if err != nil {
 		return nil, mapBackendError(err)
 	}
-	expected := make(map[string]struct{})
-	for _, descriptor := range service.registry.Profile(profile) {
-		expected[descriptor.Queue] = struct{}{}
+	expected := make(map[string]struct{}, len(queueSet))
+	for _, queue := range queueSet {
+		expected[queue] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(summaries))
 	for _, summary := range summaries {
-		if summary.Profile != profile || !service.registry.HasQueue(summary.Name) ||
+		if summary.Group != "" && summary.Group != group ||
+			!service.registry.HasQueue(summary.Name) ||
 			summary.Available < 0 || summary.Running < 0 || summary.Retryable < 0 || summary.Scheduled < 0 {
 			return nil, serviceError(CodeBackend, errors.New("invalid queue summary"))
 		}
 		if _, ok := expected[summary.Name]; !ok {
-			return nil, serviceError(CodeBackend, errors.New("queue summary is outside profile"))
+			return nil, serviceError(CodeBackend, errors.New("queue summary is outside request"))
 		}
 		if _, duplicate := seen[summary.Name]; duplicate {
 			return nil, serviceError(CodeBackend, errors.New("duplicate queue summary"))
@@ -517,26 +534,59 @@ func (service *Service) Queues(ctx context.Context, principal Principal, profile
 		return nil, serviceError(CodeBackend, errors.New("queue summary coverage is incomplete"))
 	}
 	sort.Slice(summaries, func(left, right int) bool { return summaries[left].Name < summaries[right].Name })
+	for index := range summaries {
+		summaries[index].Group = group
+	}
 	return summaries, nil
 }
 
-func (service *Service) Contracts(ctx context.Context, principal Principal, profile string) ([]ContractSummary, error) {
-	if err := validatePrincipal(principal); err != nil || !service.registry.HasProfile(profile) {
+func (service *Service) Contracts(ctx context.Context, principal Principal, queues []string) ([]ContractSummary, error) {
+	if err := validatePrincipal(principal); err != nil {
 		return nil, serviceError(CodeInvalid, err)
 	}
-	if err := service.authorize(ctx, principal, ActionInspect, "profile_contracts", profile); err != nil {
+	queueSet, err := normalizeQueueSet(queues)
+	if err != nil {
+		return nil, serviceError(CodeInvalid, err)
+	}
+	for _, queue := range queueSet {
+		if !service.hasQueue(queue) {
+			return nil, serviceError(CodeInvalid, errors.New("queue is not registered"))
+		}
+	}
+	if err := service.authorize(ctx, principal, ActionInspect, "worker_queues", "contracts"); err != nil {
 		return nil, err
 	}
-	descriptors := service.registry.Profile(profile)
-	result := make([]ContractSummary, 0, len(descriptors))
-	for _, descriptor := range descriptors {
+	enumerator, ok := service.registry.(descriptorEnumerator)
+	if !ok {
+		return nil, serviceError(CodeBackend, errors.New("registry does not support descriptor enumeration"))
+	}
+	requested := make(map[string]struct{}, len(queueSet))
+	for _, queue := range queueSet {
+		requested[queue] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(queueSet))
+	result := make([]ContractSummary, 0, len(queueSet))
+	for _, descriptor := range enumerator.Descriptors() {
+		if _, ok := requested[descriptor.Queue]; !ok {
+			continue
+		}
 		result = append(result, ContractSummary{
 			Kind: descriptor.Kind, CurrentVersion: descriptor.CurrentVersion,
-			Profile: descriptor.Profile, Queue: descriptor.Queue,
+			Group: descriptor.Queue, Queue: descriptor.Queue,
 			MigrationState: descriptor.MigrationState, Route: descriptor.Route,
 			RollbackRoute: descriptor.RollbackRoute, Executable: descriptor.Executable(),
 		})
+		seen[descriptor.Queue] = struct{}{}
 	}
+	if len(seen) != len(requested) {
+		return nil, serviceError(CodeBackend, errors.New("contract summary coverage is incomplete"))
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Queue == result[right].Queue {
+			return result[left].Kind < result[right].Kind
+		}
+		return result[left].Queue < result[right].Queue
+	})
 	return result, nil
 }
 
@@ -607,29 +657,75 @@ func (service *Service) ResumeQueue(ctx context.Context, principal Principal, qu
 	return service.queueMutation(ctx, principal, ActionResumeQueue, queue, reasonCode, correlationID, service.backend.ResumeQueue)
 }
 
-func (service *Service) Drain(ctx context.Context, principal Principal, profile, reasonCode, correlationID string) (DrainResult, error) {
-	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil || !service.registry.HasProfile(profile) {
+func (service *Service) Drain(ctx context.Context, principal Principal, group string, queues []string, reasonCode, correlationID string) (DrainResult, error) {
+	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil || !isValidWorkerGroup(group) {
 		return DrainResult{}, serviceError(CodeInvalid, err)
 	}
+	queueSet, err := normalizeQueueSet(queues)
+	if err != nil {
+		return DrainResult{}, serviceError(CodeInvalid, err)
+	}
+	for _, queue := range queueSet {
+		if !service.hasQueue(queue) {
+			return DrainResult{}, serviceError(CodeInvalid, errors.New("queue is not registered"))
+		}
+	}
 	mutation := Mutation{
-		Principal: principal, Action: ActionDrain, ResourceType: "profile", ResourceID: profile,
+		Principal: principal, Action: ActionDrain, ResourceType: "worker_group", ResourceID: group,
 		ReasonCode: reasonCode, CorrelationID: correlationID,
 	}
 	if err := service.authorize(ctx, principal, mutation.Action, mutation.ResourceType, mutation.ResourceID); err != nil {
 		return DrainResult{}, err
 	}
 	var result DrainResult
-	err := service.mutate(ctx, mutation, func() error {
+	err = service.mutate(ctx, mutation, func() error {
 		var mutationErr error
-		result, mutationErr = service.backend.Drain(ctx, profile, mutation)
+		result, mutationErr = service.backend.Drain(ctx, queueSet, mutation)
 		return mutationErr
 	})
 	if err != nil {
 		return DrainResult{}, err
 	}
-	if result.Profile != profile || result.QueuesPaused < 0 || result.RunningAtStart < 0 {
+	if result.Group != "" && result.Group != group || result.QueuesPaused < 0 || result.RunningAtStart < 0 {
 		return DrainResult{}, serviceError(CodeBackend, errors.New("invalid drain result"))
 	}
+	result.Group = group
+	return result, nil
+}
+
+func (service *Service) Undrain(ctx context.Context, principal Principal, group string, queues []string, reasonCode, correlationID string) (DrainResult, error) {
+	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil || !isValidWorkerGroup(group) {
+		return DrainResult{}, serviceError(CodeInvalid, err)
+	}
+	queueSet, err := normalizeQueueSet(queues)
+	if err != nil {
+		return DrainResult{}, serviceError(CodeInvalid, err)
+	}
+	for _, queue := range queueSet {
+		if !service.hasQueue(queue) {
+			return DrainResult{}, serviceError(CodeInvalid, errors.New("queue is not registered"))
+		}
+	}
+	mutation := Mutation{
+		Principal: principal, Action: ActionUndrain, ResourceType: "worker_group", ResourceID: group,
+		ReasonCode: reasonCode, CorrelationID: correlationID,
+	}
+	if err := service.authorize(ctx, principal, mutation.Action, mutation.ResourceType, mutation.ResourceID); err != nil {
+		return DrainResult{}, err
+	}
+	var result DrainResult
+	err = service.mutate(ctx, mutation, func() error {
+		var mutationErr error
+		result, mutationErr = service.backend.Undrain(ctx, queueSet, mutation)
+		return mutationErr
+	})
+	if err != nil {
+		return DrainResult{}, err
+	}
+	if result.Group != "" && result.Group != group || result.QueuesPaused < 0 || result.RunningAtStart < 0 {
+		return DrainResult{}, serviceError(CodeBackend, errors.New("invalid drain result"))
+	}
+	result.Group = group
 	return result, nil
 }
 
@@ -796,6 +892,30 @@ func (service *Service) validateSummary(job JobSummary) error {
 
 func (service *Service) hasQueue(queue string) bool {
 	return service.registry.HasQueue(queue)
+}
+
+func normalizeQueueSet(queues []string) ([]string, error) {
+	if len(queues) == 0 {
+		return nil, errors.New("at least one queue is required")
+	}
+	result := make([]string, 0, len(queues))
+	seen := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		if !safeIdentifier.MatchString(queue) || len(queue) > 128 {
+			return nil, errors.New("queue is invalid")
+		}
+		if _, duplicate := seen[queue]; duplicate {
+			return nil, errors.New("duplicate queue")
+		}
+		seen[queue] = struct{}{}
+		result = append(result, queue)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func isValidWorkerGroup(group string) bool {
+	return safeIdentifier.MatchString(group) && len(group) <= 128
 }
 
 var (

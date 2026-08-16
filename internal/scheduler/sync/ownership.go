@@ -63,7 +63,7 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 // transfer of schedule-marker mutation authority from Celery to Go.
 //
 // This is the ownership transfer, not a step toward it. There is no
-// environment variable, deployment profile, or runtime flag that can produce
+// environment variable, deployment group, or runtime flag that can produce
 // this OwnershipPolicy value: OwnershipPolicy's fields stay unexported, so
 // this function and DefaultOwnershipPolicy are the complete, closed set of
 // policies any caller outside this package can ever obtain. Calling this

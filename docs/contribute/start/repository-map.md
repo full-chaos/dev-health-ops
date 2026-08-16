@@ -55,13 +55,18 @@ Go process entry points live under `cmd/`:
 
 Shared implementation lives under `internal/`, including configuration, lifecycle, health, logging, secrets, database factories, River, job contracts, operator controls, outbox, scheduler, reconciler, and test support.
 
-These packages are coexistence foundations. They do not own current production jobs unless the checked-in route and migration state say so.
+These packages are coexistence foundations. `dev-health-worker` consumes only
+the registered queues selected by its deployment. It does not own current
+production jobs unless the checked-in route and migration state say so. The
+stream runner remains a separate process with its own runtime profiles.
 
 ## Versioned contracts
 
-- `contracts/jobs/v1/` owns job envelopes, schemas, registry, capabilities, deployment profiles, and migration state.
+- `contracts/jobs/v1/` owns job envelopes, schemas, registry, capabilities,
+  deployment queue groups, and migration state.
 - `contracts/sync-dispatch/v1/` owns frozen sync transport routes.
-- `deploy/go-workers/profiles.json` owns the disabled Go topology and connection budget.
+- `deploy/go-workers/deployment.json` owns the deployment-selected Go queue
+  groups, per-queue concurrency, replicas, and connection budget.
 
 A job or route change that updates code without the matching contract is incomplete.
 
@@ -72,7 +77,8 @@ A job or route change that updates code without the matching contract is incompl
 - `deploy/docker-swarm/` — Swarm example and migration ordering.
 - `deploy/kubernetes/` — Kustomize resources and migration Job.
 - `deploy/helm/dev-health/` — Helm chart, values, and schema.
-- `deploy/go-workers/` — disabled coexistence profiles and runtime shape.
+- `deploy/go-workers/` — Go worker queue-group deployment contracts and runtime
+  shape.
 - `docker/` — Python and Go image definitions and database initialization.
 - `deploy/grafana/dashboards/` — maintained dashboard examples.
 

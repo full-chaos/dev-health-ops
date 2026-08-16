@@ -146,21 +146,21 @@ func TestFinalizerLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	}
 }
 
-// TestDailyContractsPreserveHeavyMetricsTopologyAsRiverDefault guards the
-// heavy/metrics placement of the daily family regardless of migration route:
-// every kind must stay on the "heavy" profile and "metrics" queue so budget
-// and startup wiring never silently splits it across profiles. All three
+// TestDailyContractsPreserveMetricsQueueAsRiverDefault guards the metrics
+// placement of the daily family regardless of migration route: every kind must
+// stay on the "metrics" queue so budget and startup wiring never silently split
+// the family across queues. All three
 // kinds are checked in at go_default/river now, so the route/executable
 // assertions confirm the flip actually reached this family rather than
 // asserting continued dormancy.
-func TestDailyContractsPreserveHeavyMetricsTopologyAsRiverDefault(t *testing.T) {
+func TestDailyContractsPreserveMetricsQueueAsRiverDefault(t *testing.T) {
 	registry, err := jobruntime.Load("../../../../contracts/jobs/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{jobcontract.KindDailyMetricsDispatch, jobcontract.KindDailyMetricsPartition, jobcontract.KindDailyMetricsFinalize} {
 		descriptor, ok := registry.Descriptor(kind)
-		if !ok || descriptor.Profile != "heavy" || descriptor.Queue != "metrics" || descriptor.Route != "river" || !descriptor.Executable() {
+		if !ok || descriptor.Queue != "metrics" || descriptor.Route != "river" || !descriptor.Executable() {
 			t.Fatalf("daily topology for %s = %#v", kind, descriptor)
 		}
 	}

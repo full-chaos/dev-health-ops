@@ -93,7 +93,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.worker_profile_instances (instance_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.unrelated_semantic_table (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SEQUENCE public.unrelated_sequence",
@@ -109,7 +109,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + authorizedDomainRole,
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_profile_instances TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + authorizedDomainRole,
 		// The domain role needs DELETE but explicitly NOT UPDATE here:

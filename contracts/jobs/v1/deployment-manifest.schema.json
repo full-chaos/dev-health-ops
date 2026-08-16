@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dev-health.local/contracts/jobs/v1/deployment-profiles.schema.json",
+  "$id": "https://dev-health.local/contracts/jobs/v1/deployment-manifest.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -136,7 +136,6 @@
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
           "binary": {"type": "string", "pattern": "^dev-health-[a-z-]+$"},
           "runtime": {"enum": ["control", "river", "stream"]},
-          "registry_profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
           "enabled_by_default": {"const": false},
           "min_replicas": {"const": 0},
           "desired_replicas": {"type": "integer", "minimum": 0, "maximum": 8},

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3850 Go worker shutdown timeout contract",
+  "$limitation": "The plan proves the shared parser accepts the deployed drain windows and retains its independent safety ceiling. Platform-root Compose parity is covered by a focused test because that file is outside the ops repository and mutation harness authority.",
+  "mutations": [
+    {
+      "id": "ST01-deployed-drain-window",
+      "file": "internal/platform/config/config.go",
+      "find": "\tmaximumShutdownTimeout   = 3 * time.Hour",
+      "replace": "\tmaximumShutdownTimeout   = 5 * time.Minute",
+      "expect_occurrences": 1,
+      "rationale": "The shared parser ceiling must admit the reviewed sync, ops, and heavy drain windows emitted by every deployment renderer.",
+      "build": ["env", "GOCACHE=/private/tmp/chaos3850-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
+      "proof": [["env", "GOCACHE=/private/tmp/chaos3850-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestShutdownTimeoutSupportsDeploymentGraceWindows$", "./internal/platform/config"]]
+    },
+    {
+      "id": "ST02-bounded-safety-ceiling",
+      "file": "internal/platform/config/config.go",
+      "find": "\tmaximumShutdownTimeout   = 3 * time.Hour",
+      "replace": "\tmaximumShutdownTimeout   = 6 * time.Hour",
+      "expect_occurrences": 1,
+      "rationale": "The deployment-compatible parser must remain bounded so an accidental multi-day shutdown deadline fails configuration instead of masking a stuck drain.",
+      "build": ["env", "GOCACHE=/private/tmp/chaos3850-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-run", "^$", "./internal/platform/config"],
+      "proof": [["env", "GOCACHE=/private/tmp/chaos3850-mutation-cache", "GOTOOLCHAIN=go1.25.9", "go", "test", "-count=1", "-run", "^TestShutdownTimeoutSupportsDeploymentGraceWindows$", "./internal/platform/config"]]
+    }
+  ]
+}

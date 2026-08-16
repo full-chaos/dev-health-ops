@@ -30,8 +30,8 @@ func TestWorkerSpecConfiguresDependencies(t *testing.T) {
 	if workerSpec.Service != "dev-health-worker" || workerSpec.DefaultProfile != "" {
 		t.Fatalf("unexpected worker spec: %#v", workerSpec)
 	}
-	if !slices.Equal(workerSpec.Profiles, []string{"sync", "heavy", "ops"}) {
-		t.Fatalf("unexpected worker profiles: %v", workerSpec.Profiles)
+	if len(workerSpec.Profiles) != 0 || !workerSpec.RequireQueues {
+		t.Fatalf("worker must require queues without named profiles: %#v", workerSpec)
 	}
 	if workerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("worker dependency configuration is not wired")

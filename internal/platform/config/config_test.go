@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,73 @@ func workerSpec(values map[string]string) Spec {
 		Profiles:       []string{"latency", "sync", "heavy", "ops"},
 		DefaultProfile: "latency",
 		LookupEnv:      lookup(values),
+	}
+}
+
+func queueWorkerSpec(values map[string]string, queues ...string) Spec {
+	return Spec{
+		Service:       "dev-health-worker",
+		RequireQueues: true,
+		Queues:        queues,
+		LookupEnv:     lookup(values),
+	}
+}
+
+func TestWorkerQueueSelectionIsExplicitCanonicalAndProfileFree(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		spec Spec
+		want []string
+	}{
+		"cli comma and repeatable": {
+			spec: queueWorkerSpec(nil, "webhooks,heartbeat", "retention"),
+			want: []string{"heartbeat", "retention", "webhooks"},
+		},
+		"environment": {
+			spec: queueWorkerSpec(map[string]string{"DEV_HEALTH_QUEUES": "webhooks, heartbeat"}),
+			want: []string{"heartbeat", "webhooks"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(test.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cfg.Queues, test.want) || cfg.Profile != "" {
+				t.Fatalf("queues=%v profile=%q, want queues=%v and no profile", cfg.Queues, cfg.Profile, test.want)
+			}
+		})
+	}
+}
+
+func TestWorkerQueueSelectionRejectsInvalidOrAmbiguousInput(t *testing.T) {
+	t.Parallel()
+
+	for name, spec := range map[string]Spec{
+		"missing":      queueWorkerSpec(nil),
+		"duplicate":    queueWorkerSpec(nil, "heartbeat,webhooks", "heartbeat"),
+		"empty item":   queueWorkerSpec(nil, "heartbeat,"),
+		"invalid name": queueWorkerSpec(nil, "Heartbeat"),
+		"cli env conflict": queueWorkerSpec(
+			map[string]string{"DEV_HEALTH_QUEUES": "heartbeat"}, "webhooks",
+		),
+		"profile compatibility": {
+			Service:        "dev-health-worker",
+			Profiles:       []string{"ops"},
+			DefaultProfile: "ops",
+			RequireQueues:  true,
+			Queues:         []string{"heartbeat"},
+			LookupEnv:      lookup(nil),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(spec); err == nil {
+				t.Fatal("expected queue selection to fail")
+			}
+		})
 	}
 }
 

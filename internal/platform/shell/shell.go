@@ -42,6 +42,7 @@ type Spec struct {
 	Service                         string
 	Profiles                        []string
 	DefaultProfile                  string
+	RequireQueues                   bool
 	ConfigureDependencies           ConfigureDependencies
 	ConfigureDependenciesWithLogger ConfigureDependenciesWithLogger
 }
@@ -49,6 +50,17 @@ type Spec struct {
 type IO struct {
 	Stdout io.Writer
 	Stderr io.Writer
+}
+
+type repeatedStringFlag []string
+
+func (values *repeatedStringFlag) String() string {
+	return fmt.Sprint([]string(*values))
+}
+
+func (values *repeatedStringFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
 }
 
 // Main runs a production command and exits with its status.
@@ -78,8 +90,12 @@ func Execute(
 	flags.SetOutput(streams.Stdout)
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
 	var selectedProfile *string
+	var selectedQueues repeatedStringFlag
 	if len(spec.Profiles) > 0 {
 		selectedProfile = flags.String("profile", "", "runtime profile")
+	}
+	if spec.RequireQueues {
+		flags.Var(&selectedQueues, "queues", "registered queues to consume (comma-separated or repeatable)")
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -111,6 +127,8 @@ func Execute(
 		Profiles:       spec.Profiles,
 		DefaultProfile: spec.DefaultProfile,
 		Profile:        profile,
+		RequireQueues:  spec.RequireQueues,
+		Queues:         append([]string(nil), selectedQueues...),
 		LookupEnv:      lookup,
 	})
 	if err != nil {

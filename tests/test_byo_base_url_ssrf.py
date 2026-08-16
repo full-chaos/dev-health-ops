@@ -11,9 +11,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import httpx2
 import pytest
 
-import httpx2
 from dev_health_ops.api.admin.llm_settings import (
     LLMSettingsAccessError,
     upsert_llm_settings,

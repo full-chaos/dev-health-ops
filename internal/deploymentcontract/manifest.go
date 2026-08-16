@@ -19,10 +19,9 @@ import (
 const maxManifestBytes = 512 * 1024
 
 var (
-	namePattern    = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
-	profilePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
-	queuePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
-	envPattern     = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
+	namePattern  = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
+	queuePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
+	envPattern   = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
 )
 
 type PostgresBudget struct {
@@ -65,7 +64,6 @@ type Process struct {
 	Name                       string        `json:"name"`
 	Binary                     string        `json:"binary"`
 	Runtime                    string        `json:"runtime"`
-	RegistryProfile            *string       `json:"registry_profile,omitempty"`
 	EnabledByDefault           bool          `json:"enabled_by_default"`
 	MinReplicas                int           `json:"min_replicas"`
 	DesiredReplicas            int           `json:"desired_replicas"`
@@ -107,17 +105,17 @@ type BudgetSummary struct {
 func Load(path string, registry jobcontract.Registry) (Manifest, BudgetSummary, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Manifest{}, BudgetSummary{}, fmt.Errorf("read deployment profiles: %w", err)
+		return Manifest{}, BudgetSummary{}, fmt.Errorf("read deployment manifest: %w", err)
 	}
 	if len(data) == 0 || len(data) > maxManifestBytes || !utf8.Valid(data) {
-		return Manifest{}, BudgetSummary{}, errors.New("deployment profile manifest has invalid encoding or size")
+		return Manifest{}, BudgetSummary{}, errors.New("deployment manifest has invalid encoding or size")
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest Manifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, BudgetSummary{}, fmt.Errorf("decode deployment profiles: %w", err)
+		return Manifest{}, BudgetSummary{}, fmt.Errorf("decode deployment manifest: %w", err)
 	}
 	if err := requireEOF(decoder); err != nil {
 		return Manifest{}, BudgetSummary{}, err
@@ -131,10 +129,10 @@ func Load(path string, registry jobcontract.Registry) (Manifest, BudgetSummary, 
 
 func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary, error) {
 	if manifest.SchemaVersion != 1 || manifest.DeploymentState != "coexistence_disabled" {
-		return BudgetSummary{}, errors.New("unsupported deployment profile manifest identity")
+		return BudgetSummary{}, errors.New("unsupported deployment manifest identity")
 	}
 	if manifest.Registry != "contracts/jobs/v1/registry.json" {
-		return BudgetSummary{}, errors.New("deployment profile registry path is not canonical")
+		return BudgetSummary{}, errors.New("deployment manifest registry path is not canonical")
 	}
 	// All three runtime role identities of the Option B split. The coordinator
 	// role belongs here even though only the control-runtime processes and
@@ -158,13 +156,11 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		return BudgetSummary{}, err
 	}
 	if len(manifest.Processes) == 0 {
-		return BudgetSummary{}, errors.New("deployment profile manifest has no processes")
+		return BudgetSummary{}, errors.New("deployment manifest has no processes")
 	}
 
-	expected := expectedCoverage(registry)
-	seenProfiles := make(map[string]struct{})
+	queueCoverage := buildQueueCoverage(registry)
 	seenNames := make(map[string]struct{}, len(manifest.Processes))
-	queueOwners := make(map[string]string)
 	previousName := ""
 	summary := BudgetSummary{
 		QueueSessionClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
@@ -184,7 +180,7 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			return BudgetSummary{}, fmt.Errorf("duplicate deployment process %s", process.Name)
 		}
 		seenNames[process.Name] = struct{}{}
-		if err := validateProcess(process, registry); err != nil {
+		if err := validateProcess(process, queueCoverage); err != nil {
 			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
 
@@ -195,29 +191,15 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		if process.Runtime != "river" {
 			continue
 		}
-		profile := *process.RegistryProfile
-		if _, duplicate := seenProfiles[profile]; duplicate {
-			return BudgetSummary{}, fmt.Errorf("registry profile %s has multiple deployment processes", profile)
+		kinds, longestTimeout, err := selectedQueueKinds(queueCoverage, process.Queues)
+		if err != nil {
+			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
-		seenProfiles[profile] = struct{}{}
-		coverage := expected[profile]
-		if !equalStrings(process.Queues, coverage.queues) {
-			return BudgetSummary{}, fmt.Errorf("registry profile %s queue coverage drift", profile)
+		if !equalStrings(process.JobKinds, kinds) {
+			return BudgetSummary{}, fmt.Errorf("deployment process %s queue-kind coverage drift", process.Name)
 		}
-		if !equalStrings(process.JobKinds, coverage.kinds) {
-			return BudgetSummary{}, fmt.Errorf("registry profile %s job-kind coverage drift", profile)
-		}
-		for _, queue := range process.Queues {
-			if owner, exists := queueOwners[queue]; exists {
-				return BudgetSummary{}, fmt.Errorf("queue %s is assigned to profiles %s and %s", queue, owner, profile)
-			}
-			queueOwners[queue] = profile
-		}
-	}
-
-	for profile := range expected {
-		if _, ok := seenProfiles[profile]; !ok {
-			return BudgetSummary{}, fmt.Errorf("registry profile %s has no deployment process", profile)
+		if longestTimeout == 0 || process.ShutdownGraceSeconds < longestTimeout+60 {
+			return BudgetSummary{}, fmt.Errorf("deployment process %s shutdown grace cannot cover the longest claim and finalization", process.Name)
 		}
 	}
 	summary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +
@@ -260,6 +242,18 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		summary.DomainTransactionClientConnections
 	summary.ServerConnectionHeadroom = manifest.PostgresBudget.ServerMaxConnections -
 		summary.ServerConnectionFootprint
+	if summary.QueueSessionHeadroom <= 0 {
+		return BudgetSummary{}, errors.New("queue session PgBouncer headroom must be positive")
+	}
+	if summary.CoordinatorSessionHeadroom <= 0 {
+		return BudgetSummary{}, errors.New("coordinator session PgBouncer headroom must be positive")
+	}
+	if summary.DomainTransactionHeadroom <= 0 {
+		return BudgetSummary{}, errors.New("transaction PgBouncer headroom must be positive")
+	}
+	if summary.ServerConnectionHeadroom <= 0 {
+		return BudgetSummary{}, errors.New("PostgreSQL server connection headroom must be positive")
+	}
 	return summary, nil
 }
 
@@ -270,30 +264,43 @@ func minInt(left, right int) int {
 	return right
 }
 
-type profileCoverage struct {
-	queues []string
-	kinds  []string
+type queueCoverage struct {
+	kinds          map[string]struct{}
+	longestTimeout int
 }
 
-func expectedCoverage(registry jobcontract.Registry) map[string]profileCoverage {
-	queueSets := make(map[string]map[string]struct{})
-	kindSets := make(map[string]map[string]struct{})
+func buildQueueCoverage(registry jobcontract.Registry) map[string]queueCoverage {
+	coverage := make(map[string]queueCoverage)
 	for _, job := range registry.Jobs {
-		if queueSets[job.Profile] == nil {
-			queueSets[job.Profile] = make(map[string]struct{})
-			kindSets[job.Profile] = make(map[string]struct{})
+		info := coverage[job.Queue]
+		if info.kinds == nil {
+			info.kinds = make(map[string]struct{})
 		}
-		queueSets[job.Profile][job.Queue] = struct{}{}
-		kindSets[job.Profile][job.Kind] = struct{}{}
-	}
-	coverage := make(map[string]profileCoverage, len(queueSets))
-	for profile, queues := range queueSets {
-		coverage[profile] = profileCoverage{
-			queues: sortedKeys(queues),
-			kinds:  sortedKeys(kindSets[profile]),
+		info.kinds[job.Kind] = struct{}{}
+		if job.TimeoutSeconds > info.longestTimeout {
+			info.longestTimeout = job.TimeoutSeconds
 		}
+		coverage[job.Queue] = info
 	}
 	return coverage
+}
+
+func selectedQueueKinds(coverage map[string]queueCoverage, queues []string) ([]string, int, error) {
+	kinds := make(map[string]struct{})
+	longestTimeout := 0
+	for _, queue := range queues {
+		info, ok := coverage[queue]
+		if !ok {
+			return nil, 0, fmt.Errorf("queue %s is not registered", queue)
+		}
+		for kind := range info.kinds {
+			kinds[kind] = struct{}{}
+		}
+		if info.longestTimeout > longestTimeout {
+			longestTimeout = info.longestTimeout
+		}
+	}
+	return sortedKeys(kinds), longestTimeout, nil
 }
 
 func validatePostgresBudget(budget PostgresBudget) error {
@@ -337,7 +344,7 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		operator.MaxConcurrentInvocations != 1 || operator.QueueControlMaxConnections < 1 ||
 		operator.QueueControlMaxConnections > 4 || operator.DomainMaxConnections < 1 ||
 		operator.DomainMaxConnections > 16 ||
-		// workerctl is one of the three coordinator profiles (with reconciler
+		// workerctl is one of the three coordinator groups (with reconciler
 		// and scheduler) under the Option B split. Their dedicated PgBouncer
 		// session endpoint is server-counted, while preserving River semantics.
 		operator.CoordinatorMaxConnections < 1 || operator.CoordinatorMaxConnections > 4 {
@@ -368,7 +375,7 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	return nil
 }
 
-func validateProcess(process Process, registry jobcontract.Registry) error {
+func validateProcess(process Process, coverage map[string]queueCoverage) error {
 	if !namePattern.MatchString(process.Name) || process.EnabledByDefault || process.MinReplicas != 0 ||
 		process.DesiredReplicas < process.MinReplicas || process.DesiredReplicas > process.MaxReplicas ||
 		process.MaxReplicas < 1 || process.MaxReplicas > 8 || process.ShutdownGraceSeconds < 60 {
@@ -406,31 +413,27 @@ func validateProcess(process Process, registry jobcontract.Registry) error {
 
 	switch process.Runtime {
 	case "river":
-		if process.Binary != "dev-health-worker" || process.RegistryProfile == nil ||
-			!profilePattern.MatchString(*process.RegistryProfile) ||
-			process.QueueControlMaxConnections < 1 ||
+		if process.Binary != "dev-health-worker" || process.QueueControlMaxConnections < 1 ||
 			process.CoordinatorMaxConnections != 0 ||
 			!contains(process.SecretEnv, "WORKER_DATABASE_URI") {
-			return errors.New("River runtime is missing its binary, profile, or queue-control DSN")
+			return errors.New("River runtime is missing its binary, queue coverage, or queue-control DSN")
 		}
 		if !equalStrings(queueWorkerNames, process.Queues) {
 			return errors.New("River queue worker limits drift from queue coverage")
 		}
-		longestTimeout := 0
-		for _, job := range registry.Jobs {
-			if job.Profile == *process.RegistryProfile && job.TimeoutSeconds > longestTimeout {
-				longestTimeout = job.TimeoutSeconds
-			}
+		kinds, _, err := selectedQueueKinds(coverage, process.Queues)
+		if err != nil {
+			return err
 		}
-		if longestTimeout == 0 || process.ShutdownGraceSeconds < longestTimeout+60 {
-			return errors.New("River shutdown grace cannot cover the longest claim and finalization")
+		if !equalStrings(process.JobKinds, kinds) {
+			return errors.New("River job-kind coverage drifts from queue selection")
 		}
 	case "control":
 		expectedBinary := map[string]string{
 			"reconciler": "dev-health-reconciler",
 			"scheduler":  "dev-health-scheduler",
 		}[process.Name]
-		if expectedBinary == "" || process.Binary != expectedBinary || process.RegistryProfile != nil ||
+		if expectedBinary == "" || process.Binary != expectedBinary ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
 			process.QueueControlMaxConnections < 1 || !contains(process.SecretEnv, "WORKER_DATABASE_URI") ||
 			len(process.QueueWorkers) != 0 ||
@@ -447,7 +450,7 @@ func validateProcess(process Process, registry jobcontract.Registry) error {
 			return errors.New("control runtime wiring is invalid")
 		}
 	case "stream":
-		if process.Binary != "dev-health-stream-runner" || process.RegistryProfile != nil ||
+		if process.Binary != "dev-health-stream-runner" ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
 			process.QueueControlMaxConnections != 0 || process.CoordinatorMaxConnections != 0 ||
 			!process.RequiresValkey || len(process.QueueWorkers) != 0 {
@@ -473,9 +476,9 @@ func requireEOF(decoder *json.Decoder) error {
 		return nil
 	}
 	if err == nil {
-		return errors.New("deployment profile manifest contains multiple JSON values")
+		return errors.New("deployment manifest contains multiple JSON values")
 	}
-	return fmt.Errorf("decode deployment profiles: %w", err)
+	return fmt.Errorf("decode deployment manifest: %w", err)
 }
 
 func sortedUnique(values []string) bool {

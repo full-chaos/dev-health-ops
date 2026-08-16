@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type dailyPostSyncWriter struct {
@@ -219,30 +218,7 @@ func postSyncWorkGraphScope(
 	return json.Marshal(scope)
 }
 
-// The client type includes the driver's transaction type, but lifecycle only
-// needs Start and Stop. Keep the component concrete below to avoid exposing a
-// broad worker runtime interface.
-type syncCoordinatorLifecycle struct {
-	startStop interface {
-		Start(context.Context) error
-		Stop(context.Context) error
-	}
-}
-
-func (component syncCoordinatorLifecycle) Name() string { return "river-sync-coordinator-worker" }
-func (component syncCoordinatorLifecycle) Start(ctx context.Context) error {
-	return component.startStop.Start(ctx)
-}
-func (component syncCoordinatorLifecycle) Shutdown(ctx context.Context) error {
-	return component.startStop.Stop(ctx)
-}
-
-// syncCoordinatorQueue and its worker budget must match the deployment
-// manifest entry for the sync process.
-const (
-	syncCoordinatorQueue        = "sync"
-	syncCoordinatorQueueWorkers = 4
-)
+const syncCoordinatorQueue = "sync"
 
 // buildSyncCoordinatorWorker hosts a mixed River client: four sync-dispatch
 // coordinator kinds that are outside the bounded job registry (CUT-10 brings
@@ -260,12 +236,13 @@ func buildSyncCoordinatorWorker(
 	registry *jobruntime.Registry,
 	_ jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
-	if cfg.Profile != "sync" {
+	if !queueSelected(cfg.Queues, syncCoordinatorQueue) {
 		return workerFamily{}, nil
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
-	if !ok || postgresDatabase.pools == nil || logger == nil || registry == nil {
+	if !ok || postgresDatabase.pools == nil || logger == nil || registry == nil || workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	bridge, err := syncdispatchruntime.NewHTTPBridge(syncdispatchruntime.HTTPBridgeConfig{
@@ -297,7 +274,6 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	workers := river.NewWorkers()
 	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -310,15 +286,14 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	var handlers []jobruntime.HandlerSpec
-	var queues []jobruntime.QueueBudget
+	queues := selectedQueueBudgets(
+		cfg.Queues, []string{syncCoordinatorQueue}, cfg.WorkerQueueConcurrency,
+	)
 	if autoimport.Executable() {
 		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, bridge); err != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		handlers = []jobruntime.HandlerSpec{autoimport}
-		queues = []jobruntime.QueueBudget{
-			{Queue: syncCoordinatorQueue, MaxWorkers: syncCoordinatorQueueWorkers},
-		}
 	}
 	if err := registerRescueCoverage(
 		workers,
@@ -331,21 +306,8 @@ func buildSyncCoordinatorWorker(
 	); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
-		ID:     riverClientID(cfg, "sync-coordinator"),
-		Logger: logger,
-		Queues: map[string]river.QueueConfig{
-			syncCoordinatorQueue: {MaxWorkers: syncCoordinatorQueueWorkers},
-		},
-		Schema:  cfg.RiverDatabaseSchema,
-		Workers: workers,
-	})
-	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
-		component: syncCoordinatorLifecycle{startStop: client},
-		handlers:  handlers,
-		queues:    queues,
+		handlers: handlers,
+		queues:   queues,
 	}, nil
 }

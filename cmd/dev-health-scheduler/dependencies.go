@@ -40,7 +40,7 @@ type postgresSchedulerDatabase struct {
 // internal/storage/postgres/domain_authorization.go, and
 // internal/scheduler/sync/transaction.go's `FOR UPDATE OF config, job
 // SKIP LOCKED` requires UPDATE on those rows even though it writes nothing
-// else. deploy/go-workers/profiles.json already budgets
+// else. deploy/go-workers/deployment.json already budgets
 // coordinator_max_connections: 2 for the "scheduler" process, and both loops
 // are single-transaction-at-a-time (the sync loop hands off then reconciles
 // sequentially; the fixed engine runs one occurrence transaction at a time),

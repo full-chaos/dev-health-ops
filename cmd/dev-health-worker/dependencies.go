@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -21,12 +22,12 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 const (
-	defaultContractRoot       = "contracts/jobs/v1"
-	defaultDeploymentProfile  = "deploy/go-workers/profiles.json"
-	profileFinalizationBuffer = 60 * time.Second
+	defaultContractRoot      = "contracts/jobs/v1"
+	workerFinalizationBuffer = 60 * time.Second
 )
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
@@ -57,11 +58,15 @@ type postgresWorkerDatabase struct {
 	riverSchema string
 }
 
-func (database *postgresWorkerDatabase) NewProfilePresence(profile, instanceID string) (*jobruntime.ProfilePresence, error) {
+func (database *postgresWorkerDatabase) NewWorkerPresence(
+	workerGroup string,
+	queues []string,
+	instanceID string,
+) (*jobruntime.WorkerPresence, error) {
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil, errWorkerDependencyUnavailable
 	}
-	return jobruntime.NewProfilePresence(database.pools.Domain, profile, instanceID)
+	return jobruntime.NewWorkerPresence(database.pools.Domain, workerGroup, queues, instanceID)
 }
 
 // githubProjectsV2DurableConfigReader is deliberately narrower than
@@ -175,9 +180,9 @@ func (database *postgresWorkerDatabase) Close() {
 // the River queue budget it actually consumes. Runtime capability is only ever
 // what a builder constructed here — never what a compiled list advertises.
 type workerFamily struct {
-	component lifecycle.Component
-	handlers  []jobruntime.HandlerSpec
-	queues    []jobruntime.QueueBudget
+	handlers []jobruntime.HandlerSpec
+	queues   []jobruntime.QueueBudget
+	cleanups []func() error
 	// metricsSource is an additional Prometheus fragment this family owns
 	// (e.g. providerfoundation's dev_health_provider_* family), registered
 	// with the health.Registry alongside "worker_runtime" once construction
@@ -191,49 +196,47 @@ type workerFamilyBuilder func(
 	*jobruntime.Registry,
 	jobruntime.Observer,
 	*slog.Logger,
+	*river.Workers,
 ) (workerFamily, error)
+
+type workerProcessBuilder func(
+	config.Config,
+	workerDatabase,
+	*river.Workers,
+	workerFamily,
+	*slog.Logger,
+) (lifecycle.Component, error)
 
 type workerDependencySources struct {
 	openDatabase         func(context.Context, config.Config) (workerDatabase, error)
 	loadRuntimeRegistry  func(string) (*jobruntime.Registry, error)
-	loadJobRegistry      func(string) (jobcontract.Registry, error)
-	loadDeployment       func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
 	newRiverClientID     func() string
 	buildOperational     workerFamilyBuilder
 	buildSyncCoordinator workerFamilyBuilder
 	buildDaily           workerFamilyBuilder
-	buildReports         func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
-	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
+	buildReports         func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
+	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
+	buildRiverProcess    workerProcessBuilder
 	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
-	deploymentProfile    string
 }
 
 var productionWorkerDependencySources = workerDependencySources{
 	openDatabase:         openWorkerDatabase,
 	loadRuntimeRegistry:  jobruntime.Load,
-	loadJobRegistry:      jobcontract.LoadRegistry,
-	loadDeployment:       deploymentcontract.Load,
 	newRiverClientID:     defaultRiverClientID,
 	buildOperational:     buildOperationalWorker,
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
 	buildDaily:           buildDailyWorker,
 	buildReports:         buildReportWorker,
 	buildProviderSync:    buildProviderSyncWorker,
+	buildRiverProcess:    newRiverWorkerProcess,
 	buildWorkgraph:       buildWorkgraphWorker,
 	contractRoot:         defaultContractRoot,
-	deploymentProfile:    defaultDeploymentProfile,
 }
 
 func defaultRiverClientID() string {
 	return uuid.NewString()
-}
-
-func riverClientID(cfg config.Config, family string) string {
-	if cfg.WorkerInstanceID == "" || family == "" {
-		return ""
-	}
-	return cfg.WorkerInstanceID + "-" + family
 }
 
 type workerDependencies struct {
@@ -252,6 +255,7 @@ type workerDependencies struct {
 	instanceID             string
 	shutdownGrace          time.Duration
 	workerDrainBudget      time.Duration
+	workerGroup            string
 }
 
 type preclaimReadinessComponent struct{ registry *health.Registry }
@@ -267,29 +271,29 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 
 func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
 
-type workerProfileComponent struct {
+type workerProcessComponent struct {
 	components []lifecycle.Component
 	budget     time.Duration
-	presence   profilePresenceLifecycle
+	presence   workerPresenceLifecycle
 }
 
-type profilePresenceLifecycle interface {
+type workerPresenceLifecycle interface {
 	Start(context.Context) error
 	BeginDrain(context.Context) error
 	Shutdown(context.Context) error
 	Errors() <-chan error
 }
 
-func (workerProfileComponent) Name() string                            { return "river-profile-workers" }
-func (component workerProfileComponent) ShutdownBudget() time.Duration { return component.budget }
-func (component workerProfileComponent) Errors() <-chan error {
+func (workerProcessComponent) Name() string                            { return "river-workers" }
+func (component workerProcessComponent) ShutdownBudget() time.Duration { return component.budget }
+func (component workerProcessComponent) Errors() <-chan error {
 	if component.presence == nil {
 		return nil
 	}
 	return component.presence.Errors()
 }
 
-func (component workerProfileComponent) Start(ctx context.Context) error {
+func (component workerProcessComponent) Start(ctx context.Context) error {
 	if component.presence != nil {
 		if err := component.presence.Start(ctx); err != nil {
 			return err
@@ -322,7 +326,7 @@ func (component workerProfileComponent) Start(ctx context.Context) error {
 	return nil
 }
 
-func (component workerProfileComponent) Shutdown(ctx context.Context) error {
+func (component workerProcessComponent) Shutdown(ctx context.Context) error {
 	var shutdownErrors []error
 	if component.presence != nil {
 		if err := component.presence.BeginDrain(ctx); err != nil {
@@ -413,7 +417,7 @@ func configureWorkerDependenciesWithSources(
 		{name: "domain_postgres", check: dependencies.domainReady},
 		{name: "github_projects_v2_startup_config", check: githubProjectsV2StartupReadiness(dependencies.database, logger)},
 		{name: "job_registry", check: dependencies.jobRegistryReady},
-		{name: "profile_completeness", check: dependencies.profileReady},
+		{name: "queue_completeness", check: dependencies.queuesReady},
 		{name: "provider_route_switches", check: providerRouteSwitchesReady(cfg, &providerRuntimeConstructed)},
 		{name: "queued_contract_versions", check: dependencies.queuedContractVersionsReady},
 		{name: "queue_control_config", check: dependencies.queueControlConfigReady},
@@ -433,24 +437,23 @@ func configureWorkerDependenciesWithSources(
 	// Native replacement for the monitor-queue-depths Beat task. It reads the
 	// same River telemetry the readiness and metrics paths use, so queue depth
 	// and age come from the authoritative queue-control tables.
-	if monitor := newQueueHealthMonitor(
-		dependencies.queueTelemetry, logger, cfg.Profile,
-	); monitor != nil {
+	if monitor := newQueueHealthMonitor(dependencies.queueTelemetry, logger); monitor != nil {
 		components = append(components, monitor)
 	}
-	workerComponents := make([]lifecycle.Component, 0, 4)
+	workers := river.NewWorkers()
 	var active workerFamily
 	build := func(family workerFamily, err error) error {
 		if err != nil {
+			_ = closeWorkerFamily(active)
 			return err
 		}
-		active, err = composeWorkerFamily(active, family)
-		if err != nil {
-			return err
+		combined, composeErr := composeWorkerFamily(active, family)
+		if composeErr != nil {
+			_ = closeWorkerFamily(family)
+			_ = closeWorkerFamily(active)
+			return composeErr
 		}
-		if family.component != nil {
-			workerComponents = append(workerComponents, family.component)
-		}
+		active = combined
 		return nil
 	}
 	for _, builder := range []workerFamilyBuilder{
@@ -463,7 +466,7 @@ func configureWorkerDependenciesWithSources(
 			continue
 		}
 		if err := build(builder(
-			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
+			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger, workers,
 		)); err != nil {
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
@@ -476,6 +479,7 @@ func configureWorkerDependenciesWithSources(
 		*jobruntime.Registry,
 		jobruntime.Observer,
 		*slog.Logger,
+		*river.Workers,
 	) (workerFamily, error){
 		sources.buildReports,
 		sources.buildProviderSync,
@@ -485,7 +489,7 @@ func configureWorkerDependenciesWithSources(
 		}
 		if err := build(builder(
 			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
-			dependencies.metrics, logger,
+			dependencies.metrics, logger, workers,
 		)); err != nil {
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
@@ -493,6 +497,7 @@ func configureWorkerDependenciesWithSources(
 	}
 	if active.metricsSource != nil {
 		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
+			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, err
 		}
@@ -504,33 +509,67 @@ func configureWorkerDependenciesWithSources(
 	}
 	// Constructed capability is the only capability. Publish it before the
 	// readiness gate opens so exact startup validation sees what this binary
-	// actually built, then refuse to start when it does not cover the profile.
+	// actually built, then refuse to start when it does not cover the queues.
 	dependencies.startup.Handlers = active.handlers
 	dependencies.startup.Queues = active.queues
 	if len(active.handlers) > 0 || len(active.queues) > 0 {
-		if err := dependencies.profileReady(ctx); err != nil {
+		if err := dependencies.queuesReady(ctx); err != nil {
+			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
 	}
 	components = append(components, preclaimReadinessComponent{registry: registry})
-	var presence *jobruntime.ProfilePresence
+	if len(active.queues) == 0 {
+		return components, nil
+	}
+	if sources.buildRiverProcess == nil {
+		_ = closeWorkerFamily(active)
+		dependencies.close()
+		return nil, errWorkerDependencyUnavailable
+	}
+	workerProcess, err := sources.buildRiverProcess(
+		cfg, dependencies.database, workers, active, logger,
+	)
+	if err != nil || workerProcess == nil {
+		_ = closeWorkerFamily(active)
+		dependencies.close()
+		return nil, errWorkerDependencyUnavailable
+	}
+	var presence *jobruntime.WorkerPresence
 	if database, ok := dependencies.database.(*postgresWorkerDatabase); ok {
 		var presenceErr error
-		presence, presenceErr = database.NewProfilePresence(cfg.Profile, dependencies.instanceID)
+		presence, presenceErr = database.NewWorkerPresence(
+			dependencies.workerGroup, cfg.Queues, dependencies.instanceID,
+		)
 		if presenceErr != nil {
+			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
 	}
-	if len(workerComponents) > 0 {
-		components = append(components, workerProfileComponent{
-			components: workerComponents, budget: dependencies.workerDrainBudget, presence: presence,
-		})
-	} else if presence != nil {
-		components = append(components, presence)
-	}
+	logger.InfoContext(ctx, "worker queues configured",
+		"worker_group", dependencies.workerGroup,
+		"worker_instance_id", dependencies.instanceID,
+		"queues", strings.Join(cfg.Queues, ","),
+		"queue_workers", formatQueueBudgets(active.queues),
+		"river_client_count", 1,
+		"queue_database_max_connections", dependencies.startup.Connections.QueueControl,
+		"domain_database_max_connections", dependencies.startup.Connections.Domain,
+	)
+	components = append(components, workerProcessComponent{
+		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,
+	})
 	return components, nil
+}
+
+func formatQueueBudgets(budgets []jobruntime.QueueBudget) string {
+	values := make([]string, 0, len(budgets))
+	for _, budget := range budgets {
+		values = append(values, fmt.Sprintf("%s=%d", budget.Queue, budget.MaxWorkers))
+	}
+	sort.Strings(values)
+	return strings.Join(values, ",")
 }
 
 // githubProjectsV2StartupReadiness implements CHAOS-3506's one warning-only
@@ -585,8 +624,10 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 	result := workerFamily{
 		handlers:      append([]jobruntime.HandlerSpec(nil), existing.handlers...),
 		queues:        append([]jobruntime.QueueBudget(nil), existing.queues...),
+		cleanups:      append([]func() error(nil), existing.cleanups...),
 		metricsSource: existing.metricsSource,
 	}
+	result.cleanups = append(result.cleanups, additional.cleanups...)
 	if additional.metricsSource != nil {
 		if result.metricsSource != nil {
 			// Two families both claiming an additional metrics fragment would
@@ -629,6 +670,49 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 		result.queues = append(result.queues, queue)
 	}
 	return result, nil
+}
+
+func closeWorkerFamily(family workerFamily) error {
+	var closeErrors []error
+	for index := len(family.cleanups) - 1; index >= 0; index-- {
+		if family.cleanups[index] == nil {
+			continue
+		}
+		if err := family.cleanups[index](); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+	}
+	return errors.Join(closeErrors...)
+}
+
+func queueSelected(queues []string, target string) bool {
+	for _, queue := range queues {
+		if queue == target {
+			return true
+		}
+	}
+	return false
+}
+
+func anyQueueSelected(queues []string, targets ...string) bool {
+	for _, target := range targets {
+		if queueSelected(queues, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedQueueBudgets(queues, targets []string, concurrency map[string]int) []jobruntime.QueueBudget {
+	selected := make([]jobruntime.QueueBudget, 0, len(targets))
+	for _, queue := range targets {
+		if queueSelected(queues, queue) {
+			selected = append(selected, jobruntime.QueueBudget{
+				Queue: queue, MaxWorkers: concurrency[queue],
+			})
+		}
+	}
+	return selected
 }
 
 // workerRouteSwitches is the single translation from process configuration to
@@ -753,6 +837,9 @@ func providerRouteSwitchesReady(
 	cfg config.Config,
 	runtimeConstructed *bool,
 ) health.CheckFunc {
+	if !queueSelected(cfg.Queues, providerUnitQueue) {
+		return func(context.Context) error { return nil }
+	}
 	switches := workerRouteSwitches(cfg)
 	routes := effectiveProviderRouteSwitches(cfg)
 	return func(context.Context) error {
@@ -813,20 +900,21 @@ func (source workerMetricsSource) WritePrometheus(output io.Writer) error {
 		}
 		for _, job := range snapshot.Jobs {
 			if err := source.collector.SetJobsAvailable(jobruntime.JobLabels{
-				Profile: snapshot.Profile,
-				Queue:   job.Queue,
-				Kind:    job.Kind,
+				Queue: job.Queue,
+				Kind:  job.Kind,
 			}, job.Available); err != nil {
 				return err
 			}
 		}
 		for _, queue := range snapshot.Queues {
-			if err := source.collector.SetJobOldestAge(snapshot.Profile, queue.Queue, queue.OldestAvailableAge); err != nil {
+			if err := source.collector.SetJobOldestAge(queue.Queue, queue.OldestAvailableAge); err != nil {
 				return err
 			}
 		}
-		if err := source.collector.SetExecutionSaturation(snapshot.Profile, snapshot.ExecutionSaturation); err != nil {
-			return err
+		for _, queue := range snapshot.QueueCapacities {
+			if err := source.collector.SetExecutionSaturation(queue.Queue, queue.Saturation); err != nil {
+				return err
+			}
 		}
 	}
 	return source.collector.WritePrometheus(output)
@@ -866,67 +954,71 @@ func buildWorkerDependencies(
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
-	if sources.loadJobRegistry == nil || sources.loadDeployment == nil || sources.deploymentProfile == "" {
+	if len(cfg.Queues) == 0 || len(cfg.WorkerQueueConcurrency) != len(cfg.Queues) {
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
-	contracts, err := sources.loadJobRegistry(sources.contractRoot)
-	if err != nil {
+	descriptors, err := dependencies.runtimeRegistry.SelectedQueues(cfg.Queues)
+	if err != nil || len(descriptors) == 0 {
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
-	manifest, _, err := sources.loadDeployment(sources.deploymentProfile, contracts)
-	if err != nil {
-		dependencies.startupErr = errWorkerDependencyUnavailable
-		return dependencies
+	longestTimeout := time.Duration(0)
+	for _, descriptor := range descriptors {
+		if descriptor.Timeout > longestTimeout {
+			longestTimeout = descriptor.Timeout
+		}
 	}
-	process, ok := riverProcessForProfile(manifest, cfg.Profile)
-	if !ok {
-		dependencies.startupErr = errWorkerDependencyUnavailable
-		return dependencies
+	dependencies.workerGroup = cfg.WorkerGroup
+	if dependencies.workerGroup == "" {
+		dependencies.workerGroup = "worker"
 	}
-	dependencies.shutdownGrace = time.Duration(process.ShutdownGraceSeconds) * time.Second
-	dependencies.workerDrainBudget = dependencies.shutdownGrace - profileFinalizationBuffer
-	if dependencies.workerDrainBudget <= 0 {
-		dependencies.startupErr = errWorkerDependencyUnavailable
-		return dependencies
+	dependencies.shutdownGrace = cfg.ShutdownTimeout
+	if dependencies.shutdownGrace == 0 {
+		// Direct unit construction does not pass through config.Load. Production
+		// always supplies a concrete timeout, so infer only for that test seam.
+		dependencies.shutdownGrace = longestTimeout + workerFinalizationBuffer
 	}
-	if cfg.ShutdownTimeout > 0 && cfg.ShutdownTimeout < dependencies.shutdownGrace {
+	dependencies.workerDrainBudget = dependencies.shutdownGrace - workerFinalizationBuffer
+	if dependencies.workerDrainBudget < longestTimeout {
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
 	// Queues and Handlers stay empty here on purpose: they are filled in only by
-	// concretely constructed handler families. Everything the manifest declares
-	// is an expectation to prove against, never a capability claim.
-	manifestQueues := make([]jobruntime.QueueBudget, 0, len(process.QueueWorkers))
-	for _, queue := range process.QueueWorkers {
-		manifestQueues = append(manifestQueues, jobruntime.QueueBudget{
-			Queue: queue.Queue, MaxWorkers: queue.MaxWorkers,
-		})
+	// concretely constructed handler families. The deployment-selected queue
+	// concurrency is an expectation to prove against, never a capability claim.
+	configuredQueues := make([]jobruntime.QueueBudget, 0, len(cfg.Queues))
+	for _, queue := range cfg.Queues {
+		workers := cfg.WorkerQueueConcurrency[queue]
+		if workers < 1 || workers > 10_000 {
+			dependencies.startupErr = errWorkerDependencyUnavailable
+			return dependencies
+		}
+		configuredQueues = append(configuredQueues, jobruntime.QueueBudget{Queue: queue, MaxWorkers: workers})
 	}
 	dependencies.startup = jobruntime.StartupSpec{
-		Profile:        cfg.Profile,
-		ManifestQueues: manifestQueues,
+		SelectedQueues:   append([]string(nil), cfg.Queues...),
+		ConfiguredQueues: configuredQueues,
 		Connections: jobruntime.ConnectionBudget{
 			QueueControl: int(cfg.QueueDatabaseMaxConns),
 			Domain:       int(cfg.DomainDatabaseMaxConns),
 		},
-		ManifestConnections: jobruntime.ConnectionBudget{
-			QueueControl: process.QueueControlMaxConnections,
-			Domain:       process.DomainMaxConnections,
+		ConfiguredConnections: jobruntime.ConnectionBudget{
+			QueueControl: int(cfg.QueueDatabaseMaxConns),
+			Domain:       int(cfg.DomainDatabaseMaxConns),
 		},
 	}
-	dependencies.buildQueueTelemetry(cfg, process, sources)
+	dependencies.buildQueueTelemetry(cfg, configuredQueues, descriptors, sources)
 	return dependencies
 }
 
 func (dependencies *workerDependencies) buildQueueTelemetry(
 	cfg config.Config,
-	process deploymentcontract.Process,
+	queueBudgets []jobruntime.QueueBudget,
+	descriptors []jobruntime.Descriptor,
 	sources workerDependencySources,
 ) {
-	descriptors := dependencies.runtimeRegistry.Profile(cfg.Profile)
-	if len(descriptors) == 0 || len(process.Queues) == 0 {
+	if len(descriptors) == 0 || len(queueBudgets) == 0 {
 		return
 	}
 	dependencies.queueTelemetryRequired = true
@@ -934,8 +1026,8 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 		dependencies.queueTelemetryErr = errWorkerDependencyUnavailable
 		return
 	}
-	queues := make([]riverstore.QueueTelemetryQueue, 0, len(process.QueueWorkers))
-	for _, queue := range process.QueueWorkers {
+	queues := make([]riverstore.QueueTelemetryQueue, 0, len(queueBudgets))
+	for _, queue := range queueBudgets {
 		queues = append(queues, riverstore.QueueTelemetryQueue{Name: queue.Queue, MaxWorkers: queue.MaxWorkers})
 	}
 	jobs := make([]riverstore.QueueTelemetryJob, 0, len(descriptors))
@@ -949,7 +1041,6 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 	dependencies.queueTelemetry, dependencies.queueTelemetryErr = dependencies.database.NewQueueTelemetrySampler(
 		riverstore.QueueTelemetryConfig{
 			Schema:   cfg.RiverDatabaseSchema,
-			Profile:  cfg.Profile,
 			ClientID: dependencies.instanceID,
 			Queues:   queues,
 			Jobs:     jobs,
@@ -962,12 +1053,12 @@ func buildWorkerMetrics(
 	cfg config.Config,
 	runtimeRegistry *jobruntime.Registry,
 ) (*jobruntime.MetricsCollector, error) {
-	dimensions := jobruntime.MetricDimensions{Profiles: []string{cfg.Profile}}
-	if runtimeRegistry != nil && runtimeRegistry.HasProfile(cfg.Profile) {
-		derived, err := jobruntime.DimensionsForProfile(
-			runtimeRegistry, cfg.Profile, nil,
-			budgetDimensionsForProfile(cfg.Profile), syncLeaseDimensionsForProfile(cfg.Profile),
-			concurrencyBudgetDimensionsForProfile(runtimeRegistry, cfg.Profile),
+	dimensions := jobruntime.MetricDimensions{}
+	if runtimeRegistry != nil {
+		derived, err := jobruntime.DimensionsForQueues(
+			runtimeRegistry, cfg.Queues, nil,
+			budgetDimensionsForQueues(cfg.Queues), syncLeaseDimensionsForQueues(cfg.Queues),
+			concurrencyBudgetDimensionsForQueues(runtimeRegistry, cfg.Queues),
 		)
 		if err != nil {
 			return nil, err
@@ -982,20 +1073,23 @@ func buildWorkerMetrics(
 	if err := jobruntime.RegisterRuntime(ctx, collector, jobruntime.RuntimeInfo{
 		Version: build.Version,
 		Commit:  build.Commit,
-		Profile: cfg.Profile,
 	}); err != nil {
 		return nil, err
 	}
 	return collector, nil
 }
 
-func concurrencyBudgetDimensionsForProfile(registry *jobruntime.Registry, profile string) []jobruntime.ConcurrencyBudgetLabels {
+func concurrencyBudgetDimensionsForQueues(registry *jobruntime.Registry, queues []string) []jobruntime.ConcurrencyBudgetLabels {
 	if registry == nil {
+		return nil
+	}
+	descriptors, err := registry.SelectedQueues(queues)
+	if err != nil {
 		return nil
 	}
 	seen := make(map[jobruntime.ConcurrencyBudgetLabels]struct{})
 	var labels []jobruntime.ConcurrencyBudgetLabels
-	for _, descriptor := range registry.Profile(profile) {
+	for _, descriptor := range descriptors {
 		if descriptor.ConcurrencyScope != "fleet" && descriptor.ConcurrencyScope != "organization" {
 			continue
 		}
@@ -1015,16 +1109,16 @@ func concurrencyBudgetDimensionsForProfile(registry *jobruntime.Registry, profil
 	return labels
 }
 
-// syncLeaseDimensionsForProfile registers the frozen provider/dataset matrix
+// syncLeaseDimensionsForQueues registers the frozen provider/dataset matrix
 // (providersync.MatrixProviders + Capabilities, TRD §10.1) as the bounded
-// worker_sync_lease_expired_total dimension set. Only the "sync" profile
-// constructs the provider-unit handler that can ever observe a recovered
-// claim, so other profiles keep an empty, harmless set. The matrix is static
+// worker_sync_lease_expired_total dimension set. Only a process that selects
+// the provider-unit queue constructs the handler that can observe a recovered
+// claim, so other queue selections keep an empty, harmless set. The matrix is static
 // deployment configuration, not runtime or tenant data, so this stays well
 // under maxMetricSyncLeases regardless of which providers are feature-flag
 // enabled today.
-func syncLeaseDimensionsForProfile(profile string) []jobruntime.SyncLeaseLabels {
-	if profile != "sync" {
+func syncLeaseDimensionsForQueues(queues []string) []jobruntime.SyncLeaseLabels {
+	if !queueSelected(queues, providerUnitQueue) {
 		return nil
 	}
 	var labels []jobruntime.SyncLeaseLabels
@@ -1038,12 +1132,12 @@ func syncLeaseDimensionsForProfile(profile string) []jobruntime.SyncLeaseLabels 
 	return labels
 }
 
-// budgetDimensionsForProfile registers the same frozen provider matrix, paired
+// budgetDimensionsForQueues registers the same frozen provider matrix, paired
 // with providersync's three static cost classes, as the bounded
-// worker_budget_wait_seconds dimension set. Only "sync" builds a provider-unit
-// executor that ever acquires a provider cost budget.
-func budgetDimensionsForProfile(profile string) []jobruntime.BudgetLabels {
-	if profile != "sync" {
+// worker_budget_wait_seconds dimension set. Only a process selecting the
+// provider-unit queue builds an executor that acquires a provider cost budget.
+func budgetDimensionsForQueues(queues []string) []jobruntime.BudgetLabels {
+	if !queueSelected(queues, providerUnitQueue) {
 		return nil
 	}
 	costClasses := []providersync.CostClass{
@@ -1058,15 +1152,6 @@ func budgetDimensionsForProfile(profile string) []jobruntime.BudgetLabels {
 		}
 	}
 	return labels
-}
-
-func riverProcessForProfile(manifest deploymentcontract.Manifest, profile string) (deploymentcontract.Process, bool) {
-	for _, process := range manifest.Processes {
-		if process.Runtime == "river" && process.RegistryProfile != nil && *process.RegistryProfile == profile {
-			return process, true
-		}
-	}
-	return deploymentcontract.Process{}, false
 }
 
 func (dependencies *workerDependencies) domainReady(ctx context.Context) error {
@@ -1132,11 +1217,11 @@ func (dependencies *workerDependencies) jobRegistryReady(context.Context) error 
 	return nil
 }
 
-// profileReady is the production call site for exact startup validation. It
+// queuesReady is the production call site for exact startup validation. It
 // proves the registry's executable coverage, the constructed queue consumers,
 // and the deployment budget in one place, so no other readiness path can
-// approve a partially constructed profile.
-func (dependencies *workerDependencies) profileReady(context.Context) error {
+// approve a partially constructed queue selection.
+func (dependencies *workerDependencies) queuesReady(context.Context) error {
 	if dependencies == nil || dependencies.registryErr != nil ||
 		dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
 		return errWorkerDependencyUnavailable

@@ -251,9 +251,7 @@ INSERT INTO report_runs (
 		"00000000-0000-4000-8000-000000000099", now.Add(-time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
-		Profiles: []string{"heavy"},
-	})
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}

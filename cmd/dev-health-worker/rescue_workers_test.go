@@ -42,7 +42,7 @@ func TestRegisterRescueCoverageAddsCoordinatorKindsToPartialClient(t *testing.T)
 	}
 }
 
-func TestEveryStartedWorkerRiverClientRegistersGlobalRescueCoverage(t *testing.T) {
+func TestEveryWorkerFamilyRegistersGlobalRescueCoverageOnSharedWorkers(t *testing.T) {
 	for _, path := range []string{
 		"daily.go",
 		"operational.go",
@@ -79,10 +79,36 @@ func TestEveryStartedWorkerRiverClientRegistersGlobalRescueCoverage(t *testing.T
 				}
 				return true
 			})
-			if clients != 1 || rescueRegistrations != clients {
-				t.Fatalf("%s River clients=%d rescue registrations=%d", path, clients, rescueRegistrations)
+			if clients != 0 || rescueRegistrations != 1 {
+				t.Fatalf("%s family clients=%d rescue registrations=%d", path, clients, rescueRegistrations)
 			}
 		})
+	}
+}
+
+func TestWorkerProcessConstructsTheOnlyRiverClient(t *testing.T) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), "river_process.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients := 0
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		function, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		packageName, ok := function.X.(*ast.Ident)
+		if ok && packageName.Name == "river" && function.Sel.Name == "NewClient" {
+			clients++
+		}
+		return true
+	})
+	if clients != 1 {
+		t.Fatalf("process-level River clients = %d, want exactly one", clients)
 	}
 }
 

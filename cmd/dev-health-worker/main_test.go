@@ -33,7 +33,7 @@ func TestWorkerCommandUsesExplicitQueuesInsteadOfProfiles(t *testing.T) {
 			wantCode: 0,
 		},
 		{
-			name:     "named profile is not a worker option",
+			name:     "profile flag is not a worker option",
 			args:     []string{"--profile", "ops", "--version"},
 			wantCode: 2,
 		},
@@ -84,7 +84,12 @@ func TestWorkerCommandPassesCanonicalQueuesToDependencyConstruction(t *testing.T
 		context.Background(),
 		spec,
 		[]string{"--queues", "webhooks,heartbeat", "--queues", "retention"},
-		func(string) (string, bool) { return "", false },
+		func(key string) (string, bool) {
+			if key == "DEV_HEALTH_QUEUE_CONCURRENCY" {
+				return "heartbeat=1,retention=2,webhooks=4", true
+			}
+			return "", false
+		},
 		shell.IO{Stdout: &stdout, Stderr: &stderr},
 	)
 	if code != 1 {

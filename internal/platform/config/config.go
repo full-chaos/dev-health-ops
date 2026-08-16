@@ -24,7 +24,7 @@ const (
 	defaultDomainMaxConns    = 4
 	defaultQueueMaxConns     = 2
 	// 2 matches the checked-in per-process coordinator_max_connections in
-	// deploy/go-workers/profiles.json for every coordinator process today
+	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
 	defaultCoordinatorMaxConns = 2
 	defaultCompletedRetention  = 7 * 24 * time.Hour
@@ -77,9 +77,17 @@ type Config struct {
 	Service string
 	Profile string
 	Queues  []string
-	// WorkerInstanceID is generated once inside the process. Every River
-	// client in that process derives its attempted_by identity from it.
-	WorkerInstanceID   string
+	// WorkerInstanceID is generated once inside the process and is the one
+	// River client's attempted_by identity.
+	WorkerInstanceID string
+	// WorkerQueueConcurrency is populated from the selected deployment group
+	// and must cover Worker Queues exactly. Worker families may use it, but they
+	// must not define queue capacity in application code.
+	WorkerQueueConcurrency map[string]int
+	// WorkerGroup is an observability identity only. It never selects queues or
+	// changes handler construction.
+	WorkerGroup string
+
 	HTTPAddress        string
 	ShutdownTimeout    time.Duration
 	HealthCheckTimeout time.Duration
@@ -506,6 +514,10 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.WorkerGroup, cfg.WorkerQueueConcurrency, err = workerQueueRuntime(spec, lookup, cfg.Queues)
+	if err != nil {
+		return Config{}, err
+	}
 
 	secretTargets := []struct {
 		name   string
@@ -869,6 +881,12 @@ func (c Config) SafeAttrs() []slog.Attr {
 	if len(c.Queues) > 0 {
 		attrs = append(attrs, slog.String("queues", strings.Join(c.Queues, ",")))
 	}
+	if c.WorkerGroup != "" {
+		attrs = append(attrs,
+			slog.String("worker_group", c.WorkerGroup),
+			slog.String("queue_workers", formatQueueConcurrency(c.WorkerQueueConcurrency)),
+		)
+	}
 	return attrs
 }
 
@@ -1031,6 +1049,69 @@ func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
 	}
 	slices.Sort(queues)
 	return queues, nil
+}
+
+func workerQueueRuntime(spec Spec, lookup secrets.LookupEnv, queues []string) (string, map[string]int, error) {
+	group, groupSet := lookup("DEV_HEALTH_WORKER_GROUP")
+	encoded, concurrencySet := lookup("DEV_HEALTH_QUEUE_CONCURRENCY")
+	group = strings.TrimSpace(group)
+	encoded = strings.TrimSpace(encoded)
+	if !spec.RequireQueues {
+		if (groupSet && group != "") || (concurrencySet && encoded != "") {
+			return "", nil, fmt.Errorf("%s does not accept worker queue runtime settings", spec.Service)
+		}
+		return "", nil, nil
+	}
+	if group == "" {
+		group = "worker"
+	}
+	if len(group) > 64 {
+		return "", nil, errors.New("DEV_HEALTH_WORKER_GROUP exceeds 64 characters")
+	}
+	if err := validateName("DEV_HEALTH_WORKER_GROUP", group); err != nil {
+		return "", nil, err
+	}
+	if encoded == "" {
+		return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY is required")
+	}
+	concurrency := make(map[string]int)
+	for _, item := range strings.Split(encoded, ",") {
+		parts := strings.Split(item, "=")
+		if len(parts) != 2 {
+			return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY must use queue=workers entries")
+		}
+		queue := strings.TrimSpace(parts[0])
+		workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
+			return "", nil, errors.New("DEV_HEALTH_QUEUE_CONCURRENCY has an invalid entry")
+		}
+		if _, duplicate := concurrency[queue]; duplicate {
+			return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
+		}
+		concurrency[queue] = workers
+	}
+	if len(concurrency) != len(queues) {
+		return "", nil, errors.New("queue concurrency must cover the selected queues exactly")
+	}
+	for _, queue := range queues {
+		if concurrency[queue] < 1 {
+			return "", nil, errors.New("queue concurrency must cover the selected queues exactly")
+		}
+	}
+	return group, concurrency, nil
+}
+
+func formatQueueConcurrency(concurrency map[string]int) string {
+	queues := make([]string, 0, len(concurrency))
+	for queue := range concurrency {
+		queues = append(queues, queue)
+	}
+	slices.Sort(queues)
+	values := make([]string, 0, len(queues))
+	for _, queue := range queues {
+		values = append(values, fmt.Sprintf("%s=%d", queue, concurrency[queue]))
+	}
+	return strings.Join(values, ",")
 }
 
 func validQueueName(value string) bool {

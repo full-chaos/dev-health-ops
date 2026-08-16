@@ -1566,7 +1566,7 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_process",
-        "value": "Go ops profile"
+        "value": "Go worker consuming the webhooks queue"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
@@ -2382,7 +2382,7 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_process",
-        "value": "Go ops profile"
+        "value": "Go worker consuming the webhooks queue"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
@@ -2455,7 +2455,7 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_process",
-        "value": "Go ops profile"
+        "value": "Go worker consuming the webhooks queue"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
@@ -2517,12 +2517,12 @@
       "route_mount_prefix": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:11",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:12",
       "surface": "investment.chunk",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 11
+        "line": 12
       },
       "queue_or_cadence": "investment / heavy",
       "dispatches": "run_investment_materialize_chunk",
@@ -2541,12 +2541,12 @@
       "notes": "handler_owner metadata drift, gap 4.7 | Orchestrator resolution: real current executor is the work-graph compatibility bridge cmd/dev-health-worker/workgraph.go (confirmed: it constructs workgraph.NewHTTPCompatibilityExecutor against /internal/worker/workgraph/v1/execute), NOT internal/jobs/investment as registry.json handler_owner metadata claims. That metadata drift is a known gap (4.7) whose fix belongs to CUT-13; this row records the real owner without editing registry.json."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:12",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:44",
       "surface": "investment.dispatch",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 12
+        "line": 44
       },
       "queue_or_cadence": "investment / heavy",
       "dispatches": "dispatch_investment_materialize_partitioned",
@@ -2565,12 +2565,12 @@
       "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:13",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:76",
       "surface": "investment.finalize",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 13
+        "line": 76
       },
       "queue_or_cadence": "investment / heavy",
       "dispatches": "finalize_investment_materialize_partitioned",
@@ -2589,12 +2589,12 @@
       "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:14",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:108",
       "surface": "investment.materialize",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 14
+        "line": 108
       },
       "queue_or_cadence": "investment / heavy",
       "dispatches": "run_investment_materialize",
@@ -2613,12 +2613,12 @@
       "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:16",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:140",
       "surface": "metrics.daily_dispatch",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 16
+        "line": 140
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "dispatch_daily_metrics_partitioned",
@@ -2637,12 +2637,12 @@
       "notes": "gap 2.3"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:38",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:172",
       "surface": "metrics.daily_finalize",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 38
+        "line": 172
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_daily_metrics_finalize_task",
@@ -2661,12 +2661,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:60",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:204",
       "surface": "metrics.daily_partition",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 60
+        "line": 204
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_daily_metrics_batch",
@@ -2685,12 +2685,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:82",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:236",
       "surface": "metrics.remaining.capacity",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 82
+        "line": 236
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_capacity_forecast_job",
@@ -2709,12 +2709,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:95",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:268",
       "surface": "metrics.remaining.complexity",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 95
+        "line": 268
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_complexity_job",
@@ -2733,12 +2733,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:108",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:300",
       "surface": "metrics.remaining.dora",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 108
+        "line": 300
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_dora_metrics",
@@ -2757,12 +2757,12 @@
       "notes": "Orchestrator resolution: owner is the metrics.remaining family under the Go heavy worker (CUT-12). Confirmed chain-triggered, not scheduled: internal/syncdispatchruntime/native_post_sync.go Fanout() calls remaining.StartRunTx(ctx, tx, \"dora\", *plan, \"\") when plan.DORA is true, as part of the native post-sync fanout completed for CHAOS-2596/CHAOS-3051; there is no Beat entry or standalone cron for it."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:121",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:332",
       "surface": "metrics.remaining.extra_metrics",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 121
+        "line": 332
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "unclear - no matching task by name",
@@ -2781,12 +2781,12 @@
       "notes": "could not confirm Celery task mapping by name pattern | INVESTIGATED for CUT-01: cross-referenced contracts/jobs/v1/registry.json, internal/jobs/metrics/remaining/families.json, cmd/dev-health-worker/daily.go (addRemainingWorker registration -- the Go handler IS constructed and wired, identically to the other six metrics.remaining.* families) and internal/syncdispatchruntime/native_post_sync.go (the only place any Go code calls remaining.StartRunTx, and it only ever passes family \"complexity\", \"membership_backfill\", or \"dora\" -- never \"team_metrics\" or \"extra_metrics\"). No Celery task, Beat entry, admin/API trigger, or Go producer creates a remaining_metric_runs row for this family anywhere in the codebase. The Python compute functions (_run_team_metrics / _run_extra_metrics in worker_metrics.py) are real and would execute correctly if invoked, and the Go PartitionHandler is registered -- but nothing today ever invokes them. Do not count this kind as covered until a producer is added or the kind is confirmed intentionally dormant."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:134",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:364",
       "surface": "metrics.remaining.membership_backfill",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 134
+        "line": 364
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_membership_backfill",
@@ -2805,12 +2805,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:147",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:396",
       "surface": "metrics.remaining.recommendations",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 147
+        "line": 396
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_recommendations_job",
@@ -2829,12 +2829,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:160",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:428",
       "surface": "metrics.remaining.release_impact",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 160
+        "line": 428
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "run_release_impact_job",
@@ -2853,12 +2853,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:173",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:460",
       "surface": "metrics.remaining.team_metrics",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 173
+        "line": 460
       },
       "queue_or_cadence": "metrics / heavy",
       "dispatches": "unclear - no matching Celery task found",
@@ -2877,12 +2877,12 @@
       "notes": "NO discoverable matching Celery task by name-pattern search; orchestrator must resolve identity or flag as speculative | INVESTIGATED for CUT-01: cross-referenced contracts/jobs/v1/registry.json, internal/jobs/metrics/remaining/families.json, cmd/dev-health-worker/daily.go (addRemainingWorker registration -- the Go handler IS constructed and wired, identically to the other six metrics.remaining.* families) and internal/syncdispatchruntime/native_post_sync.go (the only place any Go code calls remaining.StartRunTx, and it only ever passes family \"complexity\", \"membership_backfill\", or \"dora\" -- never \"team_metrics\" or \"extra_metrics\"). No Celery task, Beat entry, admin/API trigger, or Go producer creates a remaining_metric_runs row for this family anywhere in the codebase. The Python compute functions (_run_team_metrics / _run_extra_metrics in worker_metrics.py) are real and would execute correctly if invoked, and the Go PartitionHandler is registered -- but nothing today ever invokes them. Do not count this kind as covered until a producer is added or the kind is confirmed intentionally dormant."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:186",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:492",
       "surface": "operational.billing_notification",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 186
+        "line": 492
       },
       "queue_or_cadence": "webhooks / ops",
       "dispatches": "send_billing_notification",
@@ -2901,12 +2901,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:215",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:524",
       "surface": "operational.webhook_delivery",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 215
+        "line": 524
       },
       "queue_or_cadence": "webhooks / ops",
       "dispatches": "process_webhook_event",
@@ -2925,12 +2925,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:244",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:556",
       "surface": "report.execute_on_demand",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 244
+        "line": 556
       },
       "queue_or_cadence": "reports / heavy",
       "dispatches": "execute_saved_report",
@@ -2949,12 +2949,12 @@
       "notes": "unreachable from any cmd/ (gap 2.7)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:273",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:588",
       "surface": "report.execute_scheduled",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 273
+        "line": 588
       },
       "queue_or_cadence": "reports / heavy",
       "dispatches": "execute_saved_report (scheduled)",
@@ -2973,12 +2973,12 @@
       "notes": "unreachable from any cmd/ (gap 2.7)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:302",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:620",
       "surface": "sync.provider_unit",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 302
+        "line": 620
       },
       "queue_or_cadence": "sync_provider / sync",
       "dispatches": "run_sync_unit",
@@ -2997,12 +2997,12 @@
       "notes": "only non-celery route transport is river_canary; matrix inventory: 59/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. All checked-in deployment switches remain default-off, so every non-enabled scope continues through the Celery/Python compatibility path."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:331",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:652",
       "surface": "sync.team_autoimport",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 331
+        "line": 652
       },
       "queue_or_cadence": "sync / sync",
       "dispatches": "run_post_sync_team_autoimport",
@@ -3021,12 +3021,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:360",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:684",
       "surface": "system.heartbeat",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 360
+        "line": 684
       },
       "queue_or_cadence": "heartbeat / ops",
       "dispatches": "phone_home_heartbeat",
@@ -3045,12 +3045,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:389",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:716",
       "surface": "system.retention_cleanup",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 389
+        "line": 716
       },
       "queue_or_cadence": "retention / ops",
       "dispatches": "n/a (native Go, worker_job_outbox terminal-row deletes only)",
@@ -3069,12 +3069,12 @@
       "notes": "does NOT cover prune_rate_limit_observations/prune_external_ingest_batches (gap 2.6)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:422",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:758",
       "surface": "system.sync_coverage_refresh",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 422
+        "line": 758
       },
       "queue_or_cadence": "coverage / ops",
       "dispatches": "native bounded projection refresh",
@@ -3093,12 +3093,12 @@
       "notes": "Fixed scheduler emits one bounded five-minute occurrence; ops worker owns the coverage queue and native PostgreSQL projector."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:450",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:790",
       "surface": "workgraph.build",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 450
+        "line": 790
       },
       "queue_or_cadence": "workgraph / heavy",
       "dispatches": "run_work_graph_build",

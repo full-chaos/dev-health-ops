@@ -48,7 +48,6 @@ func TestJobDefinitionRejectsRegistrySchemaViolations(t *testing.T) {
 		name   string
 		mutate func(*JobDefinition)
 	}{
-		{name: "profile", mutate: func(job *JobDefinition) { job.Profile = "Ops" }},
 		{name: "queue", mutate: func(job *JobDefinition) { job.Queue = "queue with spaces" }},
 		{name: "handler owner", mutate: func(job *JobDefinition) { job.HandlerOwner = "src/jobs/system" }},
 		{name: "timeout upper bound", mutate: func(job *JobDefinition) { job.TimeoutSeconds = 86401 }},
@@ -87,15 +86,17 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := CapabilitiesForProfile(root, registry, "ops")
+	opsQueues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	heavyQueues := []string{"investment", "metrics", "reports", "sync_provider", "workgraph"}
+	report, err := CapabilitiesForQueues(root, registry, opsQueues)
 	if err != nil {
 		t.Fatal(err)
 	}
-	heavy, err := CapabilitiesForProfile(root, registry, "heavy")
+	heavy, err := CapabilitiesForQueues(root, registry, heavyQueues)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sync, err := CapabilitiesForProfile(root, registry, "sync")
+	sync, err := CapabilitiesForQueues(root, registry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 		t.Fatal("CheckRollout() accepted an old schema revision")
 	}
 	if err := CheckRollout(root, registry, state, nil); err == nil {
-		t.Fatal("CheckRollout() accepted missing profile reports")
+		t.Fatal("CheckRollout() accepted missing queue reports")
 	}
 }
 
@@ -129,19 +130,19 @@ func TestRollingDeploymentHoldsProducerAtNMinusOne(t *testing.T) {
 		Kind:              KindHeartbeat,
 		CurrentVersion:    2,
 		SupportedVersions: []int{1, 2},
-		Profile:           "ops",
+		Queue:             "heartbeat",
 		SchemaVersions: map[string]string{
 			"1": "schemas/system.heartbeat.v1.schema.json",
 			"2": "schemas/system.heartbeat.v1.schema.json",
 		},
 	}}}
-	newBinary, err := CapabilitiesForProfile(root, registry, "ops")
+	newBinary, err := CapabilitiesForQueues(root, registry, []string{"heartbeat"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	oldBinary := CapabilityReport{
 		SchemaVersion: 1,
-		Profile:       "ops",
+		Queues:        []string{"heartbeat"},
 		Contracts: []ContractCapability{{
 			Kind:          KindHeartbeat,
 			Versions:      []int{1},
@@ -149,7 +150,7 @@ func TestRollingDeploymentHoldsProducerAtNMinusOne(t *testing.T) {
 		}},
 	}
 	state := MigrationState{SchemaVersion: 1, Jobs: []MigrationJob{{
-		Kind: KindHeartbeat, ProducerVersion: 1, RequiredProfiles: []string{"ops"},
+		Kind: KindHeartbeat, ProducerVersion: 1,
 	}}}
 	if err := CheckRollout(root, registry, state, []CapabilityReport{oldBinary, newBinary}); err != nil {
 		t.Fatalf("N-1 producer should remain safe during rolling deploy: %v", err)
@@ -194,27 +195,27 @@ func TestBreakingChangeDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBinary, err := CapabilitiesForProfile(base, baseRegistry, "ops")
+	oldBinary, err := CapabilitiesForQueues(base, baseRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newBinary, err := CapabilitiesForProfile(candidate, candidateRegistry, "ops")
+	newBinary, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldHeavy, err := CapabilitiesForProfile(base, baseRegistry, "heavy")
+	oldHeavy, err := CapabilitiesForQueues(base, baseRegistry, []string{"investment", "metrics", "reports", "sync_provider", "workgraph"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newHeavy, err := CapabilitiesForProfile(candidate, candidateRegistry, "heavy")
+	newHeavy, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"investment", "metrics", "reports", "sync_provider", "workgraph"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldSync, err := CapabilitiesForProfile(base, baseRegistry, "sync")
+	oldSync, err := CapabilitiesForQueues(base, baseRegistry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newSync, err := CapabilitiesForProfile(candidate, candidateRegistry, "sync")
+	newSync, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +275,11 @@ func TestEnvelopeOptionalFieldChangesEveryCapabilityDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldReport, err := CapabilitiesForProfile(base, baseRegistry, "ops")
+	oldReport, err := CapabilitiesForQueues(base, baseRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newReport, err := CapabilitiesForProfile(candidate, candidateRegistry, "ops")
+	newReport, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -210,7 +210,7 @@ services:
       # workers/task_utils.py for every provider) silently had no key in
       # local dev. The Go worker's `sync` profile decrypts the same stored
       # credentials with the same variable name
-      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/profiles.json) wherever
+      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/deployment.json) wherever
       # it runs, so this value stays byte-identical to whatever a Go
       # topology alongside this stack is given.
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}

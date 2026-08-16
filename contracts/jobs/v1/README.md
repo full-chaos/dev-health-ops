@@ -19,7 +19,7 @@ only the envelope defined by `envelope.schema.json`.
 - A kind at version N supports both N and N-1 while a rolling deployment may
   contain either binary. Version 1 is the only exception because N-1 does not
   exist.
-- A producer may emit a version only after every target profile reports that
+- A producer may emit a version only after every target worker group reports that
   exact kind/version and schema digest in a capability report. The digest
   covers both the envelope and kind payload schemas, preventing an older
   strict decoder from falsely qualifying after an additive optional-field
@@ -28,21 +28,30 @@ only the envelope defined by `envelope.schema.json`.
   identifiers and safe options only. Credentials, DSNs, headers, SQL, raw
   provider/webhook payloads, rendered reports, and tenant data are forbidden.
 
-`registry.json` defines the supported kind/version pairs and execution policy.
-`migration-state.json` records producer routing and promotion state without
-making queue state authoritative for product state. The validated
-[`deploy/go-workers/profiles.json`](../../../deploy/go-workers/profiles.json)
-manifest maps every registered profile, queue, and kind to a disabled-by-default
-deployment process and proves the maximum PostgreSQL connection footprint.
+`registry.json` defines the supported kind/version pairs, their canonical
+queues, and execution policy. `migration-state.json` records producer routing
+and promotion state without making queue state authoritative for product state.
+The validated [`deploy/go-workers/deployment.json`](../../../deploy/go-workers/deployment.json)
+deployment manifest selects registered queues for independently scalable worker
+groups and declares each group's per-queue concurrency, replica range, resource
+limits, and connection footprint.
+
+The application mapping from job kind to queue is canonical. Deployment can
+place groups on disjoint sets, such as `sync,sync_provider` and
+`investment,metrics`, or intentionally overlap a queue such as `metrics`.
+River distributes claims among all consumers of an overlapping queue. A worker
+process constructs one River client for its selected queue set; a separate
+process is the boundary for a separate group. Deployment changes do not create
+new queues or remap a job kind.
 
 `system.retention_cleanup` version 3 adds only the table-scoped
 `ask_dev_conversations` policy. Versions 1 and 2 keep their originally
 published policy enums; accepting v3 must never make an older-version decoder
 accept the new deletion capability.
 
-The registry and ops consumer accept v3 before production emission is enabled.
+The registry and Go consumer accept v3 before production emission is enabled.
 `migration-state.json` therefore keeps `producer_version` at 2 until capability
-reports from every live ops profile prove the v3 schema digest. The fixed
+reports from every live worker group prove the v3 schema digest. The fixed
 scheduler treats that producer version as an admission boundary and cannot
 construct a v3 envelope while the route remains at v2.
 
@@ -52,12 +61,12 @@ From the repository root:
 
 ```text
 go run ./cmd/worker-contractcheck validate
-go run ./cmd/worker-contractcheck capabilities --profile ops
+go run ./cmd/worker-contractcheck capabilities --queues metrics
 go run ./cmd/worker-contractcheck compare --base <old-v1-dir> --candidate contracts/jobs/v1
 ```
 
 `compare` exits non-zero for a breaking in-place edit and is designed to be
 wired to CI with the merge-base contract directory as `--base`. `validate`
-also fails when the registry and deployment profiles drift, a long-running
+also fails when the registry and deployment groups drift, a long-running
 process receives the migration DSN, or the rendered maximum connection budget
 exceeds its checked-in PostgreSQL/PgBouncer ceilings.

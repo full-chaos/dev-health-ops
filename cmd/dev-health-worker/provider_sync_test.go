@@ -6,21 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
-	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type providerSyncEntitlementFunc func(context.Context, string) error
@@ -301,9 +296,7 @@ func (hydrate providerSyncCredentialHydratorFunc) Hydrate(
 // exactly as wired as the real fix. Only a same-instance check distinguishes
 // them, which is why this test compares pointers rather than values.
 func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
-	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
-		Profiles: []string{"sync"},
-	})
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,126 +407,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeCo
 	}
 }
 
-type independentRiverClient struct {
-	name     string
-	config   *river.Config
-	handlers map[string]struct{}
-}
-
-func TestIndependentSyncClientsDoNotShareQueuesWithDisjointHandlers(
-	t *testing.T,
-) {
-	coordinator := independentRiverClient{
-		name: "sync-coordinator",
-		config: &river.Config{
-			Queues: map[string]river.QueueConfig{
-				"sync": {MaxWorkers: 2},
-			},
-		},
-		handlers: handlerSet(
-			syncdispatchcontract.KindDispatchSyncRun,
-			syncdispatchcontract.KindFinalizeSyncRun,
-			syncdispatchcontract.KindPostSync,
-			syncdispatchcontract.KindReferenceDiscovery,
-		),
-	}
-	provider := independentRiverClient{
-		name: "provider-unit",
-		config: providerSyncRiverConfig(
-			slog.Default(), river.NewWorkers(), "river",
-		),
-		handlers: handlerSet(jobcontract.KindSyncProviderUnit),
-	}
-
-	assertNoSharedQueueWithDisjointHandlers(t, coordinator, provider)
-	if _, ok := provider.config.Queues[providerUnitQueue]; !ok {
-		t.Fatalf("provider client does not own %q", providerUnitQueue)
-	}
-}
-
-func TestProviderSyncClientOwnsItsRegistryQueue(t *testing.T) {
-	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor, ok := registry.Descriptor(jobcontract.KindSyncProviderUnit)
-	if !ok {
-		t.Fatal("provider-unit descriptor missing")
-	}
-	config := providerSyncRiverConfig(
-		slog.Default(), river.NewWorkers(), "river",
-	)
-	if descriptor.Queue != providerUnitQueue {
-		t.Fatalf(
-			"provider-unit registry queue=%q want=%q",
-			descriptor.Queue, providerUnitQueue,
-		)
-	}
-	if _, ok := config.Queues[descriptor.Queue]; !ok {
-		t.Fatalf("provider client does not consume registry queue %q", descriptor.Queue)
-	}
-}
-
-func TestProviderSyncRiverConfigPassesRiverClientValidation(t *testing.T) {
-	pool, err := pgxpool.New(
-		context.Background(),
-		"postgresql://unused:unused@127.0.0.1:1/unused",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-
-	_, err = river.NewClient(
-		riverpgxv5.New(pool),
-		providerSyncRiverConfig(
-			slog.Default(), river.NewWorkers(), "river",
-		),
-	)
-	if err != nil {
-		t.Fatalf("provider sync River config is invalid: %v", err)
-	}
-}
-
-func handlerSet(kinds ...string) map[string]struct{} {
-	result := make(map[string]struct{}, len(kinds))
-	for _, kind := range kinds {
-		result[kind] = struct{}{}
-	}
-	return result
-}
-
-func assertNoSharedQueueWithDisjointHandlers(
-	t *testing.T,
-	clients ...independentRiverClient,
-) {
-	t.Helper()
-	for left := range clients {
-		for right := left + 1; right < len(clients); right++ {
-			if !disjointHandlerSets(clients[left].handlers, clients[right].handlers) {
-				continue
-			}
-			for queue := range clients[left].config.Queues {
-				if _, shared := clients[right].config.Queues[queue]; shared {
-					t.Fatalf(
-						"independent River clients %q and %q share queue %q with disjoint handlers",
-						clients[left].name, clients[right].name, queue,
-					)
-				}
-			}
-		}
-	}
-}
-
-func disjointHandlerSets(left, right map[string]struct{}) bool {
-	for kind := range left {
-		if _, shared := right[kind]; shared {
-			return false
-		}
-	}
-	return true
-}
-
 // TestProviderSyncHandlerSwitchesFollowConfiguration pins the CHAOS-3123 fix
 // that the executing handler reads the same switches the readiness check does.
 //
@@ -589,10 +462,11 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 		_ *jobruntime.Registry,
 		_ jobruntime.Observer,
 		_ *slog.Logger,
+		_ *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
 			queues: []jobruntime.QueueBudget{{
-				Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers,
+				Queue: providerUnitQueue, MaxWorkers: 17,
 			}},
 		}, nil
 	}
@@ -604,229 +478,230 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 		{
 			name: "launchdarkly feature flags",
 			cfg: config.Config{
-				Profile: "sync", WorkerLaunchDarklyFeatureFlagsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerLaunchDarklyFeatureFlagsEnabled: true,
 			},
 		},
 		{
 			name: "github repo metadata",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubRepoMetadataEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubRepoMetadataEnabled: true,
 			},
 		},
 		{
 			name: "gitlab repo metadata",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabRepoMetadataEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabRepoMetadataEnabled: true,
 			},
 		},
 		{
 			name: "gitlab commits",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabCommitsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCommitsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab commit stats",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabCommitStatsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCommitStatsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab cicd",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabCICDEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCICDEnabled: true,
 			},
 		},
 		{
 			name: "gitlab tests",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabTestsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabTestsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab incidents",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabIncidentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabIncidentsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab deployments",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabDeploymentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabDeploymentsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab feature flags",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabFeatureFlagsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabFeatureFlagsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab files",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabFilesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabFilesEnabled: true,
 			},
 		},
 		{
 			name: "gitlab blame",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabBlameEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabBlameEnabled: true,
 			},
 		},
 		{
 			name: "gitlab prs",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabPRsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab pr reviews",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabPRReviewsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRReviewsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab pr comments",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabPRCommentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRCommentsEnabled: true,
 			},
 		},
 		{
 			name: "gitlab security",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabSecurityEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabSecurityEnabled: true,
 			},
 		},
 		{
 			name: "gitlab work items",
 			cfg: config.Config{
-				Profile: "sync", WorkerGitlabWorkItemsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGitlabWorkItemsEnabled: true,
 			},
 		},
 		{
 			name: "jira work items",
 			cfg: config.Config{
-				Profile: "sync", WorkerJiraWorkItemsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerJiraWorkItemsEnabled: true,
 			},
 		},
 		{
 			name: "linear work items",
 			cfg: config.Config{
-				Profile: "sync", WorkerLinearWorkItemsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerLinearWorkItemsEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty services",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyServicesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyServicesEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty business services",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyBusinessServicesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyBusinessServicesEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty escalation policies",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyEscalationPoliciesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyEscalationPoliciesEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty schedules",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutySchedulesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutySchedulesEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty on calls",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyOnCallsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyOnCallsEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty users",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyUsersEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyUsersEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty teams",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyTeamsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyTeamsEnabled: true,
 			},
 		},
 		{
 			name: "pagerduty incident family",
 			cfg: config.Config{
-				Profile: "sync", WorkerPagerDutyIncidentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyIncidentsEnabled: true,
 			},
 		},
 		{
 			name: "github cicd",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubCICDEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubCICDEnabled: true,
 			},
 		},
 		{
 			name: "github prs",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubPRsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRsEnabled: true,
 			},
 		},
 		{
 			name: "github pr reviews",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubPRReviewsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRReviewsEnabled: true,
 			},
 		},
 		{
 			name: "github pr comments",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubPRCommentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRCommentsEnabled: true,
 			},
 		},
 		{
 			name: "github commits",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubCommitsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubCommitsEnabled: true,
 			},
 		},
 		{
 			name: "github deployments",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubDeploymentsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubDeploymentsEnabled: true,
 			},
 		},
 		{
 			name: "github security",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubSecurityEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubSecurityEnabled: true,
 			},
 		},
 		{
 			name: "github files",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubFilesEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubFilesEnabled: true,
 			},
 		},
 		{
 			name: "github commit stats",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubCommitStatsEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubCommitStatsEnabled: true,
 			},
 		},
 		{
 			name: "github blame",
 			cfg: config.Config{
-				Profile: "sync", WorkerGithubBlameEnabled: true,
+				Queues: []string{"sync", "sync_provider"}, WorkerGithubBlameEnabled: true,
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			test.cfg.Queues = []string{providerUnitQueue}
 			family, err := buildProviderSyncWorker(
-				context.Background(), test.cfg, nil, nil, nil, nil,
+				context.Background(), test.cfg, nil, nil, nil, nil, river.NewWorkers(),
 			)
 			if err != nil {
 				t.Fatalf("buildProviderSyncWorker() error = %v", err)
@@ -1026,12 +901,13 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T) {
 	t.Parallel()
 	values := map[string]string{
-		"DEV_HEALTH_ENV":     "local",
-		"GO_PROVIDER_ROUTES": "all",
-		"DEV_HEALTH_PROFILE": "sync",
+		"DEV_HEALTH_ENV":               "local",
+		"GO_PROVIDER_ROUTES":           "all",
+		"DEV_HEALTH_QUEUES":            "sync,sync_provider",
+		"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=4,sync_provider=2",
 	}
 	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-worker", Profiles: []string{"sync"}, DefaultProfile: "sync",
+		Service: "dev-health-worker", RequireQueues: true,
 		LookupEnv: func(key string) (string, bool) {
 			value, ok := values[key]
 			return value, ok

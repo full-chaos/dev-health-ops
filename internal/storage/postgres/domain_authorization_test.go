@@ -167,6 +167,23 @@ func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) 
 	}
 }
 
+func TestDomainPostureUsesWorkerInstancesTable(t *testing.T) {
+	t.Parallel()
+
+	var matches []TablePrivilege
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "worker_instances" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("worker_instances posture entries=%d, want 1", len(matches))
+	}
+	if grant := matches[0]; !grant.AllowInsert || !grant.AllowUpdate || !grant.AllowDelete {
+		t.Fatalf("worker_instances posture=%+v, want SELECT+INSERT+UPDATE+DELETE", grant)
+	}
+}
+
 func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
 	t.Parallel()
 	want := map[string]TablePrivilege{

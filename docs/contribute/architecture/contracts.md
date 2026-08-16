@@ -139,11 +139,11 @@ Versioned Go job contracts live under `contracts/jobs/v1/` and define:
 - stable kind and version;
 - registry entry;
 - handler capability;
-- deployment profile;
+- deployment manifest;
 - migration and route state;
 - compatibility and admission evidence.
 
-A running binary does not admit a job. The route, contract version, compiled handler, schema, deployment profile, and runtime capability must all agree.
+A running binary does not admit a job. The route, contract version, compiled handler, schema, deployment manifest, and runtime capability must all agree.
 
 ## Route ownership
 

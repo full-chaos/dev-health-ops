@@ -16,21 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
-
-type operationalWorkerComponent struct{ client *river.Client[pgx.Tx] }
-
-func (component operationalWorkerComponent) Name() string { return "river-operational-worker" }
-func (component operationalWorkerComponent) Start(ctx context.Context) error {
-	return component.client.Start(ctx)
-}
-func (component operationalWorkerComponent) Shutdown(ctx context.Context) error {
-	return component.client.Stop(ctx)
-}
 
 func buildOperationalWorker(
 	cfg config.Config,
@@ -38,27 +26,16 @@ func buildOperationalWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
-	if cfg.Profile != "ops" || registry == nil {
+	operationalQueues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	if !anyQueueSelected(cfg.Queues, operationalQueues...) || registry == nil {
 		return workerFamily{}, nil
 	}
-	profile := registry.Profile("ops")
-	executable := 0
-	for _, descriptor := range profile {
-		if descriptor.Executable() {
-			executable++
-		}
-	}
-	if executable == 0 {
-		return workerFamily{}, nil
-	}
-	// The process-level readiness contract is all-or-nothing. Never start a
-	// partial queue consumer before every checked-in ops handler has concrete
-	// coverage; later system-handler work completes the same profile.
-	if executable != len(profile) {
+	if workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	specs := make([]jobruntime.HandlerSpec, 0, len(profile))
+	specs := make([]jobruntime.HandlerSpec, 0, len(operationalQueues))
 	for _, kind := range []string{
 		jobcontract.KindBillingNotification,
 		jobcontract.KindWebhookDelivery,
@@ -67,12 +44,15 @@ func buildOperationalWorker(
 		jobcontract.KindSyncCoverageRefresh,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
-		if ok && descriptor.Executable() {
+		if !ok {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		if queueSelected(cfg.Queues, descriptor.Queue) && descriptor.Executable() {
 			specs = append(specs, descriptor)
 		}
 	}
-	if len(specs) != len(profile) {
-		return workerFamily{}, errWorkerDependencyUnavailable
+	if len(specs) == 0 {
+		return workerFamily{}, nil
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
@@ -134,7 +114,6 @@ func buildOperationalWorker(
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
 		Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 	}
-	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
 		switch spec.Kind {
@@ -207,27 +186,10 @@ func buildOperationalWorker(
 	if err := registerRescueCoverage(workers, registry, registered); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	budgets := []jobruntime.QueueBudget{
-		{Queue: "coverage", MaxWorkers: 1},
-		{Queue: "heartbeat", MaxWorkers: 1},
-		{Queue: "retention", MaxWorkers: 1},
-		{Queue: "webhooks", MaxWorkers: 4},
-	}
-	queues := make(map[string]river.QueueConfig, len(budgets))
-	for _, budget := range budgets {
-		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
-	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
-		ID: riverClientID(cfg, "operational"), Logger: logger, Queues: queues,
-		Schema: cfg.RiverDatabaseSchema, Workers: workers,
-	})
-	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
+	budgets := selectedQueueBudgets(cfg.Queues, operationalQueues, cfg.WorkerQueueConcurrency)
 	return workerFamily{
-		component: operationalWorkerComponent{client: client},
-		handlers:  registered,
-		queues:    budgets,
+		handlers: registered,
+		queues:   budgets,
 	}, nil
 }
 

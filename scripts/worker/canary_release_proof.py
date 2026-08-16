@@ -285,6 +285,15 @@ def validate_registry(value: dict[str, Any]) -> None:
     for job in jobs:
         if (
             not isinstance(job, dict)
+            or "profile" in job
+            or not {
+                "kind",
+                "handler_owner",
+                "current_version",
+                "supported_versions",
+                "queue",
+            }
+            <= set(job)
             or not isinstance(job.get("kind"), str)
             or KIND.fullmatch(job["kind"]) is None
             or not isinstance(job.get("handler_owner"), str)
@@ -294,8 +303,8 @@ def validate_registry(value: dict[str, Any]) -> None:
             or not job["supported_versions"]
             or not all(valid_int(version, 1) for version in job["supported_versions"])
             or job["current_version"] not in job["supported_versions"]
-            or not isinstance(job.get("profile"), str)
-            or not job["profile"]
+            or not isinstance(job.get("queue"), str)
+            or not job["queue"]
             or job["kind"] in seen
         ):
             raise ProofError("registry_invalid")
@@ -320,6 +329,18 @@ def validate_migration_state(value: dict[str, Any]) -> None:
     for job in jobs:
         if (
             not isinstance(job, dict)
+            or "required_profiles" in job
+            or not {
+                "kind",
+                "state",
+                "producer_version",
+                "consumer_versions",
+                "required_queues",
+                "route",
+                "rollback_route",
+                "evidence",
+            }
+            <= set(job)
             or not isinstance(job.get("kind"), str)
             or KIND.fullmatch(job["kind"]) is None
             or job.get("state") not in allowed_states
@@ -330,11 +351,10 @@ def validate_migration_state(value: dict[str, Any]) -> None:
             or not isinstance(job.get("consumer_versions"), list)
             or not job["consumer_versions"]
             or not all(valid_int(version, 1) for version in job["consumer_versions"])
-            or not isinstance(job.get("required_profiles"), list)
-            or not job["required_profiles"]
+            or not isinstance(job.get("required_queues"), list)
+            or not job["required_queues"]
             or not all(
-                isinstance(profile, str) and profile
-                for profile in job["required_profiles"]
+                isinstance(queue, str) and queue for queue in job["required_queues"]
             )
             or job["kind"] in seen
         ):
@@ -431,7 +451,7 @@ def validate_documents(documents: dict[str, PinnedDocument]) -> None:
             or not set(policy["consumer_versions"]).issubset(
                 set(registered["supported_versions"])
             )
-            or set(policy["required_profiles"]) != {registered["profile"]}
+            or set(policy["required_queues"]) != {registered["queue"]}
         ):
             raise ProofError("contract_job_policy_mismatch")
 

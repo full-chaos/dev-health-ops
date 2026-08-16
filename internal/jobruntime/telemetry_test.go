@@ -13,7 +13,7 @@ import (
 
 func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testing.T) {
 	t.Parallel()
-	job := JobLabels{Profile: "ops", Queue: "retention", Kind: "system.retention_cleanup"}
+	job := JobLabels{Queue: "retention", Kind: "system.retention_cleanup"}
 	stream := StreamLabels{Stream: "external_ingest", ConsumerGroup: "sink_workers"}
 	budget := BudgetLabels{Provider: "github", CostClass: "medium"}
 	syncLease := SyncLeaseLabels{Provider: "github", DatasetFamily: "work_items"}
@@ -28,19 +28,19 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		t.Fatalf("NewMetricsCollector: %v", err)
 	}
 	ctx := context.Background()
-	if err := RegisterRuntime(ctx, collector, RuntimeInfo{Version: "1.2.3", Commit: "abc123", Profile: "ops"}); err != nil {
+	if err := RegisterRuntime(ctx, collector, RuntimeInfo{Version: "1.2.3", Commit: "abc123"}); err != nil {
 		t.Fatalf("RegisterRuntime: %v", err)
 	}
 	if err := collector.SetJobsAvailable(job, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := collector.SetJobOldestAge("ops", "retention", 12*time.Second); err != nil {
+	if err := collector.SetJobOldestAge("retention", 12*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := collector.ObserveJobWait(job, 1500*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if err := collector.SetExecutionSaturation("ops", 0.75); err != nil {
+	if err := collector.SetExecutionSaturation("retention", 0.75); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,16 +86,16 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	}
 
 	lines := []string{
-		`worker_runtime_info{version="1.2.3",commit="abc123",profile="ops"} 1`,
-		`worker_jobs_available{profile="ops",queue="retention",kind="system.retention_cleanup"} 7`,
-		`worker_job_oldest_age_seconds{profile="ops",queue="retention"} 12`,
-		`worker_jobs_running{profile="ops",queue="retention",kind="system.retention_cleanup"} 0`,
-		`worker_execution_saturation_ratio{profile="ops"} 0.75`,
-		`worker_job_wait_seconds_bucket{profile="ops",queue="retention",kind="system.retention_cleanup",le="1"} 0`,
-		`worker_job_wait_seconds_bucket{profile="ops",queue="retention",kind="system.retention_cleanup",le="2.5"} 1`,
-		`worker_job_wait_seconds_sum{profile="ops",queue="retention",kind="system.retention_cleanup"} 1.5`,
-		`worker_job_wait_seconds_count{profile="ops",queue="retention",kind="system.retention_cleanup"} 1`,
-		`worker_job_duration_seconds_count{profile="ops",queue="retention",kind="system.retention_cleanup",result="success"} 1`,
+		`worker_runtime_info{version="1.2.3",commit="abc123"} 1`,
+		`worker_jobs_available{queue="retention",kind="system.retention_cleanup"} 7`,
+		`worker_job_oldest_age_seconds{queue="retention"} 12`,
+		`worker_jobs_running{queue="retention",kind="system.retention_cleanup"} 0`,
+		`worker_execution_saturation_ratio{queue="retention"} 0.75`,
+		`worker_job_wait_seconds_bucket{queue="retention",kind="system.retention_cleanup",le="1"} 0`,
+		`worker_job_wait_seconds_bucket{queue="retention",kind="system.retention_cleanup",le="2.5"} 1`,
+		`worker_job_wait_seconds_sum{queue="retention",kind="system.retention_cleanup"} 1.5`,
+		`worker_job_wait_seconds_count{queue="retention",kind="system.retention_cleanup"} 1`,
+		`worker_job_duration_seconds_count{queue="retention",kind="system.retention_cleanup",result="success"} 1`,
 		`worker_job_attempts_total{kind="system.retention_cleanup",result="cancel",error_category="permanent"} 1`,
 		`worker_job_attempts_total{kind="system.retention_cleanup",result="retry",error_category="panic"} 1`,
 		`worker_job_attempts_total{kind="system.retention_cleanup",result="success",error_category="none"} 1`,
@@ -153,7 +153,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 
 func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) {
 	t.Parallel()
-	job := JobLabels{Profile: "ops", Queue: "heartbeat", Kind: "system.heartbeat"}
+	job := JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
 	collector, err := NewMetricsCollector(MetricDimensions{
 		Jobs:        []JobLabels{job},
 		DomainTypes: []string{"schedule_occurrence"},
@@ -164,11 +164,11 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknownJob := JobLabels{Profile: "ops", Queue: "tenant-secret", Kind: "system.heartbeat"}
+	unknownJob := JobLabels{Queue: "tenant-secret", Kind: "system.heartbeat"}
 	if err := collector.SetJobsAvailable(unknownJob, 1); err == nil || strings.Contains(err.Error(), "tenant-secret") {
 		t.Fatalf("unregistered label error is missing or unsafe: %v", err)
 	}
-	if err := collector.SetJobOldestAge("ops", "tenant-secret", time.Second); err == nil {
+	if err := collector.SetJobOldestAge("tenant-secret", time.Second); err == nil {
 		t.Fatal("unregistered queue accepted")
 	}
 	if err := collector.SetStreamLag(StreamLabels{Stream: "unknown", ConsumerGroup: "sink_workers"}, 1); err == nil {
@@ -190,7 +190,7 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 		t.Fatal("unregistered pool accepted")
 	}
 	if err := collector.SetExecutionSaturation("unknown", 0.5); err == nil {
-		t.Fatal("unregistered execution profile accepted")
+		t.Fatal("unregistered execution queue accepted")
 	}
 	if err := collector.SetExecutionSaturation("ops", math.Inf(1)); err == nil {
 		t.Fatal("infinite execution saturation accepted")
@@ -206,9 +206,9 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 	collector.JobFinished(context.Background(), unknownJob, Result("failed"), ErrorCategory("secret"), time.Second)
 	collector.JobCancelled(context.Background(), unknownJob, ErrorCategory("secret"))
 	collector.DomainMismatch(context.Background(), "tenant-secret")
-	collector.RuntimeRegistered(context.Background(), RuntimeInfo{Version: "1.0.0", Commit: "abc", Profile: "unknown"})
+	collector.RuntimeRegistered(context.Background(), RuntimeInfo{Version: "1.0.0", Commit: "abc"})
 	text := collector.PrometheusText()
-	for _, forbidden := range []string{"tenant-secret", `result="cas_conflict"`, `error_category="secret"`, `profile="unknown"`, `provider="unknown"`} {
+	for _, forbidden := range []string{"tenant-secret", `result="cas_conflict"`, `error_category="secret"`, `provider="unknown"`} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("rejected observer label escaped into exposition: %s", forbidden)
 		}
@@ -218,7 +218,6 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 func TestMetricsCollectorPreRegistersSyncLeaseSeriesInStableOrder(t *testing.T) {
 	t.Parallel()
 	collector, err := NewMetricsCollector(MetricDimensions{
-		Profiles: []string{"sync"},
 		SyncLeases: []SyncLeaseLabels{
 			{Provider: "gitlab", DatasetFamily: "issues"},
 			{Provider: "github", DatasetFamily: "work_items"},
@@ -250,23 +249,23 @@ func TestMetricsCollectorPreRegistersSyncLeaseSeriesInStableOrder(t *testing.T) 
 
 func TestMetricsCollectorConstructorBoundsCardinality(t *testing.T) {
 	t.Parallel()
-	job := JobLabels{Profile: "ops", Queue: "heartbeat", Kind: "system.heartbeat"}
+	job := JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
 	if _, err := NewMetricsCollector(MetricDimensions{Jobs: []JobLabels{job, job}}); err == nil {
 		t.Fatal("duplicate job dimensions accepted")
 	}
-	if _, err := NewMetricsCollector(MetricDimensions{Jobs: []JobLabels{{Profile: "ops", Queue: "bad/queue", Kind: "system.heartbeat"}}}); err == nil {
+	if _, err := NewMetricsCollector(MetricDimensions{Jobs: []JobLabels{{Queue: "bad/queue", Kind: "system.heartbeat"}}}); err == nil {
 		t.Fatal("unsafe job dimension accepted")
 	}
 	syncLease := SyncLeaseLabels{Provider: "github", DatasetFamily: "work_items"}
-	if _, err := NewMetricsCollector(MetricDimensions{Profiles: []string{"ops"}, SyncLeases: []SyncLeaseLabels{syncLease, syncLease}}); err == nil {
+	if _, err := NewMetricsCollector(MetricDimensions{SyncLeases: []SyncLeaseLabels{syncLease, syncLease}}); err == nil {
 		t.Fatal("duplicate sync lease dimensions accepted")
 	}
-	if _, err := NewMetricsCollector(MetricDimensions{Profiles: []string{"ops"}, SyncLeases: []SyncLeaseLabels{{Provider: "github", DatasetFamily: "tenant/work_items"}}}); err == nil {
+	if _, err := NewMetricsCollector(MetricDimensions{SyncLeases: []SyncLeaseLabels{{Provider: "github", DatasetFamily: "tenant/work_items"}}}); err == nil {
 		t.Fatal("unsafe sync lease dimension accepted")
 	}
 	jobs := make([]JobLabels, maxMetricJobs+1)
 	for index := range jobs {
-		jobs[index] = JobLabels{Profile: "ops", Queue: fmt.Sprintf("queue-%d", index), Kind: fmt.Sprintf("job.kind_%d", index)}
+		jobs[index] = JobLabels{Queue: fmt.Sprintf("queue-%d", index), Kind: fmt.Sprintf("job.kind_%d", index)}
 	}
 	if _, err := NewMetricsCollector(MetricDimensions{Jobs: jobs}); err == nil {
 		t.Fatal("unbounded job dimensions accepted")
@@ -275,7 +274,7 @@ func TestMetricsCollectorConstructorBoundsCardinality(t *testing.T) {
 	for index := range syncLeases {
 		syncLeases[index] = SyncLeaseLabels{Provider: "github", DatasetFamily: fmt.Sprintf("family_%d", index)}
 	}
-	if _, err := NewMetricsCollector(MetricDimensions{Profiles: []string{"ops"}, SyncLeases: syncLeases}); err == nil {
+	if _, err := NewMetricsCollector(MetricDimensions{SyncLeases: syncLeases}); err == nil {
 		t.Fatal("unbounded sync lease dimensions accepted")
 	}
 }
@@ -284,13 +283,12 @@ func TestMetricsCollectorSupportsStreamOnlyRuntimeAndWriter(t *testing.T) {
 	t.Parallel()
 	stream := StreamLabels{Stream: "external_ingest", ConsumerGroup: "sink_workers"}
 	collector, err := NewMetricsCollector(MetricDimensions{
-		Profiles: []string{"stream"},
-		Streams:  []StreamLabels{stream},
+		Streams: []StreamLabels{stream},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterRuntime(context.Background(), collector, RuntimeInfo{Version: "1.0.0", Commit: "abc123", Profile: "stream"}); err != nil {
+	if err := RegisterRuntime(context.Background(), collector, RuntimeInfo{Version: "1.0.0", Commit: "abc123"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := collector.SetStreamLag(stream, 5); err != nil {
@@ -303,14 +301,14 @@ func TestMetricsCollectorSupportsStreamOnlyRuntimeAndWriter(t *testing.T) {
 	if output.String() != collector.PrometheusText() {
 		t.Fatal("writer and string exposition differ")
 	}
-	if !strings.Contains(output.String(), `worker_runtime_info{version="1.0.0",commit="abc123",profile="stream"} 1`) ||
+	if !strings.Contains(output.String(), `worker_runtime_info{version="1.0.0",commit="abc123"} 1`) ||
 		!strings.Contains(output.String(), `worker_stream_lag{stream="external_ingest",consumer_group="sink_workers"} 5`) {
 		t.Fatalf("stream-only exposition missing runtime/lag:\n%s", output.String())
 	}
 }
 
 func TestMetricsCollectorConcurrentUpdates(t *testing.T) {
-	job := JobLabels{Profile: "ops", Queue: "retention", Kind: "system.retention_cleanup"}
+	job := JobLabels{Queue: "retention", Kind: "system.retention_cleanup"}
 	collector, err := NewMetricsCollector(MetricDimensions{
 		Jobs: []JobLabels{job}, DomainTypes: []string{"maintenance_run"},
 		SyncLeases: []SyncLeaseLabels{{Provider: "github", DatasetFamily: "work_items"}},
@@ -335,8 +333,8 @@ func TestMetricsCollectorConcurrentUpdates(t *testing.T) {
 				collector.JobStarted(context.Background(), job)
 				collector.JobFinished(context.Background(), job, ResultSuccess, CategoryNone, time.Millisecond)
 				_ = collector.SetJobsAvailable(job, int64((worker+iteration)%10))
-				_ = collector.SetJobOldestAge("ops", "retention", time.Duration(iteration)*time.Millisecond)
-				_ = collector.SetExecutionSaturation("ops", 0.5)
+				_ = collector.SetJobOldestAge("retention", time.Duration(iteration)*time.Millisecond)
+				_ = collector.SetExecutionSaturation("retention", 0.5)
 				_ = collector.ObserveJobWait(job, time.Millisecond)
 				_ = collector.ObserveProviderBudgetWait(BudgetLabels{Provider: "github", CostClass: "medium"}, time.Millisecond)
 				_ = collector.ObserveSyncLeaseExpired(SyncLeaseLabels{Provider: "github", DatasetFamily: "work_items"}, syncLeaseResult)
@@ -353,7 +351,7 @@ func TestMetricsCollectorConcurrentUpdates(t *testing.T) {
 	if !strings.Contains(text, wantAttempts+"\n") {
 		t.Fatalf("attempt counter lost concurrent updates; want %s", wantAttempts)
 	}
-	if !strings.Contains(text, `worker_jobs_running{profile="ops",queue="retention",kind="system.retention_cleanup"} 0`+"\n") {
+	if !strings.Contains(text, `worker_jobs_running{queue="retention",kind="system.retention_cleanup"} 0`+"\n") {
 		t.Fatal("running gauge did not converge to zero")
 	}
 	wantLeaseResults := goroutines * iterations / 2
@@ -365,19 +363,19 @@ func TestMetricsCollectorConcurrentUpdates(t *testing.T) {
 	}
 }
 
-func TestDimensionsForProfileUsesRegistryPolicy(t *testing.T) {
+func TestDimensionsForQueuesUsesRegistryPolicy(t *testing.T) {
 	t.Parallel()
 	registry, err := Load("../../contracts/jobs/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dimensions, err := DimensionsForProfile(registry, "ops", nil, nil, nil)
+	dimensions, err := DimensionsForQueues(registry, []string{"coverage", "heartbeat", "retention", "webhooks"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(dimensions.Jobs) != 5 ||
 		strings.Join(dimensions.DomainTypes, ",") != "billing_notification,maintenance_run,schedule_occurrence,webhook_delivery" {
-		t.Fatalf("profile dimensions drifted: %+v", dimensions)
+		t.Fatalf("queue dimensions drifted: %+v", dimensions)
 	}
 	if _, err := NewMetricsCollector(dimensions); err != nil {
 		t.Fatalf("derived dimensions rejected: %v", err)

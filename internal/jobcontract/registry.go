@@ -19,7 +19,6 @@ const (
 )
 
 var (
-	profilePattern      = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 	queuePattern        = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 	handlerOwnerPattern = regexp.MustCompile(`^internal/jobs/[a-z0-9_/]+$`)
 )
@@ -39,7 +38,6 @@ type JobDefinition struct {
 	Kind              string              `json:"kind"`
 	CurrentVersion    int                 `json:"current_version"`
 	SupportedVersions []int               `json:"supported_versions"`
-	Profile           string              `json:"profile"`
 	Queue             string              `json:"queue"`
 	HandlerOwner      string              `json:"handler_owner"`
 	ExecutionMode     string              `json:"execution_mode"`
@@ -71,7 +69,7 @@ type MigrationJob struct {
 	State            string   `json:"state"`
 	ProducerVersion  int      `json:"producer_version"`
 	ConsumerVersions []int    `json:"consumer_versions"`
-	RequiredProfiles []string `json:"required_profiles"`
+	RequiredQueues   []string `json:"required_queues"`
 	Route            string   `json:"route"`
 	RollbackRoute    string   `json:"rollback_route"`
 	Evidence         []string `json:"evidence"`
@@ -115,7 +113,7 @@ func (registry Registry) validate(root string, checkCompiledTypes bool) error {
 	}
 	if registry.VersionPolicy.Compatibility != "additive_optional_only" ||
 		registry.VersionPolicy.MinimumConsumerWindow != 2 ||
-		registry.VersionPolicy.SameVersionRollout != "schema_digest_all_live_profiles" {
+		registry.VersionPolicy.SameVersionRollout != "schema_digest_all_live_queues" {
 		return errors.New("unsupported version policy")
 	}
 	if len(registry.Jobs) == 0 {
@@ -200,8 +198,7 @@ func validateJobDefinition(root string, job JobDefinition) error {
 			return fmt.Errorf("version %d has no golden fixture", version)
 		}
 	}
-	if !matchesBounded(profilePattern, job.Profile, 32) ||
-		!matchesBounded(queuePattern, job.Queue, 96) ||
+	if !matchesBounded(queuePattern, job.Queue, 96) ||
 		!matchesBounded(handlerOwnerPattern, job.HandlerOwner, 128) {
 		return errors.New("runtime routing policy has invalid identifiers")
 	}
@@ -298,10 +295,11 @@ func (state MigrationState) Validate(registry Registry) error {
 		if !equalInts(job.ConsumerVersions, definition.SupportedVersions) {
 			return fmt.Errorf("migration job %s consumer versions drift from registry", job.Kind)
 		}
-		if !containsString(job.RequiredProfiles, definition.Profile) {
-			return fmt.Errorf("migration job %s omits registry profile", job.Kind)
+		if len(job.RequiredQueues) != 1 || job.RequiredQueues[0] != definition.Queue {
+			return fmt.Errorf("migration job %s required queues drift from registry", job.Kind)
 		}
-		if !strictlyIncreasing(job.ConsumerVersions) || !sortedUniqueStrings(job.RequiredProfiles) || !sortedUniqueStrings(job.Evidence) {
+		if !strictlyIncreasing(job.ConsumerVersions) || !sortedUniqueStrings(job.RequiredQueues) ||
+			!sortedUniqueStrings(job.Evidence) {
 			return fmt.Errorf("migration job %s has unsorted or duplicate policy values", job.Kind)
 		}
 		if !containsString([]string{"inventory", "contract_frozen", "go_implemented", "shadow", "canary", "go_default", "celery_fallback_only", "celery_removed"}, job.State) {
@@ -339,7 +337,7 @@ func ValidateTree(root string) error {
 		"registry.schema.json",
 		"migration-state.schema.json",
 		"capability-report.schema.json",
-		"deployment-profiles.schema.json",
+		"deployment-manifest.schema.json",
 	} {
 		data, err := readContractFile(root, artifact)
 		if err != nil {

@@ -47,13 +47,19 @@ func TestHeavyMetricsQueueFitsReviewedPostgresPools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, _, err := deploymentcontract.Load(defaultDeploymentProfile, contracts)
+	manifest, _, err := deploymentcontract.Load("deploy/go-workers/deployment.json", contracts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	process, ok := riverProcessForProfile(manifest, "heavy")
-	if !ok {
-		t.Fatal("heavy process is missing")
+	var process deploymentcontract.Process
+	for _, candidate := range manifest.Processes {
+		if candidate.Name == "heavy" {
+			process = candidate
+			break
+		}
+	}
+	if process.Name == "" {
+		t.Fatal("metrics worker group is missing")
 	}
 	var metricsWorkers int
 	for _, queue := range process.QueueWorkers {

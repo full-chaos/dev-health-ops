@@ -33,7 +33,7 @@ def _policy(route: str = "celery") -> tuple[MigrationJob, ...]:
         MigrationJob(
             kind=KIND,
             producer_version=1,
-            required_profiles=("ops",),
+            required_queues=("heartbeat",),
             route=route,
         ),
     )

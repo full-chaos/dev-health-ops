@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -24,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 func TestWorkerSpecConfiguresDependencies(t *testing.T) {
@@ -31,24 +31,51 @@ func TestWorkerSpecConfiguresDependencies(t *testing.T) {
 		t.Fatalf("unexpected worker spec: %#v", workerSpec)
 	}
 	if len(workerSpec.Profiles) != 0 || !workerSpec.RequireQueues {
-		t.Fatalf("worker must require queues without named profiles: %#v", workerSpec)
+		t.Fatalf("worker must require queues and reject profile selection: %#v", workerSpec)
 	}
 	if workerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("worker dependency configuration is not wired")
 	}
 }
 
-func TestRiverClientsShareOneProcessIdentityWithDistinctFamilySuffixes(t *testing.T) {
+func TestDeploymentSuppliesQueueConcurrencyAndObservableBudget(t *testing.T) {
 	t.Parallel()
-	cfg := config.Config{WorkerInstanceID: "11111111-1111-4111-8111-111111111111"}
-	if got := riverClientID(cfg, "operational"); got != cfg.WorkerInstanceID+"-operational" {
-		t.Fatalf("operational client ID = %q", got)
+	budgets := selectedQueueBudgets(
+		[]string{"heartbeat", "webhooks"},
+		[]string{"coverage", "heartbeat", "webhooks"},
+		map[string]int{"coverage": 99, "heartbeat": 7, "webhooks": 13},
+	)
+	want := []jobruntime.QueueBudget{
+		{Queue: "heartbeat", MaxWorkers: 7},
+		{Queue: "webhooks", MaxWorkers: 13},
 	}
-	if got := riverClientID(cfg, "daily"); got != cfg.WorkerInstanceID+"-daily" {
-		t.Fatalf("daily client ID = %q", got)
+	if !slices.Equal(budgets, want) {
+		t.Fatalf("selected queue budgets = %#v, want %#v", budgets, want)
 	}
-	if got := riverClientID(config.Config{}, "daily"); got != "" {
-		t.Fatalf("test client ID = %q, want River default", got)
+	if got := formatQueueBudgets(budgets); got != "heartbeat=7,webhooks=13" {
+		t.Fatalf("formatted queue budgets = %q", got)
+	}
+}
+
+func TestWorkerGroupIsAnObservableLabelNotAQueueSelector(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	dependencies := buildWorkerDependencies(context.Background(), config.Config{
+		Queues:                 []string{"heartbeat"},
+		WorkerQueueConcurrency: map[string]int{"heartbeat": 7},
+		WorkerGroup:            "my-latency-pool",
+	}, sources)
+	defer dependencies.close()
+	if dependencies.startupErr != nil {
+		t.Fatal(dependencies.startupErr)
+	}
+	if dependencies.workerGroup != "my-latency-pool" ||
+		!slices.Equal(dependencies.startup.SelectedQueues, []string{"heartbeat"}) ||
+		!slices.Equal(dependencies.startup.ConfiguredQueues, []jobruntime.QueueBudget{{Queue: "heartbeat", MaxWorkers: 7}}) {
+		t.Fatalf("worker dependencies = %#v", dependencies)
 	}
 }
 
@@ -57,7 +84,11 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	components, err := configureWorkerDependencies(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+		},
 		registry,
 	)
 	if err != nil {
@@ -69,7 +100,7 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if registry.RequiredCount() != 9 {
 		t.Fatalf("required checks = %d, want 9", registry.RequiredCount())
 	}
-	// Every accepted profile now owns registered kinds, so queue telemetry is
+	// Every accepted queue set now owns registered kinds, so queue telemetry is
 	// always required and a worker without a database cannot serve a complete
 	// scrape. Partial metrics would understate a backlog, so the scrape fails
 	// closed instead.
@@ -86,7 +117,7 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	status := registry.Readiness(context.Background())
 	want := []string{
 		"domain_postgres",
-		"profile_completeness",
+		"queue_completeness",
 		"queue_postgres",
 		"queued_contract_versions",
 		"river_schema",
@@ -256,6 +287,9 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 			wantErr: true,
 		},
 	} {
+		if providerSyncWorkerEnabled(test.config) {
+			test.config.Queues = []string{providerUnitQueue}
+		}
 		err := providerRouteSwitchesReady(
 			test.config, &test.runtime,
 		)(context.Background())
@@ -267,12 +301,13 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 
 func TestLocalAllStartupReadinessProjectsEveryCompleteWriterAlias(t *testing.T) {
 	values := map[string]string{
-		"DEV_HEALTH_ENV":     "local",
-		"GO_PROVIDER_ROUTES": "all",
-		"DEV_HEALTH_PROFILE": "sync",
+		"DEV_HEALTH_ENV":               "local",
+		"GO_PROVIDER_ROUTES":           "all",
+		"DEV_HEALTH_QUEUES":            "sync,sync_provider",
+		"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=4,sync_provider=2",
 	}
 	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-worker", Profiles: []string{"sync"}, DefaultProfile: "sync",
+		Service: "dev-health-worker", RequireQueues: true,
 		LookupEnv: func(key string) (string, bool) {
 			value, ok := values[key]
 			return value, ok
@@ -316,6 +351,7 @@ func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			test.config.Queues = []string{providerUnitQueue}
 			err := providerRouteSwitchesReady(test.config, &test.runtime)(context.Background())
 			if (err != nil) != test.wantErr {
 				t.Fatalf("error=%v wantErr=%v", err, test.wantErr)
@@ -324,6 +360,7 @@ func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.
 	}
 
 	t.Setenv("STATUS_MAPPING_PATH", " ")
+	valid.Queues = []string{providerUnitQueue}
 	if err := providerRouteSwitchesReady(valid, new(bool))(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("ambient status mapping error=%v want worker dependency unavailable", err)
 	}
@@ -387,7 +424,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		t.Fatal(err)
 	}
 	// sync.team_autoimport ships at go_default in the checked-in contract
-	// too, so the sync profile is only complete once something reports it.
+	// too, so the selected queue set is only complete once something reports it.
 	// A fake sync-coordinator builder supplies that coverage so this test
 	// stays isolated to what it actually exercises: the LaunchDarkly
 	// provider-route-switch gate on the provider_sync builder.
@@ -400,11 +437,12 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
+	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
 	sources.buildOperational = nil
 	sources.buildSyncCoordinator = fakeHandlerBuilder(
 		"sync-coordinator",
 		[]jobruntime.HandlerSpec{autoimportSpec},
-		jobruntime.QueueBudget{Queue: syncCoordinatorQueue, MaxWorkers: syncCoordinatorQueueWorkers},
+		jobruntime.QueueBudget{Queue: syncCoordinatorQueue, MaxWorkers: 4},
 	)
 	sources.buildProviderSync = func(
 		_ context.Context,
@@ -413,6 +451,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		_ *jobruntime.Registry,
 		_ jobruntime.Observer,
 		_ *slog.Logger,
+		_ *river.Workers,
 	) (workerFamily, error) {
 		spec, ok := runtimeRegistry.Descriptor("sync.provider_unit")
 		if !ok {
@@ -429,7 +468,8 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
-			Profile: "sync", RiverDatabaseSchema: "river",
+			Queues: []string{"sync", "sync_provider"}, RiverDatabaseSchema: "river",
+			WorkerQueueConcurrency:                map[string]int{"sync": 4, "sync_provider": 2},
 			DomainDatabaseMaxConns:                4,
 			QueueDatabaseMaxConns:                 2,
 			WorkerLaunchDarklyFeatureFlagsEnabled: true,
@@ -459,7 +499,8 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
-			Profile: "sync", RiverDatabaseSchema: "river",
+			Queues: []string{"sync", "sync_provider"}, RiverDatabaseSchema: "river",
+			WorkerQueueConcurrency:                map[string]int{"sync": 4, "sync_provider": 2},
 			DomainDatabaseMaxConns:                4,
 			QueueDatabaseMaxConns:                 2,
 			WorkerLaunchDarklyFeatureFlagsEnabled: true,
@@ -474,7 +515,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	}
 	missing := missingRegistry.Readiness(context.Background())
 	if !slices.Contains(missing.Failed, "provider_route_switches") ||
-		!slices.Contains(missing.Failed, "profile_completeness") {
+		!slices.Contains(missing.Failed, "queue_completeness") {
 		t.Fatalf("missing provider runtime readiness=%#v", missing)
 	}
 }
@@ -486,7 +527,8 @@ func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T)
 		context.Background(),
 		config.Config{
 			Service:                 "dev-health-worker",
-			Profile:                 "ops",
+			Queues:                  []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency:  map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
 			DomainDatabaseURI:       secrets.NewValue("postgresql://domain_role:secret@pgbouncer/app"),
 			QueueDatabaseURI:        secrets.NewValue("postgresql://queue_role:secret@pgbouncer/app"),
 			QueueDatabaseMode:       config.QueueControlTransaction,
@@ -509,7 +551,7 @@ func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T)
 	status := registry.Readiness(context.Background())
 	want := []string{
 		"domain_postgres",
-		"profile_completeness",
+		"queue_completeness",
 		"queue_control_config",
 		"queue_postgres",
 		"queued_contract_versions",
@@ -520,11 +562,10 @@ func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T)
 	}
 }
 
-func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
+func TestSelectedQueuesUseRegistryBoundedJobDimensions(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{
 		snapshot: riverstore.QueueTelemetrySnapshot{
-			Profile: "ops",
 			Jobs: []riverstore.QueueJobTelemetry{
 				{Queue: "heartbeat", Kind: "system.heartbeat", Available: 3},
 				{Queue: "retention", Kind: "system.retention_cleanup", Available: 2},
@@ -533,15 +574,17 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 				{Queue: "heartbeat", OldestAvailableAge: 12 * time.Second},
 				{Queue: "retention", OldestAvailableAge: 4 * time.Second},
 			},
-			ExecutionSaturation: 0.5,
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{
+				{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 0.5},
+			},
 		},
 	}}
 	// The ops kinds now ship at go_default, so the production operational
 	// builder would demand a real postgres pool this test's fake database
 	// cannot satisfy. This test only exercises the metrics path (registry-
-	// bounded dimensions over queue telemetry), so the ops profile is
+	// bounded dimensions over queue telemetry), so the selected queue handlers are
 	// demoted back to Celery here to keep it dormant and out of the way.
-	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOperationalKinds...)
 	sources := productionWorkerDependencySources
 	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -551,7 +594,11 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	_, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Service: "dev-health-worker", Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{
+			Service: "dev-health-worker", Queues: []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+		},
 		registry,
 		sources,
 	)
@@ -563,10 +610,10 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 		t.Fatalf("write worker metrics: %v", err)
 	}
 	for _, metric := range []string{
-		`worker_jobs_available{profile="ops",queue="heartbeat",kind="system.heartbeat"} 3`,
-		`worker_jobs_available{profile="ops",queue="retention",kind="system.retention_cleanup"} 2`,
-		`worker_job_oldest_age_seconds{profile="ops",queue="heartbeat"} 12`,
-		`worker_execution_saturation_ratio{profile="ops"} 0.5`,
+		`worker_jobs_available{queue="heartbeat",kind="system.heartbeat"} 3`,
+		`worker_jobs_available{queue="retention",kind="system.retention_cleanup"} 2`,
+		`worker_job_oldest_age_seconds{queue="heartbeat"} 12`,
+		`worker_execution_saturation_ratio{queue="heartbeat"} 0.5`,
 		`worker_domain_state_mismatch_total{domain_type="maintenance_run"} 0`,
 	} {
 		if !bytes.Contains(metrics.Bytes(), []byte(metric)) {
@@ -575,10 +622,10 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 	}
 }
 
-// celeryRoutedOpsKinds is every ops-profile kind. The checked-in contract now
-// ships all five at go_default, so a genuinely dormant ops profile has to be
+// celeryRoutedOperationalKinds is every operational queue kind. The checked-in
+// contract now ships all five at go_default, so a genuinely dormant queue set has to be
 // built explicitly by demoting them back to Celery in a scoped fixture.
-var celeryRoutedOpsKinds = []string{
+var celeryRoutedOperationalKinds = []string{
 	jobcontract.KindBillingNotification,
 	jobcontract.KindWebhookDelivery,
 	jobcontract.KindHeartbeat,
@@ -586,10 +633,10 @@ var celeryRoutedOpsKinds = []string{
 	jobcontract.KindSyncCoverageRefresh,
 }
 
-func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
+func TestCeleryRoutedHandlersCannotPassQueueCompleteness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{domainSaturation: 0.25, queueSaturation: 0.5}
-	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOperationalKinds...)
 	sources := productionWorkerDependencySources
 	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -600,7 +647,8 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	components, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
-			Profile:                "ops",
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
 			RiverDatabaseSchema:    "river",
 			DomainDatabaseMaxConns: 4,
 			QueueDatabaseMaxConns:  2,
@@ -622,8 +670,8 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 	status := registry.Readiness(context.Background())
-	if status.Ready || !slices.Equal(status.Failed, []string{"profile_completeness"}) {
-		t.Fatalf("readiness = %#v, want only profile_completeness failure", status)
+	if status.Ready || !slices.Equal(status.Failed, []string{"queue_completeness"}) {
+		t.Fatalf("readiness = %#v, want only queue_completeness failure", status)
 	}
 	if database.telemetryConfig.ClientID == "" || !slices.Equal(
 		[]string{
@@ -671,7 +719,7 @@ func TestNoCompiledCapabilityClaimSurvives(t *testing.T) {
 	}
 }
 
-func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
+func TestSelectedQueuesComposeMultipleBuilderFamilies(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
 	database := &fakeWorkerDatabase{}
@@ -683,6 +731,7 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 		return runtimeRegistry, nil
 	}
+	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
 	reportKinds := map[string]bool{
 		jobcontract.KindReportExecuteOnDemand:  true,
 		jobcontract.KindReportExecuteScheduled: true,
@@ -690,7 +739,7 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	// dailyKinds also covers the remaining-metrics families: their route is
 	// cross-validated against families.json's unconditional "river" value,
 	// so they stay executable regardless of this fixture and the fake
-	// "daily" builder below must report them or profile completeness sees
+	// "daily" builder below must report them or queue completeness sees
 	// uncovered registry kinds.
 	dailyKinds := map[string]bool{
 		jobcontract.KindDailyMetricsDispatch:     true,
@@ -710,18 +759,25 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	// has its own coverage.
 	sources.buildReports = nil
 	sources.buildOperational = fakeHandlerBuilder(
-		"reports", selectSpecs(runtimeRegistry.Profile("heavy"), reportKinds),
+		"reports", selectSpecs(mustSelectedQueueSpecs(
+			t, runtimeRegistry, "investment", "metrics", "reports", "workgraph",
+		), reportKinds),
 		jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},
 	)
 	sources.buildDaily = fakeHandlerBuilder(
-		"daily", selectSpecs(runtimeRegistry.Profile("heavy"), dailyKinds),
+		"daily", selectSpecs(mustSelectedQueueSpecs(
+			t, runtimeRegistry, "investment", "metrics", "reports", "workgraph",
+		), dailyKinds),
 		jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
 	)
 
 	components, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
-			Profile:                "heavy",
+			Queues:                 []string{"metrics", "reports"},
+			WorkerQueueConcurrency: map[string]int{"metrics": 2, "reports": 2},
+			WorkerGroup:            "metrics-reports-test",
+			ShutdownTimeout:        7_260 * time.Second,
 			RiverDatabaseSchema:    "river",
 			DomainDatabaseMaxConns: 4,
 			QueueDatabaseMaxConns:  2,
@@ -733,19 +789,18 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(components) != 4 || components[2].Name() != "preclaim-readiness" ||
-		components[3].Name() != "river-profile-workers" {
+		components[3].Name() != "river-workers" {
 		t.Fatalf("composed components = %#v", components)
 	}
-	profileWorkers, ok := components[3].(workerProfileComponent)
-	if !ok || len(profileWorkers.components) != 2 ||
-		profileWorkers.components[0].Name() != "reports" ||
-		profileWorkers.components[1].Name() != "daily" ||
-		profileWorkers.ShutdownBudget() != 7_200*time.Second {
-		t.Fatalf("profile workers = %#v", components[3])
+	processWorkers, ok := components[3].(workerProcessComponent)
+	if !ok || len(processWorkers.components) != 1 ||
+		processWorkers.components[0].Name() != "river-worker" ||
+		processWorkers.ShutdownBudget() != 7_200*time.Second {
+		t.Fatalf("worker process = %#v", components[3])
 	}
 }
 
-func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
+func TestSelectedQueuesRejectDuplicateOrMissingBuilderHandlers(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	for _, test := range []struct {
 		name   string
@@ -799,7 +854,7 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 			)
 			_, err := configureWorkerDependenciesWithSources(
 				context.Background(),
-				config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+				config.Config{Queues: []string{"investment", "metrics", "reports", "workgraph"}, RiverDatabaseSchema: "river"},
 				health.NewRegistry(time.Second),
 				sources,
 			)
@@ -837,7 +892,7 @@ func TestProductionDailyBuilderFailsClosedWithoutClickHouse(t *testing.T) {
 	_, err = configureWorkerDependenciesWithSources(
 		ctx,
 		config.Config{
-			Profile:                  "heavy",
+			Queues:                   []string{"investment", "metrics", "reports", "workgraph"},
 			RiverDatabaseSchema:      "river",
 			DomainDatabaseMaxConns:   4,
 			QueueDatabaseMaxConns:    2,
@@ -854,7 +909,7 @@ func TestProductionDailyBuilderFailsClosedWithoutClickHouse(t *testing.T) {
 	}
 }
 
-func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
+func TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, err := jobruntime.Load("contracts/jobs/v1")
 	if err != nil {
@@ -883,7 +938,8 @@ func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
 	components, err := configureWorkerDependenciesWithSources(
 		ctx,
 		config.Config{
-			Profile:                  "ops",
+			Queues:                   []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency:   map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
 			RiverDatabaseSchema:      "river",
 			DomainDatabaseMaxConns:   4,
 			QueueDatabaseMaxConns:    2,
@@ -900,35 +956,32 @@ func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
 	}
 	if len(components) != 4 || components[0].Name() != "postgres-runtime-pools" ||
 		components[2].Name() != "preclaim-readiness" ||
-		components[3].Name() != "river-profile-workers" {
+		components[3].Name() != "river-workers" {
 		t.Fatalf("production components = %#v", components)
 	}
-	profileWorkers, ok := components[3].(workerProfileComponent)
-	if !ok || profileWorkers.presence == nil {
-		t.Fatalf("production profile lifecycle = %#v", components[3])
+	queueWorkers, ok := components[3].(workerProcessComponent)
+	if !ok || queueWorkers.presence == nil {
+		t.Fatalf("production queue lifecycle = %#v", components[3])
+	}
+	presence, ok := queueWorkers.presence.(*jobruntime.WorkerPresence)
+	if !ok || presence == nil {
+		t.Fatalf("production worker presence = %#v", queueWorkers.presence)
 	}
 	if err := components[0].Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestWorkerProfileRejectsProcessShutdownTimeoutBelowContract(t *testing.T) {
+func TestWorkerQueueSelectionRejectsProcessShutdownTimeoutBelowContract(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	profile := "ops"
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return &fakeWorkerDatabase{}, nil
 	}
-	sources.loadDeployment = func(
-		string, jobcontract.Registry,
-	) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error) {
-		return deploymentcontract.Manifest{Processes: []deploymentcontract.Process{{
-			Name: "ops", Runtime: "river", RegistryProfile: &profile,
-			ShutdownGraceSeconds: 960,
-		}}}, deploymentcontract.BudgetSummary{}, nil
-	}
 	dependencies := buildWorkerDependencies(context.Background(), config.Config{
-		Profile: "ops", ShutdownTimeout: 959 * time.Second,
+		Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+		ShutdownTimeout:        959 * time.Second,
 	}, sources)
 	defer dependencies.close()
 	if !errors.Is(dependencies.startupErr, errWorkerDependencyUnavailable) {
@@ -954,7 +1007,6 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{
 		snapshot: riverstore.QueueTelemetrySnapshot{
-			Profile: "ops",
 			Jobs: []riverstore.QueueJobTelemetry{
 				{Queue: "heartbeat", Kind: "system.heartbeat"},
 				{Queue: "retention", Kind: "system.retention_cleanup"},
@@ -966,7 +1018,7 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	// Demote the ops kinds so the production operational builder (which now
 	// requires a real postgres pool once they are executable) stays a
 	// no-op; this test only exercises the queued-contract-versions gate.
-	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOperationalKinds...)
 	sources := productionWorkerDependencySources
 	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
@@ -975,7 +1027,11 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+		},
 		registry,
 		sources,
 	); err != nil {
@@ -985,7 +1041,7 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := registry.Readiness(context.Background())
-	want := []string{"profile_completeness", "queued_contract_versions"}
+	want := []string{"queue_completeness", "queued_contract_versions"}
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -999,7 +1055,7 @@ func TestQueueTelemetryFailureMakesMetricsUnavailable(t *testing.T) {
 	// Demote the ops kinds so the production operational builder (which now
 	// requires a real postgres pool once they are executable) stays a
 	// no-op; this test only exercises the queue-telemetry metrics path.
-	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOperationalKinds...)
 	sources := productionWorkerDependencySources
 	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
@@ -1008,7 +1064,11 @@ func TestQueueTelemetryFailureMakesMetricsUnavailable(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+		},
 		registry,
 		sources,
 	); err != nil {
@@ -1023,7 +1083,7 @@ func TestQueueTelemetryFailureMakesMetricsUnavailable(t *testing.T) {
 	}
 }
 
-func TestMissingContractArtifactsFailRegistryAndProfileChecks(t *testing.T) {
+func TestMissingContractArtifactsFailRegistryAndQueueChecks(t *testing.T) {
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -1034,7 +1094,7 @@ func TestMissingContractArtifactsFailRegistryAndProfileChecks(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	_, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{Queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, RiverDatabaseSchema: "river"},
 		registry,
 		sources,
 	)
@@ -1045,7 +1105,7 @@ func TestMissingContractArtifactsFailRegistryAndProfileChecks(t *testing.T) {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 	status := registry.Readiness(context.Background())
-	want := []string{"job_registry", "profile_completeness"}
+	want := []string{"job_registry", "queue_completeness"}
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -1065,7 +1125,7 @@ func TestReadinessRegistrationFailureClosesConstructedPools(t *testing.T) {
 	}
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{Queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, RiverDatabaseSchema: "river"},
 		registry,
 		sources,
 	); err == nil {
@@ -1122,29 +1182,29 @@ type blockingShutdownComponent struct {
 	release chan struct{}
 }
 
-type recordingProfilePresence struct {
+type recordingWorkerPresence struct {
 	started  chan struct{}
 	draining chan struct{}
 	removed  chan struct{}
 }
 
-func newRecordingProfilePresence() *recordingProfilePresence {
-	return &recordingProfilePresence{
+func newRecordingWorkerPresence() *recordingWorkerPresence {
+	return &recordingWorkerPresence{
 		started: make(chan struct{}), draining: make(chan struct{}), removed: make(chan struct{}),
 	}
 }
 
-func (presence *recordingProfilePresence) Start(context.Context) error {
+func (presence *recordingWorkerPresence) Start(context.Context) error {
 	close(presence.started)
 	return nil
 }
 
-func (presence *recordingProfilePresence) BeginDrain(context.Context) error {
+func (presence *recordingWorkerPresence) BeginDrain(context.Context) error {
 	close(presence.draining)
 	return nil
 }
 
-func (presence *recordingProfilePresence) Shutdown(ctx context.Context) error {
+func (presence *recordingWorkerPresence) Shutdown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1152,7 +1212,7 @@ func (presence *recordingProfilePresence) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (*recordingProfilePresence) Errors() <-chan error { return nil }
+func (*recordingWorkerPresence) Errors() <-chan error { return nil }
 
 type failingStartComponent struct{ err error }
 
@@ -1173,11 +1233,11 @@ func (component *deadlineShutdownComponent) Shutdown(ctx context.Context) error 
 	return nil
 }
 
-func TestWorkerProfileStartRollbackUsesReviewedShutdownBudget(t *testing.T) {
+func TestWorkerProcessStartRollbackUsesConfiguredShutdownBudget(t *testing.T) {
 	t.Parallel()
 	started := &deadlineShutdownComponent{deadline: make(chan time.Time, 1)}
 	budget := time.Second
-	component := workerProfileComponent{
+	component := workerProcessComponent{
 		components: []lifecycle.Component{
 			started,
 			failingStartComponent{err: errors.New("start failed")},
@@ -1202,7 +1262,7 @@ func (component *blockingShutdownComponent) Shutdown(context.Context) error {
 	return nil
 }
 
-func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testing.T) {
+func TestWorkerProcessComponentStopsChildrenConcurrently(t *testing.T) {
 	t.Parallel()
 	first := &blockingShutdownComponent{
 		name: "first", entered: make(chan struct{}), release: make(chan struct{}),
@@ -1210,7 +1270,7 @@ func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testi
 	second := &blockingShutdownComponent{
 		name: "second", entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	component := workerProfileComponent{
+	component := workerProcessComponent{
 		components: []lifecycle.Component{first, second}, budget: time.Minute,
 	}
 	done := make(chan error, 1)
@@ -1219,7 +1279,7 @@ func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testi
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
-			t.Fatal("River clients did not enter shutdown concurrently")
+			t.Fatal("worker children did not enter shutdown concurrently")
 		}
 	}
 	close(first.release)
@@ -1229,13 +1289,13 @@ func TestWorkerProfileComponentStopsIndependentRiverClientsConcurrently(t *testi
 	}
 }
 
-func TestWorkerProfilePresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
+func TestWorkerPresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
 	t.Parallel()
 	child := &blockingShutdownComponent{
 		name: "child", entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	presence := newRecordingProfilePresence()
-	component := workerProfileComponent{
+	presence := newRecordingWorkerPresence()
+	component := workerProcessComponent{
 		components: []lifecycle.Component{child}, budget: time.Minute, presence: presence,
 	}
 	done := make(chan error, 1)
@@ -1244,7 +1304,7 @@ func TestWorkerProfilePresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
 	select {
 	case <-presence.draining:
 	case <-time.After(time.Second):
-		t.Fatal("profile presence was not marked draining")
+		t.Fatal("worker presence was not marked draining")
 	}
 	select {
 	case <-child.entered:
@@ -1253,7 +1313,7 @@ func TestWorkerProfilePresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
 	}
 	select {
 	case <-presence.removed:
-		t.Fatal("profile presence was removed while a worker child was running")
+		t.Fatal("worker presence was removed while a worker child was running")
 	default:
 	}
 	close(child.release)
@@ -1263,17 +1323,17 @@ func TestWorkerProfilePresenceWaitsForChildrenBeforeRemoval(t *testing.T) {
 	select {
 	case <-presence.removed:
 	case <-time.After(time.Second):
-		t.Fatal("profile presence was not removed after the worker child stopped")
+		t.Fatal("worker presence was not removed after the worker child stopped")
 	}
 }
 
-func TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
+func TestWorkerPresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
 	t.Parallel()
 	child := &blockingShutdownComponent{
 		name: "child", entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	presence := newRecordingProfilePresence()
-	component := workerProfileComponent{
+	presence := newRecordingWorkerPresence()
+	component := workerProcessComponent{
 		components: []lifecycle.Component{child}, budget: time.Minute, presence: presence,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
@@ -1284,7 +1344,7 @@ func TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
 	select {
 	case <-presence.draining:
 	case <-time.After(time.Second):
-		t.Fatal("profile presence was not marked draining")
+		t.Fatal("worker presence was not marked draining")
 	}
 	select {
 	case <-child.entered:
@@ -1294,12 +1354,12 @@ func TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
 	<-ctx.Done()
 	select {
 	case <-done:
-		t.Fatal("profile shutdown returned while a worker child was running")
+		t.Fatal("worker shutdown returned while a worker child was running")
 	default:
 	}
 	select {
 	case <-presence.removed:
-		t.Fatal("profile presence was removed after the shutdown attempt expired")
+		t.Fatal("worker presence was removed after the shutdown attempt expired")
 	default:
 	}
 
@@ -1309,13 +1369,13 @@ func TestWorkerProfilePresenceSurvivesExpiredShutdownAttempt(t *testing.T) {
 	}
 	select {
 	case <-presence.removed:
-		t.Fatal("expired shutdown attempt deleted profile presence")
+		t.Fatal("expired shutdown attempt deleted worker presence")
 	default:
 	}
 }
 
 func fakeHandlerBuilder(
-	name string,
+	_ string,
 	specs []jobruntime.HandlerSpec,
 	queues ...jobruntime.QueueBudget,
 ) workerFamilyBuilder {
@@ -1325,10 +1385,23 @@ func fakeHandlerBuilder(
 		*jobruntime.Registry,
 		jobruntime.Observer,
 		*slog.Logger,
+		*river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			component: namedComponent(name), handlers: specs, queues: queues,
+			handlers: specs, queues: queues,
 		}, nil
+	}
+}
+
+func fakeRiverProcessBuilder(name string) workerProcessBuilder {
+	return func(
+		config.Config,
+		workerDatabase,
+		*river.Workers,
+		workerFamily,
+		*slog.Logger,
+	) (lifecycle.Component, error) {
+		return namedComponent(name), nil
 	}
 }
 
@@ -1353,11 +1426,11 @@ func executableHeavyRegistry(
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatal(err)
 	}
-	// The checked-in contract now ships every heavy-profile kind at
+	// The checked-in contract now ships every batch queue kind at
 	// go_default, but this fixture only exercises the daily-metrics and
 	// (optionally) report builders. work-graph and investment have no
 	// builder in this binary at all, so they are demoted back to Celery here
-	// -- otherwise the heavy profile would demand handlers nothing ever
+	// -- otherwise the selected queue set would demand handlers nothing ever
 	// constructs. The remaining-metrics families are left alone: their route
 	// is cross-validated against families.json's own (unconditional) "river"
 	// value, so demoting them independently would make the fixture
@@ -1417,6 +1490,19 @@ func selectSpecs(
 	return result
 }
 
+func mustSelectedQueueSpecs(
+	t *testing.T,
+	registry *jobruntime.Registry,
+	queues ...string,
+) []jobruntime.HandlerSpec {
+	t.Helper()
+	specs, err := registry.SelectedQueues(queues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return specs
+}
+
 func selectNamedSpecs(
 	registry *jobruntime.Registry,
 	kinds []string,
@@ -1460,7 +1546,7 @@ func (database *fakeWorkerDatabase) NewQueueTelemetrySampler(
 	if database.telemetry != nil {
 		return database.telemetry, nil
 	}
-	snapshot := riverstore.QueueTelemetrySnapshot{Profile: config.Profile}
+	snapshot := riverstore.QueueTelemetrySnapshot{}
 	for _, job := range config.Jobs {
 		snapshot.Jobs = append(snapshot.Jobs, riverstore.QueueJobTelemetry{Queue: job.Queue, Kind: job.Kind})
 	}
@@ -1528,7 +1614,7 @@ func TestExecutableReportKindsWithoutAdaptersCloseReadiness(t *testing.T) {
 	_, err = configureWorkerDependenciesWithSources(
 		ctx,
 		config.Config{
-			Profile:                  "heavy",
+			Queues:                   []string{"investment", "metrics", "reports", "workgraph"},
 			RiverDatabaseSchema:      "river",
 			DomainDatabaseMaxConns:   4,
 			QueueDatabaseMaxConns:    2,
@@ -1545,13 +1631,13 @@ func TestExecutableReportKindsWithoutAdaptersCloseReadiness(t *testing.T) {
 	}
 }
 
-// TestFakeBuilderCannotSatisfyProfileCoverage proves a builder cannot buy
+// TestFakeBuilderCannotSatisfyQueueCoverage proves a builder cannot buy
 // readiness by inventing handler specs. Coverage counts alone are not enough:
 // every constructed spec is compared field by field with the registry.
-func TestFakeBuilderCannotSatisfyProfileCoverage(t *testing.T) {
+func TestFakeBuilderCannotSatisfyQueueCoverage(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
-	heavy := runtimeRegistry.Profile("heavy")
+	heavy := mustSelectedQueueSpecs(t, runtimeRegistry, "investment", "metrics", "reports", "workgraph")
 	reports := selectSpecs(heavy, map[string]bool{
 		jobcontract.KindReportExecuteOnDemand:  true,
 		jobcontract.KindReportExecuteScheduled: true,
@@ -1601,7 +1687,7 @@ func TestFakeBuilderCannotSatisfyProfileCoverage(t *testing.T) {
 			_, err := configureWorkerDependenciesWithSources(
 				context.Background(),
 				config.Config{
-					Profile:                "heavy",
+					Queues:                 []string{"metrics"},
 					RiverDatabaseSchema:    "river",
 					DomainDatabaseMaxConns: 4,
 					QueueDatabaseMaxConns:  2,
@@ -1625,10 +1711,12 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 	// The remaining-metrics families stay executable regardless of this
 	// fixture (their route is cross-validated against families.json's
 	// unconditional "river" value), so the fake "daily" builder below must
-	// report them too or profile completeness sees uncovered registry kinds
+	// report them too or queue completeness sees uncovered registry kinds
 	// before the queue-budget assertions this test actually exercises ever
 	// run.
-	daily := selectSpecs(runtimeRegistry.Profile("heavy"), map[string]bool{
+	daily := selectSpecs(mustSelectedQueueSpecs(
+		t, runtimeRegistry, "investment", "metrics", "reports", "workgraph",
+	), map[string]bool{
 		jobcontract.KindDailyMetricsDispatch:     true,
 		jobcontract.KindDailyMetricsPartition:    true,
 		jobcontract.KindDailyMetricsFinalize:     true,
@@ -1644,30 +1732,20 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		queue   jobruntime.QueueBudget
-		conns   jobruntime.ConnectionBudget
 		wantErr bool
 	}{
 		{
 			name:  "matching budget",
 			queue: jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
-			conns: jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
 		},
 		{
 			name:    "over-budget workers",
 			queue:   jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 8},
-			conns:   jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
 			wantErr: true,
 		},
 		{
 			name:    "unbudgeted queue",
 			queue:   jobruntime.QueueBudget{Queue: "metrics_shadow", MaxWorkers: 2},
-			conns:   jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
-			wantErr: true,
-		},
-		{
-			name:    "over-budget connections",
-			queue:   jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
-			conns:   jobruntime.ConnectionBudget{QueueControl: 4, Domain: 8},
 			wantErr: true,
 		},
 	} {
@@ -1681,6 +1759,7 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 				return runtimeRegistry, nil
 			}
+			sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
 			sources.buildReports = nil
 			sources.buildWorkgraph = nil
 			sources.buildOperational = nil
@@ -1688,10 +1767,12 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 			_, err := configureWorkerDependenciesWithSources(
 				context.Background(),
 				config.Config{
-					Profile:                "heavy",
+					Queues:                 []string{"metrics"},
+					WorkerQueueConcurrency: map[string]int{"metrics": 2},
+					ShutdownTimeout:        7_260 * time.Second,
 					RiverDatabaseSchema:    "river",
-					DomainDatabaseMaxConns: int32(test.conns.Domain),
-					QueueDatabaseMaxConns:  int32(test.conns.QueueControl),
+					DomainDatabaseMaxConns: 4,
+					QueueDatabaseMaxConns:  2,
 				},
 				health.NewRegistry(time.Second),
 				sources,
@@ -1703,13 +1784,11 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 	}
 }
 
-// TestNestedRiverClientCapabilityIsValidated proves a handler hosted in a
-// builder's own private River client is covered by exact startup validation.
-// sync.team_autoimport lives in the sync coordinator's client, not the provider
-// client, so before CUT-02 it could be constructed and consumed while readiness
-// had no way to observe it. Capability now reaches validation through one
-// canonical channel regardless of which client hosts the worker.
-func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
+// TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies proves a handler
+// contributed by a separate builder is covered by exact startup validation.
+// All builders now register into one River client, and capability reaches
+// validation through one canonical channel before that client starts.
+func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := promotedContractRoot(t, jobcontract.KindTeamAutoimport)
 	providerSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindSyncProviderUnit)
@@ -1722,7 +1801,9 @@ func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
 	}
 
 	syncConfig := config.Config{
-		Profile:                "sync",
+		Queues:                 []string{"sync", "sync_provider"},
+		WorkerQueueConcurrency: map[string]int{"sync": 4, "sync_provider": 2},
+		ShutdownTimeout:        7_260 * time.Second,
 		RiverDatabaseSchema:    "river",
 		DomainDatabaseMaxConns: 4,
 		QueueDatabaseMaxConns:  2,
@@ -1733,9 +1814,10 @@ func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
 		sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 			return runtimeRegistry, nil
 		}
+		sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
 		sources.buildProviderSync = func(
 			context.Context, config.Config, workerDatabase,
-			*jobruntime.Registry, jobruntime.Observer, *slog.Logger,
+			*jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers,
 		) (workerFamily, error) {
 			return workerFamily{
 				handlers: []jobruntime.HandlerSpec{providerSpec},
@@ -1753,7 +1835,7 @@ func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
 		wantReady bool
 	}{
 		{name: "unreported nested handler closes readiness"},
-		{name: "reported nested handler completes the profile", reported: true, wantReady: true},
+		{name: "reported nested handler completes the queue set", reported: true, wantReady: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			database := &fakeWorkerDatabase{}
@@ -1763,9 +1845,9 @@ func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
 			}
 			sources.buildSyncCoordinator = func(
 				config.Config, workerDatabase, *jobruntime.Registry,
-				jobruntime.Observer, *slog.Logger,
+				jobruntime.Observer, *slog.Logger, *river.Workers,
 			) (workerFamily, error) {
-				family := workerFamily{component: namedComponent("sync-coordinator")}
+				family := workerFamily{}
 				if test.reported {
 					family.handlers = []jobruntime.HandlerSpec{autoimportSpec}
 					family.queues = []jobruntime.QueueBudget{
@@ -1789,8 +1871,8 @@ func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
 				t.Fatal(err)
 			}
 			status := registry.Readiness(context.Background())
-			if failed := slices.Contains(status.Failed, "profile_completeness"); failed == test.wantReady {
-				t.Fatalf("readiness = %#v, want profile_completeness failure = %t",
+			if failed := slices.Contains(status.Failed, "queue_completeness"); failed == test.wantReady {
+				t.Fatalf("readiness = %#v, want queue_completeness failure = %t",
 					status, !test.wantReady)
 			}
 		})

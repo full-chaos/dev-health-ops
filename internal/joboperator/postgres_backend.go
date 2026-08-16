@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"regexp"
-	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -92,11 +91,10 @@ func (backend *PostgresBackend) List(ctx context.Context, filter ListFilter) ([]
 	return result, nil
 }
 
-func (backend *PostgresBackend) Queues(ctx context.Context, profile string) ([]QueueSummary, error) {
+func (backend *PostgresBackend) Queues(ctx context.Context, queues []string) ([]QueueSummary, error) {
 	if backend == nil || backend.pool == nil {
 		return nil, ErrBackendConfiguration
 	}
-	queues := backend.profileQueues(profile)
 	if len(queues) == 0 {
 		return nil, ErrBackendConfiguration
 	}
@@ -128,7 +126,6 @@ func (backend *PostgresBackend) Queues(ctx context.Context, profile string) ([]Q
 	result := make([]QueueSummary, 0, len(queues))
 	for rows.Next() {
 		var summary QueueSummary
-		summary.Profile = profile
 		if err := rows.Scan(
 			&summary.Name,
 			&summary.Paused,
@@ -268,11 +265,18 @@ func (backend *PostgresBackend) ResumeQueue(ctx context.Context, queue string, _
 	return backend.setQueuePaused(ctx, queue, false)
 }
 
-func (backend *PostgresBackend) Drain(ctx context.Context, profile string, _ Mutation) (DrainResult, error) {
+func (backend *PostgresBackend) Drain(ctx context.Context, queues []string, _ Mutation) (DrainResult, error) {
+	return backend.mutateQueues(ctx, queues, true)
+}
+
+func (backend *PostgresBackend) Undrain(ctx context.Context, queues []string, _ Mutation) (DrainResult, error) {
+	return backend.mutateQueues(ctx, queues, false)
+}
+
+func (backend *PostgresBackend) mutateQueues(ctx context.Context, queues []string, pause bool) (DrainResult, error) {
 	if backend == nil || backend.pool == nil || backend.client == nil {
 		return DrainResult{}, ErrBackendConfiguration
 	}
-	queues := backend.profileQueues(profile)
 	if len(queues) == 0 {
 		return DrainResult{}, ErrBackendConfiguration
 	}
@@ -306,14 +310,20 @@ func (backend *PostgresBackend) Drain(ctx context.Context, profile string, _ Mut
 		return DrainResult{}, err
 	}
 	for _, queue := range queues {
-		if err := backend.client.QueuePauseTx(ctx, tx, queue, nil); err != nil {
-			return DrainResult{}, err
+		var opErr error
+		if pause {
+			opErr = backend.client.QueuePauseTx(ctx, tx, queue, nil)
+		} else {
+			opErr = backend.client.QueueResumeTx(ctx, tx, queue, nil)
+		}
+		if opErr != nil {
+			return DrainResult{}, opErr
 		}
 	}
 	if err := commitMutation(ctx, tx); err != nil {
 		return DrainResult{}, err
 	}
-	return DrainResult{Profile: profile, QueuesPaused: len(queues), RunningAtStart: running}, nil
+	return DrainResult{QueuesPaused: len(queues), RunningAtStart: running}, nil
 }
 
 func (backend *PostgresBackend) setQueuePaused(ctx context.Context, queue string, paused bool) error {
@@ -382,21 +392,6 @@ func (backend *PostgresBackend) compareLockedState(ctx context.Context, tx pgx.T
 		return ErrStateConflict
 	}
 	return nil
-}
-
-func (backend *PostgresBackend) profileQueues(profile string) []string {
-	descriptors := backend.registry.Profile(profile)
-	seen := make(map[string]struct{}, len(descriptors))
-	queues := make([]string, 0, len(descriptors))
-	for _, descriptor := range descriptors {
-		if _, duplicate := seen[descriptor.Queue]; duplicate {
-			continue
-		}
-		seen[descriptor.Queue] = struct{}{}
-		queues = append(queues, descriptor.Queue)
-	}
-	sort.Strings(queues)
-	return queues
 }
 
 func (backend *PostgresBackend) summaryQuery() string {

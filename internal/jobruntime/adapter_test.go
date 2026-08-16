@@ -219,8 +219,7 @@ func TestAdapterObservesJobWaitFromRiverScheduledAt(t *testing.T) {
 		t.Fatal("missing retention descriptor")
 	}
 	collector, err := NewMetricsCollector(MetricDimensions{
-		Profiles: []string{spec.Profile},
-		Jobs:     []JobLabels{{Profile: spec.Profile, Queue: spec.Queue, Kind: spec.Kind}},
+		Jobs: []JobLabels{{Queue: spec.Queue, Kind: spec.Kind}},
 	})
 	if err != nil {
 		t.Fatalf("NewMetricsCollector: %v", err)
@@ -242,7 +241,7 @@ func TestAdapterObservesJobWaitFromRiverScheduledAt(t *testing.T) {
 	}
 
 	text := collector.PrometheusText()
-	labels := `profile="` + spec.Profile + `",queue="` + spec.Queue + `",kind="` + spec.Kind + `"`
+	labels := `queue="` + spec.Queue + `",kind="` + spec.Kind + `"`
 	if !strings.Contains(text, "worker_job_wait_seconds_count{"+labels+"} 1") {
 		t.Fatalf("expected a non-zero worker_job_wait_seconds series, got:\n%s", text)
 	}

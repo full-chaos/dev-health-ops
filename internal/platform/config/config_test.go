@@ -124,11 +124,17 @@ func TestWorkerQueueSelectionIsExplicitCanonicalAndProfileFree(t *testing.T) {
 		want []string
 	}{
 		"cli comma and repeatable": {
-			spec: queueWorkerSpec(nil, "webhooks,heartbeat", "retention"),
+			spec: queueWorkerSpec(map[string]string{
+				"DEV_HEALTH_WORKER_GROUP":      "api-workers",
+				"DEV_HEALTH_QUEUE_CONCURRENCY": "webhooks=4,heartbeat=1,retention=2",
+			}, "webhooks,heartbeat", "retention"),
 			want: []string{"heartbeat", "retention", "webhooks"},
 		},
 		"environment": {
-			spec: queueWorkerSpec(map[string]string{"DEV_HEALTH_QUEUES": "webhooks, heartbeat"}),
+			spec: queueWorkerSpec(map[string]string{
+				"DEV_HEALTH_QUEUES":            "webhooks, heartbeat",
+				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=3,webhooks=9",
+			}),
 			want: []string{"heartbeat", "webhooks"},
 		},
 	} {
@@ -138,7 +144,8 @@ func TestWorkerQueueSelectionIsExplicitCanonicalAndProfileFree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(cfg.Queues, test.want) || cfg.Profile != "" {
+			if !slices.Equal(cfg.Queues, test.want) || cfg.Profile != "" ||
+				len(cfg.WorkerQueueConcurrency) != len(test.want) {
 				t.Fatalf("queues=%v profile=%q, want queues=%v and no profile", cfg.Queues, cfg.Profile, test.want)
 			}
 		})
@@ -149,10 +156,23 @@ func TestWorkerQueueSelectionRejectsInvalidOrAmbiguousInput(t *testing.T) {
 	t.Parallel()
 
 	for name, spec := range map[string]Spec{
-		"missing":      queueWorkerSpec(nil),
-		"duplicate":    queueWorkerSpec(nil, "heartbeat,webhooks", "heartbeat"),
-		"empty item":   queueWorkerSpec(nil, "heartbeat,"),
-		"invalid name": queueWorkerSpec(nil, "Heartbeat"),
+		"missing":             queueWorkerSpec(nil),
+		"duplicate":           queueWorkerSpec(nil, "heartbeat,webhooks", "heartbeat"),
+		"empty item":          queueWorkerSpec(nil, "heartbeat,"),
+		"invalid name":        queueWorkerSpec(nil, "Heartbeat"),
+		"missing concurrency": queueWorkerSpec(nil, "heartbeat"),
+		"incomplete concurrency": queueWorkerSpec(
+			map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1"}, "heartbeat,webhooks",
+		),
+		"extra concurrency": queueWorkerSpec(
+			map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1,webhooks=1"}, "heartbeat",
+		),
+		"duplicate concurrency": queueWorkerSpec(
+			map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1,heartbeat=2"}, "heartbeat",
+		),
+		"invalid concurrency": queueWorkerSpec(
+			map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=0"}, "heartbeat",
+		),
 		"cli env conflict": queueWorkerSpec(
 			map[string]string{"DEV_HEALTH_QUEUES": "heartbeat"}, "webhooks",
 		),

@@ -66,7 +66,6 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	defer queuePool.Close()
 	sampler, err := riverstore.NewQueueTelemetrySampler(queuePool, riverstore.QueueTelemetryConfig{
 		Schema:   "river",
-		Profile:  "ops",
 		ClientID: "client-ops",
 		Queues: []riverstore.QueueTelemetryQueue{
 			{Name: "heartbeat", MaxWorkers: 2},
@@ -85,7 +84,7 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Profile != "ops" || snapshot.LocalRunning != 3 || snapshot.ExecutionSaturation != 0.75 {
+	if snapshot.LocalRunning != 3 || snapshot.ExecutionSaturation != 0.75 {
 		t.Fatalf("unexpected live snapshot scalars: %#v", snapshot)
 	}
 	available := make(map[string]int64, len(snapshot.Jobs))
@@ -102,6 +101,16 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	if ages["heartbeat"] < 9*time.Minute || ages["heartbeat"] > 11*time.Minute ||
 		ages["retention"] < 4*time.Minute || ages["retention"] > 6*time.Minute {
 		t.Fatalf("live oldest ages = %v", ages)
+	}
+	capacities := make(map[string]riverstore.QueueCapacityTelemetry, len(snapshot.QueueCapacities))
+	for _, queue := range snapshot.QueueCapacities {
+		capacities[queue.Queue] = queue
+	}
+	if capacities["heartbeat"].Capacity != 2 || capacities["heartbeat"].Running != 1 ||
+		capacities["heartbeat"].Saturation != 0.5 ||
+		capacities["retention"].Capacity != 2 || capacities["retention"].Running != 2 ||
+		capacities["retention"].Saturation != 1 {
+		t.Fatalf("live queue capacities = %v", capacities)
 	}
 	if err := sampler.CheckAvailableContractVersions(ctx); err != nil {
 		t.Fatalf("supported available contracts failed readiness: %v", err)

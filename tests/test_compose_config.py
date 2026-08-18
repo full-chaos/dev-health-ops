@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 import yaml
 
 from dev_health_ops.workers.config import task_queues
+from dev_health_ops.workers.provider_unit_route import _switch_field_name
 
 
 def _parse_queues(command_str: str) -> set[str]:
@@ -190,50 +192,37 @@ _GO_CONFIG = _REPO_ROOT / "internal" / "platform" / "config" / "config.go"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
-_PROVIDER_ROUTE_SWITCH_NAMES = frozenset(
-    {
-        "WORKER_GITHUB_BLAME_ENABLED",
-        "WORKER_GITHUB_CICD_ENABLED",
-        "WORKER_GITHUB_COMMIT_STATS_ENABLED",
-        "WORKER_GITHUB_COMMITS_ENABLED",
-        "WORKER_GITHUB_DEPLOYMENTS_ENABLED",
-        "WORKER_GITHUB_FILES_ENABLED",
-        "WORKER_GITHUB_PR_COMMENTS_ENABLED",
-        "WORKER_GITHUB_PR_REVIEWS_ENABLED",
-        "WORKER_GITHUB_PRS_ENABLED",
-        "WORKER_GITHUB_REPO_METADATA_ENABLED",
-        "WORKER_GITHUB_SECURITY_ENABLED",
-        "WORKER_GITHUB_TESTS_ENABLED",
-        "WORKER_GITHUB_WORK_ITEMS_ENABLED",
-        "WORKER_GITLAB_BLAME_ENABLED",
-        "WORKER_GITLAB_CICD_ENABLED",
-        "WORKER_GITLAB_COMMIT_STATS_ENABLED",
-        "WORKER_GITLAB_COMMITS_ENABLED",
-        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
-        "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
-        "WORKER_GITLAB_FILES_ENABLED",
-        "WORKER_GITLAB_INCIDENTS_ENABLED",
-        "WORKER_GITLAB_PR_COMMENTS_ENABLED",
-        "WORKER_GITLAB_PR_REVIEWS_ENABLED",
-        "WORKER_GITLAB_PRS_ENABLED",
-        "WORKER_GITLAB_REPO_METADATA_ENABLED",
-        "WORKER_GITLAB_SECURITY_ENABLED",
-        "WORKER_GITLAB_TESTS_ENABLED",
-        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_INCIDENTS_ENABLED",
-        "WORKER_JIRA_WORK_ITEMS_ENABLED",
-        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
-        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
-        "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
-        "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
-        "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
-        "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
-        "WORKER_PAGERDUTY_SERVICES_ENABLED",
-        "WORKER_PAGERDUTY_TEAMS_ENABLED",
-        "WORKER_PAGERDUTY_USERS_ENABLED",
+_MATRIX_CONTRACT = _REPO_ROOT / "contracts" / "provider-matrix" / "v1" / "matrix.json"
+
+
+def _derive_provider_route_switch_names() -> frozenset[str]:
+    """Derive the route-switch census from the provider matrix (CHAOS-3875).
+
+    ``contracts/provider-matrix/v1/matrix.json`` is the single source of truth
+    for which ``(provider, dataset)`` pairs exist. The switch name for a pair is
+    ``_switch_field_name``'s convention uppercased, which is also what
+    ``ProviderUnitRouteSwitches`` reads at runtime -- so family aliases collapse
+    onto their canonical dataset's switch here exactly as they do in the
+    producer.
+
+    This used to be a hand-maintained frozenset, which made the census a fifth
+    copy of a list already written out in Go typed config, ``compose.yml``,
+    ``.env.example``, and the Go-workers overlay. Deriving it binds all four to
+    the matrix: adding a pair there fails the tests below by name until every
+    copy carries it, instead of silently routing a unit to a process with no
+    matching handler.
+    """
+
+    matrix = json.loads(_MATRIX_CONTRACT.read_text(encoding="utf-8"))
+    names = {
+        f"WORKER_{_switch_field_name(pair['provider'], pair['dataset']).upper()}_ENABLED"
+        for pair in matrix["pairs"]
     }
-)
+    assert names, "the provider matrix declared no pairs"
+    return frozenset(names)
+
+
+_PROVIDER_ROUTE_SWITCH_NAMES = _derive_provider_route_switch_names()
 
 _PROVIDER_ROUTE_CONFIG_NAMES = (
     "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",

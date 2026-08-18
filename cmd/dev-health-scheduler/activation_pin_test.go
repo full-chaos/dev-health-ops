@@ -6,6 +6,7 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"reflect"
 	"sort"
 	"testing"
@@ -81,7 +82,7 @@ func TestProductionSchedulerConfigurationBuildsTheReviewedLoop(t *testing.T) {
 
 	built := false
 	productionSchedulerDependencySources = schedulerDependencySources{
-		buildLoop: func(_ context.Context, cfg config.Config, registry *health.Registry) (lifecycle.Component, error) {
+		buildLoop: func(_ context.Context, cfg config.Config, registry *health.Registry, _ ...*slog.Logger) (lifecycle.Component, error) {
 			built = true
 			if cfg.Service != schedulerSpec.Service || registry == nil {
 				t.Fatalf("production config/service=%q registry=%v", cfg.Service, registry)
@@ -99,7 +100,7 @@ func TestProductionSchedulerConfigurationBuildsTheReviewedLoop(t *testing.T) {
 		t.Fatalf("loading a production-defaulted config for %q: %v", schedulerSpec.Service, err)
 	}
 
-	components, err := configureSchedulerDependencies(context.Background(), cfg, registry)
+	components, err := configureSchedulerDependencies(context.Background(), cfg, registry, nil)
 
 	if err != nil || !built || len(components) != 1 || components[0].Name() != "scheduler-test-loop" {
 		t.Fatalf("production activation built=%t components=%v err=%v", built, components, err)
@@ -172,26 +173,32 @@ func TestProductionSchedulerConfigurationBuildsTheReviewedLoop(t *testing.T) {
 // And, as stated above, neither pin proves that flipping the seam retains the
 // capability the seam guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
-	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
+	// Retargeted (CHAOS-3903): the scheduler moved to the logger-aware hook so
+	// the fixed maintenance loop can name the schedules that fail a window.
+	// The guard this replaces did its job -- it refused to keep pinning a field
+	// shell.Main had stopped invoking -- so the mirror-image check is kept: if
+	// the wiring ever moves BACK, this pin must be retargeted again rather than
+	// silently covering nothing.
+	if schedulerSpec.ConfigureDependencies != nil {
 		t.Fatal(
-			"schedulerSpec now sets ConfigureDependenciesWithLogger. shell.Main may " +
-				"call that instead of ConfigureDependencies, so the behavioural pin " +
+			"schedulerSpec now sets ConfigureDependencies. shell.Main refuses a spec " +
+				"with both hooks and would call the other one, so the behavioural pin " +
 				"below no longer proves anything about the production path. Retarget " +
 				"the pin at whichever field shell.Main actually invokes.",
 		)
 	}
-	if schedulerSpec.ConfigureDependencies == nil {
+	if schedulerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal(
-			"schedulerSpec.ConfigureDependencies is nil, so this pin covers nothing " +
-				"that production runs",
+			"schedulerSpec.ConfigureDependenciesWithLogger is nil, so this pin covers " +
+				"nothing that production runs",
 		)
 	}
 
 	pinned := reflect.ValueOf(configureSchedulerDependencies).Pointer()
-	wired := reflect.ValueOf(schedulerSpec.ConfigureDependencies).Pointer()
+	wired := reflect.ValueOf(schedulerSpec.ConfigureDependenciesWithLogger).Pointer()
 	if pinned != wired {
 		t.Fatal(
-			"schedulerSpec.ConfigureDependencies is NOT " +
+			"schedulerSpec.ConfigureDependenciesWithLogger is NOT " +
 				"configureSchedulerDependencies. The behavioural pin therefore tests a " +
 				"function the binary does not call, and activation could ship green. " +
 				"Either restore the wiring or retarget the pin at the function " +

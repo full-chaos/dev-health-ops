@@ -3,6 +3,7 @@ package remaining
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -99,7 +100,13 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) ||
 			errors.Is(err, joboutbox.ErrPolicyRejected) {
-			return ErrInvalidState
+			// Keep BOTH sentinels reachable. Callers switch on ErrInvalidState
+			// to classify the failure as permanent for this input, and the
+			// outbox reason underneath is what names which rule rejected the
+			// envelope -- replacing it left "remaining metrics durable state is
+			// invalid" as the only evidence of a field-level validation failure
+			// (CHAOS-3903).
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
 		return ErrUnavailable
 	}

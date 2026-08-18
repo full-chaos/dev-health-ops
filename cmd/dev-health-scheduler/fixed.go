@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -186,6 +187,7 @@ func refuseUnbuiltFixedSchedules(
 func buildFixedScheduleLoop(
 	coordinatorPool *pgxpool.Pool,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) (fixedScheduleRuntime, error) {
 	if coordinatorPool == nil || registry == nil {
 		return nil, errSchedulerActivationUnavailable
@@ -220,5 +222,10 @@ func buildFixedScheduleLoop(
 	if err != nil {
 		return nil, err
 	}
-	return schedulerfixed.NewLoop(engine, schedulerfixed.DefaultLoopConfig(registry))
+	loopConfig := schedulerfixed.DefaultLoopConfig(registry)
+	// Without this the loop can fail every 15s window indefinitely and emit
+	// nothing, which is exactly how a single non-conformant organization row
+	// held this process unready with no attributable signal (CHAOS-3903).
+	loopConfig.Logger = logger
+	return schedulerfixed.NewLoop(engine, loopConfig)
 }

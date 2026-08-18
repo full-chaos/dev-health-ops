@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,12 @@ type LoopConfig struct {
 	StepTimeout  time.Duration
 	MaxBackoff   time.Duration
 	Registry     *health.Registry
+	// Logger names the schedules that fail a window. It is optional so tests
+	// and embedders need not supply one; a nil Logger discards. Without it a
+	// loop can fail every window forever and emit nothing at all, which is how
+	// a single non-conformant organization row silently held this scheduler
+	// unready (CHAOS-3903).
+	Logger *slog.Logger
 }
 
 // DefaultLoopConfig is the production cadence. The poll interval is far
@@ -279,6 +286,20 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	}
 	loop.record(result, now)
 	if result.Failed() {
+		// Name every schedule that failed and why. Schedule IDs are declared
+		// compile-time constants, and the errors underneath are domain
+		// validation and durability failures that name fields and rules rather
+		// than values, so this is bounded operator detail, not a payload dump.
+		for _, schedule := range result.Schedules {
+			if schedule.Err == nil {
+				continue
+			}
+			loop.logger().ErrorContext(
+				parent, "fixed schedule failed",
+				"schedule", schedule.ScheduleID,
+				"error", schedule.Err.Error(),
+			)
+		}
 		return result.Err()
 	}
 	if overdue := loop.overdueSchedules(); len(overdue) > 0 {
@@ -362,6 +383,16 @@ func (loop *Loop) backoff() time.Duration {
 		return loop.config.MaxBackoff
 	}
 	return delay
+}
+
+// logger is nil-safe: an unset Logger discards rather than panicking, and
+// never falls back to slog.Default(), so an embedder cannot be surprised by
+// scheduler output appearing on a logger it did not choose.
+func (loop *Loop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *Loop) setFailed() {

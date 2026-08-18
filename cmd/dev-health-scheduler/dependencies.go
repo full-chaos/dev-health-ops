@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -244,7 +245,7 @@ type schedulerRuntimeSources struct {
 	// CHAOS-3114 it takes the COORDINATOR pool: its occurrence ledger is
 	// coordinator-exclusive and commits with the producers' domain rows in one
 	// transaction.
-	newFixedLoop func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error)
+	newFixedLoop func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error)
 	// newOccurrences builds the consumer for the occurrences the sync loop
 	// hands off. It is constructed in the same process for the same reason:
 	// the marker advances on handoff, so an unconsumed occurrence is stranded
@@ -286,12 +287,14 @@ func buildProductionSchedulerLoop(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	loggers ...*slog.Logger,
 ) (lifecycle.Component, error) {
 	return buildSchedulerLoopWithSources(
 		ctx,
 		cfg,
 		registry,
 		productionSchedulerRuntimeSources,
+		loggers...,
 	)
 }
 
@@ -300,7 +303,15 @@ func buildSchedulerLoopWithSources(
 	cfg config.Config,
 	registry *health.Registry,
 	sources schedulerRuntimeSources,
+	loggers ...*slog.Logger,
 ) (lifecycle.Component, error) {
+	// Variadic for the same reason the worker's configure path is: existing
+	// callers and test doubles stay source-compatible, and a caller that has no
+	// logger to give is not forced to invent one.
+	var logger *slog.Logger
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	if ctx == nil || registry == nil || sources.openDatabase == nil ||
 		sources.newRepository == nil || sources.newCoordinator == nil ||
 		sources.newLoop == nil || sources.newFixedLoop == nil ||
@@ -429,7 +440,7 @@ func buildSchedulerLoopWithSources(
 	// The domain role deliberately did NOT gain fixed_schedule_occurrences:
 	// widening the login that provider-sync workers use is what the partition
 	// exists to prevent.
-	fixedLoop, err := sources.newFixedLoop(coordinatorPool, registry)
+	fixedLoop, err := sources.newFixedLoop(coordinatorPool, registry, logger)
 	if err != nil || fixedLoop == nil {
 		// The gate stays unattached, so both names report unavailable while the
 		// product loop below runs normally.

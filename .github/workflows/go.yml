@@ -38,58 +38,65 @@ on:
   #     - '.dockerignore'
   #     - 'Makefile'
   #     - '.github/workflows/go.yml'
-  # pull_request:
-  #   branches: ['**']
-  #   paths:
-  #     - '**/*.go'
-  #     - '**/go.mod'
-  #     - '**/go.sum'
-  #     - 'go.work'
-  #     - 'go.work.sum'
-  #     - 'pyproject.toml'
-  #     - 'uv.lock'
-  #     - 'contracts/jobs/v1/**'
-  #     - 'deploy/go-workers/**'
-  #     - 'src/dev_health_ops/licensing/**'
-  #     - 'src/dev_health_ops/metrics/testops*.py'
-  #     - 'src/dev_health_ops/models/**'
-  #     - 'src/dev_health_ops/parsers/**'
-  #     - 'src/dev_health_ops/processors/**'
-  #     - 'src/dev_health_ops/providers/**'
-  #     - 'src/dev_health_ops/storage/repository_rows.py'
-  #     - 'src/dev_health_ops/sync/**'
-  #     - 'src/dev_health_ops/workers/job_contracts/**'
-  #     - 'internal/providersync/testdata/**'
-  #     - 'internal/scheduler/sync/testdata/**'
-  #     - 'tests/workers/job_contracts/**'
-  #     - 'docker/go-worker.Dockerfile'
-  #     - 'tests/compatibility/river/**'
-  #     - 'ci/check_go.sh'
-  #     - 'ci/go_integration_shards.tsv'
-  #     - 'ci/go_providersync_test_shards.tsv'
-  #     - 'ci/requirements-live-python-oracles.txt'
-  #     - 'ci/check_go_containers.sh'
-  #     - 'ci/check_river_compat_static.sh'
-  #     - 'ci/evidence/go-worker-migration/**'
-  #     # - 'ci/local_validate.sh'
-  #     - '.dockerignore'
-  #     - 'Makefile'
-  #     - '.github/workflows/go.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
+      - 'src/dev_health_ops/licensing/**'
+      - 'src/dev_health_ops/metrics/testops*.py'
+      - 'src/dev_health_ops/models/**'
+      - 'src/dev_health_ops/parsers/**'
+      - 'src/dev_health_ops/processors/**'
+      - 'src/dev_health_ops/providers/**'
+      - 'src/dev_health_ops/storage/repository_rows.py'
+      - 'src/dev_health_ops/sync/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'internal/providersync/testdata/**'
+      - 'internal/scheduler/sync/testdata/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_providersync_test_shards.tsv'
+      - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/check_go_containers.sh'
+      - 'ci/check_river_compat_static.sh'
+      - 'ci/evidence/go-worker-migration/**'
+      # - 'ci/local_validate.sh'
+      - '.dockerignore'
+      - 'Makefile'
+      - '.github/workflows/go.yml'
   merge_group:
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   # PR runs cancel their predecessor so fast-follow pushes don't queue behind
-  # a stale diff. push (main) and merge_group runs must not be cancelled:
-  # this workflow already triggers on push to main (see `on.push` above),
-  # but a burst of merges lands several pushes to main within the same
-  # `github.ref` group in quick succession, and with an unconditional
-  # cancel-in-progress every push but the last in that burst gets cancelled
-  # before go-storage-integration finishes — so most main commits never get
-  # a real pass/fail, only "cancelled". integration.yml (push-to-main
-  # integration suite) already sets cancel-in-progress: false for the same
-  # reason; docs-cloudflare.yml uses this same event-conditional pattern.
+  # a stale diff, which bounds this workflow to ONE live fan-out per PR --
+  # ~13 jobs, several at a 25-minute cap. That bound is why `pull_request` is
+  # the trigger that is on.
+  #
+  # merge_group runs must not be cancelled: a burst of merges lands several
+  # within the same `github.ref` group in quick succession, and with an
+  # unconditional cancel-in-progress every one but the last gets cancelled
+  # before go-storage-integration finishes — so most merges never get a real
+  # pass/fail, only "cancelled". integration.yml (push-to-main integration
+  # suite) already sets cancel-in-progress: false for the same reason;
+  # docs-cloudflare.yml uses this same event-conditional pattern. The same
+  # applies to `on.push`, which is why it stays commented out above: it is
+  # the one trigger here that cannot be cancelled AND fires per-commit, so
+  # it is the one that exhausted the org's Actions concurrency. merge_group
+  # gates the merge itself, so leaving push off costs post-merge re-runs on
+  # main rather than gate coverage.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

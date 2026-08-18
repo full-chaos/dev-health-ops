@@ -98,12 +98,14 @@ func lookup(values map[string]string) secrets.LookupEnv {
 	}
 }
 
+// workerSpec is the profile-free worker surface. The worker's named profiles
+// (latency/sync/heavy/ops) were retired when queue topology became explicit,
+// and profile resolution itself now lives in internal/platform/shell
+// (CHAOS-3875), so config.Spec carries only an already-resolved value.
 func workerSpec(values map[string]string) Spec {
 	return Spec{
-		Service:        "dev-health-worker",
-		Profiles:       []string{"latency", "sync", "heavy", "ops"},
-		DefaultProfile: "latency",
-		LookupEnv:      lookup(values),
+		Service:   "dev-health-worker",
+		LookupEnv: lookup(values),
 	}
 }
 
@@ -130,11 +132,10 @@ func TestWorkerQueueSelectionIsExplicitCanonicalAndProfileFree(t *testing.T) {
 			}, "webhooks,heartbeat", "retention"),
 			want: []string{"heartbeat", "retention", "webhooks"},
 		},
-		"environment": {
+		"single comma-joined flag": {
 			spec: queueWorkerSpec(map[string]string{
-				"DEV_HEALTH_QUEUES":            "webhooks, heartbeat",
 				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=3,webhooks=9",
-			}),
+			}, "webhooks, heartbeat"),
 			want: []string{"heartbeat", "webhooks"},
 		},
 	} {
@@ -173,16 +174,18 @@ func TestWorkerQueueSelectionRejectsInvalidOrAmbiguousInput(t *testing.T) {
 		"invalid concurrency": queueWorkerSpec(
 			map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=0"}, "heartbeat",
 		),
-		"cli env conflict": queueWorkerSpec(
-			map[string]string{"DEV_HEALTH_QUEUES": "heartbeat"}, "webhooks",
+		"queue env is not a configuration path": queueWorkerSpec(
+			map[string]string{
+				"DEV_HEALTH_QUEUES":            "heartbeat",
+				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1",
+			},
 		),
 		"profile compatibility": {
-			Service:        "dev-health-worker",
-			Profiles:       []string{"ops"},
-			DefaultProfile: "ops",
-			RequireQueues:  true,
-			Queues:         []string{"heartbeat"},
-			LookupEnv:      lookup(nil),
+			Service:       "dev-health-worker",
+			Profile:       "ops",
+			RequireQueues: true,
+			Queues:        []string{"heartbeat"},
+			LookupEnv:     lookup(nil),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -245,7 +248,6 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT":     "17s",
 		"DEV_HEALTH_HEALTH_CHECK_TIMEOUT": "750ms",
 		"DEV_HEALTH_LOG_LEVEL":            "debug",
-		"DEV_HEALTH_PROFILE":              "heavy",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -255,9 +257,6 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	}
 	if cfg.HealthCheckTimeout != 750*time.Millisecond || cfg.LogLevel != slog.LevelDebug {
 		t.Fatalf("unexpected health/log config: %#v", cfg.SafeAttrs())
-	}
-	if cfg.Profile != "heavy" {
-		t.Fatalf("expected heavy profile, got %q", cfg.Profile)
 	}
 }
 
@@ -323,22 +322,30 @@ func TestSafeAttrsRedactsSettingsEncryptionSalt(t *testing.T) {
 	}
 }
 
-func TestCLIProfileOverridesEnvironmentAndMustBeAllowed(t *testing.T) {
+func TestProfileIsCarriedVerbatimAndNeverResolvedHere(t *testing.T) {
 	t.Parallel()
 
+	// Selection, the DEV_HEALTH_PROFILE fallback, and membership checking are
+	// the shell's job (CHAOS-3875). Load must neither read the environment for
+	// a profile nor second-guess the value it is handed -- a service that
+	// declares no profiles is the only thing it still rejects.
 	spec := workerSpec(map[string]string{"DEV_HEALTH_PROFILE": "heavy"})
-	spec.Profile = "sync"
 	cfg, err := Load(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Profile != "sync" {
-		t.Fatalf("expected CLI profile override, got %q", cfg.Profile)
+	if cfg.Profile != "" {
+		t.Fatalf("Load resolved a profile from the environment: %q", cfg.Profile)
 	}
 
+	spec = workerSpec(nil)
 	spec.Profile = "arbitrary"
-	if _, err := Load(spec); err == nil {
-		t.Fatal("expected invalid profile to fail")
+	cfg, err = Load(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Profile != "arbitrary" {
+		t.Fatalf("profile = %q, want the caller's resolved value verbatim", cfg.Profile)
 	}
 }
 

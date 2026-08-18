@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -61,6 +63,41 @@ func (values *repeatedStringFlag) String() string {
 func (values *repeatedStringFlag) Set(value string) error {
 	*values = append(*values, value)
 	return nil
+}
+
+// resolveProfile owns runtime-profile selection end to end (CHAOS-3875). Only
+// dev-health-stream-runner declares profiles, so the platform config package
+// no longer carries a Profiles/DefaultProfile pair threaded through a second
+// package just to be validated there: the flag, the DEV_HEALTH_PROFILE
+// fallback, the default, and the membership check all live at this one site,
+// and config.Spec receives an already-resolved value.
+func resolveProfile(
+	spec Spec,
+	selected *string,
+	lookup secrets.LookupEnv,
+) (string, error) {
+	chosen := ""
+	if selected != nil {
+		chosen = strings.TrimSpace(*selected)
+	}
+	if len(spec.Profiles) == 0 {
+		if chosen != "" {
+			return "", fmt.Errorf("%s does not accept a profile", spec.Service)
+		}
+		return "", nil
+	}
+	if chosen == "" {
+		if value, ok := lookup("DEV_HEALTH_PROFILE"); ok {
+			chosen = strings.TrimSpace(value)
+		}
+	}
+	if chosen == "" {
+		chosen = spec.DefaultProfile
+	}
+	if !slices.Contains(spec.Profiles, chosen) {
+		return "", fmt.Errorf("profile must be one of %s", strings.Join(spec.Profiles, ", "))
+	}
+	return chosen, nil
 }
 
 // Main runs a production command and exits with its status.
@@ -134,17 +171,16 @@ func Execute(
 		return 0
 	}
 
-	profile := ""
-	if selectedProfile != nil {
-		profile = *selectedProfile
+	profile, err := resolveProfile(spec, selectedProfile, lookup)
+	if err != nil {
+		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
+		return 1
 	}
 	cfg, err := config.Load(config.Spec{
-		Service:        spec.Service,
-		Profiles:       spec.Profiles,
-		DefaultProfile: spec.DefaultProfile,
-		Profile:        profile,
-		RequireQueues:  spec.RequireQueues,
-		Queues:         append([]string(nil), selectedQueues...),
+		Service:       spec.Service,
+		Profile:       profile,
+		RequireQueues: spec.RequireQueues,
+		Queues:        append([]string(nil), selectedQueues...),
 		QueueConcurrency: append(
 			[]string(nil), queueConcurrency...,
 		),

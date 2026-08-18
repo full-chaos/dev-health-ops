@@ -533,7 +533,8 @@ INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
 	// The venue isolates the runtime snapshot contract: the snapshot table has
 	// no UPDATE-class privilege and the domain role cannot read Alembic's
 	// privileged migration ledger. Everything else is granted broadly on
-	// purpose -- internal/domaingrants owns the full posture audit. Successful
+	// purpose -- the role-posture manifests in internal/storage/postgres own the
+	// full posture audit, not this venue. Successful
 	// prepare/load/complete below is therefore readiness evidence derived from
 	// the domain-accessible snapshot surface, not public.alembic_version.
 	const role = "providersync_domain_probe"

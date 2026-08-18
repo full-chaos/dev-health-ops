@@ -75,9 +75,8 @@ class PairSpec:
         broken fails at import time, not silently the first time someone
         runs its comparison.
     excluded_fields: {field_name: reason}. A field listed here is skipped by
-        the comparator on BOTH sides. A reason is required -- this mirrors
-        `expected_survivor_reason` in scripts/mutation_harness.py: an
-        omission must be declared, in writing, at registration time, never
+        the comparator on BOTH sides. A reason is required -- an omission
+        must be declared, in writing, at registration time, never
         discovered by a reader wondering why a field went untested.
     """
 

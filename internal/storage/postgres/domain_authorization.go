@@ -834,8 +834,9 @@ func CoordinatorPosture() RolePosture {
 // restatement of it.
 //
 // It replaces an earlier shim that handed out the verbatim SQL text of the
-// readiness query so internal/domaingrants could regex the
-// required_table_privileges VALUES rows back out of it. Phase 2 parameterized
+// readiness query so a regex-based static analyser (internal/domaingrants,
+// since removed) could pull the required_table_privileges VALUES rows back out
+// of it. Phase 2 parameterized
 // that query over posture data bound through unnest, so the table list is no
 // longer in the SQL at all and there is nothing left to parse — the data is
 // the artefact now, and reading it directly removes a whole class of

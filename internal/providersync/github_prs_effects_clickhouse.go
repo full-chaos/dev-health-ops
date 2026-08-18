@@ -302,11 +302,11 @@ type pullRequestVersion struct {
 // large conjunction. A monolithic `a && b && c && ...` is a single unit for
 // a mutation harness to kill -- deleting or weakening ONE clause inside it
 // can go unnoticed as long as the OTHER clauses in the same test's fixture
-// already differ, exactly the failure mode the shared mutation harness's
-// "mutate compound predicates clause by clause" rule exists to catch. Named,
-// separately-returning clauses make every field its own provable unit:
-// TestPullRequestReadbackClassifiesEveryVersionRelationship and the mutation
-// plan in testdata/mutation-plans kill each one independently.
+// already differ, exactly the failure mode the "mutate compound predicates
+// clause by clause" rule exists to catch. Named, separately-returning clauses
+// make every field its own provable unit:
+// TestPullRequestReadbackClassifiesEveryVersionRelationship kills each one
+// independently.
 func comparePullRequestVersion(
 	expected pullRequestRow,
 	actual pullRequestVersion,

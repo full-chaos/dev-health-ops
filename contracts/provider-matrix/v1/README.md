@@ -404,11 +404,13 @@ What this activation actually proves, and how:
   finding: an earlier hand-authored fixture omitted the review-enrichment
   phase entirely and then asserted its own zero-valued output as "verified"
   parity, which cannot fail when the omitted phase is wrong.
-- A full mutation-testing pass via the shared harness
-  (`internal/providersync/testdata/mutation-plans/github_prs.json`, run with
-  `scripts/mutation_harness.py`), 12/12 mutations `KILLED` (one additional
+- A full mutation-testing pass, 12/12 mutations `KILLED` (one additional
   mutation `SURVIVED` on a first pass and identified genuinely dead/redundant
-  code — see the plan's `$limitation` field).
+  code, which was deleted). This is a record of a pass that was run, not a
+  reproducible command: the plan
+  (`internal/providersync/testdata/mutation-plans/github_prs.json`) and the
+  harness that executed it were removed under CHAOS-3875 and are recoverable
+  only from history.
 - `repo_id` is derived the same way `(github, repo-metadata)` derives its
   repository identity: `repositoryIdentity(fullName)` where `fullName` comes
   from a `GET /repos/{owner}/{repo}` call's `full_name` field, matching
@@ -457,9 +459,8 @@ surface:
   truncation had no sub-millisecond fixture of its own (a separate
   truncation call site from the one M5's first fix covered).
 
-All five (two HIGH, three MEDIUM) are proven via the shared mutation harness
-plan (`testdata/mutation-plans/github_prs.json`) alongside the first round's
-findings — 17/17 mutations `KILLED`.
+All five (two HIGH, three MEDIUM) were proven alongside the first round's
+findings — 17/17 mutations `KILLED` — under the same removed plan.
 
 Full recipe, the (now fifteen) defect classes above generalized into a
 checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in

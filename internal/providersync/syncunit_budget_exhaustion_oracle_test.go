@@ -195,9 +195,8 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 		// the corpus pairing a zero counter with a live stamp: every
 		// pre-existing zero-counter case has a nil stamp, so a Go mirror that
 		// dropped clause 1's `&& FirstDeferredAt == nil` conjunct agreed with
-		// Python on all of them. Verified by planting exactly that mutation --
-		// M4 in testdata/mutation-plans/chaos_3465_budget_surplus_parity.json,
-		// which survives the old corpus.
+		// Python on all of them. Verified by planting exactly that mutation by
+		// hand: it survives the old corpus.
 		//
 		// Which of the two kills it, stated exactly rather than as "these
 		// cases": only the PAST-the-wall-clock one. Under the mutant, Go

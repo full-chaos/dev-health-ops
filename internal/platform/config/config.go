@@ -67,9 +67,9 @@ const (
 
 // Spec describes the immutable configuration surface of one executable.
 type Spec struct {
-	Service          string
-	Profiles         []string
-	DefaultProfile   string
+	Service string
+	// Profile is already resolved and validated by the caller; config does not
+	// own profile selection (CHAOS-3875).
 	Profile          string
 	RequireQueues    bool
 	Queues           []string
@@ -526,10 +526,7 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.Profile, err = profile(spec, lookup)
-	if err != nil {
-		return Config{}, err
-	}
+	cfg.Profile = spec.Profile
 	cfg.Queues, err = queueSelection(spec, lookup)
 	if err != nil {
 		return Config{}, err
@@ -1046,23 +1043,6 @@ func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	}
 }
 
-func profile(spec Spec, lookup secrets.LookupEnv) (string, error) {
-	selected := spec.Profile
-	if selected == "" {
-		selected = envOrDefault(lookup, "DEV_HEALTH_PROFILE", spec.DefaultProfile)
-	}
-	if len(spec.Profiles) == 0 {
-		if selected != "" {
-			return "", fmt.Errorf("%s does not accept a profile", spec.Service)
-		}
-		return "", nil
-	}
-	if !slices.Contains(spec.Profiles, selected) {
-		return "", fmt.Errorf("profile must be one of %s", strings.Join(spec.Profiles, ", "))
-	}
-	return selected, nil
-}
-
 func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
 	if !spec.RequireQueues {
 		if len(spec.Queues) > 0 {
@@ -1070,19 +1050,16 @@ func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
 		}
 		return nil, nil
 	}
-	if len(spec.Profiles) > 0 || spec.Profile != "" || spec.DefaultProfile != "" {
+	if spec.Profile != "" {
 		return nil, fmt.Errorf("%s cannot combine queue selection with profiles", spec.Service)
 	}
 
-	environment, environmentSet := lookup("DEV_HEALTH_QUEUES")
-	environment = strings.TrimSpace(environment)
-	if len(spec.Queues) > 0 && environmentSet && environment != "" {
-		return nil, errors.New("DEV_HEALTH_QUEUES conflicts with --queues")
-	}
+	// Queue topology is flag-only on purpose (CHAOS-3875). Every deploy
+	// artifact -- Compose, Swarm, raw Kubernetes, and the Helm chart -- passes
+	// --queues, so the parallel DEV_HEALTH_QUEUES env path bought nothing but a
+	// second way to say the same thing and a conflict branch to detect the two
+	// disagreeing.
 	rawValues := append([]string(nil), spec.Queues...)
-	if len(rawValues) == 0 && environment != "" {
-		rawValues = []string{environment}
-	}
 	if len(rawValues) == 0 {
 		return nil, errors.New("at least one worker queue is required")
 	}

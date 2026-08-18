@@ -55,10 +55,11 @@ dev-health-worker \
   --shutdown-timeout 960s
 ```
 
-`DEV_HEALTH_QUEUES`, `DEV_HEALTH_QUEUE_CONCURRENCY`,
-`DEV_HEALTH_WORKER_GROUP`, and `DEV_HEALTH_SHUTDOWN_TIMEOUT` remain supported as
-fallbacks for existing supervisors. Do not set a fallback together with its
-command argument; ambiguous input fails before readiness.
+`--queues` is the only way to select queues; there is no environment fallback
+for it. `DEV_HEALTH_QUEUE_CONCURRENCY`, `DEV_HEALTH_WORKER_GROUP`, and
+`DEV_HEALTH_SHUTDOWN_TIMEOUT` remain supported as fallbacks for existing
+supervisors. Do not set one of those together with its command argument;
+ambiguous input fails before readiness.
 
 The deployment owns the worker group name, replicas, resources, autoscaling,
 shutdown budget, and per-queue concurrency. The binary owns neither a named

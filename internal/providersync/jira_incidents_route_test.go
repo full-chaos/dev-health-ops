@@ -54,7 +54,7 @@ func (doer *jiraIncidentDoer) Do(request *http.Request) (*http.Response, error) 
 		if !strings.Contains(payload["jql"].(string), `project in (JSM)`) {
 			doer.t.Fatalf("JQL=%q", payload["jql"])
 		}
-		body = `{"issues":[{"id":"10001","key":"JSM-1","fields":{"summary":"API down","created":"2026-07-22T10:00:00Z","updated":"2026-07-22T10:05:00Z","resolutiondate":null,"status":{"name":"Investigating","statusCategory":{"key":"indeterminate"}},"priority":{"name":"Highest"}}},{"id":"10002","key":"JSM-2","fields":{"summary":"Ordinary request","created":"2026-07-22T11:00:00Z","updated":"2026-07-22T11:05:00Z","resolutiondate":null,"status":{"name":"Open","statusCategory":{"key":"new"}},"priority":null}}],"isLast":true}`
+		body = `{"issues":[{"id":"10001","key":"JSM-1","fields":{"summary":"API down","created":"2026-07-22T10:00:00.000+0000","updated":"2026-07-22T10:05:00.000+0000","resolutiondate":null,"status":{"name":"Investigating","statusCategory":{"key":"indeterminate"}},"priority":{"name":"Highest"}}},{"id":"10002","key":"JSM-2","fields":{"summary":"Ordinary request","created":"2026-07-22T11:00:00.000+0000","updated":"2026-07-22T11:05:00.000+0000","resolutiondate":null,"status":{"name":"Open","statusCategory":{"key":"new"}},"priority":null}}],"isLast":true}`
 	case "https://api.atlassian.com/jsm/incidents/cloudId/cloud-123/v1/incident/10001":
 		body = `{}`
 	case "https://api.atlassian.com/jsm/incidents/cloudId/cloud-123/v1/incident/10002":
@@ -280,5 +280,41 @@ func TestJiraIncidentsRouteRechecksRevokedEntitlementAtClickHouseWrite(t *testin
 	}).WriteEffect(context.Background(), claim, batch.Effects[0])
 	if !errors.Is(err, ErrJiraIncidentEntitlementDisabled) || checks != 2 || writer.prepared != 0 {
 		t.Fatalf("write checks=%d prepared=%d err=%v", checks, writer.prepared, err)
+	}
+}
+
+// TestParseJiraIncidentTimeAcceptsRealJiraCloudShapes is CHAOS-3869 evidence.
+// Jira Cloud REST returns created/updated/resolutiondate as
+// "2026-07-22T10:00:00.000+0000" -- a numeric offset with no colon, which
+// time.Parse(time.RFC3339Nano, ...) rejects. Strict parsing here failed every
+// real incidents unit with ErrNormalizationInvalid, a category that is not
+// deterministically terminal, so it burned all 5 attempts and terminalized the
+// dataset. Route fixtures were Z-suffixed, so CI could not catch it.
+func TestParseJiraIncidentTimeAcceptsRealJiraCloudShapes(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	for _, raw := range []string{
+		"2026-07-22T10:00:00.000+0000",
+		"2026-07-22T10:00:00+0000",
+		"2026-07-22T10:00:00.000Z",
+		"2026-07-22T10:00:00Z",
+		"2026-07-22T10:00:00.000+00:00",
+		" 2026-07-22T10:00:00.000+0000 ",
+	} {
+		parsed, err := parseJiraIncidentTime(raw)
+		if err != nil {
+			t.Fatalf("parseJiraIncidentTime(%q) = %v", raw, err)
+		}
+		if !parsed.Equal(want) {
+			t.Fatalf("parseJiraIncidentTime(%q) = %s, want %s", raw, parsed, want)
+		}
+	}
+	// A non-zero offset must still be honoured, not silently treated as UTC.
+	offset, err := parseJiraIncidentTime("2026-07-22T12:00:00.000+0200")
+	if err != nil || !offset.Equal(want) {
+		t.Fatalf("parseJiraIncidentTime(+0200) = %s, %v; want %s", offset, err, want)
+	}
+	if _, err := parseJiraIncidentTime("not-a-timestamp"); err == nil {
+		t.Fatal("malformed timestamp was accepted")
 	}
 }

@@ -649,19 +649,35 @@ func jiraTime(value any) *time.Time {
 			return &parsed
 		}
 	}
-	if strings.HasSuffix(raw, "Z") {
-		raw = strings.TrimSuffix(raw, "Z") + "+00:00"
-	}
-	if len(raw) >= 5 && (raw[len(raw)-5] == '+' || raw[len(raw)-5] == '-') && raw[len(raw)-3] != ':' {
-		raw = raw[:len(raw)-2] + ":" + raw[len(raw)-2:]
-	}
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000-07:00"} {
+	raw = normalizeJiraOffset(raw)
+	for _, layout := range jiraTimestampLayouts {
 		if parsed, err := time.Parse(layout, raw); err == nil {
 			parsed = parsed.UTC()
 			return &parsed
 		}
 	}
 	return nil
+}
+
+// jiraTimestampLayouts are the shapes Jira REST returns for datetime fields.
+var jiraTimestampLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04:05.000-07:00"}
+
+// normalizeJiraOffset rewrites Jira Cloud's numeric offset into the colon form
+// RFC3339 requires: the API returns "2026-07-22T10:00:00.000+0000", which
+// time.Parse(time.RFC3339Nano, ...) rejects outright. A "Z" suffix becomes an
+// explicit zero offset so one layout set covers every shape.
+//
+// This lived only on the work-items path; the incidents route parsed strict
+// RFC3339 and so rejected every real Jira Cloud incident (CHAOS-3869). Route
+// fixtures were Z-suffixed, which is why CI could not catch it.
+func normalizeJiraOffset(raw string) string {
+	if strings.HasSuffix(raw, "Z") {
+		raw = strings.TrimSuffix(raw, "Z") + "+00:00"
+	}
+	if len(raw) >= 5 && (raw[len(raw)-5] == '+' || raw[len(raw)-5] == '-') && raw[len(raw)-3] != ':' {
+		raw = raw[:len(raw)-2] + ":" + raw[len(raw)-2:]
+	}
+	return raw
 }
 
 func jiraFloat(value any) *float64 {

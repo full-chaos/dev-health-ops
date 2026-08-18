@@ -286,14 +286,14 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 			if job != nil && job.JobRow != nil && job.Attempt > 0 {
 				attempt = job.Attempt
 			}
-			choice = retryDecision(CategoryPanic, attempt, adapter.descriptor.MaxAttempts)
-			returned = &safeError{category: CategoryPanic}
+			choice = retryDecision(CategoryPanic, ReasonHandlerPanic, attempt, adapter.descriptor.MaxAttempts)
+			returned = &safeError{category: CategoryPanic, reason: ReasonHandlerPanic}
 			observe(func() { adapter.observer.JobPanicked(parent, labels) })
 			if claim != nil && claim.State() == ClaimProceed {
 				if err := finishClaim(parent, claim, Completion{
 					Result: choice.result, Category: choice.category, Terminal: choice.cancel,
 				}); err != nil {
-					choice = retryDecision(CategoryIdempotency, attempt, adapter.descriptor.MaxAttempts)
+					choice = retryDecision(CategoryIdempotency, Reason{}, attempt, adapter.descriptor.MaxAttempts)
 					returned = &safeError{category: CategoryIdempotency}
 				}
 			}

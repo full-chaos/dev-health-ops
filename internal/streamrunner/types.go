@@ -7,6 +7,7 @@ package streamrunner
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -106,6 +107,13 @@ type Config struct {
 	ShutdownDrain      time.Duration
 	Singleton          bool
 	ConfiguredReplicas int
+	// Logger names the cycle failures this runner hits. It is optional so
+	// tests and embedders need not supply one; a nil Logger discards. Without
+	// it a runner could flip ready=false forever and emit nothing at all
+	// (CHAOS-3907). It must never fall back to slog.Default(): that sends
+	// output to a sink other than the process's configured JSON logger, so
+	// log-capturing tests would pass while production ships nothing.
+	Logger *slog.Logger
 }
 
 func (c Config) validate() error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sync"
 	"testing"
@@ -524,5 +525,41 @@ func TestShutdownClosesReadinessAndLeavesUncommittedMessagePending(t *testing.T)
 	}
 	if !transport.closed || len(transport.acked) != 0 {
 		t.Fatalf("shutdown should close transport without ack: closed=%v acked=%v", transport.closed, transport.acked)
+	}
+}
+
+// TestRunnerWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
+// path is inert: a runner given no Config.Logger must not panic on a cycle
+// failure, and it must not fall back to slog.Default() -- that would send
+// output to a sink other than the process's configured JSON logger, so a
+// log-capturing test could pass while production ships nothing (CHAOS-3907).
+func TestRunnerWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}, stats: StreamStats{Pending: 1}}
+	config := testConfig()
+	if config.Logger != nil {
+		t.Fatal("test config unexpectedly has a logger")
+	}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+		return errors.New("clickhouse unavailable")
+	}), config, health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runner.Shutdown(context.Background()) }()
+
+	// Give the background loop several cycles' worth of time to hit (and,
+	// were the fallback present, log) its failure.
+	time.Sleep(100 * time.Millisecond)
+
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

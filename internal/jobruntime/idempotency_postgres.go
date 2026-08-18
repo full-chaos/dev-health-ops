@@ -206,7 +206,16 @@ func runStatus(completion Completion) (string, error) {
 		return "succeeded", nil
 	case ResultRetry:
 		return "retryable", nil
-	case ResultDiscard, ResultCancel:
+	case ResultCancel:
+		// Only an explicit domain-terminal decision is terminal. A drain or a
+		// budget-lease loss also arrives as ResultCancel, and River will retry
+		// it -- stamping those "terminal" made Begin return ClaimTerminal on
+		// the retry, which the adapter auto-cancelled forever (CHAOS-3865).
+		if completion.Terminal {
+			return "terminal", nil
+		}
+		return "retryable", nil
+	case ResultDiscard:
 		return "terminal", nil
 	default:
 		return "", fmt.Errorf("unsupported completion result")

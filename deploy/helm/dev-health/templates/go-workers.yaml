@@ -56,6 +56,11 @@ spec:
             - {name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}
             {{- end }}
             - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
+            # Explicit env beats the shared Secret mounted via envFrom below,
+            # so Go pods get the native port while Python keeps HTTP.
+            - {name: CLICKHOUSE_URI, value: {{ . | quote }}}
+            {{- end }}
             {{- if not $group.queues }}
             - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $group.terminationGracePeriodSeconds) | quote }}}
             {{- end }}

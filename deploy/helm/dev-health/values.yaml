@@ -207,6 +207,13 @@ workerHeavy:
 # to zero but retains their definitions and Valkey DB 0.
 goWorkers:
   enabled: false
+  # -- ClickHouse URI for the Go workers, which speak the NATIVE wire protocol
+  #    (port 9000) rather than the HTTP interface (8123) that Python's
+  #    clickhouse-connect uses. Leave empty with the bundled ClickHouse and it
+  #    is derived natively; with an EXTERNAL ClickHouse this is REQUIRED,
+  #    because the shared secrets.data.CLICKHOUSE_URI carries Python's HTTP URI
+  #    and pointing a Go worker at it fails readiness immediately.
+  clickhouseURI: ""
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot
@@ -234,11 +241,11 @@ goWorkers:
       maxClientConnections: 1000
     queueSession:
       port: 6433
-      poolSize: 22
+      poolSize: 23
       maxClientConnections: 128
     coordinatorSession:
       port: 6434
-      poolSize: 10
+      poolSize: 11
       maxClientConnections: 32
     resources:
       requests: {cpu: 50m, memory: 64Mi}

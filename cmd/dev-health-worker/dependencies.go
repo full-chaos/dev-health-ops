@@ -183,6 +183,12 @@ type workerFamily struct {
 	handlers []jobruntime.HandlerSpec
 	queues   []jobruntime.QueueBudget
 	cleanups []func() error
+	// ownedKinds names kinds this family registers real workers for WITHOUT
+	// reporting them as handler specs -- today only the sync coordinator's
+	// four bridge-backed kinds (syncdispatchruntime.RegisterWorkers). Rescue
+	// coverage must treat them as owned, so they have to survive composition
+	// rather than being consumed by a per-family rescue call.
+	ownedKinds []string
 	// metricsSource is an additional Prometheus fragment this family owns
 	// (e.g. providerfoundation's dev_health_provider_* family), registered
 	// with the health.Registry alongside "worker_runtime" once construction
@@ -495,6 +501,23 @@ func configureWorkerDependenciesWithSources(
 			return nil, errWorkerDependencyUnavailable
 		}
 	}
+	// Rescue coverage is registered exactly once, after every selected family
+	// has composed, against the union of all owned kinds. Registering it per
+	// family (the previous shape) made any multi-family selection unbootable:
+	// the first family registered rescue-only workers for the kinds it did not
+	// own, and the next family's real worker for one of those kinds collided on
+	// the shared river.Workers (CHAOS-3864). The shipped "heavy" group
+	// (investment, metrics, reports, workgraph) hit this on every start.
+	// A registry that failed to load is already reported by the job_registry
+	// readiness check; surfacing it here too would turn an attributable
+	// not-ready process into an opaque construction failure.
+	if dependencies.runtimeRegistry != nil {
+		if err := registerRescueCoverage(workers, dependencies.runtimeRegistry, active.handlers, active.ownedKinds...); err != nil {
+			_ = closeWorkerFamily(active)
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+	}
 	if active.metricsSource != nil {
 		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
 			_ = closeWorkerFamily(active)
@@ -625,6 +648,7 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 		handlers:      append([]jobruntime.HandlerSpec(nil), existing.handlers...),
 		queues:        append([]jobruntime.QueueBudget(nil), existing.queues...),
 		cleanups:      append([]func() error(nil), existing.cleanups...),
+		ownedKinds:    append([]string(nil), existing.ownedKinds...),
 		metricsSource: existing.metricsSource,
 	}
 	result.cleanups = append(result.cleanups, additional.cleanups...)
@@ -655,6 +679,29 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 		}
 		seen[handler.Kind] = struct{}{}
 		result.handlers = append(result.handlers, handler)
+	}
+	// ownedKinds share the kind namespace with handlers: a kind may be claimed
+	// exactly once across all families, whether it is reported as a handler
+	// spec or registered directly. Fail closed on any overlap so a duplicate
+	// registration surfaces here rather than as a River duplicate-kind panic.
+	for _, kind := range result.ownedKinds {
+		if kind == "" {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[kind]; duplicate {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		seen[kind] = struct{}{}
+	}
+	for _, kind := range additional.ownedKinds {
+		if kind == "" {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[kind]; duplicate {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		seen[kind] = struct{}{}
+		result.ownedKinds = append(result.ownedKinds, kind)
 	}
 	queues := make(map[string]struct{}, len(result.queues)+len(additional.queues))
 	for _, queue := range result.queues {

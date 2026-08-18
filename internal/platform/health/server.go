@@ -184,6 +184,39 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 		strconv.Quote(s.service),
 		strconv.Quote(s.version),
 	)
+	// dev_health_runtime_ready collapses every required check into one bit, so
+	// an alert fired from it cannot say which dependency is down — and a
+	// crash-looping process serves no /readyz at all, leaving that one good
+	// surface dark exactly when it is needed. Publish a labelled gauge per
+	// required check alongside it so a scrape (and a page) can name the
+	// failure. Every required check gets a series, passing or not, so an
+	// alert can be written against the absence of failure, not the absence of
+	// a series. readiness.Checks is sorted by name (Registry.CheckRequired),
+	// so the label ordering is stable scrape to scrape.
+	if len(readiness.Checks) > 0 {
+		_, _ = fmt.Fprint(
+			&output,
+			"# HELP dev_health_runtime_check_failed Whether a required readiness check is currently failing.\n"+
+				"# TYPE dev_health_runtime_check_failed gauge\n",
+		)
+		for _, check := range readiness.Checks {
+			failed := 0
+			if check.Failed {
+				failed = 1
+			}
+			// Name only, never dependency error text. Names are pre-registered
+			// and validated against checkNamePattern (see
+			// Registry.RegisterRequired), which is the same guarantee
+			// dev_health_runtime_metrics_source_failed already relies on for
+			// its source label below — reusing an already-reviewed pattern
+			// rather than a new one.
+			_, _ = fmt.Fprintf(
+				&output,
+				"dev_health_runtime_check_failed{check=%s} %d\n",
+				strconv.Quote(check.Name), failed,
+			)
+		}
+	}
 	// Degrade rather than fail: a source whose dependency is unreachable must
 	// not take the process-level gauges above down with it, since live/ready/
 	// uptime matter most while the process is unready. The per-source failure

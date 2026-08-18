@@ -38,7 +38,13 @@ func NewPostgresPublisher(
 	registry *jobruntime.Registry,
 ) (*PostgresPublisher, error) {
 	producer, err := joboutbox.NewProducer(pool, registry)
-	if err != nil || registry == nil {
+	if err != nil {
+		// Keep the producer construction cause reachable, same as the publish
+		// path below -- a nil pool/registry error from joboutbox otherwise
+		// vanishes into an undifferentiated "unavailable" (CHAOS-3903/3905).
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if registry == nil {
 		return nil, ErrUnavailable
 	}
 	return &PostgresPublisher{producer: producer, registry: registry}, nil
@@ -108,7 +114,11 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 			// (CHAOS-3903).
 			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
-		return ErrUnavailable
+		// Any other producer error (e.g. a Postgres write failure) keeps its
+		// cause too -- dropping it here was the same defect CHAOS-3903 fixed
+		// on the contract/policy branch above, just left on this one
+		// (CHAOS-3905).
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
 }

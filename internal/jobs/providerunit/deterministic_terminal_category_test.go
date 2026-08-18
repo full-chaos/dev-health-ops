@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
@@ -39,6 +40,27 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			name:     "effect recovery ambiguous",
 			err:      providersync.ErrEffectRecoveryAmbiguous,
 			category: EffectRecoveryAmbiguousCategory,
+		},
+		{
+			// Deterministic given the provider's current state: a repo with
+			// more in-window rows than the cap refuses identically on every
+			// attempt, so retrying only re-fetched up to 100 list pages and
+			// 10k detail GETs five times over (CHAOS-3871).
+			name:     "pagination cap refusal",
+			err:      providersync.ErrPaginationCapExceeded,
+			category: PaginationIncompleteCategory,
+		},
+		{
+			// Already non-retryable at the HTTP layer; the unit handler was
+			// still spending four more executions against a dead credential.
+			name:     "authentication",
+			err:      &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401},
+			category: AuthCategory,
+		},
+		{
+			name:     "not found",
+			err:      &providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404},
+			category: NotFoundCategory,
 		},
 	}
 	for _, testCase := range deterministic {
@@ -86,6 +108,11 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 		errors.New("connection reset by peer"),
 		providersync.ErrInvalidConfiguration,
 		fmt.Errorf("wrapped: %w", errors.New("timeout")),
+		// A rate limit is deferred by its own branch upstream of this mapper
+		// and must never be terminalized here, and a transient provider fault
+		// still deserves its bounded retries.
+		&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429},
+		&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503},
 	} {
 		if category, ok := deterministicTerminalCategory(err); ok {
 			t.Errorf("deterministicTerminalCategory(%v) = (%q, true), want retryable",

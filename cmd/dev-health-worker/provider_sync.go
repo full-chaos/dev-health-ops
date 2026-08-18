@@ -794,10 +794,6 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := registerRescueCoverage(workers, registry, []jobruntime.HandlerSpec{adapter.Spec()}); err != nil {
-		closeDependencies()
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
 		handlers: []jobruntime.HandlerSpec{adapter.Spec()},
 		queues: selectedQueueBudgets(

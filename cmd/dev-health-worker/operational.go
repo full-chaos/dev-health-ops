@@ -183,9 +183,6 @@ func buildOperationalWorker(
 			registered = append(registered, adapter.Spec())
 		}
 	}
-	if err := registerRescueCoverage(workers, registry, registered); err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	budgets := selectedQueueBudgets(cfg.Queues, operationalQueues, cfg.WorkerQueueConcurrency)
 	return workerFamily{
 		handlers: registered,

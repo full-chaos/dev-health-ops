@@ -48,6 +48,14 @@ var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
 
+// errSchedulerDatabaseUnconfigured marks the one non-fatal outcome of building
+// the loop: the database contract was DECLARED-rejected (typically no DSN), so
+// buildSchedulerLoopWithSources has already closed the readiness names and the
+// process must stay live and unready rather than exit. It is a distinct
+// sentinel rather than a (nil, nil) return so that a loop factory returning nil
+// by mistake still fails loudly.
+var errSchedulerDatabaseUnconfigured = errors.New("scheduler database is not configured")
+
 // schedulerActivation is a source-reviewed, package-private composition seam.
 // It deliberately cannot be influenced by process environment or deployment
 // profile. The production loop factory is reached only through the checked-in
@@ -130,6 +138,11 @@ func configureSchedulerDependenciesWithSources(
 		return nil, errSchedulerActivationUnavailable
 	}
 	loop, err := sources.buildLoop(ctx, cfg, registry)
+	if errors.Is(err, errSchedulerDatabaseUnconfigured) {
+		// Live, unready, no components: the readiness names are already
+		// registered unavailable by the loop factory.
+		return nil, nil
+	}
 	if err != nil || loop == nil {
 		return nil, errSchedulerActivationUnavailable
 	}

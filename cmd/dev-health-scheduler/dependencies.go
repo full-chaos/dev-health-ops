@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -307,7 +308,33 @@ func buildSchedulerLoopWithSources(
 		return nil, errSchedulerActivationUnavailable
 	}
 	database, err := sources.openDatabase(ctx, cfg)
+	if err != nil && postgres.ConfigurationRejected(err) {
+		// A DECLARED configuration rejection -- most commonly no DSN supplied
+		// at all -- keeps the process live and unready, exactly as the worker
+		// does, so an operator scrapes named readiness failures instead of
+		// reading a crash loop (CHAOS-3873). The scheduler previously treated
+		// every open failure as fatal, so an unconfigured scheduler container
+		// exited before it could publish its operator port at all.
+		//
+		// The same five names the goOwnsMarkers gate closes are closed here,
+		// so the externally visible readiness surface does not change shape
+		// depending on WHY the loop is not running.
+		if registerErr := processreadiness.RegisterUnavailable(
+			registry,
+			"domain_postgres",
+			"queue_postgres",
+			"coordinator_postgres",
+			"river_schema",
+			"scheduler_loop",
+		); registerErr != nil {
+			return nil, registerErr
+		}
+		return nil, errSchedulerDatabaseUnconfigured
+	}
 	if err != nil || database == nil {
+		// Operational failure -- unreachable host, refused credentials, an
+		// unparseable DSN. Crash-loop rather than idle as an alive-but-unready
+		// zombie.
 		return nil, errSchedulerActivationUnavailable
 	}
 	closeOnError := true

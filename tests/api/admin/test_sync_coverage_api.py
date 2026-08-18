@@ -12,6 +12,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin.schemas_flat import (
+    BackfillSelectorRequest,
+    SyncCoverageBackfillWindow,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.sync_coverage import (
     invalidate_sync_coverage_projection,
@@ -853,6 +857,72 @@ def test_canonical_backfill_windows_preserve_pair_scope_and_half_open_bounds():
             "reasons": ["failed"],
         },
     ]
+
+
+def test_canonical_backfill_windows_drop_empty_intervals():
+    """An empty interval is not a submittable selector.
+
+    BackfillSelectorRequest requires ``since < before``. Suggesting a window
+    that fails that validator hands the operator a button that always 422s.
+    """
+    source_id = "11111111-1111-1111-1111-111111111111"
+    instant = datetime(2026, 3, 12, tzinfo=timezone.utc)
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="commits",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=instant,
+                    before=instant,
+                    source_ids=(source_id,),
+                )
+            ],
+            failed_ranges=[
+                sync_coverage_module.CoverageInterval(
+                    since=instant,
+                    before=instant,
+                    source_ids=(source_id,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == []
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param({"since": "2026-08-08", "before": "2026-08-13"}, id="v1-dates"),
+        pytest.param(
+            {"since": "2026-08-08T00:00:00", "before": "2026-08-13T00:00:00"},
+            id="naive-datetimes",
+        ),
+    ],
+)
+def test_advertised_backfill_window_is_accepted_by_the_backfill_selector(stored):
+    """A suggested window must survive being echoed back as a selector.
+
+    Web sends ``backfill_windows`` entries to POST /backfill verbatim. The
+    response model used to be naive-tolerant while the request model is
+    ``AwareDatetime``, so a version-1 projection produced
+    ``2026-08-08T00:00:00`` and the server rejected its own suggestion with a
+    ``timezone_aware`` 422.
+    """
+    window = SyncCoverageBackfillWindow.model_validate(
+        {**stored, "reasons": ["failed", "gap"]}
+    )
+    assert window.since.tzinfo is not None
+    assert window.before.tzinfo is not None
+
+    emitted = window.model_dump(mode="json")
+    selector = BackfillSelectorRequest.model_validate(
+        {"since": emitted["since"], "before": emitted["before"]}
+    )
+
+    assert selector.since == datetime(2026, 8, 8, tzinfo=timezone.utc)
+    assert selector.before == datetime(2026, 8, 13, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio

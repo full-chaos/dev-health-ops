@@ -29,10 +29,35 @@ _PROFILE_NAMES = {
     "stream-pagerduty",
 }
 _COORDINATOR_GROUPS = {"reconciler", "scheduler"}
+# Pool sizes and client caps come from the deployment manifest's postgres
+# budget rather than being restated here: the queue and coordinator session
+# defaults had drifted below it (22/10 against 23/11) precisely because this
+# oracle carried its own copy of the numbers (CHAOS-3872).
+_POSTGRES_BUDGET = json.loads(_DEPLOYMENT.read_text(encoding="utf-8"))[
+    "postgres_budget"
+]
 _POOLERS = {
-    "transaction": (6432, "transaction", 20, 1000, "devhealth_domain"),
-    "queue-session": (6433, "session", 22, 128, "devhealth_queue"),
-    "coordinator-session": (6434, "session", 10, 32, "devhealth_coordinator"),
+    "transaction": (
+        6432,
+        "transaction",
+        _POSTGRES_BUDGET["pgbouncer_transaction_pool_size"],
+        _POSTGRES_BUDGET["pgbouncer_transaction_max_client_connections"],
+        "devhealth_domain",
+    ),
+    "queue-session": (
+        6433,
+        "session",
+        _POSTGRES_BUDGET["pgbouncer_queue_session_pool_size"],
+        _POSTGRES_BUDGET["pgbouncer_queue_session_max_client_connections"],
+        "devhealth_queue",
+    ),
+    "coordinator-session": (
+        6434,
+        "session",
+        _POSTGRES_BUDGET["pgbouncer_coordinator_session_pool_size"],
+        _POSTGRES_BUDGET["pgbouncer_coordinator_session_max_client_connections"],
+        "devhealth_coordinator",
+    ),
 }
 _ROLE_SECRET_KEYS = {
     "RIVER_DOMAIN_DATABASE_PASSWORD",

@@ -26,6 +26,7 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 		handler         HandlerFunc[RetentionCleanupArgs]
 		wantResult      Result
 		wantCategory    ErrorCategory
+		wantTerminal    bool
 		wantCancelError bool
 		wantPanic       bool
 		wantDomain      bool
@@ -98,7 +99,23 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			handler: func(ctx context.Context, _ *Execution[RetentionCleanupArgs]) error {
 				return ctx.Err()
 			},
-			wantResult: ResultCancel, wantCategory: CategoryCancelled,
+			// A drain must leave the run retryable, never terminal.
+			wantResult: ResultCancel, wantCategory: CategoryCancelled, wantTerminal: false,
+		},
+		{
+			// CHAOS-3865: a drain or budget-lease loss landing between the
+			// handler's successful return and classification must not rewrite
+			// the outcome -- the work is already done.
+			name: "success survives late cancellation", attempt: 1, claimState: ClaimProceed,
+			parent: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, func() {}
+			},
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return nil
+			},
+			wantResult: ResultSuccess, wantCategory: CategoryNone,
 		},
 		{
 			name: "terminal domain", attempt: 1, claimState: ClaimTerminal,
@@ -122,7 +139,7 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return errors.New("unclassified-secret")
 			},
-			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantCancelError: true,
+			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantTerminal: true, wantCancelError: true,
 		},
 	}
 
@@ -180,6 +197,10 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			if test.claimState == ClaimProceed {
 				if len(claim.completions) != 1 || claim.completions[0].Result != test.wantResult {
 					t.Fatalf("claim completions: %+v", claim.completions)
+				}
+				if claim.completions[0].Terminal != test.wantTerminal {
+					t.Fatalf("completion terminal = %v, want %v (%+v)",
+						claim.completions[0].Terminal, test.wantTerminal, claim.completions[0])
 				}
 				if claim.finishContextErr != nil {
 					t.Fatalf("claim finalized with cancelled context: %v", claim.finishContextErr)

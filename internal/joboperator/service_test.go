@@ -3,6 +3,7 @@ package joboperator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -534,6 +535,38 @@ func TestJobRouteApplyIsAuthorizedAndDurablyAudited(t *testing.T) {
 	if fixture.auditor.event.Action != ActionApplyJobRoute {
 		t.Fatalf("audit=%+v", fixture.auditor.event)
 	}
+}
+
+// TestJobRouteRollbackClassifiesQuiesceProbeFailureAsBackendNotPrecondition
+// covers the joboperator side of CHAOS-3904: once jobroute.Controller.Rollback
+// stops relabelling a failed quiescence probe as ErrLiveClaims, the error it
+// returns (ErrUnavailable wrapping the driver cause) must route through
+// mapBackendError -> CodeBackend, not mapJobRouteError -> CodePrecondition.
+func TestJobRouteRollbackClassifiesQuiesceProbeFailureAsBackendNotPrecondition(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.err = fmt.Errorf("%w: %w", jobroute.ErrUnavailable, errors.New("dial tcp: connection refused"))
+
+	_, err := fixture.service.RollbackJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"rollback", "corr-job-route-outage",
+	)
+	assertCode(t, err, CodeBackend)
+}
+
+// TestJobRouteRollbackNegativeControlStillClassifiesLiveClaimsAsPrecondition
+// is the negative control for the test above: a genuine live-claims error
+// must still classify as CodePrecondition after the fix.
+func TestJobRouteRollbackNegativeControlStillClassifiesLiveClaimsAsPrecondition(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.err = jobroute.ErrLiveClaims
+
+	_, err := fixture.service.RollbackJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"rollback", "corr-job-route-live-claims",
+	)
+	assertCode(t, err, CodePrecondition)
 }
 
 type fakeRouteController struct {

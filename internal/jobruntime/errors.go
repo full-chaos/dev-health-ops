@@ -28,6 +28,49 @@ const (
 	CategoryIdempotency    ErrorCategory = "idempotency"
 )
 
+// Reason is a bounded, compile-time-fixed elaboration of an ErrorCategory.
+// It crosses the same boundary ErrorCategory does -- logs, metrics, River
+// error rows, operator responses -- and is safe for the same reason: its
+// entire value space is the finite set of package-level constants declared
+// below, never a runtime string.
+//
+// The field is unexported and this package exports no function that builds
+// a Reason from a string. A call site outside this package cannot construct
+// one at all (only the zero value, via an unkeyed Reason{} literal, which
+// isZero treats as "no reason supplied"); a call site inside this package
+// cannot smuggle a runtime value past a Reason-typed parameter, because
+// doing so requires literally writing Reason{value: someExpr} in this file
+// next to -- and as conspicuous as -- the constants it would be duplicating.
+// That is the enforcement: passing err.Error(), a tenant ID, or a formatted
+// message anywhere a Reason is expected is a compile error, not a review
+// nit. See TestReasonConstructorRejectsRuntimeValue for the compiled proof.
+type Reason struct{ value string }
+
+func (reason Reason) isZero() bool { return reason == Reason{} }
+
+// String renders the bounded reason text. It is exported so operator-facing
+// formatting outside this package (if any) can read the value without
+// reaching into the safeError string; it can never return anything other
+// than one of the constants below.
+func (reason Reason) String() string { return reason.value }
+
+// reason is the package's only constructor. It is unexported, so nothing
+// outside jobruntime can call it, and every call site inside the package is
+// one of the "var Reason... = reason(...)" declarations immediately below --
+// there is no call to reason() anywhere else in the package.
+func reason(value string) Reason { return Reason{value: value} }
+
+// The fixed catalog. Adding a new bounded reason means adding a line here,
+// in code review, next to this comment -- the same bar Category constants
+// already clear.
+var (
+	// ReasonHandlerPanic marks the safeError built by Adapter.execute's
+	// recover path: the sole site in this package that turns a panic into a
+	// CategoryPanic result. It never carries the recovered value or a stack
+	// trace -- only the fact that this is where the panic was caught.
+	ReasonHandlerPanic = reason("handler_panic_recovered")
+)
+
 // Result is the runtime decision. A discard is represented by a normal safe
 // error on the final River attempt; River performs the durable state change.
 type Result string
@@ -45,6 +88,7 @@ type markedError struct {
 	cause    error
 	cancel   bool
 	snooze   time.Duration
+	reason   Reason
 }
 
 func (err *markedError) Error() string { return "job error category: " + string(err.category) }
@@ -112,6 +156,26 @@ func mark(category ErrorCategory, err error, cancel bool) error {
 	return &markedError{category: category, cause: nonNilError(err), cancel: cancel}
 }
 
+// WithReason attaches a bounded Reason to an error already produced by one of
+// this package's marking functions (Retryable, RetryableAfter, Permanent,
+// TerminalDomain, Cancel, DomainMismatch, BudgetContention, RateLimited).
+// Applied to anything else -- including a nil or unmarked error -- it is a
+// no-op, so an unclassified handler error still fails closed exactly as
+// before: a reason is opt-in, never a substitute for classification.
+//
+// Because its second parameter is the unexported-field Reason type, a caller
+// can only pass one of this package's exported Reason constants; there is no
+// way to pass err.Error(), a tenant ID, or any other runtime string.
+func WithReason(err error, why Reason) error {
+	var marked *markedError
+	if !errors.As(err, &marked) {
+		return err
+	}
+	updated := *marked
+	updated.reason = why
+	return &updated
+}
+
 func nonNilError(err error) error {
 	if err == nil {
 		return errors.New("unspecified")
@@ -124,6 +188,7 @@ type decision struct {
 	category ErrorCategory
 	cancel   bool
 	snooze   time.Duration
+	reason   Reason
 }
 
 func classify(ctx context.Context, err error, attempt, maxAttempts int) decision {
@@ -131,7 +196,7 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 		return decision{result: ResultSuccess, category: CategoryNone}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return retryDecision(CategoryTimeout, attempt, maxAttempts)
+		return retryDecision(CategoryTimeout, Reason{}, attempt, maxAttempts)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		// Do not wrap this in river.JobCancel. A remote River cancellation already
@@ -141,36 +206,43 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 	var marked *markedError
 	if errors.As(err, &marked) {
 		if marked.snooze > 0 {
-			return decision{result: ResultRetry, category: marked.category, snooze: marked.snooze}
+			return decision{result: ResultRetry, category: marked.category, snooze: marked.snooze, reason: marked.reason}
 		}
 		if marked.cancel {
-			return decision{result: ResultCancel, category: marked.category, cancel: true}
+			return decision{result: ResultCancel, category: marked.category, cancel: true, reason: marked.reason}
 		}
-		return retryDecision(marked.category, attempt, maxAttempts)
+		return retryDecision(marked.category, marked.reason, attempt, maxAttempts)
 	}
 	// Unclassified handler errors fail closed. Retrying requires an explicit
 	// Retryable wrapper so deterministic failures cannot create retry storms.
+	// No marker means no reason: this path never sets one.
 	return decision{result: ResultCancel, category: CategoryPermanent, cancel: true}
 }
 
-func retryDecision(category ErrorCategory, attempt, maxAttempts int) decision {
+func retryDecision(category ErrorCategory, why Reason, attempt, maxAttempts int) decision {
 	if attempt >= maxAttempts {
-		return decision{result: ResultDiscard, category: category}
+		return decision{result: ResultDiscard, category: category, reason: why}
 	}
-	return decision{result: ResultRetry, category: category}
+	return decision{result: ResultRetry, category: category, reason: why}
 }
 
-type safeError struct{ category ErrorCategory }
+type safeError struct {
+	category ErrorCategory
+	reason   Reason
+}
 
 func (err *safeError) Error() string {
-	return fmt.Sprintf("dev-health job failed [%s]", err.category)
+	if err.reason.isZero() {
+		return fmt.Sprintf("dev-health job failed [%s]", err.category)
+	}
+	return fmt.Sprintf("dev-health job failed [%s: %s]", err.category, err.reason)
 }
 
 func transportError(choice decision) error {
 	if choice.snooze > 0 {
 		return river.JobSnooze(choice.snooze)
 	}
-	safe := &safeError{category: choice.category}
+	safe := &safeError{category: choice.category, reason: choice.reason}
 	if choice.cancel {
 		return river.JobCancel(safe)
 	}

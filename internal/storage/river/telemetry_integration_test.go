@@ -10,6 +10,7 @@ import (
 
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testing.T) {
@@ -138,5 +139,106 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	}
 	if err := sampler.CheckAvailableContractVersions(ctx); !errors.Is(err, riverstore.ErrUnsupportedAvailableContractVersion) {
 		t.Fatalf("unknown kind readiness error = %v", err)
+	}
+}
+
+// TestQueueSaturationIsPerProcessAcrossReplicas is CHAOS-3867 evidence.
+//
+// The per-queue running count was fleet-wide while the capacity it is divided
+// by is this process's MaxWorkers, so every replica of an N-replica group
+// reported saturation of roughly N -- clamped to 1.0. The signal an operator
+// uses to decide scale-out was therefore pegged at 100% exactly under
+// scale-out, and the queue_saturation warning (threshold 0.9) fired
+// permanently at N >= 2.
+func TestQueueSaturationIsPerProcessAcrossReplicas(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeInstance(t, instance)
+
+	adminPool := openPool(t, ctx, instance.URI)
+	defer adminPool.Close()
+	createRuntimeRoles(t, ctx, adminPool)
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queuePool := openPool(t, ctx, roleURI(t, instance.URI, queueRole, queuePassword, "worker_test"))
+	defer queuePool.Close()
+	samplerFor := func(clientID string) *riverstore.QueueTelemetrySampler {
+		t.Helper()
+		sampler, err := riverstore.NewQueueTelemetrySampler(queuePool, riverstore.QueueTelemetryConfig{
+			Schema:   "river",
+			ClientID: clientID,
+			Queues:   []riverstore.QueueTelemetryQueue{{Name: "retention", MaxWorkers: 2}},
+			Jobs: []riverstore.QueueTelemetryJob{
+				{Queue: "retention", Kind: "system.retention_cleanup", SupportedVersions: []int{1}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sampler
+	}
+	saturationFor := func(sampler *riverstore.QueueTelemetrySampler) (float64, int64) {
+		t.Helper()
+		snapshot, err := sampler.Snapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, capacity := range snapshot.QueueCapacities {
+			if capacity.Queue == "retention" {
+				return capacity.Saturation, capacity.Running
+			}
+		}
+		t.Fatal("retention queue missing from snapshot")
+		return 0, 0
+	}
+
+	first, second := samplerFor("replica-1"), samplerFor("replica-2")
+
+	// An idle two-replica group must not trip the 0.9 queue_saturation warning.
+	for name, sampler := range map[string]*riverstore.QueueTelemetrySampler{
+		"replica-1": first, "replica-2": second,
+	} {
+		if saturation, running := saturationFor(sampler); saturation != 0 || running != 0 {
+			t.Fatalf("idle %s reported saturation=%v running=%d, want 0/0", name, saturation, running)
+		}
+	}
+
+	// Each replica claims one of its two slots: 2 of 4 fleet slots busy, so
+	// true utilization is 50%. Fleet-wide counting reported 2/2 = 1.0 on BOTH.
+	insertRunningRetentionJob(t, ctx, adminPool, "replica-1")
+	insertRunningRetentionJob(t, ctx, adminPool, "replica-2")
+
+	for name, sampler := range map[string]*riverstore.QueueTelemetrySampler{
+		"replica-1": first, "replica-2": second,
+	} {
+		saturation, running := saturationFor(sampler)
+		if running != 1 {
+			t.Fatalf("%s counted %d running jobs, want only its own 1", name, running)
+		}
+		if saturation != 0.5 {
+			t.Fatalf("%s reported saturation=%v at 50%% true utilization, want 0.5", name, saturation)
+		}
+	}
+}
+
+func insertRunningRetentionJob(t *testing.T, ctx context.Context, pool *pgxpool.Pool, clientID string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO river.river_job
+			(state, max_attempts, args, kind, queue, scheduled_at, attempted_by)
+		VALUES ('running', 3, '{"contract_version":1}'::jsonb, 'system.retention_cleanup',
+			'retention', now(), $1)`,
+		[]string{clientID},
+	); err != nil {
+		t.Fatal(err)
 	}
 }

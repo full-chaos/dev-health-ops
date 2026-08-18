@@ -70,7 +70,11 @@ type QueueAgeTelemetry struct {
 	OldestAvailableAge time.Duration
 }
 
-// QueueCapacityTelemetry reports one queue's live running count and capacity.
+// QueueCapacityTelemetry reports one queue's live running count and capacity,
+// both scoped to THIS process. Running counts only jobs this client claimed and
+// Capacity is this client's MaxWorkers for the queue, so Saturation is a
+// per-process ratio. Averaging it across replicas gives fleet utilization;
+// summing Running across replicas gives the fleet's in-flight count.
 type QueueCapacityTelemetry struct {
 	Queue      string
 	Capacity   int64
@@ -464,12 +468,22 @@ local_running AS (
         AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
 ),
 queue_running AS (
+    -- Scoped to THIS client, like local_running above. The capacity this count
+    -- is divided by is QueueCapacityTelemetry.Capacity, which is this
+    -- process's MaxWorkers, so a fleet-wide numerator made every replica
+    -- report saturation of roughly N at N replicas -- clamped to 1.0, so the
+    -- signal an operator would use to decide scale-out was pegged at 100%
+    -- exactly under scale-out (CHAOS-3867). Per-process is also what the
+    -- sibling LocalRunning/ExecutionSaturation metrics already report, and it
+    -- aggregates correctly: averaging the ratio across replicas gives fleet
+    -- utilization without depending on presence-table freshness.
     SELECT
         river_job.queue,
         count(*)::bigint AS running
     FROM {{river_job}} AS river_job
     WHERE river_job.queue = ANY($3::text[])
         AND river_job.state = 'running'
+        AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
     GROUP BY river_job.queue
 ),
 unsupported_available AS (

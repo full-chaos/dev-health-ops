@@ -28,7 +28,7 @@ type JobLabels struct {
 // row's ScheduledAt, since that is the only place the adapter observes both
 // the job's availability time and its execution start. Deployment sampling
 // sets worker_execution_saturation_ratio{queue} directly from configured
-// worker capacity and active executions.
+// worker capacity and active executions, both scoped to this process.
 //
 // Pool adapters use worker_database_pool_saturation_ratio{pool} and
 // worker_database_pool_acquire_seconds{pool,result}; pool is bounded to

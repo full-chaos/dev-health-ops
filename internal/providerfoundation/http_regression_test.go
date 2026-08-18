@@ -51,8 +51,15 @@ func TestHTTPClientClampsIntegerAndDateRetryAfter(t *testing.T) {
 			if parsed <= policy.MaxWait {
 				t.Fatalf("fixture did not exceed max wait: %s", parsed)
 			}
-			if got := client.retryDelay(1, parsed); got != policy.MaxWait {
+			// Generic transient errors keep the policy's own ceiling.
+			if got := client.retryDelay(1, parsed, ErrorTransient); got != policy.MaxWait {
 				t.Fatalf("retry delay=%s, want %s", got, policy.MaxWait)
+			}
+			// A rate limit is the provider stating its own window, so it is
+			// honoured up to Python's 300s ceiling instead of being truncated
+			// to MaxWait and retried inside the window (CHAOS-3868).
+			if got := client.retryDelay(1, parsed, ErrorRateLimited); got != RateLimitMaxHonoredDelay {
+				t.Fatalf("rate-limit delay=%s, want %s", got, RateLimitMaxHonoredDelay)
 			}
 		})
 	}
@@ -77,7 +84,7 @@ func TestHTTPClientRetryJitterStaysWithinBounds(t *testing.T) {
 				t.Fatal("unexpected request")
 				return nil, nil
 			}), test.policy)
-			if got := client.retryDelay(test.attempt, 0); got < test.minimum || got > test.maximum {
+			if got := client.retryDelay(test.attempt, 0, ErrorTransient); got < test.minimum || got > test.maximum {
 				t.Fatalf("retry delay=%s, want [%s,%s]", got, test.minimum, test.maximum)
 			}
 		})
@@ -96,7 +103,7 @@ func TestHTTPClientRetryJitterFallsBackWhenEntropyFails(t *testing.T) {
 	}), policy)
 	client.entropy = failingEntropyReader{}
 
-	if got := client.retryDelay(1, 0); got != policy.InitialWait {
+	if got := client.retryDelay(1, 0, ErrorTransient); got != policy.InitialWait {
 		t.Fatalf("retry delay=%s, want unjittered fallback %s", got, policy.InitialWait)
 	}
 	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)

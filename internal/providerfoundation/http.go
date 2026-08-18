@@ -158,7 +158,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			if attempt == c.Retry.MaxAttempts {
 				return nil, last
 			}
-			if err := c.wait(ctx, c.retryDelay(attempt, 0)); err != nil {
+			if err := c.wait(ctx, c.retryDelay(attempt, 0, ErrorTransient)); err != nil {
 				return nil, err
 			}
 			continue
@@ -170,9 +170,20 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
 		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
-		retryDelay := c.retryDelay(attempt, classification.RetryAfter)
+		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
-			if err := c.Gate.Penalize(ctx, retryDelay); err != nil {
+			// The gate is shared cross-runtime (Celery workers read the same
+			// key) and accepts up to 300s, so arm it with the provider's own
+			// delay rather than this client's truncated retry wait --
+			// under-penalizing it sent Celery back at the provider early too.
+			penalty := classification.RetryAfter
+			if penalty <= 0 {
+				penalty = retryDelay
+			}
+			if penalty > RateLimitMaxHonoredDelay {
+				penalty = RateLimitMaxHonoredDelay
+			}
+			if err := c.Gate.Penalize(ctx, penalty); err != nil {
 				_ = response.Body.Close()
 				return nil, err
 			}
@@ -271,10 +282,18 @@ func (c *HTTPClient) DoUnauthenticated(
 	return response, nil
 }
 
-func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {
 	if retryAfter > 0 {
-		if retryAfter > c.Retry.MaxWait {
-			return c.Retry.MaxWait
+		// A rate limit is the provider telling us exactly how long to wait.
+		// Truncating that to the generic 30s MaxWait and retrying anyway is
+		// what escalates a primary limit into a secondary one, so honour it up
+		// to Python's 300s ceiling. Every other class keeps MaxWait.
+		honored := c.Retry.MaxWait
+		if class == ErrorRateLimited && RateLimitMaxHonoredDelay > honored {
+			honored = RateLimitMaxHonoredDelay
+		}
+		if retryAfter > honored {
+			return honored
 		}
 		return retryAfter
 	}
@@ -348,10 +367,14 @@ func ClassifyHTTP(provider string, status int, headers http.Header) *ProviderErr
 }
 
 func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, message string) *ProviderError {
-	retryAfter := ParseRetryAfter(headerValue(headers, "retry-after"), time.Now())
+	now := time.Now()
+	retryAfter := ParseRetryAfter(headerValue(headers, "retry-after"), now)
 	message = strings.ToLower(message)
 	if isRateLimitedForbidden(provider, status, headers, message) {
-		return &ProviderError{Class: ErrorRateLimited, StatusCode: status, RetryAfter: retryAfter}
+		return &ProviderError{
+			Class: ErrorRateLimited, StatusCode: status,
+			RetryAfter: rateLimitRetryAfter(headers, retryAfter, now),
+		}
 	}
 	switch status {
 	case 0:
@@ -363,7 +386,10 @@ func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, m
 	case http.StatusConflict:
 		return &ProviderError{Class: ErrorConflict, StatusCode: status}
 	case http.StatusTooManyRequests:
-		return &ProviderError{Class: ErrorRateLimited, StatusCode: status, RetryAfter: retryAfter}
+		return &ProviderError{
+			Class: ErrorRateLimited, StatusCode: status,
+			RetryAfter: rateLimitRetryAfter(headers, retryAfter, now),
+		}
 	}
 	if status >= 500 && status <= 599 {
 		return &ProviderError{Class: ErrorTransient, StatusCode: status, RetryAfter: retryAfter}
@@ -406,6 +432,47 @@ func hasHeader(headers http.Header, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// RateLimitMaxHonoredDelay bounds how long a provider-supplied rate-limit
+// delay may park a request or the shared cooldown gate. It matches Python's
+// RateLimitConfig.max_backoff_seconds (300s, connectors/utils/rate_limit_queue.py).
+//
+// The generic RetryPolicy.MaxWait (30s by default) stays the cap for ordinary
+// transient errors: clamping a rate limit to it meant Go kept re-hitting a
+// provider inside its own stated window, which is exactly what escalates
+// GitHub from a primary to a secondary limit (CHAOS-3868).
+const RateLimitMaxHonoredDelay = 300 * time.Second
+
+// ParseRateLimitReset derives a delay from an absolute epoch-seconds reset
+// header. GitHub primary limits usually carry only x-ratelimit-reset and no
+// Retry-After; GitLab uses RateLimit-Reset. Python resolves both
+// (providers/github/ratelimit.py github_retry_after_seconds); Go previously
+// looked at retry-after alone and fell back to a generic backoff.
+func ParseRateLimitReset(raw string, now time.Time) time.Duration {
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0
+	}
+	delay := time.Duration((seconds - float64(now.UnixNano())/float64(time.Second)) * float64(time.Second))
+	if delay < 0 {
+		return 0
+	}
+	return delay
+}
+
+// rateLimitRetryAfter prefers an explicit Retry-After and falls back to the
+// provider's reset header, mirroring Python's resolution order.
+func rateLimitRetryAfter(headers http.Header, retryAfter time.Duration, now time.Time) time.Duration {
+	if retryAfter > 0 {
+		return retryAfter
+	}
+	for _, header := range []string{"x-ratelimit-reset", "ratelimit-reset"} {
+		if delay := ParseRateLimitReset(headerValue(headers, header), now); delay > 0 {
+			return delay
+		}
+	}
+	return retryAfter
 }
 
 func ParseRetryAfter(raw string, now time.Time) time.Duration {

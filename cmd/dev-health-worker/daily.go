@@ -227,12 +227,6 @@ func buildDailyWorker(
 			registered = append(registered, registeredSpec)
 		}
 	}
-	if err := registerRescueCoverage(workers, registry, registered); err != nil {
-		if metricsClickHouse != nil {
-			_ = metricsClickHouse.Close()
-		}
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 
 	var cleanups []func() error
 	if metricsClickHouse != nil {

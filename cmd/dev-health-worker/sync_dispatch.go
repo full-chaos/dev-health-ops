@@ -295,19 +295,17 @@ func buildSyncCoordinatorWorker(
 		}
 		handlers = []jobruntime.HandlerSpec{autoimport}
 	}
-	if err := registerRescueCoverage(
-		workers,
-		registry,
-		handlers,
-		syncdispatchcontract.KindDispatchSyncRun,
-		syncdispatchcontract.KindFinalizeSyncRun,
-		syncdispatchcontract.KindPostSync,
-		syncdispatchcontract.KindReferenceDiscovery,
-	); err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
 		handlers: handlers,
 		queues:   queues,
+		// RegisterWorkers above registered real workers for these four kinds
+		// without reporting them as handler specs; rescue coverage (now applied
+		// once, centrally) must still treat them as owned.
+		ownedKinds: []string{
+			syncdispatchcontract.KindDispatchSyncRun,
+			syncdispatchcontract.KindFinalizeSyncRun,
+			syncdispatchcontract.KindPostSync,
+			syncdispatchcontract.KindReferenceDiscovery,
+		},
 	}, nil
 }

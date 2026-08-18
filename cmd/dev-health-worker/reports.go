@@ -99,10 +99,6 @@ func buildReportWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := registerRescueCoverage(workers, registry, specs); err != nil {
-		closeClickHouse()
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
 	return workerFamily{
 		handlers: specs,
 		queues: selectedQueueBudgets(

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -110,6 +111,10 @@ func (r *Runner) run(ctx context.Context, done chan struct{}) {
 		active, err := r.cycle(ctx, maintain)
 		if err != nil {
 			r.recordFailure()
+			r.logger().ErrorContext(ctx, "stream runner cycle failed",
+				"stream", r.config.Name,
+				"error", err.Error(),
+			)
 			idleDelay = initialIdleDelay
 			select {
 			case <-ctx.Done():
@@ -377,6 +382,16 @@ func (r *Runner) recordFailure() {
 	r.failures++
 	r.up = false
 	r.mu.Unlock()
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by stream-runner output appearing on a logger it did not choose.
+func (r *Runner) logger() *slog.Logger {
+	if r == nil || r.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return r.config.Logger
 }
 
 func (r *Runner) readiness(context.Context) error {

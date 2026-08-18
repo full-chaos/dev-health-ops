@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -641,5 +642,32 @@ func TestMetricsOmitLastSuccessAgeBeforeFirstSuccess(t *testing.T) {
 	}
 	if strings.Contains(metrics.String(), "sync_dispatch_observer_last_success_age_seconds") {
 		t.Fatalf("pre-success metrics exported a fabricated age:\n%s", metrics.String())
+	}
+}
+
+// TestLoopWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
+// path is inert: a loop given no Logger must not panic on a failed step, and
+// it must not fall back to slog.Default() -- that would send output to a
+// sink other than the process's configured JSON logger, so a log-capturing
+// test could pass while production ships nothing (CHAOS-3907).
+func TestLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	failure := errors.New("initial observation probe failure")
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		return Observation{}, failure
+	})
+	loop, _ := newTestLoop(t, stepper, &testClock{})
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted initial observation failure")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

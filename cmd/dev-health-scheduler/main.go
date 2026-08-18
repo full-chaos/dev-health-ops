@@ -49,6 +49,30 @@ var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
 
+// dependencyFailure attaches a bounded reason code to the generic activation
+// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// exactly. Before this, every distinct construction failure in this binary --
+// a missing coordinator pool, a failed handoff repository, a broken sync loop
+// -- collapsed into the same bare errSchedulerActivationUnavailable, so the
+// shell logged "dependency_configuration_failed" with no reason and an
+// operator could not tell which knob was wrong (CHAOS-3873/CHAOS-3907). The
+// reason is always a compile-time constant, never interpolated input, so
+// logging it cannot leak a DSN or a secret.
+type dependencyFailure struct {
+	reason string
+}
+
+func (failure dependencyFailure) Error() string {
+	return errSchedulerActivationUnavailable.Error() + ": " + failure.reason
+}
+
+func (dependencyFailure) Unwrap() error { return errSchedulerActivationUnavailable }
+
+// DependencyReason satisfies the shell's reason-code interface.
+func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
 // errSchedulerDatabaseUnconfigured marks the one non-fatal outcome of building
 // the loop: the database contract was DECLARED-rejected (typically no DSN), so
 // buildSchedulerLoopWithSources has already closed the readiness names and the
@@ -123,7 +147,7 @@ func configureSchedulerDependenciesWithSources(
 		return nil, err
 	}
 	if registry == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_registry_unavailable")
 	}
 	if !activation.goOwnsMarkers {
 		// schedulerOwnership alone (CHAOS-3128) is not activation: until this
@@ -139,7 +163,7 @@ func configureSchedulerDependenciesWithSources(
 		)
 	}
 	if sources.buildLoop == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_loop_factory_missing")
 	}
 	loop, err := sources.buildLoop(ctx, cfg, registry, loggers...)
 	if errors.Is(err, errSchedulerDatabaseUnconfigured) {
@@ -147,8 +171,19 @@ func configureSchedulerDependenciesWithSources(
 		// registered unavailable by the loop factory.
 		return nil, nil
 	}
-	if err != nil || loop == nil {
-		return nil, errSchedulerActivationUnavailable
+	if err != nil {
+		// buildSchedulerLoopWithSources already names its own failing
+		// construction site with a bounded reason (see dependencies.go). Preserve
+		// it rather than flattening back to the bare sentinel here -- errors.Is
+		// still matches for any caller (or test double) that returns an
+		// unrelated error, which normalizes below to a reason of its own.
+		if errors.Is(err, errSchedulerActivationUnavailable) {
+			return nil, err
+		}
+		return nil, dependencyUnavailable("scheduler_loop_construction_failed")
+	}
+	if loop == nil {
+		return nil, dependencyUnavailable("scheduler_loop_unavailable")
 	}
 	return []lifecycle.Component{loop}, nil
 }

@@ -190,7 +190,7 @@ func buildFixedScheduleLoop(
 	logger *slog.Logger,
 ) (fixedScheduleRuntime, error) {
 	if coordinatorPool == nil || registry == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_fixed_loop_inputs_unavailable")
 	}
 	jobs, err := jobruntime.Load(defaultContractRoot)
 	if err != nil {

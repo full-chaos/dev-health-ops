@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,18 @@ type LoopConfig struct {
 	// a loop that can create pending occurrences but not consume them is the
 	// exact gap that leaves work stranded after the marker advances.
 	Occurrences OccurrenceStepper
+	// Logger names the failures that close this loop's readiness. It is
+	// optional so tests and embedders need not supply one; a nil Logger
+	// discards. Without it a loop can fail every window forever and emit
+	// nothing at all, mirroring the literal sibling scheduler/fixed.Loop's
+	// CHAOS-3903 fix -- see that package's LoopConfig.Logger.
+	Logger *slog.Logger
+}
+
+// WithLogger returns the config bound to a diagnostic logger.
+func (config LoopConfig) WithLogger(logger *slog.Logger) LoopConfig {
+	config.Logger = logger
+	return config
 }
 
 func DefaultLoopConfig(registry *health.Registry) LoopConfig {
@@ -182,6 +195,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 
 	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "sync scheduler initial handoff failed", "error", err.Error())
 		cancel()
 		close(done)
 		return fmt.Errorf("initial scheduler handoff: %w", err)
@@ -193,6 +207,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 		ticker.Stop()
 		cancel()
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "sync scheduler stopped before its polling loop started")
 		close(done)
 		if err := loopCtx.Err(); err != nil {
 			return err
@@ -216,6 +231,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 		case now, open := <-ticker.Chan():
 			if !open {
 				loop.setFailed()
+				loop.logger().ErrorContext(ctx, "sync scheduler ticker closed unexpectedly")
 				return
 			}
 			if !nextEligible.IsZero() && now.Before(nextEligible) {
@@ -223,6 +239,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 			}
 			if err := loop.step(ctx, now); err != nil {
 				loop.setFailed()
+				loop.logger().ErrorContext(ctx, "sync scheduler handoff window failed", "error", err.Error())
 				// Measure retry delay from failure completion. A slow or timed
 				// out step may leave old ticker values buffered; those must not
 				// collapse the intended backoff.
@@ -302,6 +319,17 @@ func (loop *Loop) setFailed() {
 	loop.mu.Lock()
 	loop.up = false
 	loop.mu.Unlock()
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by scheduler output appearing on a logger it did not choose. Mirrors
+// scheduler/fixed.Loop.logger exactly.
+func (loop *Loop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *Loop) readiness(context.Context) error {

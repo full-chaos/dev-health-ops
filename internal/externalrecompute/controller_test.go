@@ -1,8 +1,10 @@
 package externalrecompute
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -124,5 +126,54 @@ func TestControllerScheduleRejectsInvalidOrReversedScope(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("reversed window error = %v", err)
+	}
+}
+
+type controllerAlwaysFailingDispatcher struct{ err error }
+
+func (dispatcher controllerAlwaysFailingDispatcher) PendingScopes(
+	context.Context, int,
+) ([]streamhandlers.ExternalRecomputeScope, error) {
+	return nil, dispatcher.err
+}
+
+func (controllerAlwaysFailingDispatcher) Dispatch(context.Context, Claim) error { return nil }
+
+// TestControllerWithoutALoggerDoesNotFallBackToSlogDefault proves the
+// nil-logger path is inert: a controller given no Config.Logger must not
+// panic on a failed step, and it must not fall back to slog.Default() --
+// that would send output to a sink other than the process's configured JSON
+// logger, so a log-capturing test could pass while production ships nothing
+// (CHAOS-3907).
+func TestControllerWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	cfg := DefaultConfig()
+	cfg.PollInterval = 100 * time.Millisecond
+	if cfg.Logger != nil {
+		t.Fatal("default config unexpectedly has a logger")
+	}
+	controller, err := New(
+		&controllerStoreFake{},
+		controllerAlwaysFailingDispatcher{err: errors.New("pending scopes probe failure")},
+		cfg,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = controller.Shutdown(context.Background()) }()
+
+	// Give the background loop several cycles' worth of time to hit (and,
+	// were the fallback present, log) its failure.
+	time.Sleep(100 * time.Millisecond)
+
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

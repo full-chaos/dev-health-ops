@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -25,6 +26,31 @@ import (
 )
 
 var errStreamDependencyUnavailable = errors.New("stream-runner dependency is unavailable")
+
+// dependencyFailure attaches a bounded reason code to the generic dependency
+// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// exactly. Before this, every distinct storage-construction failure -- a
+// missing URI, a domain Postgres pool that would not open, ClickHouse
+// refusing the connection, Valkey refusing the connection -- collapsed into
+// the same bare errStreamDependencyUnavailable, so the shell logged
+// "dependency_configuration_failed" with no reason and an operator could not
+// tell which knob was wrong (CHAOS-3873/CHAOS-3907). The reason is always a
+// compile-time constant, never interpolated input, so logging it cannot leak
+// a DSN or a secret.
+type dependencyFailure struct {
+	reason string
+}
+
+func (failure dependencyFailure) Error() string {
+	return errStreamDependencyUnavailable.Error() + ": " + failure.reason
+}
+
+func (dependencyFailure) Unwrap() error { return errStreamDependencyUnavailable }
+
+// DependencyReason satisfies the shell's reason-code interface.
+func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
 
 type streamHandlerKind string
 
@@ -53,6 +79,7 @@ type productionStreamStorage struct {
 	riverSchema string
 	recompute   *externalrecompute.Controller
 	bridge      operationalBridgeSettings
+	logger      *slog.Logger
 }
 
 // operationalBridgeSettings is the transitional Python worker-bridge wiring the
@@ -68,20 +95,36 @@ type operationalBridgeSettings struct {
 	transport string
 }
 
-func openProductionStreamStorage(ctx context.Context, cfg config.Config) (streamStorage, error) {
+// newExternalRecomputeController is the one place this binary constructs the
+// external-ingest recompute controller. It exists as a named seam (rather than
+// inlining externalrecompute.DefaultConfig() at the call site) so a
+// composition-root test can prove the process's configured logger reaches the
+// controller without needing a live ClickHouse/Postgres/Valkey connection --
+// see TestExternalRecomputeControllerReceivesTheComposedLogger.
+func newExternalRecomputeController(
+	store externalrecompute.Store,
+	dispatcher externalrecompute.CompatibilityDispatcher,
+	logger *slog.Logger,
+) (*externalrecompute.Controller, error) {
+	cfg := externalrecompute.DefaultConfig()
+	cfg.Logger = logger
+	return externalrecompute.New(store, dispatcher, cfg)
+}
+
+func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger *slog.Logger) (streamStorage, error) {
 	if !cfg.ClickHouseURI.Configured() || !cfg.DomainDatabaseURI.Configured() || !cfg.ValkeyURI.Configured() {
-		return nil, errStreamDependencyUnavailable
+		return nil, dependencyUnavailable("stream_storage_uris_unconfigured")
 	}
 	domainConfig := postgres.DefaultConfig(cfg.DomainDatabaseURI.Reveal())
 	domainConfig.MaxConns = cfg.DomainDatabaseMaxConns
 	domainPool, err := postgres.New(ctx, domainConfig)
 	if err != nil {
-		return nil, errStreamDependencyUnavailable
+		return nil, dependencyUnavailable("stream_domain_postgres_open_failed")
 	}
 	clickHouse, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(cfg.ClickHouseURI.Reveal()))
 	if err != nil {
 		domainPool.Close()
-		return nil, errStreamDependencyUnavailable
+		return nil, dependencyUnavailable("stream_clickhouse_open_failed")
 	}
 	valkeyConfig := valkey.DefaultConfig(cfg.ValkeyURI.Reveal())
 	valkeyConfig.ClientName = "dev-health-stream-runner-" + cfg.Profile
@@ -89,11 +132,12 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config) (stream
 	if err != nil {
 		_ = clickHouse.Close()
 		domainPool.Close()
-		return nil, errStreamDependencyUnavailable
+		return nil, dependencyUnavailable("stream_valkey_open_failed")
 	}
 	return &productionStreamStorage{
 		clickHouse: clickHouse, domainPool: domainPool, valkey: valkeyClient,
 		domainRole: cfg.DomainDatabaseRole, riverSchema: cfg.RiverDatabaseSchema,
+		logger: logger,
 		bridge: operationalBridgeSettings{
 			baseURL:       cfg.OperationalBridgeURL,
 			token:         cfg.OperationalBridgeToken,
@@ -172,11 +216,7 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamr
 		if err != nil {
 			return nil, err
 		}
-		storage.recompute, err = externalrecompute.New(
-			recomputeStore,
-			dispatcher,
-			externalrecompute.DefaultConfig(),
-		)
+		storage.recompute, err = newExternalRecomputeController(recomputeStore, dispatcher, storage.logger)
 		if err != nil {
 			return nil, err
 		}
@@ -243,23 +283,25 @@ func (storage *productionStreamStorage) Close() {
 }
 
 type streamDependencySources struct {
-	openStorage func(context.Context, config.Config) (streamStorage, error)
+	openStorage func(context.Context, config.Config, *slog.Logger) (streamStorage, error)
 }
 
 var productionStreamDependencySources = streamDependencySources{
 	openStorage: openProductionStreamStorage,
 }
 
-func configureStreamRunnerDependencies(
+func configureStreamRunnerDependenciesWithLogger(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
 	return configureStreamRunnerDependenciesWithSources(
 		ctx,
 		cfg,
 		registry,
 		productionStreamDependencySources,
+		logger,
 	)
 }
 
@@ -268,11 +310,12 @@ func configureStreamRunnerDependenciesWithSources(
 	cfg config.Config,
 	registry *health.Registry,
 	sources streamDependencySources,
+	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
 	if registry == nil || sources.openStorage == nil {
-		return nil, errStreamDependencyUnavailable
+		return nil, dependencyUnavailable("stream_runner_sources_unavailable")
 	}
-	storage, err := sources.openStorage(ctx, cfg)
+	storage, err := sources.openStorage(ctx, cfg, logger)
 	if err != nil || storage == nil {
 		return nil, processreadiness.RegisterUnavailable(
 			registry,
@@ -345,7 +388,7 @@ func configureStreamRunnerDependenciesWithSources(
 				config: productTelemetryRunnerConfig(replicas),
 			},
 		} {
-			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config)
+			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config, logger)
 			if err != nil {
 				if errors.Is(err, streamrunner.ErrInvalidConfig) {
 					return nil, err
@@ -360,6 +403,7 @@ func configureStreamRunnerDependenciesWithSources(
 			registry,
 			externalIngestHandlerKind,
 			externalIngestRunnerConfig(replicas),
+			logger,
 		)
 		if err != nil {
 			if errors.Is(err, streamrunner.ErrInvalidConfig) {
@@ -375,6 +419,7 @@ func configureStreamRunnerDependenciesWithSources(
 			registry,
 			pagerdutyHandlerKind,
 			pagerdutyRunnerConfig(replicas),
+			logger,
 		)
 		if err != nil {
 			if errors.Is(err, streamrunner.ErrInvalidConfig) {
@@ -396,6 +441,7 @@ func buildStreamRunner(
 	registry *health.Registry,
 	kind streamHandlerKind,
 	cfg streamrunner.Config,
+	logger *slog.Logger,
 ) (*streamrunner.Runner, error) {
 	handler, err := storage.Handler(kind)
 	if err != nil {
@@ -405,6 +451,7 @@ func buildStreamRunner(
 	if err != nil {
 		return nil, err
 	}
+	cfg.Logger = logger
 	runner, err := streamrunner.New(transport, handler, cfg, registry)
 	if err != nil {
 		transport.Close()

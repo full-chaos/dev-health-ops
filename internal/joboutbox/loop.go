@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ type ReconcilerLoopConfig struct {
 	PollInterval time.Duration
 	Limit        int
 	Registry     *health.Registry
+	// Logger names why a step failed. It is optional so tests and embedders
+	// need not supply one; a nil Logger discards. Without it this loop could
+	// flip readiness closed forever and emit nothing at all (CHAOS-3907).
+	Logger *slog.Logger
 }
 
 func DefaultReconcilerLoopConfig(registry *health.Registry) ReconcilerLoopConfig {
@@ -168,6 +173,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 
 	if err := loop.step(ctx, loop.clock.Now()); err != nil {
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "outbox reconciler initial step failed", "error", err.Error())
 		return fmt.Errorf("initial outbox reconciliation: %w", err)
 	}
 
@@ -180,6 +186,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 		ticker.Stop()
 		cancel()
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "outbox reconciler stopped before its polling loop started")
 		return context.Canceled
 	}
 	loop.cancel = cancel
@@ -202,6 +209,7 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 			}
 			if err := loop.step(ctx, now); err != nil {
 				loop.setFailed()
+				loop.logger().ErrorContext(ctx, "outbox reconciler step failed", "error", err.Error())
 				select {
 				case loop.errors <- fmt.Errorf("outbox reconciliation step: %w", err):
 				case <-ctx.Done():
@@ -244,6 +252,16 @@ func (loop *ReconcilerLoop) setFailed() {
 	loop.mu.Lock()
 	loop.up = false
 	loop.mu.Unlock()
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by reconciler output appearing on a logger it did not choose.
+func (loop *ReconcilerLoop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *ReconcilerLoop) readiness(context.Context) error {

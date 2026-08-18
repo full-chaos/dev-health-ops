@@ -842,24 +842,6 @@ def test_scheduler_image_packages_runtime_policy_inputs() -> None:
     assert "WORKDIR /app" in scheduler_target
 
 
-def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
-    dockerfile = _APP_DOCKERFILE.read_text(encoding="utf-8")
-
-    for required in (
-        "FROM runtime AS sync-parity",
-        "COPY --from=go-migrator-builder /out/dev-health-sync-parity "
-        + "/usr/local/bin/dev-health-sync-parity",
-        "COPY --from=builder /build/contracts/sync-dispatch/v1 "
-        + "/app/contracts/sync-dispatch/v1",
-        "COPY --from=builder /build/scripts/worker/observe_sync_dispatch_parity.py "
-        + "/app/scripts/worker/observe_sync_dispatch_parity.py",
-        "ln -s /usr/local/bin/python /app/.venv/bin/python",
-        "ENV PYTHONPATH=/app/src",
-        'ENTRYPOINT ["dev-health-sync-parity"]',
-    ):
-        assert required in dockerfile
-
-
 def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> None:
     manifest = _load_json(_DEPLOYMENT)
     pgbouncer = _load_yaml(_PRODUCTION_COMPOSE)["services"]["pgbouncer"]

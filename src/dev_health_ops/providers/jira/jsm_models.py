@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 class JsmPayloadError(ValueError):
@@ -43,6 +43,36 @@ class JsmIncidentFields(BaseModel):
     resolution_date: datetime | None = Field(default=None, alias="resolutiondate")
     status: JsmStatus
     priority: JsmPriority | None = None
+
+    @field_validator("created", "updated", "resolution_date")
+    @classmethod
+    def _require_utc(cls, value: datetime | None) -> datetime | None:
+        """Pin every incident timestamp to UTC at the provider boundary.
+
+        Jira Cloud returns the reporter's local offset -- ``+0200`` as readily
+        as ``+0000`` -- and pydantic preserves whichever it is parsed. Two
+        things then break downstream, both silently:
+
+        * ``operational_ordering_codec.canonical_datetime`` requires a
+          zero-offset datetime and raises ``OperationalOrderingEncodingError``
+          on anything else, so a single non-UTC incident aborts the whole
+          batch's conflict-key construction.
+        * The Go incidents route already normalizes
+          (``parseJiraIncidentTime`` -> ``parsed.UTC().Truncate(microsecond)``),
+          so leaving Python on the source offset makes the two runtimes emit
+          different rows for the same payload -- exactly the divergence the
+          live-Python oracle exists to catch.
+
+        A naive value is rejected rather than assumed to be UTC, matching Go,
+        whose layouts all require an explicit offset: guessing a zone here
+        would move a timestamp by hours with no error anywhere.
+        """
+
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("JSM incident timestamps require an explicit offset")
+        return value.astimezone(UTC)
 
 
 class JsmIncidentIssue(BaseModel):

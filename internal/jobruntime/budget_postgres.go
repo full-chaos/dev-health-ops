@@ -147,6 +147,10 @@ func (store *PostgresConcurrencyBudget) tryAcquire(
 			return nil, -1, 0, errConcurrencyBudgetUnavailable
 		}
 	}
+	// Captured before the INSERT so the locally-tracked expiry can only be
+	// EARLIER than the row's statement_timestamp()-based one: renewal retries
+	// must give up before the real lease expires, never after.
+	acquiredAt := time.Now()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.worker_concurrency_leases (
 			id, budget_key, job_kind, concurrency_scope, organization_id,
@@ -165,6 +169,7 @@ func (store *PostgresConcurrencyBudget) tryAcquire(
 		pool:          store.pool,
 		id:            id,
 		token:         token,
+		leasedAt:      acquiredAt,
 		leaseDuration: store.leaseDuration,
 		stopRenewal:   make(chan struct{}),
 		renewalDone:   make(chan struct{}),
@@ -178,6 +183,7 @@ type postgresConcurrencyLease struct {
 	pool          *pgxpool.Pool
 	id            uuid.UUID
 	token         uuid.UUID
+	leasedAt      time.Time
 	leaseDuration time.Duration
 	stopRenewal   chan struct{}
 	renewalDone   chan struct{}
@@ -228,11 +234,15 @@ func (lease *postgresConcurrencyLease) renew() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	defer close(lease.renewalDone)
+	// The instant the lease stops being ours if no renewal succeeds. Renewal
+	// retries until this passes rather than surrendering on the first error.
+	expiry := lease.leasedAt.Add(lease.leaseDuration)
 	for {
 		select {
 		case <-lease.stopRenewal:
 			return
 		case <-ticker.C:
+			attemptedAt := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), renewalQueryTimeout(interval))
 			result, err := lease.pool.Exec(ctx, `
 				UPDATE public.worker_concurrency_leases
@@ -241,7 +251,22 @@ func (lease *postgresConcurrencyLease) renew() {
 				WHERE id = $1 AND owner_token = $2 AND lease_expires_at > statement_timestamp()`,
 				lease.id, lease.token, int64(lease.leaseDuration/time.Second))
 			cancel()
-			if err != nil || result.RowsAffected() != 1 {
+			switch {
+			case err == nil && result.RowsAffected() == 1:
+				expiry = attemptedAt.Add(lease.leaseDuration)
+			case err == nil:
+				// The UPDATE only matches a live row we still own, so zero rows
+				// means the lease is provably gone -- another owner took it or
+				// it already expired. Nothing to wait for.
+				lease.markLost()
+				return
+			case time.Now().Before(expiry):
+				// A transient failure -- a query timeout, a PgBouncer restart,
+				// a failover -- is not lease loss. The interval is a third of
+				// the TTL, so there are further attempts left before the lease
+				// actually expires; cancelling the handler on the first error
+				// terminalized 2-hour jobs on any DB blip (CHAOS-3866).
+			default:
 				lease.markLost()
 				return
 			}

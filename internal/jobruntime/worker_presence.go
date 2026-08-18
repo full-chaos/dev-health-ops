@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"regexp"
 	"sort"
 	"sync"
@@ -127,6 +128,10 @@ func (presence *WorkerPresence) Shutdown(ctx context.Context) error {
 	return presence.update(ctx, `DELETE FROM public.worker_instances WHERE instance_id = $1`, presence.instanceID)
 }
 
+// Errors never emits. Presence is observability-only, so a renewal failure is
+// logged and retried rather than surfaced to lifecycle.Runtime, which treats
+// any component error as fatal. The channel stays part of the component
+// contract so the runtime's error-source plumbing is uniform.
 func (presence *WorkerPresence) Errors() <-chan error {
 	if presence == nil {
 		return nil
@@ -151,11 +156,19 @@ func (presence *WorkerPresence) renew(ctx context.Context, done chan<- struct{})
 				WHERE instance_id = $1`, presence.instanceID, presence.ttl.String())
 			cancel()
 			if err != nil {
-				select {
-				case presence.errors <- err:
-				default:
-				}
-				return
+				// Presence is observability-only: it feeds worker_instances
+				// counts, nothing claims or executes work through it. Treating
+				// the first failed heartbeat as fatal meant a 10-second domain
+				// database hiccup -- a failover, a PgBouncer restart -- drained
+				// every replica at once, a self-inflicted fleet-wide restart
+				// (CHAOS-3866). Keep ticking instead: the TTL is three
+				// intervals wide, and a recovered database revives the row on
+				// the next successful renewal.
+				slog.Default().WarnContext(ctx, "worker presence heartbeat failed",
+					"error_category", "worker_presence_renewal",
+					"worker_group", presence.workerGroup,
+					"worker_instance_id", presence.instanceID.String(),
+				)
 			}
 		}
 	}

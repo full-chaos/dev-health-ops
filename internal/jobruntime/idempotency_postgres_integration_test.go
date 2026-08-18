@@ -77,7 +77,20 @@ func TestPostgresIdempotencyPreservesDuplicateAndCrashRecoverySemantics(t *testi
 	if err != nil || nextAttempt.State() != ClaimProceed {
 		t.Fatalf("next retry Begin = %v, %v", nextAttempt, err)
 	}
-	if err := nextAttempt.Finish(ctx, Completion{Result: ResultCancel, Category: CategoryPermanent}); err != nil {
+	// A drain or budget-lease loss also arrives as ResultCancel but is not
+	// terminal: the run must stay reclaimable so River's retry can execute it
+	// (CHAOS-3865). classify() sets Terminal from the same cancel flag.
+	if err := nextAttempt.Finish(ctx, Completion{Result: ResultCancel, Category: CategoryCancelled}); err != nil {
+		t.Fatalf("finish drained claim: %v", err)
+	}
+	afterDrain, err := store.Begin(ctx, retryRequest)
+	if err != nil || afterDrain.State() != ClaimProceed {
+		t.Fatalf("post-drain Begin = %v, %v", afterDrain, err)
+	}
+	// An explicit domain-terminal outcome still fences every later claim.
+	if err := afterDrain.Finish(ctx, Completion{
+		Result: ResultCancel, Category: CategoryPermanent, Terminal: true,
+	}); err != nil {
 		t.Fatalf("finish terminal claim: %v", err)
 	}
 	terminal, err := store.Begin(ctx, retryRequest)
@@ -124,5 +137,66 @@ func idempotencyRequest(key string) ClaimRequest {
 		Policy:  "maintenance_run_checkpoint",
 		JobID:   42,
 		Attempt: 1,
+	}
+}
+
+// TestPostgresIdempotencyRenewsLeaseWhileTheRunIsHealthy is CHAOS-3866
+// evidence. The lease (10 minutes in production) is shorter than registered
+// timeouts (up to 2 hours), and Begin's running-with-expired-lease branch
+// hands a duplicate a concurrent claim on the same run -- the double execution
+// this store exists to fence. Renewal must keep a healthy run's lease ahead of
+// the clock for as long as it executes.
+func TestPostgresIdempotencyRenewsLeaseWhileTheRunIsHealthy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createIdempotencyTable(t, ctx, pool)
+
+	store, err := NewPostgresIdempotency(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Renewal ticks every leaseDuration/3, so the run outlives its original
+	// lease several times over during this test.
+	store.leaseDuration = 1500 * time.Millisecond
+	request := idempotencyRequest("retention:worker_job_long_run:2026-07-16")
+
+	claim, err := store.Begin(ctx, request)
+	if err != nil || claim.State() != ClaimProceed {
+		t.Fatalf("Begin = %v, %v", claim, err)
+	}
+
+	// Well past the original lease: without renewal the row would now be
+	// claimable by a duplicate running concurrently with this one.
+	time.Sleep(3 * store.leaseDuration)
+
+	var leaseAhead bool
+	if err := pool.QueryRow(ctx,
+		`SELECT lease_expires_at > statement_timestamp() FROM public.worker_job_runs`,
+	).Scan(&leaseAhead); err != nil {
+		t.Fatal(err)
+	}
+	if !leaseAhead {
+		t.Fatal("lease was not renewed while the run was still executing")
+	}
+	duplicate, err := store.Begin(ctx, request)
+	if err != nil || duplicate.State() != ClaimAlreadyComplete {
+		t.Fatalf("duplicate claimed a healthy long-running job: %v, %v", duplicate, err)
+	}
+	if err := claim.Finish(ctx, Completion{Result: ResultSuccess, Category: CategoryNone}); err != nil {
+		t.Fatalf("finish renewed claim: %v", err)
 	}
 }

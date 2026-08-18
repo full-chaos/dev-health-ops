@@ -308,7 +308,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 			if parseErr != nil {
-				return CompleteRouteBatch{}, fmt.Errorf("%w: reports skipped=%d: %v", ErrGitHubTestsIncomplete, rows.Skipped, parseErr)
+				return CompleteRouteBatch{}, fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 			}
 			reportIncomplete, optional := rows.optionalIncomplete()
 			if !optional {

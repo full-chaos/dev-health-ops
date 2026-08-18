@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
@@ -812,5 +814,91 @@ func TestZeroHorizonEmitsACutoffExactlyAtTheDueTime(t *testing.T) {
 	// refuses outright.
 	if parsed.After(dueTime) {
 		t.Fatalf("zero-horizon cutoff %s is in the future", payload.DeleteBefore)
+	}
+}
+
+// rejectingRemainingStore permanently refuses ONE organization and accepts
+// every other, modelling the real failure: an organization row whose id the
+// job contract rejects (jobcontract.uuidPattern enforces RFC 4122, which
+// uuid.Parse does not).
+type rejectingRemainingStore struct {
+	reject   string
+	err      error
+	accepted []string
+}
+
+func (store *rejectingRemainingStore) StartRunTx(
+	_ context.Context,
+	_ pgx.Tx,
+	request remaining.StartRunRequest,
+	_ remaining.PartitionPublisher,
+) (remaining.Run, error) {
+	if request.OrganizationID == store.reject {
+		return remaining.Run{}, store.err
+	}
+	store.accepted = append(store.accepted, request.OrganizationID)
+	return remaining.Run{ID: uuid.NewString(), OrganizationID: request.OrganizationID}, nil
+}
+
+// One tenant the contract can never accept must not cost every other tenant
+// its work. Before CHAOS-3903 this returned an error, which rolled the
+// engine's whole transaction back on every 15s window, so a single bad
+// organization row held the fixed scheduler permanently unready.
+func TestFanoutIsolatesAnOrganizationTheContractPermanentlyRejects(t *testing.T) {
+	schedule := scheduleByID(t, "complexity_daily_fanout")
+	store := &rejectingRemainingStore{
+		reject: testOrgA,
+		err:    fmt.Errorf("%w: %w", remaining.ErrInvalidState, joboutbox.ErrContractRejected),
+	}
+	producer, err := NewRemainingMetricsFanoutProducer(
+		store, nopPartitionPublisher{},
+		fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}},
+		&recordingGraphWriter{},
+	)
+	if err != nil {
+		t.Fatalf("NewRemainingMetricsFanoutProducer() = %v", err)
+	}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T03:30:00Z"), mustTime(t, "2026-07-24T03:30:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v, want the window to survive one rejected organization", err)
+	}
+	if len(store.accepted) != 1 || store.accepted[0] != testOrgB {
+		t.Fatalf("accepted = %v, want only %s", store.accepted, testOrgB)
+	}
+	if outcome.Handoffs != 1 {
+		t.Errorf("Handoffs = %d, want 1 (the accepted organization only)", outcome.Handoffs)
+	}
+	// The rejected tenant must stay VISIBLE. Isolating it silently would be a
+	// different defect: an operator would see a healthy window and never learn
+	// that one organization produces nothing.
+	if outcome.Degraded != DegradedRejectedOrganizations {
+		t.Errorf("Degraded = %q, want %q", outcome.Degraded, DegradedRejectedOrganizations)
+	}
+}
+
+// The mirror image, and the reason the predicate is not simply "any error":
+// a transient fault MUST still fail the window. Skipping a tenant on a dropped
+// connection would drop its work for that occurrence while the ledger recorded
+// the window as healthy.
+func TestFanoutStillFailsTheWindowOnATransientOrganizationFault(t *testing.T) {
+	schedule := scheduleByID(t, "complexity_daily_fanout")
+	store := &rejectingRemainingStore{reject: testOrgA, err: remaining.ErrUnavailable}
+	producer, err := NewRemainingMetricsFanoutProducer(
+		store, nopPartitionPublisher{},
+		fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}},
+		&recordingGraphWriter{},
+	)
+	if err != nil {
+		t.Fatalf("NewRemainingMetricsFanoutProducer() = %v", err)
+	}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T03:30:00Z"), mustTime(t, "2026-07-24T03:30:05Z"),
+	)
+	if _, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence); err == nil {
+		t.Fatal("Produce() = nil, want a transient organization fault to fail the window")
 	}
 }

@@ -116,6 +116,13 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class, and the
 		// snapshot read-back must never be able to take a row lock.
 		"GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + authorizedDomainRole,
+		// Chunked provider persistence (migration 0102). domainPosture() requires
+		// the full SELECT/INSERT/UPDATE/DELETE set on both, and
+		// scripts/worker/provision_river_roles.sql now grants it. These fixtures
+		// had the CREATE TABLE but never the GRANT, so CheckDomainAuthorization
+		// failed on a posture entry no deployment satisfied either.
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,

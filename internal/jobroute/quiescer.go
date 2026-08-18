@@ -3,6 +3,7 @@ package jobroute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -60,7 +61,7 @@ func (quiescer *PostgresRiverQuiescer) Quiesce(ctx context.Context, kind string)
 		kind,
 	).Scan(&count)
 	if err != nil {
-		return ErrUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if count != 0 {
 		return ErrLiveClaims
@@ -91,7 +92,7 @@ func (quiescer *PostgresCelerySyncProviderQuiescer) Quiesce(ctx context.Context,
 			  AND status IN ('dispatching', 'running')
 		)`).Scan(&active)
 	if err != nil {
-		return ErrUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if active {
 		return ErrLiveClaims

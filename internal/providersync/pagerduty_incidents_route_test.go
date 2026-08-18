@@ -254,3 +254,54 @@ func mustPagerDutyAlertRow(t *testing.T, raw []byte) pagerDutyAlertRow {
 	}
 	return row
 }
+
+// TestPagerDutyIncidentsRouteAdvancesWatermarkOnAnEmptyWindow is CHAOS-3870
+// evidence. A quiet PagerDuty account -- no incidents in the window, the
+// common case -- produced no watermark, so Complete skipped the watermark
+// write entirely: the incremental window [W, now] grew without bound, every
+// run re-listed the whole span, and watermark-lag monitoring fired forever.
+// Python's shared worker falls back to the window end for exactly this case.
+func TestPagerDutyIncidentsRouteAdvancesWatermarkOnAnEmptyWindow(t *testing.T) {
+	t.Parallel()
+	doer := &pagerDutyIncidentFamilyDoer{t: t, responses: []pagerDutyIncidentFamilyResponse{{
+		body: `{"incidents":[],"more":false}`,
+	}}}
+	client := pagerDutyIncidentFamilyTestClient(t, doer)
+	claim := nativeTestClaim("pagerduty", "incidents")
+	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+		context.Background(), claim, credential, client,
+		time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil {
+		t.Fatal("empty window left the watermark unset, so it can never advance")
+	}
+	if !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("watermark = %s, want window end %s", batch.Watermark, claim.BeforeAt)
+	}
+	if batch.Evidence.Records != 0 {
+		t.Fatalf("empty window reported %d records", batch.Evidence.Records)
+	}
+}
+
+// A window the route could not read in full must NOT advance: the fail-closed
+// refusal Go added over Python (which silently truncated and advanced anyway)
+// is preserved.
+func TestPagerDutyIncidentsRouteWithholdsWatermarkWhenTheWindowWasCapped(t *testing.T) {
+	t.Parallel()
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).collectPagerDutyIncidents(
+		nativeTestClaim("pagerduty", "incidents"), "acme",
+		time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
+		pagerDutyIncidentPageCollection{Items: nil, Pages: 1, CapReached: true},
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("capped window advanced the watermark to %s", batch.Watermark)
+	}
+}

@@ -438,7 +438,7 @@ type directAdapterCase struct {
 	foreignOrgID string
 }
 
-const foreignTenantOrgID = "11111111-2222-3333-4444-555555555555"
+const foreignTenantOrgID = "11111111-2222-4333-8444-555555555555"
 
 func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 	foreignWorkItem := workItemTestRow(foreignTenantOrgID, now)

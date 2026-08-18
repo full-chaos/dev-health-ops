@@ -118,7 +118,7 @@ PY_PROG_AUTH_TOKEN='import hashlib, jwt, uuid, os
 from datetime import datetime, timedelta, timezone
 
 user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-org_id = uuid.UUID(os.getenv("E2E_ORG_ID", "11111111-2222-3333-4444-555555555555"))
+org_id = uuid.UUID(os.getenv("E2E_ORG_ID", "11111111-2222-4333-8444-555555555555"))
 
 pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
 if pg_uri:
@@ -268,7 +268,7 @@ export FIXTURE_PROVIDER
 
 
 # Must match the org_id used in generate_auth_token() below.
-E2E_ORG_ID="11111111-2222-3333-4444-555555555555"
+E2E_ORG_ID="11111111-2222-4333-8444-555555555555"
 READINESS_ATTEMPTS="${LIVE_E2E_READINESS_ATTEMPTS:-90}"
 READINESS_SLEEP_SECS="${LIVE_E2E_READINESS_SLEEP_SECS:-2}"
 

@@ -100,6 +100,52 @@ func loadRegistry(root string, checkCompiledTypes bool) (Registry, error) {
 	return registry, nil
 }
 
+// loadBaseRegistryForComparison loads a MERGE BASE registry for comparison
+// only. It is deliberately NOT loadRegistry.
+//
+// The base is older than the tree comparing against it, and it was already
+// validated strictly -- by this same gate -- when it was itself the candidate.
+// Re-validating it with the CANDIDATE's struct and the CANDIDATE's policy
+// constants therefore adds no safety, and makes the compatibility gate
+// structurally unable to survive its own evolution: removing any registry
+// field makes every base undecodable, and changing any pinned policy constant
+// makes every base invalid. Both fail at LOAD, before a single compatibility
+// rule is evaluated -- so the gate stops protecting anything while still
+// reporting red, and only clears once the change reaches main, which requires
+// merging the very branch it blocks.
+//
+// Concretely: CHAOS-3851 removed `profile` from the registry and renamed the
+// same_version_rollout constant, and each edit alone made main's registry
+// unloadable here.
+//
+// What is checked is the structural minimum the comparison itself needs. What
+// is NOT checked is anything encoding today's policy -- version policy,
+// per-job definition rules, Go decoder drift -- because those describe what a
+// CANDIDATE must satisfy, not what the past did.
+func loadBaseRegistryForComparison(root string) (Registry, error) {
+	data, err := readContractFile(root, registryFilename)
+	if err != nil {
+		return Registry{}, err
+	}
+	var registry Registry
+	if err := decodeLenient(data, 512*1024, &registry); err != nil {
+		return Registry{}, fmt.Errorf("decode %s: %w", registryFilename, err)
+	}
+	if registry.SchemaVersion != 1 || registry.ContractFamily != "dev-health.jobs" {
+		return Registry{}, errors.New("unsupported base registry identity")
+	}
+	// Pinned rather than merely non-empty: this value is used to READ A FILE
+	// out of the base tree, so it stays a fixed name and never a path from
+	// data.
+	if registry.EnvelopeSchema != "envelope.schema.json" {
+		return Registry{}, errors.New("base registry must use envelope.schema.json")
+	}
+	if len(registry.Jobs) == 0 {
+		return Registry{}, errors.New("base registry has no jobs")
+	}
+	return registry, nil
+}
+
 func (registry Registry) Validate(root string) error {
 	return registry.validate(root, true)
 }

@@ -137,6 +137,30 @@ SELECT format(
        )
  WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
 \gexec
+-- Chunked provider persistence (migration 0102). Both tables are written and
+-- reclaimed by the domain role -- checkpoints advance per chunk, chunks are
+-- inserted, superseded, and deleted on completion -- so both need the full
+-- SELECT/INSERT/UPDATE/DELETE set domainPosture() declares.
+--
+-- This script runs BEFORE the pinned migration, so these to_regclass guards
+-- skip on a first provision and runtimeGrantStatements in
+-- internal/storage/river/migrate.go is what actually grants them once the
+-- tables exist. They are listed here for the same reason
+-- sync_run_unit_effect_snapshots is: the two lists are maintained in parallel,
+-- and a re-provision of an already-migrated database must not silently narrow
+-- the posture the migration established.
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL
+\gexec
 SELECT format(
          'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
          :'domain_role'

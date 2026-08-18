@@ -5,6 +5,7 @@ content_type: runbook
 owner: platform-operations
 source_of_truth:
   - docs/operate/run/workers-and-jobs.md
+  - deploy/go-workers/CUTOVER-RUNBOOK.md
   - docs/operate/configure/databases-and-storage.md
   - current worker health, queue, outbox, operator, and route contracts
 applicability: current
@@ -72,6 +73,18 @@ For readiness failure, distinguish:
 - dependency sampling failure.
 
 Long-running Go processes must not receive `MIGRATION_DATABASE_URI`. Correct schema through the one-shot migration process, then restart the affected process and verify readiness.
+
+## Post-cutover rollback
+
+Applies once migration `0066` has moved the checked-in worker job kinds to River. The full forward procedure, including its preconditions and per-kind verification, is `deploy/go-workers/CUTOVER-RUNBOOK.md`.
+
+Roll back when a retargeted kind shows a growing worker outbox with no corresponding River execution, when oldest-available job age climbs past its threshold for a queue and does not recover, when a Go group cannot hold readiness, or when a retargeted kind fails terminally at a rate the pre-cutover baseline did not show.
+
+Prefer per-kind rollback. It is audited and it proves quiescence: the route controller refuses to move a kind while its outbox holds pending or claimed rows, or while a run for it is still executing. A refusal means the kind is still working — let it finish rather than forcing it.
+
+Wholesale downgrade of the cutover migration is plain SQL and proves nothing about quiescence. Stop the Go workers and the reconciler for every retargeted queue first, confirm no run is executing and no outbox row is pending or claimed, and only then downgrade and restart the Celery consumers, Beat, and producers. Stopping Go before routes move back is the inverse of draining Celery before they moved forward, and it is what keeps two runtimes from owning the same kind.
+
+Confirm `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` is unset afterwards. Left set, any later migration run re-applies the cutover unattended.
 
 ## Outbox and reconciler recovery
 

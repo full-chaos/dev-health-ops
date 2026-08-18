@@ -168,7 +168,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			"gap_count":              gapCount, "stale_dataset_count": staleCount, "failed_range_count": failedCount,
 		},
 		"datasets": datasetPayload, "sources": sources,
-		"backfill_windows": canonicalBackfillWindows(datasets),
+		"backfill_windows": canonicalBackfillWindows(pairs),
 	}, nil
 }
 
@@ -390,49 +390,96 @@ func notEnabledDatasets(config syncConfig, scope effectiveScope) []string {
 	return result
 }
 
-func canonicalBackfillWindows(datasets []datasetCoverage) []any {
-	type candidate struct {
-		Since, Before time.Time
-		Reasons       []string
+// canonicalBackfillWindows mirrors _canonical_backfill_windows in
+// src/dev_health_ops/api/services/sync_coverage.py, which is authoritative:
+// this payload feeds the same focused-backfill selector the Python API serves.
+//
+// Two rules carry the whole contract, and the previous implementation broke
+// both.
+//
+// First, a window is emitted ONLY when the half-open range already sits on
+// exact UTC-midnight boundaries, because that selector accepts nothing else.
+// Python skips anything else outright, so an empty list means "not safely
+// representable"; the old Go code instead COERCED a partial-day range onto day
+// boundaries (nudging a midnight `before` back a microsecond, then truncating
+// both ends), which manufactured windows for ranges the API would refuse --
+// including a degenerate since == before empty window in the oracle fixture.
+//
+// Second, the scope is (since, before, source_id, dataset_key). A backfill
+// window is only actionable against the source and dataset it came from. The
+// old code iterated datasets alone, dropped source identity entirely, and then
+// merged adjacent windows across BOTH -- so one source's gap could widen a
+// different source's window. Python does no merging at all, deliberately.
+func canonicalBackfillWindows(pairs []pairCoverage) []any {
+	type scope struct {
+		Since, Before        time.Time
+		SourceID, DatasetKey string
 	}
-	candidates := make([]candidate, 0)
-	for _, dataset := range datasets {
+	reasonsByScope := make(map[scope]map[string]struct{})
+	for _, pair := range pairs {
 		for _, group := range []struct {
 			Intervals []coverageInterval
 			Reason    string
-		}{{dataset.Gaps, "gap"}, {dataset.FailedRanges, "failed"}} {
+		}{{pair.Gaps, "gap"}, {pair.FailedRanges, "failed"}} {
 			for _, interval := range group.Intervals {
-				before := interval.Before
-				if before.Hour() == 0 && before.Minute() == 0 && before.Second() == 0 && before.Nanosecond() == 0 {
-					before = before.Add(-time.Microsecond)
+				since, before := interval.Since.UTC(), interval.Before.UTC()
+				if !isUTCMidnight(since) || !isUTCMidnight(before) {
+					continue
 				}
-				candidates = append(candidates, candidate{Since: day(interval.Since), Before: day(before), Reasons: []string{group.Reason}})
+				key := scope{
+					Since: since, Before: before,
+					SourceID: pair.SourceID, DatasetKey: pair.DatasetKey,
+				}
+				if reasonsByScope[key] == nil {
+					reasonsByScope[key] = make(map[string]struct{})
+				}
+				reasonsByScope[key][group.Reason] = struct{}{}
 			}
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Since.Equal(candidates[j].Since) {
-			return candidates[i].Before.Before(candidates[j].Before)
+
+	keys := make([]scope, 0, len(reasonsByScope))
+	for key := range reasonsByScope {
+		keys = append(keys, key)
+	}
+	// Python sorts by (since, before, dataset_keys, source_ids, reasons); the
+	// first four already make the order total here, since reasons are a
+	// function of the scope.
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].Since.Equal(keys[j].Since) {
+			return keys[i].Since.Before(keys[j].Since)
 		}
-		return candidates[i].Since.Before(candidates[j].Since)
+		if !keys[i].Before.Equal(keys[j].Before) {
+			return keys[i].Before.Before(keys[j].Before)
+		}
+		if keys[i].DatasetKey != keys[j].DatasetKey {
+			return keys[i].DatasetKey < keys[j].DatasetKey
+		}
+		return keys[i].SourceID < keys[j].SourceID
 	})
-	merged := make([]candidate, 0)
-	for _, item := range candidates {
-		if len(merged) > 0 && !item.Since.After(merged[len(merged)-1].Before.AddDate(0, 0, 1)) {
-			last := &merged[len(merged)-1]
-			if item.Before.After(last.Before) {
-				last.Before = item.Before
-			}
-			last.Reasons = unionSorted(last.Reasons, item.Reasons)
-			continue
+
+	result := make([]any, 0, len(keys))
+	for _, key := range keys {
+		reasons := make([]string, 0, len(reasonsByScope[key]))
+		for reason := range reasonsByScope[key] {
+			reasons = append(reasons, reason)
 		}
-		merged = append(merged, item)
-	}
-	result := make([]any, 0, len(merged))
-	for _, item := range merged {
-		result = append(result, map[string]any{"since": item.Since.Format("2006-01-02"), "before": item.Before.Format("2006-01-02"), "reasons": item.Reasons})
+		sort.Strings(reasons)
+		result = append(result, map[string]any{
+			"since": isoTime(key.Since), "before": isoTime(key.Before),
+			"source_ids": []string{key.SourceID}, "dataset_keys": []string{key.DatasetKey},
+			"reasons": reasons,
+		})
 	}
 	return result
+}
+
+// isUTCMidnight reports whether value is exactly 00:00:00.000000000 UTC, the
+// only boundary the focused-backfill selector accepts.
+func isUTCMidnight(value time.Time) bool {
+	utc := value.UTC()
+	return utc.Hour() == 0 && utc.Minute() == 0 &&
+		utc.Second() == 0 && utc.Nanosecond() == 0
 }
 
 func day(value time.Time) time.Time {

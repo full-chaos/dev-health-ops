@@ -8,8 +8,11 @@ to ``go_default`` in the same release, which makes ``river`` the checked-in rout
 and leaves ``celery`` as the declared rollback route.
 
 ``sync.provider_unit`` is the exception and stays on its canary route.  See
-``_PROMOTABLE_TRANSPORTS`` below for why: its Go route surface covers one of the
-59 provider/dataset pairs, so promoting it would stop the other 58 from syncing.
+``_PROMOTABLE_TRANSPORTS`` below for why.  The canary route lets
+``ProviderUnitRouteSwitches`` confine River to the pairs whose per-route
+``WORKER_*_ENABLED`` switch is on, while every other pair still dispatches
+through Celery; promoting the kind to plain ``river`` would route all 59 pairs
+at once, regardless of those switches.
 
 Why the route rows are seeded here rather than promoted one at a time with
 ``dev-health-workerctl job-routes apply``:
@@ -65,15 +68,17 @@ _CUTOVER_OPT_IN_VALUE: Final = "1"
 # sync.provider_unit is deliberately NOT migrated here and keeps the
 # river_canary row that 0061 seeded.
 #
-# Its Go route surface covers exactly one provider/dataset pair --
-# launchdarkly/feature-flags is the only entry in
-# contracts/provider-matrix/v1/matrix.json with route_ready true, against 58
-# that are not (github 17, gitlab 19, jira 6, linear 5, pagerduty 11). The
-# canary route exists so ProviderUnitRouteSwitches can confine River to that
-# one ready pair while every other pair still dispatches through Celery.
+# When this migration was written, launchdarkly/feature-flags was the only
+# entry in contracts/provider-matrix/v1/matrix.json with route_ready true. That
+# is no longer the case -- all 59 pairs are now route_ready -- but the reason
+# this kind stays on canary is unchanged: route readiness is not the same as
+# being enabled. The canary route is what lets ProviderUnitRouteSwitches
+# confine River to the pairs whose per-route WORKER_*_ENABLED switch is on,
+# every one of which still defaults off.
 #
-# Promoting this kind to plain river would route all 59 pairs at a handler that
-# serves one, so the 58 unserved pairs would fail closed and stop syncing.
+# Promoting this kind to plain river would route all 59 pairs to the Go handler
+# in one step, bypassing those switches and the per-route parity evidence they
+# gate. That is a separate reviewed decision, not part of a wholesale cutover.
 # Leaving it at river_canary is not an oversight or a deferral of cleanup: it is
 # the only state in which this kind currently works.
 #

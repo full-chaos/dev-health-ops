@@ -398,7 +398,7 @@
       "compatibility_dependency": "The checked-in `dispatch_sync_run` route is River; this Celery task remains only as the declared rollback_route=celery compatibility target.",
       "deletion_evidence_requirement": "Delete this Python task after the Celery rollback route is retired and the native Go dispatch coordinator has completed the required rollback and soak evidence.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "transport-routes.json kind dispatch_sync_run, route=river, rollback_route=celery; native Go coordinator is the active path"
+      "notes": "transport-routes.json kind dispatch_sync_run, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is still transport='celery' (seeded by 0049, and no migration flips it), so the native Go coordinator is the CHECKED-IN route, not the running one, until an operator applies it with `dev-health-workerctl routes apply`"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1184",
@@ -446,7 +446,7 @@
       "compatibility_dependency": "The checked-in `finalize_sync_run` route is River; this Celery task remains only as the declared rollback_route=celery compatibility target.",
       "deletion_evidence_requirement": "Delete this Python task after the Celery rollback route is retired and the native Go finalizer has completed the required rollback and soak evidence.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "transport-routes.json kind finalize_sync_run, route=river, rollback_route=celery; native Go coordinator is the active path"
+      "notes": "transport-routes.json kind finalize_sync_run, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is still transport='celery' (seeded by 0049, and no migration flips it), so the native Go coordinator is the CHECKED-IN route, not the running one, until an operator applies it with `dev-health-workerctl routes apply`"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/sync_reconciler.py:78",
@@ -1094,7 +1094,7 @@
       "compatibility_dependency": "The checked-in `reference_discovery` route is River; this Celery task remains only as the declared rollback_route=celery compatibility target.",
       "deletion_evidence_requirement": "Delete this Python task after the Celery rollback route is retired and native Go reference discovery has completed the required rollback and soak evidence.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "transport-routes.json kind reference_discovery, route=river, rollback_route=celery; native Go coordinator is the active path"
+      "notes": "transport-routes.json kind reference_discovery, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is still transport='celery' (seeded by 0049, and no migration flips it), so the native Go coordinator is the CHECKED-IN route, not the running one, until an operator applies it with `dev-health-workerctl routes apply`"
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:143",

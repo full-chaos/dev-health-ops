@@ -44,8 +44,12 @@ def test_go_worker_alerts_use_runtime_metric_dimensions() -> None:
         "max by (queue) (worker_job_oldest_age_seconds)"
         in alerts["GoWorkerOldestAvailableJobHigh"]
     )
+    # worker_execution_saturation_ratio is per process, so the fleet's
+    # utilization is the AVERAGE across replicas -- the same aggregation the
+    # Kubernetes HPAs target. `max` would fire whenever one replica filled up
+    # while the group still had idle capacity (CHAOS-3867).
     assert (
-        "max by (queue) (worker_execution_saturation_ratio)"
+        "avg by (queue) (worker_execution_saturation_ratio)"
         in alerts["GoWorkerExecutionSaturated"]
     )
     assert (

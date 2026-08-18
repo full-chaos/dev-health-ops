@@ -724,7 +724,7 @@ func (collector *MetricsCollector) writeJobs(output *strings.Builder) {
 		writeIntSample(output, "worker_jobs_running", jobMetricLabels(labels), collector.jobsRunning[labels])
 	}
 
-	writeMetadata(output, "worker_execution_saturation_ratio", "Fraction of configured worker execution capacity currently in use.", "gauge")
+	writeMetadata(output, "worker_execution_saturation_ratio", "Fraction of THIS process's configured worker execution capacity currently in use. Per-process, not fleet-wide: average across replicas for fleet utilization.", "gauge")
 	for _, labels := range queues {
 		writeFloatSample(output, "worker_execution_saturation_ratio", queueMetricLabels(labels), collector.executionSaturation[labels])
 	}

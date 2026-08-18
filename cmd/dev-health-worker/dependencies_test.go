@@ -1003,6 +1003,84 @@ func TestPreclaimReadinessRefusesFailedDependenciesBeforeConsumersStart(t *testi
 	}
 }
 
+// A preclaim refusal aborts Start, so the process exits before its operator
+// HTTP surface can be scraped: the log line is the ONLY place the failing
+// check names are ever observable. It must name exactly the checks that
+// refused, and must not leak the dependency error strings behind them.
+func TestPreclaimReadinessNamesTheChecksThatRefused(t *testing.T) {
+	t.Parallel()
+	const secret = "postgresql://devhealth_domain:hunter2@postgres:5432/devhealth"
+	registry := health.NewRegistry(time.Second)
+	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error {
+		return errors.New("dial " + secret)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("river_schema", func(context.Context) error {
+		return errors.New("schema missing")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("job_registry", func(context.Context) error {
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
+	}
+
+	var record struct {
+		Message       string `json:"msg"`
+		ErrorCategory string `json:"error_category"`
+		FailedChecks  string `json:"failed_checks"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil {
+		t.Fatalf("decode log record: %v (raw %q)", err, logs.String())
+	}
+	if record.ErrorCategory != "dependency_unavailable" {
+		t.Errorf("error_category = %q, want dependency_unavailable", record.ErrorCategory)
+	}
+	// Registry.CheckRequired sorts, so this is an exact-set assertion, not a
+	// containment one: a check that passed must not appear.
+	if record.FailedChecks != "domain_postgres,river_schema" {
+		t.Errorf("failed_checks = %q, want \"domain_postgres,river_schema\"", record.FailedChecks)
+	}
+	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "hunter2") {
+		t.Errorf("preclaim log leaked dependency error detail: %s", logs.String())
+	}
+}
+
+// The mirror image: a satisfied preclaim starts silently. Without this, a
+// refusal-naming regression that logged unconditionally would still pass the
+// test above.
+func TestPreclaimReadinessLogsNothingWhenDependenciesPass(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(time.Second)
+	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error {
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil", err)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("preclaim logged on a ready registry: %s", logs.String())
+	}
+}
+
 func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{

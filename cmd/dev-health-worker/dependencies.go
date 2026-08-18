@@ -293,15 +293,45 @@ type workerDependencies struct {
 	workerGroup            string
 }
 
-type preclaimReadinessComponent struct{ registry *health.Registry }
+type preclaimReadinessComponent struct {
+	registry *health.Registry
+	logger   *slog.Logger
+}
 
 func (preclaimReadinessComponent) Name() string { return "preclaim-readiness" }
 
 func (component preclaimReadinessComponent) Start(ctx context.Context) error {
-	if component.registry == nil || !component.registry.CheckRequired(ctx).Ready {
+	if component.registry == nil {
 		return errWorkerDependencyUnavailable
 	}
-	return nil
+	readiness := component.registry.CheckRequired(ctx)
+	if readiness.Ready {
+		return nil
+	}
+	// Name the checks that refused. A preclaim failure aborts Start, so the
+	// shell exits 1 and the process is restarted -- and the readiness detail
+	// that would explain why is only reachable on the operator HTTP surface,
+	// which this process never lives long enough to serve. Without this line
+	// the whole crash loop reports nothing but the shell's
+	// "runtime_failure" category (CHAOS-3902).
+	//
+	// Check names are bounded compile-time constants registered by this
+	// package, and Registry.CheckRequired returns names only -- never a
+	// dependency error string that could carry a DSN or credential -- so this
+	// is the same disclosure the /readyz surface already makes, on the one
+	// path that cannot reach it. Joined the way every other multi-valued
+	// worker startup attribute is (see the "queues" attribute).
+	if component.logger != nil {
+		component.logger.ErrorContext(
+			ctx,
+			"preclaim readiness refused",
+			"error_category",
+			"dependency_unavailable",
+			"failed_checks",
+			strings.Join(readiness.Failed, ","),
+		)
+	}
+	return errWorkerDependencyUnavailable
 }
 
 func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
@@ -519,7 +549,7 @@ func configureWorkerDependenciesWithSources(
 			return nil, dependencyUnavailable("queue_coverage_validation_failed")
 		}
 	}
-	components = append(components, preclaimReadinessComponent{registry: registry})
+	components = append(components, preclaimReadinessComponent{registry: registry, logger: logger})
 	if len(active.queues) == 0 {
 		return components, nil
 	}

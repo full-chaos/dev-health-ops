@@ -40,6 +40,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.admin.routers.integrations import _unit_to_response
 from dev_health_ops.api.admin.routers.sync import _job_run_response, _SyncRunUnitRollup
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.sync_coverage import (
+    SYNC_COVERAGE_PROJECTION_VERSION,
+)
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.integrations import (
@@ -371,7 +374,7 @@ async def test_backfill_fanout_creates_job_run_anchor(
                 org_id=seeded_state["org_id"],
                 sync_config_id=uuid.UUID(config_id),
                 history_lookback_days=3650,
-                projection_version=1,
+                projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
                 generated_at=datetime.now(timezone.utc),
                 payload={},
             )

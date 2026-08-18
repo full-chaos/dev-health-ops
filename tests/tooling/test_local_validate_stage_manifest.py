@@ -286,12 +286,11 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
 
     assert result.returncode == 0, combined
     assert "GATE PASSED." in combined, combined
-    assert "GATE_STAGE_MANIFEST result=PASSED declared=9 executed=9" in combined, (
+    assert "GATE_STAGE_MANIFEST result=PASSED declared=8 executed=8" in combined, (
         combined
     )
-    assert "[9/9:" in combined, combined
+    assert "[8/8:" in combined, combined
     for stage_id in (
-        "mutation_clean",
         "lint_format",
         "lint_check",
         "typecheck",
@@ -308,7 +307,7 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
 
 def test_skip_clickhouse_reduces_the_declared_set_exactly(tmp_path):
     """SKIP_CLICKHOUSE=1 is the ONLY sanctioned way to shrink the declared set
-    -- it must do so exactly (5/5, the 5 non-CH stage ids), never silently
+    -- it must do so exactly (4/4, the 4 non-CH stage ids), never silently
     leaving a CH-dependent id in the declaration with nothing to execute it."""
     result = subprocess.run(
         ["bash", str(SCRIPT), "--stage-manifest-probe"],
@@ -321,10 +320,10 @@ def test_skip_clickhouse_reduces_the_declared_set_exactly(tmp_path):
     combined = result.stdout + result.stderr
 
     assert result.returncode == 0, combined
-    assert "GATE_STAGE_MANIFEST result=PASSED declared=5 executed=5" in combined, (
+    assert "GATE_STAGE_MANIFEST result=PASSED declared=4 executed=4" in combined, (
         combined
     )
-    assert "[5/5:" in combined, combined
+    assert "[4/4:" in combined, combined
     for stage_id in ("ch_probe", "ch_scratch_create", "ch_migrate", "ch_argmax_proof"):
         assert stage_id not in combined, (
             f"CH stage id {stage_id!r} must not appear in a SKIP_CLICKHOUSE=1 "

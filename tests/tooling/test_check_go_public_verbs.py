@@ -15,7 +15,6 @@ PUBLIC_VERBS = (
     "live-python-oracles",
     "build",
     "contract",
-    "grant-advisory",
     "multi-replica-workers",
     "integration-vet",
     "integration-coverage",

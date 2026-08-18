@@ -903,11 +903,11 @@ func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T)
 	values := map[string]string{
 		"DEV_HEALTH_ENV":               "local",
 		"GO_PROVIDER_ROUTES":           "all",
-		"DEV_HEALTH_QUEUES":            "sync,sync_provider",
 		"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=4,sync_provider=2",
 	}
 	cfg, err := config.Load(config.Spec{
 		Service: "dev-health-worker", RequireQueues: true,
+		Queues: []string{"sync,sync_provider"},
 		LookupEnv: func(key string) (string, bool) {
 			value, ok := values[key]
 			return value, ok

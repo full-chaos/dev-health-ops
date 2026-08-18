@@ -455,9 +455,8 @@ func TestPagerDutyConsumerRefusesToRaceCelery(t *testing.T) {
 func TestPagerDutyTransportDefaultsToCelery(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-stream-runner", Profiles: []string{"ingest"},
-		DefaultProfile: "ingest",
-		LookupEnv:      func(string) (string, bool) { return "", false },
+		Service: "dev-health-stream-runner", Profile: "ingest",
+		LookupEnv: func(string) (string, bool) { return "", false },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -466,8 +465,7 @@ func TestPagerDutyTransportDefaultsToCelery(t *testing.T) {
 		t.Fatalf("default transport = %q, want celery", cfg.PagerDutyWebhookTransport)
 	}
 	if _, err := config.Load(config.Spec{
-		Service: "dev-health-stream-runner", Profiles: []string{"ingest"},
-		DefaultProfile: "ingest",
+		Service: "dev-health-stream-runner", Profile: "ingest",
 		LookupEnv: func(key string) (string, bool) {
 			if key == "PAGERDUTY_WEBHOOK_TRANSPORT" {
 				return "kafka", true

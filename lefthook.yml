@@ -15,6 +15,11 @@
 #     files) because per-file mypy is unreliable — it needs full module context.
 #     The glob "*.py" means it only fires when Python files are involved, and the
 #     incremental cache (.mypy_cache/) keeps warm runs well under a second.
+#     It goes through scripts/run_mypy.sh so the check always resolves the
+#     PROJECT environment. Bare `mypy` picks up whatever is first on PATH, and
+#     in a worktree that is a global interpreter carrying a shadow copy of our
+#     dependencies -- which produced phantom errors in untouched files while CI
+#     stayed green (CHAOS-3913).
 #   - Either hook can be skipped with `--no-verify` for WIP or emergency pushes.
 #
 # Install: `make install` (wires `lefthook install` into the bootstrap).
@@ -41,7 +46,7 @@ pre-commit:
       stage_fixed: true
     mypy:
       glob: "*.py"
-      run: mypy
+      run: scripts/run_mypy.sh
       fail_text: "mypy found type errors. Fix them, or `git commit --no-verify` to bypass (discouraged)."
 
 pre-push:
@@ -57,5 +62,5 @@ pre-push:
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     mypy:
       glob: "*.py"
-      run: mypy
+      run: scripts/run_mypy.sh
       fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."

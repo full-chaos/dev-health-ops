@@ -523,6 +523,21 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyIncidents(
 		rows = append(rows, row)
 		watermark = pagerDutyMaxTime(watermark, createdAt)
 	}
+	// An empty window is a complete answer, not a missing one: a quiet
+	// PagerDuty account (the common case) has no incidents to derive a
+	// watermark from, and leaving it nil meant Complete skipped the watermark
+	// write entirely. The incremental window [W, now] then grew without bound,
+	// every run re-listed the whole span, and watermark-lag monitoring fired
+	// forever. Python's shared worker falls back to the window end for exactly
+	// this reason (sync_units.py, run_sync_unit).
+	//
+	// Guarded on CapReached: a capped page collection did NOT see the whole
+	// window, so advancing past it would skip incidents the unit never read.
+	// That fail-closed refusal is the behaviour Go deliberately added over
+	// Python and it is preserved here (CHAOS-3870).
+	if watermark == nil && !parents.CapReached {
+		watermark = claim.BeforeAt
+	}
 	effect, err := effectBatchFromValues("operational_incidents", EffectReadbackRequired, rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err

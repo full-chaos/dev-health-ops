@@ -138,6 +138,20 @@ type UnitRepository interface {
 	) error
 }
 
+// RateLimitCategory is the terminal category for a unit whose rate-limit
+// deferral episode is spent. Python fails with a rate-limit category rather
+// than a generic exhaustion, so an operator can tell "the provider kept
+// throttling us for two hours" from "this unit is broken".
+const RateLimitCategory = "rate_limit"
+
+// RateLimitDeferralRepository is optional so existing repository test doubles
+// and older rolling binaries stay source-compatible, exactly like
+// ChunkContinuationRepository. Production's PostgresRepository implements it.
+type RateLimitDeferralRepository interface {
+	RateLimitEpisode(context.Context, providersync.Claim) (providersync.RateLimitEpisode, error)
+	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time) error
+}
+
 // ChunkContinuationRepository is optional so legacy repository test doubles
 // and older rolling binaries remain source-compatible. Production's
 // PostgresRepository implements it for the opt-in chunk route.
@@ -431,6 +445,42 @@ func (handler *Handler) Work(
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
 		return jobruntime.RetryableAfter(err, delay)
 	}
+	// A provider rate limit is the provider scheduling us, not the unit
+	// failing. Python defers it up to 10 times over 2 hours without consuming
+	// the failure budget; Go had no branch at all, so a 429 burned one of five
+	// attempts on a 5s-5m backoff and a 30-60 minute reset window terminalized
+	// the unit in two or three minutes (CHAOS-3868).
+	if retryAfter, rateLimited := providerRateLimitDelay(err); rateLimited {
+		if deferrer, supported := handler.Repository.(RateLimitDeferralRepository); supported {
+			episode, episodeErr := deferrer.RateLimitEpisode(context.WithoutCancel(ctx), session.Claim)
+			if episodeErr != nil {
+				return jobruntime.Retryable(episodeErr)
+			}
+			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
+			if granted {
+				if deferErr := deferrer.DeferForRateLimit(
+					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
+				); deferErr != nil {
+					return jobruntime.Retryable(deferErr)
+				}
+				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err)
+				return jobruntime.RateLimited(err, plan.countdown)
+			}
+			// The episode's count or wall-clock budget is spent. Fail with the
+			// rate-limit category rather than letting it fall through to the
+			// generic provider_unit_exhausted, which buries the real cause.
+			if failErr := handler.Repository.Fail(
+				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
+				startedAt, completedAt,
+			); failErr != nil {
+				return jobruntime.Retryable(failErr)
+			}
+			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
+			return jobruntime.Permanent(err)
+		}
+	}
 	// A healthy shared request bucket can be full when sibling provider units
 	// overlap. That is scheduling contention, not an execution failure. Persist
 	// the domain deferral before returning River's attempt-neutral snooze so a
@@ -488,6 +538,17 @@ func (handler *Handler) Work(
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying", err)
 	return jobruntime.Retryable(err)
+}
+
+// providerRateLimitDelay reports whether the failure is a provider rate limit
+// and, if so, the delay the provider asked for (already resolved from
+// Retry-After or the reset headers by providerfoundation).
+func providerRateLimitDelay(err error) (time.Duration, bool) {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		return 0, false
+	}
+	return providerErr.RetryAfter, true
 }
 
 func providerBudgetContentionDelay(unitID string) time.Duration {

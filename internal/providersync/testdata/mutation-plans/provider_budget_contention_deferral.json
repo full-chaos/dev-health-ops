@@ -129,8 +129,8 @@
     {
       "id": "M6-contention-charged-to-intrinsic-counter",
       "file": "internal/providersync/repository_postgres.go",
-      "find": "    first_blocked_at = COALESCE(unit.first_blocked_at, $3),\n",
-      "replace": "    budget_deferrals = unit.budget_deferrals + 1,\n    first_blocked_at = COALESCE(unit.first_blocked_at, $3),\n",
+      "find": "'provider_budget_contention_deferrals', contention.next_deferrals\n      )\n    ),\n    first_blocked_at = COALESCE(unit.first_blocked_at, $3),\n",
+      "replace": "'provider_budget_contention_deferrals', contention.next_deferrals\n      )\n    ),\n    budget_deferrals = unit.budget_deferrals + 1,\n    first_blocked_at = COALESCE(unit.first_blocked_at, $3),\n",
       "expect_occurrences": 1,
       "rationale": "Short-lived HTTP slot contention must not advance the Python planner's intrinsic budget episode.",
       "proof": [

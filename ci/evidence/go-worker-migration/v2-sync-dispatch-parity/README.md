@@ -18,13 +18,20 @@ and kinds without a persisted route are excluded before ordering and limiting.
 The predicate version is `sync_dispatch_active_celery_due_v2`; the digest byte
 framing is unchanged at `sync_dispatch_candidate_digest_v1`.
 
-Run from the repository root with `POSTGRES_URI` or `DATABASE_URI` already set:
+The comparison was produced by `cmd/dev-health-sync-parity` together with
+`scripts/worker/observe_sync_dispatch_parity.py`, run from the repository root
+with `POSTGRES_URI` or `DATABASE_URI` set:
 
 ```bash
 go run ./cmd/dev-health-sync-parity --limit 100
 ```
 
-The command exits nonzero on configuration failure, observation failure, or a
+**Both were removed under CHAOS-3875** once this capture was taken; the
+one-shot oracle had served its purpose and is no longer reproducible from the
+working tree. Recover them from history at the commit recorded in
+[`capture.json`](capture.json) if the comparison ever needs to be re-run.
+
+The command exited nonzero on configuration failure, observation failure, or a
 mismatch. A `match` proves that the two read-only implementations observed the
 same bounded candidate window under this protocol. It does not prove claim,
 publish, handler, scheduler, performance, or production-canary parity.

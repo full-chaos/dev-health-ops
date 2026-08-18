@@ -38,6 +38,28 @@ func (component failingComponent) Start(context.Context) error {
 }
 func (failingComponent) Shutdown(context.Context) error { return nil }
 
+// asyncFailingComponent starts cleanly and then reports a failure on its
+// Errors() channel, exercising lifecycle.Runtime's asynchronous
+// component-failure path (as opposed to failingComponent's synchronous
+// Start-failure path) end to end through the shell.
+type asyncFailingComponent struct {
+	name  string
+	errCh chan error
+}
+
+func (component asyncFailingComponent) Name() string         { return component.name }
+func (asyncFailingComponent) Start(context.Context) error    { return nil }
+func (asyncFailingComponent) Shutdown(context.Context) error { return nil }
+func (component asyncFailingComponent) Errors() <-chan error { return component.errCh }
+
+// reasonedComponentError is a component-supplied error carrying a bounded
+// DependencyReason(), the same shape dependency adapters use on the
+// configure path (CHAOS-3873), but returned from the runtime path instead.
+type reasonedComponentError struct{ reason string }
+
+func (reasonedComponentError) Error() string                { return "dependency unavailable" }
+func (err reasonedComponentError) DependencyReason() string { return err.reason }
+
 func TestVersionFlagReportsMetadataWithoutLoadingRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
@@ -278,6 +300,140 @@ func TestRuntimeFailureIsCategorizedWithoutLoggingComponentErrorText(t *testing.
 	}
 	if !strings.Contains(combined, "runtime_failure") {
 		t.Fatalf("runtime failure omitted safe category: %s", combined)
+	}
+}
+
+// TestRuntimeFailureCarriesComponentNameAndCause pins CHAOS-3906: an
+// operator reading the shell's runtime-failure log must be able to see
+// which component failed and why, not just an opaque category.
+func TestRuntimeFailureCarriesComponentNameAndCause(t *testing.T) {
+	t.Parallel()
+
+	errCh := make(chan error, 1)
+	errCh <- errors.New("dial dependency: connection refused")
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependencies: func(
+			_ context.Context,
+			_ config.Config,
+			registry *health.Registry,
+		) ([]lifecycle.Component, error) {
+			if err := registry.RegisterRequired(
+				"test_dependency",
+				func(context.Context) error { return nil },
+			); err != nil {
+				return nil, err
+			}
+			return []lifecycle.Component{asyncFailingComponent{
+				name:  "sync-worker-loop",
+				errCh: errCh,
+			}}, nil
+		},
+	}, nil, testLookup(map[string]string{
+		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
+	}), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected async component failure to fail the process")
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "sync-worker-loop") {
+		t.Fatalf("runtime failure log omitted the failing component name: %s", combined)
+	}
+	if !strings.Contains(combined, "connection refused") {
+		t.Fatalf("runtime failure log omitted the cause: %s", combined)
+	}
+	if !strings.Contains(combined, "component_failure") {
+		t.Fatalf("runtime component failure omitted its category: %s", combined)
+	}
+}
+
+// TestRuntimeFailureRedactsComponentErrorDSN proves the redacting slog
+// handler (internal/platform/logging.NewJSON) still scrubs a DSN carried by
+// a component's runtime-path error, which is what makes attaching the raw
+// error (rather than discarding it) safe (CHAOS-3873).
+func TestRuntimeFailureRedactsComponentErrorDSN(t *testing.T) {
+	t.Parallel()
+
+	errCh := make(chan error, 1)
+	errCh <- fmt.Errorf("dial postgres://user:do-not-print@ch.internal/db")
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependencies: func(
+			_ context.Context,
+			_ config.Config,
+			registry *health.Registry,
+		) ([]lifecycle.Component, error) {
+			if err := registry.RegisterRequired(
+				"test_dependency",
+				func(context.Context) error { return nil },
+			); err != nil {
+				return nil, err
+			}
+			return []lifecycle.Component{asyncFailingComponent{
+				name:  "async-dsn-component",
+				errCh: errCh,
+			}}, nil
+		},
+	}, nil, testLookup(map[string]string{
+		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
+	}), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected async component failure to fail the process")
+	}
+	combined := stdout.String() + stderr.String()
+	for _, forbidden := range []string{"postgres://", "do-not-print", "ch.internal"} {
+		if strings.Contains(combined, forbidden) {
+			t.Fatalf("runtime component failure leaked %q: %s", forbidden, combined)
+		}
+	}
+	// This is the assertion that actually proves the handler did the
+	// scrubbing rather than the DSN simply never being attached: it only
+	// appears once the component's cause is attached as a real attribute
+	// value and passed through the redacting ReplaceAttr handler.
+	if !strings.Contains(combined, "component async-dsn-component: dial [REDACTED]") {
+		t.Fatalf("runtime failure log did not show a redacted (not discarded) cause: %s", combined)
+	}
+}
+
+// TestRuntimeFailureHonoursComponentDependencyReason pins CHAOS-3906's core
+// asymmetry fix: a bounded DependencyReason() from a component was already
+// honoured on the configure path (CHAOS-3873) but discarded on the runtime
+// path. It must now be honoured there too.
+func TestRuntimeFailureHonoursComponentDependencyReason(t *testing.T) {
+	t.Parallel()
+
+	errCh := make(chan error, 1)
+	errCh <- reasonedComponentError{reason: "queue_backend_unreachable"}
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependencies: func(
+			_ context.Context,
+			_ config.Config,
+			registry *health.Registry,
+		) ([]lifecycle.Component, error) {
+			if err := registry.RegisterRequired(
+				"test_dependency",
+				func(context.Context) error { return nil },
+			); err != nil {
+				return nil, err
+			}
+			return []lifecycle.Component{asyncFailingComponent{
+				name:  "reasoned-worker",
+				errCh: errCh,
+			}}, nil
+		},
+	}, nil, testLookup(map[string]string{
+		"DEV_HEALTH_HTTP_ADDR": "127.0.0.1:0",
+	}), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected async component failure to fail the process")
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, `"reason":"queue_backend_unreachable"`) {
+		t.Fatalf("runtime failure did not honour the component's DependencyReason: %s", combined)
 	}
 }
 

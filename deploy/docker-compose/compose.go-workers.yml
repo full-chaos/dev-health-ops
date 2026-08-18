@@ -11,8 +11,18 @@ x-go-worker-env-base: &go-worker-env-base
   DEV_HEALTH_HTTP_ADDR: ":8080"
   POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
   WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?session-pooler queue-control PostgreSQL URI is required}
-  CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+  # Port 9000 is the NATIVE protocol, not 8123. Python's CLICKHOUSE_URI speaks
+  # HTTP through clickhouse-connect; the Go worker speaks the native wire
+  # protocol through clickhouse-go and eagerly Ping()s at construction, so the
+  # same variable name must resolve to a different port for these containers.
+  # Pointing them at 8123 fails every ClickHouse-dependent group on first
+  # scale-up (CHAOS-3872, and deploy/go-workers/README.md documents it).
+  CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
   VALKEY_URI: redis://valkey:6379/1
+  # deploy/go-workers/deployment.json requires this for the sync group, and
+  # provider-sync handler construction fails closed without it. Shared with the
+  # Python services so both runtimes decrypt the same provider credentials.
+  SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
   RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
   RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
   RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}

@@ -37,7 +37,12 @@ from dev_health_ops.sync.family_flags import (
 logger = logging.getLogger(__name__)
 
 HISTORY_LOOKBACK_DAYS = 3650
-SYNC_COVERAGE_PROJECTION_VERSION = 1
+# Bump whenever the persisted payload shape changes. The read path filters on
+# this value, so a stale-shaped row becomes unreadable and is rebuilt instead of
+# being served as current. Version 1 stored ``backfill_windows`` as bare
+# calendar dates with no source/dataset scope; version 2 stores exact UTC
+# instants plus scope, which is what BackfillSelectorRequest requires.
+SYNC_COVERAGE_PROJECTION_VERSION = 2
 STALE_MINIMUM_GRACE = timedelta(hours=6)
 STALE_FALLBACK_GRACE = timedelta(hours=48)
 INTERVAL_ADJACENCY_TOLERANCE = timedelta(microseconds=1)
@@ -1550,6 +1555,10 @@ def _canonical_backfill_windows(
     suggestion only when the half-open coverage range has exact UTC-midnight
     boundaries. This keeps the server authoritative: an explicit empty list
     means a displayed row is not safely representable by that selector.
+
+    Empty intervals are dropped for the same reason: BackfillSelectorRequest
+    requires ``since < before``, so emitting one would suggest a window the
+    server rejects with a 422.
     """
 
     candidates_by_scope: dict[
@@ -1561,6 +1570,8 @@ def _canonical_backfill_windows(
             before = ensure_utc(interval.before)
             if since.time() != time.min or before.time() != time.min:
                 continue
+            if since >= before:
+                continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
                 "gap"
             )
@@ -1568,6 +1579,8 @@ def _canonical_backfill_windows(
             since = ensure_utc(interval.since)
             before = ensure_utc(interval.before)
             if since.time() != time.min or before.time() != time.min:
+                continue
+            if since >= before:
                 continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
                 "failed"

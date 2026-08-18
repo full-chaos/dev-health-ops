@@ -12,13 +12,21 @@ import (
 
 const (
 	HistoryLookbackDays = 3650
-	projectionVersion   = 1
-	maxProjectionRows   = 1_000_000
-	maxSources          = 5_000
-	maxDatasets         = 100
-	maxPairs            = 20_000
-	maxCompactWindows   = 30_000
-	maxBackfillPairs    = 20_000
+	// projectionVersion must stay in lockstep with
+	// SYNC_COVERAGE_PROJECTION_VERSION in
+	// src/dev_health_ops/api/services/sync_coverage.py: the API reads
+	// projections filtered on this value, so a mismatch makes every
+	// projection unreadable and coverage returns 503 forever. Bump both
+	// whenever the payload shape changes. Version 1 stored backfill_windows
+	// as bare calendar dates with no source/dataset scope; version 2 stores
+	// exact UTC instants plus scope.
+	projectionVersion = 2
+	maxProjectionRows = 1_000_000
+	maxSources        = 5_000
+	maxDatasets       = 100
+	maxPairs          = 20_000
+	maxCompactWindows = 30_000
+	maxBackfillPairs  = 20_000
 )
 
 var (

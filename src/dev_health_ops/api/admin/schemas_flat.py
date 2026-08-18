@@ -420,11 +420,36 @@ class SyncCoverageBackfillWindow(BaseModel):
     or dataset.
     """
 
-    since: datetime
-    before: datetime
+    since: AwareDatetime
+    before: AwareDatetime
     source_ids: list[str] = Field(default_factory=list)
     dataset_keys: list[str] = Field(default_factory=list)
     reasons: list[Literal["gap", "failed"]] = Field(default_factory=list)
+
+    @field_validator("since", "before", mode="before")
+    @classmethod
+    def _assume_utc(cls, value: Any) -> Any:
+        """Attach UTC to a naive or date-only boundary read from a projection.
+
+        These windows are echoed straight back by clients as a
+        ``BackfillSelectorRequest``, whose boundaries are ``AwareDatetime``. A
+        naive value here therefore produces a selector the server itself
+        rejects with a 422. Version-1 projections stored bare calendar dates,
+        so coerce rather than reject: an unreadable suggestion is worse than a
+        UTC-assumed one, and every stored boundary is already UTC.
+        """
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                return value
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return value
 
 
 class SyncCoverageSummaryResponse(BaseModel):

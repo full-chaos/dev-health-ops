@@ -14,6 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from dev_health_ops.api.services.sync_coverage import (
+    SYNC_COVERAGE_PROJECTION_VERSION,
+)
 from dev_health_ops.models import (
     BackfillJob,
     Base,
@@ -2017,7 +2020,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
         org_id=run.org_id,
         sync_config_id=config.id,
         history_lookback_days=3650,
-        projection_version=1,
+        projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
         generated_at=datetime.now(timezone.utc),
         payload={},
     )

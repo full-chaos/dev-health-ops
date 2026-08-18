@@ -426,6 +426,12 @@ func canonicalBackfillWindows(pairs []pairCoverage) []any {
 				if !isUTCMidnight(since) || !isUTCMidnight(before) {
 					continue
 				}
+				// BackfillSelectorRequest requires since < before, so an
+				// empty interval would suggest a window the API rejects
+				// with a 422. Mirrors _canonical_backfill_windows.
+				if !since.Before(before) {
+					continue
+				}
 				key := scope{
 					Since: since, Before: before,
 					SourceID: pair.SourceID, DatasetKey: pair.DatasetKey,

@@ -72,6 +72,13 @@ func Main(spec Spec) {
 }
 
 // Execute is the testable command entry point.
+// dependencyReason is implemented by dependency-construction errors that carry
+// a bounded, non-sensitive reason code identifying which construction site
+// failed. Adapters that do not implement it keep the previous opaque logging.
+type dependencyReason interface {
+	DependencyReason() string
+}
+
 func Execute(
 	parent context.Context,
 	spec Spec,
@@ -188,12 +195,15 @@ func Execute(
 		if configureErr != nil {
 			// Dependency adapters return operational detail to their caller, but the
 			// shell never assumes an arbitrary error is free of DSNs or secrets.
-			logger.ErrorContext(
-				ctx,
-				"configure runtime dependencies",
-				"error_category",
-				"dependency_configuration_failed",
-			)
+			// A reason code, when the adapter supplies one, is a bounded
+			// compile-time constant naming the failing construction site, so it
+			// can be logged without redaction (CHAOS-3873).
+			attributes := []any{"error_category", "dependency_configuration_failed"}
+			var coded dependencyReason
+			if errors.As(configureErr, &coded) {
+				attributes = append(attributes, "reason", coded.DependencyReason())
+			}
+			logger.ErrorContext(ctx, "configure runtime dependencies", attributes...)
 			return 1
 		}
 		components = append(components, configured...)

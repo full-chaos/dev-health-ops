@@ -32,6 +32,28 @@ const (
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
 
+// dependencyFailure attaches a bounded reason code to the generic dependency
+// sentinel. Dozens of distinct construction failures -- rescue collisions,
+// drain-budget math, a missing ClickHouse URI, handler drift -- used to return
+// the bare sentinel, and the shell logged only "dependency_configuration_failed",
+// so an operator could not tell which knob was wrong (CHAOS-3873). The reason is
+// always a compile-time constant, never interpolated input, so logging it cannot
+// leak a DSN or a secret.
+type dependencyFailure struct {
+	reason string
+}
+
+func (failure dependencyFailure) Error() string {
+	return errWorkerDependencyUnavailable.Error() + ": " + failure.reason
+}
+
+func (dependencyFailure) Unwrap() error { return errWorkerDependencyUnavailable }
+
+// DependencyReason satisfies the shell's reason-code interface.
+func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
 type workerDatabase interface {
 	DomainReady(context.Context) error
 	QueueReady(context.Context) error
@@ -76,6 +98,32 @@ func (database *postgresWorkerDatabase) NewWorkerPresence(
 // posture; tests can provide the same small query seam without widening roles.
 type githubProjectsV2DurableConfigReader interface {
 	GitHubProjectsV2Configured(context.Context) (bool, error)
+}
+
+// databaseConfigurationRejected reports whether a database-open failure is a
+// declared configuration rejection rather than an operational one. Those are
+// reported through named readiness checks (domain_postgres, queue_postgres,
+// queue_control_config), which an operator can scrape; failing construction
+// instead would replace an attributable check name with a crash loop.
+// Everything else -- an unreachable host, a refused password, a DSN that will
+// not parse -- is operational and must crash-loop rather than idle as an
+// alive-but-unready zombie (CHAOS-3873).
+func databaseConfigurationRejected(err error) bool {
+	for _, configurationError := range []error{
+		postgres.ErrInvalidConfig,
+		postgres.ErrDomainDatabaseRequired,
+		postgres.ErrQueueControlRequired,
+		postgres.ErrQueueControlTransactionMode,
+		postgres.ErrRuntimeRolesNotSeparated,
+		postgres.ErrRuntimeRoleConfiguration,
+		postgres.ErrCoordinatorDatabaseRequired,
+		postgres.ErrCoordinatorTransactionMode,
+	} {
+		if errors.Is(err, configurationError) {
+			return true
+		}
+	}
+	return false
 }
 
 func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase, error) {
@@ -398,7 +446,7 @@ func configureWorkerDependenciesWithSources(
 	}
 	if dependencies.metricsErr != nil || dependencies.metrics == nil {
 		dependencies.close()
-		return nil, errWorkerDependencyUnavailable
+		return nil, dependencyUnavailable("worker_metrics_unavailable")
 	}
 	if err := registry.RegisterMetrics("worker_runtime", workerMetricsSource{
 		collector:              dependencies.metrics,
@@ -437,6 +485,17 @@ func configureWorkerDependenciesWithSources(
 		}
 	}
 	if dependencies.database == nil {
+		if dependencies.databaseErr != nil && !databaseConfigurationRejected(dependencies.databaseErr) {
+			// A DSN that was supplied but could not be opened used to return
+			// nil, nil: the shell started with no components, readiness failed
+			// forever, and nothing terminated the process -- an alive-but-unready
+			// zombie instead of an attributable crash-loop (CHAOS-3873).
+			dependencies.close()
+			return nil, dependencyUnavailable("worker_database_open_failed")
+		}
+		// A rejected or absent DSN configuration stays live and unready on
+		// purpose, so an operator can scrape readiness and see exactly which
+		// check names failed rather than reading a crash loop.
 		return nil, nil
 	}
 	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
@@ -453,7 +512,7 @@ func configureWorkerDependenciesWithSources(
 	)
 	if composeErr != nil {
 		dependencies.close()
-		return nil, errWorkerDependencyUnavailable
+		return nil, dependencyUnavailable("worker_family_composition_failed")
 	}
 	if active.metricsSource != nil {
 		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
@@ -476,7 +535,7 @@ func configureWorkerDependenciesWithSources(
 		if err := dependencies.queuesReady(ctx); err != nil {
 			_ = closeWorkerFamily(active)
 			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
+			return nil, dependencyUnavailable("queue_coverage_validation_failed")
 		}
 	}
 	components = append(components, preclaimReadinessComponent{registry: registry})
@@ -486,7 +545,7 @@ func configureWorkerDependenciesWithSources(
 	if sources.buildRiverProcess == nil {
 		_ = closeWorkerFamily(active)
 		dependencies.close()
-		return nil, errWorkerDependencyUnavailable
+		return nil, dependencyUnavailable("river_process_builder_missing")
 	}
 	workerProcess, err := sources.buildRiverProcess(
 		cfg, dependencies.database, workers, active, logger,
@@ -494,7 +553,7 @@ func configureWorkerDependenciesWithSources(
 	if err != nil || workerProcess == nil {
 		_ = closeWorkerFamily(active)
 		dependencies.close()
-		return nil, errWorkerDependencyUnavailable
+		return nil, dependencyUnavailable("river_process_construction_failed")
 	}
 	var presence *jobruntime.WorkerPresence
 	if database, ok := dependencies.database.(*postgresWorkerDatabase); ok {
@@ -505,7 +564,7 @@ func configureWorkerDependenciesWithSources(
 		if presenceErr != nil {
 			_ = closeWorkerFamily(active)
 			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
+			return nil, dependencyUnavailable("worker_presence_unavailable")
 		}
 	}
 	logger.InfoContext(ctx, "worker queues configured",
@@ -513,6 +572,10 @@ func configureWorkerDependenciesWithSources(
 		"worker_instance_id", dependencies.instanceID,
 		"queues", strings.Join(cfg.Queues, ","),
 		"queue_workers", formatQueueBudgets(active.queues),
+		// Surfaced so an operator can see the effective drain window, including
+		// when it was derived from the selection rather than configured.
+		"shutdown_timeout", dependencies.shutdownGrace.String(),
+		"drain_budget", dependencies.workerDrainBudget.String(),
 		"river_client_count", 1,
 		"queue_database_max_connections", dependencies.startup.Connections.QueueControl,
 		"domain_database_max_connections", dependencies.startup.Connections.Domain,
@@ -597,7 +660,7 @@ func composeSelectedWorkerFamilies(
 	if runtimeRegistry != nil {
 		if err := registerRescueCoverage(workers, runtimeRegistry, active.handlers, active.ownedKinds...); err != nil {
 			_ = closeWorkerFamily(active)
-			return workerFamily{}, err
+			return workerFamily{}, dependencyUnavailable("rescue_coverage_registration_failed")
 		}
 	}
 	return active, nil
@@ -1038,14 +1101,22 @@ func buildWorkerDependencies(
 		dependencies.workerGroup = "worker"
 	}
 	dependencies.shutdownGrace = cfg.ShutdownTimeout
-	if dependencies.shutdownGrace == 0 {
-		// Direct unit construction does not pass through config.Load. Production
-		// always supplies a concrete timeout, so infer only for that test seam.
-		dependencies.shutdownGrace = longestTimeout + workerFinalizationBuffer
+	// The drain budget is the shutdown grace minus a finalization buffer and
+	// must cover the longest selected timeout. The 30s config default cannot
+	// satisfy that for any real selection -- it yields a NEGATIVE budget -- so
+	// every default-configured worker failed with the opaque sentinel
+	// (CHAOS-3873). An unset timeout is derived from the selection; an operator
+	// who set one explicitly still gets a hard, attributable failure.
+	requiredGrace := longestTimeout + workerFinalizationBuffer
+	// Only an unset timeout is derived. A value the operator chose -- including
+	// one that happens to equal the default -- still fails closed, so the
+	// contract check keeps its teeth.
+	if !cfg.ShutdownTimeoutExplicit && dependencies.shutdownGrace <= config.DefaultShutdownTimeout {
+		dependencies.shutdownGrace = requiredGrace
 	}
 	dependencies.workerDrainBudget = dependencies.shutdownGrace - workerFinalizationBuffer
 	if dependencies.workerDrainBudget < longestTimeout {
-		dependencies.startupErr = errWorkerDependencyUnavailable
+		dependencies.startupErr = dependencyUnavailable("shutdown_timeout_below_drain_budget")
 		return dependencies
 	}
 	// Queues and Handlers stay empty here on purpose: they are filled in only by

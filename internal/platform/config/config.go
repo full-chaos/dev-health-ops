@@ -16,9 +16,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
+// DefaultShutdownTimeout is the shutdown grace used when neither
+// --shutdown-timeout nor DEV_HEALTH_SHUTDOWN_TIMEOUT is supplied. The worker
+// compares against it to tell an unset timeout from one an operator chose.
+const DefaultShutdownTimeout = 30 * time.Second
+
 const (
 	defaultHTTPAddress       = ":8080"
-	defaultShutdownTimeout   = 30 * time.Second
+	defaultShutdownTimeout   = DefaultShutdownTimeout
 	maximumShutdownTimeout   = 3 * time.Hour
 	defaultHealthCheckTimout = 2 * time.Second
 	defaultDomainMaxConns    = 4
@@ -91,10 +96,17 @@ type Config struct {
 	// changes handler construction.
 	WorkerGroup string
 
-	HTTPAddress        string
-	ShutdownTimeout    time.Duration
-	HealthCheckTimeout time.Duration
-	LogLevel           slog.Level
+	HTTPAddress     string
+	ShutdownTimeout time.Duration
+	// ShutdownTimeoutExplicit records whether ShutdownTimeout came from the
+	// operator rather than the package default. The worker's drain budget is
+	// ShutdownTimeout minus a finalization buffer and must cover the longest
+	// selected job timeout, which the 30s default cannot do for any real queue
+	// selection -- so an unset timeout is derived from the selection instead of
+	// failing every default-configured worker (CHAOS-3873).
+	ShutdownTimeoutExplicit bool
+	HealthCheckTimeout      time.Duration
+	LogLevel                slog.Level
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -266,6 +278,9 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.ShutdownTimeoutExplicit = durationArgumentOrEnvSet(
+		spec.ShutdownTimeout, lookup, "DEV_HEALTH_SHUTDOWN_TIMEOUT",
+	)
 	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)
@@ -978,6 +993,16 @@ func durationEnv(
 		return 0, fmt.Errorf("%s must be between %s and %s", key, minimum, maximum)
 	}
 	return value, nil
+}
+
+// durationArgumentOrEnvSet reports whether a duration was supplied by flag or
+// environment, as opposed to falling back to the package default.
+func durationArgumentOrEnvSet(argument string, lookup secrets.LookupEnv, key string) bool {
+	if strings.TrimSpace(argument) != "" {
+		return true
+	}
+	value, set := lookup(key)
+	return set && strings.TrimSpace(value) != ""
 }
 
 func durationArgumentOrEnv(

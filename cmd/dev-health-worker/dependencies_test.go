@@ -1878,3 +1878,78 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 		})
 	}
 }
+
+// TestOperationalDatabaseFailureCrashesInsteadOfIdlingUnready is CHAOS-3873
+// evidence. A DSN that cannot be opened for an operational reason used to
+// return nil, nil: the shell started, readiness failed forever, and nothing
+// terminated the process. Declared configuration rejections keep their
+// live-but-unready behaviour, because those surface as named readiness checks.
+func TestOperationalDatabaseFailureCrashesInsteadOfIdlingUnready(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	cfg := config.Config{
+		Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+		RiverDatabaseSchema:    "river",
+	}
+
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return nil, errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")
+	}
+	components, err := configureWorkerDependenciesWithSources(
+		context.Background(), cfg, health.NewRegistry(100*time.Millisecond), sources,
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) || len(components) != 0 {
+		t.Fatalf("operational open failure = %v, %d components; want dependency refusal", err, len(components))
+	}
+	var coded interface{ DependencyReason() string }
+	if !errors.As(err, &coded) || coded.DependencyReason() != "worker_database_open_failed" {
+		t.Fatalf("reason code = %v, want worker_database_open_failed", err)
+	}
+
+	rejected := productionWorkerDependencySources
+	rejected.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return nil, postgres.ErrQueueControlTransactionMode
+	}
+	if _, err := configureWorkerDependenciesWithSources(
+		context.Background(), cfg, health.NewRegistry(100*time.Millisecond), rejected,
+	); err != nil {
+		t.Fatalf("configuration rejection must stay live and unready, got %v", err)
+	}
+}
+
+// TestUnsetShutdownTimeoutIsDerivedFromTheSelectedQueues is CHAOS-3873
+// evidence: the 30s package default yields a NEGATIVE drain budget, so every
+// default-configured worker failed with the opaque sentinel. An unset timeout
+// is derived from the selection; a value the operator chose still fails closed.
+func TestUnsetShutdownTimeoutIsDerivedFromTheSelectedQueues(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	base := config.Config{
+		Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+	}
+
+	defaulted := base
+	defaulted.ShutdownTimeout = config.DefaultShutdownTimeout
+	derived := buildWorkerDependencies(context.Background(), defaulted, sources)
+	defer derived.close()
+	if derived.startupErr != nil {
+		t.Fatalf("default-configured worker refused to start: %v", derived.startupErr)
+	}
+	if derived.workerDrainBudget <= 0 {
+		t.Fatalf("derived drain budget = %s, want a positive window", derived.workerDrainBudget)
+	}
+
+	chosen := base
+	chosen.ShutdownTimeout = config.DefaultShutdownTimeout
+	chosen.ShutdownTimeoutExplicit = true
+	refused := buildWorkerDependencies(context.Background(), chosen, sources)
+	defer refused.close()
+	if !errors.Is(refused.startupErr, errWorkerDependencyUnavailable) {
+		t.Fatalf("explicit 30s timeout = %v, want shutdown contract refusal", refused.startupErr)
+	}
+}

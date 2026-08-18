@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -414,4 +415,32 @@ func (stepper schedulerHandoffStepper) HandoffDueResult(
 	context.Context, time.Time, int, Coordinator,
 ) (HandoffResult, error) {
 	return stepper()
+}
+
+// TestLoopWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
+// path is inert: a loop given no Logger must not panic on a failed handoff
+// window, and it must not fall back to slog.Default() -- that would send
+// output to a sink other than the process's configured JSON logger, so a
+// log-capturing test could pass while production ships nothing (CHAOS-3907).
+// Mirrors scheduler/fixed's own nil-logger test for its literal sibling loop.
+func TestLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	failure := errors.New("initial handoff probe failure")
+	stepper := loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+		return HandoffResult{}, failure
+	})
+	loop, _ := newTestLoop(t, stepper, &testLoopClock{})
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted initial handoff failure")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
+	}
 }

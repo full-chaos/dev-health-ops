@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -258,5 +259,33 @@ func TestReconcilerLoopRejectsUnboundedConfiguration(t *testing.T) {
 		if _, err := NewReconcilerLoop(stepper, config); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("NewReconcilerLoop(%#v) error = %v", config, err)
 		}
+	}
+}
+
+// TestReconcilerLoopWithoutALoggerDoesNotFallBackToSlogDefault proves the
+// mirror image of the logging tests above: a loop given no Logger must not
+// panic on a failed step, and it must not fall back to slog.Default() --
+// that would send output to a sink other than the process's configured JSON
+// logger, so a log-capturing test could pass while production ships nothing
+// (CHAOS-3907).
+func TestReconcilerLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	failure := errors.New("initial step probe failure")
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, failure
+	})
+	loop, _ := newTestReconcilerLoop(t, stepper, &testReconcilerClock{})
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted initial step failure")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

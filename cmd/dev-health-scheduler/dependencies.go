@@ -316,7 +316,7 @@ func buildSchedulerLoopWithSources(
 		sources.newRepository == nil || sources.newCoordinator == nil ||
 		sources.newLoop == nil || sources.newFixedLoop == nil ||
 		sources.newOccurrences == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_build_sources_unavailable")
 	}
 	database, err := sources.openDatabase(ctx, cfg)
 	if err != nil && postgres.ConfigurationRejected(err) {
@@ -346,7 +346,7 @@ func buildSchedulerLoopWithSources(
 		// Operational failure -- unreachable host, refused credentials, an
 		// unparseable DSN. Crash-loop rather than idle as an alive-but-unready
 		// zombie.
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_domain_database_open_failed")
 	}
 	closeOnError := true
 	defer func() {
@@ -383,31 +383,31 @@ func buildSchedulerLoopWithSources(
 	// closed with postgres.ErrUnavailable instead.
 	coordinatorPool, err := database.CoordinatorPool()
 	if err != nil || coordinatorPool == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_coordinator_pool_unavailable")
 	}
 	domainPool := database.DomainPool()
 	if domainPool == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_domain_pool_unavailable")
 	}
 	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_handoff_repository_construction_failed")
 	}
 	coordinator := sources.newCoordinator()
 	if coordinator == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_occurrence_coordinator_unavailable")
 	}
 	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
 	if err != nil || occurrences == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
 	}
 	loop, err := sources.newLoop(
 		repository,
 		coordinator,
-		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences),
+		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger),
 	)
 	if err != nil || loop == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_sync_loop_construction_failed")
 	}
 	// The fixed maintenance scheduler is deliberately optional. Product schedule
 	// handoff and pending-occurrence reconciliation are a different workload

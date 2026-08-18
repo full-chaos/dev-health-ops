@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -79,14 +80,14 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 	if !slices.Equal(streamRunnerSpec.Profiles, []string{"ingest", "external", "pagerduty"}) {
 		t.Fatalf("unexpected stream profiles: %v", streamRunnerSpec.Profiles)
 	}
-	if streamRunnerSpec.ConfigureDependencies == nil {
+	if streamRunnerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("stream-runner dependency configuration is not wired")
 	}
 
 	t.Run("unconfigured storage stays live and fails readiness", func(t *testing.T) {
 		registry := health.NewRegistry(100 * time.Millisecond)
-		components, err := configureStreamRunnerDependencies(
-			context.Background(), config.Config{}, registry,
+		components, err := configureStreamRunnerDependenciesWithLogger(
+			context.Background(), config.Config{}, registry, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -111,10 +112,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
 			registry,
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -146,10 +148,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
 			registry,
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -174,10 +177,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
 			registry,
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -202,10 +206,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 2},
 			registry,
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -236,10 +241,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 1},
 			registry,
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -263,10 +269,11 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			config.Config{Profile: "external", StreamConfiguredReplicas: 2},
 			health.NewRegistry(time.Second),
 			streamDependencySources{
-				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
 					return storage, nil
 				},
 			},
+			nil,
 		)
 		if err == nil || !storage.closed {
 			t.Fatalf("duplicate external replicas: err=%v storage_closed=%v", err, storage.closed)

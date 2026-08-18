@@ -100,30 +100,11 @@ type githubProjectsV2DurableConfigReader interface {
 	GitHubProjectsV2Configured(context.Context) (bool, error)
 }
 
-// databaseConfigurationRejected reports whether a database-open failure is a
-// declared configuration rejection rather than an operational one. Those are
-// reported through named readiness checks (domain_postgres, queue_postgres,
-// queue_control_config), which an operator can scrape; failing construction
-// instead would replace an attributable check name with a crash loop.
-// Everything else -- an unreachable host, a refused password, a DSN that will
-// not parse -- is operational and must crash-loop rather than idle as an
-// alive-but-unready zombie (CHAOS-3873).
+// databaseConfigurationRejected delegates to postgres.ConfigurationRejected,
+// which owns the sentinel list it classifies. It stays as a named local so the
+// call site below still reads as a policy decision rather than a type check.
 func databaseConfigurationRejected(err error) bool {
-	for _, configurationError := range []error{
-		postgres.ErrInvalidConfig,
-		postgres.ErrDomainDatabaseRequired,
-		postgres.ErrQueueControlRequired,
-		postgres.ErrQueueControlTransactionMode,
-		postgres.ErrRuntimeRolesNotSeparated,
-		postgres.ErrRuntimeRoleConfiguration,
-		postgres.ErrCoordinatorDatabaseRequired,
-		postgres.ErrCoordinatorTransactionMode,
-	} {
-		if errors.Is(err, configurationError) {
-			return true
-		}
-	}
-	return false
+	return postgres.ConfigurationRejected(err)
 }
 
 func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase, error) {

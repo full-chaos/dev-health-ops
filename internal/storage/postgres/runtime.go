@@ -25,6 +25,43 @@ var (
 	ErrCoordinatorTransactionMode  = errors.New("transaction-mode PgBouncer cannot be used for coordinator control-plane access")
 )
 
+// ConfigurationRejected reports whether a database-open failure is a DECLARED
+// configuration rejection rather than an operational one.
+//
+// The distinction decides whether a process crash-loops or stays live and
+// unready (CHAOS-3873). A declared rejection -- a DSN that is absent, or one
+// the runtime contract refuses on sight, like queue control pointed at a
+// transaction-mode pooler -- is reported through named readiness checks an
+// operator can scrape; crashing instead would replace an attributable check
+// name with a restart loop that says nothing about which input was wrong.
+// Everything else -- an unreachable host, a refused password, a DSN that will
+// not parse -- is operational, and must crash-loop rather than idle as an
+// alive-but-unready zombie.
+//
+// This lives here, beside the sentinels it classifies, because every sentinel
+// added above has to be considered for this list. It was previously a private
+// copy of the list inside cmd/dev-health-worker, which is exactly how
+// cmd/dev-health-scheduler came to crash on an unconfigured DSN where the
+// worker stayed live: the classification existed, but only one binary could
+// reach it.
+func ConfigurationRejected(err error) bool {
+	for _, configurationError := range []error{
+		ErrInvalidConfig,
+		ErrDomainDatabaseRequired,
+		ErrQueueControlRequired,
+		ErrQueueControlTransactionMode,
+		ErrRuntimeRolesNotSeparated,
+		ErrRuntimeRoleConfiguration,
+		ErrCoordinatorDatabaseRequired,
+		ErrCoordinatorTransactionMode,
+	} {
+		if errors.Is(err, configurationError) {
+			return true
+		}
+	}
+	return false
+}
+
 // RuntimeConfig describes the PostgreSQL trust boundaries used by River
 // processes. Domain traffic may traverse transaction-mode PgBouncer. Queue
 // control must use either a bounded direct PostgreSQL endpoint or a bounded

@@ -54,8 +54,9 @@ type oracleCase struct {
 //     would collide at float64 precision, or a datetime and a same-looking
 //     plain string, never compare equal by accident) -- UNLESS the field is
 //     declared in the Python pair's excluded_fields OR the caller's own
-//     goOnlyFields. Every exclusion requires a written reason, mirroring
-//     expected_survivor_reason in scripts/mutation_harness.py.
+//     goOnlyFields. Every exclusion requires a written reason: an omission
+//     must be declared in writing at registration time, never discovered by a
+//     reader wondering why a field went untested.
 //
 // This is the single comparator every pair reuses; a pair difference is a
 // difference in WHAT gets compared (the pair id, the cases, the Go row

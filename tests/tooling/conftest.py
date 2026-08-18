@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # `scripts/` has no `__init__.py` and pytest.ini only puts `src` on sys.path, so
-# tests that import `scripts.mutation_harness` as a library need the ops repo
+# tests that import modules under `scripts.` as libraries need the ops repo
 # root on sys.path too. Scoped to this conftest, matching tests/docs/conftest.py.
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -51,11 +51,11 @@ import (
 // ci/check_go.sh: an exemption list that drifts unnoticed is how the next
 // gap gets pre-approved.
 // It is empty today, and that is a real result rather than a placeholder:
-// every package discovery enrols does build a venue. internal/domaingrants was
-// the one candidate for an entry -- grant_surface_test.go names
-// CheckDomainAuthorization and starts no database -- but it names it inside a
-// message string, and discovery matches parsed CALL sites, so it is never
-// enrolled and needs no exemption.
+// every package discovery enrols does build a venue. The one historical
+// candidate for an entry was internal/domaingrants, whose grant_surface_test.go
+// named CheckDomainAuthorization inside a message string and started no
+// database -- discovery matches parsed CALL sites, so it was never enrolled and
+// needed no exemption. That package was removed under CHAOS-3875.
 var venuePackagesWithoutSchema = map[string]string{}
 
 var createTablePattern = regexp.MustCompile(

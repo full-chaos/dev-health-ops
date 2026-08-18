@@ -74,6 +74,82 @@ func TestConfigurationFailureIsSanitized(t *testing.T) {
 	}
 }
 
+// TestProfileResolutionOwnsFlagEnvDefaultAndMembership pins the resolution
+// order the shell took over from internal/platform/config (CHAOS-3875):
+// --profile beats DEV_HEALTH_PROFILE beats the declared default, the result
+// must be a declared profile, and a service that declares none accepts no
+// profile at all.
+func TestProfileResolutionOwnsFlagEnvDefaultAndMembership(t *testing.T) {
+	t.Parallel()
+
+	streamSpec := Spec{
+		Service:        "dev-health-stream-runner",
+		Profiles:       []string{"ingest", "external", "pagerduty"},
+		DefaultProfile: "ingest",
+	}
+
+	for name, test := range map[string]struct {
+		spec     Spec
+		selected *string
+		env      map[string]string
+		want     string
+		wantErr  bool
+	}{
+		"flag beats environment": {
+			spec: streamSpec, selected: ptr("external"),
+			env:  map[string]string{"DEV_HEALTH_PROFILE": "pagerduty"},
+			want: "external",
+		},
+		"environment beats default": {
+			spec: streamSpec, selected: ptr(""),
+			env:  map[string]string{"DEV_HEALTH_PROFILE": "pagerduty"},
+			want: "pagerduty",
+		},
+		"default when neither is set": {
+			spec: streamSpec, selected: ptr(""), want: "ingest",
+		},
+		"blank environment falls through to the default": {
+			spec: streamSpec, selected: ptr(""),
+			env:  map[string]string{"DEV_HEALTH_PROFILE": "   "},
+			want: "ingest",
+		},
+		"undeclared flag value is rejected": {
+			spec: streamSpec, selected: ptr("archive"), wantErr: true,
+		},
+		"undeclared environment value is rejected": {
+			spec: streamSpec, selected: ptr(""),
+			env:     map[string]string{"DEV_HEALTH_PROFILE": "archive"},
+			wantErr: true,
+		},
+		"profile-free service accepts none": {
+			spec: Spec{Service: "dev-health-worker"}, selected: nil, want: "",
+		},
+		"profile-free service rejects one": {
+			spec: Spec{Service: "dev-health-worker"}, selected: ptr("ingest"),
+			wantErr: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveProfile(test.spec, test.selected, testLookup(test.env))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("resolveProfile accepted %v, want an error", test.selected)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("profile = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func ptr(value string) *string { return &value }
+
 func TestDependencyConfigurationFailureIsCategorizedWithoutLoggingErrorText(t *testing.T) {
 	t.Parallel()
 
@@ -221,9 +297,7 @@ func TestShellStartsEndpointsAndTerminatesCleanly(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		done <- Execute(ctx, Spec{
-			Service:        "dev-health-worker",
-			Profiles:       []string{"latency", "sync", "heavy", "ops"},
-			DefaultProfile: "latency",
+			Service: "dev-health-worker",
 			ConfigureDependencies: func(
 				_ context.Context,
 				_ config.Config,

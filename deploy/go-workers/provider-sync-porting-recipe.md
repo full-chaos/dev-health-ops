@@ -509,15 +509,14 @@ question.
       root cause. What IS certain, independent of whichever exact
       mechanism is responsible: `go test -count=1` disables cache lookup
       entirely by design (documented Go behavior, not a workaround), so it
-      closes this hole regardless of what is ultimately causing it. Until
-      `scripts/mutation_harness.py` passes `-count=1` (or an equivalent
-      cache-bypass) in its own proof-command invocation, **always run `go
-      clean -testcache` immediately before any `mutation_harness.py run`**
-      — a full cache clear reliably reproduced the correct KILLED verdict
-      every single time it was tried, unlike `-count=1` on a single proof
-      command in isolation which was not separately re-verified against a
-      confirmed-concurrent-load reproduction of the bug. Do not trust a
-      lone SURVIVED or KILLED verdict produced against a warm cache without
+      closes this hole regardless of what is ultimately causing it.
+      **Always run `go clean -testcache` immediately before any hand-run
+      mutation proof** — a full cache clear reliably reproduced the correct
+      KILLED verdict every single time it was tried, unlike `-count=1` on a
+      single proof command in isolation which was not separately re-verified
+      against a confirmed-concurrent-load reproduction of the bug. Do not
+      trust a lone SURVIVED or KILLED verdict produced against a warm cache
+      without
       that step, and if you run a mutation plan while other `go`
       invocations are active in the same environment, clear the cache
       again afterward before trusting the result.
@@ -1014,66 +1013,44 @@ Minimum test surface per pair (see `github_prs_route_test.go`,
    `legacy_target`/processor flag (see below), a test proving the new switch
    does NOT flip them ready too.
 
-**Use the shared mutation harness — `scripts/mutation_harness.py`, runbook
-`tests/tooling/README.md` — rather than a hand-rolled mutate/test/revert
-loop.** Three ad-hoc per-lane harnesses produced false results on the same
-day this pair was reviewed (a leaked mutation reported as restored, `git
-checkout` reverting unrelated uncommitted edits, a waiter that matched its
-own process and hung forever); the shared tool exists specifically to close
-those failure modes; do not re-open them by rolling your own again. Two
-rules from that runbook matter most for this recipe:
+**Mutation-test the new handler by hand; there is no shared harness.**
+`scripts/mutation_harness.py` and its checked-in plan JSONs were removed under
+CHAOS-3875 — no GitHub workflow ever ran them, and the plans had to be
+re-anchored by hand on every refactor of the files they pinned. Nothing
+replaces them: apply one mutation, run the proof command, revert by content
+digest, and report the result in the PR. Three rules survive the tool and
+still decide whether the exercise means anything:
 
 - **Mutate compound predicates clause by clause, never as a unit** — this is
-  defect class 4 above, restated as a harness discipline: a three-clause
-  condition mutated wholesale can report `KILLED` while one clause inside it
-  is both unasserted and wrong, because the OTHER clauses in whatever
-  fixture the proof test uses already made the outcome differ. Write one
-  mutation per named clause.
+  defect class 4 above, restated: a three-clause condition mutated wholesale
+  can report `KILLED` while one clause inside it is both unasserted and wrong,
+  because the OTHER clauses in whatever fixture the proof test uses already
+  made the outcome differ. Write one mutation per named clause.
+- **Never verify a restore with a build or a git check.** `go build` and
+  `go vet` both pass on `if false && (guard)`, and `git diff` calls an
+  *untracked* file clean whatever it contains. Compare the restored file's
+  SHA-256 against the pre-mutation one.
 - **A `SURVIVED` result is not automatically a coverage gap.** Running
-  `github/prs`'s own plan
-  (`internal/providersync/testdata/mutation-plans/github_prs.json`) found
-  exactly one: a mutated `if fullName == "" { ... }` guard survived because
-  `repositoryIdentity` (the function called two lines later) already
-  rejects an empty string with the identical error — the guard was dead
-  code duplicating a check its own callee makes. The fix was deleting the
-  redundant guard, not adding a test to justify keeping it; see that plan's
-  `$limitation` field for the full account. Classify every survivor
-  (missing test / invalid mutation / genuine redundancy) rather than
+  `github/prs`'s plan found exactly one: a mutated `if fullName == "" { ... }`
+  guard survived because `repositoryIdentity` (the function called two lines
+  later) already rejects an empty string with the identical error — the guard
+  was dead code duplicating a check its own callee makes. The fix was deleting
+  the redundant guard, not adding a test to justify keeping it. Classify every
+  survivor (missing test / invalid mutation / genuine redundancy) rather than
   reflexively adding assertions until everything shows `KILLED`.
-
-Write the plan to `internal/providersync/testdata/mutation-plans/<pair>.json`
-(checked in, reviewable) and run it with:
-
-```
-PATH="$PWD/.venv/bin:$PATH" python3 scripts/mutation_harness.py run \
-  --plan internal/providersync/testdata/mutation-plans/<pair>.json \
-  --assert-all-killed
-```
 
 Report which mutation was caught by which test — that mapping is what makes
 "I mutation-tested this" a checkable claim instead of an assertion.
 
-**`BASELINE_FAILED` is an UNMEASURED mutation, not a known-failing one — and
-it is easiest to misread in a fresh worktree.** Proof commands are argv
-arrays resolved against `PATH` (`_run_command` uses `shell=False` and no
-interpreter pinning), so a plan's `pytest …` proof runs whatever `pytest`
-`PATH` finds — a pyenv shim or a Homebrew install, not this tree's `.venv`.
-Two failure modes stack:
-
-- the worktree venv does not exist or is incomplete — fix with `uv sync
-  --all-extras --dev`; `pyproject.toml` is the source of truth and `uv.lock`
-  is never hand-edited;
-- the venv exists and the proof still runs a different interpreter, because
-  `PATH` was not prefixed. This one is the trap: `./.venv/bin/python
-  scripts/mutation_harness.py` pins the *harness*, not the *proofs*.
-
-Measured instance: four `github/work-items` REST mutations reported
-`BASELINE_FAILED` from `ModuleNotFoundError: pytest_asyncio` and were carried
-in two consecutive reports as "pre-existing environment noise". They were
-neither pre-existing nor noise — with the venv synced and on `PATH` all four
-are `KILLED`. A verdict of `BASELINE_FAILED` says the mutation proved
-**nothing**; never total it alongside kills, and never let it ride into a
-second report.
+**A proof that never ran is not a passing proof.** Proof commands resolve
+against `PATH`, so a `pytest …` proof runs whatever `pytest` `PATH` finds — a
+pyenv shim or a Homebrew install, not this tree's `.venv`. Measured instance:
+four `github/work-items` REST mutations reported a baseline failure from
+`ModuleNotFoundError: pytest_asyncio` and were carried in two consecutive
+reports as "pre-existing environment noise". They were neither pre-existing
+nor noise — with the venv synced (`uv sync --all-extras --dev`) and prefixed
+onto `PATH`, all four are `KILLED`. A mutation whose baseline was already red
+proved **nothing**; never total it alongside kills.
 
 ## Difficulty tiers for the remaining GitHub pairs
 

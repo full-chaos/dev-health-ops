@@ -115,14 +115,20 @@ smoke_target() {
   # map even for this deliberately unconfigured dependency run. Keep these
   # target-specific: scheduler and reconciler do not consume River queues, and
   # the stream runner has its own separate stream-profile contract.
+  #
+  # Queue topology is flag-only (CHAOS-3875), so it is passed as an argument
+  # after the image, exactly the way every deploy artifact passes it. The
+  # worker target declares an ENTRYPOINT and no CMD, so these append rather
+  # than override anything.
   startup_env=()
+  startup_args=()
   case "${target}" in
     worker)
       startup_env=(
-        --env "DEV_HEALTH_QUEUES=sync,sync_provider"
         --env "DEV_HEALTH_QUEUE_CONCURRENCY=sync=4,sync_provider=2"
         --env "DEV_HEALTH_WORKER_GROUP=container-smoke"
       )
+      startup_args=(--queues=sync,sync_provider)
       ;;
   esac
   docker run --detach \
@@ -130,7 +136,7 @@ smoke_target() {
     --publish "127.0.0.1::8080" \
     "${startup_env[@]}" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    "${tag}" >/dev/null
+    "${tag}" "${startup_args[@]}" >/dev/null
   published_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
   if [ -z "${published_address}" ]; then
     # Surface why the container is gone rather than only that the port is

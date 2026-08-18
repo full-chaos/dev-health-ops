@@ -221,7 +221,10 @@ func (controller *Controller) Rollback(ctx context.Context, kind string) (State,
 	}
 	if state.Transport != descriptor.RollbackRoute {
 		if err := controller.quiescer.Quiesce(ctx, kind); err != nil {
-			return State{}, ErrLiveClaims
+			if errors.Is(err, ErrLiveClaims) {
+				return State{}, ErrLiveClaims
+			}
+			return State{}, err
 		}
 	}
 	now := controller.now().UTC()

@@ -24,6 +24,7 @@ const (
 	CategoryTerminalDomain ErrorCategory = "terminal_domain"
 	CategoryTenant         ErrorCategory = "tenant_scope"
 	CategoryBudget         ErrorCategory = "budget"
+	CategoryRateLimited    ErrorCategory = "rate_limit"
 	CategoryIdempotency    ErrorCategory = "idempotency"
 )
 
@@ -69,6 +70,19 @@ func BudgetContention(err error, delay time.Duration) error {
 		delay = time.Second
 	}
 	return &markedError{category: CategoryBudget, cause: nonNilError(err), snooze: delay}
+}
+
+// RateLimited marks provider-signalled rate limiting. Like BudgetContention it
+// snoozes rather than failing, because a 429 is the provider scheduling us, not
+// the job going wrong: burning one of the unit's bounded attempts on a 30-60
+// minute GitHub reset window exhausted all of them in minutes and terminalized
+// the unit (CHAOS-3868). It carries its own category so rate-limited work is
+// distinguishable from shared-bucket contention in metrics and logs.
+func RateLimited(err error, delay time.Duration) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	return &markedError{category: CategoryRateLimited, cause: nonNilError(err), snooze: delay}
 }
 
 // SnoozeDelay exposes the typed decision to domain handlers and tests without

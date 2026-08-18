@@ -1169,7 +1169,7 @@ check_multi_replica_workers() {
     GOWORK=off \
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
       go test -mod=readonly -tags=integration -count=1 -timeout=5m \
-        -run '^TestOperationalProfileMultiReplicaClaimDrainRestart$' \
+        -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
         ./cmd/dev-health-worker
   ) || result=$?
   if [ "${result}" -ne 0 ]; then

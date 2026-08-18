@@ -731,6 +731,8 @@ type memoryUnitRepository struct {
 	releaseErr          error
 	releaseCalls        int
 	contentionDeferrals int
+	rateLimitDeferrals  int
+	rateLimitFirstSeen  *time.Time
 	availableAt         time.Time
 }
 
@@ -839,6 +841,38 @@ func (repository *memoryUnitRepository) DeferForBudgetContention(
 		return providersync.ErrLeaseLost
 	}
 	repository.contentionDeferrals++
+	repository.availableAt = availableAt
+	repository.status = "dispatching"
+	return nil
+}
+
+func (repository *memoryUnitRepository) RateLimitEpisode(
+	_ context.Context,
+	_ providersync.Claim,
+) (providersync.RateLimitEpisode, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	return providersync.RateLimitEpisode{
+		Deferrals: repository.rateLimitDeferrals, FirstSeenAt: repository.rateLimitFirstSeen,
+	}, nil
+}
+
+func (repository *memoryUnitRepository) DeferForRateLimit(
+	_ context.Context,
+	claim providersync.Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
+		return providersync.ErrLeaseLost
+	}
+	repository.rateLimitDeferrals++
+	if repository.rateLimitFirstSeen == nil {
+		stamped := now
+		repository.rateLimitFirstSeen = &stamped
+	}
 	repository.availableAt = availableAt
 	repository.status = "dispatching"
 	return nil

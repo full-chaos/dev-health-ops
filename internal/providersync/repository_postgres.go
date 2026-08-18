@@ -270,6 +270,66 @@ func (repository *PostgresRepository) ReleaseForRetry(
 // It is intentionally separate from the Python planner's intrinsic
 // budget_deferred episode: a sibling holding a short-lived HTTP slot says
 // nothing about whether this unit can fit the configured sync budget.
+// RateLimitEpisode is the persisted rate-limit deferral bookkeeping for one
+// unit. Python carries the equivalent state in task kwargs
+// (rate_limit_deferrals / rate_limit_first_seen_at); Go keeps it on the row so
+// a process restart resumes the same episode rather than starting a fresh
+// 2-hour budget.
+type RateLimitEpisode struct {
+	Deferrals   int
+	FirstSeenAt *time.Time
+}
+
+// RateLimitEpisode reads the current deferral counters for a leased unit.
+func (repository *PostgresRepository) RateLimitEpisode(
+	ctx context.Context,
+	claim Claim,
+) (RateLimitEpisode, error) {
+	if repository == nil || repository.Pool == nil || ctx == nil || claim.Validate() != nil {
+		return RateLimitEpisode{}, ErrInvalidConfiguration
+	}
+	var episode RateLimitEpisode
+	if err := repository.Pool.QueryRow(ctx, `
+		SELECT COALESCE(rate_limit_deferrals, 0), rate_limit_first_seen_at
+		FROM public.sync_run_units
+		WHERE id = $1::uuid`, claim.ID,
+	).Scan(&episode.Deferrals, &episode.FirstSeenAt); err != nil {
+		return RateLimitEpisode{}, ErrInvalidConfiguration
+	}
+	return episode, nil
+}
+
+// DeferForRateLimit keeps a rate-limited unit claimable without consuming its
+// bounded failure budget, mirroring Python's treatment of a 429 as deferred
+// work rather than a failure. The attempt decrement matches
+// DeferForBudgetContention: River's snooze is already attempt-neutral, and the
+// authoritative sync-unit attempt must stay neutral with it.
+func (repository *PostgresRepository) DeferForRateLimit(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > rateLimitMaxTotalWait {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForRateLimitSQL,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// rateLimitMaxTotalWait bounds a single deferral's not-before fence. It equals
+// the episode wall-clock budget in internal/jobs/providerunit, which is the
+// longest a deferral could legitimately be scheduled for.
+const rateLimitMaxTotalWait = 2 * time.Hour
+
 func (repository *PostgresRepository) DeferForBudgetContention(
 	ctx context.Context,
 	claim Claim,
@@ -649,6 +709,34 @@ SET status = 'dispatching',
     updated_at = $3
 FROM contention
 WHERE unit.id = contention.id
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const deferForRateLimitSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_rate_limited',
+    rate_limit_deferrals = COALESCE(unit.rate_limit_deferrals, 0) + 1,
+    rate_limit_first_seen_at = COALESCE(unit.rate_limit_first_seen_at, $3),
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_rate_limited',
+        'not_before', to_jsonb($4::timestamptz),
+        'rate_limit_deferrals', COALESCE(unit.rate_limit_deferrals, 0) + 1
+      )
+    ),
+    first_blocked_at = COALESCE(unit.first_blocked_at, $3),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_rate_limited',
+    updated_at = $3
+WHERE unit.id = $1::uuid
   AND unit.status = 'running'
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL

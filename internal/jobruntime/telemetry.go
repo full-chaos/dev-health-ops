@@ -1016,7 +1016,7 @@ func validErrorCategory(category ErrorCategory) bool {
 	switch category {
 	case CategoryNone, CategoryValidation, CategoryPanic, CategoryTimeout, CategoryCancelled,
 		CategoryRetryable, CategoryPermanent, CategoryTerminalDomain, CategoryTenant,
-		CategoryBudget, CategoryIdempotency:
+		CategoryBudget, CategoryRateLimited, CategoryIdempotency:
 		return true
 	default:
 		return false

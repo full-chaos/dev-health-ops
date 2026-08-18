@@ -175,8 +175,20 @@ func discoverDomainAuthorizationPackages(t *testing.T, root string) []string {
 			return err
 		}
 		if entry.IsDir() {
+			// Every dot-directory in this repo is tooling output, not source:
+			// .git and .venv were already enumerated here, and .gitlab-ci-local
+			// (which caches a FULL copy of the tree under builds/.docker/) made
+			// it three. A stale copy still parses, still calls
+			// CheckDomainAuthorization, and is still missing whatever tables
+			// domainPosture() has gained since it was cached -- so this test
+			// false-reds on any machine that has run gitlab-ci-local, naming
+			// packages that do not exist. Skipping the class beats extending
+			// the list once per artifact directory anyone adds.
+			if path != root && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
 			switch entry.Name() {
-			case ".git", "vendor", "node_modules", ".venv", "site", "docs":
+			case "vendor", "node_modules", "site", "docs":
 				return filepath.SkipDir
 			}
 			return nil

@@ -11,8 +11,14 @@ x-go-worker: &go-worker
     DEV_HEALTH_HTTP_ADDR: ":8080"
     POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
     WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?session-pooler queue-control PostgreSQL URI is required}
-    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    # Native protocol (9000), not HTTP (8123): the Go worker's ClickHouse
+    # client eagerly Ping()s at construction and cannot speak HTTP. Same
+    # variable name as Python's, different port (CHAOS-3872).
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:9000/default
     VALKEY_URI: redis://valkey:6379/1
+    # deploy/go-workers/deployment.json requires this for the sync group, and
+    # provider-sync handler construction fails closed without it.
+    SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
     RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
     RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
     RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}

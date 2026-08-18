@@ -878,6 +878,49 @@ def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> No
     # distinct (database,user) server pools in PgBouncer.
     assert manifest["postgres_budget"]["pgbouncer_transaction_server_pool_count"] == 2
 
+    # The SESSION pools are bound to the manifest too. Only the transaction
+    # pool used to be, so the queue and coordinator defaults had drifted below
+    # the budget (22/10 against the manifest's 23/11) with nothing to catch it
+    # (CHAOS-3872).
+    services = _load_yaml(_PRODUCTION_COMPOSE)["services"]
+    session_pools = {
+        "pgbouncer-river-queue": (
+            "pgbouncer_queue_session_pool_size",
+            "PGBOUNCER_RIVER_QUEUE_POOL_SIZE",
+            "pgbouncer_queue_session_max_client_connections",
+            "PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN",
+        ),
+        "pgbouncer-river-coordinator": (
+            "pgbouncer_coordinator_session_pool_size",
+            "PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE",
+            "pgbouncer_coordinator_session_max_client_connections",
+            "PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN",
+        ),
+    }
+    for service, (pool_key, pool_var, client_key, client_var) in session_pools.items():
+        environment = services[service]["environment"]
+        assert manifest["postgres_budget"][pool_key] == _compose_default(
+            environment["DEFAULT_POOL_SIZE"], pool_var
+        ), f"{service} pool size drifted from the manifest budget"
+        assert manifest["postgres_budget"][client_key] == _compose_default(
+            environment["MAX_CLIENT_CONN"], client_var
+        ), f"{service} client cap drifted from the manifest budget"
+
+    # Helm renders the same three pools from values, so bind those too.
+    helm_pools = _load_yaml(_HELM_CHART / "values.yaml")["goWorkers"]["pgbouncer"]
+    assert (
+        manifest["postgres_budget"]["pgbouncer_transaction_pool_size"]
+        == helm_pools["transaction"]["poolSize"]
+    )
+    assert (
+        manifest["postgres_budget"]["pgbouncer_queue_session_pool_size"]
+        == helm_pools["queueSession"]["poolSize"]
+    )
+    assert (
+        manifest["postgres_budget"]["pgbouncer_coordinator_session_pool_size"]
+        == helm_pools["coordinatorSession"]["poolSize"]
+    )
+
 
 @pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])
 def test_compose_and_swarm_migration_wiring_matches_contract(path: Path) -> None:
@@ -1275,3 +1318,154 @@ def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> N
     values = _load_yaml(_HELM_CHART / "values.yaml")
     resolved = set(values["config"]) | set(values["secrets"]["data"])
     assert not _API_BRIDGE_ENV - resolved
+
+
+# Every manifest process mapped to the service/deployment name each renderer
+# uses for it. The river workers already have _RIVER_WORKER_SERVICES; this is
+# the complete set, including the coordinator and stream binaries.
+_MANIFEST_RENDERED_SERVICES = {
+    "heavy": "go-worker-heavy",
+    "ops": "go-worker-ops",
+    "sync": "go-worker-sync-provider",
+    "reconciler": "go-reconciler",
+    "scheduler": "go-scheduler",
+    "stream-external": "go-stream-external",
+    "stream-ingest": "go-stream-ingest",
+    "stream-pagerduty": "go-stream-pagerduty",
+}
+
+# The Go client speaks ClickHouse's native wire protocol and eagerly Ping()s at
+# construction. Python's clickhouse-connect speaks HTTP on 8123, so the same
+# variable name must resolve to a different port per runtime.
+_CLICKHOUSE_NATIVE_PORT = ":9000/"
+_CLICKHOUSE_HTTP_PORT = ":8123/"
+
+
+def _compose_environment(service: dict) -> dict[str, str]:
+    environment = service["environment"]
+    assert isinstance(environment, dict), (
+        "worker environments must use mapping form so the manifest binding can read them"
+    )
+    return {str(name): str(value) for name, value in environment.items()}
+
+
+def _manifest_required_env(process: dict) -> set[str]:
+    return set(process.get("secret_env") or []) | set(process.get("env") or [])
+
+
+def test_every_manifest_process_env_requirement_is_rendered_by_every_renderer() -> None:
+    """CHAOS-3872: bind deployment.json's env contract to what actually ships.
+
+    The queue/replica/drain contract was already test-locked across renderers,
+    but the credential and DSN layer was not -- so it drifted per renderer, and
+    it is the layer an operator hits FIRST on scale-up. Compose and Swarm never
+    passed the sync group SETTINGS_ENCRYPTION_KEY (handler construction fails
+    closed without it), and raw Kubernetes declared none of the four DSN/secret
+    keys its Go pods need.
+    """
+    processes = {
+        process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
+    }
+    assert set(processes) == set(_MANIFEST_RENDERED_SERVICES), (
+        "a manifest process has no renderer mapping; this test would silently skip it"
+    )
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    kubernetes = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+
+    for name, service_name in _MANIFEST_RENDERED_SERVICES.items():
+        required = _manifest_required_env(processes[name])
+        assert required, f"{name} declares no env requirements to bind"
+
+        for renderer, services in (("Compose", compose), ("Swarm", swarm)):
+            rendered = set(_compose_environment(services[service_name]))
+            missing = required - rendered
+            assert not missing, (
+                f"{renderer} {service_name} is missing manifest-required env {sorted(missing)}"
+            )
+
+        deployment = kubernetes[f"dev-health-{service_name}"]
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        rendered = _kubernetes_container_env(container)
+        missing = required - rendered
+        assert not missing, (
+            f"Kubernetes dev-health-{service_name} is missing manifest-required env "
+            f"{sorted(missing)}"
+        )
+
+
+def test_every_renderer_gives_go_workers_a_native_protocol_clickhouse_uri() -> None:
+    """CHAOS-3872: CLICKHOUSE_URI must be the native port for Go, HTTP for Python."""
+    processes = {
+        process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
+    }
+    clickhouse_groups = {
+        name
+        for name, process in processes.items()
+        if "CLICKHOUSE_URI" in _manifest_required_env(process)
+    }
+    assert clickhouse_groups, "no manifest process requires ClickHouse"
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    for name in clickhouse_groups:
+        service_name = _MANIFEST_RENDERED_SERVICES[name]
+        for renderer, services in (("Compose", compose), ("Swarm", swarm)):
+            uri = _compose_environment(services[service_name])["CLICKHOUSE_URI"]
+            assert _CLICKHOUSE_NATIVE_PORT in uri, (
+                f"{renderer} {service_name} CLICKHOUSE_URI is not the native port: {uri}"
+            )
+            assert _CLICKHOUSE_HTTP_PORT not in uri
+
+    # Raw Kubernetes shares one Secret between Python and Go, so the Go pods
+    # take a dedicated Secret listed AFTER it in envFrom; Kubernetes resolves
+    # duplicate keys in favour of the later source.
+    secrets = {
+        document["metadata"]["name"]: document.get("stringData") or {}
+        for document in _load_yaml_documents(_KUBERNETES_SECRETS)
+        if document["kind"] == "Secret"
+    }
+    go_secret = secrets["dev-health-go-worker-secrets"]
+    assert _CLICKHOUSE_NATIVE_PORT in go_secret["CLICKHOUSE_URI"]
+    assert _CLICKHOUSE_HTTP_PORT in secrets["dev-health-secrets"]["CLICKHOUSE_URI"], (
+        "the shared Secret still serves Python, which needs the HTTP interface"
+    )
+
+    kubernetes = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+    for name in clickhouse_groups:
+        container = kubernetes[f"dev-health-{_MANIFEST_RENDERED_SERVICES[name]}"][
+            "spec"
+        ]["template"]["spec"]["containers"][0]
+        references = [
+            source["secretRef"]["name"]
+            for source in container.get("envFrom") or []
+            if "secretRef" in source
+        ]
+        assert "dev-health-go-worker-secrets" in references, (
+            f"dev-health-{_MANIFEST_RENDERED_SERVICES[name]} does not mount the Go secret"
+        )
+        assert references.index("dev-health-go-worker-secrets") > references.index(
+            "dev-health-secrets"
+        ), "the Go Secret must come last or the shared HTTP URI wins"
+
+    # Helm renders through templates, which are not parseable as YAML without
+    # the helm binary. Bind the wiring itself: the Go worker template must set
+    # CLICKHOUSE_URI as an explicit env entry (which beats envFrom) from the
+    # native-protocol helper, and that helper must use the native port.
+    go_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert 'include "dev-health.goWorkerClickhouseURI"' in go_template
+    assert "name: CLICKHOUSE_URI" in go_template
+    helpers = (_HELM_CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    native_helper = helpers.split('define "dev-health.goWorkerClickhouseURI"')[1]
+    assert "9000" in native_helper.split("{{- end }}")[0] or "9000" in native_helper

@@ -128,6 +128,30 @@ ClickHouse URI — auto-computed when clickhouse.enabled
 {{- end }}
 
 {{/*
+ClickHouse NATIVE-protocol URI for the Go workers.
+
+dev-health.clickhouseURI above renders the HTTP port (8123) because Python's
+clickhouse-connect speaks HTTP. The Go worker's client speaks the native wire
+protocol and eagerly Ping()s at construction, so it needs 9000 -- the same
+variable name resolving to a different port per runtime. Go worker containers
+therefore set CLICKHOUSE_URI as an explicit env entry, which takes precedence
+over the shared Secret they also mount via envFrom (CHAOS-3872).
+
+Resolution order: an explicit goWorkers.clickhouseURI wins, otherwise the
+bundled ClickHouse is addressed natively. With an EXTERNAL ClickHouse and no
+goWorkers.clickhouseURI set, this renders empty and the shared Secret's HTTP
+URI is inherited -- which will fail readiness, so the value is required in that
+configuration and the deployment contract test asserts it.
+*/}}
+{{- define "dev-health.goWorkerClickhouseURI" -}}
+{{- if .Values.goWorkers.clickhouseURI }}
+{{- .Values.goWorkers.clickhouseURI }}
+{{- else if .Values.clickhouse.enabled }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- end }}
+{{- end }}
+
+{{/*
 PostgreSQL URI — auto-computed when postgresql.enabled
 */}}
 {{- define "dev-health.postgresURI" -}}

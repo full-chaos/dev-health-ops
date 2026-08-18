@@ -156,6 +156,12 @@ func (monitor *queueHealthMonitor) report(
 	// worker's capacity was already committed. It is the earliest signal that a
 	// queue is about to build a backlog, so it is reported independently of
 	// depth.
+	//
+	// This is a PER-PROCESS ratio -- this client's running jobs over its own
+	// MaxWorkers -- so the log line means "this replica is nearly full", which
+	// is the actionable statement a single process can make. Fleet utilization
+	// is the average across replicas, which is what the GoWorkerExecutionSaturated
+	// alert and the HPA targets compute (CHAOS-3867).
 	for _, capacity := range snapshot.QueueCapacities {
 		if capacity.Saturation <= queueSaturationWarnRatio {
 			continue

@@ -41,6 +41,28 @@ func oracleJiraIncidentCases() []oracleCase {
 				"priority": map[string]any{"name": "Highest"},
 			}},
 		}},
+		// CHAOS-3869: the shapes Jira Cloud REST actually returns -- a numeric
+		// "+0000" offset with millisecond precision, which strict RFC3339
+		// parsing rejected. Every other case here is Z-suffixed, which is why
+		// the oracle could not catch it either.
+		{ID: "jira_cloud_numeric_offset", Input: map[string]any{
+			"cloud_id": "cloud-123", "base_url": "https://acme.atlassian.net",
+			"raw_issue": map[string]any{"id": "10003", "key": "JSM-7", "fields": map[string]any{
+				"summary": "Checkout latency", "created": "2026-07-22T10:00:00.000+0000",
+				"updated": "2026-07-22T10:05:00.000+0000", "resolutiondate": "2026-07-22T10:30:00.000+0000",
+				"status":   map[string]any{"name": "Done", "statusCategory": map[string]any{"key": "done"}},
+				"priority": map[string]any{"name": "High"},
+			}},
+		}},
+		{ID: "jira_cloud_non_utc_offset", Input: map[string]any{
+			"cloud_id": "cloud-123", "base_url": "https://acme.atlassian.net",
+			"raw_issue": map[string]any{"id": "10004", "key": "JSM-8", "fields": map[string]any{
+				"summary": "Region failover", "created": "2026-07-22T12:00:00.000+0200",
+				"updated": "2026-07-22T12:05:00.000+0200", "resolutiondate": nil,
+				"status":   map[string]any{"name": "Investigating", "statusCategory": map[string]any{"key": "indeterminate"}},
+				"priority": nil,
+			}},
+		}},
 		{ID: "resolved_without_priority", Input: map[string]any{
 			"cloud_id": "CLOUD-XYZ", "base_url": "https://team.atlassian.net/",
 			"raw_issue": map[string]any{"id": "10002", "key": "OPS-9", "fields": map[string]any{

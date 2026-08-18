@@ -478,11 +478,18 @@ func normalizeJiraIncident(
 }
 
 func parseJiraIncidentTime(raw string) (time.Time, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, providerfoundation.ErrNormalizationInvalid
+	// Shares normalizeJiraOffset with the work-items path: Jira Cloud returns
+	// "+0000" offsets that strict RFC3339 parsing rejects, which failed every
+	// real incidents unit with ErrNormalizationInvalid -- a category that is
+	// not deterministically terminal, so it burned all 5 attempts and
+	// terminalized the whole dataset (CHAOS-3869).
+	normalized := normalizeJiraOffset(strings.TrimSpace(raw))
+	for _, layout := range jiraTimestampLayouts {
+		if parsed, err := time.Parse(layout, normalized); err == nil {
+			return parsed.UTC().Truncate(time.Microsecond), nil
+		}
 	}
-	return parsed.UTC().Truncate(time.Microsecond), nil
+	return time.Time{}, providerfoundation.ErrNormalizationInvalid
 }
 
 type jiraOperationalField struct {

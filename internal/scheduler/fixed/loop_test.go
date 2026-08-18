@@ -1,8 +1,12 @@
 package fixed
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -276,5 +280,65 @@ func TestStartDoesNotBlockOnTheDurationOfTheFirstWindow(t *testing.T) {
 	})
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() = %v", err)
+	}
+}
+
+// A failing window is only actionable if it names WHICH schedule failed and
+// why. Before CHAOS-3903 this package had no logger at all: five setFailed()
+// paths and zero output, so a loop could fail every 15s window indefinitely
+// while emitting nothing, and the underlying cause (an organization row the
+// job contract rejects) was reachable only by rebuilding with temporary
+// traces.
+func TestLoopLogsTheScheduleAndReasonForEveryFailedWindow(t *testing.T) {
+	t.Parallel()
+	stepper := &scriptedStepper{failing: true, schedules: []Schedule{heartbeatSchedule(t)}}
+	var logs bytes.Buffer
+	clock := &fixedTestClock{now: mustTime(t, "2026-07-24T00:00:00Z")}
+	loop, err := newLoop(stepper, LoopConfig{
+		PollInterval: minLoopPollInterval,
+		StepTimeout:  time.Second,
+		MaxBackoff:   2 * minLoopPollInterval,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatalf("newLoop() = %v", err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err == nil {
+		t.Fatal("step() = nil, want the scripted window failure")
+	}
+
+	var record struct {
+		Message  string `json:"msg"`
+		Schedule string `json:"schedule"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil {
+		t.Fatalf("decode log record: %v (raw %q)", err, logs.String())
+	}
+	if record.Message != "fixed schedule failed" {
+		t.Errorf("msg = %q", record.Message)
+	}
+	if record.Schedule != stepper.schedules[0].ID {
+		t.Errorf("schedule = %q, want %q", record.Schedule, stepper.schedules[0].ID)
+	}
+	// The reason itself must survive, not just the fact of failure.
+	if !strings.Contains(record.Error, "window failed") {
+		t.Errorf("error = %q, want the underlying window reason", record.Error)
+	}
+}
+
+// The mirror image: a loop given no Logger must not panic and must not fall
+// back to slog.Default(), so an embedder never gets scheduler output on a
+// logger it did not choose.
+func TestLoopWithoutALoggerStaysSilentAndDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	stepper := &scriptedStepper{failing: true, schedules: []Schedule{heartbeatSchedule(t)}}
+	loop, clock := newFixedTestLoop(t, stepper)
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.step(context.Background(), clock.Now()); err == nil {
+		t.Fatal("step() = nil, want the scripted window failure")
 	}
 }

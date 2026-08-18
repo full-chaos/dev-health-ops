@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -68,7 +69,11 @@ func (publisher *PostgresPublisher) PublishDispatchTx(
 	}
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
-			return ErrInvalidState
+			// Keep BOTH sentinels reachable, matching the remaining-metrics
+			// publisher: callers classify on ErrInvalidState, and the outbox
+			// reason underneath names which rule rejected the envelope
+			// (CHAOS-3903).
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
 		return ErrUnavailable
 	}

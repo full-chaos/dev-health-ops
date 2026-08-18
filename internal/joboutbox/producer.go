@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -100,25 +101,34 @@ func (producer *Producer) publish(
 		return ErrInvalidConfiguration
 	}
 	if prerequisiteCompletionKey != "" && !validCompletionKey(prerequisiteCompletionKey) {
-		return ErrContractRejected
+		return fmt.Errorf("%w: prerequisite_completion_key_invalid", ErrContractRejected)
 	}
 	descriptor, ok := producer.registry.Descriptor(kind)
 	if !ok {
-		return ErrContractRejected
+		return fmt.Errorf("%w: kind_not_registered", ErrContractRejected)
 	}
 	if !descriptorAllowsPublish(descriptor, deferred) {
-		return ErrPolicyRejected
+		return fmt.Errorf("%w: publish_not_permitted_for_route", ErrPolicyRejected)
 	}
 	if envelope.ContractVersion != descriptor.CurrentVersion {
-		return ErrContractRejected
+		return fmt.Errorf("%w: contract_version_mismatch", ErrContractRejected)
 	}
 	encoded, err := jobcontract.MarshalCanonical(envelope)
 	if err != nil {
-		return ErrContractRejected
+		// jobcontract validation messages name the offending FIELD and its rule
+		// ("organization_id must be a lowercase UUID"), never the value, so
+		// they carry no tenant data or credential material and are safe to
+		// propagate. Collapsing them to a bare sentinel is what made a
+		// non-conformant organization row cost four rebuild-and-read cycles to
+		// find (CHAOS-3903).
+		return fmt.Errorf("%w: envelope_marshal_rejected: %w", ErrContractRejected, err)
 	}
 	decoded, err := jobcontract.Decode(kind, encoded)
-	if err != nil || decoded.IdempotencyKey != envelope.IdempotencyKey {
-		return ErrContractRejected
+	if err != nil {
+		return fmt.Errorf("%w: envelope_decode_rejected: %w", ErrContractRejected, err)
+	}
+	if decoded.IdempotencyKey != envelope.IdempotencyKey {
+		return fmt.Errorf("%w: idempotency_key_not_round_trippable", ErrContractRejected)
 	}
 	hash := sha256.Sum256(encoded)
 	payloadHash := "sha256:" + hex.EncodeToString(hash[:])
@@ -157,7 +167,7 @@ WHERE dedupe_key = $1`, envelope.IdempotencyKey).
 	}
 	if existingKind != kind || existingVersion != envelope.ContractVersion ||
 		existingHash != payloadHash || existingPrerequisite != prerequisiteCompletionKey {
-		return ErrContractRejected
+		return fmt.Errorf("%w: dedupe_key_conflicts_with_existing_row", ErrContractRejected)
 	}
 	return nil
 }

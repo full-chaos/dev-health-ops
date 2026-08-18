@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -32,8 +33,15 @@ func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *t
 	if schedulerSpec.Service != "dev-health-scheduler" {
 		t.Fatalf("service = %q", schedulerSpec.Service)
 	}
-	if schedulerSpec.ConfigureDependencies == nil {
+	// The scheduler configures through the LOGGER-AWARE hook so the fixed
+	// maintenance loop can name the schedules that fail a window (CHAOS-3903).
+	// shell.Main rejects a spec that sets BOTH hooks with
+	// "ambiguous_dependency_configuration", so this asserts exactly one.
+	if schedulerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("scheduler dependency configuration is not wired")
+	}
+	if schedulerSpec.ConfigureDependencies != nil {
+		t.Fatal("both dependency hooks are set; shell.Main refuses an ambiguous spec")
 	}
 
 	// Failing closed means LIVE AND UNREADY, not exiting. This previously
@@ -45,7 +53,7 @@ func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *t
 	// (postgres.ConfigurationRejected), so it is reported through readiness an
 	// operator can scrape rather than a crash loop that names nothing.
 	registry := health.NewRegistry(100 * time.Millisecond)
-	components, err := configureSchedulerDependencies(context.Background(), config.Config{}, registry)
+	components, err := configureSchedulerDependencies(context.Background(), config.Config{}, registry, nil)
 	if err != nil || len(components) != 0 {
 		t.Fatalf("unconfigured activated scheduler components=%v err=%v", components, err)
 	}
@@ -105,7 +113,7 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 		config.Config{},
 		registry,
 		schedulerActivation{goOwnsMarkers: true},
-		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
+		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry, ...*slog.Logger) (lifecycle.Component, error) {
 			called = true
 			return schedulerTestComponent{}, nil
 		}},
@@ -118,7 +126,7 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 	_, err = configureSchedulerDependenciesWithSources(
 		context.Background(), config.Config{}, registry,
 		schedulerActivation{},
-		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
+		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry, ...*slog.Logger) (lifecycle.Component, error) {
 			t.Fatal("activation without goOwnsMarkers invoked the loop factory")
 			return nil, nil
 		}},
@@ -136,7 +144,7 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 	_, err = configureSchedulerDependenciesWithSources(
 		context.Background(), config.Config{}, health.NewRegistry(time.Second),
 		schedulerActivation{goOwnsMarkers: true},
-		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
+		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry, ...*slog.Logger) (lifecycle.Component, error) {
 			return nil, errors.New("private factory failure")
 		}},
 	)

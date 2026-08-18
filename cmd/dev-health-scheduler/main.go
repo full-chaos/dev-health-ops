@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -13,8 +14,8 @@ import (
 )
 
 var schedulerSpec = shell.Spec{
-	Service:               "dev-health-scheduler",
-	ConfigureDependencies: configureSchedulerDependencies,
+	Service:                         "dev-health-scheduler",
+	ConfigureDependenciesWithLogger: configureSchedulerDependencies,
 }
 
 // schedulerOwnership is intentionally fixed in the binary. Do not make it an
@@ -83,7 +84,7 @@ type schedulerActivation struct {
 var checkedInSchedulerActivation = schedulerActivation{goOwnsMarkers: true}
 
 type schedulerDependencySources struct {
-	buildLoop func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error)
+	buildLoop func(context.Context, config.Config, *health.Registry, ...*slog.Logger) (lifecycle.Component, error)
 }
 
 var productionSchedulerDependencySources = schedulerDependencySources{
@@ -98,6 +99,7 @@ func configureSchedulerDependencies(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
 	return configureSchedulerDependenciesWithSources(
 		ctx,
@@ -105,6 +107,7 @@ func configureSchedulerDependencies(
 		registry,
 		checkedInSchedulerActivation,
 		productionSchedulerDependencySources,
+		logger,
 	)
 }
 
@@ -114,6 +117,7 @@ func configureSchedulerDependenciesWithSources(
 	registry *health.Registry,
 	activation schedulerActivation,
 	sources schedulerDependencySources,
+	loggers ...*slog.Logger,
 ) ([]lifecycle.Component, error) {
 	if err := schedulerOwnership.Validate(); err != nil {
 		return nil, err
@@ -137,7 +141,7 @@ func configureSchedulerDependenciesWithSources(
 	if sources.buildLoop == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
-	loop, err := sources.buildLoop(ctx, cfg, registry)
+	loop, err := sources.buildLoop(ctx, cfg, registry, loggers...)
 	if errors.Is(err, errSchedulerDatabaseUnconfigured) {
 		// Live, unready, no components: the readiness names are already
 		// registered unavailable by the loop factory.

@@ -36,10 +36,64 @@ func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *t
 		t.Fatal("scheduler dependency configuration is not wired")
 	}
 
+	// Failing closed means LIVE AND UNREADY, not exiting. This previously
+	// asserted errSchedulerActivationUnavailable, which is what made an
+	// unconfigured scheduler container exit before it could publish its
+	// operator port -- ci/check_go_containers.sh's smoke contract requires the
+	// process to stay up, serve /healthz 200 and /readyz 503, and name the
+	// checks that failed. An absent DSN is a DECLARED configuration rejection
+	// (postgres.ConfigurationRejected), so it is reported through readiness an
+	// operator can scrape rather than a crash loop that names nothing.
 	registry := health.NewRegistry(100 * time.Millisecond)
 	components, err := configureSchedulerDependencies(context.Background(), config.Config{}, registry)
-	if !errors.Is(err, errSchedulerActivationUnavailable) || len(components) != 0 {
+	if err != nil || len(components) != 0 {
 		t.Fatalf("unconfigured activated scheduler components=%v err=%v", components, err)
+	}
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := registry.Readiness(context.Background())
+	if status.Ready {
+		t.Fatal("an unconfigured scheduler reported ready")
+	}
+	// Exactly the names ci/check_go_containers.sh greps for on this target,
+	// plus coordinator_postgres, so the readiness surface does not change shape
+	// depending on WHY the loop is not running.
+	for _, name := range []string{
+		"domain_postgres", "queue_postgres", "coordinator_postgres",
+		"river_schema", "scheduler_loop",
+	} {
+		if !slices.Contains(status.Failed, name) {
+			t.Fatalf("unconfigured readiness omitted %q: %#v", name, status)
+		}
+	}
+}
+
+// TestSchedulerCrashLoopsOnAnOperationalDatabaseFailure is the other half of
+// the contract the test above pins. A declared configuration rejection stays
+// live; anything operational -- an unreachable host, refused credentials, an
+// unparseable DSN -- must still terminate the process rather than idle as an
+// alive-but-unready zombie (CHAOS-3873).
+func TestSchedulerCrashLoopsOnAnOperationalDatabaseFailure(t *testing.T) {
+	registry := health.NewRegistry(100 * time.Millisecond)
+	_, err := buildSchedulerLoopWithSources(
+		context.Background(), config.Config{}, registry,
+		schedulerRuntimeSources{
+			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
+				return nil, errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")
+			},
+			newRepository:  productionSchedulerRuntimeSources.newRepository,
+			newCoordinator: productionSchedulerRuntimeSources.newCoordinator,
+			newLoop:        productionSchedulerRuntimeSources.newLoop,
+			newFixedLoop:   productionSchedulerRuntimeSources.newFixedLoop,
+			newOccurrences: productionSchedulerRuntimeSources.newOccurrences,
+		},
+	)
+	if errors.Is(err, errSchedulerDatabaseUnconfigured) {
+		t.Fatal("an operational database failure was treated as a configuration rejection")
+	}
+	if !errors.Is(err, errSchedulerActivationUnavailable) {
+		t.Fatalf("operational failure error = %v", err)
 	}
 }
 

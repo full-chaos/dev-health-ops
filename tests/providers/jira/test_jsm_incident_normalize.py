@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
@@ -299,3 +299,67 @@ def test_normalize_rejects_malformed_issue() -> None:
 
     with pytest.raises(JsmPayloadError, match="id"):
         producer.normalize([{"key": "OPS-7", "fields": {}}])
+
+
+def test_normalize_pins_non_utc_jira_offsets_to_utc() -> None:
+    """Jira Cloud returns the reporter's local offset, not always ``+0000``.
+
+    Left on its source offset, a ``+0200`` timestamp aborts the batch:
+    ``operational_ordering_codec.canonical_datetime`` requires a zero-offset
+    datetime and raises ``OperationalOrderingEncodingError`` on anything else,
+    so one non-UTC incident takes down every conflict key in the batch. It also
+    diverged from the Go incidents route, which has always normalized
+    (``parseJiraIncidentTime`` -> ``parsed.UTC()``).
+    """
+
+    issue = _issue()
+    issue["fields"] = {
+        **issue["fields"],  # type: ignore[dict-item]
+        "created": "2026-07-20T11:00:00.000+0200",
+        "updated": "2026-07-20T12:00:00.000+0200",
+        "resolutiondate": "2026-07-20T13:00:00.000+0200",
+    }
+    producer = JsmIncidentProducer(
+        client=_Client(),
+        org_id="org-a",
+        provider_instance_id="cloud-a",
+        base_url="https://example.atlassian.net",
+        observed_at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC),
+    )
+
+    batch = producer.normalize([issue])
+    incident = batch.incidents[0]
+
+    # Same instants as the +0000 fixture in _issue(), which is the point: the
+    # offset is dropped by conversion, never by truncation.
+    assert incident.source_event_at == datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
+    assert incident.source_version_at == datetime(2026, 7, 20, 10, 0, tzinfo=UTC)
+    assert incident.source_version_at.utcoffset() == timedelta(0)
+    # __post_init__ builds these through canonical_datetime, which is the call
+    # that raised before the fix -- a populated conflict key is the proof the
+    # whole batch survived, not just that the field converted.
+    assert incident.source_conflict_key
+    assert incident.source_revision
+
+
+def test_normalize_rejects_a_naive_jira_timestamp() -> None:
+    """A zone-less timestamp is rejected, not assumed to be UTC.
+
+    Go's layouts all require an explicit offset, so guessing one here would
+    move an incident by hours in Python only, with no error on either side.
+    """
+
+    issue = _issue()
+    issue["fields"] = {
+        **issue["fields"],  # type: ignore[dict-item]
+        "updated": "2026-07-20T10:00:00.000",
+    }
+    producer = JsmIncidentProducer(
+        client=_Client(),
+        org_id="org-a",
+        provider_instance_id="cloud-a",
+        base_url="https://example.atlassian.net",
+    )
+
+    with pytest.raises(JsmPayloadError):
+        producer.normalize([issue])

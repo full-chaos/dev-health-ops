@@ -98,6 +98,13 @@ type ClaimRequest struct {
 type Completion struct {
 	Result   Result
 	Category ErrorCategory
+	// Terminal separates the two outcomes that both arrive as ResultCancel:
+	// an explicit domain-terminal decision (validation failure, permanent
+	// error, ClaimTerminal readback), which must never run again, from a
+	// process drain or budget-lease loss, which must stay retryable. Without
+	// it the idempotency store stamped every cancellation "terminal" and the
+	// River retry was auto-cancelled forever (CHAOS-3865).
+	Terminal bool
 }
 
 type IdempotencyClaim interface {
@@ -283,7 +290,9 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 			returned = &safeError{category: CategoryPanic}
 			observe(func() { adapter.observer.JobPanicked(parent, labels) })
 			if claim != nil && claim.State() == ClaimProceed {
-				if err := finishClaim(parent, claim, Completion{Result: choice.result, Category: choice.category}); err != nil {
+				if err := finishClaim(parent, claim, Completion{
+					Result: choice.result, Category: choice.category, Terminal: choice.cancel,
+				}); err != nil {
 					choice = retryDecision(CategoryIdempotency, attempt, adapter.descriptor.MaxAttempts)
 					returned = &safeError{category: CategoryIdempotency}
 				}
@@ -408,14 +417,18 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 		),
 	}
 	handlerErr := adapter.handler.Work(ctx, execution)
-	if handlerErr == nil && ctx.Err() != nil {
-		handlerErr = ctx.Err()
-	}
+	// A handler that returned success completed its work; a drain or lease
+	// loss that lands between that return and this line must not rewrite the
+	// outcome. Promoting ctx.Err() here used to turn a succeeded run into a
+	// cancellation -- and, before the runStatus fix below, into a permanently
+	// terminal one (CHAOS-3865).
 	choice = classify(ctx, handlerErr, job.Attempt, adapter.descriptor.MaxAttempts)
 	if choice.category == CategoryTerminalDomain {
 		observe(func() { adapter.observer.DomainMismatch(ctx, envelope.Domain.Type) })
 	}
-	if err := finishClaim(ctx, claim, Completion{Result: choice.result, Category: choice.category}); err != nil {
+	if err := finishClaim(ctx, claim, Completion{
+		Result: choice.result, Category: choice.category, Terminal: choice.cancel,
+	}); err != nil {
 		choice = classify(ctx, mark(CategoryIdempotency, err, false), job.Attempt, adapter.descriptor.MaxAttempts)
 		return choice, envelope, err
 	}

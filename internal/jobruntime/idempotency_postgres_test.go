@@ -40,17 +40,35 @@ func TestPostgresIdempotencySupportsWorkgraphFamilyPolicies(t *testing.T) {
 
 func TestIdempotencyCompletionMapsOnlyExplicitRuntimeOutcomes(t *testing.T) {
 	t.Parallel()
-	tests := map[Result]string{
-		ResultSuccess:   "succeeded",
-		ResultDuplicate: "succeeded",
-		ResultRetry:     "retryable",
-		ResultDiscard:   "terminal",
-		ResultCancel:    "terminal",
+	tests := []struct {
+		name       string
+		completion Completion
+		want       string
+	}{
+		{name: "success", completion: Completion{Result: ResultSuccess}, want: "succeeded"},
+		{name: "duplicate", completion: Completion{Result: ResultDuplicate}, want: "succeeded"},
+		{name: "retry", completion: Completion{Result: ResultRetry}, want: "retryable"},
+		{name: "discard", completion: Completion{Result: ResultDiscard}, want: "terminal"},
+		// An explicit domain-terminal decision must never run again.
+		{
+			name:       "cancel/domain-terminal",
+			completion: Completion{Result: ResultCancel, Category: CategoryTerminalDomain, Terminal: true},
+			want:       "terminal",
+		},
+		// A process drain or budget-lease loss also arrives as ResultCancel,
+		// and River retries it: stamping it terminal made Begin return
+		// ClaimTerminal on the retry and the adapter cancelled it forever
+		// (CHAOS-3865).
+		{
+			name:       "cancel/drain",
+			completion: Completion{Result: ResultCancel, Category: CategoryCancelled},
+			want:       "retryable",
+		},
 	}
-	for result, want := range tests {
-		got, err := runStatus(Completion{Result: result})
-		if err != nil || got != want {
-			t.Fatalf("runStatus(%q) = %q, %v; want %q", result, got, err, want)
+	for _, test := range tests {
+		got, err := runStatus(test.completion)
+		if err != nil || got != test.want {
+			t.Fatalf("runStatus(%s) = %q, %v; want %q", test.name, got, err, test.want)
 		}
 	}
 	if _, err := runStatus(Completion{}); err == nil {

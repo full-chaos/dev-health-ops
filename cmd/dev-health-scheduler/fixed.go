@@ -132,12 +132,12 @@ var errFixedScheduleUnbuilt = errors.New("declared fixed schedule has no built p
 // maps onto the schedule table with matching cadence, timezone and catch-up
 // policy, an ownership property, and never constructs a producer at all.
 //
-// This is currently SUBSUMED by the goOwnsMarkers gate: the process already
-// registers unavailable in main.go because checkedInSchedulerActivation
-// .goOwnsMarkers is false, so on today's tree this check never decides anything.
-// It is deliberately not dead code. It becomes load-bearing at the exact moment
-// someone flips that flag, which is the moment a paper-owned schedule must stop
-// the process rather than quietly never run.
+// This check is LOAD-BEARING on today's tree. It was previously subsumed by the
+// goOwnsMarkers gate -- the process registered unavailable in main.go because
+// checkedInSchedulerActivation.goOwnsMarkers was false, so the check never
+// decided anything -- but main.go now sets that flag TRUE. The moment it was
+// flipped is exactly the moment a paper-owned schedule must stop the process
+// rather than quietly never run, which is what this check does.
 func refuseUnbuiltFixedSchedules(
 	producers *schedulerfixed.ProducerSet,
 	schedules []schedulerfixed.Schedule,

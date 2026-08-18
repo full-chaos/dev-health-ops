@@ -447,76 +447,13 @@ func configureWorkerDependenciesWithSources(
 		components = append(components, monitor)
 	}
 	workers := river.NewWorkers()
-	var active workerFamily
-	build := func(family workerFamily, err error) error {
-		if err != nil {
-			_ = closeWorkerFamily(active)
-			return err
-		}
-		combined, composeErr := composeWorkerFamily(active, family)
-		if composeErr != nil {
-			_ = closeWorkerFamily(family)
-			_ = closeWorkerFamily(active)
-			return composeErr
-		}
-		active = combined
-		return nil
-	}
-	for _, builder := range []workerFamilyBuilder{
-		sources.buildOperational,
-		sources.buildDaily,
-		sources.buildWorkgraph,
-		sources.buildSyncCoordinator,
-	} {
-		if builder == nil {
-			continue
-		}
-		if err := build(builder(
-			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger, workers,
-		)); err != nil {
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
-	}
-	for _, builder := range []func(
-		context.Context,
-		config.Config,
-		workerDatabase,
-		*jobruntime.Registry,
-		jobruntime.Observer,
-		*slog.Logger,
-		*river.Workers,
-	) (workerFamily, error){
-		sources.buildReports,
-		sources.buildProviderSync,
-	} {
-		if builder == nil {
-			continue
-		}
-		if err := build(builder(
-			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
-			dependencies.metrics, logger, workers,
-		)); err != nil {
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
-	}
-	// Rescue coverage is registered exactly once, after every selected family
-	// has composed, against the union of all owned kinds. Registering it per
-	// family (the previous shape) made any multi-family selection unbootable:
-	// the first family registered rescue-only workers for the kinds it did not
-	// own, and the next family's real worker for one of those kinds collided on
-	// the shared river.Workers (CHAOS-3864). The shipped "heavy" group
-	// (investment, metrics, reports, workgraph) hit this on every start.
-	// A registry that failed to load is already reported by the job_registry
-	// readiness check; surfacing it here too would turn an attributable
-	// not-ready process into an opaque construction failure.
-	if dependencies.runtimeRegistry != nil {
-		if err := registerRescueCoverage(workers, dependencies.runtimeRegistry, active.handlers, active.ownedKinds...); err != nil {
-			_ = closeWorkerFamily(active)
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
+	active, composeErr := composeSelectedWorkerFamilies(
+		ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
+		dependencies.metrics, logger, workers, sources,
+	)
+	if composeErr != nil {
+		dependencies.close()
+		return nil, errWorkerDependencyUnavailable
 	}
 	if active.metricsSource != nil {
 		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
@@ -584,6 +521,86 @@ func configureWorkerDependenciesWithSources(
 		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,
 	})
 	return components, nil
+}
+
+// composeSelectedWorkerFamilies runs every selected family builder against one
+// shared river.Workers and then registers rescue coverage exactly once, over
+// the union of all owned kinds.
+//
+// The single-registration ordering is the whole point (CHAOS-3864): when each
+// family registered its own rescue coverage, the first family registered
+// rescue-only workers for every kind it did not own, and the next family's real
+// worker for one of those kinds hit River's duplicate-kind rejection -- so any
+// selection spanning two families, including the shipped "heavy" group, exited
+// at startup. Production and the multi-family boot test share this function so
+// the test cannot drift from the composition order it is proving.
+func composeSelectedWorkerFamilies(
+	ctx context.Context,
+	cfg config.Config,
+	database workerDatabase,
+	runtimeRegistry *jobruntime.Registry,
+	observer jobruntime.Observer,
+	logger *slog.Logger,
+	workers *river.Workers,
+	sources workerDependencySources,
+) (workerFamily, error) {
+	var active workerFamily
+	build := func(family workerFamily, err error) error {
+		if err != nil {
+			_ = closeWorkerFamily(active)
+			return err
+		}
+		combined, composeErr := composeWorkerFamily(active, family)
+		if composeErr != nil {
+			_ = closeWorkerFamily(family)
+			_ = closeWorkerFamily(active)
+			return composeErr
+		}
+		active = combined
+		return nil
+	}
+	for _, builder := range []workerFamilyBuilder{
+		sources.buildOperational,
+		sources.buildDaily,
+		sources.buildWorkgraph,
+		sources.buildSyncCoordinator,
+	} {
+		if builder == nil {
+			continue
+		}
+		if err := build(builder(cfg, database, runtimeRegistry, observer, logger, workers)); err != nil {
+			return workerFamily{}, err
+		}
+	}
+	for _, builder := range []func(
+		context.Context,
+		config.Config,
+		workerDatabase,
+		*jobruntime.Registry,
+		jobruntime.Observer,
+		*slog.Logger,
+		*river.Workers,
+	) (workerFamily, error){
+		sources.buildReports,
+		sources.buildProviderSync,
+	} {
+		if builder == nil {
+			continue
+		}
+		if err := build(builder(ctx, cfg, database, runtimeRegistry, observer, logger, workers)); err != nil {
+			return workerFamily{}, err
+		}
+	}
+	// A registry that failed to load is already reported by the job_registry
+	// readiness check; failing here too would turn an attributable not-ready
+	// process into an opaque construction failure.
+	if runtimeRegistry != nil {
+		if err := registerRescueCoverage(workers, runtimeRegistry, active.handlers, active.ownedKinds...); err != nil {
+			_ = closeWorkerFamily(active)
+			return workerFamily{}, err
+		}
+	}
+	return active, nil
 }
 
 func formatQueueBudgets(budgets []jobruntime.QueueBudget) string {

@@ -74,9 +74,47 @@ const ProviderDatasetUnavailableCategory = "provider_dataset_unavailable"
 // destinations this lane adds. That is intended -- the error means the same
 // thing wherever it comes from -- but it does change the recorded category and
 // the retry count for existing adapters that previously exhausted instead.
+// Categories matching Python's vocabulary in
+// src/dev_health_ops/workers/sync_units.py (_PROVIDER_ERROR_PATTERNS and
+// _classify_error), so a unit that fails for the same reason in either runtime
+// reports the same category.
+const (
+	// AuthCategory covers 401 and non-rate-limit 403.
+	AuthCategory = "auth"
+	// NotFoundCategory covers 404.
+	NotFoundCategory = "not_found"
+	// PaginationIncompleteCategory covers a fail-closed pagination or row-cap
+	// refusal -- Python's PaginationException category.
+	PaginationIncompleteCategory = "pagination_incomplete"
+)
+
 func deterministicTerminalCategory(err error) (string, bool) {
 	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
 		return ProviderDatasetUnavailableCategory, true
+	}
+	// A fail-closed pagination or row-cap refusal is deterministic given the
+	// provider's current state: a repo with more in-window rows than the cap
+	// returns the same refusal on every attempt. Retrying it re-fetched up to
+	// 100 list pages and 10k detail GETs on each of 5 attempts, then again on
+	// every scheduled tick, and finally reported the generic exhaustion
+	// category. The refusal itself is correct; the repetition is not
+	// (CHAOS-3871).
+	if errors.Is(err, providersync.ErrPaginationCapExceeded) {
+		return PaginationIncompleteCategory, true
+	}
+	// Authentication and not-found are already non-retryable at the HTTP layer
+	// (providerfoundation.ProviderError.Retryable), so the unit handler was
+	// spending four more full executions against a dead credential or a
+	// deleted repository before collapsing the precise cause into
+	// provider_unit_exhausted. Python fails these once, with the category.
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.Class {
+		case providerfoundation.ErrorAuthentication:
+			return AuthCategory, true
+		case providerfoundation.ErrorNotFound:
+			return NotFoundCategory, true
+		}
 	}
 	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
 		return RepositoryIdentityCategory, true

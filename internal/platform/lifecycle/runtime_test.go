@@ -3,12 +3,52 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// capturingHandler records emitted slog.Record values so tests can assert on
+// structured attributes directly, without going through a text/JSON encoder.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, record.Clone())
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *capturingHandler) find(message string) (slog.Record, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, record := range h.records {
+		if record.Message == message {
+			return record, true
+		}
+	}
+	return slog.Record{}, false
+}
+
+func attrMap(record slog.Record) map[string]any {
+	attrs := make(map[string]any, record.NumAttrs())
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Any()
+		return true
+	})
+	return attrs
+}
 
 type recordingComponent struct {
 	name        string
@@ -157,6 +197,50 @@ func TestRuntimeStopsAfterAsynchronousComponentFailure(t *testing.T) {
 	}
 	if !reflect.DeepEqual(events, []string{"start:async", "stop:async"}) {
 		t.Fatalf("unexpected events: %v", events)
+	}
+}
+
+// TestRuntimeComponentFailureLogsComponentNameAndCause pins CHAOS-3906: the
+// "runtime component failed" log line must carry which component failed (a
+// bounded, safe identifier) and the underlying cause, not just a category.
+func TestRuntimeComponentFailureLogsComponentNameAndCause(t *testing.T) {
+	t.Parallel()
+
+	handler := &capturingHandler{}
+	logger := slog.New(handler)
+	failures := make(chan error, 1)
+	component := &recordingComponent{
+		name:     "async",
+		record:   func(string) {},
+		failures: failures,
+	}
+	runtime, err := New(Options{Logger: logger, ShutdownTimeout: time.Second, Components: []Component{component}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(context.Background()) }()
+	cause := errors.New("serve failed")
+	failures <- cause
+	if err := <-done; err == nil {
+		t.Fatal("expected asynchronous failure")
+	}
+
+	record, ok := handler.find("runtime component failed")
+	if !ok {
+		t.Fatalf("did not log a runtime component failure: %+v", handler.records)
+	}
+	attrs := attrMap(record)
+	if got := attrs["error_category"]; got != "component_failure" {
+		t.Fatalf("error_category = %v, want component_failure", got)
+	}
+	if got := attrs["component"]; got != "async" {
+		t.Fatalf("component = %v, want %q", got, "async")
+	}
+	loggedErr, ok := attrs["error"].(error)
+	if !ok || !errors.Is(loggedErr, cause) {
+		t.Fatalf("error attribute = %#v, want to wrap %v", attrs["error"], cause)
 	}
 }
 

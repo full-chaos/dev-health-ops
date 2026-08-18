@@ -259,12 +259,17 @@ func Execute(
 	attrs := append(cfg.SafeAttrs(), build.Attrs()...)
 	logger.LogAttrs(ctx, slog.LevelInfo, "service starting", attrs...)
 	if err := runtime.Run(ctx); err != nil {
-		logger.ErrorContext(
-			context.Background(),
-			"service stopped with error",
-			"error_category",
-			"runtime_failure",
-		)
+		// Mirrors the configure path above: a reason code, when a component
+		// supplies one, is a bounded compile-time constant safe to log
+		// as-is, and the error itself is attached as a normal attribute
+		// value (not pre-formatted into the message) so the logging
+		// handler's redacting ReplaceAttr still processes it (CHAOS-3873).
+		attributes := []any{"error_category", "runtime_failure", "error", err}
+		var coded dependencyReason
+		if errors.As(err, &coded) {
+			attributes = append(attributes, "reason", coded.DependencyReason())
+		}
+		logger.ErrorContext(context.Background(), "service stopped with error", attributes...)
 		return 1
 	}
 	logger.InfoContext(context.Background(), "service stopped")

@@ -106,7 +106,7 @@ func TestMultiReplicaFleetSurvivesDatabaseOutage(t *testing.T) {
 	}
 
 	bridge.release()
-	waitForCompleted(t, ctx, admin, firstJob.Job.ID, secondJob.Job.ID)
+	waitForCompletedAfterOutage(t, ctx, admin, firstJob.Job.ID, secondJob.Job.ID)
 
 	// Zero terminalized jobs: no domain run may be stamped terminal, and no
 	// River job may have been cancelled or discarded.
@@ -206,6 +206,62 @@ func (cutover *databaseCutover) serve() {
 		go func() { _, _ = io.Copy(upstream, client); _ = upstream.Close() }()
 		go func() { _, _ = io.Copy(client, upstream); _ = client.Close() }()
 	}
+}
+
+// completerRetryCeiling bounds how long River's completer can take to land a
+// completion whose first attempt failed, which is exactly what a mid-flight
+// database outage produces. From river@v0.40.0
+// internal/jobcompleter/job_completer.go, above `const numRetries = 3`:
+//
+//	As configured, total time asleep from initial attempt is ~7 seconds
+//	(1 + 2 + 4) (not including jitter). However, if each attempt times out,
+//	that's up to ~37 seconds (7 seconds + 3 * 10 seconds).
+//
+// The shared waitForCompleted uses 30s, which is fine for the non-outage
+// multi-replica test where no completion ever fails -- but it sits BELOW this
+// ceiling, so this test could fail while River was still correctly retrying.
+// That is what it did on CI: the sibling replica's job stayed `running` with
+// no error recorded, the signature of a completion still inside the retry
+// loop rather than a lost one.
+//
+// Measuring locally does not bound this: both jobs completed 0.3s after
+// release there, because whether the outage window actually covers the sibling
+// job's completion is timing-dependent. When it does not, no retry happens at
+// all and the wait is irrelevant; when it does, the full ceiling is in play.
+//
+// The budget is deliberately above the ceiling rather than at it. If a job is
+// still incomplete after this, the completer has given up and the job is
+// stranded until the rescuer reclaims it -- a real finding this test should
+// fail on, not wait out.
+const completerRetryCeiling = 90 * time.Second
+
+func waitForCompletedAfterOutage(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, jobIDs ...int64,
+) {
+	t.Helper()
+	deadline := time.Now().Add(completerRetryCeiling)
+	for time.Now().Before(deadline) {
+		count, err := countRiverStates(ctx, pool, jobIDs, "completed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count == len(jobIDs) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	snapshots := make(map[int64]riverJobSnapshot, len(jobIDs))
+	for _, jobID := range jobIDs {
+		snapshot, err := readRiverJob(ctx, pool, jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshots[jobID] = snapshot
+	}
+	t.Fatalf(
+		"jobs still incomplete %s after release, past River's completer retry ceiling: %#v",
+		completerRetryCeiling, snapshots,
+	)
 }
 
 func (cutover *databaseCutover) cut() {

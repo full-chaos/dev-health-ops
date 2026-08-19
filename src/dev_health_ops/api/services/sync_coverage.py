@@ -1551,14 +1551,22 @@ def _canonical_backfill_windows(
 ) -> list[dict[str, Any]]:
     """Return exact, source/dataset-scoped actionable coverage windows.
 
-    The focused-backfill form only accepts day boundaries. We therefore emit a
-    suggestion only when the half-open coverage range has exact UTC-midnight
-    boundaries. This keeps the server authoritative: an explicit empty list
-    means a displayed row is not safely representable by that selector.
+    Boundaries are emitted verbatim, at whatever instant the coverage interval
+    actually has. An earlier revision emitted a suggestion only when both
+    boundaries fell on exact UTC midnight; coverage intervals derive from sync
+    run unit windows, which start whenever a sync happened, so that gate
+    matched 0 of 138 real intervals in a populated org and the feature could
+    never produce a suggestion (CHAOS-3915).
 
-    Empty intervals are dropped for the same reason: BackfillSelectorRequest
-    requires ``since < before``, so emitting one would suggest a window the
-    server rejects with a 422.
+    Sub-day and off-midnight windows are safe to advertise because the planner
+    honours them: ``_backfill_windows`` chunks on whole days but
+    ``_chunk_to_window`` keeps the requested instants at the outer edges, so a
+    02:46:06.501450 boundary is planned as 02:46:06.501450, and a window inside
+    a single day still yields one unit rather than none.
+
+    Empty intervals are still dropped: BackfillSelectorRequest requires
+    ``since < before``, so emitting one would suggest a window the server
+    rejects with a 422.
     """
 
     candidates_by_scope: dict[
@@ -1568,8 +1576,6 @@ def _canonical_backfill_windows(
         for interval in pair.gaps:
             since = ensure_utc(interval.since)
             before = ensure_utc(interval.before)
-            if since.time() != time.min or before.time() != time.min:
-                continue
             if since >= before:
                 continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
@@ -1578,8 +1584,6 @@ def _canonical_backfill_windows(
         for interval in pair.failed_ranges:
             since = ensure_utc(interval.since)
             before = ensure_utc(interval.before)
-            if since.time() != time.min or before.time() != time.min:
-                continue
             if since >= before:
                 continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(

@@ -849,12 +849,57 @@ def test_canonical_backfill_windows_preserve_pair_scope_and_half_open_bounds():
             "dataset_keys": ["commits"],
             "reasons": ["gap"],
         },
+        # An intra-day window is advertised verbatim rather than skipped: the
+        # planner keeps the requested instants at the window edges, so this is
+        # submittable exactly as shown.
+        {
+            "since": datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+            "source_ids": [source_one],
+            "dataset_keys": ["deployments"],
+            "reasons": ["gap"],
+        },
         {
             "since": datetime(2026, 1, 3, tzinfo=timezone.utc),
             "before": datetime(2026, 1, 4, tzinfo=timezone.utc),
             "source_ids": [source_two],
             "dataset_keys": ["commits"],
             "reasons": ["failed"],
+        },
+    ]
+
+
+def test_canonical_backfill_windows_advertise_off_midnight_boundaries():
+    """Real coverage gaps almost never start at midnight.
+
+    Intervals derive from sync run unit windows, which begin whenever a sync
+    ran. Gating suggestions on exact UTC-midnight boundaries matched 0 of 138
+    real intervals in a populated org, so the focused-backfill dialog could
+    never offer a window (CHAOS-3915). These boundaries are taken verbatim
+    from a live projection.
+    """
+    source_id = "4addf46f-c4d2-4226-b0b0-2e7c51cb91fe"
+    since = datetime(2026, 8, 8, 2, 46, 6, 501450, tzinfo=timezone.utc)
+    before = datetime(2026, 8, 18, 22, 28, 46, 890654, tzinfo=timezone.utc)
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="cicd",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=since, before=before, source_ids=(source_id,)
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == [
+        {
+            "since": since,
+            "before": before,
+            "source_ids": [source_id],
+            "dataset_keys": ["cicd"],
+            "reasons": ["gap"],
         },
     ]
 

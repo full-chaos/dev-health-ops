@@ -50,7 +50,9 @@ services:
   # role provisioning only after it completes so guarded grants see every
   # current semantic table, including an already-initialized local volume.
   go-river-provision:
-    image: postgres:18-alpine
+    # The Ops runtime image, not a bare postgres client image: it carries both
+    # psql and the provisioning SQL, so this step needs no source checkout.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     profiles: [go-workers]
     restart: "no"
     read_only: true
@@ -79,9 +81,7 @@ services:
           --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
           --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
           --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
-          --file=/opt/dev-health/provision_river_roles.sql
-    volumes:
-      - ../../scripts/worker/provision_river_roles.sql:/opt/dev-health/provision_river_roles.sql:ro
+          --file=/usr/local/share/dev-health/provision_river_roles.sql
     networks: [dev-health]
     depends_on:
       migrate:

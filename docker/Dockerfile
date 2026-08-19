@@ -77,13 +77,25 @@ FROM python:3.14-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
 
-# GitPython requires git; wget used by Docker/compose healthchecks
-RUN apt-get update && apt-get install -y --no-install-recommends git wget \
+# GitPython requires git; wget used by Docker/compose healthchecks;
+# postgresql-client runs the River role provisioning below (CHAOS-3925).
+RUN apt-get update && apt-get install -y --no-install-recommends git wget postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder (no build tools, pip, or setuptools).
 COPY --from=builder /install /usr/local
 COPY --from=go-migrator-builder /out/dev-health-worker-migrate /usr/local/bin/dev-health-worker-migrate
+
+# River runtime-role provisioning travels WITH the image that runs it. It used
+# to be bind-mounted from a source checkout, which a pull-only host cannot
+# produce: Docker answers a missing bind-mount source by creating an empty
+# DIRECTORY, so the first Go bring-up failed as
+# `psql: could not read from input file: Is a directory` -- a message that
+# names psql rather than the missing artifact (CHAOS-3925).
+#
+# The SQL, not this image, remains the source of truth for the domain role's
+# grants; only its delivery changes.
+COPY scripts/worker/provision_river_roles.sql /usr/local/share/dev-health/provision_river_roles.sql
 
 # Fail the image build if the installed distribution cannot load the exact job
 # contract artifacts used by Python worker routing.

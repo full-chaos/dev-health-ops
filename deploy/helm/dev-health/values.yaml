@@ -241,7 +241,7 @@ goWorkers:
       maxClientConnections: 1000
     queueSession:
       port: 6433
-      poolSize: 23
+      poolSize: 27
       maxClientConnections: 128
     coordinatorSession:
       port: 6434
@@ -278,8 +278,19 @@ goWorkers:
       autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: sync
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
-      queues: [sync, sync_provider]
-      queueConcurrency: {sync: 4, sync_provider: 2}
+      queues: [sync]
+      queueConcurrency: {sync: 4}
+      replicas: 0
+      terminationGracePeriodSeconds: 960
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+    # Its own group, like the Celery fleet splits per queue. Fused with sync it
+    # cannot start while provider routes are default-off: selected queues must
+    # equal constructed queues, and no provider handler is built (CHAOS-3926).
+    - name: sync-provider
+      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      queues: [sync_provider]
+      queueConcurrency: {sync_provider: 2}
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}

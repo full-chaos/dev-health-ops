@@ -226,8 +226,8 @@ services:
       - path: ./ops/.env
         required: false
     command:
-      - --queues=sync,sync_provider
-      - --queue-concurrency=sync=4,sync_provider=2
+      - --queues=sync
+      - --queue-concurrency=sync=4
       - --worker-group=sync
       - --shutdown-timeout=960s
     environment:

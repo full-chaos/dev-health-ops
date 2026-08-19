@@ -188,14 +188,36 @@ services:
 
   # This worker group selects both registered sync queues. Its queue set is a
   # group choice, not a runtime profile.
-  go-worker-sync-provider:
+  go-worker-sync:
     <<: *go-worker
     labels:
       dev-health.io/worker-group: sync
     command:
-      - --queues=sync,sync_provider
-      - --queue-concurrency=sync=4,sync_provider=2
+      - --queues=sync
+      - --queue-concurrency=sync=4
       - --worker-group=sync
+      - --shutdown-timeout=960s
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 960s
+
+  # sync_provider is its own process, exactly as the Celery fleet splits
+  # worker-ingest and worker-backfill out by queue. It is NOT fused into the
+  # sync worker above: startup validation requires selected queues to equal
+  # CONSTRUCTED queues, and buildProviderSyncWorker constructs nothing while
+  # every provider route is default-off. A combined service therefore cannot
+  # start in this manifest's own `coexistence_disabled` state -- it fails with
+  # queue_coverage_validation_failed (CHAOS-3926). Split, the default state
+  # starts clean and enabling provider routes is a scale-up, not a queue-list
+  # edit across five renderers.
+  go-worker-sync-provider:
+    <<: *go-worker
+    labels:
+      dev-health.io/worker-group: sync-provider
+    command:
+      - --queues=sync_provider
+      - --queue-concurrency=sync_provider=2
+      - --worker-group=sync-provider
       - --shutdown-timeout=960s
     environment:
       <<: *go-worker-env-base

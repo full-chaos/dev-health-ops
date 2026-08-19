@@ -423,12 +423,15 @@ func canonicalBackfillWindows(pairs []pairCoverage) []any {
 		}{{pair.Gaps, "gap"}, {pair.FailedRanges, "failed"}} {
 			for _, interval := range group.Intervals {
 				since, before := interval.Since.UTC(), interval.Before.UTC()
-				if !isUTCMidnight(since) || !isUTCMidnight(before) {
-					continue
-				}
-				// BackfillSelectorRequest requires since < before, so an
-				// empty interval would suggest a window the API rejects
-				// with a 422. Mirrors _canonical_backfill_windows.
+				// Boundaries are advertised verbatim. Gating on exact UTC
+				// midnight matched 0 of 138 real intervals, because coverage
+				// derives from sync run unit windows that start whenever a
+				// sync ran (CHAOS-3915). The planner honours these instants:
+				// it chunks on whole days but keeps the requested edges.
+				//
+				// BackfillSelectorRequest still requires since < before, so an
+				// empty interval would suggest a window the API rejects with a
+				// 422. Mirrors _canonical_backfill_windows.
 				if !since.Before(before) {
 					continue
 				}
@@ -478,14 +481,6 @@ func canonicalBackfillWindows(pairs []pairCoverage) []any {
 		})
 	}
 	return result
-}
-
-// isUTCMidnight reports whether value is exactly 00:00:00.000000000 UTC, the
-// only boundary the focused-backfill selector accepts.
-func isUTCMidnight(value time.Time) bool {
-	utc := value.UTC()
-	return utc.Hour() == 0 && utc.Minute() == 0 &&
-		utc.Second() == 0 && utc.Nanosecond() == 0
 }
 
 func day(value time.Time) time.Time {

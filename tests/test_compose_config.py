@@ -257,6 +257,51 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+# Measured cost of one Go worker replica on the queue-session endpoint:
+# WORKER_DATABASE_MAX_CONNS pgxpool connections (2) plus the long-lived River
+# notifier session, which lives outside that pool budget. Sizing from the
+# environment variable alone under-counts by a third.
+_QUEUE_CONNECTIONS_PER_REPLICA = 3
+_QUEUE_WORKER_GROUPS = ("go-worker", "go-worker-heavy", "go-worker-ops")
+# The platform stack must support this many replicas of every worker group.
+_PLATFORM_REPLICAS_PER_GROUP = 3
+# Reconciler, scheduler, and riverui hold queue-endpoint sessions too.
+_QUEUE_SINGLETON_CONNECTIONS = 5
+# Migrations bypass the poolers and connect to PostgreSQL directly.
+_MIGRATION_CONNECTIONS = 5
+# Superuser slots PostgreSQL keeps back from ordinary roles.
+_POSTGRES_RESERVED = 3
+
+_COMPOSE_DEFAULT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:-(?P<default>[^}]*)\}$")
+
+
+def _compose_int(value: object) -> int:
+    """Resolve a compose scalar that may be ``${VAR:-default}`` to its int.
+
+    Interpolated defaults are what an unconfigured checkout actually runs, so
+    a budget assertion has to read through the substitution rather than
+    compare the literal string.
+    """
+    text = str(value)
+    match = _COMPOSE_DEFAULT.match(text)
+    if match is not None:
+        text = match.group("default")
+    return int(text)
+
+
+def _postgres_max_connections(service: dict) -> int:
+    """Return the max_connections the postgres service is started with."""
+    command = service.get("command") or []
+    if isinstance(command, str):
+        command = command.split()
+    for entry in command:
+        text = str(entry)
+        if text.startswith("max_connections="):
+            return _compose_int(text.split("=", 1)[1])
+    # The postgres image default when the service passes no override.
+    return 100
+
+
 def _command_string(service: dict) -> str:
     return _container_command_string(service)
 
@@ -1498,10 +1543,49 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         coordinator_pool["environment"].get("DB_USER")
         == "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}"
     )
-    assert queue_pool["environment"].get("DEFAULT_POOL_SIZE") == "22"
-    assert coordinator_pool["environment"].get("DEFAULT_POOL_SIZE") == "10"
-    assert transaction_pool["environment"].get("DEFAULT_POOL_SIZE") == "20"
+    # Assert the budget rule, not a literal. Session mode pins one server
+    # connection per client session for the life of that session, so
+    # DEFAULT_POOL_SIZE is a hard ceiling on worker replicas rather than a
+    # throughput knob: the first replica past it never reaches ready, it
+    # crash-loops on preclaim-readiness with the queue-database checks
+    # failing. A literal pinned here passes for whatever number happens to be
+    # deployed, including one that is already too small.
+    queue_pool_size = _compose_int(queue_pool["environment"].get("DEFAULT_POOL_SIZE"))
+    required_queue_backends = (
+        _QUEUE_CONNECTIONS_PER_REPLICA
+        * _PLATFORM_REPLICAS_PER_GROUP
+        * len(_QUEUE_WORKER_GROUPS)
+    ) + _QUEUE_SINGLETON_CONNECTIONS
+    assert queue_pool_size >= required_queue_backends, (
+        f"queue session pool holds {queue_pool_size} backends; "
+        f"{_PLATFORM_REPLICAS_PER_GROUP} replicas of "
+        f"{len(_QUEUE_WORKER_GROUPS)} worker groups plus singletons need "
+        f"{required_queue_backends}"
+    )
+    coordinator_pool_size = _compose_int(
+        coordinator_pool["environment"].get("DEFAULT_POOL_SIZE")
+    )
+    transaction_pool_size = _compose_int(
+        transaction_pool["environment"].get("DEFAULT_POOL_SIZE")
+    )
+    assert coordinator_pool_size >= 10
+    assert transaction_pool_size >= 20
     assert "RESERVE_POOL_SIZE" not in transaction_pool["environment"]
+
+    # The three pools plus direct migration connections must fit the server.
+    # PgBouncer opens backends lazily, so an over-subscribed budget surfaces
+    # only under the load that needs every pool at once.
+    usable = _postgres_max_connections(services["postgres"]) - _POSTGRES_RESERVED
+    declared = (
+        queue_pool_size
+        + coordinator_pool_size
+        + transaction_pool_size
+        + _MIGRATION_CONNECTIONS
+    )
+    assert declared <= usable, (
+        f"pooler backends plus migrations ({declared}) exceed usable "
+        f"PostgreSQL connections ({usable})"
+    )
 
     for service_name in ("go-worker", "go-worker-heavy", "go-worker-ops"):
         environment = services[service_name]["environment"]

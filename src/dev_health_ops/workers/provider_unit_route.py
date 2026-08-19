@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+from dev_health_ops.contract_artifacts import contract_directory
 from dev_health_ops.sync.planner import (
     _FAMILY_CANONICAL_DATASET_KEY,
     _WORK_ITEM_FAMILY_DATASET_ORDER,
@@ -67,13 +68,12 @@ _LOCAL_ALL_ALIAS_CANONICAL = {
     for alternative in alternatives
 }
 
-# src/dev_health_ops/workers/provider_unit_route.py -> repo root is 3 parents up.
+# Resolved through contract_artifacts rather than a per-file parents[N] count.
+# The count here used to be 3, correct in a checkout and wrong in an installed
+# distribution, where the same three hops land on the interpreter's lib
+# directory instead of the repository root (CHAOS-3933).
 _DEFAULT_MATRIX_CONTRACT_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "contracts"
-    / "provider-matrix"
-    / "v1"
-    / "matrix.json"
+    contract_directory("provider-matrix", "v1") / "matrix.json"
 )
 
 # Reassignable only by tests (see tests/workers/test_provider_unit_route.py),

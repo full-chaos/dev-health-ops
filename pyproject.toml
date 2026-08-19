@@ -161,6 +161,21 @@ include-package-data = true
 ]
 "contracts/jobs/v1/examples" = ["contracts/jobs/v1/examples/*.json"]
 "contracts/jobs/v1/schemas" = ["contracts/jobs/v1/schemas/*.json"]
+# provider-matrix and sync-dispatch ship for the same reason contracts/jobs
+# does: dev_health_ops reads them at RUNTIME, not only in a checkout.
+# Omitting them made every production sync dispatch fail with a
+# FileNotFoundError once the Go bridge moved dispatch onto the installed
+# api service (CHAOS-3933). Keep this in step with the resolver fallbacks in
+# workers/provider_unit_route.py and sync/dispatch_routes.py -- packaging and
+# resolution are one contract, and either half alone still fails.
+"contracts/provider-matrix/v1" = [
+  "contracts/provider-matrix/v1/*.json",
+  "contracts/provider-matrix/v1/*.md",
+]
+"contracts/sync-dispatch/v1" = [
+  "contracts/sync-dispatch/v1/*.json",
+  "contracts/sync-dispatch/v1/*.md",
+]
 
 [tool.ruff]
 line-length = 88

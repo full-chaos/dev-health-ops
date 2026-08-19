@@ -22,6 +22,7 @@ _PROFILE_NAMES = {
     "heavy",
     "ops",
     "sync",
+    "sync-provider",
     "reconciler",
     "scheduler",
     "stream-external",

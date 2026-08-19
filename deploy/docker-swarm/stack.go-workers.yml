@@ -64,11 +64,19 @@ services:
       dev-health.io/worker-group: ops
     command: ["--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s"]
     stop_grace_period: 960s
-  go-worker-sync-provider:
+  go-worker-sync:
     <<: *go-worker
     labels:
       dev-health.io/worker-group: sync
-    command: ["--queues=sync,sync_provider", "--queue-concurrency=sync=4,sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s"]
+    command: ["--queues=sync", "--queue-concurrency=sync=4", "--worker-group=sync", "--shutdown-timeout=960s"]
+    stop_grace_period: 960s
+  # Split from the sync worker: a combined service cannot start while provider
+  # routes are default-off (CHAOS-3926). See compose.go-workers.yml.
+  go-worker-sync-provider:
+    <<: *go-worker
+    labels:
+      dev-health.io/worker-group: sync-provider
+    command: ["--queues=sync_provider", "--queue-concurrency=sync_provider=2", "--worker-group=sync-provider", "--shutdown-timeout=960s"]
     stop_grace_period: 960s
   go-reconciler:
     <<: *go-worker

@@ -72,7 +72,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dev-health-go-worker-sync-provider
+  name: dev-health-go-worker-sync
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}
 spec:
@@ -87,7 +87,34 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          args: ["--queues=sync,sync_provider", "--queue-concurrency=sync=4,sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s"]
+          args: ["--queues=sync", "--queue-concurrency=sync=4", "--worker-group=sync", "--shutdown-timeout=960s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-go-worker-sync-provider
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync-provider}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync-provider}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync-provider}}
+    spec:
+      terminationGracePeriodSeconds: 960
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/full-chaos/dev-health-go-worker:latest
+          args: ["--queues=sync_provider", "--queue-concurrency=sync_provider=2", "--worker-group=sync-provider", "--shutdown-timeout=960s"]
           env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
@@ -282,9 +309,9 @@ spec:
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
-metadata: {name: dev-health-go-worker-sync-provider, namespace: dev-health}
+metadata: {name: dev-health-go-worker-sync, namespace: dev-health}
 spec:
-  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-sync-provider}
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-sync}
   minReplicas: 0
   maxReplicas: 2
   metrics:
@@ -294,6 +321,15 @@ spec:
       external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: sync}}}, target: {type: AverageValue, averageValue: "60"}}
     - type: External
       external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: sync}}}, target: {type: AverageValue, averageValue: "800m"}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: dev-health-go-worker-sync-provider, namespace: dev-health}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-sync-provider}
+  minReplicas: 0
+  maxReplicas: 2
+  metrics:
     - type: External
       external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: sync_provider}}}, target: {type: AverageValue, averageValue: "1"}}
     - type: External

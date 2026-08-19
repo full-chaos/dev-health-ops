@@ -37,7 +37,7 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 22 {
+	if summary.QueueSessionClientConnections != 26 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
 	if summary.QueueSessionHeadroom != 1 {
@@ -49,16 +49,16 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.CoordinatorSessionHeadroom != 1 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
-	if summary.DomainTransactionClientConnections != 58 {
+	if summary.DomainTransactionClientConnections != 66 {
 		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
 	}
-	if summary.DomainTransactionHeadroom != 942 {
+	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 89 {
+	if summary.ServerConnectionFootprint != 93 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 11 {
+	if summary.ServerConnectionHeadroom != 7 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -124,7 +124,7 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 22 {
+	if summary.QueueSessionClientConnections != 26 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
 	if summary.QueueSessionHeadroom != 1 {
@@ -136,16 +136,16 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.CoordinatorSessionHeadroom != 1 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
-	if summary.DomainTransactionClientConnections != 58 {
+	if summary.DomainTransactionClientConnections != 66 {
 		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
 	}
-	if summary.DomainTransactionHeadroom != 942 {
+	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 89 {
+	if summary.ServerConnectionFootprint != 93 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 11 {
+	if summary.ServerConnectionHeadroom != 7 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -163,7 +163,7 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 18 {
+	if summary.QueueSessionClientConnections != 22 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
 	if summary.QueueSessionHeadroom != 5 {
@@ -175,16 +175,16 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.CoordinatorSessionHeadroom != 1 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
-	if summary.DomainTransactionClientConnections != 50 {
+	if summary.DomainTransactionClientConnections != 58 {
 		t.Fatalf("domain transaction clients = %d", summary.DomainTransactionClientConnections)
 	}
-	if summary.DomainTransactionHeadroom != 950 {
+	if summary.DomainTransactionHeadroom != 942 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 89 {
+	if summary.ServerConnectionFootprint != 93 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 11 {
+	if summary.ServerConnectionHeadroom != 7 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }

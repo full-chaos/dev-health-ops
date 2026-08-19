@@ -79,7 +79,11 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _RIVER_WORKER_SERVICES = {
     "heavy": "go-worker-heavy",
     "ops": "go-worker-ops",
-    "sync": "go-worker-sync-provider",
+    "sync": "go-worker-sync",
+    # Its own process, like the Celery fleet splits worker-ingest and
+    # worker-backfill out by queue. Fused with sync it cannot start while
+    # provider routes are default-off (CHAOS-3926).
+    "sync-provider": "go-worker-sync-provider",
 }
 
 
@@ -368,12 +372,14 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
         "stream-ingest",
         "stream-pagerduty",
         "sync",
+        "sync-provider",
     }
 
     compose = _load_yaml(_GO_COMPOSE)["services"]
     runtime_services = {
         "go-worker-heavy",
         "go-worker-ops",
+        "go-worker-sync",
         "go-worker-sync-provider",
         "go-reconciler",
         "go-scheduler",
@@ -400,8 +406,9 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
             )
             == "true"
         )
+    assert _process_arguments(compose["go-worker-sync"])["--queues"] == "sync"
     assert _process_arguments(compose["go-worker-sync-provider"])["--queues"] == (
-        "sync,sync_provider"
+        "sync_provider"
     )
 
     swarm = _load_yaml(_GO_SWARM)["services"]
@@ -434,11 +441,14 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
         assert container["securityContext"]["readOnlyRootFilesystem"] is True
         assert container["resources"]["requests"]["cpu"]
         assert container["resources"]["limits"]["memory"]
-    sync_labels = deployments["dev-health-go-worker-sync-provider"]["metadata"][
-        "labels"
-    ]
+    sync_labels = deployments["dev-health-go-worker-sync"]["metadata"]["labels"]
     assert sync_labels["dev-health.io/worker-group"] == "sync"
     assert "dev-health.io/profile" not in sync_labels
+    provider_labels = deployments["dev-health-go-worker-sync-provider"]["metadata"][
+        "labels"
+    ]
+    assert provider_labels["dev-health.io/worker-group"] == "sync-provider"
+    assert "dev-health.io/profile" not in provider_labels
 
     values = _load_yaml(_HELM_CHART / "values.yaml")
     assert values["goWorkers"]["enabled"] is False
@@ -450,7 +460,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     sync_profile = next(
         group for group in values["goWorkers"]["groups"] if group["name"] == "sync"
     )
-    assert sync_profile["queues"] == ["sync", "sync_provider"]
+    assert sync_profile["queues"] == ["sync"]
     helm_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
         encoding="utf-8"
     )
@@ -523,8 +533,8 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
     for scaler in horizontal_scalers:
         target = scaler["spec"]["scaleTargetRef"]["name"]
         group = target.removeprefix("dev-health-go-worker-")
-        if group == "sync-provider":
-            group = "sync"
+        # No aliasing: sync and sync-provider are distinct manifest processes,
+        # each autoscaling on its own queue's backlog (CHAOS-3926).
         if group not in river:
             continue
         selectors = [
@@ -595,7 +605,8 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
         "stream-external": "go-stream-external",
         "stream-ingest": "go-stream-ingest",
         "stream-pagerduty": "go-stream-pagerduty",
-        "sync": "go-worker-sync-provider",
+        "sync": "go-worker-sync",
+        "sync-provider": "go-worker-sync-provider",
     }
     compose = _load_yaml(_GO_COMPOSE)["services"]
     swarm = _load_yaml(_GO_SWARM)["services"]
@@ -1311,7 +1322,8 @@ def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> N
 _MANIFEST_RENDERED_SERVICES = {
     "heavy": "go-worker-heavy",
     "ops": "go-worker-ops",
-    "sync": "go-worker-sync-provider",
+    "sync": "go-worker-sync",
+    "sync-provider": "go-worker-sync-provider",
     "reconciler": "go-reconciler",
     "scheduler": "go-scheduler",
     "stream-external": "go-stream-external",

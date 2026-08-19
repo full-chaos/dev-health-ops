@@ -13,6 +13,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from dev_health_ops.contract_artifacts import contract_directory
+
 MAX_TRANSPORT_ROUTES_BYTES = 16 * 1024
 _MAX_JSON_DEPTH = 8
 
@@ -71,15 +73,14 @@ class TransportRoutes:
 
 
 def default_transport_routes_path() -> Path:
-    """Return the checked-in v1 transport contract from a source checkout."""
+    """Return the v1 transport contract from a checkout or an installed dist.
 
-    return (
-        Path(__file__).resolve().parents[3]
-        / "contracts"
-        / "sync-dispatch"
-        / "v1"
-        / "transport-routes.json"
-    )
+    Resolved through contract_artifacts rather than a per-file parents[N]
+    count, which resolves to the interpreter's lib directory once installed
+    (CHAOS-3933).
+    """
+
+    return contract_directory("sync-dispatch", "v1") / "transport-routes.json"
 
 
 def load_transport_routes(path: Path | None = None) -> TransportRoutes:

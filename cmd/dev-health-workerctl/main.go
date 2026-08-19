@@ -286,7 +286,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	}
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
-		return nil, writeError(stderr, "authentication_failed")
+		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
 	}
 	mode := databaseMode(lookup, "WORKER_DATABASE_MODE")
 	if !sessionSafeMode(mode) {
@@ -353,11 +353,18 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	// is coordinator-exclusive and has no domain grant at all.
 	authenticator, err := joboperator.NewAuthenticator(coordinatorPool)
 	if err != nil {
-		return nil, writeError(stderr, "authentication_failed")
+		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
 	}
 	authentication, err := authenticator.Authenticate(ctx, token.Reveal())
 	if err != nil {
-		return nil, writeError(stderr, "authentication_failed")
+		// The reason code comes from joboperator's bounded vocabulary rather
+		// than from the error text. A 42501 on internal_service_credentials
+		// means the connected role lacks its grant -- or that this binary was
+		// wired back onto a pool that never had one -- which is a different
+		// operator action entirely from a rotated or revoked token. Both codes
+		// are compile-time constants, so neither can carry credential or
+		// catalog material into the operator's terminal or logs.
+		return nil, writeError(stderr, joboperator.AuthenticationReason(err))
 	}
 	lockTx, err := pools.Domain.Begin(ctx)
 	if err != nil {

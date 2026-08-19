@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,11 +20,70 @@ const (
 	ScopeWorkerOperate    = "workers:operate"
 )
 
+// The bounded operator reason-code vocabulary for authentication outcomes,
+// following the same idiom as cmd/dev-health-stream-runner/dependencies.go's
+// DependencyReason: every code is a compile-time constant chosen from this
+// closed set, never interpolated from a token, a role name, a catalog row or
+// a driver message. That is what makes an operator-visible reason safe to
+// emit and log unredacted.
+const (
+	// ReasonAuthenticationFailed is the credential verdict: the statement ran
+	// and the supplied token did not resolve to a live, correctly scoped
+	// worker-operator credential. It is also the conservative default for any
+	// failure whose cause is not positively identified.
+	ReasonAuthenticationFailed = "authentication_failed"
+	// ReasonCredentialStoreForbidden is the deployment verdict, and is
+	// deliberately NOT a credential verdict: PostgreSQL refused the
+	// authentication statement with 42501 before the token was ever compared,
+	// so the connected role lacks SELECT/UPDATE on
+	// public.internal_service_credentials. Reporting this as
+	// ReasonAuthenticationFailed (CHAOS-3100) sent operators after a rotated
+	// token when the actual defect was a missing grant or a binary wired onto
+	// the wrong pool.
+	ReasonCredentialStoreForbidden = "credential_store_forbidden"
+)
+
+// insufficientPrivilege is PostgreSQL's SQLSTATE for a denied permission. It
+// is raised during execution, after parse analysis, so it cannot be confused
+// with an undefined table or column.
+const insufficientPrivilege = "42501"
+
 var (
 	ErrAuthentication = errors.New("worker operator authentication failed")
 	ErrAuthorization  = errors.New("worker operator authorization failed")
 	workerToken       = regexp.MustCompile(`^svc_worker_[A-Za-z0-9_-]{32,256}$`)
 )
+
+// authenticationFailure carries one bounded reason code alongside the
+// ErrAuthentication sentinel, so existing errors.Is(err, ErrAuthentication)
+// callers keep working unchanged while a caller that wants the finer verdict
+// can ask for it. Its reason field is only ever assigned a constant from the
+// vocabulary above.
+type authenticationFailure struct{ reason string }
+
+func (failure authenticationFailure) Error() string {
+	return ErrAuthentication.Error() + ": " + failure.reason
+}
+
+func (authenticationFailure) Unwrap() error { return ErrAuthentication }
+
+// AuthenticationReason satisfies the operator shell's reason-code interface.
+func (failure authenticationFailure) AuthenticationReason() string { return failure.reason }
+
+func authenticationDenied(reason string) error { return authenticationFailure{reason: reason} }
+
+// AuthenticationReason maps an Authenticate error onto the bounded reason-code
+// vocabulary above. Anything that does not positively identify itself — a bare
+// ErrAuthentication, a wrapped one, a nil error — reports
+// ReasonAuthenticationFailed, so a new failure mode can never widen what an
+// operator surface prints.
+func AuthenticationReason(err error) string {
+	var failure interface{ AuthenticationReason() string }
+	if errors.As(err, &failure) {
+		return failure.AuthenticationReason()
+	}
+	return ReasonAuthenticationFailed
+}
 
 // Authenticator verifies a worker operator bearer token against the semantic
 // database. Only the SHA-256 digest crosses the database boundary; plaintext
@@ -87,6 +147,15 @@ func (authenticator *Authenticator) Authenticate(ctx context.Context, token stri
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Authentication{}, ErrAuthentication
+		}
+		// A privilege denial is not a credential verdict: the CTE above never
+		// compared the digest, because the connected role may not read or
+		// touch the credential store at all. Only the SQLSTATE is inspected
+		// and only a constant is returned -- the driver's message can quote
+		// statement text, so it never reaches the operator surface.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {
+			return Authentication{}, authenticationDenied(ReasonCredentialStoreForbidden)
 		}
 		return Authentication{}, ErrAuthentication
 	}

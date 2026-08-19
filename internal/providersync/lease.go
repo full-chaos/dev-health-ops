@@ -11,17 +11,26 @@ import (
 )
 
 var (
-	ErrInvalidConfiguration        = errors.New("provider sync configuration is invalid")
-	ErrUnitNotClaimable            = errors.New("provider sync unit is not claimable")
-	ErrLeaseLost                   = errors.New("provider sync unit lease is lost")
-	ErrCompatibilityRequired       = errors.New("provider sync dataset requires Python compatibility execution")
-	ErrGenerationJournalConflict   = errors.New("provider sync generation journal conflicts with persisted state")
-	ErrGenerationBlockAmbiguous    = errors.New("provider sync generation block requires readback reconciliation")
-	ErrGenerationRecoveryUnsafe    = errors.New("provider sync generation recovery payload is outside the bounded contract")
-	ErrEffectLedgerConflict        = errors.New("provider sync effect ledger conflicts with persisted state")
-	ErrEffectLedgerNotFound        = errors.New("provider sync effect ledger is not present")
-	ErrEffectRecoveryAmbiguous     = errors.New("provider sync effect recovery requires exact reconciliation")
-	ErrEffectRecoveryUnsafe        = errors.New("provider sync effect recovery is outside the bounded contract")
+	ErrInvalidConfiguration             = errors.New("provider sync configuration is invalid")
+	ErrUnitNotClaimable                 = errors.New("provider sync unit is not claimable")
+	ErrLeaseLost                        = errors.New("provider sync unit lease is lost")
+	ErrCompatibilityRequired            = errors.New("provider sync dataset requires Python compatibility execution")
+	ErrGenerationJournalConflict        = errors.New("provider sync generation journal conflicts with persisted state")
+	ErrGenerationBlockAmbiguous         = errors.New("provider sync generation block requires readback reconciliation")
+	ErrGenerationRecoveryUnsafe         = errors.New("provider sync generation recovery payload is outside the bounded contract")
+	ErrEffectLedgerConflict             = errors.New("provider sync effect ledger conflicts with persisted state")
+	ErrEffectLedgerNotFound             = errors.New("provider sync effect ledger is not present")
+	ErrPreparedRouteSnapshotNotFound    = errors.New("provider sync prepared route snapshot is not present")
+	ErrPreparedRouteSnapshotRunTerminal = errors.New(
+		"provider sync prepared route snapshot belongs to a run that already finished",
+	)
+	ErrEffectRecoveryAmbiguous = errors.New("provider sync effect recovery requires exact reconciliation")
+	ErrEffectRecoveryUnsafe    = errors.New("provider sync effect recovery is outside the bounded contract")
+	// ErrProviderDatasetUnavailable means the provider account cannot expose a
+	// specific dataset even though the credential itself is valid. Retrying
+	// cannot add an account-level product ability, and treating the response as
+	// an empty snapshot would incorrectly tombstone previously collected rows.
+	ErrProviderDatasetUnavailable  = errors.New("provider sync dataset is unavailable for this account")
 	ErrShadowMismatch              = errors.New("provider sync native shadow differs from Python compatibility output")
 	ErrRepositoryIdentityAmbiguous = errors.New(
 		"provider sync repository identity cannot be proven identical to the Python derivation",
@@ -84,10 +93,20 @@ func (unit Unit) Validate() error {
 	if unit.SinceAt != nil && unit.BeforeAt != nil && unit.SinceAt.After(*unit.BeforeAt) {
 		return ErrInvalidConfiguration
 	}
-	if unit.AuthSource == "environment" || unit.CredentialID == "" {
+	if unit.AuthSource == "environment" {
 		// Go execution never hydrates credentials through process-global state.
+		// This is where D18's "environment target/token fallback is not part of
+		// the Go route" is actually enforced for every provider, not just
+		// Projects v2: a unit whose credentials would come from process state
+		// never reaches a collector at all.
 		return ErrInvalidConfiguration
 	}
+	// A resolved credential id is REQUIRED, and this is the only clause that
+	// enforces it: uuid.Parse rejects "" as readily as it rejects garbage. The
+	// separate `unit.CredentialID == ""` test that used to sit above was the
+	// twin of one removed from the Projects v2 fetcher for the same reason --
+	// it could never decide on its own, so its mutation was unkillable and it
+	// read as coverage while proving nothing.
 	if _, err := uuid.Parse(unit.CredentialID); err != nil {
 		return ErrInvalidConfiguration
 	}

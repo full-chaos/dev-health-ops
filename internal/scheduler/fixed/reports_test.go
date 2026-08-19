@@ -197,9 +197,9 @@ func TestScheduledReportsProducerRequiresACronEvaluator(t *testing.T) {
 }
 
 // A schedule owning two active reports is refused rather than fanned out.
-// saved_reports.schedule_id has no unique constraint, so this is reachable data,
-// and joining would silently produce two runs and advance one schedule's
-// next_run_at twice.
+// Alembic 0096 makes this unreachable in a current database. The guard remains
+// an assertion for a partially migrated or manually drifted schema, where a
+// join would silently produce two runs and advance next_run_at twice.
 func TestAmbiguousReportScheduleIsRefused(t *testing.T) {
 	candidates := []dueReportCandidate{
 		{JobID: "job-a", ReportID: "report-1"},
@@ -413,21 +413,24 @@ func TestStoredDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 		return ""
 	}
 
-	// An evaluating window observes the fault.
+	// A ledger read reports the committed fault.
 	loop.record(WindowResult{ObservedAt: now, Schedules: []ScheduleResult{{
 		ScheduleID: scheduleID, Due: 1, Claimed: 1, Handoffs: 1,
-		Evaluated: true, Degraded: DegradedScheduledReportsUndeliverable,
+		Evaluated: true, DegradedLoaded: true, Degraded: DegradedScheduledReportsUndeliverable,
 	}}}, now)
 	raised := degradedGauge()
 	if !strings.Contains(raised, DegradedScheduledReportsUndeliverable) || !strings.HasSuffix(raised, " 1") {
 		t.Fatalf("after the evaluating window the gauge is %q, want the reason raised", raised)
 	}
 
-	// The polls in between: no occurrence due, so no verdict. These must not clear it.
+	// The polls in between load the same newest ledger verdict. They must not clear it.
 	for poll := 1; poll <= 3; poll++ {
 		loop.record(WindowResult{
 			ObservedAt: now.Add(time.Duration(poll) * 15 * time.Second),
-			Schedules:  []ScheduleResult{{ScheduleID: scheduleID}},
+			Schedules: []ScheduleResult{{
+				ScheduleID: scheduleID, DegradedLoaded: true,
+				Degraded: DegradedScheduledReportsUndeliverable,
+			}},
 		}, now.Add(time.Duration(poll)*15*time.Second))
 		if held := degradedGauge(); held != raised {
 			t.Fatalf(
@@ -442,7 +445,8 @@ func TestStoredDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 	loop.record(WindowResult{
 		ObservedAt: now.Add(5 * time.Minute),
 		Schedules: []ScheduleResult{{
-			ScheduleID: scheduleID, Due: 1, Claimed: 1, Handoffs: 1, Evaluated: true,
+			ScheduleID: scheduleID, Due: 1, Claimed: 1, Handoffs: 1,
+			Evaluated: true, DegradedLoaded: true,
 		}},
 	}, now.Add(5*time.Minute))
 	cleared := degradedGauge()
@@ -490,7 +494,8 @@ func TestSkipReasonIsNotPromotedToTheDegradedGauge(t *testing.T) {
 	// A window that skipped for a bounded reason and reported NO degraded condition:
 	// exactly what the fan-out produces on an installation with no organizations.
 	loop.record(WindowResult{ObservedAt: now, Schedules: []ScheduleResult{{
-		ScheduleID: scheduleID, Due: 1, Claimed: 1, Skipped: 1, Evaluated: true,
+		ScheduleID: scheduleID, Due: 1, Claimed: 1, Skipped: 1,
+		Evaluated: true, DegradedLoaded: true,
 	}}}, now)
 
 	var exported strings.Builder

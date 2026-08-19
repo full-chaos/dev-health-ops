@@ -1,0 +1,8 @@
+# DECLARED DIVERGENCE: a sexagesimal as a rule ID. PyYAML resolves it to the
+# int 90, so rule_id is the NUMBER 90 -- which a *string cannot hold. Refusing
+# is the loud direction; emitting "1:30" would be a silent wrong value.
+rules:
+  - id: 1:30
+    priority: 10
+    match:
+      always: true

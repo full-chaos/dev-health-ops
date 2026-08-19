@@ -269,6 +269,33 @@ func DueOccurrence(
 		// the process was absent, or prune under a cutoff the next night
 		// supersedes anyway. Re-baselining records where the schedule resumed
 		// without claiming work happened.
+		//
+		// Interval cadences measure that gap as ELAPSED TIME, not as grid
+		// distance, for the same reason the guard above exists: their grid
+		// points carry no meaning of their own. Counting boundaries here made
+		// every interval schedule with CatchUpSkip latch permanently
+		// (CHAOS-3914). The guard above defers a run to the boundary after
+		// `anchor.ObservedAt + period`, because a process almost never starts
+		// exactly on a grid point; by the time the run is allowed, scheduledFor
+		// has advanced two boundaries past the anchor, so a boundary count
+		// reports "stale" on a scheduler that never missed anything. It then
+		// re-baselines, observes a few seconds late again, and repeats forever.
+		// Live evidence: sync_coverage_refresh recorded 314 cold-start
+		// baselines and exactly 1 materialized occurrence, so the sync coverage
+		// projector never ran.
+		if schedule.Cadence.Kind == CadenceInterval {
+			// `earliest` is the instant the guard above releases this schedule,
+			// and the boundary it releases is the first grid point at or after
+			// it -- necessarily within one period of `earliest`. So scheduledFor
+			// landing a full period or more beyond `earliest` is the only proof
+			// that an allowed boundary went unrun. Anything closer is the guard
+			// working as designed, not a missed run.
+			earliest := lastRecorded.ObservedAt.UTC().Add(schedule.Cadence.Period())
+			if scheduledFor.Sub(earliest) >= schedule.Cadence.Period() {
+				return DueDecision{Occurrence: &occurrence, SkippedStale: true}, nil
+			}
+			break
+		}
 		priorBoundary, ok := schedule.Cadence.Previous(scheduledFor.Add(-time.Second), location)
 		if ok && anchor.Before(priorBoundary) {
 			return DueDecision{Occurrence: &occurrence, SkippedStale: true}, nil

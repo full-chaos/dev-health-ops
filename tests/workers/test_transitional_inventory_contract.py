@@ -63,7 +63,63 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # billing_edge.py, forwarding to that same handler cross-file), + 2
     # added for CHAOS-3404 (the new ask_dev_retention celery task and its
     # ask-dev-retention-sweep Beat entry).
-    assert inventory["row_count"] == 158
+    assert inventory["row_count"] == 146
+
+
+def test_retired_beat_entries_are_evidenced_and_absent_from_source():
+    inventory = checker.load_inventory(_INVENTORY_PATH)
+    retired = inventory["retired_beat_entries"]
+
+    assert retired == [
+        {
+            "name": "dispatch-scheduled-metrics",
+            "cadence": "300s",
+            "reason": (
+                "No production ScheduledJob writer creates job_type='metrics'; the legacy "
+                "dispatcher could only create arbitrary-config Celery work, which the durable "
+                "Go daily-metrics contract cannot safely emulate."
+            ),
+            "evidence": (
+                "CHAOS-3128 retirement decision: source audit found zero production writers "
+                "and a local feature-stack PostgreSQL read-only audit found zero scheduled_jobs "
+                "rows with job_type='metrics'."
+            ),
+        }
+    ]
+    assert (
+        checker.validate_retired_beat_entries(
+            inventory, checker.discover_all(_REPO_ROOT)
+        )
+        == []
+    )
+
+
+def test_retired_beat_reintroduction_fails_the_inventory_gate():
+    inventory = {
+        "retired_beat_entries": [
+            {
+                "name": "dispatch-scheduled-metrics",
+                "cadence": "300s",
+                "reason": "audited retirement",
+                "evidence": "reviewed evidence",
+            }
+        ]
+    }
+    errors = checker.validate_retired_beat_entries(
+        inventory,
+        [
+            checker.Surface(
+                checker.CLASS_BEAT_ENTRY,
+                "src/dev_health_ops/workers/config.py",
+                1,
+                "dispatch-scheduled-metrics",
+            )
+        ],
+    )
+    assert errors == [
+        "RETIRED BEAT REINTRODUCED: 'dispatch-scheduled-metrics' appears in source and must "
+        "either be removed again or deleted from retired_beat_entries after review"
+    ]
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():
@@ -247,7 +303,10 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
                 },
                 "dispatch_mechanism": "celery_task_decorator",
                 "owner_role": "primary",
-                "target_owner": {"type": "native_process", "value": "Go ops profile"},
+                "target_owner": {
+                    "type": "native_process",
+                    "value": "Go worker consuming the webhooks queue",
+                },
                 "target_kind_id": "task:health_check",
                 "current_implementation_state": "celery_only",
                 "verification_status": "verified",
@@ -986,7 +1045,10 @@ def test_gate_catches_content_drift_when_the_dispatched_task_is_swapped(tmp_path
                 },
                 "dispatch_mechanism": "literal_dispatch_call",
                 "owner_role": "contributor",
-                "target_owner": {"type": "native_process", "value": "Go ops profile"},
+                "target_owner": {
+                    "type": "native_process",
+                    "value": "Go worker consuming the webhooks queue",
+                },
                 "target_kind_id": None,
                 "current_implementation_state": "celery_only",
                 "verification_status": "verified",

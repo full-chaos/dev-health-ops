@@ -6,6 +6,7 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"reflect"
 	"sort"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 )
 
 // This file pins the scheduler's activation seam two ways, and the order matters
@@ -38,36 +40,24 @@ import (
 //
 // What NEITHER pin can do, stated so nobody infers otherwise: they cannot prove
 // that flipping a seam retains the delivery capability the seam exists to guard.
-// Pinning goOwnsMarkers false says the process is dormant; it says nothing about
-// whether a materializer exists once it is true. That evidence is a human's job
-// at review time, and CHAOS-3145 is where the requirement lives.
+// The source-level construction and readiness proof lives in
+// TestSchedulerProductionFactoryBuildsReviewedRuntime; deployment remains a
+// separate, live-environment acceptance step.
 
 // checkedInSchedulerActivationPin is the reviewed expectation for every field of
 // schedulerActivation. Update it in the SAME commit that flips a flag, with the
 // evidence for the flip in the commit message.
 var checkedInSchedulerActivationPin = map[string]bool{
-	"goOwnsMarkers": false,
+	"goOwnsMarkers": true,
 }
 
-// schedulerReadinessNamesClosedWhenDormant are the readiness names the dormant
-// path must register as unavailable. Hard-coded rather than read from the
-// production call, because a test that asks the code under test what it should
-// have done proves nothing.
-var schedulerReadinessNamesClosedWhenDormant = []string{
-	"domain_postgres",
-	"queue_postgres",
-	"coordinator_postgres",
-	"river_schema",
-	"scheduler_loop",
-}
-
-// TestProductionSchedulerConfigurationIsDormant asserts the state the process
-// reaches, not the value of a variable.
+// TestProductionSchedulerConfigurationBuildsTheReviewedLoop asserts the state
+// the process reaches, not the value of a variable.
 //
 // This is the pin that survives a second activation literal, an init-time
 // assignment, a parallel activation type, and a test-only reset of the global:
 // it goes through the production wrapper and checks the outcome. If someone
-// activates the scheduler by any route, this test fails.
+// disables the scheduler by any route, this test fails.
 //
 // The cfg passed in is config.Load's own real output for schedulerSpec.Service
 // with no environment set, not a hand-built config.Config{} literal.
@@ -82,15 +72,24 @@ var schedulerReadinessNamesClosedWhenDormant = []string{
 // and "what production would actually compute for this input", for every
 // field config.Load can populate without a real secret being set.
 //
-// NOT covered by this, and disclosed rather than assumed closed: a field that
-// config.Load only populates when a secret environment variable is actually
-// set (cfg.CoordinatorDatabaseURI.Configured(), for instance) still reads
-// zero here, because supplying a real one would make this an integration
-// test against infrastructure that may not exist. A future
-// configureSchedulerDependencies that activates specifically on a CONFIGURED
-// coordinator URI, rather than on the checked-in activation map, would still
-// pass this test undetected.
-func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
+// The production factory is replaced only to avoid opening real PostgreSQL
+// pools. TestSchedulerProductionFactoryBuildsReviewedRuntime separately proves
+// that the real factory builds and starts both the product and fixed loops with
+// their readiness checks.
+func TestProductionSchedulerConfigurationBuildsTheReviewedLoop(t *testing.T) {
+	original := productionSchedulerDependencySources
+	t.Cleanup(func() { productionSchedulerDependencySources = original })
+
+	built := false
+	productionSchedulerDependencySources = schedulerDependencySources{
+		buildLoop: func(_ context.Context, cfg config.Config, registry *health.Registry, _ ...*slog.Logger) (lifecycle.Component, error) {
+			built = true
+			if cfg.Service != schedulerSpec.Service || registry == nil {
+				t.Fatalf("production config/service=%q registry=%v", cfg.Service, registry)
+			}
+			return schedulerTestComponent{}, nil
+		},
+	}
 	registry := health.NewRegistry(time.Second)
 
 	cfg, err := config.Load(config.Spec{
@@ -101,54 +100,12 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 		t.Fatalf("loading a production-defaulted config for %q: %v", schedulerSpec.Service, err)
 	}
 
-	components, err := configureSchedulerDependencies(context.Background(), cfg, registry)
+	components, err := configureSchedulerDependencies(context.Background(), cfg, registry, nil)
 
-	if err != nil {
-		t.Fatalf(
-			"the production scheduler configuration returned an error (%v). The "+
-				"dormant path is expected to register closed readiness and return "+
-				"nil error; an error here means this test can no longer tell "+
-				"dormant from activated, so fix the test before trusting it.",
-			err,
-		)
-	}
-	if len(components) != 0 {
-		t.Fatalf(
-			"the production scheduler configuration built %d lifecycle "+
-				"component(s). A dormant scheduler must build none and must not "+
-				"open a PostgreSQL pool. If activation is intended, that is a "+
-				"reviewed source change: update the pin in this file, record the "+
-				"evidence, and expect this test to need rewriting.",
-			len(components),
-		)
+	if err != nil || !built || len(components) != 1 || components[0].Name() != "scheduler-test-loop" {
+		t.Fatalf("production activation built=%t components=%v err=%v", built, components, err)
 	}
 
-	// SetReady is what a started process does; do it here so Readiness reports
-	// the per-name checks rather than short-circuiting on "runtime".
-	registry.SetReady(true)
-	readiness := registry.Readiness(context.Background())
-	if readiness.Ready {
-		t.Fatal(
-			"the dormant production configuration reports READY. Every externally " +
-				"visible name must stay closed while the scheduler owns nothing, or " +
-				"an operator sees a healthy scheduler that schedules nothing.",
-		)
-	}
-	failed := make(map[string]bool, len(readiness.Failed))
-	for _, name := range readiness.Failed {
-		failed[name] = true
-	}
-	for _, name := range schedulerReadinessNamesClosedWhenDormant {
-		if !failed[name] {
-			t.Errorf(
-				"readiness name %q is not among the failing checks %v. The dormant "+
-					"path must register every one of these as unavailable; a name that "+
-					"is simply absent is worse than one that fails, because /readyz "+
-					"cannot report on a check nobody registered.",
-				name, readiness.Failed,
-			)
-		}
-	}
 }
 
 // TestSchedulerSpecUsesTheConfigurationThisFilePins pins the spec-to-function
@@ -206,7 +163,7 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // NOT PINNED: a future configureSchedulerDependencies that branches on a
 // config.Config field only populated when a real secret environment variable
 // is set (cfg.CoordinatorDatabaseURI.Configured(), for instance), rather than
-// on checkedInSchedulerActivation. TestProductionSchedulerConfigurationIsDormant
+// on checkedInSchedulerActivation. TestProductionSchedulerConfigurationBuildsTheReviewedLoop
 // passes config.Load's own defaulted output, which closes the version of this
 // where the branch condition is merely non-empty (config.Load already
 // defaults most fields); it does not close a branch on whether a SECRET was
@@ -216,26 +173,32 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // And, as stated above, neither pin proves that flipping the seam retains the
 // capability the seam guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
-	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
+	// Retargeted (CHAOS-3903): the scheduler moved to the logger-aware hook so
+	// the fixed maintenance loop can name the schedules that fail a window.
+	// The guard this replaces did its job -- it refused to keep pinning a field
+	// shell.Main had stopped invoking -- so the mirror-image check is kept: if
+	// the wiring ever moves BACK, this pin must be retargeted again rather than
+	// silently covering nothing.
+	if schedulerSpec.ConfigureDependencies != nil {
 		t.Fatal(
-			"schedulerSpec now sets ConfigureDependenciesWithLogger. shell.Main may " +
-				"call that instead of ConfigureDependencies, so the behavioural pin " +
+			"schedulerSpec now sets ConfigureDependencies. shell.Main refuses a spec " +
+				"with both hooks and would call the other one, so the behavioural pin " +
 				"below no longer proves anything about the production path. Retarget " +
 				"the pin at whichever field shell.Main actually invokes.",
 		)
 	}
-	if schedulerSpec.ConfigureDependencies == nil {
+	if schedulerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal(
-			"schedulerSpec.ConfigureDependencies is nil, so this pin covers nothing " +
-				"that production runs",
+			"schedulerSpec.ConfigureDependenciesWithLogger is nil, so this pin covers " +
+				"nothing that production runs",
 		)
 	}
 
 	pinned := reflect.ValueOf(configureSchedulerDependencies).Pointer()
-	wired := reflect.ValueOf(schedulerSpec.ConfigureDependencies).Pointer()
+	wired := reflect.ValueOf(schedulerSpec.ConfigureDependenciesWithLogger).Pointer()
 	if pinned != wired {
 		t.Fatal(
-			"schedulerSpec.ConfigureDependencies is NOT " +
+			"schedulerSpec.ConfigureDependenciesWithLogger is NOT " +
 				"configureSchedulerDependencies. The behavioural pin therefore tests a " +
 				"function the binary does not call, and activation could ship green. " +
 				"Either restore the wiring or retarget the pin at the function " +

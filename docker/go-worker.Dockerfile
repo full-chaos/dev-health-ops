@@ -26,6 +26,8 @@ COPY cmd ./cmd
 COPY contracts ./contracts
 COPY deploy/go-workers ./deploy/go-workers
 COPY internal ./internal
+COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml
+COPY src/dev_health_ops/config/investment_areas.yaml ./src/dev_health_ops/config/investment_areas.yaml
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -51,6 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     mkdir -p \
       /runtime/worker/usr/local/bin \
       /runtime/worker/app/contracts/jobs \
+      /runtime/worker/app/config \
       /runtime/worker/app/deploy/go-workers \
       /runtime/scheduler/usr/local/bin \
       /runtime/scheduler/app/contracts/jobs \
@@ -61,15 +64,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/stream-runner/usr/local/bin \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
+      /runtime/operator/app/contracts/sync-dispatch \
       /runtime/operator/app/deploy/go-workers \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
       /runtime/contractcheck/app/deploy/go-workers \
       /runtime/migrate/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
+    cp /out/dev-health-workerctl /runtime/worker/usr/local/bin/dev-health-workerctl; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/profiles.json /runtime/scheduler/app/deploy/go-workers/profiles.json; \
+    cp /src/deploy/go-workers/deployment.json /runtime/scheduler/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
     cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
@@ -77,11 +82,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /out/dev-health-workerctl /runtime/operator/usr/local/bin/dev-health-workerctl; \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/profiles.json /runtime/worker/app/deploy/go-workers/profiles.json; \
+    cp /src/deploy/go-workers/deployment.json /runtime/worker/app/deploy/go-workers/deployment.json; \
+    cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
+    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/worker/app/config/investment_areas.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
+    cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1; \
+    cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/profiles.json /runtime/contractcheck/app/deploy/go-workers/profiles.json; \
+    cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 

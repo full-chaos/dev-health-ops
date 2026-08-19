@@ -7,9 +7,11 @@ import (
 )
 
 // queueAuthorizationQuery proves the queue-control login has only the River
-// plus completion-fence capabilities it requires. In particular, it cannot create
-// database objects, touch arbitrary semantic tables, or insert producer-owned
-// outbox rows. Every predicate operates on effective privileges.
+// plus completion-fence capabilities it requires. Its only semantic-table
+// privileges are read-only sync_runs/sync_run_units access for bounding
+// terminal delivery repair to active work. In particular, it cannot create database objects, touch
+// arbitrary semantic tables, or insert producer-owned outbox rows. Every
+// predicate operates on effective privileges.
 const queueAuthorizationQuery = `
 WITH river_tables AS (
 	SELECT class.oid
@@ -36,9 +38,12 @@ WITH river_tables AS (
 		AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
 		AND class.relname NOT IN (
 			'worker_job_outbox',
+			'worker_job_delivery_abandonments',
 			'worker_job_completion_fences',
 			'sync_dispatch_outbox',
-			'sync_dispatch_transport_routes'
+			'sync_dispatch_transport_routes',
+			'sync_runs',
+			'sync_run_units'
 		)
 ), public_sequences AS (
 	SELECT class.oid
@@ -69,6 +74,52 @@ SELECT
 			AND NOT rolreplication
 			AND NOT rolbypassrls
 	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'sync_run_units'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'sync_runs'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
 	AND NOT EXISTS (
 		SELECT 1 FROM member_roles
 		WHERE pg_has_role(current_user, oid, 'MEMBER')
@@ -91,6 +142,29 @@ SELECT
 			AND NOT has_any_column_privilege(
 				current_user, class.oid, 'INSERT, REFERENCES'
 			)
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'worker_job_delivery_abandonments'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')

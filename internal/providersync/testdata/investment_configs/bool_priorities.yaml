@@ -1,0 +1,16 @@
+# A BOOLEAN priority. Python bool IS an int subclass, so True sorts as 1 --
+# BEFORE the 9 below -- rather than raising. Both engines must agree here; this
+# is the case that catches a port routing bool to "Python cannot order this".
+rules:
+  - id: bool_priority
+    priority: true
+    match:
+      always: true
+    output:
+      investment_area: bool_area
+  - id: int_priority
+    priority: 9
+    match:
+      always: true
+    output:
+      investment_area: int_area

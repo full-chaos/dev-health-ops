@@ -15,6 +15,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests.canonical_incident_orchestration_support import (
+    SYNC_FIXTURE_BEFORE,
     CanonicalState,
     create_canonical_graph,
 )
@@ -43,7 +44,7 @@ def plan_run(state: CanonicalState) -> tuple[SyncRun, SyncRunUnit]:
             org_id=str(state.enabled_org_id),
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="test",
-            before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+            before=SYNC_FIXTURE_BEFORE,
             dataset_keys=(graph.dataset.dataset_key,),
         ),
     )
@@ -78,7 +79,7 @@ def plan_zero_unit_run(state: CanonicalState) -> SyncRun:
             org_id=str(state.enabled_org_id),
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="test",
-            before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+            before=SYNC_FIXTURE_BEFORE,
             source_ids=(),
             dataset_keys=(graph.dataset.dataset_key,),
         ),

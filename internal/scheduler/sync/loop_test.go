@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,13 +84,16 @@ func openLoopReadiness(t *testing.T, registry *health.Registry) {
 	}
 }
 
-func waitForLoopReadiness(t *testing.T, registry *health.Registry, wantReady bool) health.Readiness {
+func waitForLoopReadiness(t *testing.T, loop *Loop, registry *health.Registry, wantReady bool) health.Readiness {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	var status health.Readiness
 	for time.Now().Before(deadline) {
 		status = registry.Readiness(context.Background())
-		if status.Ready == wantReady {
+		loop.mu.Lock()
+		up := loop.up
+		loop.mu.Unlock()
+		if status.Ready == wantReady && up == wantReady {
 			return status
 		}
 		time.Sleep(time.Millisecond)
@@ -224,7 +228,8 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- firstTick
 	<-failed
-	if status := waitForLoopReadiness(t, registry, false); !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
+	status := waitForLoopReadiness(t, loop, registry, false)
+	if status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
 		t.Fatalf("failed readiness = %#v", status)
 	}
 	var failedMetrics bytes.Buffer
@@ -247,7 +252,7 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- retryTick
 	<-recovered
-	waitForLoopReadiness(t, registry, true)
+	waitForLoopReadiness(t, loop, registry, true)
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -410,4 +415,32 @@ func (stepper schedulerHandoffStepper) HandoffDueResult(
 	context.Context, time.Time, int, Coordinator,
 ) (HandoffResult, error) {
 	return stepper()
+}
+
+// TestLoopWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
+// path is inert: a loop given no Logger must not panic on a failed handoff
+// window, and it must not fall back to slog.Default() -- that would send
+// output to a sink other than the process's configured JSON logger, so a
+// log-capturing test could pass while production ships nothing (CHAOS-3907).
+// Mirrors scheduler/fixed's own nil-logger test for its literal sibling loop.
+func TestLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	failure := errors.New("initial handoff probe failure")
+	stepper := loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+		return HandoffResult{}, failure
+	})
+	loop, _ := newTestLoop(t, stepper, &testLoopClock{})
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted initial handoff failure")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
+	}
 }

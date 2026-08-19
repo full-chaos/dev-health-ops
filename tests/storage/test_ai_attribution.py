@@ -521,7 +521,7 @@ class TestResolvedViewPrecedence:
             _resolve_effective([rec])
 
     def test_full_precedence_chain_manual_wins(self) -> None:
-        """All 7 sources present — MANUAL always wins."""
+        """All 8 sources present — MANUAL always wins."""
         sources = list(AIAttributionSource)
         records = [_make_record(source=s, confidence=0.5) for s in sources]
         winner = _resolve_effective(records)

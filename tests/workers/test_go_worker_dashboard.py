@@ -38,6 +38,32 @@ def test_go_worker_dashboard_covers_required_runtime_signals() -> None:
     assert pool_panel["targets"][0]["legendFormat"] == "{{pool}}"
 
 
+def test_go_worker_dashboard_uses_runtime_metric_dimensions() -> None:
+    dashboard = json.loads(DASHBOARD_PATH.read_text(encoding="utf-8"))
+    expressions = {
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel.get("targets", [])
+    }
+
+    assert "max by (queue) (worker_job_oldest_age_seconds)" in expressions
+    assert "sum by (queue) (worker_jobs_available)" in expressions
+    assert "sum by (queue) (worker_jobs_running)" in expressions
+    assert "max by (queue) (worker_execution_saturation_ratio)" in expressions
+    assert (
+        "histogram_quantile(0.95, sum by (le, queue, kind) "
+        "(rate(worker_job_duration_seconds_bucket[10m])))"
+    ) in expressions
+    assert "max by (job, instance) (worker_stream_lag)" in expressions
+    assert "max by (job, instance) (worker_stream_pending)" in expressions
+
+
+def test_go_worker_dashboard_has_no_fixed_worker_profile_label() -> None:
+    serialized = DASHBOARD_PATH.read_text(encoding="utf-8")
+    assert "profile" not in serialized.lower()
+    assert "worker_group" not in serialized.lower()
+
+
 def test_go_worker_dashboard_queries_are_low_cardinality_and_payload_free() -> None:
     serialized = DASHBOARD_PATH.read_text(encoding="utf-8")
     for prohibited in (

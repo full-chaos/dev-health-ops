@@ -11,7 +11,7 @@ from dev_health_ops.workers.job_contracts import (
     ContractCapability,
     ContractDecodeError,
     MigrationJob,
-    capabilities_for_profile,
+    capabilities_for_queues,
     check_rollout_capabilities,
     default_contract_root,
     load_migration_jobs,
@@ -78,62 +78,128 @@ def test_migration_registry_rejects_state_route_mismatch(tmp_path: Path) -> None
         load_migration_jobs(candidate)
 
 
-def test_rollout_requires_every_live_profile_report() -> None:
+def test_python_registry_rejects_profile_field(tmp_path: Path) -> None:
+    candidate = tmp_path / "v1"
+    shutil.copytree(default_contract_root(), candidate)
+    registry_path = candidate / "registry.json"
+    document = json.loads(registry_path.read_text())
+    document["jobs"][0]["profile"] = "ops"
+    registry_path.write_text(json.dumps(document))
+
+    with pytest.raises(ContractDecodeError, match="registry job must be an object"):
+        load_registry(candidate)
+
+
+def test_migration_registry_rejects_required_profiles_field(tmp_path: Path) -> None:
+    candidate = tmp_path / "v1"
+    shutil.copytree(default_contract_root(), candidate)
+    state_path = candidate / "migration-state.json"
+    document = json.loads(state_path.read_text())
+    document["jobs"][0]["required_profiles"] = ["ops"]
+    state_path.write_text(json.dumps(document))
+
+    with pytest.raises(ContractDecodeError, match="migration job must be an object"):
+        load_migration_jobs(candidate)
+
+
+def test_capability_reports_canonicalize_queue_claims() -> None:
+    report = CapabilityReport(
+        contracts=(),
+        queues=("sync", "ops", "sync"),
+    )
+
+    assert report.queues == ("ops", "sync")
+
+
+def test_rollout_requires_every_live_queue_report() -> None:
     registry = load_registry()
-    migration_jobs = load_migration_jobs()
-    current = capabilities_for_profile(registry, "ops")
-    heavy = capabilities_for_profile(registry, "heavy")
-    sync = capabilities_for_profile(registry, "sync")
+    current = capabilities_for_queues(
+        registry,
+        ("coverage", "heartbeat", "retention", "webhooks"),
+    )
+    heavy = capabilities_for_queues(
+        registry,
+        ("investment", "metrics", "reports", "workgraph"),
+    )
+    sync = capabilities_for_queues(registry, ("sync", "sync_provider"))
+    overlapping = capabilities_for_queues(
+        registry,
+        ("retention", "heartbeat", "coverage", "heartbeat"),
+    )
+    heartbeat_job = (
+        MigrationJob(
+            kind="system.heartbeat",
+            producer_version=1,
+            required_queues=("heartbeat",),
+        ),
+    )
+    assert overlapping.queues == ("coverage", "heartbeat", "retention")
+    assert current.queues == ("coverage", "heartbeat", "retention", "webhooks")
+    assert heavy.queues == ("investment", "metrics", "reports", "workgraph")
+    assert sync.queues == ("sync", "sync_provider")
+    with pytest.raises(
+        ContractDecodeError, match="required queue has no capability report"
+    ):
+        check_rollout_capabilities(
+            heartbeat_job,
+            (CapabilityReport(contracts=current.contracts, queues=("retention",)),),
+            (current,),
+        )
     check_rollout_capabilities(
-        migration_jobs,
-        (current, current, heavy, heavy, sync, sync),
+        heartbeat_job,
+        (current, heavy, sync),
         (current, heavy, sync),
     )
 
     stale = CapabilityReport(
-        profile="ops",
         contracts=(
             ContractCapability(
                 kind="system.heartbeat",
                 versions=(2,),
                 schema_digests=((2, "sha256:" + "a" * 64),),
             ),
-            current.contracts[1],
         ),
+        queues=("heartbeat",),
     )
     with pytest.raises(ContractDecodeError, match="lacks producer support"):
         check_rollout_capabilities(
-            migration_jobs,
-            (current, stale, heavy, heavy, sync, sync),
-            (current, heavy, sync),
+            heartbeat_job,
+            (current, stale),
+            (current,),
         )
 
     stale_digest = CapabilityReport(
-        profile="ops",
         contracts=(
             ContractCapability(
-                kind=current.contracts[0].kind,
-                versions=current.contracts[0].versions,
+                kind="system.heartbeat",
+                versions=(1,),
                 schema_digests=((1, "sha256:" + "0" * 64),),
             ),
-            current.contracts[1],
         ),
+        queues=("heartbeat",),
     )
     with pytest.raises(ContractDecodeError, match="lacks producer support"):
         check_rollout_capabilities(
-            migration_jobs,
-            (current, stale_digest, heavy, heavy, sync, sync),
-            (current, heavy, sync),
+            heartbeat_job,
+            (current, stale_digest),
+            (current,),
         )
     with pytest.raises(ContractDecodeError, match="no capability report"):
-        check_rollout_capabilities(migration_jobs, (), (current, heavy, sync))
+        check_rollout_capabilities(heartbeat_job, (), (current,))
 
 
 def test_rolling_deployment_holds_producer_at_n_minus_one() -> None:
-    current = capabilities_for_profile(load_registry(), "ops")
-    digest = dict(current.contracts[0].schema_digests)[1]
+    current = capabilities_for_queues(
+        load_registry(),
+        ("coverage", "heartbeat", "retention", "webhooks"),
+    )
+    heartbeat = next(
+        contract
+        for contract in current.contracts
+        if contract.kind == "system.heartbeat"
+    )
+    digest = dict(heartbeat.schema_digests)[1]
     old_binary = CapabilityReport(
-        profile="ops",
         contracts=(
             ContractCapability(
                 kind="system.heartbeat",
@@ -141,9 +207,9 @@ def test_rolling_deployment_holds_producer_at_n_minus_one() -> None:
                 schema_digests=((1, digest),),
             ),
         ),
+        queues=("heartbeat",),
     )
     new_binary = CapabilityReport(
-        profile="ops",
         contracts=(
             ContractCapability(
                 kind="system.heartbeat",
@@ -151,12 +217,13 @@ def test_rolling_deployment_holds_producer_at_n_minus_one() -> None:
                 schema_digests=((1, digest), (2, digest)),
             ),
         ),
+        queues=("heartbeat",),
     )
     producer_n_minus_one = (
         MigrationJob(
             kind="system.heartbeat",
             producer_version=1,
-            required_profiles=("ops",),
+            required_queues=("heartbeat",),
         ),
     )
     check_rollout_capabilities(
@@ -167,7 +234,7 @@ def test_rolling_deployment_holds_producer_at_n_minus_one() -> None:
         MigrationJob(
             kind="system.heartbeat",
             producer_version=2,
-            required_profiles=("ops",),
+            required_queues=("heartbeat",),
         ),
     )
     with pytest.raises(ContractDecodeError, match="lacks producer support"):

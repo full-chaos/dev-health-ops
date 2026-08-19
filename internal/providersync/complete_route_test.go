@@ -42,6 +42,38 @@ func TestCompleteRouteExecutorRunsEnabledMultiEffectUnit(t *testing.T) {
 	}
 }
 
+func TestCompleteRouteExecutorBindsCredentialScopedEffectsBeforeCollection(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+	bound := false
+	handler := &effectsFactoryObservingHandler{
+		bound: &bound, batch: completeRouteFixture(t, claim),
+	}
+	ledger := &memoryEffectLedger{}
+	sink := &memoryEffectSink{}
+	executor := completeRouteExecutor(now, handler, ledger, nil)
+	executor.EffectsFactory = func(
+		credential providerfoundation.Credential,
+	) (EffectSink, EffectReadback, error) {
+		if credential.Provider != "launchdarkly" || credential.ID != firstCredentialID {
+			return nil, nil, ErrInvalidConfiguration
+		}
+		bound = true
+		return sink, nil, nil
+	}
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound || result.Effects.Written != 4 || len(sink.destinations) != 4 {
+		t.Fatalf("bound=%t result=%+v writes=%v", bound, result, sink.destinations)
+	}
+}
+
 func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
@@ -70,11 +102,43 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *test
 
 func TestCompleteRouteExecutorRejectsAliasActivation(t *testing.T) {
 	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	descriptor, ok := (CompleteRouteSwitches{
 		LinearWorkItems: true,
 	}).Descriptor("linear", "work-item-comments")
-	if !ok || descriptor.RouteReady || descriptor.RouteEnabled {
+	if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+		descriptor.RouteDataset != "work-items" {
 		t.Fatalf("alias descriptor=%+v ok=%v", descriptor, ok)
+	}
+	claim, session := completeRouteSessionFor(
+		t, now, false, "linear", "work-item-comments",
+	)
+	credentials := &trackingCompleteRouteCredentialRepository{provider: "linear"}
+	budget := &trackingCompleteRouteBudget{}
+	gate := &trackingCompleteRouteGate{}
+	doer := &trackingCompleteRouteDoer{}
+	executor := completeRouteExecutor(
+		now, &requestingCompleteRouteHandler{batch: completeRouteFixture(t, claim)},
+		nil, nil,
+	)
+	executor.Credentials.Repository = credentials
+	executor.Budget = budget
+	executor.Gate = func(
+		Claim, *providerfoundation.HTTPClient,
+	) providerfoundation.BackoffGate {
+		return gate
+	}
+	executor.Doer = doer
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("alias execution error=%v", err)
+	}
+	if credentials.resolves != 0 || budget.acquires != 0 || gate.waits != 0 ||
+		doer.requests != 0 {
+		t.Fatalf(
+			"alias crossed preflight: credentials=%d budget=%d gate=%d requests=%d",
+			credentials.resolves, budget.acquires, gate.waits, doer.requests,
+		)
 	}
 }
 
@@ -167,7 +231,20 @@ func completeRouteSession(
 	recovered bool,
 ) (Claim, *LeaseSession) {
 	t.Helper()
-	unit := nativeTestClaim("launchdarkly", "feature-flags").Unit
+	return completeRouteSessionFor(
+		t, now, recovered, "launchdarkly", "feature-flags",
+	)
+}
+
+func completeRouteSessionFor(
+	t *testing.T,
+	now time.Time,
+	recovered bool,
+	provider string,
+	dataset string,
+) (Claim, *LeaseSession) {
+	t.Helper()
+	unit := nativeTestClaim(provider, dataset).Unit
 	status := "dispatching"
 	if recovered {
 		status = "running"
@@ -275,6 +352,24 @@ type requestingCompleteRouteHandler struct {
 	batch CompleteRouteBatch
 }
 
+type effectsFactoryObservingHandler struct {
+	bound *bool
+	batch CompleteRouteBatch
+}
+
+func (handler *effectsFactoryObservingHandler) Collect(
+	_ context.Context,
+	_ Claim,
+	_ providerfoundation.Credential,
+	_ *providerfoundation.HTTPClient,
+	_ time.Time,
+) (CompleteRouteBatch, error) {
+	if handler.bound == nil || !*handler.bound {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	return handler.batch, nil
+}
+
 func (handler *requestingCompleteRouteHandler) Collect(
 	ctx context.Context,
 	_ Claim,
@@ -319,6 +414,23 @@ func (completeRouteCredentialRepository) ResolveEncrypted(
 ) (providerfoundation.EncryptedCredential, error) {
 	return providerfoundation.EncryptedCredential{
 		ID: firstCredentialID, Provider: "launchdarkly", Name: "fixture",
+		Active: true, Ciphertext: secrets.NewValue("opaque"),
+		Config: map[string]string{"base_url": "https://fixture.test"},
+	}, nil
+}
+
+type trackingCompleteRouteCredentialRepository struct {
+	provider string
+	resolves int
+}
+
+func (repository *trackingCompleteRouteCredentialRepository) ResolveEncrypted(
+	context.Context,
+	providerfoundation.TenantScope,
+) (providerfoundation.EncryptedCredential, error) {
+	repository.resolves++
+	return providerfoundation.EncryptedCredential{
+		ID: firstCredentialID, Provider: repository.provider, Name: "fixture",
 		Active: true, Ciphertext: secrets.NewValue("opaque"),
 		Config: map[string]string{"base_url": "https://fixture.test"},
 	}, nil

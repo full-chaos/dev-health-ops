@@ -4,6 +4,7 @@ package providerfoundation_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,6 @@ func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 	t.Cleanup(client.Close)
 
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
-		Profiles: []string{"sync"},
 		Budgets: []jobruntime.BudgetLabels{
 			{Provider: "github", CostClass: "medium"},
 		},
@@ -60,6 +60,19 @@ func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 		t.Fatalf("Acquire() = %v, %v", reservation, err)
 	}
 	t.Cleanup(func() { _ = reservation.Release(context.Background()) })
+
+	// A full, healthy reservation bucket is contention, not a store outage.
+	// The distinction is what lets the provider-unit worker snooze without
+	// consuming its bounded River attempt budget. Before this regression fix,
+	// both cases returned ErrBudgetUnavailable and five sibling collisions
+	// terminalized a healthy sync unit as provider_unit_exhausted.
+	blocked, err := store.Acquire(ctx, key)
+	if blocked != nil || !errors.Is(err, providerfoundation.ErrBudgetContended) {
+		t.Fatalf("contended Acquire() = %v, %v; want nil, ErrBudgetContended", blocked, err)
+	}
+	if errors.Is(err, providerfoundation.ErrBudgetUnavailable) {
+		t.Fatalf("healthy contention was classified as a budget-store outage: %v", err)
+	}
 
 	gate := providerfoundation.ValkeyBackoffGate{
 		Client: client, Provider: "github", OrgID: "org-1", Host: "api.github.com",
@@ -82,8 +95,8 @@ func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 	}
 
 	text := collector.PrometheusText()
-	if !strings.Contains(text, `worker_budget_wait_seconds_count{provider="github",cost_class="medium"} 2`) {
-		t.Fatalf("expected two non-zero worker_budget_wait_seconds observations (Acquire + Wait), got:\n%s", text)
+	if !strings.Contains(text, `worker_budget_wait_seconds_count{provider="github",cost_class="medium"} 3`) {
+		t.Fatalf("expected three worker_budget_wait_seconds observations (grant + contention + backoff), got:\n%s", text)
 	}
 	if strings.Contains(text, `worker_budget_wait_seconds_sum{provider="github",cost_class="medium"} 0`) {
 		t.Fatalf("expected a non-zero wait sum from the real Penalize/Wait round trip, got:\n%s", text)

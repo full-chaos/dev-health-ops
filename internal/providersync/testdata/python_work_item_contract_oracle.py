@@ -60,8 +60,9 @@ def main() -> int:
                         "sync_prs": sync_prs,
                         "include_issues": kwargs.get("include_issues"),
                         "include_pull_requests": kwargs.get("include_pull_requests"),
-                        "has_fetch_comments": "fetch_comments" in kwargs,
-                        "has_fetch_milestones": "fetch_milestones" in kwargs,
+                        "fetch_comments": kwargs.get("fetch_comments"),
+                        "fetch_milestones": kwargs.get("fetch_milestones"),
+                        "comments_limit": kwargs.get("comments_limit"),
                     }
                 )
             result[provider][dataset] = {"variants": variants}

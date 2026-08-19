@@ -72,6 +72,7 @@ class WorkItemIngestionOptions:
     include_pull_requests: bool | None = None
     fetch_comments: bool | None = None
     fetch_milestones: bool | None = None
+    comments_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,7 @@ class ProviderBatch:
     reopen_events: list[WorkItemReopenEvent] = field(default_factory=list)
     worklogs: list[Worklog] = field(default_factory=list)
     # AI attribution signals detected during provider normalization.
-    # Populated by providers that support AI detection (currently GitHub).
+    # Populated by providers that support AI detection (GitHub and Linear).
     # Records are passed to the ClickHouse sink by the sync orchestrator.
     # NOTE: storage-worker (CHAOS-1579) may add this field too — trivial merge.
     ai_attributions: list[AIAttributionRecord] = field(default_factory=list)

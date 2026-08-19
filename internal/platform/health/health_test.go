@@ -66,6 +66,21 @@ func TestReadinessFailsClosedForGateAndRequiredChecks(t *testing.T) {
 	}
 }
 
+func TestRequiredChecksCanPassBeforePublicReadinessGateOpens(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(time.Second)
+	if err := registry.RegisterRequired("database", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if status := registry.CheckRequired(context.Background()); !status.Ready || len(status.Failed) != 0 {
+		t.Fatalf("preclaim check = %#v", status)
+	}
+	if status := registry.Readiness(context.Background()); status.Ready ||
+		!slices.Equal(status.Failed, []string{"runtime"}) {
+		t.Fatalf("public readiness opened early: %#v", status)
+	}
+}
+
 func TestReadinessTimesOutAndContainsPanics(t *testing.T) {
 	t.Parallel()
 
@@ -254,6 +269,167 @@ func TestMetricsSourcesAreStableAndFailWithoutPartialOutput(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("metrics body leaked source error text %q\nbody:\n%s", forbidden, body)
 		}
+	}
+}
+
+func TestMetricsExposesPerCheckFailureGauge(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(100 * time.Millisecond)
+	// Registered out of alphabetical order so a pass requires the handler to
+	// sort, not merely echo registration order.
+	if err := registry.RegisterRequired("queue_postgres", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error {
+		return errors.New("dial postgres://user:secret@db/app")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("cache_redis", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetReady(true)
+	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "test", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d", response.Code)
+	}
+	body := response.Body.String()
+
+	// dev_health_runtime_ready must still collapse to the aggregate bit,
+	// unchanged, so existing alerts wired to it keep working.
+	if !strings.Contains(body, "dev_health_runtime_ready 0\n") {
+		t.Fatalf("aggregate ready gauge changed semantics:\n%s", body)
+	}
+
+	// A failing required check must be named, not just reflected in the
+	// aggregate boolean.
+	if !strings.Contains(body, `dev_health_runtime_check_failed{check="domain_postgres"} 1`) {
+		t.Fatalf("failing check was not named in per-check gauge:\n%s", body)
+	}
+	// Passing checks must emit an explicit 0, not be left absent, so an
+	// alert can fire on the absence of a failure value rather than the
+	// absence of a series.
+	for _, want := range []string{
+		`dev_health_runtime_check_failed{check="cache_redis"} 0`,
+		`dev_health_runtime_check_failed{check="queue_postgres"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("passing check missing explicit 0 series %q:\n%s", want, body)
+		}
+	}
+
+	if got := strings.Count(body, "# TYPE dev_health_runtime_check_failed gauge"); got != 1 {
+		t.Fatalf("expected exactly one TYPE line for dev_health_runtime_check_failed, got %d", got)
+	}
+
+	// Output ordering must be deterministic (sorted by check name), not
+	// registration order, so scrapes and diffs are stable.
+	first := strings.Index(body, `check="cache_redis"`)
+	second := strings.Index(body, `check="domain_postgres"`)
+	third := strings.Index(body, `check="queue_postgres"`)
+	if first < 0 || second < 0 || third < 0 || !(first < second && second < third) {
+		t.Fatalf("per-check gauge lines are not sorted by name:\n%s", body)
+	}
+
+	if strings.Contains(body, "secret") || strings.Contains(body, "postgres://") {
+		t.Fatalf("per-check gauge leaked dependency error text:\n%s", body)
+	}
+}
+
+func TestMetricsPerCheckGaugeOrderingIsStableAcrossScrapes(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(100 * time.Millisecond)
+	for _, name := range []string{"zzz_last", "aaa_first", "mmm_middle"} {
+		if err := registry.RegisterRequired(name, func(context.Context) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry.SetReady(true)
+	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "test", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extractCheckLines := func() []string {
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		var lines []string
+		for _, line := range strings.Split(response.Body.String(), "\n") {
+			if strings.HasPrefix(line, "dev_health_runtime_check_failed{") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	first := extractCheckLines()
+	second := extractCheckLines()
+	third := extractCheckLines()
+	if len(first) != 3 {
+		t.Fatalf("expected 3 per-check gauge lines, got %d: %v", len(first), first)
+	}
+	if !slices.Equal(first, second) || !slices.Equal(second, third) {
+		t.Fatalf("per-check gauge ordering was not deterministic across scrapes:\n%v\n%v\n%v", first, second, third)
+	}
+	want := []string{
+		`dev_health_runtime_check_failed{check="aaa_first"} 0`,
+		`dev_health_runtime_check_failed{check="mmm_middle"} 0`,
+		`dev_health_runtime_check_failed{check="zzz_last"} 0`,
+	}
+	if !slices.Equal(first, want) {
+		t.Fatalf("per-check gauge lines = %v, want %v", first, want)
+	}
+}
+
+func TestReadinessCheckNamesRejectValuesThatWouldCorruptExpositionFormat(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(100 * time.Millisecond)
+	for _, unsafeName := range []string{
+		`bad"name`,
+		"bad\nname",
+		"bad name",
+		"",
+	} {
+		if err := registry.RegisterRequired(unsafeName, func(context.Context) error { return nil }); err == nil {
+			t.Fatalf("expected registering unsafe check name %q to fail checkNamePattern", unsafeName)
+		}
+	}
+	if err := registry.RegisterRequired("safe_name", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.RequiredCount(); got != 1 {
+		t.Fatalf("expected only the safe name to register, got %d required checks", got)
+	}
+	registry.SetReady(true)
+
+	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "test", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	body := response.Body.String()
+
+	// A rejected registration must never reach the exposition format: a raw
+	// quote or newline in a label value would corrupt the Prometheus text
+	// format for every metric after it in the scrape.
+	if strings.Contains(body, `bad"name`) || strings.Contains(body, "bad\nname") || strings.Contains(body, "bad name") {
+		t.Fatalf("unsafe check name reached /metrics output:\n%s", body)
+	}
+	if !strings.Contains(body, `dev_health_runtime_check_failed{check="safe_name"} 0`) {
+		t.Fatalf("safe check name missing from /metrics output:\n%s", body)
 	}
 }
 

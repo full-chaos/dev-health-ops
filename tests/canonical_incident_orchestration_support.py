@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -20,6 +20,20 @@ from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
 from tests._helpers import seed_sync_dispatch_transport_routes
+
+# Planner fixture instants must sit INSIDE the cold-start window, which is
+# `now - initial_sync_depth` and is 30 days here: the fixtures leave
+# Integration.config empty, and _get_tier_backfill_days_cap clamps any larger
+# per-integration override back to the community cap anyway. An absolute
+# instant therefore ages out of the window as the calendar advances. The
+# previous pin, 2026-07-20 12:00Z, became unreachable at exactly 2026-08-19
+# 12:00Z, and 14 feature-gate tests started failing mid-day with a bare
+# NoResultFound on a run that planned no units -- on main as well as on any
+# open branch, with no code change to blame. Anchoring to the clock keeps the
+# same relationships (dispatch instant, watermark two hours earlier) while
+# staying inside the window on every future run.
+SYNC_FIXTURE_BEFORE = datetime.now(timezone.utc) - timedelta(days=5)
+SYNC_FIXTURE_LAST_SYNC_AT = SYNC_FIXTURE_BEFORE - timedelta(hours=2)
 
 FEATURE_KEY = "canonical_incident_ingestion"
 
@@ -150,7 +164,7 @@ def create_canonical_graph(
             is_active=True,
             integration_id=integration.id,
         )
-        config.last_sync_at = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
+        config.last_sync_at = SYNC_FIXTURE_LAST_SYNC_AT
     state.session.add_all([source, dataset, *([config] if config is not None else [])])
     state.session.commit()
     return CanonicalGraph(

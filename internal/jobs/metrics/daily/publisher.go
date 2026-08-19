@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -21,7 +22,10 @@ func NewPostgresPublisher(
 ) (*PostgresPublisher, error) {
 	producer, err := joboutbox.NewProducer(pool, registry)
 	if err != nil {
-		return nil, ErrUnavailable
+		// Keep the producer construction cause reachable, same as the publish
+		// paths below -- collapsing it to an undifferentiated "unavailable"
+		// is the CHAOS-3903/3905 defect.
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return &PostgresPublisher{producer: producer, registry: registry}, nil
 }
@@ -68,9 +72,17 @@ func (publisher *PostgresPublisher) PublishDispatchTx(
 	}
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
-			return ErrInvalidState
+			// Keep BOTH sentinels reachable, matching the remaining-metrics
+			// publisher: callers classify on ErrInvalidState, and the outbox
+			// reason underneath names which rule rejected the envelope
+			// (CHAOS-3903).
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
-		return ErrUnavailable
+		// Any other producer error (e.g. a Postgres write failure) keeps its
+		// cause too -- dropping it here was the same defect CHAOS-3903 fixed
+		// on the contract/policy branch above, just left on this one
+		// (CHAOS-3905).
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
 }
@@ -98,7 +110,7 @@ func (publisher *PostgresPublisher) PublishPartition(
 	if err := publisher.producer.PublishStandalone(
 		ctx, jobcontract.KindDailyMetricsPartition, envelope,
 	); err != nil {
-		return ErrUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
 }
@@ -126,7 +138,7 @@ func (publisher *PostgresPublisher) PublishFinalizeTx(
 	if err := publisher.producer.Publish(
 		ctx, tx, jobcontract.KindDailyMetricsFinalize, envelope,
 	); err != nil {
-		return ErrUnavailable
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // oracleCase is one input case for a generic Python<->Go oracle comparison
@@ -51,8 +54,9 @@ type oracleCase struct {
 //     would collide at float64 precision, or a datetime and a same-looking
 //     plain string, never compare equal by accident) -- UNLESS the field is
 //     declared in the Python pair's excluded_fields OR the caller's own
-//     goOnlyFields. Every exclusion requires a written reason, mirroring
-//     expected_survivor_reason in scripts/mutation_harness.py.
+//     goOnlyFields. Every exclusion requires a written reason: an omission
+//     must be declared in writing at registration time, never discovered by a
+//     reader wondering why a field went untested.
 //
 // This is the single comparator every pair reuses; a pair difference is a
 // difference in WHAT gets compared (the pair id, the cases, the Go row
@@ -203,6 +207,7 @@ func oracleDivergences(
 	if err != nil {
 		t.Fatalf("execute Python generic row oracle for %s: %v: %s", pairID, err, output)
 	}
+	recordGenericOracleProof(t, packageDir, pairID)
 
 	// UseNumber, defensively: every leaf this oracle emits is type-tagged
 	// (codex finding #2) so no bare JSON number should reach this decode at
@@ -260,6 +265,28 @@ func oracleDivergences(
 		pythonRowsByCase, goRowsByCase, decoded.ExcludedFields, goOnlyFields,
 	)...)
 	return messages
+}
+
+// recordGenericOracleProof records one successfully executed checked-in pair.
+// ci/check_go.sh derives the complete expected inventory from oracle_pairs/*.py
+// and requires every corresponding marker after the package passes. Keeping
+// this after CombinedOutput succeeds means selecting the interpreter, running
+// an unrelated Python test, or failing to import a pair cannot satisfy the
+// dedicated live-oracle gate.
+func recordGenericOracleProof(t *testing.T, packageDir, pairID string) {
+	t.Helper()
+	pairFilename := strings.ReplaceAll(pairID, "/", "_") + ".py"
+	if filepath.Base(pairFilename) != pairFilename {
+		t.Fatalf("pair %q does not map to a safe oracle proof filename", pairID)
+	}
+	pairSource := filepath.Join(packageDir, "testdata", "oracle_pairs", pairFilename)
+	if info, err := os.Stat(pairSource); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("pair %q does not map to a checked-in oracle source %s", pairID, pairSource)
+	}
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), pairFilename)
+	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {
+		t.Fatalf("write live Python oracle proof for %s: %v", pairID, err)
+	}
 }
 
 // checkExclusionIntegrity is CHAOS-3162's third-review fix: a declared
@@ -376,6 +403,21 @@ func typedEncode(t *testing.T, v reflect.Value) any {
 	}
 	if timeValue, ok := v.Interface().(time.Time); ok {
 		return map[string]any{"t": "datetime", "v": timeValue.UTC().Format(time.RFC3339Nano)}
+	}
+	if integer, ok := v.Interface().(big.Int); ok {
+		return map[string]any{"t": "int", "v": integer.String()}
+	}
+	if identifier, ok := v.Interface().(uuid.UUID); ok {
+		return map[string]any{"t": "uuid", "v": strings.ToLower(identifier.String())}
+	}
+	// A calendar day is not a string and not an instant. Python's _encode tags
+	// datetime.date as "date", so a Go day type whose underlying kind is string
+	// would otherwise be tagged "str" and compare unequal to EVERY Python date
+	// -- or, worse, compare equal to a genuinely-string field that happens to
+	// hold the same text. Types that persist as a ClickHouse Date declare
+	// oracleDate() to opt into the matching tag.
+	if dated, ok := v.Interface().(interface{ oracleDate() string }); ok {
+		return map[string]any{"t": "date", "v": dated.oracleDate()}
 	}
 	switch v.Kind() {
 	case reflect.String:
@@ -533,6 +575,15 @@ func diffRows(
 // it. Values are parsed back and compared numerically/temporally instead
 // of as text; everything else still falls through to reflect.DeepEqual
 // unchanged.
+// A pair whose row is COLUMN-ORIENTED (one key per production field, holding
+// the ordered list of that field's values across every record the case
+// produced) puts its leaves one level down, inside a []any. A top-level-only
+// canonicalization would then compare those lists with reflect.DeepEqual on
+// their raw text and report `[5.0]` vs `[5]` as a divergence -- reintroducing
+// the exact false positive the scalar path exists to remove, for every pair
+// that compares a list of records rather than a single row. So recurse:
+// containers are compared element-wise with this same function, and only
+// genuine leaves reach the text/DeepEqual comparison.
 func typedValuesEqual(pythonValue, goValue any) bool {
 	pythonTagged, pythonOK := asTaggedValue(pythonValue)
 	goTagged, goOK := asTaggedValue(goValue)
@@ -551,6 +602,32 @@ func typedValuesEqual(pythonValue, goValue any) bool {
 				return pythonTime.Equal(goTime)
 			}
 		}
+		return reflect.DeepEqual(pythonValue, goValue)
+	}
+	switch python := pythonValue.(type) {
+	case []any:
+		other, ok := goValue.([]any)
+		if !ok || len(other) != len(python) {
+			return false
+		}
+		for index := range python {
+			if !typedValuesEqual(python[index], other[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		other, ok := goValue.(map[string]any)
+		if !ok || len(other) != len(python) {
+			return false
+		}
+		for key, value := range python {
+			otherValue, exists := other[key]
+			if !exists || !typedValuesEqual(value, otherValue) {
+				return false
+			}
+		}
+		return true
 	}
 	return reflect.DeepEqual(pythonValue, goValue)
 }
@@ -595,7 +672,7 @@ func asTaggedValue(value any) (taggedValue, bool) {
 // directive's file list drifted out of sync with what oracleDivergences
 // actually executes.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py
+//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/python_investment_call_site.py testdata/oracle_pairs/*.py
 var embeddedOracleSources embed.FS
 
 func assertOracleSourcesUnchangedSinceBuild(t *testing.T) {
@@ -870,6 +947,48 @@ func TestTypedValuesEqualCanonicalizesFloatAndDatetimeText(t *testing.T) {
 			name:      "int tag: exact text comparison, untouched by the float/datetime path",
 			a:         tagged("int", "5"),
 			b:         tagged("int", "5.0"), // an int side must never accept float-shaped text
+			wantEqual: false,
+		},
+		{
+			name:      "column list of equal floats with different text",
+			a:         []any{tagged("float", "5.0"), tagged("float", "0.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "0")},
+			wantEqual: true,
+		},
+		{
+			name:      "column list where one element genuinely differs",
+			a:         []any{tagged("float", "5.0"), tagged("float", "1.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "2")},
+			wantEqual: false,
+		},
+		{
+			name:      "column lists of different length are never equal",
+			a:         []any{tagged("float", "5.0")},
+			b:         []any{tagged("float", "5"), tagged("float", "5")},
+			wantEqual: false,
+		},
+		{
+			name:      "column list holding nulls stays position-sensitive",
+			a:         []any{nil, tagged("float", "5.0")},
+			b:         []any{tagged("float", "5"), nil},
+			wantEqual: false,
+		},
+		{
+			name:      "nested object canonicalizes its float leaves",
+			a:         map[string]any{"hours": tagged("float", "5.0"), "name": tagged("str", "a")},
+			b:         map[string]any{"hours": tagged("float", "5"), "name": tagged("str", "a")},
+			wantEqual: true,
+		},
+		{
+			name:      "nested object missing a key is not equal",
+			a:         map[string]any{"hours": tagged("float", "5.0"), "name": tagged("str", "a")},
+			b:         map[string]any{"hours": tagged("float", "5")},
+			wantEqual: false,
+		},
+		{
+			name:      "differing tags on the same text are never equal",
+			a:         tagged("date", "2026-08-04"),
+			b:         tagged("str", "2026-08-04"),
 			wantEqual: false,
 		},
 	}

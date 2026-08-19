@@ -2,14 +2,12 @@ package main
 
 import "github.com/full-chaos/dev-health-ops/internal/platform/shell"
 
-// The worker has no default profile. Every profile it accepts owns registered
-// job kinds, and an operator must name the one this process runs: starting a
-// River consumer with nothing registered is unrepresentable rather than
-// permanently unready. The empty "latency" profile was removed with CUT-02
-// because it could never satisfy exact startup validation.
+// A worker consumes only the registered queues selected by its deployment.
+// Queue selection is explicit and static for the process lifetime; deployment
+// topology is not encoded as an application profile.
 var workerSpec = shell.Spec{
 	Service:                         "dev-health-worker",
-	Profiles:                        []string{"sync", "heavy", "ops"},
+	RequireQueues:                   true,
 	ConfigureDependenciesWithLogger: configureWorkerDependenciesWithLogger,
 }
 

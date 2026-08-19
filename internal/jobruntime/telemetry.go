@@ -14,18 +14,19 @@ import (
 )
 
 const (
-	maxMetricJobs       = 512
-	maxMetricProfiles   = 32
-	maxMetricDomains    = 128
-	maxMetricSyncLeases = 128
-	maxMetricStreams    = 64
-	maxMetricBudgets    = 128
-	poolDomain          = "domain"
-	poolQueueControl    = "queue_control"
-	poolResultAcquired  = "acquired"
-	poolResultTimeout   = "timeout"
-	poolResultCancelled = "cancelled"
-	poolResultError     = "error"
+	maxMetricJobs               = 512
+	maxMetricQueues             = 32
+	maxMetricDomains            = 128
+	maxMetricSyncLeases         = 128
+	maxMetricStreams            = 64
+	maxMetricBudgets            = 128
+	maxMetricConcurrencyBudgets = 128
+	poolDomain                  = "domain"
+	poolQueueControl            = "queue_control"
+	poolResultAcquired          = "acquired"
+	poolResultTimeout           = "timeout"
+	poolResultCancelled         = "cancelled"
+	poolResultError             = "error"
 )
 
 // SyncLeaseResult is the bounded result vocabulary for expired sync-lease
@@ -36,6 +37,16 @@ type SyncLeaseResult string
 const (
 	SyncLeaseResultRetrying SyncLeaseResult = "retrying"
 	SyncLeaseResultFailed   SyncLeaseResult = "failed"
+)
+
+// ReportRunLeaseResult is the bounded durable outcome of one expired report
+// execution lease. Retrying means a new holder was fenced in; failed means the
+// persisted reclaim ceiling terminalized the ReportRun.
+type ReportRunLeaseResult string
+
+const (
+	ReportRunLeaseResultRetrying ReportRunLeaseResult = "retrying"
+	ReportRunLeaseResultFailed   ReportRunLeaseResult = "failed"
 )
 
 var durationBuckets = []float64{
@@ -56,6 +67,14 @@ type BudgetLabels struct {
 	CostClass string
 }
 
+// ConcurrencyBudgetLabels identify one registry-owned durable budget without
+// including organization identity. Tenant identity is a lease-key concern,
+// never a metric label.
+type ConcurrencyBudgetLabels struct {
+	Kind  string
+	Scope string
+}
+
 // SyncLeaseLabels are pre-registered provider/dataset-family dimensions for
 // expired sync-lease recovery. They never contain tenant or repository data.
 type SyncLeaseLabels struct {
@@ -64,20 +83,20 @@ type SyncLeaseLabels struct {
 }
 
 // MetricDimensions is the complete low-cardinality vocabulary accepted by a
-// MetricsCollector. Jobs normally come from Registry.Profile; sync-lease,
-// stream, and budget pairs come from static deployment configuration.
+// MetricsCollector. Jobs normally come from registry-selected queues;
+// sync-lease, stream, and budget pairs come from static deployment
+// configuration.
 type MetricDimensions struct {
-	Profiles    []string
-	Jobs        []JobLabels
-	DomainTypes []string
-	SyncLeases  []SyncLeaseLabels
-	Streams     []StreamLabels
-	Budgets     []BudgetLabels
+	Jobs               []JobLabels
+	DomainTypes        []string
+	SyncLeases         []SyncLeaseLabels
+	Streams            []StreamLabels
+	Budgets            []BudgetLabels
+	ConcurrencyBudgets []ConcurrencyBudgetLabels
 }
 
 type queueLabels struct {
-	Profile string
-	Queue   string
+	Queue string
 }
 
 type jobResultLabels struct {
@@ -99,6 +118,11 @@ type cancellationLabels struct {
 type syncLeaseResultLabels struct {
 	Lease  SyncLeaseLabels
 	Result SyncLeaseResult
+}
+
+type concurrencyBudgetResultLabels struct {
+	Budget ConcurrencyBudgetLabels
+	Result string
 }
 
 type poolAcquireLabels struct {
@@ -135,88 +159,88 @@ func (histogram *histogram) observe(value float64) {
 type MetricsCollector struct {
 	mu sync.RWMutex
 
-	allowedJobs       map[JobLabels]struct{}
-	allowedQueues     map[queueLabels]struct{}
-	allowedKinds      map[string]struct{}
-	allowedProfiles   map[string]struct{}
-	allowedDomains    map[string]struct{}
-	allowedSyncLeases map[SyncLeaseLabels]struct{}
-	allowedStreams    map[StreamLabels]struct{}
-	allowedBudgets    map[BudgetLabels]struct{}
+	allowedJobs               map[JobLabels]struct{}
+	allowedQueues             map[queueLabels]struct{}
+	allowedKinds              map[string]struct{}
+	allowedDomains            map[string]struct{}
+	allowedSyncLeases         map[SyncLeaseLabels]struct{}
+	allowedStreams            map[StreamLabels]struct{}
+	allowedBudgets            map[BudgetLabels]struct{}
+	allowedConcurrencyBudgets map[ConcurrencyBudgetLabels]struct{}
 
 	runtimeInfo *RuntimeInfo
 
-	jobsAvailable       map[JobLabels]int64
-	jobOldestAge        map[queueLabels]float64
-	jobsRunning         map[JobLabels]int64
-	executionSaturation map[string]float64
-	jobWait             map[JobLabels]*histogram
-	jobDuration         map[jobResultLabels]*histogram
-	jobAttempts         map[attemptLabels]uint64
-	jobPanics           map[string]uint64
-	cancellations       map[cancellationLabels]uint64
-	domainMismatch      map[string]uint64
-	syncLeaseExpired    map[syncLeaseResultLabels]uint64
+	jobsAvailable         map[JobLabels]int64
+	jobOldestAge          map[queueLabels]float64
+	jobsRunning           map[JobLabels]int64
+	executionSaturation   map[queueLabels]float64
+	jobWait               map[JobLabels]*histogram
+	jobDuration           map[jobResultLabels]*histogram
+	jobAttempts           map[attemptLabels]uint64
+	jobPanics             map[string]uint64
+	cancellations         map[cancellationLabels]uint64
+	domainMismatch        map[string]uint64
+	syncLeaseExpired      map[syncLeaseResultLabels]uint64
+	reportRunLeaseExpired map[ReportRunLeaseResult]uint64
 
-	streamLag           map[StreamLabels]int64
-	streamPending       map[StreamLabels]int64
-	streamOldestPending map[StreamLabels]float64
-	budgetWait          map[BudgetLabels]*histogram
-	poolSaturation      map[string]float64
-	poolAcquire         map[poolAcquireLabels]*histogram
+	streamLag                 map[StreamLabels]int64
+	streamPending             map[StreamLabels]int64
+	streamOldestPending       map[StreamLabels]float64
+	budgetWait                map[BudgetLabels]*histogram
+	concurrencyBudgetCapacity map[ConcurrencyBudgetLabels]int64
+	concurrencyBudgetLeased   map[ConcurrencyBudgetLabels]int64
+	concurrencyBudgetWait     map[ConcurrencyBudgetLabels]*histogram
+	concurrencyBudgetEvents   map[concurrencyBudgetResultLabels]uint64
+	poolSaturation            map[string]float64
+	poolAcquire               map[poolAcquireLabels]*histogram
 }
 
 var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
+var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
 		return nil, errors.New("metric job dimensions exceed bounds")
 	}
-	if len(dimensions.Profiles) > maxMetricProfiles || len(dimensions.DomainTypes) > maxMetricDomains ||
+	if len(dimensions.DomainTypes) > maxMetricDomains ||
 		len(dimensions.SyncLeases) > maxMetricSyncLeases || len(dimensions.Streams) > maxMetricStreams ||
-		len(dimensions.Budgets) > maxMetricBudgets {
+		len(dimensions.Budgets) > maxMetricBudgets || len(dimensions.ConcurrencyBudgets) > maxMetricConcurrencyBudgets {
 		return nil, errors.New("metric dimensions exceed cardinality bounds")
 	}
 
 	collector := &MetricsCollector{
-		allowedJobs:         make(map[JobLabels]struct{}, len(dimensions.Jobs)),
-		allowedQueues:       make(map[queueLabels]struct{}),
-		allowedKinds:        make(map[string]struct{}),
-		allowedProfiles:     make(map[string]struct{}),
-		allowedDomains:      make(map[string]struct{}, len(dimensions.DomainTypes)),
-		allowedSyncLeases:   make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
-		allowedStreams:      make(map[StreamLabels]struct{}, len(dimensions.Streams)),
-		allowedBudgets:      make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
-		jobsAvailable:       make(map[JobLabels]int64, len(dimensions.Jobs)),
-		jobOldestAge:        make(map[queueLabels]float64),
-		jobsRunning:         make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation: make(map[string]float64),
-		jobWait:             make(map[JobLabels]*histogram, len(dimensions.Jobs)),
-		jobDuration:         make(map[jobResultLabels]*histogram),
-		jobAttempts:         make(map[attemptLabels]uint64),
-		jobPanics:           make(map[string]uint64),
-		cancellations:       make(map[cancellationLabels]uint64),
-		domainMismatch:      make(map[string]uint64, len(dimensions.DomainTypes)),
-		syncLeaseExpired:    make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
-		streamLag:           make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamPending:       make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamOldestPending: make(map[StreamLabels]float64, len(dimensions.Streams)),
-		budgetWait:          make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
-		poolSaturation:      map[string]float64{poolDomain: 0, poolQueueControl: 0},
-		poolAcquire:         make(map[poolAcquireLabels]*histogram, 8),
+		allowedJobs:               make(map[JobLabels]struct{}, len(dimensions.Jobs)),
+		allowedQueues:             make(map[queueLabels]struct{}),
+		allowedKinds:              make(map[string]struct{}),
+		allowedDomains:            make(map[string]struct{}, len(dimensions.DomainTypes)),
+		allowedSyncLeases:         make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
+		allowedStreams:            make(map[StreamLabels]struct{}, len(dimensions.Streams)),
+		allowedBudgets:            make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
+		allowedConcurrencyBudgets: make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		jobsAvailable:             make(map[JobLabels]int64, len(dimensions.Jobs)),
+		jobOldestAge:              make(map[queueLabels]float64),
+		jobsRunning:               make(map[JobLabels]int64, len(dimensions.Jobs)),
+		executionSaturation:       make(map[queueLabels]float64),
+		jobWait:                   make(map[JobLabels]*histogram, len(dimensions.Jobs)),
+		jobDuration:               make(map[jobResultLabels]*histogram),
+		jobAttempts:               make(map[attemptLabels]uint64),
+		jobPanics:                 make(map[string]uint64),
+		cancellations:             make(map[cancellationLabels]uint64),
+		domainMismatch:            make(map[string]uint64, len(dimensions.DomainTypes)),
+		syncLeaseExpired:          make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
+		reportRunLeaseExpired:     make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		streamLag:                 make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamPending:             make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamOldestPending:       make(map[StreamLabels]float64, len(dimensions.Streams)),
+		budgetWait:                make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
+		concurrencyBudgetCapacity: make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetLeased:   make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetWait:     make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetEvents:   make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
+		poolSaturation:            map[string]float64{poolDomain: 0, poolQueueControl: 0},
+		poolAcquire:               make(map[poolAcquireLabels]*histogram, 8),
 	}
-	for _, profile := range dimensions.Profiles {
-		if !metricIdentifier(profile, 32) {
-			return nil, errors.New("invalid metric profile dimension")
-		}
-		if _, duplicate := collector.allowedProfiles[profile]; duplicate {
-			return nil, errors.New("duplicate metric profile dimension")
-		}
-		collector.allowedProfiles[profile] = struct{}{}
-		collector.executionSaturation[profile] = 0
-	}
-
 	for _, labels := range dimensions.Jobs {
 		if err := validateJobLabels(labels); err != nil {
 			return nil, err
@@ -225,26 +249,20 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 			return nil, errors.New("duplicate metric job dimensions")
 		}
 		collector.allowedJobs[labels] = struct{}{}
-		collector.allowedQueues[queueLabels{Profile: labels.Profile, Queue: labels.Queue}] = struct{}{}
+		queue := queueLabels{Queue: labels.Queue}
+		collector.allowedQueues[queue] = struct{}{}
 		collector.allowedKinds[labels.Kind] = struct{}{}
-		if len(dimensions.Profiles) > 0 {
-			if _, ok := collector.allowedProfiles[labels.Profile]; !ok {
-				return nil, errors.New("metric job profile is not registered")
-			}
-		} else {
-			collector.allowedProfiles[labels.Profile] = struct{}{}
-			collector.executionSaturation[labels.Profile] = 0
-		}
+		collector.executionSaturation[queue] = 0
 		collector.jobsAvailable[labels] = 0
 		collector.jobsRunning[labels] = 0
 		collector.jobWait[labels] = newHistogram()
 		collector.jobPanics[labels.Kind] = 0
 	}
-	if len(collector.allowedProfiles) == 0 {
-		return nil, errors.New("at least one metric profile dimension is required")
-	}
 	for labels := range collector.allowedQueues {
 		collector.jobOldestAge[labels] = 0
+	}
+	if len(collector.allowedQueues) > maxMetricQueues {
+		return nil, errors.New("metric queue dimensions exceed bounds")
 	}
 	for _, domainType := range dimensions.DomainTypes {
 		if !metricIdentifier(domainType, 64) {
@@ -268,6 +286,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 			collector.syncLeaseExpired[syncLeaseResultLabels{Lease: labels, Result: result}] = 0
 		}
 	}
+	for _, result := range reportRunLeaseResults() {
+		collector.reportRunLeaseExpired[result] = 0
+	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
 			return nil, errors.New("invalid metric stream dimensions")
@@ -290,6 +311,22 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		collector.allowedBudgets[labels] = struct{}{}
 		collector.budgetWait[labels] = newHistogram()
 	}
+	for _, labels := range dimensions.ConcurrencyBudgets {
+		if !metricIdentifier(labels.Kind, 96) ||
+			(labels.Scope != "fleet" && labels.Scope != "organization") {
+			return nil, errors.New("invalid concurrency budget dimensions")
+		}
+		if _, duplicate := collector.allowedConcurrencyBudgets[labels]; duplicate {
+			return nil, errors.New("duplicate concurrency budget dimensions")
+		}
+		collector.allowedConcurrencyBudgets[labels] = struct{}{}
+		collector.concurrencyBudgetCapacity[labels] = 0
+		collector.concurrencyBudgetLeased[labels] = 0
+		collector.concurrencyBudgetWait[labels] = newHistogram()
+		for _, result := range []string{"expired", "recovered"} {
+			collector.concurrencyBudgetEvents[concurrencyBudgetResultLabels{Budget: labels, Result: result}] = 0
+		}
+	}
 	for _, pool := range []string{poolDomain, poolQueueControl} {
 		for _, result := range poolAcquireResults() {
 			collector.poolAcquire[poolAcquireLabels{Pool: pool, Result: result}] = newHistogram()
@@ -298,30 +335,34 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	return collector, nil
 }
 
-// DimensionsForProfile derives job and domain dimensions from the validated
+// DimensionsForQueues derives job and domain dimensions from the validated
 // runtime registry. Sync-lease, stream, and budget pairs remain explicit
 // inputs here since they come from static deployment configuration rather
 // than the job registry.
-func DimensionsForProfile(registry *Registry, profile string, streams []StreamLabels, budgets []BudgetLabels, syncLeases []SyncLeaseLabels) (MetricDimensions, error) {
+func DimensionsForQueues(registry *Registry, queues []string, streams []StreamLabels, budgets []BudgetLabels, syncLeases []SyncLeaseLabels, concurrencyBudgets ...[]ConcurrencyBudgetLabels) (MetricDimensions, error) {
 	if registry == nil {
 		return MetricDimensions{}, errors.New("runtime registry is required")
 	}
-	descriptors := registry.Profile(profile)
+	descriptors, err := registry.SelectedQueues(queues)
+	if err != nil {
+		return MetricDimensions{}, err
+	}
 	if len(descriptors) == 0 {
-		return MetricDimensions{}, errors.New("runtime profile has no registered jobs")
+		return MetricDimensions{}, errors.New("runtime queues have no registered jobs")
 	}
 	dimensions := MetricDimensions{
-		Profiles:   []string{profile},
 		Streams:    append([]StreamLabels(nil), streams...),
 		Budgets:    append([]BudgetLabels(nil), budgets...),
 		SyncLeases: append([]SyncLeaseLabels(nil), syncLeases...),
 	}
+	if len(concurrencyBudgets) > 0 {
+		dimensions.ConcurrencyBudgets = append([]ConcurrencyBudgetLabels(nil), concurrencyBudgets[0]...)
+	}
 	domains := make(map[string]struct{})
 	for _, descriptor := range descriptors {
 		dimensions.Jobs = append(dimensions.Jobs, JobLabels{
-			Profile: descriptor.Profile,
-			Queue:   descriptor.Queue,
-			Kind:    descriptor.Kind,
+			Queue: descriptor.Queue,
+			Kind:  descriptor.Kind,
 		})
 		domains[descriptor.DomainLink] = struct{}{}
 	}
@@ -333,14 +374,11 @@ func DimensionsForProfile(registry *Registry, profile string, streams []StreamLa
 }
 
 func (collector *MetricsCollector) RuntimeRegistered(_ context.Context, info RuntimeInfo) {
-	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) || !boundedIdentity(info.Profile, 32) {
+	if !boundedIdentity(info.Version, 128) || !boundedIdentity(info.Commit, 128) {
 		return
 	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if _, ok := collector.allowedProfiles[info.Profile]; !ok {
-		return
-	}
 	copy := info
 	collector.runtimeInfo = &copy
 }
@@ -421,11 +459,11 @@ func (collector *MetricsCollector) SetJobsAvailable(labels JobLabels, count int6
 	return nil
 }
 
-func (collector *MetricsCollector) SetJobOldestAge(profile, queue string, age time.Duration) error {
+func (collector *MetricsCollector) SetJobOldestAge(queue string, age time.Duration) error {
 	if age < 0 {
 		return errors.New("oldest job age cannot be negative")
 	}
-	labels := queueLabels{Profile: profile, Queue: queue}
+	labels := queueLabels{Queue: queue}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if _, ok := collector.allowedQueues[labels]; !ok {
@@ -472,16 +510,29 @@ func (collector *MetricsCollector) ObserveSyncLeaseExpired(labels SyncLeaseLabel
 	return nil
 }
 
-func (collector *MetricsCollector) SetExecutionSaturation(profile string, ratio float64) error {
-	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
-		return errors.New("execution saturation must be between zero and one")
+// ObserveReportRunLeaseExpired records only durable expired-lease outcomes.
+// A worker that loses the row-lock race must not call this method.
+func (collector *MetricsCollector) ObserveReportRunLeaseExpired(result ReportRunLeaseResult) error {
+	if !validReportRunLeaseResult(result) {
+		return errors.New("report run lease result is not registered")
 	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if _, ok := collector.allowedProfiles[profile]; !ok {
-		return errors.New("execution saturation profile is not registered")
+	collector.reportRunLeaseExpired[result]++
+	return nil
+}
+
+func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
+	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
+		return errors.New("execution saturation must be between zero and one")
 	}
-	collector.executionSaturation[profile] = ratio
+	labels := queueLabels{Queue: queue}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedQueues[labels]; !ok {
+		return errors.New("execution saturation queue is not registered")
+	}
+	collector.executionSaturation[labels] = ratio
 	return nil
 }
 
@@ -538,6 +589,60 @@ func (collector *MetricsCollector) ObserveProviderBudgetWait(labels BudgetLabels
 	return nil
 }
 
+func (collector *MetricsCollector) SetConcurrencyBudgetCapacity(labels ConcurrencyBudgetLabels, capacity int) error {
+	if capacity < 1 {
+		return errors.New("concurrency budget capacity must be positive")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedConcurrencyBudgets[labels]; !ok {
+		return errors.New("concurrency budget dimensions are not registered")
+	}
+	collector.concurrencyBudgetCapacity[labels] = int64(capacity)
+	return nil
+}
+
+func (collector *MetricsCollector) SetConcurrencyBudgetLeased(labels ConcurrencyBudgetLabels, leased int) error {
+	if leased < 0 {
+		return errors.New("concurrency budget leased capacity cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedConcurrencyBudgets[labels]; !ok {
+		return errors.New("concurrency budget dimensions are not registered")
+	}
+	collector.concurrencyBudgetLeased[labels] = int64(leased)
+	return nil
+}
+
+func (collector *MetricsCollector) ObserveConcurrencyBudgetWait(labels ConcurrencyBudgetLabels, wait time.Duration) error {
+	if wait < 0 {
+		return errors.New("concurrency budget wait cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	metric, ok := collector.concurrencyBudgetWait[labels]
+	if !ok {
+		return errors.New("concurrency budget dimensions are not registered")
+	}
+	metric.observe(wait.Seconds())
+	return nil
+}
+
+func (collector *MetricsCollector) ObserveConcurrencyBudgetExpiry(labels ConcurrencyBudgetLabels, result string) error {
+	if result != "expired" && result != "recovered" {
+		return errors.New("invalid concurrency budget lease event")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	key := concurrencyBudgetResultLabels{Budget: labels, Result: result}
+	if _, ok := collector.concurrencyBudgetEvents[key]; !ok {
+		return errors.New("concurrency budget dimensions are not registered")
+	}
+	collector.concurrencyBudgetEvents[key]++
+	return nil
+}
+
 func (collector *MetricsCollector) SetDatabasePoolSaturation(pool string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("database pool saturation must be between zero and one")
@@ -574,8 +679,10 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeRuntime(&output)
 	collector.writeJobs(&output)
 	collector.writeSyncLeases(&output)
+	collector.writeReportRunLeases(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
+	collector.writeConcurrencyBudgets(&output)
 	collector.writePools(&output)
 	return output.String()
 }
@@ -590,37 +697,36 @@ func (collector *MetricsCollector) WritePrometheus(output io.Writer) error {
 }
 
 func (collector *MetricsCollector) writeRuntime(output *strings.Builder) {
-	writeMetadata(output, "worker_runtime_info", "Build and profile identity for this worker runtime.", "gauge")
+	writeMetadata(output, "worker_runtime_info", "Build identity for this worker runtime.", "gauge")
 	if collector.runtimeInfo != nil {
 		writeFloatSample(output, "worker_runtime_info", []metricLabel{
 			{"version", collector.runtimeInfo.Version},
 			{"commit", collector.runtimeInfo.Commit},
-			{"profile", collector.runtimeInfo.Profile},
 		}, 1)
 	}
 }
 
 func (collector *MetricsCollector) writeJobs(output *strings.Builder) {
 	jobs := sortedJobs(collector.allowedJobs)
-	writeMetadata(output, "worker_jobs_available", "Current jobs available to the worker by profile, queue, and kind.", "gauge")
+	writeMetadata(output, "worker_jobs_available", "Current jobs available to the worker by queue and kind.", "gauge")
 	for _, labels := range jobs {
 		writeIntSample(output, "worker_jobs_available", jobMetricLabels(labels), collector.jobsAvailable[labels])
 	}
 
 	queues := sortedQueues(collector.allowedQueues)
-	writeMetadata(output, "worker_job_oldest_age_seconds", "Age of the oldest available job by profile and queue.", "gauge")
+	writeMetadata(output, "worker_job_oldest_age_seconds", "Age of the oldest available job by queue.", "gauge")
 	for _, labels := range queues {
 		writeFloatSample(output, "worker_job_oldest_age_seconds", queueMetricLabels(labels), collector.jobOldestAge[labels])
 	}
 
-	writeMetadata(output, "worker_jobs_running", "Current jobs executing by profile, queue, and kind.", "gauge")
+	writeMetadata(output, "worker_jobs_running", "Current jobs executing by queue and kind.", "gauge")
 	for _, labels := range jobs {
 		writeIntSample(output, "worker_jobs_running", jobMetricLabels(labels), collector.jobsRunning[labels])
 	}
 
-	writeMetadata(output, "worker_execution_saturation_ratio", "Fraction of configured worker execution capacity currently in use.", "gauge")
-	for _, profile := range sortedStrings(collector.allowedProfiles) {
-		writeFloatSample(output, "worker_execution_saturation_ratio", []metricLabel{{"profile", profile}}, collector.executionSaturation[profile])
+	writeMetadata(output, "worker_execution_saturation_ratio", "Fraction of THIS process's configured worker execution capacity currently in use. Per-process, not fleet-wide: average across replicas for fleet utilization.", "gauge")
+	for _, labels := range queues {
+		writeFloatSample(output, "worker_execution_saturation_ratio", queueMetricLabels(labels), collector.executionSaturation[labels])
 	}
 
 	writeMetadata(output, "worker_job_wait_seconds", "Time from job availability to execution start.", "histogram")
@@ -719,12 +825,54 @@ func (collector *MetricsCollector) writeSyncLeases(output *strings.Builder) {
 	}
 }
 
+func (collector *MetricsCollector) writeReportRunLeases(output *strings.Builder) {
+	writeMetadata(output, "worker_report_run_lease_expired_total", "Expired report execution leases by bounded durable result.", "counter")
+	for _, result := range reportRunLeaseResults() {
+		writeUintSample(output, "worker_report_run_lease_expired_total", []metricLabel{
+			{"result", string(result)},
+		}, collector.reportRunLeaseExpired[result])
+	}
+}
+
 func (collector *MetricsCollector) writeBudgets(output *strings.Builder) {
 	writeMetadata(output, "worker_budget_wait_seconds", "Time spent waiting for a provider cost budget.", "histogram")
 	for _, labels := range sortedBudgets(collector.allowedBudgets) {
 		writeHistogram(output, "worker_budget_wait_seconds", []metricLabel{
 			{"provider", labels.Provider}, {"cost_class", labels.CostClass},
 		}, collector.budgetWait[labels])
+	}
+}
+
+func (collector *MetricsCollector) writeConcurrencyBudgets(output *strings.Builder) {
+	labels := make([]ConcurrencyBudgetLabels, 0, len(collector.allowedConcurrencyBudgets))
+	for value := range collector.allowedConcurrencyBudgets {
+		labels = append(labels, value)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		if labels[i].Kind == labels[j].Kind {
+			return labels[i].Scope < labels[j].Scope
+		}
+		return labels[i].Kind < labels[j].Kind
+	})
+	writeMetadata(output, "worker_concurrency_budget_capacity", "Configured durable concurrency budget capacity.", "gauge")
+	for _, labels := range labels {
+		values := []metricLabel{{"kind", labels.Kind}, {"scope", labels.Scope}}
+		writeIntSample(output, "worker_concurrency_budget_capacity", values, collector.concurrencyBudgetCapacity[labels])
+	}
+	writeMetadata(output, "worker_concurrency_budget_leased", "Currently leased durable concurrency capacity.", "gauge")
+	for _, labels := range labels {
+		values := []metricLabel{{"kind", labels.Kind}, {"scope", labels.Scope}}
+		writeIntSample(output, "worker_concurrency_budget_leased", values, collector.concurrencyBudgetLeased[labels])
+	}
+	writeMetadata(output, "worker_concurrency_budget_wait_seconds", "Time spent waiting for durable concurrency capacity.", "histogram")
+	for _, labels := range labels {
+		writeHistogram(output, "worker_concurrency_budget_wait_seconds", []metricLabel{{"kind", labels.Kind}, {"scope", labels.Scope}}, collector.concurrencyBudgetWait[labels])
+	}
+	writeMetadata(output, "worker_concurrency_budget_lease_events_total", "Expired and recovered durable concurrency leases.", "counter")
+	for _, labels := range labels {
+		for _, result := range []string{"expired", "recovered"} {
+			writeUintSample(output, "worker_concurrency_budget_lease_events_total", []metricLabel{{"kind", labels.Kind}, {"scope", labels.Scope}, {"result", result}}, collector.concurrencyBudgetEvents[concurrencyBudgetResultLabels{Budget: labels, Result: result}])
+		}
 	}
 }
 
@@ -817,11 +965,11 @@ func formatMetricFloat(value float64) string {
 }
 
 func jobMetricLabels(labels JobLabels) []metricLabel {
-	return []metricLabel{{"profile", labels.Profile}, {"queue", labels.Queue}, {"kind", labels.Kind}}
+	return []metricLabel{{"queue", labels.Queue}, {"kind", labels.Kind}}
 }
 
 func queueMetricLabels(labels queueLabels) []metricLabel {
-	return []metricLabel{{"profile", labels.Profile}, {"queue", labels.Queue}}
+	return []metricLabel{{"queue", labels.Queue}}
 }
 
 func streamMetricLabels(labels StreamLabels) []metricLabel {
@@ -829,7 +977,7 @@ func streamMetricLabels(labels StreamLabels) []metricLabel {
 }
 
 func validateJobLabels(labels JobLabels) error {
-	if !metricIdentifier(labels.Profile, 32) || !metricIdentifier(labels.Queue, 96) || !metricIdentifier(labels.Kind, 96) {
+	if !metricIdentifier(labels.Queue, 96) || !metricIdentifier(labels.Kind, 96) {
 		return errors.New("invalid metric job dimensions")
 	}
 	return nil
@@ -868,7 +1016,7 @@ func validErrorCategory(category ErrorCategory) bool {
 	switch category {
 	case CategoryNone, CategoryValidation, CategoryPanic, CategoryTimeout, CategoryCancelled,
 		CategoryRetryable, CategoryPermanent, CategoryTerminalDomain, CategoryTenant,
-		CategoryBudget, CategoryIdempotency:
+		CategoryBudget, CategoryRateLimited, CategoryIdempotency:
 		return true
 	default:
 		return false
@@ -881,6 +1029,14 @@ func validSyncLeaseResult(result SyncLeaseResult) bool {
 
 func syncLeaseResults() []SyncLeaseResult {
 	return []SyncLeaseResult{SyncLeaseResultFailed, SyncLeaseResultRetrying}
+}
+
+func validReportRunLeaseResult(result ReportRunLeaseResult) bool {
+	return result == ReportRunLeaseResultRetrying || result == ReportRunLeaseResultFailed
+}
+
+func reportRunLeaseResults() []ReportRunLeaseResult {
+	return []ReportRunLeaseResult{ReportRunLeaseResultFailed, ReportRunLeaseResultRetrying}
 }
 
 func poolAcquireResults() []string {
@@ -897,9 +1053,6 @@ func sortedJobs(values map[JobLabels]struct{}) []JobLabels {
 }
 
 func compareJobs(left, right JobLabels) int {
-	if left.Profile != right.Profile {
-		return strings.Compare(left.Profile, right.Profile)
-	}
 	if left.Queue != right.Queue {
 		return strings.Compare(left.Queue, right.Queue)
 	}
@@ -912,9 +1065,6 @@ func sortedQueues(values map[queueLabels]struct{}) []queueLabels {
 		result = append(result, value)
 	}
 	sort.Slice(result, func(left, right int) bool {
-		if result[left].Profile != result[right].Profile {
-			return result[left].Profile < result[right].Profile
-		}
 		return result[left].Queue < result[right].Queue
 	})
 	return result

@@ -1,0 +1,10 @@
+# `path_prefix:` PRESENT and NULL. Python resolves the prefix list INSIDE the
+# loop over the artifact paths, so this file raises only for an artifact that
+# actually carries paths; with none, the inner loop never runs and the arm just
+# rejects. Both directions are cases over THIS file, which is what makes the
+# raise a property of the artifact rather than of the config.
+rules:
+  - id: null_path_prefix
+    priority: 10
+    match:
+      path_prefix:

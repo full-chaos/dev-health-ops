@@ -98,13 +98,14 @@ type EffectLedgerEntry struct {
 }
 
 type EffectLedgerState struct {
-	SchemaVersion string              `json:"schema_version"`
-	Generation    string              `json:"generation"`
-	Provider      string              `json:"provider"`
-	Dataset       string              `json:"dataset"`
-	Effects       []EffectLedgerEntry `json:"effects"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	SchemaVersion    string                          `json:"schema_version"`
+	Generation       string                          `json:"generation"`
+	Provider         string                          `json:"provider"`
+	Dataset          string                          `json:"dataset"`
+	Effects          []EffectLedgerEntry             `json:"effects"`
+	PreparedSnapshot *PreparedRouteSnapshotReference `json:"prepared_snapshot,omitempty"`
+	CreatedAt        time.Time                       `json:"created_at"`
+	UpdatedAt        time.Time                       `json:"updated_at"`
 }
 
 func NewEffectLedgerState(
@@ -117,9 +118,7 @@ func NewEffectLedgerState(
 		return EffectLedgerState{}, ErrEffectRecoveryUnsafe
 	}
 	batches = append([]EffectBatch(nil), batches...)
-	sort.Slice(batches, func(left, right int) bool {
-		return batches[left].Destination < batches[right].Destination
-	})
+	sortEffectBatches(batches)
 	state := EffectLedgerState{
 		SchemaVersion: "v1", Generation: claim.GenerationKey(),
 		Provider: claim.Provider, Dataset: claim.Dataset,
@@ -143,10 +142,17 @@ func NewEffectLedgerState(
 }
 
 func (state EffectLedgerState) validate() error {
-	if state.SchemaVersion != "v1" || state.Generation == "" ||
+	if (state.SchemaVersion != "v1" && state.SchemaVersion != "v2") || state.Generation == "" ||
 		strings.TrimSpace(state.Provider) == "" || strings.TrimSpace(state.Dataset) == "" ||
 		len(state.Effects) < 1 || len(state.Effects) > maxEffectDestinations ||
 		state.CreatedAt.IsZero() || state.UpdatedAt.IsZero() {
+		return ErrEffectLedgerConflict
+	}
+	if state.SchemaVersion == "v1" && state.PreparedSnapshot != nil {
+		return ErrEffectLedgerConflict
+	}
+	if state.SchemaVersion == "v2" &&
+		(state.PreparedSnapshot == nil || state.PreparedSnapshot.validate() != nil) {
 		return ErrEffectLedgerConflict
 	}
 	seen := map[string]bool{}
@@ -217,6 +223,15 @@ func decodeEffectLedgerState(raw []byte) (EffectLedgerState, error) {
 func sameEffectManifest(left, right EffectLedgerState) bool {
 	if left.SchemaVersion != right.SchemaVersion ||
 		left.Generation != right.Generation || left.Provider != right.Provider ||
+		left.Dataset != right.Dataset || len(left.Effects) != len(right.Effects) ||
+		!samePreparedRouteSnapshotReference(left.PreparedSnapshot, right.PreparedSnapshot) {
+		return false
+	}
+	return sameEffectEntries(left, right)
+}
+
+func sameEffectEntries(left, right EffectLedgerState) bool {
+	if left.Generation != right.Generation || left.Provider != right.Provider ||
 		left.Dataset != right.Dataset || len(left.Effects) != len(right.Effects) {
 		return false
 	}
@@ -242,6 +257,41 @@ type EffectLedger interface {
 		int,
 		string,
 		GenerationBlockResolution,
+		time.Time,
+	) error
+}
+
+// PreparedEffectLedger is the opt-in durable payload sidecar for complete
+// routes whose manifest cannot be deterministically rebuilt from mutable
+// provider state. The same object owns both contracts so a binary cannot wire
+// the effect ledger and its exact recovery payload to different stores.
+type PreparedEffectLedger interface {
+	EffectLedger
+	PrepareRouteSnapshot(
+		context.Context,
+		Claim,
+		CompleteRouteBatch,
+		ShadowComparison,
+		time.Time,
+	) (EffectLedgerState, error)
+	LoadRouteSnapshot(
+		context.Context,
+		Claim,
+		EffectLedgerState,
+		time.Time,
+	) (PreparedRouteManifest, error)
+}
+
+// EffectLedgerReplanner is intentionally separate from EffectLedger. Only a
+// route that can prove its first ordered durable effect is absent may discard
+// a prepared manifest whose provider-dependent rows can no longer be
+// reproduced. The repository rechecks the exact loaded state under the same
+// row lock used by all other ledger transitions.
+type EffectLedgerReplanner interface {
+	ResetPreparedEffectsForReplan(
+		context.Context,
+		Claim,
+		EffectLedgerState,
 		time.Time,
 	) error
 }
@@ -381,6 +431,48 @@ func (repository *PostgresRepository) ResolveEffect(
 	})
 }
 
+func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
+	ctx context.Context,
+	claim Claim,
+	expected EffectLedgerState,
+	now time.Time,
+) error {
+	if !isSafeGitHubBlameReplanState(claim, expected) || now.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	expectedEncoded := encodeEffectLedgerState(expected)
+	if len(expectedEncoded) == 0 {
+		return ErrEffectLedgerConflict
+	}
+	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+		current, err := decodeEffectLedgerState(document[effectLedgerResultKey])
+		if err != nil || !bytes.Equal(encodeEffectLedgerState(current), expectedEncoded) ||
+			!isSafeGitHubBlameReplanState(claim, current) {
+			return ErrEffectLedgerConflict
+		}
+		delete(document, effectLedgerResultKey)
+		return nil
+	})
+}
+
+func isSafeGitHubBlameReplanState(claim Claim, state EffectLedgerState) bool {
+	if claim.Validate() != nil || state.validate() != nil ||
+		claim.Provider != "github" || claim.Dataset != "blame" ||
+		state.Generation != claim.GenerationKey() || state.Provider != claim.Provider ||
+		state.Dataset != claim.Dataset || len(state.Effects) != 2 {
+		return false
+	}
+	progress, blame := state.Effects[0], state.Effects[1]
+	if progress.Destination != "github_blame_path_progress" ||
+		progress.Recovery != EffectReadbackRequired ||
+		(progress.Status != GenerationBlockPending && progress.Status != GenerationBlockWriting) {
+		return false
+	}
+	return blame.Destination == "git_blame" &&
+		blame.Recovery == EffectReadbackRequired &&
+		blame.Status == GenerationBlockPending
+}
+
 func (repository *PostgresRepository) transitionEffect(
 	ctx context.Context,
 	claim Claim,
@@ -448,3 +540,4 @@ WHERE unit.id = $1::uuid
   AND run.status NOT IN ('success', 'partial_failed', 'failed')`
 
 var _ EffectLedger = (*PostgresRepository)(nil)
+var _ EffectLedgerReplanner = (*PostgresRepository)(nil)

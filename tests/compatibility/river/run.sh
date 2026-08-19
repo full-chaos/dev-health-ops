@@ -18,6 +18,7 @@ PYTHON_VERSION="3.13.14"
 RIVERQUEUE_PYTHON_VERSION="0.7.0"
 SQLALCHEMY_VERSION="2.0.49"
 ASYNCPG_VERSION="0.31.0"
+GREENLET_VERSION="3.5.0"
 FETCH_POLL_INTERVAL="250ms"
 CRASH_CANDIDATE_JOB_TIMEOUT="30s"
 CRASH_CANDIDATE_RESCUE_AFTER="31s"
@@ -167,6 +168,8 @@ dump_bootstrap_diagnostics() {
     "${compose[@]}" logs --no-color --tail=40 postgres 2>&1
     printf -- '\n-- pgbouncer logs (tail 40) --\n'
     "${compose[@]}" logs --no-color --tail=40 pgbouncer 2>&1
+    printf -- '\n-- Helm PgBouncer security smoke logs (tail 40) --\n'
+    "${compose[@]}" logs --no-color --tail=40 pgbouncer-session-helm-smoke 2>&1
   } 2>&1 | redact_diagnostic_stream >"${status_file}" || true
 
   printf 'river compatibility harness: bootstrap diagnostics (sanitized) ----------\n' >&2
@@ -209,7 +212,7 @@ assert_all_emitted_gates() {
     and (
       if ($cancel_gates | length) == 0 then
         all($gates[]; .value == true)
-      elif .mode == "direct" then
+      elif .mode == "direct" or .mode == "session" then
         all($gates[]; .value == true)
       elif .mode == "poll-only" then
         all(
@@ -257,7 +260,9 @@ run_go_checked() {
 
   if ! RIVER_COMPAT_DATABASE_URL="${database_url}" "${GO_BINARY}" "$@" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    die "${label} failed; captured details were discarded"
+    progress "${label} failed; sanitized diagnostic follows"
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
   if ! assert_all_emitted_gates "${output_file}"; then
@@ -306,7 +311,7 @@ assert_matrix() {
       and .workload.execute_latency_ms.within_limit == true
       and .workload.cancel.state == "cancelled"
       and (
-        if $mode == "direct" then
+        if $mode == "direct" or $mode == "session" then
           .workload.cancel.outcome == "running_context_cancelled_cross_client"
           and .workload.running_cancellation.cross_client_context_cancelled == true
           and .workload.running_cancellation.same_client_attempted == false
@@ -327,7 +332,10 @@ assert_matrix() {
       and .workload.scheduled.state == "cancelled"
       and .workload.scheduled.scheduled == true
       and .workload.scheduled.outcome == "scheduled_state_observed"
-    ' "${output_file}" >/dev/null 2>&1 || die "${mode} matrix contract assertion failed"
+    ' "${output_file}" >/dev/null 2>&1 || {
+      report_gate_failure "${output_file}"
+      die "${mode} matrix contract assertion failed"
+    }
 }
 
 run_python_case() {
@@ -358,7 +366,9 @@ run_python_case() {
 
   if ! "${PYTHON_BIN}" "${PYTHON_CLI}" "${args[@]}" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    die "${label} failed; captured details were discarded"
+    progress "${label} failed; sanitized diagnostic follows"
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
 }
@@ -1015,6 +1025,7 @@ from importlib.metadata import version
 
 print(json.dumps({
     "asyncpg": version("asyncpg"),
+    "greenlet": version("greenlet"),
     "python": platform.python_version(),
     "riverqueue": version("riverqueue"),
     "sqlalchemy": version("SQLAlchemy"),
@@ -1028,11 +1039,13 @@ if ! jq -e \
   --arg python "${PYTHON_VERSION}" \
   --arg riverqueue "${RIVERQUEUE_PYTHON_VERSION}" \
   --arg sqlalchemy "${SQLALCHEMY_VERSION}" \
-  --arg asyncpg "${ASYNCPG_VERSION}" '
+  --arg asyncpg "${ASYNCPG_VERSION}" \
+  --arg greenlet "${GREENLET_VERSION}" '
     .python == $python
     and .riverqueue == $riverqueue
     and .sqlalchemy == $sqlalchemy
     and .asyncpg == $asyncpg
+    and .greenlet == $greenlet
   ' "${python_versions}" \
   >"${TEMP_DIR}/python-import.stdout" \
   2>"${TEMP_DIR}/python-version-check.stderr"; then
@@ -1060,7 +1073,7 @@ fi
 
 progress "starting the isolated pinned PostgreSQL and PgBouncer services"
 COMPOSE_ATTEMPTED=1
-if ! "${compose[@]}" up -d --wait postgres pgbouncer \
+if ! "${compose[@]}" up -d --wait postgres pgbouncer pgbouncer-session pgbouncer-session-helm-smoke \
   >"${TEMP_DIR}/compose-up.stdout" \
   2>"${TEMP_DIR}/compose-up.stderr"; then
   dump_bootstrap_diagnostics
@@ -1069,13 +1082,17 @@ fi
 
 postgres_port="$(resolve_local_port postgres 5432)"
 pgbouncer_port="$(resolve_local_port pgbouncer 6432)"
+pgbouncer_session_port="$(resolve_local_port pgbouncer-session 6433)"
 direct_database_url="postgresql://river_compat:river_compat@127.0.0.1:${postgres_port}/river_compat"
 poll_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_port}/river_compat"
+session_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_session_port}/river_compat"
 
 direct_profile="${TEMP_DIR}/direct-profile.json"
 poll_profile="${TEMP_DIR}/poll-only-profile.json"
+session_profile="${TEMP_DIR}/session-profile.json"
 direct_matrix="${TEMP_DIR}/direct-matrix.stdout"
 poll_matrix="${TEMP_DIR}/poll-only-matrix.stdout"
+session_matrix="${TEMP_DIR}/session-matrix.stdout"
 n_minus_one_before="${TEMP_DIR}/n-minus-one-before-upgrade.json"
 n_minus_one_after="${TEMP_DIR}/n-minus-one-after-upgrade.json"
 n_minus_one="${TEMP_DIR}/n-minus-one.json"
@@ -1091,15 +1108,18 @@ run_nested_n_minus_one after-v0.40-upgrade "${direct_database_url}" "${n_minus_o
 # Keep the second measured matrix as close to service startup as the required
 # N/N-1 migration-prefix order permits, minimizing pg_isready contamination.
 run_mode_matrix poll-only "${poll_database_url}" true chaos3034-poll-only "${poll_matrix}"
+run_mode_matrix session "${session_database_url}" false chaos3034-session "${session_matrix}"
 
 run_profile direct "${direct_database_url}" false direct_postgresql "${direct_matrix}" "${direct_profile}"
 run_profile poll-only "${poll_database_url}" true pgbouncer_transaction_poll_only "${poll_matrix}" "${poll_profile}"
+run_profile session "${session_database_url}" false pgbouncer_session "${session_matrix}" "${session_profile}"
 combine_nested_n_minus_one "${n_minus_one_before}" "${n_minus_one_after}" "${n_minus_one}"
 
 jq -n \
   --argjson samples "${SAMPLES}" \
   --slurpfile direct "${direct_profile}" \
   --slurpfile poll "${poll_profile}" \
+  --slurpfile session "${session_profile}" \
   --slurpfile n_minus_one "${n_minus_one}" \
   --slurpfile python_versions "${python_versions}" '{
     schema_version: 1,
@@ -1118,7 +1138,8 @@ jq -n \
       python: $python_versions[0].python,
       riverqueue_python: $python_versions[0].riverqueue,
       sqlalchemy: $python_versions[0].sqlalchemy,
-      asyncpg: $python_versions[0].asyncpg
+      asyncpg: $python_versions[0].asyncpg,
+      greenlet: $python_versions[0].greenlet
     },
     samples_per_mode: $samples,
     gate_truth_table: {
@@ -1137,9 +1158,24 @@ jq -n \
         new_connections_at_most_six: $poll[0].matrix.gates.new_connections_at_most_six,
         cross_client_running_cancel: $poll[0].matrix.gates.cross_client_running_cancel,
         same_client_running_cancel: $poll[0].matrix.gates.same_client_running_cancel
+      },
+      session: {
+        backend_connection_delta_at_most_six: $session[0].matrix.gates.backend_connection_delta_at_most_six,
+        canceled_acquires_zero: $session[0].matrix.gates.canceled_acquires_zero,
+        enqueue_p95_within_limit: $session[0].matrix.gates.enqueue_p95_within_limit,
+        new_connections_at_most_six: $session[0].matrix.gates.new_connections_at_most_six,
+        cross_client_running_cancel: $session[0].matrix.gates.cross_client_running_cancel,
+        same_client_running_cancel: $session[0].matrix.gates.same_client_running_cancel
       }
     },
-    profiles: [$direct[0], $poll[0]],
+    helm_pgbouncer_startup: {
+      status: "pass",
+      mode: "session",
+      container_identity: "postgres_uid_gid_70",
+      root_filesystem: "read_only",
+      writable_config_path: "/etc/pgbouncer"
+    },
+    profiles: [$direct[0], $poll[0], $session[0]],
     nested_n_minus_1: $n_minus_one[0],
     redaction: {
       contains_raw_logs: false,

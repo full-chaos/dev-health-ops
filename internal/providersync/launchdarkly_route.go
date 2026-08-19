@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,6 +141,9 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("launchdarkly flags pagination: %w", err)
 	}
+	if flagsPage.CapReached {
+		return CompleteRouteBatch{}, ErrPaginationCapExceeded
+	}
 	auditPage, err := providerfoundation.CollectLaunchDarklyAuditPages(
 		ctx,
 		client,
@@ -159,6 +163,10 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		}
 		if leaseErr := client.Lease.Assert(ctx); leaseErr != nil {
 			return CompleteRouteBatch{}, leaseErr
+		}
+		var providerErr *providerfoundation.ProviderError
+		if !errors.As(codeReferenceErr, &providerErr) {
+			return CompleteRouteBatch{}, codeReferenceErr
 		}
 		codeReferencePayload = json.RawMessage(`{"items":[]}`)
 	}

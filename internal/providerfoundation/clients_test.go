@@ -41,6 +41,17 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 			want:       "gitlab-token",
 		},
 		{
+			name: "jira basic auth",
+			credential: testCredential("jira", map[string]string{
+				"email": "dev@acme.test", "api_token": "jira-token",
+				"base_url": "https://acme.atlassian.net",
+			}),
+			newClient: NewJiraClient,
+			path:      "/rest/api/3/search/jql",
+			header:    "Authorization",
+			want:      "Basic ZGV2QGFjbWUudGVzdDpqaXJhLXRva2Vu",
+		},
+		{
 			name:       "linear",
 			credential: testCredential("linear", map[string]string{"api_key": "linear-key"}),
 			newClient:  NewLinearClient,
@@ -98,6 +109,11 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 			}
 			if test.credential.Provider == "pagerduty" && doer.header.Get("Accept") != pagerDutyAccept {
 				t.Fatalf("PagerDuty Accept=%q", doer.header.Get("Accept"))
+			}
+			if test.credential.Provider == "jira" &&
+				(doer.header.Get("Accept") != "application/json" ||
+					doer.header.Get("Content-Type") != "application/json") {
+				t.Fatalf("Jira JSON headers=%v", doer.header)
 			}
 		})
 	}
@@ -159,11 +175,83 @@ func testCredential(provider string, values map[string]string) Credential {
 
 type headerCaptureDoer struct {
 	header http.Header
+	url    *url.URL
 }
 
 func (d *headerCaptureDoer) Do(request *http.Request) (*http.Response, error) {
 	d.header = request.Header.Clone()
+	d.url = request.URL
 	return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
+}
+
+func TestGitLabClientURLAliasesMatchCanonicalPythonPrecedence(t *testing.T) {
+	t.Parallel()
+	retry := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond}
+	lease := LeaseGuardFunc(func(context.Context) error { return nil })
+	tests := []struct {
+		name   string
+		secret map[string]string
+		config map[string]string
+		want   string
+	}{
+		{
+			name: "decrypted aliases",
+			secret: map[string]string{
+				"token": "gitlab-token", "base_url": "https://wrong-base.test",
+				"url": "https://wrong-url.test", "gitlab_url": "https://canonical.test",
+			},
+			want: "canonical.test",
+		},
+		{
+			name:   "config aliases",
+			secret: map[string]string{"token": "gitlab-token"},
+			config: map[string]string{
+				"base_url": "https://wrong-base.test", "url": "https://wrong-url.test",
+				"gitlab_url": "https://canonical.test",
+			},
+			want: "canonical.test",
+		},
+		{
+			name: "higher priority config beats lower priority secret",
+			secret: map[string]string{
+				"token": "gitlab-token", "base_url": "https://wrong-base.test",
+			},
+			config: map[string]string{"gitlab_url": "https://canonical.test"},
+			want:   "canonical.test",
+		},
+		{
+			name: "same alias decrypted value beats config",
+			secret: map[string]string{
+				"token": "gitlab-token", "gitlab_url": "https://canonical.test",
+			},
+			config: map[string]string{"gitlab_url": "https://wrong-config.test"},
+			want:   "canonical.test",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			credential := testCredential("gitlab", test.secret)
+			credential.Config = test.config
+			doer := &headerCaptureDoer{}
+			client, err := NewGitLabClient(credential, doer, retry, lease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(context.Background(), http.MethodGet, "/api/v4/projects/1", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if doer.url == nil || doer.url.Host != test.want {
+				t.Fatalf("request host=%v, want %q", doer.url, test.want)
+			}
+			if doer.header.Get("PRIVATE-TOKEN") != "gitlab-token" {
+				t.Fatal("GitLab token was not applied at the selected canonical host")
+			}
+		})
+	}
 }
 
 type pagerDutyClientCredentialsDoer struct {

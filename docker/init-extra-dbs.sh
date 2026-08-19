@@ -74,19 +74,35 @@ psql \
       FROM (
         VALUES
           ('integrations'),
-          ('integration_sources'),
-          ('integration_datasets'),
           ('integration_credentials'),
-          ('sync_runs'),
           ('sync_dispatch_transport_routes')
       ) AS required(table_name)
       WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
     \gexec
     SELECT format(
-      'GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO %I',
+      'GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I',
+      required.table_name, :'domain_role'
+    )
+      FROM (VALUES ('integration_sources'),('integration_datasets'),('sync_runs'),('sync_run_units')) AS required(table_name)
+      WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
+    \gexec
+    SELECT format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO %I',
       :'domain_role'
     )
-      WHERE to_regclass('public.sync_run_units') IS NOT NULL
+      WHERE to_regclass('public.worker_concurrency_leases') IS NOT NULL
+    \gexec
+    SELECT format(
+	  'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO %I',
+      :'domain_role'
+    )
+	  WHERE to_regclass('public.worker_instances') IS NOT NULL
+    \gexec
+    SELECT format(
+      'GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO %I',
+      :'domain_role'
+    )
+      WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
     \gexec
     SELECT format(
       'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
@@ -116,6 +132,12 @@ psql \
       :'queue_role'
     )
       WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+    \gexec
+    SELECT format(
+      'GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO %I',
+      :'queue_role'
+    )
+      WHERE to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL
     \gexec
     SELECT format(
       'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO %I',

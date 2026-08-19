@@ -33,6 +33,30 @@ const (
 
 var errReconcilerDependencyUnavailable = errors.New("reconciler readiness dependency is unavailable")
 
+// dependencyFailure attaches a bounded reason code to the generic dependency
+// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// exactly. Before this, every distinct construction failure in this binary --
+// a database that would not open, a missing job registry, a broken sync
+// dispatch pipeline -- collapsed into the same bare
+// errReconcilerDependencyUnavailable, so an operator could not tell which
+// knob was wrong (CHAOS-3873/CHAOS-3907). The reason is always a
+// compile-time constant, never interpolated input, so logging it cannot leak
+// a DSN or a secret.
+type dependencyFailure struct {
+	reason string
+}
+
+func (failure dependencyFailure) Error() string {
+	return errReconcilerDependencyUnavailable.Error() + ": " + failure.reason
+}
+
+func (dependencyFailure) Unwrap() error { return errReconcilerDependencyUnavailable }
+
+// DependencyReason satisfies the shell's reason-code interface.
+func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
 // reconcilerDatabase keeps the command's domain, queue-control, and
 // coordinator trust boundaries testable without weakening the production
 // RuntimePools contract.
@@ -56,7 +80,7 @@ type postgresReconcilerDatabase struct {
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
-	// The reconciler is a coordinator binary: deploy/go-workers/profiles.json
+	// The reconciler is a coordinator binary: deploy/go-workers/deployment.json
 	// gives its "control" runtime coordinator_max_connections >= 1, and its
 	// always-constructed outbox relay reads worker_job_routes, which is
 	// coordinator-exclusive. WithCoordinator makes the coordinator DSN a
@@ -154,18 +178,18 @@ type reconcilerDependencySources struct {
 }
 
 // reconcilerActivation is a source-reviewed composition seam. It is
-// deliberately not configurable through environment or deployment profiles:
+// deliberately not configurable through environment or deployment groups:
 // changing from observation to mutation must retain concrete River delivery
 // capabilities in the same reviewed source change.
 type reconcilerActivation struct {
 	syncMutation bool
 }
 
-// The checked-in routes remain Celery until the canary owner proves a River
-// consumer deployment. The complete mutation composition is retained below,
-// but source activation stays false so this branch cannot alter the current
-// production baseline merely by starting a reconciler replica.
-var checkedInReconcilerActivation = reconcilerActivation{}
+// Every checked-in sync-dispatch route is River-owned. The reconciler must run
+// the mutation pipeline so durable outbox wakeups are claimed and published;
+// leaving this in shadow mode strands planned runs when Python workers are not
+// present even though the route table says River.
+var checkedInReconcilerActivation = reconcilerActivation{syncMutation: true}
 
 var productionReconcilerDependencySources = reconcilerDependencySources{
 	openDatabase:             openReconcilerDatabase,
@@ -188,8 +212,8 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
 }
 
-// Dormant today (checkedInReconcilerActivation.syncMutation is false), but
-// wired correctly so flipping that flag does not ship a 42501: the Materializer
+// The active mutation pipeline is wired so activation does not ship a 42501:
+// the Materializer
 // reads sync_run_reference_discoveries and sync_run_post_dispatches, both
 // coordinator-exclusive, so it takes the coordinator pool. LeaseRepair, the
 // Kernel's observe side, and the Observer stay on the domain pool -- every
@@ -202,6 +226,10 @@ func buildSyncMutationPipeline(
 	registry *syncdispatchcontract.Registry,
 ) (syncreconciler.Stepper, error) {
 	repair, err := syncreconciler.NewLeaseRepair(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	terminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -237,15 +265,13 @@ func buildSyncMutationPipeline(
 		if referenceErr != nil {
 			return "", referenceErr
 		}
-		return publisher.Publish(ctx, tx, syncdispatchruntime.Claim{
-			OutboxID: claim.ID, Kind: claim.Kind, RouteGeneration: claim.RouteGeneration,
-		}, reference)
+		return publisher.Publish(ctx, tx, syncDispatchClaimForTransport(claim), reference)
 	}
-	// The bridge workers cover the three concrete coordinator kinds. post_sync
-	// remains fail-closed under its current Celery route until a concrete River
-	// fanout handler is registered and proven independently.
+	// The worker registers all four coordinator kinds, including the native
+	// post_sync fanout, before advertising River route readiness.
 	return syncreconciler.NewMutationPipeline(
 		repair,
+		terminalRepair,
 		materializer,
 		kernel,
 		observer,
@@ -253,6 +279,13 @@ func buildSyncMutationPipeline(
 		nil,
 		syncreconciler.DefaultMutationPipelineConfig(),
 	)
+}
+
+func syncDispatchClaimForTransport(claim syncreconciler.TransportClaim) syncdispatchruntime.Claim {
+	return syncdispatchruntime.Claim{
+		OutboxID: claim.ID, Kind: claim.Kind, RouteGeneration: claim.RouteGeneration,
+		DeliveryAttempt: claim.Attempts,
+	}
 }
 
 func syncDispatchReference(
@@ -306,7 +339,7 @@ func buildReconcilerRelay(
 	riverSchema string,
 	registry *jobruntime.Registry,
 ) (joboutbox.RelayStepper, error) {
-	_ = domainPool // the relay has no domain-role component today
+	_ = domainPool // provider-unit recovery reads domain state through the queue role
 	repository, err := joboutbox.NewRepository(queuePool)
 	if err != nil {
 		return nil, err
@@ -323,7 +356,13 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	return joboutbox.NewRelayWithRoutes(repository, inserter, routes, joboutbox.DefaultRelayConfig())
+	repair, err := joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	return joboutbox.NewRelayWithRoutesAndRecovery(
+		repository, inserter, routes, repair, joboutbox.DefaultRelayConfig(),
+	)
 }
 
 type reconcilerDependencies struct {
@@ -381,7 +420,7 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	sources reconcilerDependencySources,
 ) ([]lifecycle.Component, error) {
 	if registry == nil {
-		return nil, errReconcilerDependencyUnavailable
+		return nil, dependencyUnavailable("reconciler_registry_unavailable")
 	}
 
 	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
@@ -448,21 +487,21 @@ func buildReconcilerDependencies(
 ) *reconcilerDependencies {
 	dependencies := &reconcilerDependencies{logger: logger, coordinatorRole: cfg.CoordinatorDatabaseRole}
 	if sources.openDatabase == nil {
-		dependencies.databaseErr = errReconcilerDependencyUnavailable
+		dependencies.databaseErr = dependencyUnavailable("reconciler_database_source_missing")
 	} else {
 		dependencies.database, dependencies.databaseErr = sources.openDatabase(ctx, cfg)
 		if dependencies.databaseErr != nil {
-			dependencies.databaseErr = errReconcilerDependencyUnavailable
+			dependencies.databaseErr = dependencyUnavailable("reconciler_database_open_failed")
 			dependencies.disableDatabase()
 		}
 	}
 	if sources.loadRuntimeRegistry == nil || sources.contractRoot == "" {
-		dependencies.registryErr = errReconcilerDependencyUnavailable
+		dependencies.registryErr = dependencyUnavailable("reconciler_job_registry_source_missing")
 	} else {
 		dependencies.runtimeRegistry, dependencies.registryErr = sources.loadRuntimeRegistry(sources.contractRoot)
 	}
 	if sources.loadSyncDispatchRegistry == nil || sources.syncDispatchContractRoot == "" {
-		dependencies.syncRegistryErr = errReconcilerDependencyUnavailable
+		dependencies.syncRegistryErr = dependencyUnavailable("reconciler_sync_dispatch_registry_source_missing")
 	} else {
 		dependencies.syncDispatchRegistry, dependencies.syncRegistryErr = sources.loadSyncDispatchRegistry(sources.syncDispatchContractRoot)
 	}
@@ -475,7 +514,7 @@ func buildReconcilerDependencies(
 		(activation.syncMutation && sources.buildSyncMutation == nil) ||
 		sources.newSyncRecorder == nil ||
 		sources.newSyncLoop == nil {
-		dependencies.relayErr = errReconcilerDependencyUnavailable
+		dependencies.relayErr = dependencyUnavailable("reconciler_build_sources_missing")
 		dependencies.disableDatabase()
 		return dependencies
 	}
@@ -488,20 +527,22 @@ func buildReconcilerDependencies(
 		dependencies.runtimeRegistry,
 	)
 	if err != nil || relay == nil {
-		dependencies.relayErr = errReconcilerDependencyUnavailable
+		dependencies.relayErr = dependencyUnavailable("reconciler_relay_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
-	loop, err := sources.newLoop(relay, joboutbox.DefaultReconcilerLoopConfig(registry))
+	loopConfig := joboutbox.DefaultReconcilerLoopConfig(registry)
+	loopConfig.Logger = logger
+	loop, err := sources.newLoop(relay, loopConfig)
 	if err != nil || loop == nil {
-		dependencies.loopErr = errReconcilerDependencyUnavailable
+		dependencies.loopErr = dependencyUnavailable("reconciler_relay_loop_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
 	dependencies.loop = loop
 	routeFence, err := sources.buildSyncRouteFence(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
 	if err != nil || routeFence == nil {
-		dependencies.syncRouteFenceErr = errReconcilerDependencyUnavailable
+		dependencies.syncRouteFenceErr = dependencyUnavailable("reconciler_sync_route_fence_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
@@ -522,27 +563,28 @@ func buildReconcilerDependencies(
 		)
 	}
 	if err != nil || syncStepper == nil {
-		dependencies.syncObserverErr = errReconcilerDependencyUnavailable
+		dependencies.syncObserverErr = dependencyUnavailable("reconciler_sync_stepper_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
 	if logger == nil {
-		dependencies.syncRecorderErr = errReconcilerDependencyUnavailable
+		dependencies.syncRecorderErr = dependencyUnavailable("reconciler_sync_recorder_logger_missing")
 		dependencies.disableDatabase()
 		return dependencies
 	}
 	recorder, err := sources.newSyncRecorder(logger)
 	dependencies.syncRecorder = recorder
 	if err != nil || recorder == nil {
-		dependencies.syncRecorderErr = errReconcilerDependencyUnavailable
+		dependencies.syncRecorderErr = dependencyUnavailable("reconciler_sync_recorder_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
 	syncLoopConfig.Recorder = recorder
+	syncLoopConfig.Logger = logger
 	syncLoop, err := sources.newSyncLoop(syncStepper, syncLoopConfig)
 	if err != nil || syncLoop == nil {
-		dependencies.syncLoopErr = errReconcilerDependencyUnavailable
+		dependencies.syncLoopErr = dependencyUnavailable("reconciler_sync_loop_construction_failed")
 		dependencies.disableDatabase()
 		return dependencies
 	}
@@ -698,7 +740,7 @@ func (dependencies *reconcilerDependencies) disableDatabase() {
 	dependencies.close()
 	dependencies.database = nil
 	if dependencies.databaseErr == nil {
-		dependencies.databaseErr = errReconcilerDependencyUnavailable
+		dependencies.databaseErr = dependencyUnavailable("reconciler_database_disabled_after_dependency_failure")
 	}
 }
 

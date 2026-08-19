@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin.schemas_flat import (
+    BackfillSelectorRequest,
+    SyncCoverageBackfillWindow,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.sync_coverage import (
     invalidate_sync_coverage_projection,
@@ -741,12 +745,16 @@ async def test_sync_coverage_missing_projection_is_pending_without_building(
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_invalidated_projection_is_pending_until_rebuilt(
+async def test_sync_coverage_invalidated_projection_stays_visible_until_rebuilt(
     client, session_maker
 ):
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
     await _warm_projection(session_maker, scope)
+    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+    current = await ac.get(url)
+    assert current.status_code == 200, current.text
+    assert current.json()["projection_refreshing"] is False
 
     async with session_maker() as session:
         await invalidate_sync_coverage_projection(
@@ -756,13 +764,17 @@ async def test_sync_coverage_invalidated_projection_is_pending_until_rebuilt(
         )
         await session.commit()
 
-    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
-    pending = await ac.get(url)
-    assert pending.status_code == 503
+    refreshing = await ac.get(url)
+    assert refreshing.status_code == 200, refreshing.text
+    assert refreshing.json() == {
+        **current.json(),
+        "projection_refreshing": True,
+    }
 
     await _warm_projection(session_maker, scope)
     rebuilt = await ac.get(url)
     assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["projection_refreshing"] is False
 
 
 @pytest.mark.asyncio
@@ -780,37 +792,211 @@ async def test_sync_config_update_invalidates_coverage_projection(
     assert updated.status_code == 200, updated.text
 
     coverage = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
-    assert coverage.status_code == 503
+    assert coverage.status_code == 200, coverage.text
+    assert coverage.json()["projection_refreshing"] is True
 
 
-def test_canonical_backfill_windows_merge_after_inclusive_date_conversion():
-    dataset = sync_coverage_module._DatasetCoverage(
-        dataset_key="commits",
-        gaps=[
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
-            )
-        ],
-        failed_ranges=[
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 2, 13, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 2, 14, tzinfo=timezone.utc),
-            ),
-            sync_coverage_module.CoverageInterval(
-                since=datetime(2026, 1, 3, tzinfo=timezone.utc),
-                before=datetime(2026, 1, 4, tzinfo=timezone.utc),
-            ),
-        ],
+def test_canonical_backfill_windows_preserve_pair_scope_and_half_open_bounds():
+    """Coverage actions must not join adjacent gaps from different sources.
+
+    The focused-backfill dialog sends source and dataset scope back to the
+    planner. Joining these pair windows would quietly schedule a source over a
+    time period that coverage never marked as missing.
+    """
+    source_one = "11111111-1111-1111-1111-111111111111"
+    source_two = "22222222-2222-2222-2222-222222222222"
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_one,
+            dataset_key="commits",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                    source_ids=(source_one,),
+                )
+            ],
+        ),
+        sync_coverage_module._PairCoverage(
+            source_id=source_two,
+            dataset_key="commits",
+            failed_ranges=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 4, tzinfo=timezone.utc),
+                    source_ids=(source_two,),
+                )
+            ],
+        ),
+        sync_coverage_module._PairCoverage(
+            source_id=source_one,
+            dataset_key="deployments",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+                    before=datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+                    source_ids=(source_one,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == [
+        {
+            "since": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 3, tzinfo=timezone.utc),
+            "source_ids": [source_one],
+            "dataset_keys": ["commits"],
+            "reasons": ["gap"],
+        },
+        # An intra-day window is advertised verbatim rather than skipped: the
+        # planner keeps the requested instants at the window edges, so this is
+        # submittable exactly as shown.
+        {
+            "since": datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 2, 11, tzinfo=timezone.utc),
+            "source_ids": [source_one],
+            "dataset_keys": ["deployments"],
+            "reasons": ["gap"],
+        },
+        {
+            "since": datetime(2026, 1, 3, tzinfo=timezone.utc),
+            "before": datetime(2026, 1, 4, tzinfo=timezone.utc),
+            "source_ids": [source_two],
+            "dataset_keys": ["commits"],
+            "reasons": ["failed"],
+        },
+    ]
+
+
+def test_canonical_backfill_windows_advertise_off_midnight_boundaries():
+    """Real coverage gaps almost never start at midnight.
+
+    Intervals derive from sync run unit windows, which begin whenever a sync
+    ran. Gating suggestions on exact UTC-midnight boundaries matched 0 of 138
+    real intervals in a populated org, so the focused-backfill dialog could
+    never offer a window (CHAOS-3915). These boundaries are taken verbatim
+    from a live projection.
+    """
+    source_id = "4addf46f-c4d2-4226-b0b0-2e7c51cb91fe"
+    since = datetime(2026, 8, 8, 2, 46, 6, 501450, tzinfo=timezone.utc)
+    before = datetime(2026, 8, 18, 22, 28, 46, 890654, tzinfo=timezone.utc)
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="cicd",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=since, before=before, source_ids=(source_id,)
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == [
+        {
+            "since": since,
+            "before": before,
+            "source_ids": [source_id],
+            "dataset_keys": ["cicd"],
+            "reasons": ["gap"],
+        },
+    ]
+
+
+def test_canonical_backfill_windows_drop_day_boundary_seams():
+    """A one-microsecond seam is not a gap.
+
+    Where one day-bounded window meets the next, coverage leaves a residue of
+    exactly INTERVAL_ADJACENCY_TOLERANCE -- the same span the merge step treats
+    as adjacent. These boundaries are taken verbatim from a live projection; 66
+    of 114 candidate windows in a populated org had this exact shape, and
+    advertising them would offer a backfill covering no time at all.
+    """
+    source_id = "11111111-1111-1111-1111-111111111111"
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="commit-stats",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(
+                        2026, 3, 12, 23, 59, 59, 999999, tzinfo=timezone.utc
+                    ),
+                    before=datetime(2026, 3, 13, tzinfo=timezone.utc),
+                    source_ids=(source_id,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == []
+
+
+def test_canonical_backfill_windows_drop_empty_intervals():
+    """An empty interval is not a submittable selector.
+
+    BackfillSelectorRequest requires ``since < before``. Suggesting a window
+    that fails that validator hands the operator a button that always 422s.
+    """
+    source_id = "11111111-1111-1111-1111-111111111111"
+    instant = datetime(2026, 3, 12, tzinfo=timezone.utc)
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="commits",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=instant,
+                    before=instant,
+                    source_ids=(source_id,),
+                )
+            ],
+            failed_ranges=[
+                sync_coverage_module.CoverageInterval(
+                    since=instant,
+                    before=instant,
+                    source_ids=(source_id,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == []
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param({"since": "2026-08-08", "before": "2026-08-13"}, id="v1-dates"),
+        pytest.param(
+            {"since": "2026-08-08T00:00:00", "before": "2026-08-13T00:00:00"},
+            id="naive-datetimes",
+        ),
+    ],
+)
+def test_advertised_backfill_window_is_accepted_by_the_backfill_selector(stored):
+    """A suggested window must survive being echoed back as a selector.
+
+    Web sends ``backfill_windows`` entries to POST /backfill verbatim. The
+    response model used to be naive-tolerant while the request model is
+    ``AwareDatetime``, so a version-1 projection produced
+    ``2026-08-08T00:00:00`` and the server rejected its own suggestion with a
+    ``timezone_aware`` 422.
+    """
+    window = SyncCoverageBackfillWindow.model_validate(
+        {**stored, "reasons": ["failed", "gap"]}
+    )
+    assert window.since.tzinfo is not None
+    assert window.before.tzinfo is not None
+
+    emitted = window.model_dump(mode="json")
+    selector = BackfillSelectorRequest.model_validate(
+        {"since": emitted["since"], "before": emitted["before"]}
     )
 
-    assert sync_coverage_module._canonical_backfill_windows([dataset]) == [
-        {
-            "since": date(2026, 1, 2),
-            "before": date(2026, 1, 3),
-            "reasons": ["failed", "gap"],
-        }
-    ]
+    assert selector.since == datetime(2026, 8, 8, tzinfo=timezone.utc)
+    assert selector.before == datetime(2026, 8, 13, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -924,7 +1110,13 @@ async def test_sync_coverage_api_planned_units_create_requested_gap(
     assert data["coverage_since"] is None
     assert data["coverage_through"] is None
     assert data["backfill_windows"] == [
-        {"since": "2026-01-01", "before": "2026-01-01", "reasons": ["gap"]}
+        {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [scope["source_id"]],
+            "dataset_keys": ["commits"],
+            "reasons": ["gap"],
+        }
     ]
     assert data["overall"]["health"] == "gaps"
 

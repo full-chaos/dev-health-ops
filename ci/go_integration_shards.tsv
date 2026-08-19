@@ -1,0 +1,40 @@
+# CHAOS-3141 deterministic package weights for Go integration CI sharding.
+#
+# The first data row declares the shard count. Remaining rows are
+# <repository-relative package key><TAB><estimated seconds>. The package set is
+# checked against ci/check_go.sh's live integration-tag discovery before any
+# shard runs, so this file cannot silently omit or duplicate a package.
+#
+# Most weights are rounded up from the latest complete go-storage-integration
+# runner (2026-08-03) or PR #1733's completed package lines (2026-08-11).
+# internal/providersync is rounded from the exact current-feature local run,
+# 1165.894s. Longest-processing-time-first assignment keeps the two
+# non-dominant shards balanced while isolating that indivisible dominant
+# package under the unchanged 25-minute job budget.
+shards	3
+cmd/dev-health-worker	24
+cmd/dev-health-workerctl	13
+internal/externalrecompute	15
+internal/joboperator	13
+internal/joboutbox	12
+internal/jobrescue	5
+internal/jobroute	6
+internal/jobruntime	5
+internal/jobs/metrics/daily	6
+internal/jobs/metrics/remaining	6
+internal/jobs/pagerduty	9
+internal/jobs/report	33
+internal/jobs/system	12
+internal/jobs/workgraph	7
+internal/providerfoundation	12
+internal/providersync	1166
+internal/scheduler/fixed	143
+internal/scheduler/sync	32
+internal/storage/postgres	91
+internal/storage/river	9
+internal/streamrunner	2
+internal/syncdispatchruntime	6
+internal/syncreconciler	16
+internal/synccoverage	13
+internal/syncroute	3
+internal/testsupport/containers	13

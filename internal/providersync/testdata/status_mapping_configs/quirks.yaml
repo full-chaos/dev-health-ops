@@ -1,0 +1,58 @@
+# Synthetic config for loader quirks the REAL status_mapping.yaml cannot express.
+#
+# Anything the real file CAN express is pinned against the real file instead --
+# a synthetic fixture can be too small to fail (a 3-rule tie once survived a
+# SliceStable->Slice mutation that the real config killed).
+#
+# Pinned here:
+#   * last-wins ACROSS base categories, which needs one raw value listed under
+#     two different categories -- the real file has no such collision
+#   * provider `statuses` overriding a base category for ONE provider only
+#   * an unrecognised category name being skipped in silence
+#   * _norm_key's internal whitespace collapse
+#   * an empty-string raw value being skipped
+version: 1
+
+status_categories:
+  todo:
+    # Listed again under `done` below. Python iterates these categories in FILE
+    # ORDER and _index_values is last-wins, so "shared value" must resolve to
+    # `done`, not `todo`. A port that decodes YAML into an unordered map cannot
+    # get this right reliably.
+    - Shared Value
+    # Collapses to "spaced out": strip, lower, AND collapse the internal run.
+    - "  Spaced   Out  "
+    # Normalizes to "" and is skipped by `if not key: continue`.
+    - ""
+  done:
+    - Shared Value
+  # Not a WorkItemStatusCategory. `_as_status_category` returns None and the
+  # whole category is skipped -- no entry, no error.
+  not_a_category:
+    - Ignored Thing
+
+providers:
+  jira:
+    statuses:
+      # Provider overrides are applied AFTER the base block, so for jira only,
+      # "shared value" ends up in_progress while github/gitlab keep `done`.
+      in_progress:
+        - Shared Value
+  github:
+    status_labels:
+      blocked:
+        - Blocked Label
+    type_labels:
+      bug:
+        - Bug Label
+      # Not a WorkItemType: skipped in silence, same as the status side.
+      not_a_type:
+        - Bogus Thing
+  gitlab:
+    # The real config gives gitlab no `types` section at all; giving it one here
+    # proves the type_raw arm genuinely works when fed, so the real config's
+    # empty type_by_provider[gitlab] reads as a property of that FILE rather
+    # than as this engine being broken.
+    types:
+      task:
+        - Some Raw Type

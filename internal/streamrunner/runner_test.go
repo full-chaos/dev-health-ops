@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sync"
 	"testing"
@@ -179,7 +180,7 @@ func TestRunnerLeavesTransientFailurePendingForReclaim(t *testing.T) {
 	transport.pending = []Pending{{MessageID: "1-0", TimesDelivered: 1, Idle: time.Second}}
 	transport.claimed = []Message{{Stream: "test:stream", ID: "1-0"}}
 	runner.handler = handlerFunc(func(context.Context, Message) error { return nil })
-	if err := runner.reclaim(context.Background(), "test:stream"); err != nil {
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(transport.acked, []string{"1-0"}) {
@@ -279,6 +280,92 @@ func TestRunnerReadsContinuouslyBetweenReclaimCadences(t *testing.T) {
 	}
 }
 
+func TestRunnerBacksOffAfterZeroStreamCycle(t *testing.T) {
+	transport := &fakeTransport{}
+	config := dynamicTestConfig()
+	config.Block = 80 * time.Millisecond
+	config.ReclaimEvery = 100 * time.Millisecond
+	config.ReclaimIdle = 100 * time.Millisecond
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), config, health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan []time.Duration, 1)
+	var delays []time.Duration
+	runner.waitIdle = func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		if len(delays) == 5 {
+			waited <- append([]time.Duration(nil), delays...)
+			return false
+		}
+		return true
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-waited:
+		want := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 80 * time.Millisecond}
+		if !slices.Equal(got, want) {
+			t.Fatalf("idle delays = %v, want %v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("zero-stream cycle was not throttled")
+	}
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.readStreams) != 0 {
+		t.Fatalf("zero-stream cycle attempted reads: %v", transport.readStreams)
+	}
+}
+
+func TestRunnerDoesNotBackOffAfterActiveCycle(t *testing.T) {
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readsAtWait := make(chan int, 1)
+	runner.waitIdle = func(_ context.Context, _ time.Duration) bool {
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		readsAtWait <- len(transport.readStreams)
+		return false
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case reads := <-readsAtWait:
+		if reads != 2 {
+			t.Fatalf("reads before idle wait = %d, want active cycle plus immediate next read", reads)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runner did not reach its first idle cycle")
+	}
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(transport.acked, []string{"1-0"}) {
+		t.Fatalf("active message was not processed before idle wait: %v", transport.acked)
+	}
+}
+
+func TestRunnerIdleWaitStopsOnContextCancellation(t *testing.T) {
+	runner, err := New(&fakeTransport{}, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if runner.waitIdle(ctx, time.Hour) {
+		t.Fatal("idle wait reported elapsed after context cancellation")
+	}
+}
+
 func TestRunnerRestartReclaimsPendingAndAckFailureReplaysDurableWrite(t *testing.T) {
 	transport := &fakeTransport{
 		new:    []Message{{Stream: "test:stream", ID: "1-0"}},
@@ -371,7 +458,7 @@ func TestRunnerClaimsPoisonFieldsBeforeDLQFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.reclaim(context.Background(), message.Stream); err != nil {
+	if _, err := runner.reclaim(context.Background(), message.Stream); err != nil {
 		t.Fatal(err)
 	}
 	if len(handler.finalized) != 1 || handler.finalized[0].Fields["ingestion_id"] != "batch-a" {
@@ -385,7 +472,7 @@ func TestRunnerReclaimsPoisonDeliveryCountAndExportsBoundedMetrics(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.reclaim(context.Background(), "test:stream"); err != nil {
+	if _, err := runner.reclaim(context.Background(), "test:stream"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(transport.quarantined, []string{"1-0:max_deliveries_exceeded"}) || !slices.Equal(transport.acked, []string{"1-0"}) {
@@ -438,5 +525,41 @@ func TestShutdownClosesReadinessAndLeavesUncommittedMessagePending(t *testing.T)
 	}
 	if !transport.closed || len(transport.acked) != 0 {
 		t.Fatalf("shutdown should close transport without ack: closed=%v acked=%v", transport.closed, transport.acked)
+	}
+}
+
+// TestRunnerWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
+// path is inert: a runner given no Config.Logger must not panic on a cycle
+// failure, and it must not fall back to slog.Default() -- that would send
+// output to a sink other than the process's configured JSON logger, so a
+// log-capturing test could pass while production ships nothing (CHAOS-3907).
+func TestRunnerWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}, stats: StreamStats{Pending: 1}}
+	config := testConfig()
+	if config.Logger != nil {
+		t.Fatal("test config unexpectedly has a logger")
+	}
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error {
+		return errors.New("clickhouse unavailable")
+	}), config, health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runner.Shutdown(context.Background()) }()
+
+	// Give the background loop several cycles' worth of time to hit (and,
+	// were the fallback present, log) its failure.
+	time.Sleep(100 * time.Millisecond)
+
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

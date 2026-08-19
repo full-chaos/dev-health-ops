@@ -11,7 +11,22 @@ import (
 
 const maxJSONDepth = 16
 
+// decodeLenient applies every guard decodeStrict applies -- size, UTF-8,
+// structure, trailing data -- but does NOT reject unknown fields.
+//
+// It exists for exactly one caller: loading a MERGE BASE contract tree for
+// comparison. An older tree legitimately carries fields the current struct has
+// dropped, and rejecting them is not a safety property, it is an inability to
+// read history (CHAOS-3903 follow-up).
+func decodeLenient(data []byte, maxBytes int, destination any) error {
+	return decodeJSON(data, maxBytes, destination, false)
+}
+
 func decodeStrict(data []byte, maxBytes int, destination any) error {
+	return decodeJSON(data, maxBytes, destination, true)
+}
+
+func decodeJSON(data []byte, maxBytes int, destination any, disallowUnknownFields bool) error {
 	if len(data) == 0 {
 		return errors.New("JSON value is empty")
 	}
@@ -26,7 +41,9 @@ func decodeStrict(data []byte, maxBytes int, destination any) error {
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
+	if disallowUnknownFields {
+		decoder.DisallowUnknownFields()
+	}
 	if err := decoder.Decode(destination); err != nil {
 		return errors.New("JSON does not match contract")
 	}

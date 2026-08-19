@@ -100,9 +100,19 @@ func coordinatorExclusiveDDL() []string {
 			generation bigint NOT NULL DEFAULT 1,
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
-		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
+		`CREATE TABLE public.worker_job_delivery_abandonments (
+			dedupe_key text PRIMARY KEY,
+			job_kind text NOT NULL,
+			abandoned_at timestamptz NOT NULL,
+			attempt_count integer NOT NULL,
+			last_error_code text
+		)`,
+		`CREATE TABLE public.sync_run_reference_discoveries (
+			id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
+			status text NOT NULL, attempts integer NOT NULL, available_at timestamptz NOT NULL,
+			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+		)`,
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
-		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
 		// Production column shape (internal/scheduler/fixed/ledger.go), because
 		// fixed_engine_statement_privileges_integration_test.go executes the
@@ -118,6 +128,7 @@ func coordinatorExclusiveDDL() []string {
 			status text NOT NULL,
 			handoff_count integer NOT NULL,
 			skip_reason text,
+			degraded_reason text,
 			completed_at timestamptz,
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL,
@@ -219,6 +230,14 @@ func coordinatorStatements() []coordinatorStatement {
 			sql:       "LOCK TABLE public.worker_job_outbox IN SHARE ROW EXCLUSIVE MODE",
 		},
 		{
+			name:      "scheduled-report replay reads retained delivery abandonment",
+			site:      "internal/scheduler/fixed/reports.go replayNeedsRearming -> replayedReportRunSQL",
+			privilege: "worker_job_delivery_abandonments SELECT",
+			sql: `SELECT dedupe_key IS NOT NULL
+				FROM public.worker_job_delivery_abandonments
+				WHERE dedupe_key = 'report.run:11111111-1111-5111-8111-111111111111'`,
+		},
+		{
 			name:      "sync-dispatch route pause",
 			site:      "internal/syncroute/control.go Pause, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "sync_dispatch_transport_routes UPDATE (domain side is SELECT-only)",
@@ -305,6 +324,84 @@ func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 			t.Errorf("%s: denied to the coordinator role, so coordinatorPosture is missing %s\n  site: %s\n  statement: %s\n  error: %v",
 				statement.name, statement.privilege, statement.site, collapse(statement.sql), err)
 		}
+	}
+}
+
+// TestCoordinatorMaterializerCanInsertSyncDispatchOutbox is the CHAOS-3146
+// regression at the real trust boundary. The reconciler constructs its
+// Materializer with the restricted coordinator pool, so only a connection as
+// that login can prove the migration grants the INSERT that Step needs. The
+// statement is the production post_sync materialization shape, including its
+// conflict arbiter; a table owner or a one-column INSERT would miss the defect.
+//
+// The domain posture is checked in the same harness because sync_dispatch_outbox
+// is deliberately dual-role. Fixing the coordinator must not alter the domain
+// role's independently declared privileges.
+func TestCoordinatorMaterializerCanInsertSyncDispatchOutbox(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, uri := startGrantHarness(t, ctx)
+
+	statement := `INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+			'post_sync', 'pending', now(), 0, now(), now()
+		) ON CONFLICT (sync_run_id, kind) DO NOTHING`
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	if err := execInRolledBackTransaction(t, ctx, coordinator, statement); err != nil {
+		t.Errorf("restricted coordinator cannot execute syncreconciler materializer INSERT: %v", err)
+	}
+
+	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		t.Errorf("coordinator grant changed the domain role's privilege posture: %v", err)
+	}
+}
+
+// TestScheduledMaterializerRoleBoundary executes the new materializer's
+// decisive statement shapes as the restricted logins. It proves both halves
+// of the two-transaction seam and, critically, that the coordinator can read
+// only credential metadata rather than encrypted secret material.
+func TestScheduledMaterializerRoleBoundary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, uri := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+
+	domainStatements := []string{
+		"INSERT INTO public.integration_sources (id) VALUES (gen_random_uuid())",
+		"INSERT INTO public.integration_datasets (id) VALUES (gen_random_uuid())",
+		"INSERT INTO public.sync_runs (id) VALUES (gen_random_uuid())",
+		"INSERT INTO public.sync_run_units (id,state) VALUES (gen_random_uuid(),'planned')",
+	}
+	for _, statement := range domainStatements {
+		if err := execInRolledBackTransaction(t, ctx, domain, statement); err != nil {
+			t.Errorf("domain materializer statement denied: %v\n  statement: %s", err, collapse(statement))
+		}
+		if err := execInRolledBackTransaction(t, ctx, coordinator, statement); !isInsufficientPrivilege(err) {
+			t.Errorf("coordinator crossed domain write boundary: error=%v\n  statement: %s", err, collapse(statement))
+		}
+	}
+
+	coordinatorStatements := []string{
+		"SELECT id,org_id,provider,is_active,config FROM public.integration_credentials WHERE id=gen_random_uuid()",
+		"SELECT id FROM public.organizations WHERE id=gen_random_uuid() FOR KEY SHARE",
+		"SELECT id FROM public.feature_flags WHERE key='canonical_incident_ingestion' FOR UPDATE",
+		"SELECT id FROM public.org_feature_overrides WHERE org_id=gen_random_uuid() FOR UPDATE",
+		"INSERT INTO public.job_runs (id,job_id,status,result,triggered_by,completed_at,error,created_at) VALUES (gen_random_uuid(),gen_random_uuid(),0,'{}','schedule',NULL,NULL,now())",
+		"INSERT INTO public.sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at) VALUES (gen_random_uuid(),gen_random_uuid(),'org','planned',0,now(),now(),now())",
+	}
+	for _, statement := range coordinatorStatements {
+		if err := execInRolledBackTransaction(t, ctx, coordinator, statement); err != nil {
+			t.Errorf("coordinator materializer statement denied: %v\n  statement: %s", err, collapse(statement))
+		}
+	}
+	secretRead := "SELECT credentials_encrypted FROM public.integration_credentials WHERE id=gen_random_uuid()"
+	if err := execInRolledBackTransaction(t, ctx, coordinator, secretRead); !isInsufficientPrivilege(err) {
+		t.Errorf("coordinator can read encrypted credential material: error=%v", err)
 	}
 }
 

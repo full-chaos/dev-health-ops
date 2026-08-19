@@ -19,7 +19,6 @@ const (
 )
 
 var (
-	profilePattern      = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 	queuePattern        = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 	handlerOwnerPattern = regexp.MustCompile(`^internal/jobs/[a-z0-9_/]+$`)
 )
@@ -39,7 +38,6 @@ type JobDefinition struct {
 	Kind              string              `json:"kind"`
 	CurrentVersion    int                 `json:"current_version"`
 	SupportedVersions []int               `json:"supported_versions"`
-	Profile           string              `json:"profile"`
 	Queue             string              `json:"queue"`
 	HandlerOwner      string              `json:"handler_owner"`
 	ExecutionMode     string              `json:"execution_mode"`
@@ -71,7 +69,7 @@ type MigrationJob struct {
 	State            string   `json:"state"`
 	ProducerVersion  int      `json:"producer_version"`
 	ConsumerVersions []int    `json:"consumer_versions"`
-	RequiredProfiles []string `json:"required_profiles"`
+	RequiredQueues   []string `json:"required_queues"`
 	Route            string   `json:"route"`
 	RollbackRoute    string   `json:"rollback_route"`
 	Evidence         []string `json:"evidence"`
@@ -102,6 +100,52 @@ func loadRegistry(root string, checkCompiledTypes bool) (Registry, error) {
 	return registry, nil
 }
 
+// loadBaseRegistryForComparison loads a MERGE BASE registry for comparison
+// only. It is deliberately NOT loadRegistry.
+//
+// The base is older than the tree comparing against it, and it was already
+// validated strictly -- by this same gate -- when it was itself the candidate.
+// Re-validating it with the CANDIDATE's struct and the CANDIDATE's policy
+// constants therefore adds no safety, and makes the compatibility gate
+// structurally unable to survive its own evolution: removing any registry
+// field makes every base undecodable, and changing any pinned policy constant
+// makes every base invalid. Both fail at LOAD, before a single compatibility
+// rule is evaluated -- so the gate stops protecting anything while still
+// reporting red, and only clears once the change reaches main, which requires
+// merging the very branch it blocks.
+//
+// Concretely: CHAOS-3851 removed `profile` from the registry and renamed the
+// same_version_rollout constant, and each edit alone made main's registry
+// unloadable here.
+//
+// What is checked is the structural minimum the comparison itself needs. What
+// is NOT checked is anything encoding today's policy -- version policy,
+// per-job definition rules, Go decoder drift -- because those describe what a
+// CANDIDATE must satisfy, not what the past did.
+func loadBaseRegistryForComparison(root string) (Registry, error) {
+	data, err := readContractFile(root, registryFilename)
+	if err != nil {
+		return Registry{}, err
+	}
+	var registry Registry
+	if err := decodeLenient(data, 512*1024, &registry); err != nil {
+		return Registry{}, fmt.Errorf("decode %s: %w", registryFilename, err)
+	}
+	if registry.SchemaVersion != 1 || registry.ContractFamily != "dev-health.jobs" {
+		return Registry{}, errors.New("unsupported base registry identity")
+	}
+	// Pinned rather than merely non-empty: this value is used to READ A FILE
+	// out of the base tree, so it stays a fixed name and never a path from
+	// data.
+	if registry.EnvelopeSchema != "envelope.schema.json" {
+		return Registry{}, errors.New("base registry must use envelope.schema.json")
+	}
+	if len(registry.Jobs) == 0 {
+		return Registry{}, errors.New("base registry has no jobs")
+	}
+	return registry, nil
+}
+
 func (registry Registry) Validate(root string) error {
 	return registry.validate(root, true)
 }
@@ -115,7 +159,7 @@ func (registry Registry) validate(root string, checkCompiledTypes bool) error {
 	}
 	if registry.VersionPolicy.Compatibility != "additive_optional_only" ||
 		registry.VersionPolicy.MinimumConsumerWindow != 2 ||
-		registry.VersionPolicy.SameVersionRollout != "schema_digest_all_live_profiles" {
+		registry.VersionPolicy.SameVersionRollout != "schema_digest_all_live_queues" {
 		return errors.New("unsupported version policy")
 	}
 	if len(registry.Jobs) == 0 {
@@ -200,8 +244,7 @@ func validateJobDefinition(root string, job JobDefinition) error {
 			return fmt.Errorf("version %d has no golden fixture", version)
 		}
 	}
-	if !matchesBounded(profilePattern, job.Profile, 32) ||
-		!matchesBounded(queuePattern, job.Queue, 96) ||
+	if !matchesBounded(queuePattern, job.Queue, 96) ||
 		!matchesBounded(handlerOwnerPattern, job.HandlerOwner, 128) {
 		return errors.New("runtime routing policy has invalid identifiers")
 	}
@@ -298,10 +341,11 @@ func (state MigrationState) Validate(registry Registry) error {
 		if !equalInts(job.ConsumerVersions, definition.SupportedVersions) {
 			return fmt.Errorf("migration job %s consumer versions drift from registry", job.Kind)
 		}
-		if !containsString(job.RequiredProfiles, definition.Profile) {
-			return fmt.Errorf("migration job %s omits registry profile", job.Kind)
+		if len(job.RequiredQueues) != 1 || job.RequiredQueues[0] != definition.Queue {
+			return fmt.Errorf("migration job %s required queues drift from registry", job.Kind)
 		}
-		if !strictlyIncreasing(job.ConsumerVersions) || !sortedUniqueStrings(job.RequiredProfiles) || !sortedUniqueStrings(job.Evidence) {
+		if !strictlyIncreasing(job.ConsumerVersions) || !sortedUniqueStrings(job.RequiredQueues) ||
+			!sortedUniqueStrings(job.Evidence) {
 			return fmt.Errorf("migration job %s has unsorted or duplicate policy values", job.Kind)
 		}
 		if !containsString([]string{"inventory", "contract_frozen", "go_implemented", "shadow", "canary", "go_default", "celery_fallback_only", "celery_removed"}, job.State) {
@@ -339,7 +383,7 @@ func ValidateTree(root string) error {
 		"registry.schema.json",
 		"migration-state.schema.json",
 		"capability-report.schema.json",
-		"deployment-profiles.schema.json",
+		"deployment-manifest.schema.json",
 	} {
 		data, err := readContractFile(root, artifact)
 		if err != nil {
@@ -462,6 +506,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindInvestmentChunk:          {"chunk_id"},
 		KindInvestmentFinalize:       {"run_id"},
 		KindHeartbeat:                {"scheduled_for"},
+		KindSyncCoverageRefresh:      {"scheduled_for", "limit"},
 		KindRetentionCleanup:         {"batch_size", "delete_before", "retention_policy"},
 		KindSyncProviderUnit:         {"unit_id"},
 	}[kind]
@@ -470,6 +515,16 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindHeartbeat {
 		return validateTimestampProperty(properties["scheduled_for"])
+	}
+	if kind == KindSyncCoverageRefresh {
+		if err := validateTimestampProperty(properties["scheduled_for"]); err != nil {
+			return err
+		}
+		limit, ok := properties["limit"].(map[string]any)
+		if !ok || limit["type"] != "integer" || fmt.Sprint(limit["minimum"]) != "1" || fmt.Sprint(limit["maximum"]) != "1000" {
+			return errors.New("limit schema drifts from compiled bounds")
+		}
+		return nil
 	}
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])

@@ -162,6 +162,25 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	providerJobID := insertOperatorProviderUnitIntegrationJob(t, ctx, adminPool, registry, now)
+	if _, err := backend.Retry(ctx, providerJobID, Mutation{ExpectedState: StateDiscarded}); err != nil {
+		t.Fatalf("current provider-unit delivery retry: %v", err)
+	}
+	if _, err := adminPool.Exec(ctx, `
+		UPDATE river.river_job
+		SET state = 'discarded', finalized_at = $2
+		WHERE id = $1`, providerJobID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adminPool.Exec(ctx, `
+		UPDATE public.worker_job_outbox
+		SET status = 'pending', river_job_id = NULL
+		WHERE river_job_id = $1`, providerJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Retry(ctx, providerJobID, Mutation{ExpectedState: StateDiscarded}); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale provider-unit delivery retry error=%v, want ErrStateConflict", err)
+	}
 	auditor, err := NewPostgresAuditor(adminPool)
 	if err != nil {
 		t.Fatal(err)
@@ -214,9 +233,16 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil || len(jobs) != 1 || jobs[0].ID != jobID {
 		t.Fatalf("List() = %+v, %v", jobs, err)
 	}
-	queues, err := service.Queues(ctx, principal, "ops")
-	if err != nil || len(queues) != 3 {
+	queues, err := service.Queues(ctx, principal, "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	})
+	if err != nil || len(queues) != 4 {
 		t.Fatalf("Queues() = %+v, %v", queues, err)
+	}
+	for index, name := range []string{"coverage", "heartbeat", "retention", "webhooks"} {
+		if queues[index].Name != name {
+			t.Fatalf("Queues()[%d].Name = %q, want %q", index, queues[index].Name, name)
+		}
 	}
 	if err := productionGuard.Check(ctx, ActionCancel, job); !errors.Is(err, ErrDomainPreconditionUnsupported) {
 		t.Fatalf("production domain guard error = %v", err)
@@ -234,8 +260,10 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err := service.PauseQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-pause"); err != nil {
 		t.Fatalf("PauseQueue: %v", err)
 	}
-	queues, err = service.Queues(ctx, principal, "ops")
-	if err != nil || !queues[0].Paused {
+	queues, err = service.Queues(ctx, principal, "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	})
+	if err != nil || len(queues) != 4 || queues[1].Name != "heartbeat" || !queues[1].Paused {
 		t.Fatalf("paused Queues() = %+v, %v", queues, err)
 	}
 	if err := service.ResumeQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-resume"); err != nil {
@@ -334,14 +362,18 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			id uuid PRIMARY KEY,
 			state text NOT NULL,
 			job_kind text,
-			status text
+			status text,
+			river_job_id bigint UNIQUE
 		)`,
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_runs (
 			id uuid PRIMARY KEY,
 			job_kind text NOT NULL,
 			status text NOT NULL
 		)`,
+		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_routes (
 			job_kind text PRIMARY KEY,
 			transport text NOT NULL,
@@ -353,10 +385,27 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Migration 0088 (#1529) added this table to domainPosture's manifest,
+		// so the CheckDomainAuthorization readiness call each test in this
+		// package makes fails closed on its absence — the
+		// table has to exist here even though this fixture never writes to it,
+		// exactly as it has to exist in a deployment before domain workers
+		// start. ApplyPinnedMigrations' domain GRANT for it is guarded by
+		// `IF to_regclass(...) IS NOT NULL`, so without this CREATE the role
+		// silently receives no grant and readiness reports the opaque
+		// "PostgreSQL readiness check failed".
+		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
+		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
@@ -463,6 +512,74 @@ func insertOperatorIntegrationJob(
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return jobID
+}
+
+func insertOperatorProviderUnitIntegrationJob(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	registry joboutbox.PolicyRegistry,
+	now time.Time,
+) int64 {
+	t.Helper()
+	organizationID := "00000000-0000-4000-8000-000000000310"
+	unitID := "00000000-0000-4000-8000-000000000311"
+	envelope := jobcontract.Envelope{
+		ContractVersion: 1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "sync-run:00000000-0000-4000-8000-000000000312",
+		IdempotencyKey:  "sync.provider_unit:" + unitID,
+		Domain: jobcontract.DomainLink{
+			Type: "sync_run_unit",
+			ID:   unitID,
+		},
+		Payload: jobcontract.ProviderUnitPayload{UnitID: unitID},
+	}
+	encoded, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	inserter, err := joboutbox.NewRiverInserter(pool, "river", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	outboxID := "00000000-0000-4000-8000-000000000313"
+	jobID, err := inserter.Insert(ctx, tx, joboutbox.Row{
+		ID:              outboxID,
+		DedupeKey:       envelope.IdempotencyKey,
+		JobKind:         jobcontract.KindSyncProviderUnit,
+		ContractVersion: 1,
+		Args:            encoded,
+		PayloadHash:     "sha256:" + hex.EncodeToString(digest[:]),
+		Queue:           "sync_provider",
+		Priority:        2,
+		MaxAttempts:     5,
+		ScheduledAt:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.worker_job_outbox (id, state, job_kind, status, river_job_id)
+		VALUES ($1, 'current', $2, 'delivered', $3)`, outboxID, jobcontract.KindSyncProviderUnit, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE river.river_job
+		SET state = 'discarded', finalized_at = $2
+		WHERE id = $1`, jobID, now); err != nil {
 		t.Fatal(err)
 	}
 	return jobID

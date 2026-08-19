@@ -15,7 +15,8 @@ import (
 )
 
 // The DDL mirrors the shape alembic revisions 0001, 0005, 0053 and 0056 leave
-// behind for the four tables this producer touches. It is repeated here rather
+// behind for the report graph and the two delivery-state tables this producer
+// reads. It is repeated here rather
 // than executed through Alembic so the Go integration test has no Python runtime
 // dependency, and it deliberately keeps the parts that constrain the producer:
 //
@@ -25,8 +26,10 @@ import (
 //   - unique (report_id, scheduled_for) and unique report_run_id on the
 //     occurrence table, which are what make a second materialization of one due
 //     time impossible rather than merely unlikely;
-//   - saved_reports.schedule_id having NO unique constraint, because the
-//     ambiguous-schedule case the producer refuses is only reachable without it.
+//   - the deliberate omission of Alembic 0096's
+//     uq_saved_reports_schedule_id constraint. This simulates a partially
+//     migrated or manually drifted schema and keeps the producer's secondary
+//     ambiguity assertion executable.
 const scheduledReportDDL = `
 CREATE TABLE public.organizations (
     id UUID PRIMARY KEY,
@@ -108,6 +111,13 @@ CREATE TABLE public.worker_job_outbox (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE public.worker_job_delivery_abandonments (
+    dedupe_key VARCHAR(256) PRIMARY KEY,
+    job_kind VARCHAR(96) NOT NULL,
+    abandoned_at TIMESTAMPTZ NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    last_error_code VARCHAR(64)
 );
 `
 
@@ -344,8 +354,9 @@ func TestRepeatedOccurrenceWindowMaterializesNothingFurther(t *testing.T) {
 	first := readReportState(t, pool)
 	// The engine, not the producer, publishes the handoff, so a direct Produce
 	// leaves none behind. Seed the live row the engine would have written:
-	// without it replay would correctly RE-ARM the pruned handoff, which is a
-	// different property (TestReplayRearmsAPendingRunWhoseHandoffWasPruned).
+	// without it replay would correctly RE-ARM the never-published handoff,
+	// which is a different property
+	// (TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished).
 	seedHandoff(t, pool, first.RunID, "pending")
 
 	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
@@ -410,10 +421,28 @@ func TestNextCronInstantAfterCompletionProducesAgain(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	// The report handler is what advances last_run_at; simulate its completion.
+	// The report handler is what advances last_run_at; simulate a terminal
+	// transition that records the exact scheduled occurrence. Cancellation uses
+	// this shape, so the replay selector must treat equality as already advanced.
 	if _, err := pool.Exec(ctx, `
 UPDATE public.saved_reports SET last_run_at = $2, last_run_status = 'success' WHERE id = $1::uuid`,
-		testReportID, time.Date(2026, time.July, 25, 6, 1, 0, 0, time.UTC)); err != nil {
+		testReportID, time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	// Terminal transitions invalidate the paging projection; this forces the
+	// selector to distinguish the completed occurrence from genuinely owed work
+	// using last_run_at. Leaving tomorrow's projection in place would let an
+	// incorrect >= replay predicate pass by selecting the old occurrence and
+	// deriving tomorrow independently.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.scheduled_jobs SET next_run_at = NULL WHERE id = $1::uuid`, testJobID); err != nil {
+		t.Fatal(err)
+	}
+	// A terminal occurrence no longer owns a report run. If equality is wrongly
+	// classified as replay, replayExisting reaches the preserved occurrence and
+	// fails this missing-link state instead of moving to tomorrow's cron instant.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.scheduled_report_occurrences SET report_run_id = NULL`); err != nil {
 		t.Fatal(err)
 	}
 	_, tomorrow := reportOccurrence(t, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC))
@@ -685,9 +714,10 @@ func TestNotYetDueScheduledReportIsABoundedSkip(t *testing.T) {
 }
 
 // A cron expression the evaluator cannot resolve fails the occurrence loudly and
-// names the offending schedule. The report write path validates the timezone and
-// not the cron, so this is reachable tenant data; silently skipping it would let
-// one tenant's reports stop while the schedule stayed green.
+// names the offending schedule. New GraphQL writes reject these expressions, but
+// the producer must still defend against legacy, corrupt, and direct database
+// rows; silently skipping one would leave that tenant's reports stopped while the
+// schedule stayed green.
 func TestUnevaluableCronFailsTheOccurrence(t *testing.T) {
 	for _, expression := range []string{"not-a-cron", "", "0 6 * * * *", "@daily", "99 * * * *"} {
 		t.Run(expression, func(t *testing.T) {
@@ -733,8 +763,9 @@ func TestUnknownTimezoneFallsBackToUTCRatherThanFailing(t *testing.T) {
 	}
 }
 
-// A schedule owning two active reports is refused against real PostgreSQL, where
-// the missing unique constraint on saved_reports.schedule_id makes it reachable.
+// A schedule owning two active reports is refused against real PostgreSQL. The
+// fixture deliberately omits Alembic 0096's storage constraint to prove the
+// producer stays fail-closed under schema drift.
 func TestScheduleOwningTwoActiveReportsFailsTheOccurrence(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)

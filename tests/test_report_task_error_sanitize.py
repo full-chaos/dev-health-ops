@@ -100,16 +100,6 @@ def test_execute_saved_report_sanitizes_secret_bearing_failure(
     monkeypatch.setattr(
         "dev_health_ops.reports.engine.execute_report", _raise_with_secret
     )
-    # SQLite (unlike the production Postgres backend) doesn't round-trip
-    # tzinfo on DateTime(timezone=True) columns, so the previously-persisted
-    # `started_at` comes back naive while `completed_at` is computed fresh as
-    # tz-aware -- an unrelated test-harness artifact, not something this
-    # sanitize fix touches. Short-circuit the (irrelevant to this test)
-    # duration_seconds computation rather than fighting sqlite's tz handling.
-    monkeypatch.setattr(
-        "dev_health_ops.workers.report_task._datetime_or_none", lambda value: None
-    )
-
     from dev_health_ops.workers.report_task import execute_saved_report
 
     result = execute_saved_report(str(report_uuid), str(run_uuid))

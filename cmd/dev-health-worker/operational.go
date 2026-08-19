@@ -6,29 +6,19 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
+	coveragejobs "github.com/full-chaos/dev-health-ops/internal/jobs/synccoverage"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
-
-type operationalWorkerComponent struct{ client *river.Client[pgx.Tx] }
-
-func (component operationalWorkerComponent) Name() string { return "river-operational-worker" }
-func (component operationalWorkerComponent) Start(ctx context.Context) error {
-	return component.client.Start(ctx)
-}
-func (component operationalWorkerComponent) Shutdown(ctx context.Context) error {
-	return component.client.Stop(ctx)
-}
 
 func buildOperationalWorker(
 	cfg config.Config,
@@ -36,40 +26,33 @@ func buildOperationalWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
+	workers *river.Workers,
 ) (workerFamily, error) {
-	if cfg.Profile != "ops" || registry == nil {
+	operationalQueues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	if !anyQueueSelected(cfg.Queues, operationalQueues...) || registry == nil {
 		return workerFamily{}, nil
 	}
-	profile := registry.Profile("ops")
-	executable := 0
-	for _, descriptor := range profile {
-		if descriptor.Executable() {
-			executable++
-		}
-	}
-	if executable == 0 {
-		return workerFamily{}, nil
-	}
-	// The process-level readiness contract is all-or-nothing. Never start a
-	// partial queue consumer before every checked-in ops handler has concrete
-	// coverage; later system-handler work completes the same profile.
-	if executable != len(profile) {
+	if workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	specs := make([]jobruntime.HandlerSpec, 0, len(profile))
+	specs := make([]jobruntime.HandlerSpec, 0, len(operationalQueues))
 	for _, kind := range []string{
 		jobcontract.KindBillingNotification,
 		jobcontract.KindWebhookDelivery,
 		jobcontract.KindHeartbeat,
 		jobcontract.KindRetentionCleanup,
+		jobcontract.KindSyncCoverageRefresh,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
-		if ok && descriptor.Executable() {
+		if !ok {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		if queueSelected(cfg.Queues, descriptor.Queue) && descriptor.Executable() {
 			specs = append(specs, descriptor)
 		}
 	}
-	if len(specs) != len(profile) {
-		return workerFamily{}, errWorkerDependencyUnavailable
+	if len(specs) == 0 {
+		return workerFamily{}, nil
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
@@ -129,9 +112,8 @@ func buildOperationalWorker(
 	}
 	dependencies := jobruntime.Dependencies{
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
-		Budget: newOperationalBudget(), Idempotency: idempotency,
+		Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency,
 	}
-	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
 		switch spec.Kind {
@@ -183,27 +165,28 @@ func buildOperationalWorker(
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
+		case jobcontract.KindSyncCoverageRefresh:
+			projector, projectorErr := synccoverage.NewProjector(postgresDatabase.pools.Domain)
+			if projectorErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := coveragejobs.NewHandler(projector)
+			if handlerErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.SyncCoverageRefreshArgs](
+				registry, spec, handler, dependencies,
+			)
+			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			registered = append(registered, adapter.Spec())
 		}
 	}
-	budgets := []jobruntime.QueueBudget{
-		{Queue: "heartbeat", MaxWorkers: 1},
-		{Queue: "retention", MaxWorkers: 1},
-		{Queue: "webhooks", MaxWorkers: 4},
-	}
-	queues := make(map[string]river.QueueConfig, len(budgets))
-	for _, budget := range budgets {
-		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
-	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
-		Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers,
-	})
-	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
+	budgets := selectedQueueBudgets(cfg.Queues, operationalQueues, cfg.WorkerQueueConcurrency)
 	return workerFamily{
-		component: operationalWorkerComponent{client: client},
-		handlers:  registered,
-		queues:    budgets,
+		handlers: registered,
+		queues:   budgets,
 	}, nil
 }
 
@@ -228,47 +211,19 @@ func (operationalTenantScope) Resolve(ctx context.Context, request jobruntime.Sc
 	return ctx, nil
 }
 
-type operationalBudget struct {
-	mu     sync.Mutex
-	limits map[string]chan struct{}
-}
-
-func newOperationalBudget() *operationalBudget {
-	return &operationalBudget{limits: make(map[string]chan struct{})}
-}
-
-func (*operationalBudget) Supports(scope string, limit int) bool {
-	return (scope == "organization" || scope == "fleet") && limit > 0 && limit <= 32
-}
-
-func (budget *operationalBudget) Acquire(ctx context.Context, request jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
-	if budget == nil || !budget.Supports(request.ConcurrencyScope, request.ConcurrencyLimit) {
-		return nil, errors.New("operational budget is unavailable")
+func newOperationalBudget(pool *pgxpool.Pool, observer jobruntime.Observer) jobruntime.Budget {
+	metrics, _ := observer.(jobruntime.ConcurrencyBudgetObserver)
+	budget, err := jobruntime.NewPostgresConcurrencyBudget(pool, metrics)
+	if err != nil {
+		return unavailableOperationalBudget{}
 	}
-	key := "global"
-	if request.OrganizationID != nil {
-		key = *request.OrganizationID
-	}
-	budget.mu.Lock()
-	semaphore, ok := budget.limits[key]
-	if !ok {
-		semaphore = make(chan struct{}, request.ConcurrencyLimit)
-		budget.limits[key] = semaphore
-	}
-	budget.mu.Unlock()
-	select {
-	case semaphore <- struct{}{}:
-		return &operationalBudgetLease{release: func() { <-semaphore }}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return budget
 }
 
-type operationalBudgetLease struct {
-	once    sync.Once
-	release func()
-}
+type unavailableOperationalBudget struct{}
 
-func (lease *operationalBudgetLease) Release() {
-	lease.once.Do(lease.release)
+func (unavailableOperationalBudget) Supports(string, int) bool { return false }
+
+func (unavailableOperationalBudget) Acquire(context.Context, jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
+	return nil, errors.New("operational budget is unavailable")
 }

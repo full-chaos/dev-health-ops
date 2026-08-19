@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class SettingResponse(BaseModel):
@@ -273,9 +280,59 @@ class DiscoveredReposResponse(BaseModel):
     total: int
 
 
+class BackfillSelectorRequest(BaseModel):
+    """An exact, half-open focused-backfill selector.
+
+    The legacy top-level ``since`` and ``before`` fields remain calendar dates
+    with their established inclusive semantics. A structured selector is the
+    authoritative form used by coverage actions: ``since`` is inclusive and
+    ``before`` is exclusive so an advertised coverage interval can be submitted
+    without expanding it by a day.
+    """
+
+    since: AwareDatetime
+    before: AwareDatetime
+    source_ids: list[str] | None = None
+    dataset_keys: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_half_open_interval(self) -> BackfillSelectorRequest:
+        if self.since >= self.before:
+            raise ValueError("backfill selector before must be after since")
+        return self
+
+
 class BackfillRequest(BaseModel):
-    since: date
-    before: date
+    selector: BackfillSelectorRequest | None = None
+    since: date | None = None
+    before: date | None = None
+
+    @model_validator(mode="after")
+    def _validate_selector(self) -> BackfillRequest:
+        if self.selector is not None and (
+            self.since is not None or self.before is not None
+        ):
+            raise ValueError(
+                "backfill selector cannot be mixed with legacy flat fields"
+            )
+        if self.selector is None and (self.since is None or self.before is None):
+            raise ValueError(
+                "backfill requires since and before, either top-level or in selector"
+            )
+        return self
+
+    def resolved_selector(self) -> BackfillSelectorRequest:
+        if self.selector is not None:
+            return self.selector
+        assert self.since is not None
+        assert self.before is not None
+        # Legacy flat dates retain their inclusive calendar-date semantics.
+        # Construct the equivalent UTC datetimes without routing them through
+        # the exact half-open structured-selector validator.
+        return BackfillSelectorRequest.model_construct(
+            since=datetime.combine(self.since, time.min, tzinfo=timezone.utc),
+            before=datetime.combine(self.before, time.max, tzinfo=timezone.utc),
+        )
 
 
 JOB_RUN_STATUS_LABELS: dict[int, str] = {
@@ -356,9 +413,43 @@ class SyncCoverageSource(BaseModel):
 
 
 class SyncCoverageBackfillWindow(BaseModel):
-    since: date
-    before: date
+    """A server-authorized exact selector for a coverage gap or failure.
+
+    These are deliberately source and dataset scoped. Callers must not merge
+    adjacent windows, because the adjacent range can belong to another source
+    or dataset.
+    """
+
+    since: AwareDatetime
+    before: AwareDatetime
+    source_ids: list[str] = Field(default_factory=list)
+    dataset_keys: list[str] = Field(default_factory=list)
     reasons: list[Literal["gap", "failed"]] = Field(default_factory=list)
+
+    @field_validator("since", "before", mode="before")
+    @classmethod
+    def _assume_utc(cls, value: Any) -> Any:
+        """Attach UTC to a naive or date-only boundary read from a projection.
+
+        These windows are echoed straight back by clients as a
+        ``BackfillSelectorRequest``, whose boundaries are ``AwareDatetime``. A
+        naive value here therefore produces a selector the server itself
+        rejects with a 422. Version-1 projections stored bare calendar dates,
+        so coerce rather than reject: an unreadable suggestion is worse than a
+        UTC-assumed one, and every stored boundary is already UTC.
+        """
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                return value
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return value
 
 
 class SyncCoverageSummaryResponse(BaseModel):
@@ -385,6 +476,13 @@ class SyncCoverageSummaryResponse(BaseModel):
     truncation_reason: Literal["lookback_limit"] | None = None
     projection_version: int
     projection_complete: bool
+    projection_refreshing: bool = Field(
+        default=False,
+        description=(
+            "True when this response is the last completed projection while a newer "
+            "projection is being built."
+        ),
+    )
     overall: SyncCoverageOverall
     datasets: list[SyncCoverageDataset]
     sources: list[SyncCoverageSource]

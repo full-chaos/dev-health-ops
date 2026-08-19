@@ -13,6 +13,7 @@ from unittest.mock import Mock
 import pytest
 
 from dev_health_ops.connectors import BatchResult
+from dev_health_ops.connectors.models import Repository
 from dev_health_ops.connectors.utils import match_repo_pattern
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models.git import (
@@ -319,11 +320,13 @@ async def test_process_gitlab_projects_batch_persists_instance_discriminator(
 
     store = DummyStore()
 
-    project = Mock()
-    project.id = 456
-    project.full_name = "group/proj"
-    project.url = "https://example.com/group/proj"
-    project.default_branch = "main"
+    project = Repository(
+        id=456,
+        name="proj",
+        full_name="group/proj",
+        url="https://example.com/group/proj",
+        default_branch="main",
+    )
 
     result = BatchResult(repository=project, stats=None, success=True)
     _stub_gitlab_project_discovery(monkeypatch, [project])
@@ -1636,11 +1639,13 @@ async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatc
         async def insert_git_pull_requests(self, pr_data):
             return
 
-    project = Mock()
-    project.id = 456
-    project.full_name = "group/proj-metrics"
-    project.url = "https://example.com/group/proj-metrics"
-    project.default_branch = "main"
+    project = Repository(
+        id=456,
+        name="proj-metrics",
+        full_name="group/proj-metrics",
+        url="https://example.com/group/proj-metrics",
+        default_branch="main",
+    )
 
     result = BatchResult(repository=project, stats=None, success=True)
     _stub_gitlab_project_discovery(monkeypatch, [project])
@@ -1770,11 +1775,13 @@ async def test_process_gitlab_projects_batch_since_prepass_persists_aggregate_st
         async def insert_git_pull_requests(self, pr_data):
             return
 
-    project = Mock()
-    project.id = 457
-    project.full_name = "group/windowed-stats"
-    project.url = "https://example.com/group/windowed-stats"
-    project.default_branch = "main"
+    project = Repository(
+        id=457,
+        name="windowed-stats",
+        full_name="group/windowed-stats",
+        url="https://example.com/group/windowed-stats",
+        default_branch="main",
+    )
 
     class DummyConnector:
         def __init__(self, url: str, private_token: str):
@@ -1797,7 +1804,9 @@ async def test_process_gitlab_projects_batch_since_prepass_persists_aggregate_st
         async def get_commit_stats(self, project_id, commit_hash):
             assert project_id == project.id
             assert commit_hash == "gitlab-windowed"
-            return SimpleNamespace(additions=7, deletions=2)
+            return SimpleNamespace(
+                commit_id="gitlab-windowed", additions=7, deletions=2
+            )
 
         def drain_usage_observations(self):
             return []

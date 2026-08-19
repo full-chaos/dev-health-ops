@@ -46,6 +46,7 @@ from dev_health_ops.exceptions import (
     APIException,
     AuthenticationException,
     NotFoundException,
+    PaginationException,
     RateLimitException,
 )
 from dev_health_ops.providers._ratelimit import resolve_retry_after_seconds
@@ -302,7 +303,7 @@ class InstrumentedRESTCore:
         -- records exactly one usage observation via ``_record_usage``
         (CHAOS-2754 contract: actuals are real request counts, never
         abstract units). ``operation`` is the caller-authored label (often a
-        path TEMPLATE, e.g. ``"cicd:GET /repos/{o}/{r}/actions/runs"``,
+        path TEMPLATE, e.g. ``"tests:GET /repos/{o}/{r}/actions/runs"``,
         distinct from the literal ``path`` sent over the wire) used both for
         usage-recorder resolution and for diagnostic messages.
 
@@ -537,6 +538,7 @@ class InstrumentedRESTCore:
         headers: dict[str, str] | None = None,
         data_key: str | None = None,
         max_pages: int | None = 100,
+        require_complete: bool = False,
     ) -> list[Any]:
         """Paginate a GitHub-style endpoint via the RFC 5988 ``Link`` header.
 
@@ -547,6 +549,8 @@ class InstrumentedRESTCore:
         :param data_key: When the endpoint wraps its list in an envelope
             (e.g. GitHub Actions' ``{"workflow_runs": [...]}"``), the key to
             extract; ``None`` when the JSON payload IS the list.
+        :param require_complete: Raise instead of returning partial results
+            when the page cap is reached while a next page still exists.
         """
         items: list[Any] = []
         next_url: str | None = path
@@ -560,6 +564,11 @@ class InstrumentedRESTCore:
                     max_pages,
                     operation,
                 )
+                if require_complete:
+                    raise PaginationException(
+                        f"{self.provider} pagination incomplete after "
+                        f"{max_pages} pages for {operation}"
+                    )
                 break
             response = await self.request(
                 "GET",

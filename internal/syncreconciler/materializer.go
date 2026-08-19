@@ -24,10 +24,10 @@ type materializerBeginFunc func(context.Context) (pgx.Tx, error)
 // domain state. It is transport-neutral: it neither reads nor mutates transport
 // routes, and it never claims or publishes an outbox row.
 //
-// The component is intentionally command-unwired. Its transaction can coexist
-// with the Python reconciler because the outbox has a unique (sync_run_id, kind)
-// constraint. The first three conflict transitions match the Python wrapper;
-// post_sync is deliberately stricter and never re-arms an existing row.
+// Its transaction can coexist with a compatibility reconciler because the
+// outbox has a unique (sync_run_id, kind) constraint. The first three conflict
+// transitions match that compatibility contract; post_sync is deliberately
+// stricter and never re-arms an existing row.
 type Materializer struct {
 	begin materializerBeginFunc
 }
@@ -47,8 +47,8 @@ func newMaterializer(begin materializerBeginFunc) (*Materializer, error) {
 }
 
 // Step materializes one deterministic candidate window per frozen kind in one
-// transaction. staleDispatchCutoff is supplied by the future command owner so
-// this dormant domain component does not duplicate environment policy.
+// transaction. staleDispatchCutoff is supplied by command composition so this
+// domain component does not duplicate environment policy.
 func (materializer *Materializer) Step(
 	ctx context.Context,
 	now time.Time,
@@ -103,13 +103,24 @@ func (materializer *Materializer) Step(
 // materializeDispatchSQL mirrors _dispatchable_run_ids followed by
 // _materialize_outbox_wakeups and its canonical upsert transition. The
 // DISTINCT candidate set is bounded before insertion, and the unique outbox
-// key arbitrates concurrent Go/Python writers.
+// key arbitrates concurrent Go/Python writers. For schedule-triggered runs,
+// scheduled_sync_occurrences.sync_run_id is the readiness fence: the table's
+// completed-state constraint permits that link only in the same coordinator
+// transaction that links job_run_id and marks the occurrence completed.
 const materializeDispatchSQL = `
 WITH candidates AS (
 	SELECT DISTINCT run.id, run.org_id
 	FROM public.sync_runs AS run
 	JOIN public.sync_run_units AS unit ON unit.sync_run_id = run.id
 	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+		AND (
+			run.triggered_by <> 'schedule'
+			OR EXISTS (
+				SELECT 1
+				FROM public.scheduled_sync_occurrences AS occurrence
+				WHERE occurrence.sync_run_id = run.id
+			)
+		)
 		AND (
 			unit.status = 'planned'
 			OR (unit.status = 'dispatching' AND unit.updated_at <= $2)
@@ -210,6 +221,23 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
+	AND (
+		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
+		OR EXISTS (
+			SELECT 1
+			FROM public.sync_run_units AS unit
+			WHERE unit.sync_run_id = sync_dispatch_outbox.sync_run_id
+				AND (
+					(unit.status = 'dispatching' AND unit.updated_at <= $2)
+					OR (
+						unit.status = 'retrying'
+						AND unit.available_at IS NOT NULL
+						AND unit.available_at <= $1
+					)
+				)
+		)
+	)
 `
 
 const materializeFinalizeSQL = `
@@ -217,6 +245,14 @@ WITH candidates AS (
 	SELECT run.id, run.org_id
 	FROM public.sync_runs AS run
 	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+		AND (
+			run.triggered_by <> 'schedule'
+			OR EXISTS (
+				SELECT 1
+				FROM public.scheduled_sync_occurrences AS occurrence
+				WHERE occurrence.sync_run_id = run.id
+			)
+		)
 		AND NOT EXISTS (
 			SELECT 1
 			FROM public.sync_run_units AS unit
@@ -320,6 +356,10 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND NOT (
+		sync_dispatch_outbox.status = 'dispatched'
+		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	)
 `
 
 const materializeDiscoverySQL = `
@@ -430,6 +470,10 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND NOT (
+		sync_dispatch_outbox.status = 'dispatched'
+		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	)
 `
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

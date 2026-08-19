@@ -55,6 +55,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 -- no way to express "this column only" — hence the separate CTEs below.
 ), column_scoped_privileges(table_name, column_name, privilege) AS (
 	SELECT * FROM unnest($6::text[], $7::text[], $8::text[])
+), required_sequence_privileges(sequence_name) AS (
+	SELECT * FROM unnest($10::text[])
 ), column_scoped_relations AS (
 	SELECT DISTINCT class.oid, class.relname
 	FROM pg_catalog.pg_class AS class
@@ -89,12 +91,20 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 			FROM column_scoped_privileges AS scoped
 			WHERE scoped.table_name = class.relname
 		)
-), public_sequences AS (
+), required_public_sequences AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
 		AND class.relkind = 'S'
+		AND class.relname IN (SELECT sequence_name FROM required_sequence_privileges)
+), other_public_sequences AS (
+	SELECT class.oid
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname = 'public'
+		AND class.relkind = 'S'
+		AND class.relname NOT IN (SELECT sequence_name FROM required_sequence_privileges)
 ), river_relations AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
@@ -369,9 +379,19 @@ SELECT
 				ELSE false
 			END
 	)
+	AND (SELECT count(*) FROM required_public_sequences) =
+		(SELECT count(*) FROM required_sequence_privileges)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM public_sequences
+		FROM required_public_sequences
+		WHERE NOT has_sequence_privilege(current_user, oid, 'USAGE')
+			OR has_sequence_privilege(current_user, oid, 'USAGE WITH GRANT OPTION')
+			OR has_sequence_privilege(current_user, oid, 'SELECT')
+			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM other_public_sequences
 		WHERE has_sequence_privilege(current_user, oid, 'USAGE')
 			OR has_sequence_privilege(current_user, oid, 'SELECT')
 			OR has_sequence_privilege(current_user, oid, 'UPDATE')
@@ -454,8 +474,9 @@ type ColumnPrivilege struct {
 // same deployment; see the package doc on rolePostureQuery for why that is
 // what makes cross-role attribution hold without a separate check.
 type RolePosture struct {
-	RequiredTables []TablePrivilege
-	ColumnScoped   []ColumnPrivilege
+	RequiredTables    []TablePrivilege
+	ColumnScoped      []ColumnPrivilege
+	RequiredSequences []string
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -465,16 +486,22 @@ type RolePosture struct {
 // authority for role/privilege attribution — not this comment, and not any
 // earlier revision of it.
 //
-//   - worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
+//   - worker_job_routes, scheduled_sync_occurrences, and
 //     fixed_schedule_occurrences moved OUT of this posture entirely: the
-//     manifest attributes all four exclusively to the coordinator role (see
-//     coordinatorPosture below). None has a domain-side SQL site.
+//     manifest attributes all three exclusively to the coordinator role (see
+//     coordinatorPosture below). scheduled_jobs is deliberately dual-role and
+//     SELECT-only here because the native sync-coverage projector reads its
+//     schedule facts while the coordinator remains its only writer.
 //   - sync_configurations tightens from {SELECT, UPDATE} to {SELECT} only:
 //     the domain-side site (internal/syncdispatchruntime/native_post_sync.go:263)
 //     is a plain SELECT with no lock clause. The genuine row-locking write
 //     this table used to need UPDATE for belongs to the coordinator-side
 //     scheduler code, not the domain worker.
-//   - sync_runs tightens from {SELECT} to {SELECT, UPDATE}: it is one of the
+//   - integration_sources, integration_datasets, sync_runs, and sync_run_units
+//     require INSERT as of CHAOS-3145: the native scheduler materializer keeps
+//     PagerDuty inventory repair and its FK-dependent graph in one domain
+//     transaction. Existing worker-side UPDATE remains unchanged.
+//     sync_runs was previously widened from {SELECT} to {SELECT, UPDATE}: it is one of the
 //     six dual-grant ("both") tables — the domain side genuinely holds
 //     UPDATE via Fanout's `FOR SHARE` and the providersync hot path, not just
 //     an implied SELECT.
@@ -529,16 +556,46 @@ func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"integrations", false, false, false},
-			{"integration_sources", false, false, false},
-			{"integration_datasets", false, false, false},
+			{"integration_sources", true, true, false},
+			{"integration_datasets", true, true, false},
 			{"integration_credentials", false, false, false},
-			{"sync_runs", false, true, false},
+			// Provider-sync workers resolve tokenless PagerDuty OAuth descriptors
+			// through this encrypted token row and atomically rotate an expiring
+			// token. They need no INSERT or DELETE authority.
+			{"provider_oauth_credentials", false, true, false},
+			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
-			{"sync_run_units", false, true, false},
+			{"sync_run_units", true, true, false},
+			// Chunked provider routes write a small tenant/generation checkpoint
+			// and immutable prepared normalized sidecars. The checkpoint advances
+			// in place; sidecars transition pending -> writing -> committed and
+			// are deleted with the owning unit on successful completion.
+			{"sync_run_unit_chunk_checkpoints", true, true, true},
+			{"sync_run_unit_effect_chunks", true, true, true},
+			// Prepared recovery snapshots are transient state: written once when
+			// a route's
+			// manifest is prepared, read back on recovery, and cleared in the
+			// same transaction that completes the unit SUCCESSFULLY. A failed
+			// or retrying unit deliberately keeps its snapshot, so "cleared on
+			// any terminal transition" would be wrong. Nothing ever updates a
+			// snapshot in place, so UPDATE stays off -- and note that means no
+			// row-locking clause can be used against this table either, since
+			// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class
+			// privileges. See loadPreparedRouteSnapshotRowSQL.
+			{"sync_run_unit_effect_snapshots", true, false, true},
 			{"sync_watermarks", true, true, false},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
 			{"sync_configurations", false, false, false},
+			// The native sync-coverage projector reads schedule facts. The report
+			// worker also clears next_run_at after a terminal scheduled run so the
+			// fixed scheduler recomputes the next cron instant.
+			{"scheduled_jobs", false, true, false},
+			// Read only: terminal report handling follows the immutable occurrence
+			// link to the scheduled_jobs row it is allowed to invalidate.
+			{"scheduled_report_occurrences", false, false, false},
+			{"backfill_jobs", false, false, false},
+			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},
 			{"remaining_metric_runs", true, true, false},
 			{"remaining_metric_partitions", true, true, false},
@@ -562,6 +619,13 @@ func domainPosture() RolePosture {
 			{"saved_reports", false, true, false},
 			{"webhook_deliveries", false, false, false},
 			{"worker_job_runs", true, true, false},
+			// Durable organization/fleet concurrency leases are domain-owned. The
+			// lease row contains policy identity and expiry only; queue and
+			// coordinator roles must not reach it.
+			{"worker_concurrency_leases", true, true, true},
+			// Expiring process liveness is domain-owned. The operator reads only
+			// bounded worker-instance counts through its domain pool.
+			{"worker_instances", true, true, true},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
@@ -624,8 +688,14 @@ func domainPosture() RolePosture {
 //     is proven by coordinator_statement_privileges_integration_test.go, which
 //     executes the real statements as both roles.
 //
+//   - worker_job_delivery_abandonments (coordinator: SELECT): scheduled-report
+//     replay reads the minimal terminal-delivery fact after queue-side outbox
+//     retention deletes the full dead row. The queue role owns INSERT; the
+//     coordinator never mutates this write-once evidence.
+//
 //   - remaining_metric_runs, remaining_metric_partitions,
-//     work_graph_execution_requests (coordinator: SELECT, INSERT) and the
+//     work_graph_execution_requests, daily_metrics_runs (coordinator: SELECT,
+//     INSERT) and the
 //     INSERT half of worker_job_outbox, plus the ColumnScoped
 //     worker_job_completion_fences pair: CHAOS-3114's second half. The
 //     fixed-schedule engine (internal/scheduler/fixed) now runs on the
@@ -659,6 +729,11 @@ func domainPosture() RolePosture {
 //     grant stays column-scoped for exactly the reason it is on the domain
 //     side: completed_at is server-owned and a table-wide grant would let the
 //     coordinator forge a fence retention never reaps.
+//     daily_metrics_runs         SELECT+INSERT         daily/postgres.go
+//     StartScheduledFanoutRunTx inserts one durable per-organization run and
+//     verifyScheduledFanoutRun re-reads it on replay. It deliberately does not
+//     touch daily_metrics_partitions: ClickHouse discovery and partition
+//     materialization execute later in the heavy domain worker.
 //
 //     Widening the COORDINATOR rather than the domain role is the deliberate
 //     choice. The property the partition protects is that provider-sync
@@ -670,43 +745,72 @@ func domainPosture() RolePosture {
 //     the scheduler, the reconciler, and workerctl. Celery Beat, which this
 //     replaces, already spans both table sets under ONE identity.
 //
-//   - feature_flags, org_feature_overrides, org_licenses, dev_conversations:
-//     the fixed scheduler's Ask Dev retention admission reads the canonical
-//     explicit-entitlement inputs and an independent persisted-state existence
-//     fact inside the occurrence transaction. These are SELECT-only on the
-//     coordinator side. The domain retention handler separately owns the
-//     row-lock, tombstone insert, and conversation delete privileges.
+//   - feature_flags and org_feature_overrides require UPDATE solely for the
+//     native scheduled planner's `FOR UPDATE` entitlement locks. No statement
+//     mutates their columns. integrations/sources/datasets/watermarks,
+//     tier_limits, and the safe metadata columns of integration_credentials
+//     are its SELECT-only plan-time inputs; the encrypted credential column is
+//     deliberately absent. PagerDuty source/dataset INSERT+UPDATE happens on
+//     the domain transaction so unit foreign keys never depend on uncommitted
+//     coordinator rows.
+//     job_runs and sync_run_reference_discoveries are coordinator ledger
+//     INSERTs after the domain graph commit.
+//
+//   - organizations requires UPDATE only for the native scheduled planner's
+//     FOR KEY SHARE existence lock. org_licenses and dev_conversations remain
+//     SELECT-only coordinator inputs. The domain retention handler separately
+//     owns the conversation row-lock, tombstone insert, and delete privileges.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"internal_service_credentials", false, true, false},
 			{"worker_operator_audits", true, true, false},
-			{"sync_run_reference_discoveries", false, false, false},
+			{"sync_run_reference_discoveries", true, false, false},
 			{"sync_run_post_dispatches", false, false, false},
 			{"worker_job_routes", false, true, false},
 			{"scheduled_jobs", false, true, false},
 			{"scheduled_sync_occurrences", true, true, false},
 			{"fixed_schedule_occurrences", true, true, false},
-			{"sync_dispatch_outbox", false, true, false},
+			// syncreconciler.Materializer.Step executes coordinator-pool INSERTs at
+			// internal/syncreconciler/materializer.go:125,
+			// internal/syncreconciler/materializer.go:235,
+			// internal/syncreconciler/materializer.go:345, and
+			// internal/syncreconciler/materializer.go:450. The first three also use
+			// ON CONFLICT DO UPDATE.
+			{"sync_dispatch_outbox", true, true, false},
 			{"sync_run_units", false, false, false},
 			{"sync_runs", false, true, false},
 			{"sync_dispatch_transport_routes", false, true, false},
 			{"worker_job_runs", false, true, false},
-			{"organizations", false, false, false},
-			{"feature_flags", false, false, false},
-			{"org_feature_overrides", false, false, false},
+			{"organizations", false, true, false},
+			{"feature_flags", false, true, false},
+			{"org_feature_overrides", false, true, false},
 			{"org_licenses", false, false, false},
 			{"dev_conversations", false, false, false},
 			{"sync_configurations", false, true, false},
+			{"integrations", false, false, false},
+			{"integration_sources", false, false, false},
+			{"integration_datasets", false, false, false},
+			{"sync_watermarks", false, false, false},
+			{"tier_limits", false, false, false},
+			{"job_runs", true, false, false},
 			{"worker_job_outbox", true, true, false},
+			{"worker_job_delivery_abandonments", false, false, false},
 			{"remaining_metric_runs", true, false, false},
 			{"remaining_metric_partitions", true, false, false},
 			{"work_graph_execution_requests", true, false, false},
+			{"daily_metrics_runs", true, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "id", "SELECT"},
+			{"integration_credentials", "org_id", "SELECT"},
+			{"integration_credentials", "provider", "SELECT"},
+			{"integration_credentials", "is_active", "SELECT"},
+			{"integration_credentials", "config", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},
+		RequiredSequences: []string{"worker_operator_audits_id_seq"},
 	}
 }
 
@@ -730,8 +834,9 @@ func CoordinatorPosture() RolePosture {
 // restatement of it.
 //
 // It replaces an earlier shim that handed out the verbatim SQL text of the
-// readiness query so internal/domaingrants could regex the
-// required_table_privileges VALUES rows back out of it. Phase 2 parameterized
+// readiness query so a regex-based static analyser (internal/domaingrants,
+// since removed) could pull the required_table_privileges VALUES rows back out
+// of it. Phase 2 parameterized
 // that query over posture data bound through unnest, so the table list is no
 // longer in the SQL at all and there is nothing left to parse — the data is
 // the artefact now, and reading it directly removes a whole class of
@@ -819,7 +924,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
-		allowDeletes,
+		allowDeletes, posture.RequiredSequences,
 	).Scan(&authorized); err != nil || !authorized {
 		return ErrUnavailable
 	}

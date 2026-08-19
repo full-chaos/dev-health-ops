@@ -22,6 +22,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests._helpers import seed_sync_dispatch_transport_routes
+from tests.canonical_incident_orchestration_support import SYNC_FIXTURE_BEFORE
 
 
 @contextmanager
@@ -93,7 +94,7 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
                 org_id=org_id,
                 mode=SyncRunMode.INCREMENTAL.value,
                 triggered_by="baseline",
-                before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+                before=SYNC_FIXTURE_BEFORE,
             ),
         )
 

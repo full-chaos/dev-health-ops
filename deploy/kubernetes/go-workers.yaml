@@ -20,21 +20,22 @@ kind: Deployment
 metadata:
   name: dev-health-go-worker-heavy
   namespace: dev-health
-  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: heavy}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: heavy}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: heavy}}
     spec:
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 7260
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: heavy}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          args: ["--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -46,21 +47,22 @@ kind: Deployment
 metadata:
   name: dev-health-go-worker-ops
   namespace: dev-health
-  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: ops}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: ops}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: ops}}
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 960
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: ops}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          args: ["--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -72,21 +74,22 @@ kind: Deployment
 metadata:
   name: dev-health-go-worker-sync-provider
   namespace: dev-health
-  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync, dev-health.io/queue: sync_provider}
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync, dev-health.io/queue: sync_provider}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}}
     spec:
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 960
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: sync}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          args: ["--queues=sync,sync_provider", "--queue-concurrency=sync=4,sync_provider=2", "--worker-group=sync", "--shutdown-timeout=960s"]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -95,20 +98,21 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dev-health-go-reconciler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+metadata: {name: dev-health-go-reconciler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: reconciler}}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: reconciler}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: reconciler}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: reconciler
           image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -117,20 +121,21 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dev-health-go-scheduler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+metadata: {name: dev-health-go-scheduler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: scheduler}}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: scheduler}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: scheduler}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: scheduler
           image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
@@ -139,20 +144,21 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dev-health-go-stream-external, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+metadata: {name: dev-health-go-stream-external, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-external}}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-external}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-external}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: external}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          env: [{name: DEV_HEALTH_PROFILE, value: external}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -161,20 +167,21 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dev-health-go-stream-ingest, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+metadata: {name: dev-health-go-stream-ingest, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-ingest}}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-ingest}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-ingest}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: ingest}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          env: [{name: DEV_HEALTH_PROFILE, value: ingest}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -183,20 +190,21 @@ spec:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dev-health-go-stream-pagerduty, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+metadata: {name: dev-health-go-stream-pagerduty, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-pagerduty}}
 spec:
   replicas: 0
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
-  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-pagerduty}}
   template:
-    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-pagerduty}}
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          env: [{name: DEV_HEALTH_PROFILE, value: pagerduty}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          env: [{name: DEV_HEALTH_PROFILE, value: pagerduty}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -212,14 +220,65 @@ metadata: {name: dev-health-go-worker-heavy, namespace: dev-health}
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-heavy}
   minReplicas: 0
-  maxReplicas: 1
+  maxReplicas: 2
   metrics:
     - type: External
-      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "1"}}
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: investment}}}, target: {type: AverageValue, averageValue: "1"}}
     - type: External
-      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "60"}}
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: investment}}}, target: {type: AverageValue, averageValue: "60"}}
     - type: External
-      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "800m"}}
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: investment}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: metrics}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: metrics}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: metrics}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: reports}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: reports}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: reports}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: workgraph}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: workgraph}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: workgraph}}}, target: {type: AverageValue, averageValue: "800m"}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: dev-health-go-worker-ops, namespace: dev-health}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-ops}
+  minReplicas: 0
+  maxReplicas: 2
+  metrics:
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: coverage}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: coverage}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: coverage}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: heartbeat}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: heartbeat}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: heartbeat}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: retention}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: retention}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: retention}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: webhooks}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: webhooks}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: webhooks}}}, target: {type: AverageValue, averageValue: "800m"}}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -230,8 +289,14 @@ spec:
   maxReplicas: 2
   metrics:
     - type: External
-      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: sync, queue: sync_provider}}}, target: {type: AverageValue, averageValue: "1"}}
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: sync}}}, target: {type: AverageValue, averageValue: "1"}}
     - type: External
-      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: sync, queue: sync_provider}}}, target: {type: AverageValue, averageValue: "60"}}
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: sync}}}, target: {type: AverageValue, averageValue: "60"}}
     - type: External
-      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: sync}}}, target: {type: AverageValue, averageValue: "800m"}}
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: sync}}}, target: {type: AverageValue, averageValue: "800m"}}
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: sync_provider}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: sync_provider}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: sync_provider}}}, target: {type: AverageValue, averageValue: "800m"}}

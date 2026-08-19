@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 # GITHUB_USAGE_ROUTE_FAMILIES entry), bypassing the substring marker scan.
 SECURITY_ROUTE_FAMILY = "security"
 DEPLOYMENTS_ROUTE_FAMILY = "deployments"
-CICD_ROUTE_FAMILY = "cicd"
+TESTS_ROUTE_FAMILY = "tests"
 GIT_ROUTE_FAMILY = "git"
 COMMIT_STATS_ROUTE_FAMILY = "commit_stats"
 FILES_ROUTE_FAMILY = "files"
@@ -851,13 +851,14 @@ class GitHubCodeClient:
     ) -> list[GitHubWorkflowRunData]:
         if max_runs <= 0:
             return []
-        operation = f"{CICD_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/actions/runs"
+        operation = f"{TESTS_ROUTE_FAMILY}:GET /repos/{owner}/{repo}/actions/runs"
         items = await self._core.paginate_link_header(
             f"/repos/{owner}/{repo}/actions/runs",
             operation=operation,
             params={"per_page": _GITHUB_DEPLOYMENTS_PER_PAGE},
             data_key="workflow_runs",
             max_pages=_page_cap_for_limit(max_runs),
+            require_complete=True,
         )
         return [
             _workflow_run_from_item(item)
@@ -1325,7 +1326,6 @@ class GitHubCodeClient:
 __all__ = [
     "COMMIT_STATS_ROUTE_FAMILY",
     "BLAME_ROUTE_FAMILY",
-    "CICD_ROUTE_FAMILY",
     "DEPLOYMENTS_ROUTE_FAMILY",
     "FILES_ROUTE_FAMILY",
     "GIT_ROUTE_FAMILY",
@@ -1342,4 +1342,5 @@ __all__ = [
     "GitHubReleaseData",
     "PRS_ROUTE_FAMILY",
     "SECURITY_ROUTE_FAMILY",
+    "TESTS_ROUTE_FAMILY",
 ]

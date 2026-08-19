@@ -40,7 +40,7 @@ def _downgrade(migration, connection: sa.Connection) -> None:
         migration.downgrade()
 
 
-def test_0064_seeds_every_registry_kind_at_its_safe_celery_baseline() -> None:
+def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
     migration = importlib.import_module(
         "dev_health_ops.alembic.versions.0064_seed_checked_in_worker_job_route_baselines"
     )
@@ -54,7 +54,10 @@ def test_0064_seeds_every_registry_kind_at_its_safe_celery_baseline() -> None:
             registry_kinds = tuple(
                 contract.kind for contract in load_registry().contracts
             )
-            assert len(registry_kinds) == 24
+            assert len(registry_kinds) == 25
+            assert set(registry_kinds) - set(migration._KINDS) == {
+                "system.sync_coverage_refresh"
+            }
             rows = connection.execute(
                 sa.text(
                     """
@@ -64,17 +67,96 @@ def test_0064_seeds_every_registry_kind_at_its_safe_celery_baseline() -> None:
                     """
                 )
             ).all()
-            assert tuple(row[0] for row in rows) == registry_kinds
+            assert tuple(row[0] for row in rows) == migration._KINDS
             assert all(row[1:] == ("celery", 0, 1) for row in rows)
 
             with Session(bind=connection) as session:
-                for kind in registry_kinds:
+                for kind in migration._KINDS:
                     assert resolve_worker_job_route(session, kind) == "celery"
 
             _downgrade(migration, connection)
             assert connection.execute(
                 sa.text("SELECT count(*) FROM worker_job_routes")
-            ).scalar_one() == len(registry_kinds)
+            ).scalar_one() == len(migration._KINDS)
+    finally:
+        engine.dispose()
+
+
+def test_0094_seeds_only_the_native_coverage_route_and_is_idempotent() -> None:
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0094_seed_sync_coverage_refresh_route"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            _create_pre_0064_schema(connection)
+            _upgrade(migration, connection)
+            _upgrade(migration, connection)
+
+            row = connection.execute(
+                sa.text(
+                    "SELECT transport, paused, generation FROM worker_job_routes "
+                    "WHERE job_kind = 'system.sync_coverage_refresh'"
+                )
+            ).one()
+            assert row == ("river", 0, 1)
+
+            _downgrade(migration, connection)
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT count(*) FROM worker_job_routes "
+                        "WHERE job_kind = 'system.sync_coverage_refresh'"
+                    )
+                ).scalar_one()
+                == 0
+            )
+    finally:
+        engine.dispose()
+
+
+def test_0094_preserves_native_operator_state_and_rejects_wrong_transport() -> None:
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0094_seed_sync_coverage_refresh_route"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            _create_pre_0064_schema(connection)
+            connection.execute(
+                sa.text(
+                    "INSERT INTO worker_job_routes "
+                    "(job_kind, transport, paused, generation, updated_at) VALUES "
+                    "('system.sync_coverage_refresh', 'river', TRUE, 3, CURRENT_TIMESTAMP)"
+                )
+            )
+            _upgrade(migration, connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT transport, paused, generation FROM worker_job_routes "
+                    "WHERE job_kind = 'system.sync_coverage_refresh'"
+                )
+            ).one() == ("river", 1, 3)
+
+            connection.execute(
+                sa.text(
+                    "UPDATE worker_job_routes SET transport='celery' "
+                    "WHERE job_kind='system.sync_coverage_refresh'"
+                )
+            )
+            with pytest.raises(
+                RuntimeError, match="conflicts with the native River route"
+            ):
+                _upgrade(migration, connection)
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT transport FROM worker_job_routes "
+                        "WHERE job_kind = 'system.sync_coverage_refresh'"
+                    )
+                ).scalar_one()
+                == "celery"
+            )
     finally:
         engine.dispose()
 

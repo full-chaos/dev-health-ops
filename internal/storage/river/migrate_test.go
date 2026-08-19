@@ -180,6 +180,12 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 				{TableName: "worker_job_routes"},
 			}
 		}},
+		{"unsafe sequence identifier", func(o *MigrationOptions) {
+			o.CoordinatorSequences = []string{"audit_seq; DROP TABLE x"}
+		}},
+		{"duplicate sequence grant", func(o *MigrationOptions) {
+			o.CoordinatorSequences = []string{"worker_operator_audits_id_seq", "worker_operator_audits_id_seq"}
+		}},
 		// The column-scoped half (CHAOS-3114) is validated with the same
 		// strictness. Every rejection below would otherwise provision a role
 		// whose readiness check can never pass, or a statement with an
@@ -258,6 +264,7 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
 			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
 		},
+		CoordinatorSequences: []string{"worker_operator_audits_id_seq"},
 	})
 	joined := strings.Join(statements, "\n")
 
@@ -283,6 +290,7 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 		"GRANT SELECT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
 		"GRANT INSERT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
 		"IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN",
+		"GRANT USAGE ON SEQUENCE \"public\".\"worker_operator_audits_id_seq\" TO \"coordinator_runtime\"",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("coordinator grants missing %q:\n%s", expected, joined)
@@ -395,16 +403,24 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"domain_runtime\"",
 		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_runs TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL THEN GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_report_occurrences') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_report_occurrences TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.backfill_jobs TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO \"domain_runtime\"; END IF; END $$",
@@ -429,15 +445,20 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.saved_reports') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.saved_reports TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.webhook_deliveries') IS NOT NULL THEN GRANT SELECT ON TABLE public.webhook_deliveries TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.worker_job_runs TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_concurrency_leases') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO \"domain_runtime\"; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO \"queue_runtime\"",
 		"REVOKE CREATE ON SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, \"domain_runtime\", \"queue_runtime\"",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO \"queue_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO \"queue_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO \"queue_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_run_units TO \"queue_runtime\"; END IF; END $$",
 		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM PUBLIC",
 		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM \"domain_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA \"river\" FROM PUBLIC, \"domain_runtime\"",

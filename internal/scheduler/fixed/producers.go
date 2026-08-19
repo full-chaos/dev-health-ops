@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
@@ -22,6 +23,17 @@ import (
 // SkipNoActiveOrganizations marks a fan-out occurrence that found no active
 // organization to schedule.
 const SkipNoActiveOrganizations = "no_active_organizations"
+
+// DegradedRejectedOrganizations marks a fan-out occurrence that produced work
+// for some organizations while permanently rejecting others -- most often an
+// organization whose id the job contract refuses (jobcontract.uuidPattern
+// enforces RFC 4122, which a hand-written id like
+// 11111111-2222-3333-4444-555555555555 does not satisfy even though
+// uuid.Parse accepts it). It is deliberately a DEGRADED condition rather than
+// a window failure: the rejected tenant is unactionable until its row is
+// corrected, and failing the shared window instead starves every other tenant
+// forever (CHAOS-3903).
+const DegradedRejectedOrganizations = "organizations_rejected"
 
 // occurrenceDomainNamespace derives the synthetic domain identity for job
 // kinds whose domain link has no backing table. `schedule_occurrence` and
@@ -68,6 +80,42 @@ func (HeartbeatProducer) Produce(
 		Payload: jobcontract.HeartbeatPayload{ScheduledFor: scheduledFor},
 	}
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindHeartbeat, Envelope: envelope}}}, nil
+}
+
+// SyncCoverageRefreshProducer emits one bounded global sweep. The worker
+// resolves the selected configurations and all retained facts from the domain
+// database, so the scheduled envelope stays small and contains no tenant data.
+type SyncCoverageRefreshProducer struct{ limit int }
+
+// NewSyncCoverageRefreshProducer constructs the checked 100-row safety-net
+// sweep used by the former Celery task.
+func NewSyncCoverageRefreshProducer() Producer {
+	return SyncCoverageRefreshProducer{limit: 100}
+}
+
+func (SyncCoverageRefreshProducer) ID() string { return ProducerSyncCoverageRefresh }
+
+func (producer SyncCoverageRefreshProducer) Produce(
+	_ context.Context,
+	_ pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	scheduledFor := occurrence.ScheduledFor.UTC().Format(time.RFC3339)
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + scheduledFor,
+		IdempotencyKey:  "sync-coverage-refresh:" + scheduledFor,
+		Domain: jobcontract.DomainLink{
+			Type: "schedule_occurrence",
+			ID:   OccurrenceDomainID(occurrence),
+		},
+		Payload: jobcontract.SyncCoverageRefreshPayload{
+			ScheduledFor: scheduledFor,
+			Limit:        producer.limit,
+		},
+	}
+	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindSyncCoverageRefresh, Envelope: envelope}}}, nil
 }
 
 // RetentionSpec binds one schedule to one bounded deletion scope.
@@ -316,6 +364,118 @@ type OrganizationLister interface {
 	ActiveOrganizationIDs(context.Context, pgx.Tx) ([]string, error)
 }
 
+// DailyMetricsFanoutStore owns the durable scheduler-side half of the nightly
+// daily-metrics handoff. The repository snapshot is intentionally absent from
+// this interface: only the heavy worker may read ClickHouse and materialize it.
+type DailyMetricsFanoutStore interface {
+	StartScheduledFanoutRunTx(context.Context, pgx.Tx, daily.ScheduledFanoutRequest, daily.RunPublisher) (daily.Run, error)
+}
+
+// DailyMetricsFanoutProducer creates one durable run and dispatch handoff per
+// active organization. It does not create a partition; the heavy worker first
+// discovers the organization repository IDs from ClickHouse and atomically
+// materializes non-empty partitions under that run.
+type DailyMetricsFanoutProducer struct {
+	store     DailyMetricsFanoutStore
+	publisher daily.RunPublisher
+	lister    OrganizationLister
+}
+
+func NewDailyMetricsFanoutProducer(
+	store DailyMetricsFanoutStore,
+	publisher daily.RunPublisher,
+	lister OrganizationLister,
+) (Producer, error) {
+	if store == nil || publisher == nil || lister == nil {
+		return nil, ErrProducerUnavailable
+	}
+	return &DailyMetricsFanoutProducer{store: store, publisher: publisher, lister: lister}, nil
+}
+
+func (*DailyMetricsFanoutProducer) ID() string { return ProducerDailyMetricsFanout }
+
+func (producer *DailyMetricsFanoutProducer) Produce(
+	ctx context.Context,
+	tx pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	if producer == nil || schedule.ID != "daily_metrics_fanout" ||
+		schedule.TargetKind != jobcontract.KindDailyMetricsDispatch {
+		return Outcome{}, ErrProducerUnavailable
+	}
+	organizationIDs, err := producer.lister.ActiveOrganizationIDs(ctx, tx)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(organizationIDs) == 0 {
+		return Outcome{SkipReason: SkipNoActiveOrganizations}, nil
+	}
+	due := occurrence.ScheduledFor.UTC()
+	generation := "fixed-schedule:" + schedule.ID + ":" + due.Format(time.RFC3339)
+	handoffs, rejected := 0, 0
+	for _, organizationID := range organizationIDs {
+		if err := ctx.Err(); err != nil {
+			return Outcome{}, err
+		}
+		// Same savepoint isolation as the remaining-metrics fan-out: one
+		// organization the contract permanently rejects must not discard the
+		// runs already materialized for the others (CHAOS-3903).
+		if err := producer.startOrganization(
+			ctx, tx, organizationID, due, generation,
+		); err != nil {
+			if !permanentForOrganization(err) {
+				return Outcome{}, err
+			}
+			rejected++
+			continue
+		}
+		handoffs++
+	}
+	outcome := Outcome{Handoffs: handoffs}
+	if rejected > 0 {
+		outcome.Degraded = DegradedRejectedOrganizations
+	}
+	if handoffs == 0 && rejected > 0 {
+		outcome.SkipReason = DegradedRejectedOrganizations
+	}
+	return outcome, nil
+}
+
+func (producer *DailyMetricsFanoutProducer) startOrganization(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	due time.Time,
+	generation string,
+) error {
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("open savepoint for organization: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = nested.Rollback(rollbackCtx)
+	}()
+	if _, err := producer.store.StartScheduledFanoutRunTx(ctx, nested, daily.ScheduledFanoutRequest{
+		OrganizationID: organizationID,
+		TargetDay:      due,
+		Generation:     generation,
+	}, producer.publisher); err != nil {
+		return fmt.Errorf("start daily metrics run for organization: %w", err)
+	}
+	if err := nested.Commit(ctx); err != nil {
+		return fmt.Errorf("release savepoint for organization: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // RemainingMetricsFanoutProducer materializes one remaining-metrics run per
 // active organization and lets the domain store publish each partition.
 //
@@ -444,43 +604,131 @@ func (producer *RemainingMetricsFanoutProducer) Produce(
 	}
 	generation := "fixed-schedule:" + schedule.ID + ":" + dueTime.Format(time.RFC3339)
 
-	handoffs := 0
+	handoffs, rejected := 0, 0
 	for _, organizationID := range organizationIDs {
 		if err := ctx.Err(); err != nil {
 			return Outcome{}, err
 		}
-		request := remaining.StartRunRequest{
-			OrganizationID: organizationID,
-			Family:         binding.Family,
-			Generation:     generation,
-			ScopeKey:       day,
-			Scopes:         []json.RawMessage{scope},
-		}
-		if binding.RequiresSeed {
-			seed := deterministicGenerationSeed(occurrence, organizationID)
-			request.GenerationSeed = &seed
-		}
-		if binding.RequiresGraphBuild {
-			completionKey, err := producer.startGraphBuild(
-				ctx, tx, occurrence, generation, organizationID,
-			)
-			if err != nil {
+		produced, err := producer.startOrganization(
+			ctx, tx, occurrence, binding, organizationID, generation, day, scope,
+		)
+		if err != nil {
+			if !permanentForOrganization(err) {
 				return Outcome{}, err
 			}
-			// The projection stays ineligible until the build's durable
-			// completion fence commits, which is this contract's equivalent of
-			// the legacy immutable Celery chain.
-			request.PrerequisiteCompletionKey = completionKey
-			handoffs++
+			// One tenant whose data this schedule can never act on must not
+			// discard the work already materialized for every other tenant.
+			// Returning here rolled the engine's transaction back on every
+			// tick, so a single organization row the job contract rejects held
+			// the whole fixed scheduler unready indefinitely (CHAOS-3903).
+			rejected++
+			continue
 		}
-		if _, err := producer.store.StartRunTx(ctx, tx, request, producer.publisher); err != nil {
-			return Outcome{}, fmt.Errorf(
-				"start %s run for organization: %w", binding.Family, err,
-			)
+		handoffs += produced
+	}
+	outcome := Outcome{Handoffs: handoffs}
+	if rejected > 0 {
+		// Degraded, not SkipReason: SkipReason only reaches telemetry when the
+		// occurrence produced nothing at all, and the whole point here is that
+		// the other tenants' work DID happen.
+		outcome.Degraded = DegradedRejectedOrganizations
+	}
+	if handoffs == 0 && rejected > 0 {
+		outcome.SkipReason = DegradedRejectedOrganizations
+	}
+	return outcome, nil
+}
+
+// permanentForOrganization reports whether an error will fail identically on
+// every retry for the SAME organization, so retrying it costs a window and
+// changes nothing.
+//
+// A contract or policy rejection is a statement about the envelope's shape:
+// the same organization will produce the same envelope and be refused again.
+// A durable-state rejection is a statement about rows that already exist and
+// disagree with what this schedule would write. Neither heals with time.
+//
+// Everything else -- a dropped connection, a pool timeout, a lock wait -- is
+// transient and MUST still fail the window, because skipping a tenant on a
+// transient fault would silently drop its work for that occurrence and the
+// ledger would record the window as healthy.
+func permanentForOrganization(err error) bool {
+	return errors.Is(err, joboutbox.ErrContractRejected) ||
+		errors.Is(err, joboutbox.ErrPolicyRejected) ||
+		errors.Is(err, remaining.ErrInvalidState) ||
+		errors.Is(err, daily.ErrInvalidState) ||
+		errors.Is(err, workgraph.ErrInvalidState)
+}
+
+// startOrganization produces one organization's work inside its OWN savepoint.
+//
+// The savepoint is what makes the isolation real rather than incidental. The
+// engine runs an entire occurrence in one transaction, so a per-organization
+// failure that has already issued a statement aborts that transaction, and
+// every later organization would fail with "current transaction is aborted"
+// regardless of its own data. pgx opens a savepoint for a Begin on an existing
+// Tx, so rolling the nested transaction back discards exactly this
+// organization's writes and leaves the outer transaction usable.
+func (producer *RemainingMetricsFanoutProducer) startOrganization(
+	ctx context.Context,
+	tx pgx.Tx,
+	occurrence Occurrence,
+	binding remainingFamilyBinding,
+	organizationID string,
+	generation string,
+	day string,
+	scope json.RawMessage,
+) (int, error) {
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("open savepoint for organization: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
 		}
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = nested.Rollback(rollbackCtx)
+	}()
+
+	request := remaining.StartRunRequest{
+		OrganizationID: organizationID,
+		Family:         binding.Family,
+		Generation:     generation,
+		ScopeKey:       day,
+		Scopes:         []json.RawMessage{scope},
+	}
+	if binding.RequiresSeed {
+		seed := deterministicGenerationSeed(occurrence, organizationID)
+		request.GenerationSeed = &seed
+	}
+	handoffs := 0
+	if binding.RequiresGraphBuild {
+		completionKey, err := producer.startGraphBuild(
+			ctx, nested, occurrence, generation, organizationID,
+		)
+		if err != nil {
+			return 0, err
+		}
+		// The projection stays ineligible until the build's durable
+		// completion fence commits, which is this contract's equivalent of
+		// the legacy immutable Celery chain.
+		request.PrerequisiteCompletionKey = completionKey
 		handoffs++
 	}
-	return Outcome{Handoffs: handoffs}, nil
+	if _, err := producer.store.StartRunTx(ctx, nested, request, producer.publisher); err != nil {
+		return 0, fmt.Errorf(
+			"start %s run for organization: %w", binding.Family, err,
+		)
+	}
+	handoffs++
+	if err := nested.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("release savepoint for organization: %w", err)
+	}
+	committed = true
+	return handoffs, nil
 }
 
 // startGraphBuild persists the work-graph build that must precede a membership

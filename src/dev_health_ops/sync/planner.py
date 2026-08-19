@@ -78,7 +78,7 @@ import logging
 import os
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -101,12 +101,16 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.providers.github.work_item_options import (
+    snapshot_github_work_item_runtime_options,
+)
 from dev_health_ops.sync.canonical_incident_gate import (
     require_canonical_incident_feature_sync,
     sync_datasets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.datasets import (
     CostClass,
+    DatasetKey,
     DatasetSpec,
     WatermarkBehavior,
     get_dataset_spec,
@@ -115,6 +119,13 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
+from dev_health_ops.sync.family_flags import (
+    WORK_ITEM_DATASETS,
+    family_dataset_flag,
+)
+from dev_health_ops.sync.family_flags import (
+    family_dataset_keys_from_flags as family_dataset_keys_from_flags,
+)
 from dev_health_ops.sync.guard import _resolve_total_unit_cap
 from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
@@ -122,6 +133,9 @@ from dev_health_ops.sync.pagerduty_repair import (
 from dev_health_ops.sync.watermarks import (
     _watermark_overlap_seconds,
     get_watermark_with_overlap,
+)
+from dev_health_ops.workers.provider_family_contract import (
+    atomic_provider_family_route_enabled,
 )
 
 if TYPE_CHECKING:
@@ -158,17 +172,30 @@ class WatermarkKey:
 
 
 @dataclass(frozen=True)
+class BackfillSelector:
+    """Explicit backfill scope for date and repository/unit selectors."""
+
+    since: datetime
+    before: datetime
+    source_ids: tuple[str, ...] | None = None
+    dataset_keys: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class SyncPlanRequest:
     """Input to :func:`plan_sync_run`.
 
     ``source_ids`` / ``dataset_keys`` of ``None`` mean "all enabled". Explicit
     tuples filter to the given subset (still intersected with enabled rows).
+    ``backfill_selector`` is the newer structured form used by partial
+    backfill callers; the flat fields remain as compatibility aliases.
     """
 
     integration_id: str
     org_id: str
     mode: str  # one of models.integrations.SyncRunMode
     triggered_by: str
+    backfill_selector: BackfillSelector | None = None
     source_ids: tuple[str, ...] | None = None
     dataset_keys: tuple[str, ...] | None = None
     since: datetime | None = None
@@ -236,7 +263,10 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
 
     integration = _load_integration(session, request.integration_id, request.org_id)
     repair_outcome = repair_pagerduty_operational_integration(session, integration)
+    _repair_github_work_item_runtime_options(session, integration)
     mode = _validate_mode(request.mode)
+    _validate_backfill_selector_compatibility(request)
+    request = _normalize_backfill_selector(request)
     if repair_outcome is not None:
         return _terminalize_pagerduty_disabled_plan(
             session=session,
@@ -381,6 +411,37 @@ def _terminalize_pagerduty_disabled_plan(
     )
 
 
+def _validate_backfill_selector_compatibility(request: SyncPlanRequest) -> None:
+    """Reject mixed structured/legacy backfill scopes before planning."""
+    selector = request.backfill_selector
+    if selector is None:
+        return
+    if any(
+        value is not None
+        for value in (
+            request.since,
+            request.before,
+            request.source_ids,
+            request.dataset_keys,
+        )
+    ):
+        raise ValueError("backfill selector cannot be mixed with legacy flat fields")
+
+
+def _normalize_backfill_selector(request: SyncPlanRequest) -> SyncPlanRequest:
+    """Project the structured backfill selector onto the legacy flat fields."""
+    selector = request.backfill_selector
+    if selector is None:
+        return request
+    return replace(
+        request,
+        source_ids=selector.source_ids,
+        dataset_keys=selector.dataset_keys,
+        since=selector.since,
+        before=selector.before,
+    )
+
+
 def _load_integration(
     session: Session, integration_id: str, org_id: str
 ) -> Integration:
@@ -483,6 +544,39 @@ def _load_enabled_sources(
             return []
         query = query.filter(IntegrationSource.id.in_(source_uuids))
     return list(query.order_by(IntegrationSource.full_name, IntegrationSource.id).all())
+
+
+def _repair_github_work_item_runtime_options(
+    session: Session, integration: Integration
+) -> None:
+    """Durably default legacy GitHub work-item datasets before unit planning."""
+    if str(integration.provider).lower() != "github":
+        return
+    integration_options = dict(integration.config or {})
+    dataset = (
+        session.query(IntegrationDataset)
+        .filter(
+            IntegrationDataset.org_id == integration.org_id,
+            IntegrationDataset.integration_id == integration.id,
+            IntegrationDataset.dataset_key == DatasetKey.WORK_ITEMS.value,
+        )
+        .one_or_none()
+    )
+    dataset_options = dict(dataset.options or {}) if dataset is not None else {}
+    canonical = snapshot_github_work_item_runtime_options(
+        {**integration_options, **dataset_options}
+    )
+    repaired_integration_options = {**integration_options, **canonical}
+    if repaired_integration_options != integration_options:
+        integration.config = repaired_integration_options
+
+    if dataset is None:
+        session.flush()
+        return
+    repaired_dataset_options = {**dataset_options, **canonical}
+    if repaired_dataset_options != dataset_options:
+        dataset.options = repaired_dataset_options
+    session.flush()
 
 
 def _reconcile_explicit_requested_datasets(
@@ -915,44 +1009,18 @@ def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
 # bookkeeping over the same issue crawl). Emitting one unit per dataset re-ran
 # the full ingest 5x. The planner instead emits ONE composite unit (canonical
 # ``dataset_key="work-items"``) carrying a boolean ``family_dataset_<key>`` flag
-# per enabled dataset; the worker fans those back out into per-dataset
-# watermarks + audit metadata on success. Provider-agnostic: github/gitlab/jira/
-# linear all expose these keys.
-_WORK_ITEM_FAMILY_DATASET_ORDER: tuple[str, ...] = (
-    "work-items",
-    "work-item-labels",
-    "work-item-projects",
-    "work-item-history",
-    "work-item-comments",
-)
+# per participating dataset; the worker fans those back out into per-dataset
+# watermarks + audit metadata on success. GitHub's activated Go route is the
+# deliberate exception: every canonical GitHub unit claims all five aliases,
+# even when one is caught up, because the route owns one indivisible writer
+# family. GitLab, Jira, and Linear retain their contributing-dataset flags.
+_WORK_ITEM_FAMILY_DATASET_ORDER = WORK_ITEM_DATASETS
 _WORK_ITEM_FAMILY_DATASETS: frozenset[str] = frozenset(_WORK_ITEM_FAMILY_DATASET_ORDER)
 _FAMILY_CANONICAL_DATASET_KEY = "work-items"
-_FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
-
-
-def _family_dataset_flag(dataset_key: str) -> str:
-    """Boolean processor-flag name marking an enabled work-item-family dataset."""
-    return _FAMILY_DATASET_FLAG_PREFIX + dataset_key.replace("-", "_")
-
-
-def family_dataset_keys_from_flags(
-    processor_flags: Mapping[str, object] | None,
-) -> list[str]:
-    """Enabled work-item-family dataset keys encoded on a collapsed composite
-    unit's ``processor_flags`` (CHAOS-2721), in canonical order.
-
-    ``SyncTaskBootstrap.load`` bool-coerces every processor_flags value, so the
-    composite cannot carry a *list* of enabled datasets — each is encoded as its
-    own boolean ``family_dataset_<key>`` flag. This reader validates against the
-    known family keys so a stray/unknown flag can never advance a bogus
-    watermark or pollute audit metadata.
-    """
-    flags = processor_flags or {}
-    return [
-        key
-        for key in _WORK_ITEM_FAMILY_DATASET_ORDER
-        if bool(flags.get(_family_dataset_flag(key)))
-    ]
+# Compatibility alias for route validation consumers. The implementation lives
+# in the pure family-flags module so coverage imports do not initialize planner
+# dependencies.
+_family_dataset_flag = family_dataset_flag
 
 
 def _build_work_item_family_units(
@@ -1015,8 +1083,21 @@ def _build_work_item_family_units(
     composite_windows = _merge_family_windows([windows for _, windows in contributing])
 
     processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
-    for dataset, _windows in contributing:
-        processor_flags[_family_dataset_flag(dataset.dataset_key)] = True
+    if provider == "github" or atomic_provider_family_route_enabled(
+        provider, _FAMILY_CANONICAL_DATASET_KEY
+    ):
+        # CHAOS-3606: GitHub's native route has one all-five-alias writer. A
+        # caught-up sibling still has no independent Python owner while this
+        # canonical unit runs, so its flag records atomic route ownership rather
+        # than whether that sibling contributed a window to this tick's merge.
+        # The same ownership rule applies to the other work-item providers once
+        # their native family route is enabled.
+        # The merged window above remains derived only from non-empty inputs.
+        family_flag_datasets = _WORK_ITEM_FAMILY_DATASET_ORDER
+    else:
+        family_flag_datasets = tuple(dataset.dataset_key for dataset, _ in contributing)
+    for dataset_key in family_flag_datasets:
+        processor_flags[family_dataset_flag(dataset_key)] = True
     if provider == "github":
         # CHAOS-646: thread the PRS-as-work-items signal onto the composite so
         # ``_work_item_kwargs`` sets ``include_pull_requests`` correctly.
@@ -1223,8 +1304,8 @@ def _backfill_windows(
 
     since = _as_utc(request.since)
     before = _as_utc(request.before)
-    if since > before:
-        raise ValueError("Backfill since must be before or equal to before")
+    if since >= before:
+        raise ValueError("Backfill since must be before")
 
     if _is_linear_work_item_family(provider, dataset_key):
         chunk_days = _linear_backfill_max_window_days()

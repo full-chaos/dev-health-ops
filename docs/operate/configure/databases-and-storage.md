@@ -1,6 +1,6 @@
 ---
 page_id: op-db
-summary: Configure Postgres semantic state, direct River queue control, ClickHouse analytics, Valkey coordination, migrations, retention, and recovery boundaries.
+summary: Configure Postgres semantic state, session-pooled River control, ClickHouse analytics, Valkey coordination, migrations, retention, and recovery boundaries.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
@@ -46,12 +46,30 @@ The Go foundation uses three distinct responsibilities:
 | Purpose | Setting | Default maximum | Required endpoint |
 | --- | --- | ---: | --- |
 | Domain state | `POSTGRES_URI` | `WORKER_DOMAIN_DATABASE_MAX_CONNS=4` | Transaction-mode PgBouncer is supported |
-| River queue control | `WORKER_DATABASE_URI` | `WORKER_DATABASE_MAX_CONNS=2` | Direct PostgreSQL |
+| River queue control | `WORKER_DATABASE_URI` | `WORKER_DATABASE_MAX_CONNS=2` | Dedicated PgBouncer session endpoint or direct PostgreSQL |
+| Coordinator control | `COORDINATOR_DATABASE_URI` | `WORKER_COORDINATOR_DATABASE_MAX_CONNS=2` | Dedicated PgBouncer session endpoint or direct PostgreSQL |
 | One-shot migrations | `MIGRATION_DATABASE_URI` | 2 migration connections | Direct PostgreSQL with the migration role |
 
-`WORKER_DATABASE_MODE` defaults to `direct`. Transaction mode is rejected for River queue control because cancellation and listener behavior are not compatible with that pooling model. Session mode remains unsupported until it passes the same compatibility evidence.
+`WORKER_DATABASE_MODE` and `COORDINATOR_DATABASE_MODE` default to `direct`. Use `session` for the dedicated River endpoints. Transaction mode is rejected because River listener/cancellation and coordinator locks require session semantics. PgBouncer pools are per `(database, user)` pair, so dedicate one fixed role to each session endpoint and size its pool for every declared client connection. Go pools use `MinConns=0` and a bounded idle timeout; idle clients do not permanently pin all session backends.
 
 Do not give long-running workers the migration DSN. Do not reuse the migration role for domain or queue-control access.
+
+### Helm Go-worker poolers
+
+The component chart keeps this topology disabled until `goWorkers.enabled` and
+`goWorkers.pgbouncer.enabled` are both set. It renders three in-cluster
+Services: a transaction endpoint for domain state, a queue session endpoint,
+and a coordinator session endpoint. The chart creates or references one
+dedicated PgBouncer Secret, but projects only the required DSN key to each Go
+pod: all profiles receive domain and queue endpoints; only `reconciler` and
+`scheduler` receive the coordinator endpoint. The migration hook never reads
+that Secret and continues to use direct PostgreSQL.
+
+For external PostgreSQL, set `goWorkers.pgbouncer.postgres.host`, `database`,
+and role-password Secret values. With `networkPolicy.enabled`, also set a
+narrow `goWorkers.pgbouncer.postgres.networkPolicyCIDR`; the chart fails to
+render rather than silently blocking PgBouncer egress. The chart requires a
+digest-pinned PgBouncer image and adds TCP readiness probes for each endpoint.
 
 ## Runtime roles
 
@@ -95,7 +113,7 @@ Size pools against the maximum deployment topology, not current replicas. Accoun
 
 - SQLAlchemy pools across API and Celery processes;
 - PgBouncer server pools per database/user pair;
-- direct River queue-control connections;
+- River queue-control and coordinator session pools;
 - operator CLI invocations;
 - migration and administrative reserve.
 
@@ -110,6 +128,8 @@ River terminal execution rows have bounded retention independent of product hist
 - migration versions and role/grant configuration;
 - required secret-manager data;
 - deployment configuration needed to reconstruct queue and worker ownership.
+
+Full dead worker-outbox rows also have bounded retention, but their minimal delivery-abandonment facts do not. Include `worker_job_delivery_abandonments` in PostgreSQL backup and restore validation. It contains no job arguments or detailed error text; its dedupe key, job kind, terminal timestamp, attempt count, and bounded error code are the durable evidence that prevents a retained scheduled-report run from receiving a fresh delivery budget after outbox cleanup.
 
 Test restore in an isolated environment. Do not use ad hoc schema repair or data deletion from a generic documentation command; use the current migration or incident procedure and retain evidence.
 

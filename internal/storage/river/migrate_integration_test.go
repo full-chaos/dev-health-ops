@@ -73,10 +73,14 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (key text PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.backfill_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_coverage_projections (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
@@ -373,6 +377,9 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"sync_dispatch_outbox",
 		"worker_job_outbox",
 		"sync_configurations",
+		"scheduled_jobs",
+		"backfill_jobs",
+		"sync_coverage_projections",
 		"organizations",
 		"remaining_metric_runs",
 		"remaining_metric_partitions",
@@ -443,13 +450,23 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		t.Fatalf("domain role cannot UPDATE sync-dispatch outbox state: %v", err)
 	}
 	for _, statement := range []string{
+		"INSERT INTO public.integration_sources (id) VALUES ('00000000-0000-0000-0000-000000000010')",
+		"INSERT INTO public.integration_datasets (id) VALUES ('00000000-0000-0000-0000-000000000011')",
+		"INSERT INTO public.sync_runs (id) VALUES ('00000000-0000-0000-0000-000000000012')",
+		"INSERT INTO public.sync_run_units (id, state) VALUES ('00000000-0000-0000-0000-000000000013', 'planned')",
+	} {
+		if _, err := domainPool.Exec(ctx, statement); err != nil {
+			t.Fatalf("domain materializer privilege for %q: %v", statement, err)
+		}
+	}
+	for _, statement := range []string{
 		"SELECT count(*) FROM public.domain_runtime_probe",
+		"SELECT count(*) FROM public.worker_job_delivery_abandonments",
 		"INSERT INTO public.domain_runtime_probe (value) VALUES ('forbidden')",
 		"UPDATE public.domain_runtime_probe SET value='forbidden'",
 		"DELETE FROM public.domain_runtime_probe",
 		"SELECT nextval('public.domain_runtime_probe_id_seq')",
 		"INSERT INTO public.integrations (id) VALUES ('00000000-0000-0000-0000-000000000010')",
-		"INSERT INTO public.sync_run_units (id, state) VALUES ('00000000-0000-0000-0000-000000000011', 'forbidden')",
 		"DELETE FROM public.sync_run_units",
 		"DELETE FROM public.sync_watermarks",
 		"DELETE FROM public.sync_dispatch_outbox",
@@ -553,6 +570,24 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	if _, err := queuePool.Exec(
 		ctx,
+		"INSERT INTO public.worker_job_delivery_abandonments (dedupe_key) VALUES ('report.run:abandoned')",
+	); err != nil {
+		t.Fatalf("queue role cannot preserve delivery-abandonment evidence: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"UPDATE public.worker_job_delivery_abandonments SET dedupe_key=dedupe_key",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("queue delivery-abandonment UPDATE = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"DELETE FROM public.worker_job_delivery_abandonments",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("queue delivery-abandonment DELETE = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
 		"SELECT completion_key FROM public.worker_job_completion_fences",
 	); err != nil {
 		t.Fatalf("queue role cannot read completion fences: %v", err)
@@ -598,6 +633,12 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	if _, err := queuePool.Exec(ctx, "SELECT generation FROM public.sync_dispatch_transport_routes"); err != nil {
 		t.Fatalf("queue role cannot read sync-dispatch route state: %v", err)
+	}
+	if _, err := queuePool.Exec(ctx, "SELECT id FROM public.sync_runs"); err != nil {
+		t.Fatalf("queue role cannot read active sync-run state: %v", err)
+	}
+	if _, err := queuePool.Exec(ctx, "UPDATE public.sync_runs SET id=id"); err == nil {
+		t.Fatal("queue role unexpectedly updates sync-run state")
 	}
 	if _, err := queuePool.Exec(ctx, "UPDATE public.sync_dispatch_transport_routes SET generation = generation + 1"); err == nil {
 		t.Fatal("queue role unexpectedly updates sync-dispatch route state")

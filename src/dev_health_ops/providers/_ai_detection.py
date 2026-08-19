@@ -6,7 +6,7 @@ Each function is a pure parser — no I/O, no side effects.
 
 Signal precedence (resolved at READ time, persisted raw at WRITE time)::
 
-    MANUAL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
+    MANUAL > ISSUE_LABEL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ __all__ = [
     "AI_TRAILER_KEYS",
     # detection functions
     "detect_from_pr_labels",
+    "detect_from_issue_labels",
     "detect_from_author",
     "detect_from_commit_trailers",
     "detect_from_branch_name",
@@ -49,7 +50,7 @@ __all__ = [
 # Extensible in code only — NOT user-configurable per AGENTS.md.
 # --------------------------------------------------------------------------
 
-# Known AI attribution PR label names (lowercase for comparison).
+# Known explicit AI attribution label names for PRs and issues.
 AI_LABELS: frozenset[str] = frozenset(
     {
         "ai-assisted",
@@ -248,6 +249,22 @@ def detect_from_pr_labels(labels: list[str]) -> list[AIAttributionSignal]:
         List of signals, one per AI-related label found.
         Empty list if no AI labels present.
     """
+    return _detect_from_labels(labels, source=AIAttributionSource.PR_LABEL)
+
+
+def detect_from_issue_labels(labels: list[str]) -> list[AIAttributionSignal]:
+    """Detect AI attribution only from explicit issue label names.
+
+    This deliberately does not inspect issue title or description text. The
+    registry is fixed in code and shared with PR labels, while the distinct
+    source preserves truthful provider provenance.
+    """
+    return _detect_from_labels(labels, source=AIAttributionSource.ISSUE_LABEL)
+
+
+def _detect_from_labels(
+    labels: list[str], *, source: AIAttributionSource
+) -> list[AIAttributionSignal]:
     signals: list[AIAttributionSignal] = []
     for label in labels:
         normalized = label.strip().lower()
@@ -255,7 +272,7 @@ def detect_from_pr_labels(labels: list[str]) -> list[AIAttributionSignal]:
             kind = _LABEL_KIND_MAP.get(normalized, AIAttributionKind.AI_ASSISTED)
             signals.append(
                 AIAttributionSignal(
-                    source=AIAttributionSource.PR_LABEL,
+                    source=source,
                     kind=kind,
                     confidence=0.95,
                     actor=None,

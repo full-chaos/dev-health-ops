@@ -28,6 +28,7 @@ CREATE TABLE public.fixed_schedule_occurrences (
     status VARCHAR(16) NOT NULL DEFAULT 'claimed',
     handoff_count INTEGER NOT NULL DEFAULT 0,
     skip_reason VARCHAR(64),
+    degraded_reason VARCHAR(64),
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -168,7 +169,7 @@ func TestTwoReplicasClaimOneOccurrencePerDueTime(t *testing.T) {
 				_ = tx.Rollback(ctx)
 				return
 			}
-			if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, ""); err != nil {
+			if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, "", ""); err != nil {
 				errs[index] = err
 				_ = tx.Rollback(ctx)
 				return
@@ -224,7 +225,7 @@ func TestCrashBeforeCommitLeavesNoPartialOccurrence(t *testing.T) {
 	if claim, err := ledger.Claim(ctx, tx, occurrence); err != nil || claim != ClaimInserted {
 		t.Fatalf("Claim() = %v / %v", claim, err)
 	}
-	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, ""); err != nil {
+	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// The process dies here; pgx rolls the transaction back on connection loss.
@@ -244,7 +245,7 @@ func TestCrashBeforeCommitLeavesNoPartialOccurrence(t *testing.T) {
 	if err != nil || claim != ClaimInserted {
 		t.Fatalf("recovery Claim() = %v / %v; the due time must stay eligible", claim, err)
 	}
-	if err := ledger.Complete(ctx, retry, occurrence, OccurrenceMaterialized, 1, ""); err != nil {
+	if err := ledger.Complete(ctx, retry, occurrence, OccurrenceMaterialized, 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := retry.Commit(ctx); err != nil {
@@ -275,7 +276,7 @@ func TestCrashAfterCommitKeepsTheOccurrenceClaimed(t *testing.T) {
 	if _, err := ledger.Claim(ctx, tx, occurrence); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 3, ""); err != nil {
+	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 3, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -324,7 +325,7 @@ func TestChangedIdentityDerivationFailsInsteadOfDuplicating(t *testing.T) {
 	if _, err := ledger.Claim(ctx, tx, occurrence); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, ""); err != nil {
+	if err := ledger.Complete(ctx, tx, occurrence, OccurrenceMaterialized, 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -367,7 +368,7 @@ func TestSkippedOccurrenceRecordsItsReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := ledger.Complete(
-		ctx, tx, occurrence, OccurrenceSkipped, 0, "no_active_organizations",
+		ctx, tx, occurrence, OccurrenceSkipped, 0, "no_active_organizations", "",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +397,7 @@ WHERE occurrence_key = $1`, occurrence.Key).Scan(&status, &reason, &handoffs); e
 	}
 	defer func() { _ = second.Rollback(ctx) }()
 	if err := ledger.Complete(
-		ctx, second, occurrence, OccurrenceMaterialized, 0, "",
+		ctx, second, occurrence, OccurrenceMaterialized, 0, "", "",
 	); !errors.Is(err, ErrLedgerUnavailable) {
 		t.Fatalf("Complete() = %v, want a rejection", err)
 	}

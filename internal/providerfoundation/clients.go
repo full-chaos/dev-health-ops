@@ -61,7 +61,7 @@ func NewGitLabClient(credential Credential, doer HTTPDoer, retry RetryPolicy, le
 		return nil, ErrCredentialInvalid
 	}
 	token, _ := credential.Secret("token")
-	return NewHTTPClient("gitlab", credentialBaseURL(credential, gitlabAPIBase), doer, TokenAuth("PRIVATE-TOKEN", "", token), retry, lease)
+	return NewHTTPClient("gitlab", gitLabCredentialBaseURL(credential), doer, TokenAuth("PRIVATE-TOKEN", "", token), retry, lease)
 }
 
 func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
@@ -76,6 +76,7 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 		}
 		request.SetBasicAuth(email.Reveal(), token.Reveal())
 		request.Header.Set("Accept", "application/json")
+		request.Header.Set("Content-Type", "application/json")
 		return nil
 	}
 	return NewHTTPClient("jira", credentialBaseURL(credential, ""), doer, auth, retry, lease)
@@ -177,6 +178,23 @@ func credentialBaseURL(credential Credential, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// gitLabCredentialBaseURL mirrors Python's canonical merged-mapping resolver:
+// gitlab_url > url > base_url, with decrypted storage winning over config for
+// the same alias. Alias priority is evaluated before storage priority so a
+// config gitlab_url cannot be overridden by a lower-priority decrypted
+// base_url and receive PRIVATE-TOKEN on the wrong host.
+func gitLabCredentialBaseURL(credential Credential) string {
+	for _, name := range []string{"gitlab_url", "url", "base_url"} {
+		if value, ok := credential.Secret(name); ok && value.Configured() {
+			return value.Reveal()
+		}
+		if value := strings.TrimSpace(credential.Config[name]); value != "" {
+			return value
+		}
+	}
+	return gitlabAPIBase
 }
 
 // PagerDutyClientCredentialsAuth exchanges an explicit client credential for

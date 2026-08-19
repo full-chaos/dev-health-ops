@@ -228,6 +228,7 @@ class SyncRun(Base):
         Index(
             "ix_sync_runs_org_integration_status", "org_id", "integration_id", "status"
         ),
+        Index("ix_sync_runs_status_id", "status", "id"),
     )
 
 

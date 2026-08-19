@@ -20,6 +20,22 @@ type fakeLeaseRepairRows struct {
 	err        error
 }
 
+// wantLinearExpiredLeaseRetrySurfaces is an independent recovery acceptance
+// oracle. Production selects its list from workitemcontract; keeping this
+// literal here ensures removing a retry-safety tag cannot be hidden by changing
+// both producer and expectation together.
+func wantLinearExpiredLeaseRetrySurfaces() []string {
+	return []string{
+		"ai_attribution", "estimate_coverage_metrics_daily",
+		"investment_classifications_daily", "investment_metrics_daily",
+		"issue_type_metrics_daily", "sprints", "work_item_cycle_times",
+		"work_item_dependencies", "work_item_interactions",
+		"work_item_metrics_daily", "work_item_reopen_events",
+		"work_item_state_durations_daily", "work_item_team_attributions",
+		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
+	}
+}
+
 func (rows *fakeLeaseRepairRows) Next() bool { return rows.index < len(rows.candidates) }
 
 func (rows *fakeLeaseRepairRows) Scan(dest ...any) error {
@@ -191,7 +207,7 @@ func TestLeaseRepairStepUsesCASAndRollsBackOnFault(t *testing.T) {
 		!strings.Contains(tx.execSQL[3], "'error_category', $4::text") {
 		t.Fatalf("write SQL = %v", tx.execSQL)
 	}
-	if got, want := tx.execArgs[2][4], linearBackfillRetrySurfaces; !reflect.DeepEqual(got, want) {
+	if got, want := tx.execArgs[2][4], wantLinearExpiredLeaseRetrySurfaces(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("retry surfaces = %#v, want %#v", got, want)
 	}
 

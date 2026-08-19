@@ -106,19 +106,36 @@ SELECT format(
   FROM (
          VALUES
            ('integrations'),
-           ('integration_sources'),
-           ('integration_datasets'),
            ('integration_credentials'),
-           ('sync_runs'),
            ('sync_dispatch_transport_routes')
        ) AS required(table_name)
  WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
 \gexec
 SELECT format(
-         'GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO %I',
+         'GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I',
+         required.table_name,
          :'domain_role'
        )
- WHERE to_regclass('public.sync_run_units') IS NOT NULL
+  FROM (VALUES ('integration_sources'),('integration_datasets'),('sync_runs'),('sync_run_units')) AS required(table_name)
+ WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.worker_concurrency_leases') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.worker_instances') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
 \gexec
 SELECT format(
          'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
@@ -139,9 +156,11 @@ SELECT format(
  WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
 \gexec
 
--- The queue role may atomically relay the generic outbox and transition the
--- sync-dispatch outbox while checking its read-only route fence. It
--- never receives INSERT or general semantic-table/sequence privileges.
+-- The queue role may atomically relay the generic outbox, append minimal
+-- delivery-abandonment evidence during terminal retention, and transition the
+-- sync-dispatch outbox while checking its read-only route and active-run
+-- fences. It never receives INSERT or general semantic-table/sequence
+-- privileges.
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";
@@ -152,6 +171,12 @@ SELECT format(
          :'queue_role'
        )
  WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL
 \gexec
 SELECT format(
          'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO %I',
@@ -170,4 +195,16 @@ SELECT format(
          :'queue_role'
        )
  WHERE to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT ON TABLE public.sync_runs TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_runs') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT ON TABLE public.sync_run_units TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_run_units') IS NOT NULL
 \gexec

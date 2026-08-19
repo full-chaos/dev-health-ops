@@ -1,0 +1,18 @@
+# The three answers `rule.get("id", "legacy_rule")` can give. An earlier
+# version of this port collapsed the first two into "legacy_rule" and claimed a
+# case pinned it; none existed, and absent-vs-null genuinely diverged.
+rules:
+  # PRESENT and NULL -> rule_id is None, not "legacy_rule".
+  - id:
+    priority: 10
+    match:
+      label: ["idnull"]
+  # PRESENT and EMPTY -> rule_id is "", not "legacy_rule".
+  - id: ""
+    priority: 20
+    match:
+      label: ["idempty"]
+  # ABSENT -> and only now is it "legacy_rule".
+  - priority: 30
+    match:
+      label: ["idabsent"]

@@ -6,8 +6,8 @@ oracles must execute the production functions they compare, but importing a
 that require the full service dependency set (including SQLAlchemy).
 
 This loader therefore creates an isolated project namespace and executes only
-the five fixed oracle sources, plus three dependency-free support modules.  No
-caller-controlled module name or source path is ever imported.  The target
+the explicitly allowlisted oracle sources plus their dependency-free support
+modules.  No caller-controlled module name or source path is ever imported.  The target
 source itself remains live: editing a production function changes oracle output.
 """
 
@@ -33,18 +33,140 @@ def _source(relative_path: str) -> Path:
 _BUDGET_TYPES_SOURCE = _source("dev_health_ops/sync/budget_types.py")
 _DATASETS_SOURCE = _source("dev_health_ops/sync/datasets.py")
 _USAGE_SOURCE = _source("dev_health_ops/providers/usage.py")
+_EXCEPTIONS_SOURCE = _source("dev_health_ops/exceptions.py")
+_HTTP_SOURCE = _source("dev_health_ops/providers/_http.py")
+_RATELIMIT_SOURCE = _source("dev_health_ops/providers/_ratelimit.py")
+_RATE_LIMIT_SIGNAL_SOURCE = _source("dev_health_ops/sync/rate_limit_signal.py")
+_GITLAB_RATELIMIT_SOURCE = _source("dev_health_ops/providers/gitlab/ratelimit.py")
 _LAUNCHDARKLY_PROCESSOR_SOURCE = _source("dev_health_ops/processors/launchdarkly.py")
+_GITHUB_BUDGET_SOURCE = _source("dev_health_ops/providers/github/budget.py")
+_GITLAB_BUDGET_SOURCE = _source("dev_health_ops/providers/gitlab/budget.py")
 _LINEAR_BUDGET_SOURCE = _source("dev_health_ops/providers/linear/budget.py")
 _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
+_COMPLEXITY_SOURCE = _source("dev_health_ops/analytics/complexity.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
+_GITHUB_WORK_ITEM_OPTIONS_SOURCE = _source(
+    "dev_health_ops/providers/github/work_item_options.py"
+)
+_GITLAB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/gitlab/code_client.py")
+_GITLAB_COMMITS_SOURCE = _source("dev_health_ops/providers/gitlab/commits.py")
+_GITLAB_COMMIT_STATS_SOURCE = _source("dev_health_ops/providers/gitlab/commit_stats.py")
+_GITLAB_INSTANCE_SOURCE = _source("dev_health_ops/providers/gitlab/instance.py")
+_GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.py")
+_GITLAB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/gitlab.py")
+_FETCH_UTILS_SOURCE = _source("dev_health_ops/processors/fetch_utils.py")
+_GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
+_CONNECTOR_MODELS_SOURCE = _source("dev_health_ops/connectors/models.py")
+_REPOSITORY_ROWS_SOURCE = _source("dev_health_ops/storage/repository_rows.py")
+_RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
+_TESTOPS_SCHEMAS_SOURCE = _source("dev_health_ops/metrics/testops_schemas.py")
+_JUNIT_PARSER_SOURCE = _source("dev_health_ops/parsers/junit.py")
+_COVERAGE_PARSER_SOURCE = _source("dev_health_ops/parsers/coverage.py")
+_TESTOPS_TESTS_SOURCE = _source("dev_health_ops/processors/testops_tests.py")
+_TESTOPS_COVERAGE_SOURCE = _source("dev_health_ops/processors/testops_coverage.py")
+_TESTOPS_INGEST_SOURCE = _source("dev_health_ops/processors/testops_ingest.py")
+_PIPELINE_BASE_SOURCE = _source("dev_health_ops/providers/_base.py")
+_CI_ACCEPTANCE_SOURCE = _source("dev_health_ops/providers/ci_acceptance.py")
+_GITHUB_TESTOPS_PIPELINE_SOURCE = _source(
+    "dev_health_ops/providers/github/testops_pipeline.py"
+)
+_GITLAB_TESTOPS_PIPELINE_SOURCE = _source(
+    "dev_health_ops/providers/gitlab/testops_pipeline.py"
+)
+_OPERATIONAL_ORDERING_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering_types.py"
+)
+_OPERATIONAL_ORDERING_CODEC_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering_codec.py"
+)
+_OPERATIONAL_ORDERING_RULES_SOURCE = _source(
+    "dev_health_ops/models/operational_ordering.py"
+)
+_OPERATIONAL_SOURCE = _source("dev_health_ops/models/operational.py")
+_OPERATIONAL_IDENTITY_SOURCE = _source("dev_health_ops/models/operational_identity.py")
+_PAGERDUTY_MODELS_SOURCE = _source("dev_health_ops/providers/pagerduty/models.py")
+_PAGERDUTY_NORMALIZE_SOURCE = _source("dev_health_ops/providers/pagerduty/normalize.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
+_OPERATIONAL_MIGRATION_SOURCE = _source(
+    "dev_health_ops/providers/operational_migration.py"
+)
+_JSM_MODELS_SOURCE = _source("dev_health_ops/providers/jira/jsm_models.py")
+_JSM_INCIDENTS_SOURCE = _source("dev_health_ops/providers/jira/jsm_incidents.py")
+_JIRA_NORMALIZE_SOURCE = _source("dev_health_ops/providers/jira/normalize.py")
+_IDENTITY_SOURCE = _source("dev_health_ops/providers/identity.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
+_LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
+_LICENSE_REGISTRY_SOURCE = _source("dev_health_ops/licensing/registry.py")
+_FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
+
+_STATUS_MAPPING_SOURCE = _source("dev_health_ops/providers/status_mapping.py")
+_WORK_ITEMS_MODEL_SOURCE = _source("dev_health_ops/models/work_items.py")
+_IDENTITY_SOURCE = _source("dev_health_ops/providers/identity.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_NORMALIZE_HELPERS_SOURCE = _source("dev_health_ops/providers/normalize_helpers.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
+_LINEAR_NORMALIZE_SOURCE = _source("dev_health_ops/providers/linear/normalize.py")
+_LINEAR_PROVIDER_SOURCE = _source("dev_health_ops/providers/linear/provider.py")
+_AI_DETECTION_SOURCE = _source("dev_health_ops/providers/_ai_detection.py")
+_TEAM_AUTOIMPORT_LINEAR_SOURCE = _source(
+    "dev_health_ops/workers/team_autoimport_linear.py"
+)
+_PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
+_PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
+
+# The ClickHouse metrics sink package, for the direct work-item destination
+# projection oracle. Every one of these is a real production source; the list
+# is long because the target is a package __init__ that composes fourteen
+# mixins, and each one has to be in sys.modules before that __init__ runs
+# (see _target_clickhouse_metrics_sink).
+_CLICKHOUSE_DEDUP_SOURCE = _source("dev_health_ops/clickhouse_dedup.py")
+_METRICS_SCHEMAS_SOURCE = _source("dev_health_ops/metrics/schemas.py")
+_WORK_ITEM_MODELS_SOURCE = _source("dev_health_ops/models/work_items.py")
+_AI_ATTRIBUTION_MODELS_SOURCE = _source("dev_health_ops/models/ai_attribution.py")
+_AI_WORKFLOW_MODELS_SOURCE = _source("dev_health_ops/models/ai_workflow.py")
+_AI_GOVERNANCE_MODELS_SOURCE = _source("dev_health_ops/audit/ai_governance/models.py")
+_RECOMMENDATION_SNAPSHOT_SOURCE = _source("dev_health_ops/recommendations/snapshot.py")
+_CLICKHOUSE_MIGRATIONS_SOURCE = _source(
+    "dev_health_ops/migrations/clickhouse/__init__.py"
+)
+_METRICS_SINK_BASE_SOURCE = _source("dev_health_ops/metrics/sinks/base.py")
+_METRICS_SINK_FACTORY_SOURCE = _source("dev_health_ops/metrics/sinks/factory.py")
+_CLICKHOUSE_SINK_PACKAGE = "dev_health_ops/metrics/sinks/clickhouse"
+_CLICKHOUSE_INSERT_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/_insert.py")
+_CLICKHOUSE_CONNECTION_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/connection.py")
+_CLICKHOUSE_CORE_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/core.py")
+_CLICKHOUSE_MIXIN_SOURCES: tuple[tuple[str, Path], ...] = tuple(
+    (
+        f"dev_health_ops.metrics.sinks.clickhouse.{module}",
+        _source(f"{_CLICKHOUSE_SINK_PACKAGE}/{module}.py"),
+    )
+    for module in (
+        "ai_attribution",
+        "ai_governance",
+        "ai_impact",
+        "ai_workflow",
+        "ci",
+        "compounding_risk",
+        "dora",
+        "investment",
+        "llm_tokens",
+        "recommendations",
+        "wellbeing",
+        "work_graph",
+    )
+)
+_CLICKHOUSE_SINK_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/__init__.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
     "dev_health_ops.sync.datasets": _DATASETS_SOURCE,
     "dev_health_ops.providers.usage": _USAGE_SOURCE,
+    "dev_health_ops.providers.github.work_item_options": _GITHUB_WORK_ITEM_OPTIONS_SOURCE,
 }
 
 
@@ -71,6 +193,14 @@ def _unsupported_dependency(*_args: Any, **_kwargs: Any) -> Any:
 
 def _target_dataset_adapters() -> None:
     _load_safe_source("dev_health_ops.sync.datasets")
+    _install_module(
+        "dev_health_ops.providers.utils",
+        {
+            "env_flag": lambda _name, default: default,
+            "env_int": lambda _name, default: default,
+        },
+    )
+    _load_safe_source("dev_health_ops.providers.github.work_item_options")
     _install_module(
         "dev_health_ops.credentials.resolver",
         {
@@ -105,21 +235,38 @@ def _target_dataset_adapters() -> None:
     )
 
 
+class _OracleGitFile:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _OracleAsyncBatchCollector:
+    def __init__(self, callback: Callable[[list[Any]], Any]) -> None:
+        self._callback = callback
+        self._items: list[Any] = []
+
+    async def __aenter__(self) -> _OracleAsyncBatchCollector:
+        return self
+
+    async def __aexit__(self, *_args: Any) -> None:
+        await self._callback(self._items)
+
+    def add(self, item: Any) -> None:
+        self._items.append(item)
+
+    async def maybe_flush(self) -> None:
+        return None
+
+
 def _target_base_git() -> None:
     """Stub base_git.py's heavy, unrelated imports (CHAOS-3122).
 
-    ``BaseGitProcessor.coerce_created_at`` and the module-level
-    ``build_git_pull_request`` are pure functions; everything base_git.py
-    imports beyond them (complexity scanning, ORM models, the async batch
-    collector) is dead weight for this oracle and, more importantly, is not
-    importable under the stock interpreter this loader exists for. Each stub
-    only needs to satisfy the *names* base_git.py imports at module-load
-    time -- it never calls into any of them.
+    Most base_git.py imports remain unrelated to row construction and are
+    stubbed so this loader stays dependency-light. The real complexity module
+    is loaded because the GitLab files traversal oracle executes the live
+    processor's scanner gate before the worker persistence boundary.
     """
-    _install_module(
-        "dev_health_ops.analytics.complexity",
-        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
-    )
+    _load_source_module("dev_health_ops.analytics.complexity", _COMPLEXITY_SOURCE)
     _install_module(
         "dev_health_ops.metrics.schemas",
         {"FileComplexitySnapshot": object, "RepoComplexityDaily": object},
@@ -136,10 +283,14 @@ def _target_base_git() -> None:
                 (),
                 {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
             ),
-            "Deployment": object,
+            "Deployment": type(
+                "Deployment",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
             "GitBlame": object,
             "GitCommitStat": object,
-            "GitFile": object,
+            "GitFile": _OracleGitFile,
             "GitPullRequest": type(
                 "GitPullRequest",
                 (),
@@ -148,7 +299,8 @@ def _target_base_git() -> None:
         },
     )
     _install_module(
-        "dev_health_ops.processors.fetch_utils", {"AsyncBatchCollector": object}
+        "dev_health_ops.processors.fetch_utils",
+        {"AsyncBatchCollector": _OracleAsyncBatchCollector},
     )
     # False keeps base_git.py's `elif CONNECTORS_AVAILABLE:` branch from firing,
     # so it never needs dev_health_ops.connectors.utils stubbed too.
@@ -192,7 +344,14 @@ def _target_github_code_client() -> None:
     _install_module("httpx", {"Response": object, "AsyncBaseTransport": object})
     _install_module(
         "dev_health_ops.connectors.models",
-        {"FileBlame": object, "SecurityAlertData": object},
+        {
+            "FileBlame": object,
+            "SecurityAlertData": type(
+                "SecurityAlertData",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+        },
     )
     _install_module(
         "dev_health_ops.exceptions",
@@ -238,7 +397,42 @@ def _target_github_code_client() -> None:
     )
 
 
+def _target_gitlab_code_client() -> None:
+    """Load the executable GitLab code client and its fixed transport stack."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _load_source_module("dev_health_ops.exceptions", _EXCEPTIONS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.sync.rate_limit_signal", _RATE_LIMIT_SIGNAL_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers._ratelimit", _RATELIMIT_SOURCE)
+    _load_source_module("dev_health_ops.providers._http", _HTTP_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.gitlab.ratelimit", _GITLAB_RATELIMIT_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.gitlab.budget", _GITLAB_BUDGET_SOURCE)
+    # The live security mapping returns SecurityAlertData. Load the checked-in
+    # dataclass so constructor shape and annotations remain production-owned;
+    # a kwargs container would let a field drift without the oracle noticing.
+    _load_source_module("dev_health_ops.connectors.models", _CONNECTOR_MODELS_SOURCE)
+
+
 _GITHUB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/github.py")
+
+
+def _target_gitlab_repository() -> None:
+    _load_source_module(
+        "dev_health_ops.providers.gitlab.instance", _GITLAB_INSTANCE_SOURCE
+    )
+
+
+class _OracleGitCommitStat:
+    def __init__(self, **values: Any) -> None:
+        self.__dict__.update(values)
 
 
 def _target_github_processor() -> None:
@@ -299,8 +493,12 @@ def _target_github_processor() -> None:
             "CiPipelineRun": object,
             "Deployment": object,
             "GitBlame": object,
-            "GitCommit": object,
-            "GitCommitStat": object,
+            "GitCommit": type(
+                "GitCommit",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+            "GitCommitStat": _OracleGitCommitStat,
             "GitPullRequest": object,
             "GitPullRequestReview": object,
             "Repo": object,
@@ -391,7 +589,532 @@ def _target_github_processor() -> None:
     _install_module("github", {"RateLimitExceededException": Exception})
 
 
+def _target_gitlab_processor() -> None:
+    """Load the live GitLab incident producer with only its pure dependencies."""
+    _target_jsm_incidents()
+    _install_module(
+        "dev_health_ops.models.atlassian_ops",
+        {
+            "AtlassianOpsAlert": object,
+            "AtlassianOpsIncident": object,
+            "AtlassianOpsSchedule": object,
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.providers.operational_migration",
+        _OPERATIONAL_MIGRATION_SOURCE,
+    )
+    _load_source_module("dev_health_ops.analytics.complexity", _COMPLEXITY_SOURCE)
+    # The files traversal oracle executes the live complexity scanner gate,
+    # while the security mappings construct the production connector model.
+    # Keep both real modules loaded so the combined oracle cannot drift behind
+    # either producer's typed boundary.
+    _load_source_module("dev_health_ops.connectors.models", _CONNECTOR_MODELS_SOURCE)
+    _install_module("dev_health_ops.metrics.sinks.ingestion", {"IngestionSink": object})
+
+    class _Incident:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    # The security helper constructs git_models.SecurityAlert directly after
+    # the live GitLab code-client normalizer returns SecurityAlertData. Load
+    # the checked-in ORM model rather than replacing it with a kwargs stub:
+    # this keeps the oracle on the production typed model and catches schema
+    # drift in the same constructor/field boundary the processor uses.
+    git_models = _load_source_module("dev_health_ops.models.git", _GIT_MODEL_SOURCE)
+
+    class _GitPullRequestReview:
+        # The live mapper constructs this model directly. Keep the stand-in
+        # kwargs-shaped so the oracle executes the production constructor call
+        # and returns every mapped attribute without importing SQLAlchemy.
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    # Keep the production model module for SecurityAlert and override only the
+    # review class used by the PR-family row oracle. Its kwargs-shaped output
+    # preserves the pair's field projection (without SQLAlchemy's private
+    # instance state) while security continues to exercise the typed model.
+    # SQLAlchemy's class registry holds weak references, so retain the mapped
+    # review class before replacing the public constructor used by the oracle.
+    setattr(
+        git_models,
+        "_oracle_mapped_git_pull_request_review",
+        git_models.GitPullRequestReview,
+    )
+    setattr(git_models, "GitPullRequestReview", _GitPullRequestReview)
+    _install_module(
+        "dev_health_ops.processors.base_git",
+        {
+            name: object
+            for name in (
+                "BaseGitProcessor",
+                "backfill_file_records",
+                "blame_backfill_needed",
+                "build_ci_pipeline_run",
+                "build_deployment",
+                "build_git_pull_request",
+                "check_backfill_needs",
+                "historical_backfill_day",
+                "resolve_commit_stats_limit",
+                "select_unblamed_paths",
+                "write_historical_complexity",
+            )
+        },
+    )
+    _install_module(
+        "dev_health_ops.utils",
+        {
+            "BATCH_SIZE": 1000,
+            "CONNECTORS_AVAILABLE": True,
+            "AGGREGATE_STATS_MARKER": "__AGGREGATE__",
+            "is_skippable": _unsupported_dependency,
+        },
+    )
+    _load_source_module("dev_health_ops.processors.fetch_utils", _FETCH_UTILS_SOURCE)
+    _install_module(
+        "dev_health_ops.processors.release_ref",
+        {"get_release_ref_enrichment": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.processors.storage_protocol", {"GitSyncStore": object}
+    )
+    _install_module(
+        "dev_health_ops.processors.testops_ingest",
+        {
+            "MAX_ARTIFACTS_PER_RUN": 0,
+            "MAX_RUNS_PER_SYNC": 0,
+            "ingest_report_members": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.testops_tests",
+        {"process_gitlab_test_report": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.commit_stats",
+        {"build_gitlab_commit_stat_values": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.commits",
+        {"build_gitlab_commit_values": _unsupported_dependency},
+    )
+    _load_source_module(
+        "dev_health_ops.providers.gitlab.instance", _GITLAB_INSTANCE_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers.gitlab.repository",
+        {"build_gitlab_repository_values": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.pr_state",
+        {"normalize_pr_state": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.connectors",
+        {
+            "BatchResult": object,
+            "ConnectorException": Exception,
+            "GitLabConnector": object,
+        },
+    )
+    _install_module(
+        "dev_health_ops.connectors.utils",
+        {"RateLimitConfig": object, "RateLimitGate": object},
+    )
+
+
+def _target_testops_ingest() -> None:
+    """Load only the report schemas, parsers, and pure ingestion producers."""
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _load_source_module("dev_health_ops.parsers.junit", _JUNIT_PARSER_SOURCE)
+    _load_source_module("dev_health_ops.parsers.coverage", _COVERAGE_PARSER_SOURCE)
+    _load_source_module(
+        "dev_health_ops.processors.testops_tests", _TESTOPS_TESTS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.processors.testops_coverage", _TESTOPS_COVERAGE_SOURCE
+    )
+
+
+def _target_github_testops_pipeline() -> None:
+    """Load the active GitHub TestOps adapter and its executable dependencies."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": type("APIException", (Exception,), {}),
+            "AuthenticationException": type(
+                "AuthenticationException", (Exception,), {}
+            ),
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {"GITHUB_DIAGNOSTIC_HEADER_NAMES": ()},
+    )
+    _load_source_module("dev_health_ops.providers.github.budget", _GITHUB_BUDGET_SOURCE)
+    _load_source_module("dev_health_ops.providers._base", _PIPELINE_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.ci_acceptance", _CI_ACCEPTANCE_SOURCE)
+
+
+def _target_gitlab_testops_pipeline() -> None:
+    """Load the active GitLab TestOps adapter and executable dependencies."""
+    _load_safe_source("dev_health_ops.sync.budget_types")
+    _load_safe_source("dev_health_ops.sync.datasets")
+    _load_safe_source("dev_health_ops.providers.usage")
+    _install_module(
+        "dev_health_ops.workers.sync_bootstrap", {"SyncTaskContext": object}
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": type("APIException", (Exception,), {}),
+            "AuthenticationException": type(
+                "AuthenticationException", (Exception,), {}
+            ),
+        },
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {"GITLAB_DIAGNOSTIC_HEADER_NAMES": ()},
+    )
+    _load_source_module("dev_health_ops.providers.gitlab.budget", _GITLAB_BUDGET_SOURCE)
+    _load_source_module("dev_health_ops.providers._base", _PIPELINE_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.ci_acceptance", _CI_ACCEPTANCE_SOURCE)
+
+
+def _target_jsm_incidents() -> None:
+    """Load the incident dataclasses and JSM boundary model without ORM init."""
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_types",
+        _OPERATIONAL_ORDERING_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_codec",
+        _OPERATIONAL_ORDERING_CODEC_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering",
+        _OPERATIONAL_ORDERING_RULES_SOURCE,
+    )
+    _load_source_module("dev_health_ops.models.operational", _OPERATIONAL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.operational_identity", _OPERATIONAL_IDENTITY_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.jira.jsm_models", _JSM_MODELS_SOURCE)
+
+
+def _target_jira_normalize() -> None:
+    """Load Jira's live work-item normalizers with their real pure inputs."""
+    _target_status_mapping()
+    _load_source_module(
+        "dev_health_ops.providers.status_mapping", _STATUS_MAPPING_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.identity", _IDENTITY_SOURCE)
+    _install_package("dev_health_ops.utils")
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+
+
+def _target_pagerduty_normalize() -> None:
+    """Load the live PagerDuty normalizer and its canonical model chain."""
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_types",
+        _OPERATIONAL_ORDERING_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_codec",
+        _OPERATIONAL_ORDERING_CODEC_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering",
+        _OPERATIONAL_ORDERING_RULES_SOURCE,
+    )
+    _load_source_module("dev_health_ops.models.operational", _OPERATIONAL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.operational_identity", _OPERATIONAL_IDENTITY_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.providers.pagerduty.models", _PAGERDUTY_MODELS_SOURCE
+    )
+
+
+def _target_feature_policy() -> None:
+    """Load the policy's real type and registry inputs without licensing init."""
+    _load_source_module("dev_health_ops.licensing.types", _LICENSE_TYPES_SOURCE)
+    _load_source_module("dev_health_ops.licensing.registry", _LICENSE_REGISTRY_SOURCE)
+
+
+def _target_status_mapping() -> None:
+    """Load the REAL work-item vocabulary that the status mapper validates against.
+
+    status_mapping.py derives _VALID_STATUS_CATEGORIES and _VALID_WORK_ITEM_TYPES
+    from work_items.py's Literal aliases via get_args, and the loader uses them to
+    decide which category names are real -- an unrecognised one is skipped in
+    silence. Stubbing that module would hand-maintain a SECOND copy of the valid
+    vocabulary, and the "invalid category is silently skipped" pin would then be
+    proven against the copy rather than against production, which is the precise
+    drift this framework exists to prevent. work_items.py imports only stdlib
+    (uuid, dataclasses, datetime, typing), so the real module loads unmodified.
+    """
+    module = _load_source_module(
+        "dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE
+    )
+    # PRODUCER PROVENANCE GUARD. `python3` on a developer machine is often an
+    # ambient virtualenv with dev_health_ops editable-installed against a
+    # DIFFERENT worktree, and a lane has already lost time comparing Go against
+    # another checkout's Python. load_live_module asserts this for the
+    # allowlisted module it loads; the dependency loaded HERE had no such
+    # check, so a wrong-checkout work_items -- which defines the valid category
+    # and type vocabulary the loader validates against -- could have been
+    # picked up silently. Comparing against the wrong producer must fail
+    # loudly, not merely be unlikely.
+    origin = getattr(module, "__file__", None)
+    if origin is None or Path(origin).resolve() != _WORK_ITEMS_MODEL_SOURCE:
+        raise RuntimeError(
+            f"oracle loaded work_items from {origin!r}, expected "
+            f"{_WORK_ITEMS_MODEL_SOURCE} -- the comparison would have run against "
+            "another checkout's producer"
+        )
+
+
+def _target_linear_normalize() -> None:
+    """Load the real Linear normalizer and its pure model dependencies.
+
+    This target intentionally omits the Linear HTTP client: the pair invokes
+    the production ``linear_issue_to_work_item`` boundary with the exact
+    GraphQL-shaped issue object produced by the provider query. Loading the
+    normalizer source through the fixed allowlist keeps the producer fresh
+    without pulling the application stack or replacing any value-producing
+    dependency with a hand-authored copy.
+    """
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.ai_attribution", _AI_ATTRIBUTION_MODELS_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers._ai_detection", _AI_DETECTION_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_helpers", _NORMALIZE_HELPERS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.identity", _IDENTITY_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.status_mapping", _STATUS_MAPPING_SOURCE
+    )
+
+
+def _target_linear_provider() -> None:
+    """Load the live Linear provider for an injected-client producer oracle.
+
+    The oracle supplies a typed in-memory client, so no HTTP transport or
+    credential stack is needed. The provider's actual ``iter_ingest`` method,
+    its batch boundaries, and the real Linear normalizer still execute.
+    """
+    _target_linear_normalize()
+    _load_source_module(
+        "dev_health_ops.providers.linear.normalize", _LINEAR_NORMALIZE_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module("dev_health_ops.providers.base", _PROVIDERS_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.utils", _PROVIDERS_UTILS_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.client",
+        {"LinearClient": type("LinearClient", (), {})},
+    )
+
+
+def _target_linear_team_autoimport() -> None:
+    """Load the live Linear reference-catalog producer's pure boundaries.
+
+    ``team_autoimport_linear`` owns the real team/member/project row
+    construction but imports the application sink and discovery services at
+    module load. Those collaborators are fixed stubs here because the oracle
+    invokes only ``_linear_project_records``; the value-producing normalizer
+    itself remains the checked-in production source.
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+    _install_module("sqlalchemy", {})
+    _install_package("sqlalchemy.ext")
+    _install_module(
+        "sqlalchemy.ext.asyncio", {"AsyncSession": type("AsyncSession", (), {})}
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_identity_drift",
+        {"split_memberships_for_review": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        {
+            "project_provider_team_rows": _unsupported_dependency,
+            "project_team_rows_with_store": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_discovery",
+        {"TeamDiscoveryService": type("TeamDiscoveryService", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_membership",
+        {"TeamMembershipService": type("TeamMembershipService", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.credentials.resolver",
+        {"linear_credentials_from_mapping": _unsupported_dependency},
+    )
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _install_module(
+        "dev_health_ops.metrics.sinks.clickhouse",
+        {"ClickHouseMetricsSink": type("ClickHouseMetricsSink", (), {})},
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _install_module(
+        "dev_health_ops.providers.identity",
+        {"load_identity_resolver": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.client",
+        {
+            "LinearAuth": type("LinearAuth", (), {}),
+            "LinearClient": type("LinearClient", (), {}),
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.normalize",
+        {"linear_cycle_to_sprint": _unsupported_dependency},
+    )
+
+
+def _target_fetch_utils() -> None:
+    _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
+
+
+def _target_clickhouse_metrics_sink() -> None:
+    """Compose the real ClickHouseMetricsSink without the application stack.
+
+    The target here is the sink package's own __init__, so the oracle built on
+    it constructs the SAME class production constructs -- not a local
+    re-composition of two mixins that a future mixin override could silently
+    diverge from.
+
+    Two things make a plain ``import dev_health_ops.metrics.sinks.clickhouse``
+    impossible under the go-quality interpreter, and both are package
+    __init__ side effects rather than anything the sink itself needs:
+
+      * ``metrics/sinks/__init__.py`` imports ``sinks.base``, which imports
+        ``models.work_items``, which runs ``models/__init__.py``, which
+        imports ``licensing/__init__.py``, which imports ``licensing/gating.py``,
+        which imports **fastapi** -- the whole HTTP API stack, pulled in to
+        write a row to ClickHouse. That is the CI failure this target closes
+        (ModuleNotFoundError: No module named 'fastapi').
+      * ``clickhouse/core.py`` imports **clickhouse_connect** at module level
+        for its connect path. The sink under test never connects: the oracle
+        injects a recording client. Only that name is stubbed, and it is
+        stubbed to fail loudly rather than silently return a mock, so an
+        oracle that ever reached the real connect path would say so.
+
+    Everything else below is loaded from its real source, in dependency order,
+    because ``__init__`` needs each submodule already resolved (its parent
+    package stub has an empty __path__, so the import system finds submodules
+    only through sys.modules). No projection logic is stubbed: the column
+    lists, the coercions, ClickHouseCore._insert_rows' asdict/org_id/datetime
+    handling and each mixin's writer are the shipped code.
+    """
+    _install_module("clickhouse_connect", {"get_client": _unsupported_dependency})
+    _load_source_module("dev_health_ops.clickhouse_dedup", _CLICKHOUSE_DEDUP_SOURCE)
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.metrics.testops_schemas", _TESTOPS_SCHEMAS_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEM_MODELS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.ai_attribution", _AI_ATTRIBUTION_MODELS_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.ai_workflow", _AI_WORKFLOW_MODELS_SOURCE)
+    _load_source_module(
+        "dev_health_ops.audit.ai_governance.models", _AI_GOVERNANCE_MODELS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.recommendations.snapshot", _RECOMMENDATION_SNAPSHOT_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.migrations.clickhouse", _CLICKHOUSE_MIGRATIONS_SOURCE
+    )
+    _load_source_module("dev_health_ops.metrics.sinks.base", _METRICS_SINK_BASE_SOURCE)
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.factory", _METRICS_SINK_FACTORY_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse._insert", _CLICKHOUSE_INSERT_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse.connection",
+        _CLICKHOUSE_CONNECTION_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.metrics.sinks.clickhouse.core", _CLICKHOUSE_CORE_SOURCE
+    )
+    for module_name, module_source in _CLICKHOUSE_MIXIN_SOURCES:
+        _load_source_module(module_name, module_source)
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
+    _FETCH_UTILS_SOURCE: (
+        "dev_health_ops.processors.fetch_utils",
+        _FETCH_UTILS_SOURCE,
+        _target_fetch_utils,
+    ),
+    _STATUS_MAPPING_SOURCE: (
+        "dev_health_ops.providers.status_mapping",
+        _STATUS_MAPPING_SOURCE,
+        _target_status_mapping,
+    ),
+    _LINEAR_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.linear.normalize",
+        _LINEAR_NORMALIZE_SOURCE,
+        _target_linear_normalize,
+    ),
+    _LINEAR_PROVIDER_SOURCE: (
+        "dev_health_ops.providers.linear.provider",
+        _LINEAR_PROVIDER_SOURCE,
+        _target_linear_provider,
+    ),
+    _TEAM_AUTOIMPORT_LINEAR_SOURCE: (
+        "dev_health_ops.workers.team_autoimport_linear",
+        _TEAM_AUTOIMPORT_LINEAR_SOURCE,
+        _target_linear_team_autoimport,
+    ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
         _BASE_GIT_SOURCE,
@@ -402,15 +1125,70 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         _GITHUB_CODE_CLIENT_SOURCE,
         _target_github_code_client,
     ),
+    _GITLAB_CODE_CLIENT_SOURCE: (
+        "dev_health_ops.providers.gitlab.code_client",
+        _GITLAB_CODE_CLIENT_SOURCE,
+        _target_gitlab_code_client,
+    ),
+    _GITLAB_COMMITS_SOURCE: (
+        "dev_health_ops.providers.gitlab.commits",
+        _GITLAB_COMMITS_SOURCE,
+        lambda: None,
+    ),
+    _GITLAB_COMMIT_STATS_SOURCE: (
+        "dev_health_ops.providers.gitlab.commit_stats",
+        _GITLAB_COMMIT_STATS_SOURCE,
+        lambda: None,
+    ),
+    _GITLAB_REPOSITORY_SOURCE: (
+        "dev_health_ops.providers.gitlab.repository",
+        _GITLAB_REPOSITORY_SOURCE,
+        _target_gitlab_repository,
+    ),
+    _GIT_MODEL_SOURCE: (
+        "dev_health_ops.models.git",
+        _GIT_MODEL_SOURCE,
+        lambda: None,
+    ),
+    _CONNECTOR_MODELS_SOURCE: (
+        "dev_health_ops.connectors.models",
+        _CONNECTOR_MODELS_SOURCE,
+        lambda: None,
+    ),
+    _REPOSITORY_ROWS_SOURCE: (
+        "dev_health_ops.storage.repository_rows",
+        _REPOSITORY_ROWS_SOURCE,
+        lambda: None,
+    ),
+    _RELEASE_REF_SOURCE: (
+        "dev_health_ops.processors.release_ref",
+        _RELEASE_REF_SOURCE,
+        lambda: None,
+    ),
     _GITHUB_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.github",
         _GITHUB_PROCESSOR_SOURCE,
         _target_github_processor,
     ),
+    _GITLAB_PROCESSOR_SOURCE: (
+        "dev_health_ops.processors.gitlab",
+        _GITLAB_PROCESSOR_SOURCE,
+        _target_gitlab_processor,
+    ),
     _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",
         _LAUNCHDARKLY_PROCESSOR_SOURCE,
         _target_launchdarkly_processor,
+    ),
+    _GITHUB_BUDGET_SOURCE: (
+        "dev_health_ops.providers.github.budget",
+        _GITHUB_BUDGET_SOURCE,
+        _target_budget,
+    ),
+    _GITLAB_BUDGET_SOURCE: (
+        "dev_health_ops.providers.gitlab.budget",
+        _GITLAB_BUDGET_SOURCE,
+        _target_budget,
     ),
     _LINEAR_BUDGET_SOURCE: (
         "dev_health_ops.providers.linear.budget",
@@ -431,6 +1209,46 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.processors.dataset_adapters",
         _DATASET_ADAPTERS_SOURCE,
         _target_dataset_adapters,
+    ),
+    _TESTOPS_INGEST_SOURCE: (
+        "dev_health_ops.processors.testops_ingest",
+        _TESTOPS_INGEST_SOURCE,
+        _target_testops_ingest,
+    ),
+    _GITHUB_TESTOPS_PIPELINE_SOURCE: (
+        "dev_health_ops.providers.github.testops_pipeline",
+        _GITHUB_TESTOPS_PIPELINE_SOURCE,
+        _target_github_testops_pipeline,
+    ),
+    _GITLAB_TESTOPS_PIPELINE_SOURCE: (
+        "dev_health_ops.providers.gitlab.testops_pipeline",
+        _GITLAB_TESTOPS_PIPELINE_SOURCE,
+        _target_gitlab_testops_pipeline,
+    ),
+    _JSM_INCIDENTS_SOURCE: (
+        "dev_health_ops.providers.jira.jsm_incidents",
+        _JSM_INCIDENTS_SOURCE,
+        _target_jsm_incidents,
+    ),
+    _JIRA_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.jira.normalize",
+        _JIRA_NORMALIZE_SOURCE,
+        _target_jira_normalize,
+    ),
+    _PAGERDUTY_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.pagerduty.normalize",
+        _PAGERDUTY_NORMALIZE_SOURCE,
+        _target_pagerduty_normalize,
+    ),
+    _FEATURE_POLICY_SOURCE: (
+        "dev_health_ops.licensing.feature_policy",
+        _FEATURE_POLICY_SOURCE,
+        _target_feature_policy,
+    ),
+    _CLICKHOUSE_SINK_SOURCE: (
+        "dev_health_ops.metrics.sinks.clickhouse",
+        _CLICKHOUSE_SINK_SOURCE,
+        _target_clickhouse_metrics_sink,
     ),
 }
 
@@ -462,19 +1280,30 @@ def _install_namespace() -> None:
     for name in (
         "dev_health_ops",
         "dev_health_ops.analytics",
+        "dev_health_ops.audit",
+        "dev_health_ops.audit.ai_governance",
         "dev_health_ops.connectors",
         "dev_health_ops.credentials",
+        "dev_health_ops.licensing",
+        "dev_health_ops.migrations",
         "dev_health_ops.models",
         "dev_health_ops.metrics",
         "dev_health_ops.metrics.sinks",
+        "dev_health_ops.metrics.sinks.clickhouse",
+        "dev_health_ops.recommendations",
+        "dev_health_ops.parsers",
         "dev_health_ops.processors",
         "dev_health_ops.providers",
         "dev_health_ops.providers.github",
+        "dev_health_ops.providers.gitlab",
         "dev_health_ops.providers.jira",
+        "dev_health_ops.providers.pagerduty",
         "dev_health_ops.providers.launchdarkly",
         "dev_health_ops.providers.linear",
+        "dev_health_ops.utils",
         "dev_health_ops.storage",
         "dev_health_ops.sync",
+        "dev_health_ops.utils",
         "dev_health_ops.workers",
     ):
         _install_package(name)

@@ -17,7 +17,7 @@ func TestNormalizeQueueTelemetryConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if normalized.profile != "ops" || normalized.clientID != "worker-01" ||
+	if normalized.clientID != "worker-01" ||
 		normalized.queryTimeout != defaultQueueTelemetryTimeout || normalized.executionCapacity != 4 {
 		t.Fatalf("unexpected normalized scalar config: %#v", normalized)
 	}
@@ -39,7 +39,6 @@ func TestNormalizeQueueTelemetryConfigRejectsUnsafeOrAmbiguousInputs(t *testing.
 		mutate func(*QueueTelemetryConfig)
 	}{
 		{name: "schema", mutate: func(config *QueueTelemetryConfig) { config.Schema = `river".public` }},
-		{name: "profile", mutate: func(config *QueueTelemetryConfig) { config.Profile = "ops\nsecret" }},
 		{name: "client missing", mutate: func(config *QueueTelemetryConfig) { config.ClientID = "" }},
 		{name: "client too long", mutate: func(config *QueueTelemetryConfig) { config.ClientID = strings.Repeat("x", 101) }},
 		{name: "client nul", mutate: func(config *QueueTelemetryConfig) { config.ClientID = "worker\x00secret" }},
@@ -75,15 +74,15 @@ func TestQueueTelemetrySamplerBuildsStableBoundedSnapshot(t *testing.T) {
 	t.Parallel()
 	sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
 		return []queueTelemetryRow{
-			{queue: "retention", kind: "system.retention_cleanup", available: 5, oldestAgeSeconds: 7.25, localRunning: 3},
-			{queue: "heartbeat", kind: "system.heartbeat", available: 2, oldestAgeSeconds: 12.5, localRunning: 3},
+			{queue: "retention", kind: "system.retention_cleanup", available: 5, oldestAgeSeconds: 7.25, localRunning: 3, queueRunning: 2},
+			{queue: "heartbeat", kind: "system.heartbeat", available: 2, oldestAgeSeconds: 12.5, localRunning: 3, queueRunning: 1},
 		}, nil
 	})
 	snapshot, err := sampler.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Profile != "ops" || snapshot.LocalRunning != 3 || snapshot.ExecutionSaturation != 0.75 {
+	if snapshot.LocalRunning != 3 || snapshot.ExecutionSaturation != 0.75 {
 		t.Fatalf("unexpected snapshot scalars: %#v", snapshot)
 	}
 	wantJobs := []QueueJobTelemetry{
@@ -99,6 +98,13 @@ func TestQueueTelemetrySamplerBuildsStableBoundedSnapshot(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot.Queues, wantQueues) {
 		t.Fatalf("queues = %#v, want %#v", snapshot.Queues, wantQueues)
+	}
+	wantCapacities := []QueueCapacityTelemetry{
+		{Queue: "heartbeat", Capacity: 2, Running: 1, Saturation: 0.5},
+		{Queue: "retention", Capacity: 2, Running: 2, Saturation: 1},
+	}
+	if !reflect.DeepEqual(snapshot.QueueCapacities, wantCapacities) {
+		t.Fatalf("queue capacities = %#v, want %#v", snapshot.QueueCapacities, wantCapacities)
 	}
 	if err := sampler.CheckAvailableContractVersions(context.Background()); err != nil {
 		t.Fatalf("supported version readiness error = %v", err)
@@ -205,7 +211,6 @@ func TestExecutionSaturationIsBounded(t *testing.T) {
 func validQueueTelemetryConfig() QueueTelemetryConfig {
 	return QueueTelemetryConfig{
 		Schema:   "river",
-		Profile:  "ops",
 		ClientID: "worker-01",
 		Queues: []QueueTelemetryQueue{
 			{Name: "retention", MaxWorkers: 2},

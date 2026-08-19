@@ -66,6 +66,18 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
     )
     assert "tests/test_0066_celery_river_cutover_postgres.py" in postgres_step["run"]
+    assert (
+        "tests/test_saved_report_schedule_unique_postgres_migration.py"
+        in postgres_step["run"]
+    )
+    assert (
+        "tests/test_0097_backfill_report_schedule_next_run_postgres.py"
+        in postgres_step["run"]
+    )
+    assert (
+        "tests/test_report_run_execution_lease_postgres_migration.py"
+        in postgres_step["run"]
+    )
 
     unit_step = next(
         step
@@ -76,6 +88,46 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "--ignore=tests/test_0066_celery_river_cutover_postgres.py"
         in (unit_step["env"]["PYTEST_ADDOPTS"])
     )
+    assert (
+        "--ignore=tests/test_saved_report_schedule_unique_postgres_migration.py"
+        in (unit_step["env"]["PYTEST_ADDOPTS"])
+    )
+    assert (
+        "--ignore=tests/test_0097_backfill_report_schedule_next_run_postgres.py"
+        in (unit_step["env"]["PYTEST_ADDOPTS"])
+    )
+    assert (
+        "--ignore=tests/test_report_run_execution_lease_postgres_migration.py"
+        in (unit_step["env"]["PYTEST_ADDOPTS"])
+    )
+    assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert "./ci/run_tests.sh unit" in unit_step["run"]
+
+    coverage_step = next(
+        step
+        for step in workflow["jobs"]["coverage"]["steps"]
+        if step.get("name") == "Run coverage-gated test contract"
+    )
+    assert coverage_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert "PYTEST_ADDOPTS" not in coverage_step["env"]
+    assert coverage_step["env"]["DEV_HEALTH_TEST_POSTGRES_ADMIN_URI"] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
+    )
+    assert "./ci/run_tests.sh ci" in coverage_step["run"]
+
+    for job_name in ("test-matrix", "coverage"):
+        assert all(
+            step.get("name")
+            not in {
+                "Run quarantined PostgreSQL planner test (CHAOS-3180)",
+                "Run quarantined PostgreSQL legacy dispatch test (CHAOS-3179)",
+            }
+            for step in workflow["jobs"][job_name]["steps"]
+        )
 
     coverage_step = next(
         step
@@ -107,6 +159,27 @@ def test_missing_postgres_test_uri_fails_in_ci(
     postgres_tests = importlib.import_module(
         "tests.test_0066_celery_river_cutover_postgres"
     )
+    monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
+    monkeypatch.setenv("CI", "true")
+
+    with pytest.raises(pytest.fail.Exception, match=_POSTGRES_TEST_URI_ENV):
+        postgres_tests._require_postgres_test_uri()
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    (
+        "tests.test_dispatch_outbox",
+        "tests.test_sync_reconciler",
+        "tests.test_sync_planner",
+        "tests.test_service_credentials_cli",
+    ),
+)
+def test_known_postgres_tests_fail_in_ci_without_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+) -> None:
+    postgres_tests = importlib.import_module(module_name)
     monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
     monkeypatch.setenv("CI", "true")
 

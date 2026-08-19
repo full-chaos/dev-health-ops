@@ -1,0 +1,12 @@
+# MIRRORED TypeError: a DATE priority beside an INT one. Python compares only
+# within a type, so this raises where the all-date file sorts cleanly. The two
+# files together are what stop "date" from being one undifferentiated branch.
+rules:
+  - id: dated
+    priority: 2024-01-02
+    match:
+      always: true
+  - id: numbered
+    priority: 9
+    match:
+      always: true

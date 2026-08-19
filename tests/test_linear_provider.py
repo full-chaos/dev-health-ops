@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 import pytest
 
@@ -24,6 +25,7 @@ from dev_health_ops.providers.linear.normalize import (
     linear_comment_to_interaction_event,
     linear_cycle_to_sprint,
     linear_issue_to_work_item,
+    linear_work_item_ai_attributions,
 )
 from dev_health_ops.providers.linear.provider import LinearProvider
 from dev_health_ops.providers.registry import get_provider, is_registered
@@ -781,6 +783,88 @@ class TestLinearClientWindowFilter:
 
 
 class TestLinearProviderIngest:
+    def test_explicit_issue_labels_emit_ai_attribution_without_text_inference(
+        self,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        issue = _mock_linear_issue(
+            identifier="ENG-3717",
+            title="Codex is discussed here but is not attribution",
+            description="Generated with Codex is ordinary issue text.",
+            labels=["codex", "bug"],
+        )
+        work_item, _ = linear_issue_to_work_item(
+            issue=issue,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        rows = linear_work_item_ai_attributions(
+            work_item=work_item,
+            org_id="77777777-7777-4777-8777-777777777777",
+        )
+
+        assert len(rows) == 1
+        assert rows[0].provider == "linear"
+        assert rows[0].subject_type == "issue"
+        assert rows[0].subject_id == "linear:ENG-3717"
+        assert rows[0].repo_id is None
+        assert str(rows[0].source) == "issue_label"
+        assert rows[0].evidence == {"label": "codex"}
+
+        without_label = _mock_linear_issue(
+            identifier="ENG-3718",
+            title="Codex is discussed here but is not attribution",
+            description="Generated with Codex is ordinary issue text.",
+            labels=["bug"],
+        )
+        plain, _ = linear_issue_to_work_item(
+            issue=without_label,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+        assert (
+            linear_work_item_ai_attributions(
+                work_item=plain,
+                org_id="77777777-7777-4777-8777-777777777777",
+            )
+            == []
+        )
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_ingest_carries_issue_label_attribution_in_provider_batch(
+        self,
+        mock_from_env: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        mock_client.iter_issues_pages.return_value = [
+            [_mock_linear_issue(identifier="ENG-3717", labels=["codex"])]
+        ]
+        provider = LinearProvider(
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        batch = provider.ingest(
+            IngestionContext(
+                window=IngestionWindow(),
+                org_id=UUID("77777777-7777-4777-8777-777777777777"),
+            )
+        )
+
+        assert len(batch.ai_attributions) == 1
+        assert batch.ai_attributions[0].subject_id == "linear:ENG-3717"
+        assert str(batch.ai_attributions[0].source) == "issue_label"
+
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_all_teams(

@@ -62,7 +62,7 @@ The callback URI is a browser route on Dev Health Web. Do not expose the client 
 
 ## Queue and routing settings
 
-Routing configuration must match deployed consumers. Enabling provider-specific or cost-class queues before workers consume them can strand jobs. Likewise, checked-in Go deployment profiles remain disabled with zero minimum replicas and Celery route ownership; configuration alone does not transfer a job to River.
+Routing configuration must match deployed consumers. Enabling provider-specific or cost-class queues before workers consume them can strand jobs. Checked-in Go deployment groups remain disabled with zero minimum replicas even though the sync-dispatch contract targets River; deploy the consumers and apply the durable routes before sending work.
 
 Review together:
 

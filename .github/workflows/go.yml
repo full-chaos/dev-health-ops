@@ -9,13 +9,28 @@ on:
   #     - '**/go.sum'
   #     - 'go.work'
   #     - 'go.work.sum'
+  #     - 'pyproject.toml'
+  #     - 'uv.lock'
   #     - 'contracts/jobs/v1/**'
   #     - 'deploy/go-workers/**'
+  #     - 'src/dev_health_ops/licensing/**'
+  #     - 'src/dev_health_ops/metrics/testops*.py'
+  #     - 'src/dev_health_ops/models/**'
+  #     - 'src/dev_health_ops/parsers/**'
+  #     - 'src/dev_health_ops/processors/**'
+  #     - 'src/dev_health_ops/providers/**'
+  #     - 'src/dev_health_ops/storage/repository_rows.py'
+  #     - 'src/dev_health_ops/sync/**'
   #     - 'src/dev_health_ops/workers/job_contracts/**'
+  #     - 'internal/providersync/testdata/**'
+  #     - 'internal/scheduler/sync/testdata/**'
   #     - 'tests/workers/job_contracts/**'
   #     - 'docker/go-worker.Dockerfile'
   #     - 'tests/compatibility/river/**'
   #     - 'ci/check_go.sh'
+  #     - 'ci/go_integration_shards.tsv'
+  #     - 'ci/go_providersync_test_shards.tsv'
+  #     - 'ci/requirements-live-python-oracles.txt'
   #     - 'ci/check_go_containers.sh'
   #     - 'ci/check_river_compat_static.sh'
   #     - 'ci/evidence/go-worker-migration/**'
@@ -23,43 +38,65 @@ on:
   #     - '.dockerignore'
   #     - 'Makefile'
   #     - '.github/workflows/go.yml'
-  # pull_request:
-  #   branches: ['**']
-  #   paths:
-  #     - '**/*.go'
-  #     - '**/go.mod'
-  #     - '**/go.sum'
-  #     - 'go.work'
-  #     - 'go.work.sum'
-  #     - 'contracts/jobs/v1/**'
-  #     - 'deploy/go-workers/**'
-  #     - 'src/dev_health_ops/workers/job_contracts/**'
-  #     - 'tests/workers/job_contracts/**'
-  #     - 'docker/go-worker.Dockerfile'
-  #     - 'tests/compatibility/river/**'
-  #     - 'ci/check_go.sh'
-  #     - 'ci/check_go_containers.sh'
-  #     - 'ci/check_river_compat_static.sh'
-  #     - 'ci/evidence/go-worker-migration/**'
-  #     # - 'ci/local_validate.sh'
-  #     - '.dockerignore'
-  #     - 'Makefile'
-  #     - '.github/workflows/go.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
+      - 'src/dev_health_ops/licensing/**'
+      - 'src/dev_health_ops/metrics/testops*.py'
+      - 'src/dev_health_ops/models/**'
+      - 'src/dev_health_ops/parsers/**'
+      - 'src/dev_health_ops/processors/**'
+      - 'src/dev_health_ops/providers/**'
+      - 'src/dev_health_ops/storage/repository_rows.py'
+      - 'src/dev_health_ops/sync/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'internal/providersync/testdata/**'
+      - 'internal/scheduler/sync/testdata/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_providersync_test_shards.tsv'
+      - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/check_go_containers.sh'
+      - 'ci/check_river_compat_static.sh'
+      - 'ci/evidence/go-worker-migration/**'
+      # - 'ci/local_validate.sh'
+      - '.dockerignore'
+      - 'Makefile'
+      - '.github/workflows/go.yml'
   merge_group:
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   # PR runs cancel their predecessor so fast-follow pushes don't queue behind
-  # a stale diff. push (main) and merge_group runs must not be cancelled:
-  # this workflow already triggers on push to main (see `on.push` above),
-  # but a burst of merges lands several pushes to main within the same
-  # `github.ref` group in quick succession, and with an unconditional
-  # cancel-in-progress every push but the last in that burst gets cancelled
-  # before go-storage-integration finishes — so most main commits never get
-  # a real pass/fail, only "cancelled". integration.yml (push-to-main
-  # integration suite) already sets cancel-in-progress: false for the same
-  # reason; docs-cloudflare.yml uses this same event-conditional pattern.
+  # a stale diff, which bounds this workflow to ONE live fan-out per PR --
+  # ~13 jobs, several at a 25-minute cap. That bound is why `pull_request` is
+  # the trigger that is on.
+  #
+  # merge_group runs must not be cancelled: a burst of merges lands several
+  # within the same `github.ref` group in quick succession, and with an
+  # unconditional cancel-in-progress every one but the last gets cancelled
+  # before go-storage-integration finishes — so most merges never get a real
+  # pass/fail, only "cancelled". integration.yml (push-to-main integration
+  # suite) already sets cancel-in-progress: false for the same reason;
+  # docs-cloudflare.yml uses this same event-conditional pattern. The same
+  # applies to `on.push`, which is why it stays commented out above: it is
+  # the one trigger here that cannot be cancelled AND fires per-commit, so
+  # it is the one that exhausted the org's Actions concurrency. merge_group
+  # gates the merge itself, so leaving push off costs post-merge re-runs on
+  # main rather than gate coverage.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -77,6 +114,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+
+      - name: Set up Python 3.13.14 for live provider oracles
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.14'
+
+      - name: Install locked live provider oracle dependencies
+        run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
 
       - name: Prepare base job contracts
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
@@ -100,9 +145,11 @@ jobs:
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh
 
-  go-storage-integration:
+  go-storage-integration-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -112,8 +159,72 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
-      - name: Run isolated storage integration suite
-        run: bash ci/check_go.sh integration
+      - name: Validate and emit deterministic integration shards
+        id: plan
+        run: bash ci/check_go.sh integration-shard-plan
+
+  go-storage-integration-shard:
+    name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
+    needs: go-storage-integration-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      # The derived work-item integration tests migrate their throwaway
+      # ClickHouse container with the project's REAL migration chain
+      # (internal/testsupport/chschema), which shells out to Python. This job
+      # previously installed no Python dependencies at all, so that helper died
+      # with ModuleNotFoundError. The closure is pinned and installed with
+      # --no-deps for the same reason go-quality's is: an undeclared dependency
+      # must fail loudly rather than drift to latest.
+      - name: Set up Python 3.13.14 for the ClickHouse migration chain
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.14'
+
+      - name: Install locked ClickHouse migration dependencies
+        run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
+
+      - name: Pre-pull pinned ClickHouse image with bounded retry
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
+        run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
+
+  # Preserve the existing required-check contract while the implementation
+  # fans out behind it. fail-fast is disabled above, so this job observes the
+  # aggregate result only after every shard has reached a terminal state.
+  go-storage-integration:
+    name: go-storage-integration
+    if: ${{ always() }}
+    needs:
+      - go-storage-integration-plan
+      - go-storage-integration-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
+      SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
+    steps:
+      - name: Require the plan and every integration shard to pass
+        run: |
+          set -euo pipefail
+          if [ "${PLAN_RESULT}" != "success" ] || [ "${SHARD_RESULT}" != "success" ]; then
+            echo "integration plan result: ${PLAN_RESULT}" >&2
+            echo "integration shard aggregate result: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+          echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
     runs-on: ubuntu-latest
@@ -202,6 +313,7 @@ jobs:
         run: >-
           python -m pip install
           asyncpg==0.31.0
+          greenlet==3.5.0
           riverqueue==0.7.0
           SQLAlchemy==2.0.49
 
@@ -213,7 +325,8 @@ jobs:
           jq -e '
             .status == "complete_with_architecture_blocker"
             and .nested_n_minus_1.status == "pass"
-            and (.profiles | length) == 2
+            and [.profiles[].mode] == ["direct", "poll-only", "session"]
+            and (.gate_truth_table | keys) == ["direct", "poll_only", "session"]
           ' "${RUNNER_TEMP}/river-compatibility.json" >/dev/null
 
       - name: Upload sanitized compatibility evidence

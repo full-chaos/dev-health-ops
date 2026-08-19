@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from dev_health_ops.workers.config import task_queues
+from dev_health_ops.workers.provider_unit_route import _switch_field_name
 
 
 def _parse_queues(command_str: str) -> set[str]:
@@ -38,6 +41,19 @@ def _container_command_string(service: dict) -> str:
     if command:
         parts.append(_stringify_command(command))
     return " ".join(parts)
+
+
+def _go_worker_arguments(service: dict) -> dict[str, str]:
+    command = service.get("command") or []
+    assert isinstance(command, list), "Go worker command must use list form"
+    arguments: dict[str, str] = {}
+    for item in command:
+        name, separator, value = str(item).partition("=")
+        assert separator and name.startswith("--"), (
+            f"invalid Go worker argument: {item}"
+        )
+        arguments[name] = value
+    return arguments
 
 
 def test_compose_workers_cover_every_celery_queue() -> None:
@@ -171,9 +187,47 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
-_GO_PROFILE_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-profile.yml"
+_GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.yml"
+_GO_CONFIG = _REPO_ROOT / "internal" / "platform" / "config" / "config.go"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
+
+_MATRIX_CONTRACT = _REPO_ROOT / "contracts" / "provider-matrix" / "v1" / "matrix.json"
+
+
+def _derive_provider_route_switch_names() -> frozenset[str]:
+    """Derive the route-switch census from the provider matrix (CHAOS-3875).
+
+    ``contracts/provider-matrix/v1/matrix.json`` is the single source of truth
+    for which ``(provider, dataset)`` pairs exist. The switch name for a pair is
+    ``_switch_field_name``'s convention uppercased, which is also what
+    ``ProviderUnitRouteSwitches`` reads at runtime -- so family aliases collapse
+    onto their canonical dataset's switch here exactly as they do in the
+    producer.
+
+    This used to be a hand-maintained frozenset, which made the census a fifth
+    copy of a list already written out in Go typed config, ``compose.yml``,
+    ``.env.example``, and the Go-workers overlay. Deriving it binds all four to
+    the matrix: adding a pair there fails the tests below by name until every
+    copy carries it, instead of silently routing a unit to a process with no
+    matching handler.
+    """
+
+    matrix = json.loads(_MATRIX_CONTRACT.read_text(encoding="utf-8"))
+    names = {
+        f"WORKER_{_switch_field_name(pair['provider'], pair['dataset']).upper()}_ENABLED"
+        for pair in matrix["pairs"]
+    }
+    assert names, "the provider matrix declared no pairs"
+    return frozenset(names)
+
+
+_PROVIDER_ROUTE_SWITCH_NAMES = _derive_provider_route_switch_names()
+
+_PROVIDER_ROUTE_CONFIG_NAMES = (
+    "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+    "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+)
 
 
 def _platform_compose_path() -> Path | None:
@@ -188,8 +242,64 @@ def _platform_compose_path() -> Path | None:
     return None
 
 
+def _platform_go_compose_path() -> Path | None:
+    for parent in _REPO_ROOT.parents:
+        candidate = parent / "compose.yml"
+        if not candidate.exists():
+            continue
+        services = _load_yaml(candidate).get("services") or {}
+        if "api" in services and "go-worker" in services:
+            return candidate
+    return None
+
+
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+# Measured cost of one Go worker replica on the queue-session endpoint:
+# WORKER_DATABASE_MAX_CONNS pgxpool connections (2) plus the long-lived River
+# notifier session, which lives outside that pool budget. Sizing from the
+# environment variable alone under-counts by a third.
+_QUEUE_CONNECTIONS_PER_REPLICA = 3
+_QUEUE_WORKER_GROUPS = ("go-worker", "go-worker-heavy", "go-worker-ops")
+# The platform stack must support this many replicas of every worker group.
+_PLATFORM_REPLICAS_PER_GROUP = 3
+# Reconciler, scheduler, and riverui hold queue-endpoint sessions too.
+_QUEUE_SINGLETON_CONNECTIONS = 5
+# Migrations bypass the poolers and connect to PostgreSQL directly.
+_MIGRATION_CONNECTIONS = 5
+# Superuser slots PostgreSQL keeps back from ordinary roles.
+_POSTGRES_RESERVED = 3
+
+_COMPOSE_DEFAULT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:-(?P<default>[^}]*)\}$")
+
+
+def _compose_int(value: object) -> int:
+    """Resolve a compose scalar that may be ``${VAR:-default}`` to its int.
+
+    Interpolated defaults are what an unconfigured checkout actually runs, so
+    a budget assertion has to read through the substitution rather than
+    compare the literal string.
+    """
+    text = str(value)
+    match = _COMPOSE_DEFAULT.match(text)
+    if match is not None:
+        text = match.group("default")
+    return int(text)
+
+
+def _postgres_max_connections(service: dict) -> int:
+    """Return the max_connections the postgres service is started with."""
+    command = service.get("command") or []
+    if isinstance(command, str):
+        command = command.split()
+    for entry in command:
+        text = str(entry)
+        if text.startswith("max_connections="):
+            return _compose_int(text.split("=", 1)[1])
+    # The postgres image default when the service passes no override.
+    return 100
 
 
 def _command_string(service: dict) -> str:
@@ -212,6 +322,30 @@ def _assert_compose_beat_singleton(path: Path) -> None:
     for name, service in beat_services:
         replicas = (service.get("deploy") or {}).get("replicas")
         assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
+
+
+def test_platform_go_worker_drain_contract_matches_groups() -> None:
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose checkout is unavailable")
+
+    services = _load_yaml(compose_path)["services"]
+    manifest = {
+        process["name"]: process
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
+            "processes"
+        ]
+    }
+    service_profiles = {
+        "go-worker": "sync",
+        "go-worker-heavy": "heavy",
+        "go-worker-ops": "ops",
+    }
+    for service_name, profile in service_profiles.items():
+        grace = manifest[profile]["shutdown_grace_seconds"]
+        service = services[service_name]
+        assert _go_worker_arguments(service)["--shutdown-timeout"] == f"{grace}s"
+        assert service["stop_grace_period"] == f"{grace}s"
 
 
 def test_production_compose_has_one_shot_migrate_service() -> None:
@@ -329,6 +463,7 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in init_script
@@ -378,6 +513,7 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in upgrade_script
@@ -390,6 +526,13 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         "GRANT INSERT ON TABLE public.worker_job_completion_fences"
         not in upgrade_script
     )
+    queue_section = upgrade_script.split("-- The queue role", maxsplit=1)[1]
+    assert "GRANT SELECT ON TABLE public.sync_runs TO %I" in queue_section
+    assert "GRANT SELECT ON TABLE public.sync_run_units TO %I" in queue_section
+    assert "GRANT SELECT, UPDATE ON TABLE public.sync_runs" not in queue_section
+    assert "GRANT SELECT, INSERT ON TABLE public.sync_runs" not in queue_section
+    assert "GRANT SELECT, UPDATE ON TABLE public.sync_run_units" not in queue_section
+    assert "GRANT SELECT, INSERT ON TABLE public.sync_run_units" not in queue_section
     _assert_least_privilege_domain_grants(
         upgrade_script.split("-- The queue role", maxsplit=1)[0]
     )
@@ -402,32 +545,150 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     # scripts back in contradiction with domain readiness.
     expected_read_only_tables = {
         "integrations",
-        "integration_sources",
-        "integration_datasets",
         "integration_credentials",
-        "sync_runs",
         "sync_dispatch_transport_routes",
     }
-    configured_read_only_tables = {
-        line.strip().removeprefix("('").removesuffix("'),").removesuffix("')")
-        for line in domain_script.splitlines()
-        if line.strip().startswith("('")
+    configured_read_only_tables = _tables_for_formatted_grant(
+        domain_script, "GRANT SELECT ON TABLE public.%I TO %I"
+    )
+    assert configured_read_only_tables == expected_read_only_tables, (
+        "read-only grant block covers the wrong tables"
+    )
+    # These tables are mutable domain state, so they deliberately live in the
+    # separate read/write grant rather than the read-only VALUES list above.
+    expected_read_write_tables = {
+        "integration_sources",
+        "integration_datasets",
+        "sync_runs",
+        "sync_run_units",
     }
-    assert configured_read_only_tables == expected_read_only_tables
+    configured_read_write_tables = _tables_for_formatted_grant(
+        domain_script, "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
+    )
+    assert configured_read_write_tables == expected_read_write_tables, (
+        "read-write grant block covers the wrong tables"
+    )
     for grant in (
         "GRANT SELECT ON TABLE public.%I TO %I",
-        "GRANT SELECT, UPDATE ON TABLE public.sync_run_units",
+        "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox",
         "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots",
     ):
         assert grant in domain_script
     for forbidden in (
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES",
         "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES",
-        "DELETE ON TABLE",
+        "DELETE ON ALL TABLES",
     ):
         assert forbidden not in domain_script
+    # Scoped claim: within the provisioning scripts' DOMAIN SECTION, only the
+    # snapshot and reviewed worker-lifecycle tables receive per-table DELETE.
+    # The domain ROLE holds DELETE on more tables through domainPosture(); they
+    # are simply not granted by these scripts. Stating this unscoped would be
+    # false.
+    #
+    # Assert the exact set rather than banning one spelling: admitting the
+    # snapshot grant meant relaxing a blanket "DELETE ON TABLE" ban, and a
+    # relaxed ban admits every future DELETE grant too. A templated
+    # `public.%I` DELETE block surfaces here as the literal "%I" and so
+    # cannot slip through this equality either.
+    assert _tables_for_delete_grants(domain_script) == {
+        "sync_run_unit_effect_snapshots",
+        "worker_concurrency_leases",
+        "worker_instances",
+    }
+
+
+def _tables_for_delete_grants(domain_script: str) -> set[str]:
+    """Tables granted DELETE, whatever order the privilege list is written in.
+
+    Matching "DELETE ON TABLE" only sees DELETE written last:
+    `GRANT SELECT, DELETE, UPDATE ON TABLE ...` slips straight past it. That
+    used to be covered by a blanket ban on the substring "DELETE ON TABLE",
+    which this file had to relax to admit the snapshot grant -- so the narrow
+    regex and the removed ban left the same hole open together. Parse the
+    privilege list instead.
+    """
+    granted: set[str] = set()
+    for privileges, table in re.findall(
+        r"GRANT\s+([A-Z,\s()a-z_]+?)\s+ON TABLE public\.([A-Za-z0-9_%]+)",
+        domain_script,
+    ):
+        names = {
+            privilege.split("(", maxsplit=1)[0].strip().upper()
+            for privilege in privileges.split(",")
+        }
+        if "DELETE" in names:
+            granted.add(table)
+    return granted
+
+
+# The two provisioning scripts mark the end of the domain section differently.
+# Slicing both on "-- The queue role" silently returned the WHOLE of
+# init-extra-dbs.sh, which has no such marker -- so assertions meant for the
+# domain role were reading the queue role's grants too, and the negative test
+# below passed by raising for the wrong reason.
+_DOMAIN_SECTION_MARKERS = {
+    "init-extra-dbs.sh": 'GRANT USAGE ON SCHEMA public TO :"queue_role";',
+    "provision_river_roles.sql": "-- The queue role",
+}
+
+
+def _domain_section(script_path: Path) -> str:
+    marker = _DOMAIN_SECTION_MARKERS[script_path.name]
+    script = script_path.read_text(encoding="utf-8")
+    assert marker in script, (
+        f"{script_path.name} does not contain its domain-section marker "
+        f"{marker!r}; slicing on a missing marker yields the whole file and "
+        f"every domain assertion silently widens to the queue role"
+    )
+    return script.split(marker, maxsplit=1)[0]
+
+
+def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:
+    pattern = re.compile(
+        rf"SELECT\s+format\(\s*'{re.escape(grant)}'.*?"
+        r"FROM\s+\((.*?)\)\s+AS\s+required\(table_name\)",
+        re.DOTALL,
+    )
+    matches = pattern.findall(domain_script)
+    assert len(matches) == 1, f"expected exactly one VALUES block for {grant!r}"
+    return set(re.findall(r"\('([^']+)'\)", matches[0]))
+
+
+@pytest.mark.parametrize(
+    "script_path",
+    (
+        _REPO_ROOT / "docker" / "init-extra-dbs.sh",
+        _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql",
+    ),
+)
+def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
+    script_path: Path,
+) -> None:
+    domain_script = _domain_section(script_path)
+    read_only_grant = "GRANT SELECT ON TABLE public.%I TO %I"
+    read_write_grant = "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
+    inverted = (
+        domain_script.replace(read_only_grant, "__READ_ONLY_GRANT__")
+        .replace(read_write_grant, read_only_grant)
+        .replace("__READ_ONLY_GRANT__", read_write_grant)
+    )
+    assert inverted != domain_script, "the swap fixture changed nothing"
+
+    # The control: unmodified input must PASS. Without it a bare
+    # pytest.raises proves only that SOMETHING raised -- deleting the swap
+    # assertions entirely still satisfied it.
+    _assert_least_privilege_domain_grants(domain_script)
+    with pytest.raises(AssertionError) as failure:
+        _assert_least_privilege_domain_grants(inverted)
+    # And the reason is asserted, not assumed: the swap must be caught by the
+    # read-only/read-write table sets, not by some unrelated later assertion.
+    assert "grant block covers the wrong tables" in str(failure.value), str(
+        failure.value
+    )
 
 
 def test_legacy_compose_disables_ambient_migrations() -> None:
@@ -744,7 +1005,6 @@ def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
         pytest.skip("platform compose.yml is only present in the monorepo checkout")
 
     services = _load_yaml(compose_path).get("services") or {}
-
     service_names = ["worker", "worker-ingest", "worker-heavy", "beat"]
     if "worker-wi" in services:
         service_names.append("worker-wi")
@@ -767,6 +1027,136 @@ def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None
 
     queues = _parse_queues(_container_command_string(provider_worker))
     assert "sync" in queues
+
+
+def test_platform_compose_wires_local_all_provider_routes_end_to_end() -> None:
+    """The optional monorepo Compose surface must wire one preset to both runtimes."""
+
+    compose_path = _platform_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    for service_name in ("api", "worker", "beat", "go-worker"):
+        environment = services[service_name].get("environment") or {}
+        assert environment["DEV_HEALTH_ENV"] == "${DEV_HEALTH_ENV:-}"
+        assert environment["GO_PROVIDER_ROUTES"] == "${GO_PROVIDER_ROUTES:-}"
+        assert _PROVIDER_ROUTE_SWITCH_NAMES <= environment.keys(), (
+            f"{service_name} is missing provider route switches: "
+            f"{sorted(_PROVIDER_ROUTE_SWITCH_NAMES - environment.keys())}"
+        )
+
+    operator = services.get("go-workerctl")
+    assert operator is not None, "platform Compose must expose the route operator"
+    operator_environment = operator.get("environment") or {}
+    assert operator_environment["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
+    )
+    assert operator_environment["WORKER_OPERATOR_TOKEN"] == (
+        "${WORKER_OPERATOR_TOKEN:-}"
+    )
+
+    preset_path = compose_path.with_name(".env.go-all")
+    assert preset_path.is_file()
+    preset = {
+        key: value
+        for line in preset_path.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+        for key, value in (line.split("=", maxsplit=1),)
+    }
+    assert preset == {
+        "COMPOSE_PROFILES": "go",
+        "DEV_HEALTH_ENV": "local",
+        "GO_PROVIDER_ROUTES": "all",
+    }
+
+
+def test_platform_compose_applies_sync_routes_before_readiness() -> None:
+    """Local no-Celery startup must converge routes without a readiness cycle."""
+
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    activators = {
+        "go-sync-dispatch-route-activate": "dispatch_sync_run",
+        "go-sync-finalize-route-activate": "finalize_sync_run",
+        "go-sync-post-route-activate": "post_sync",
+        "go-sync-reference-route-activate": "reference_discovery",
+    }
+    serial_order = tuple(activators)
+    ready_dependencies = services["go-worker-ready"].get("depends_on") or {}
+
+    for index, (service_name, kind) in enumerate(activators.items()):
+        service = services[service_name]
+        command = service.get("command") or []
+        assert command[:2] == ["routes", "apply"]
+        assert command[-1] == kind
+        dependencies = service.get("depends_on") or {}
+        assert "go-worker-ready" not in dependencies
+        assert dependencies["go-worker-operator-credential"]["condition"] == (
+            "service_completed_successfully"
+        )
+        assert dependencies["go-worker"]["condition"] == "service_started"
+        assert dependencies["go-reconciler"]["condition"] == "service_started"
+        if index:
+            assert dependencies[serial_order[index - 1]]["condition"] == (
+                "service_completed_successfully"
+            )
+        assert ready_dependencies[service_name]["condition"] == (
+            "service_completed_successfully"
+        )
+
+
+def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
+    """Local no-Celery startup must include the native periodic-work owner."""
+
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    migrate = services["migrate"]
+    assert (migrate.get("build") or {})["context"] == ("${DEV_HEALTH_OPS_ROOT:-./ops}")
+    assert "${DEV_HEALTH_OPS_ROOT:-./ops}:/app" in (migrate.get("volumes") or [])
+
+    scheduler = services.get("go-scheduler")
+    assert scheduler is not None, "platform Compose must run the Go scheduler"
+    assert not scheduler.get("profiles"), "local scheduler must not require a profile"
+    assert (scheduler.get("build") or {})["target"] == "scheduler"
+
+    environment = scheduler.get("environment") or {}
+    assert "DEV_HEALTH_PROFILE" not in environment
+    assert environment["DEV_HEALTH_HTTP_ADDR"] == ":8080"
+    assert environment["POSTGRES_URI"].startswith(
+        "postgresql://${RIVER_DOMAIN_DATABASE_ROLE"
+    )
+    assert environment["WORKER_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_QUEUE_DATABASE_ROLE"
+    )
+    assert environment["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
+    )
+    assert environment["PGBOUNCER_TRANSACTION_MODE"] == "true"
+
+    dependencies = scheduler.get("depends_on") or {}
+    assert dependencies["go-worker-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    # The scheduler opens pooled connections immediately, so a started-but-not
+    # yet-accepting pooler is not good enough. Every pool it dials defines a
+    # healthcheck, so gate on all three rather than only the domain pool: the
+    # queue and coordinator pools were added later and were not asserted at
+    # all, which is how this pin went stale unnoticed.
+    for pool in ("pgbouncer", "pgbouncer-river-queue", "pgbouncer-river-coordinator"):
+        assert dependencies[pool]["condition"] == "service_healthy", pool
+
+    ready = services["go-worker-ready"]
+    ready_dependencies = ready.get("depends_on") or {}
+    assert ready_dependencies["go-scheduler"]["condition"] == "service_started"
+    assert "http://go-scheduler:8080/readyz" in _command_string(ready)
+    assert "beat" not in services
 
 
 def test_compose_workers_override_runner_entrypoint() -> None:
@@ -970,28 +1360,26 @@ def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
     )
 
 
-def test_route_switches_default_off_for_producer_gate() -> None:
-    """CHAOS-3142/CHAOS-3123: WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED and
-    WORKER_GITHUB_REPO_METADATA_ENABLED must default to "false" wherever
-    this file wires them -- the shared &env anchor (api, inherited by
-    worker/worker-heavy/beat via <<: *env / <<: *worker-base). This is the
-    Python producer gate's half of the CHAOS-3123 route gate
-    (ProviderUnitRouteSwitches, src/dev_health_ops/workers/provider_unit_route.py);
-    a Go worker topology running alongside this stack must read the same
-    variable names with the same default so a unit the Python gate routes
-    to River never finds no handler.
+def test_provider_route_switch_inventory_matches_go_config() -> None:
+    """The packaging census must move with the typed Go configuration surface."""
+    configured = frozenset(
+        re.findall(r'"(WORKER_[A-Z0-9_]+_ENABLED)"', _GO_CONFIG.read_text())
+    )
+    assert configured == _PROVIDER_ROUTE_SWITCH_NAMES
 
-    Mutation coverage (manually verified): changing either default from
-    "false" to "true" makes the corresponding assertion fail.
+
+def test_route_switches_default_off_for_producer_gate() -> None:
+    """Every typed provider switch passes through both runtimes, default-off.
+
+    The shared ``&env`` anchor feeds the Python producer processes and the Go
+    profile feeds the executor. A name missing on either side can route a unit
+    to a process with no matching handler; a true default would activate a
+    landed provider route merely by deploying this packaging change.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    switch_names = (
-        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
-        "WORKER_GITHUB_REPO_METADATA_ENABLED",
-    )
 
     shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
-    for switch in switch_names:
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
         assert shared_env[switch] == f"${{{switch}:-false}}", (
             f"{switch} must default to false on the shared Celery env anchor"
         )
@@ -1000,10 +1388,43 @@ def test_route_switches_default_off_for_producer_gate() -> None:
     # confirm the merge actually carried the keys rather than being shadowed.
     for name in ("worker", "worker-heavy", "beat"):
         env = services[name]["environment"]
-        for switch in switch_names:
+        for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
             assert env[switch] == f"${{{switch}:-false}}", (
                 f"{switch} must reach {name} through the shared env anchor"
             )
+
+    # The GitHub work-item route rejects guessed filesystem defaults. These are
+    # deliberately explicit deployment inputs and stay empty until a reviewed
+    # activation supplies mounted/runtime paths.
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
+        assert shared_env[name] == f"${{{name}:-}}"
+
+    # The additive Go profile carries the exact same inactive switches and
+    # worker-only paths. This is configuration, not profile activation.
+    go_worker_env = _load_yaml(_GO_WORKER_OVERLAY)["services"]["go-worker"][
+        "environment"
+    ]
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
+        assert go_worker_env[switch] == f"${{{switch}:-false}}"
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
+        assert go_worker_env[name] == f"${{{name}:-}}"
+
+
+def test_provider_route_env_example_is_unset_and_default_off() -> None:
+    """The example inventories opt-ins without enabling a route or profile."""
+    lines = _REPO_ROOT.joinpath(".env.example").read_text().splitlines()
+    declared = set(lines)
+
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
+        assert f'# {switch}="false"' in declared
+        assert not any(line.startswith(f"{switch}=") for line in lines)
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
+        assert f'# {name}=""' in declared
+        assert not any(line.startswith(f"{name}=") for line in lines)
+
+    assert not any(line.startswith("COMPOSE_PROFILES=") for line in lines), (
+        ".env.example must not activate the opt-in Go profile"
+    )
 
 
 def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
@@ -1024,7 +1445,7 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
     `migrate: {condition: service_completed_successfully}` to
     go-worker-migrate's depends_on fails this test.
     """
-    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
     go_services = {
         name: spec for name, spec in services.items() if name.startswith("go-")
     }
@@ -1055,8 +1476,127 @@ def test_go_profile_overlay_services_are_all_profile_gated() -> None:
     Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
     go-* service fails this test.
     """
-    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
     for name, spec in services.items():
         assert spec.get("profiles") == ["go"], (
             f'{name} must declare profiles: ["go"] so a default `up` never starts it'
         )
+
+
+def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profile() -> (
+    None
+):
+    """CHAOS-3851: the local River worker uses the registered sync queues.
+
+    Compose's `go` activation profile is a deployment opt-in and is unrelated
+    to the worker's removed runtime profile contract.
+    """
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    worker = services["go-worker"]
+    environment = worker["environment"]
+    assert "DEV_HEALTH_PROFILE" not in environment
+    assert "DEV_HEALTH_QUEUES" not in environment
+    assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+    assert "DEV_HEALTH_WORKER_GROUP" not in environment
+    arguments = _go_worker_arguments(worker)
+    sync_queues = next(
+        process["queues"]
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
+            "processes"
+        ]
+        if process["name"] == "sync"
+    )
+    assert arguments["--queues"] == ",".join(sync_queues)
+    sync_process = next(
+        process
+        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
+            "processes"
+        ]
+        if process["name"] == "sync"
+    )
+    assert arguments["--queue-concurrency"] == ",".join(
+        f"{entry['queue']}={entry['max_workers']}"
+        for entry in sync_process["queue_workers"]
+    )
+    assert arguments["--worker-group"] == "sync"
+    assert worker["profiles"] == ["go"]
+
+
+def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    transaction_pool = services["pgbouncer"]
+    queue_pool = services["pgbouncer-river-queue"]
+    coordinator_pool = services["pgbouncer-river-coordinator"]
+    assert queue_pool["environment"].get("POOL_MODE") == "session"
+    assert coordinator_pool["environment"].get("POOL_MODE") == "session"
+    # PgBouncer budgets are per (database, user) pool. Each endpoint has one
+    # fixed River role and one database, so these are true backend ceilings.
+    assert (
+        queue_pool["environment"].get("DB_USER")
+        == "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}"
+    )
+    assert (
+        coordinator_pool["environment"].get("DB_USER")
+        == "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}"
+    )
+    # Assert the budget rule, not a literal. Session mode pins one server
+    # connection per client session for the life of that session, so
+    # DEFAULT_POOL_SIZE is a hard ceiling on worker replicas rather than a
+    # throughput knob: the first replica past it never reaches ready, it
+    # crash-loops on preclaim-readiness with the queue-database checks
+    # failing. A literal pinned here passes for whatever number happens to be
+    # deployed, including one that is already too small.
+    queue_pool_size = _compose_int(queue_pool["environment"].get("DEFAULT_POOL_SIZE"))
+    required_queue_backends = (
+        _QUEUE_CONNECTIONS_PER_REPLICA
+        * _PLATFORM_REPLICAS_PER_GROUP
+        * len(_QUEUE_WORKER_GROUPS)
+    ) + _QUEUE_SINGLETON_CONNECTIONS
+    assert queue_pool_size >= required_queue_backends, (
+        f"queue session pool holds {queue_pool_size} backends; "
+        f"{_PLATFORM_REPLICAS_PER_GROUP} replicas of "
+        f"{len(_QUEUE_WORKER_GROUPS)} worker groups plus singletons need "
+        f"{required_queue_backends}"
+    )
+    coordinator_pool_size = _compose_int(
+        coordinator_pool["environment"].get("DEFAULT_POOL_SIZE")
+    )
+    transaction_pool_size = _compose_int(
+        transaction_pool["environment"].get("DEFAULT_POOL_SIZE")
+    )
+    assert coordinator_pool_size >= 10
+    assert transaction_pool_size >= 20
+    assert "RESERVE_POOL_SIZE" not in transaction_pool["environment"]
+
+    # The three pools plus direct migration connections must fit the server.
+    # PgBouncer opens backends lazily, so an over-subscribed budget surfaces
+    # only under the load that needs every pool at once.
+    usable = _postgres_max_connections(services["postgres"]) - _POSTGRES_RESERVED
+    declared = (
+        queue_pool_size
+        + coordinator_pool_size
+        + transaction_pool_size
+        + _MIGRATION_CONNECTIONS
+    )
+    assert declared <= usable, (
+        f"pooler backends plus migrations ({declared}) exceed usable "
+        f"PostgreSQL connections ({usable})"
+    )
+
+    for service_name in ("go-worker", "go-worker-heavy", "go-worker-ops"):
+        environment = services[service_name]["environment"]
+        assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
+        assert environment["WORKER_DATABASE_MODE"] == "session"
+        assert "COORDINATOR_DATABASE_URI" not in environment
+    for service_name in ("go-reconciler", "go-scheduler", "go-worker-route-activate"):
+        environment = services[service_name]["environment"]
+        assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
+        assert (
+            "@pgbouncer-river-coordinator:6434/"
+            in environment["COORDINATOR_DATABASE_URI"]
+        )
+        assert environment["COORDINATOR_DATABASE_MODE"] == "session"

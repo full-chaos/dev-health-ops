@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -65,6 +66,16 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 	if err := repository.Assert(ctx, first, now.Add(89*time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	// Dataset options are intentionally joined live when the already-planned
+	// unit is claimed. Admin PATCH can therefore replace a frozen provider
+	// control before first claim or expired-lease recovery without rewriting the
+	// unit row itself.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.integration_datasets
+SET options = '{"include_archived":false,"comments_limit":37}'::jsonb
+WHERE integration_id = $1 AND dataset_key = 'commits'`, firstIntegrationID); err != nil {
+		t.Fatal(err)
+	}
 
 	secondOwner := uuid.NewString()
 	second, err := repository.Claim(ctx, ClaimRequest{
@@ -74,7 +85,8 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.Recovered || second.Attempt != 2 || second.GenerationKey() != first.GenerationKey() {
+	if !second.Recovered || second.Attempt != 2 || second.GenerationKey() != first.GenerationKey() ||
+		second.DatasetOptions["comments_limit"] != float64(37) {
 		t.Fatalf("recovered claim=%+v", second)
 	}
 	if err := repository.Assert(ctx, first, now.Add(92*time.Second)); !errors.Is(err, ErrLeaseLost) {
@@ -241,8 +253,16 @@ INSERT INTO public.sync_dispatch_outbox (
 	); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-3427: this watermark deliberately overshoots the unit's window end
+	// (the fixture's before_at is 2026-07-23T12:00:00Z, i.e. `now`) by 106
+	// seconds. Before the C10(c) write boundary landed it was persisted
+	// verbatim; it is now clamped to the coverage bound, because a unit that
+	// only fetched up to its window end cannot claim data past it. The
+	// assertion below therefore expects the CLAMPED value -- see
+	// wantWatermark.
 	watermark := now.Add(106 * time.Second)
 	completedAt := now.Add(107 * time.Second)
+	wantWatermark := *second.BeforeAt
 	if err := repository.Complete(
 		ctx, second, map[string]any{"records": 1}, &watermark,
 		now.Add(91*time.Second), completedAt,
@@ -261,8 +281,10 @@ JOIN public.sync_watermarks AS watermark
 WHERE unit.id = $1`, firstUnitID).Scan(&status, &persistedWatermark); err != nil {
 		t.Fatal(err)
 	}
-	if status != "success" || !persistedWatermark.Equal(watermark) {
-		t.Fatalf("status=%s watermark=%s", status, persistedWatermark)
+	if status != "success" || !persistedWatermark.Equal(wantWatermark) {
+		t.Fatalf("status=%s watermark=%s, want %s (the requested %s is past the "+
+			"unit's window end and must be clamped to it)",
+			status, persistedWatermark, wantWatermark, watermark)
 	}
 	var finalizeCount int
 	var persistedClaimToken string
@@ -281,6 +303,218 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 			"finalize outbox count=%d token=%q expiry=%s available_at=%s",
 			finalizeCount, persistedClaimToken, persistedClaimExpiry, availableAt,
 		)
+	}
+
+	// Optional GitHub enrichment failures are durable completion evidence, but
+	// they are not evidence that the five-alias family is current. Even if a
+	// caller forges a candidate watermark, Complete must persist the effects'
+	// typed incompleteness and suppress every alias watermark atomically.
+	degradedUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, degradedUnitID, "incremental", `{
+		"sync_prs": true,
+		"family_dataset_work_items": true,
+		"family_dataset_work_item_labels": true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history": true,
+		"family_dataset_work_item_comments": true
+	}`)
+	degradedClaimedAt := completedAt.Add(time.Second)
+	degradedClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: degradedUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: degradedClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var degradedResult map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"records": 7,
+		"incomplete": [{"component":"milestones","cause":"transient"}]
+	}`), &degradedResult); err != nil {
+		t.Fatal(err)
+	}
+	forgedWatermark := degradedClaimedAt.Add(time.Hour)
+	degradedCompletedAt := degradedClaimedAt.Add(time.Second)
+	if err := repository.Complete(
+		ctx, degradedClaim, degradedResult, &forgedWatermark,
+		degradedClaimedAt, degradedCompletedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var degradedStatus string
+	var degradedEvidenceMatches, degradedAuditMatches bool
+	var degradedWatermarkCount int
+	if err := pool.QueryRow(ctx, `
+SELECT status,
+       result::jsonb -> 'incomplete' =
+         '[{"component":"milestones","cause":"transient"}]'::jsonb,
+       result::jsonb -> 'family_datasets' =
+         '["work-items","work-item-labels","work-item-projects","work-item-history","work-item-comments"]'::jsonb
+FROM public.sync_run_units
+WHERE id = $1`, degradedUnitID).Scan(
+		&degradedStatus, &degradedEvidenceMatches, &degradedAuditMatches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*)
+FROM public.sync_watermarks
+WHERE org_id = 'org-acme'
+  AND source_id = 'acme/api'
+  AND dataset_key IN (
+    'work-items', 'work-item-labels', 'work-item-projects',
+    'work-item-history', 'work-item-comments'
+  )`,
+	).Scan(&degradedWatermarkCount); err != nil {
+		t.Fatal(err)
+	}
+	if degradedStatus != "success" || !degradedEvidenceMatches ||
+		!degradedAuditMatches || degradedWatermarkCount != 0 {
+		t.Fatalf(
+			"degraded status=%q evidence=%t audit=%t alias_watermarks=%d",
+			degradedStatus, degradedEvidenceMatches, degradedAuditMatches,
+			degradedWatermarkCount,
+		)
+	}
+
+	// The Python planner collapses the enabled GitHub work-item family onto one
+	// canonical work-items unit. Completion keeps that claim identity while
+	// atomically fanning its watermark and result audit back out to the enabled
+	// aliases.
+	familyUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, familyUnitID, "incremental", `{
+		"sync_prs": true,
+		"family_dataset_work_items": true,
+		"family_dataset_work_item_labels": true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history": true,
+		"family_dataset_work_item_comments": true
+	}`)
+	familyClaimedAt := degradedCompletedAt.Add(time.Second)
+	familyClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: familyUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: familyClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same CHAOS-3427 clamp as the single-dataset completion above: this
+	// proposed watermark sits past the seeded unit's window end, so every
+	// alias row lands on the coverage bound instead. Fanning out to three
+	// aliases is what is under test here, and the clamp must apply uniformly
+	// to all of them -- a per-alias divergence would be a real defect.
+	familyWatermark := familyClaimedAt.Add(time.Second)
+	wantFamilyWatermark := *familyClaim.BeforeAt
+	if err := repository.Complete(
+		ctx, familyClaim, map[string]any{
+			"records":    7,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, &familyWatermark,
+		familyClaimedAt, familyClaimedAt.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var familyStatus, familyDataset, watermarkKeys string
+	var familyAuditMatches bool
+	var watermarkCount int
+	if err := pool.QueryRow(ctx, `
+SELECT status, dataset_key,
+       result::jsonb -> 'family_datasets' =
+         '["work-items","work-item-labels","work-item-projects","work-item-history","work-item-comments"]'::jsonb
+FROM public.sync_run_units
+WHERE id = $1`, familyUnitID).Scan(
+		&familyStatus, &familyDataset, &familyAuditMatches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), string_agg(dataset_key, ',' ORDER BY dataset_key)
+FROM public.sync_watermarks
+WHERE org_id = 'org-acme'
+  AND source_id = 'acme/api'
+  AND dataset_key IN (
+    'work-items', 'work-item-labels', 'work-item-projects',
+    'work-item-history', 'work-item-comments'
+  )
+  AND last_synced_at = $1`, wantFamilyWatermark).Scan(&watermarkCount, &watermarkKeys); err != nil {
+		t.Fatal(err)
+	}
+	if familyStatus != "success" || familyDataset != "work-items" || !familyAuditMatches ||
+		watermarkCount != 5 || watermarkKeys != "work-item-comments,work-item-history,work-item-labels,work-item-projects,work-items" {
+		t.Fatalf(
+			"family status=%q dataset=%q audit=%t watermarks=%d keys=%q",
+			familyStatus, familyDataset, familyAuditMatches, watermarkCount, watermarkKeys,
+		)
+	}
+
+	// Unsupported family flags fail before the completion transaction. Even
+	// with a non-nil proposed watermark, the unit stays running and no alias
+	// watermark can be advanced.
+	malformedUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, malformedUnitID, "incremental", `{
+		"family_dataset_work_items": true,
+		"family_dataset_future_alias": false
+	}`)
+	malformedClaimedAt := familyClaimedAt.Add(3 * time.Second)
+	malformedClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: malformedUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: malformedClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformedWatermark := familyWatermark.Add(time.Hour)
+	if err := repository.Complete(
+		ctx, malformedClaim, map[string]any{
+			"records":    1,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, &malformedWatermark,
+		malformedClaimedAt, malformedClaimedAt.Add(time.Second),
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("malformed family completion error=%v", err)
+	}
+	var malformedStatus string
+	var malformedWatermarkCount int
+	if err := pool.QueryRow(
+		ctx, "SELECT status FROM public.sync_run_units WHERE id = $1", malformedUnitID,
+	).Scan(&malformedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM public.sync_watermarks
+WHERE org_id = 'org-acme' AND source_id = 'acme/api' AND last_synced_at = $1`,
+		malformedWatermark,
+	).Scan(&malformedWatermarkCount); err != nil {
+		t.Fatal(err)
+	}
+	if malformedStatus != "running" || malformedWatermarkCount != 0 {
+		t.Fatalf(
+			"malformed status=%q advanced_watermarks=%d",
+			malformedStatus, malformedWatermarkCount,
+		)
+	}
+}
+
+func seedWorkItemAliasUnit(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	unitID string,
+	mode string,
+	processorFlags string,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+    id, org_id, sync_run_id, integration_id, source_id, provider,
+    dataset_key, cost_class, mode, since_at, before_at, status,
+    processor_flags, updated_at
+) VALUES (
+    $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
+    $5, '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
+    'dispatching', $6::jsonb, NOW()
+)`, unitID, firstRunID, firstIntegrationID, firstSourceID, mode, processorFlags); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -314,9 +548,65 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			lease_expires_at timestamptz, last_heartbeat_at timestamptz,
 			duration_seconds integer, rate_limit_deferrals integer NOT NULL DEFAULT 0,
 			rate_limit_first_seen_at timestamptz,
+			budget_deferrals integer NOT NULL DEFAULT 0,
+			budget_first_deferred_at timestamptz,
+			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
-			last_retry_reason text, updated_at timestamptz NOT NULL
+			last_retry_reason text, updated_at timestamptz NOT NULL,
+			CONSTRAINT uq_sync_run_units_org_id_id_effect_snapshots
+				UNIQUE (org_id, id)
 		)`,
+		`CREATE TABLE public.sync_run_unit_chunk_checkpoints (
+			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL, schema_version text NOT NULL DEFAULT 'v1', generation text NOT NULL,
+			provider text NOT NULL, dataset_key text NOT NULL, route_version text NOT NULL,
+			normalized_at timestamptz NOT NULL, next_cursor text NOT NULL DEFAULT '',
+			inventory_complete boolean NOT NULL DEFAULT false, next_ordinal integer NOT NULL DEFAULT 0,
+			prepared_chunks integer NOT NULL DEFAULT 0, total_chunks integer NOT NULL DEFAULT 0,
+			final_ordinal integer NOT NULL DEFAULT -1, aggregate_result jsonb,
+			aggregate_digest text, committed_rows bigint NOT NULL DEFAULT 0,
+			owner text NOT NULL, lease_expires_at timestamptz NOT NULL,
+			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_sync_chunk_checkpoint_next_ordinal CHECK (next_ordinal >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_prepared_chunks CHECK (prepared_chunks >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_total_chunks CHECK (total_chunks >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_final_ordinal CHECK (final_ordinal >= -1),
+			CONSTRAINT ck_sync_chunk_checkpoint_cursor CHECK (length(next_cursor) <= 4096),
+			CONSTRAINT ck_sync_chunk_checkpoint_committed_rows CHECK (committed_rows >= 0),
+			CONSTRAINT ck_sync_chunk_checkpoint_complete_fence CHECK (
+				inventory_complete = false OR
+				(total_chunks > 0 AND next_ordinal = total_chunks AND prepared_chunks = total_chunks)),
+			PRIMARY KEY (org_id, sync_run_unit_id, generation),
+			FOREIGN KEY (org_id, sync_run_unit_id) REFERENCES public.sync_run_units(org_id, id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE public.sync_run_unit_effect_chunks (
+			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL, schema_version text NOT NULL DEFAULT 'v1', generation text NOT NULL,
+			route_version text NOT NULL, ordinal integer NOT NULL, total_chunks integer NOT NULL DEFAULT 0,
+			cursor_before text NOT NULL DEFAULT '', cursor_after text NOT NULL DEFAULT '',
+			inventory_complete boolean NOT NULL DEFAULT false, payload jsonb NOT NULL, ledger jsonb NOT NULL,
+			payload_bytes integer NOT NULL, manifest_digest text NOT NULL,
+			status text NOT NULL DEFAULT 'pending', created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_sync_chunk_ordinal CHECK (ordinal >= 0),
+			CONSTRAINT ck_sync_chunk_total CHECK (total_chunks = 0 OR ordinal < total_chunks),
+			CONSTRAINT ck_sync_chunk_cursors CHECK (
+				length(cursor_before) <= 4096 AND length(cursor_after) <= 4096),
+			CONSTRAINT ck_sync_chunk_payload_bytes CHECK (
+				payload_bytes >= 1 AND payload_bytes <= 2097152),
+			CONSTRAINT ck_sync_chunk_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+			CONSTRAINT ck_sync_chunk_ledger_object CHECK (jsonb_typeof(ledger) = 'object'),
+			CONSTRAINT ck_sync_chunk_status CHECK (status IN ('pending', 'writing', 'committed')),
+			PRIMARY KEY (org_id, sync_run_unit_id, generation, ordinal),
+			FOREIGN KEY (org_id, sync_run_unit_id, generation)
+				REFERENCES public.sync_run_unit_chunk_checkpoints(org_id, sync_run_unit_id, generation) ON DELETE CASCADE
+		)`,
+		// Must stay equivalent to the 0092+0093 snapshot schema. This fixture
+		// previously dropped all three CHECK constraints and widened
+		// content_digest to text, so every integration test here ran against a
+		// schema more permissive than production -- the class of gap where a
+		// test proves the code works on a table that does not exist anywhere
+		// real. tests/test_effect_snapshot_migration.py::
+		// test_integration_fixture_ddl_matches_snapshot_migrations fails if the two
+		// drift apart.
+		snapshotFixtureDDL,
 		`CREATE TABLE public.sync_watermarks (
 			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
 			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,
@@ -378,3 +668,28 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		}
 	}
 }
+
+// snapshotFixtureDDL mirrors the 0092 table plus 0093 tenant FK.
+const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
+	org_id text NOT NULL,
+	sync_run_unit_id uuid NOT NULL,
+	generation text NOT NULL,
+	provider text NOT NULL,
+	dataset_key text NOT NULL,
+	schema_version text NOT NULL,
+	content_digest varchar(64) NOT NULL,
+	payload_bytes integer NOT NULL,
+	payload bytea NOT NULL,
+	created_at timestamptz NOT NULL,
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_payload_bytes
+		CHECK (payload_bytes >= 1 AND payload_bytes <= 67108864),
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_payload_length
+		CHECK (length(payload) = payload_bytes),
+	CONSTRAINT ck_sync_run_unit_effect_snapshots_schema_version
+		CHECK (schema_version = 'v1'),
+	PRIMARY KEY (org_id, sync_run_unit_id, generation),
+	CONSTRAINT fk_sync_run_unit_effect_snapshots_tenant_unit
+		FOREIGN KEY (org_id, sync_run_unit_id)
+		REFERENCES public.sync_run_units(org_id, id)
+		ON DELETE CASCADE
+)`

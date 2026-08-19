@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
@@ -30,10 +30,24 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
-from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from dev_health_ops.sync.planner import BackfillSelector, SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 ORG_ID = "planner-org"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 @pytest.fixture
@@ -314,6 +328,69 @@ def test_backfill_creates_one_unit_per_source_dataset_window(db_session):
         (datetime(2026, 6, 1).date(), datetime(2026, 6, 7).date()),
         (datetime(2026, 6, 8).date(), datetime(2026, 6, 14).date()),
     }
+
+
+def test_backfill_selector_object_collapses_family_and_preserves_source_order(
+    db_session,
+):
+    integration = _create_integration(db_session, provider="linear")
+    source_z = _create_source(db_session, integration, external_id="full-chaos/z-repo")
+    source_a = _create_source(db_session, integration, external_id="full-chaos/a-repo")
+    _create_dataset(db_session, integration, "work-item-comments")
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="manual",
+            backfill_selector=BackfillSelector(
+                since=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                before=datetime(2026, 6, 2, tzinfo=timezone.utc),
+                source_ids=(str(source_z.id), str(source_a.id)),
+                dataset_keys=("work-item-labels", "work-item-comments"),
+            ),
+        ),
+    )
+
+    units = [
+        db_session.get(SyncRunUnit, uuid.UUID(unit_id)) for unit_id in plan.unit_ids
+    ]
+
+    assert plan.total_units == 2
+    assert all(unit is not None for unit in units)
+    assert [str(unit.source_id) for unit in units if unit is not None] == [
+        str(source_a.id),
+        str(source_z.id),
+    ]
+    assert {unit.dataset_key for unit in units if unit is not None} == {"work-items"}
+    assert {unit.mode for unit in units if unit is not None} == {
+        SyncRunMode.BACKFILL.value
+    }
+
+
+def test_backfill_selector_object_rejects_legacy_flat_fields(db_session):
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    with pytest.raises(ValueError, match="backfill selector cannot be mixed"):
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.BACKFILL.value,
+                triggered_by="manual",
+                backfill_selector=BackfillSelector(
+                    since=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    before=datetime(2026, 6, 2, tzinfo=timezone.utc),
+                ),
+                source_ids=(str(uuid.uuid4()),),
+            ),
+        )
 
 
 def test_disabled_source_produces_zero_units_without_hydrating_credentials(
@@ -783,6 +860,34 @@ def test_dataset_option_overrides_integration_depth(db_session):
     assert abs((since - expected_start).total_seconds()) < 2
 
 
+def test_planner_durably_snapshots_legacy_github_work_item_env(db_session, monkeypatch):
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "false")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "false")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "37")
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    dataset = _create_dataset(db_session, integration, "work-items")
+    dataset.options = {"unrelated": "preserve"}
+    db_session.flush()
+
+    plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    assert dataset.options == {
+        "unrelated": "preserve",
+        "fetch_comments": False,
+        "fetch_milestones": False,
+        "comments_limit": 37,
+    }
+
+
 def test_existing_watermark_incremental_unchanged(db_session):
     """With a watermark row, since_at == watermark (regression guard)."""
     integration = _create_integration(db_session)
@@ -886,32 +991,66 @@ def test_tier_cap_unlimited_tier_does_not_cap_depth(db_session, monkeypatch):
 
 
 def test_tier_limit_service_returns_empty_on_missing_table():
-    """TierLimitService._get_db_tier_limits returns {} when tier_limits is absent.
+    """A real missing-table query rolls back only its SQLite SAVEPOINT.
 
-    When the table is missing the query raises; the service swallows it and
-    falls through to hardcoded defaults. It must NOT call session.rollback()
-    here — the service is invoked from async callers via run_sync and a sync
-    rollback there breaks the greenlet context (MissingGreenlet). The caller's
-    session must remain usable.
+    SQLite's driver does not provide reliable SAVEPOINT semantics unless
+    SQLAlchemy takes over transaction control. Configure that production-like
+    contract explicitly, then prove the tier_limits query—not SAVEPOINT setup—
+    is what fails and that the outer session remains usable afterward.
     """
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.licensing.types import LicenseTier
-    from dev_health_ops.models.git import Base as GitBase
-    from tests._helpers import tables_of
 
-    # Schema with NO tier_limits table
     engine = create_engine("sqlite:///:memory:")
-    GitBase.metadata.create_all(engine, tables=tables_of(Integration))
+    statements: list[str] = []
+    errors: list[str] = []
+
+    @event.listens_for(engine, "connect")
+    def _disable_sqlite_driver_transaction_control(dbapi_connection, _record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _emit_explicit_begin(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _record_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        statements.append(statement)
+
+    @event.listens_for(engine, "handle_error")
+    def _record_error(exception_context):
+        errors.append(str(exception_context.original_exception))
 
     with Session(engine) as session:
         svc = TierLimitService(session)
-        # Must not raise; must return {} (fall through to hardcoded defaults)
         result = svc._get_db_tier_limits(LicenseTier.COMMUNITY.value)
         assert result == {}, (
             "Missing tier_limits must return empty dict (use hardcoded defaults)"
         )
-        # Session must remain usable (no rollback needed on this backend)
-        session.execute(__import__("sqlalchemy").text("SELECT 1"))
+
+        mechanism = []
+        for statement in statements:
+            normalized = " ".join(statement.upper().split())
+            if normalized.startswith("SAVEPOINT "):
+                mechanism.append("savepoint")
+            elif " FROM TIER_LIMITS " in f" {normalized} ":
+                mechanism.append("tier_limits query")
+            elif normalized.startswith("ROLLBACK TO SAVEPOINT "):
+                mechanism.append("savepoint rollback")
+        assert mechanism == [
+            "savepoint",
+            "tier_limits query",
+            "savepoint rollback",
+        ]
+        assert errors == ["no such table: tier_limits"]
+        assert session.execute(text("SELECT 1")).scalar_one() == 1
 
     engine.dispose()
 
@@ -970,10 +1109,7 @@ def test_plan_sync_run_succeeds_when_tier_limits_unavailable(db_session, monkeyp
     )
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
     """CHAOS-2580: a pre-migration Postgres tier_limits miss must not poison planning.
 
@@ -1657,6 +1793,50 @@ def test_work_item_family_collapses_to_single_composite_unit(db_session):
     for dataset_key in _FAMILY_DATASETS:
         flag = "family_dataset_" + dataset_key.replace("-", "_")
         assert flags.get(flag) is True, f"{flag} must be set on the composite unit"
+
+
+def test_enabled_linear_go_family_claims_all_aliases_for_selected_backfill(
+    db_session, monkeypatch
+):
+    """A selected backfill remains one bounded crawl but claims the full Go family.
+
+    The native Linear handler owns one indivisible sixteen-destination write.
+    Once that route is enabled, the planner must encode all five family flags
+    even when the request selected only ``work-items``; otherwise dispatch
+    rejects the persisted unit before either runtime can execute it.
+    """
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(db_session, integration, external_id="linear", provider="linear")
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    before = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="admin-api",
+            since=since,
+            before=before,
+            dataset_keys=("work-items",),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.since_at is not None and unit.since_at.date() == since.date()
+    assert unit.before_at is not None and unit.before_at.date() == before.date()
+    flags = unit.processor_flags or {}
+    assert {
+        key: flags.get("family_dataset_" + key.replace("-", "_"))
+        for key in _FAMILY_DATASETS
+    } == {key: True for key in _FAMILY_DATASETS}
 
 
 def test_work_item_family_collapse_uses_earliest_window_across_datasets(db_session):
@@ -2500,13 +2680,15 @@ def test_cold_start_with_before_older_than_depth_plans_no_unit(db_session):
     assert _planned_units(db_session, plan.sync_run_id) == []
 
 
-def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
-    """A partially-caught-up work-item family must still plan its composite.
+def test_github_family_empty_window_keeps_atomic_route_ownership(db_session):
+    """A partially-caught-up GitHub family still plans one all-five unit.
 
     ``_merge_family_windows`` raises on mismatched window counts. Once an
     already-caught-up dataset resolves to ZERO windows, that guard would fire on
     an ordinary partially-synced family and take the whole plan down, so empty
-    datasets are dropped before the merge.
+    datasets are dropped before the merge. CHAOS-3606 keeps that window behavior
+    while making all five flags literal ``True``: they describe the activated
+    native writer's atomic ownership, not which inputs were non-empty.
     """
     from datetime import timedelta
 
@@ -2550,11 +2732,10 @@ def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
     composite = units[0]
     assert composite.dataset_key == "work-items"
     flags = composite.processor_flags or {}
-    assert flags.get("family_dataset_work_items") is True
-    assert flags.get("family_dataset_work_item_labels") is not True, (
-        "a dataset that resolved to no window must not be marked as covered by "
-        "the composite crawl"
-    )
+    assert {
+        key: flags.get("family_dataset_" + key.replace("-", "_"))
+        for key in _FAMILY_DATASETS
+    } == {key: True for key in _FAMILY_DATASETS}
 
 
 # ---------------------------------------------------------------------------

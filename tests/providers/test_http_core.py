@@ -21,6 +21,7 @@ from dev_health_ops.exceptions import (
     APIException,
     AuthenticationException,
     NotFoundException,
+    PaginationException,
     RateLimitException,
 )
 from dev_health_ops.providers._http import (
@@ -595,6 +596,27 @@ class TestPaginateLinkHeader:
             "/repos/a/b/commits", operation="git:GET commits", max_pages=3
         )
         assert len(items) == 3
+
+    @pytest.mark.asyncio
+    async def test_required_complete_fetch_raises_when_page_cap_has_more_data(
+        self,
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"workflow_runs": [{"id": 1}]},
+                headers={"Link": f'<{request.url}>; rel="next"'},
+            )
+
+        core = _core(transport=httpx.MockTransport(handler))
+        with pytest.raises(PaginationException, match="incomplete.*cicd:GET runs"):
+            await core.paginate_link_header(
+                "/repos/a/b/actions/runs",
+                operation="cicd:GET runs",
+                data_key="workflow_runs",
+                max_pages=1,
+                require_complete=True,
+            )
 
 
 # ---------------------------------------------------------------------------

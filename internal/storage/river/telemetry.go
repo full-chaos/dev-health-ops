@@ -46,9 +46,10 @@ type QueueTelemetryJob struct {
 
 // QueueTelemetryConfig binds database observations to one concrete River
 // client. ClientID must be client.ID(), after River has applied defaults.
+// Queue selection is the only scope label; profile names are intentionally not
+// part of the queue-telemetry contract.
 type QueueTelemetryConfig struct {
 	Schema       string
-	Profile      string
 	ClientID     string
 	QueryTimeout time.Duration
 	Queues       []QueueTelemetryQueue
@@ -69,14 +70,26 @@ type QueueAgeTelemetry struct {
 	OldestAvailableAge time.Duration
 }
 
+// QueueCapacityTelemetry reports one queue's live running count and capacity,
+// both scoped to THIS process. Running counts only jobs this client claimed and
+// Capacity is this client's MaxWorkers for the queue, so Saturation is a
+// per-process ratio. Averaging it across replicas gives fleet utilization;
+// summing Running across replicas gives the fleet's in-flight count.
+type QueueCapacityTelemetry struct {
+	Queue      string
+	Capacity   int64
+	Running    int64
+	Saturation float64
+}
+
 // QueueTelemetrySnapshot is one database-consistent, read-only observation.
 // LocalRunning is restricted to jobs whose latest attempted_by entry is this
 // River client ID, so the saturation denominator is this process's capacity,
 // not a fleet-wide count.
 type QueueTelemetrySnapshot struct {
-	Profile             string
 	Jobs                []QueueJobTelemetry
 	Queues              []QueueAgeTelemetry
+	QueueCapacities     []QueueCapacityTelemetry
 	LocalRunning        int64
 	ExecutionSaturation float64
 }
@@ -87,7 +100,6 @@ type queueJobKey struct {
 }
 
 type normalizedQueueTelemetryConfig struct {
-	profile           string
 	clientID          string
 	queryTimeout      time.Duration
 	executionCapacity int64
@@ -107,6 +119,7 @@ type queueTelemetryRow struct {
 	available            int64
 	oldestAgeSeconds     float64
 	localRunning         int64
+	queueRunning         int64
 	unsupportedAvailable bool
 }
 
@@ -147,7 +160,7 @@ func (sampler *QueueTelemetrySampler) Snapshot(ctx context.Context) (QueueTeleme
 }
 
 // CheckAvailableContractVersions fails closed if any state=available row in a
-// configured profile queue has an unknown queue/kind pairing, a missing or
+// configured queue has an unknown queue/kind pairing, a missing or
 // non-integer contract_version, or a version outside the registered window.
 // It returns stable errors only and never loads or returns encoded arguments.
 func (sampler *QueueTelemetrySampler) CheckAvailableContractVersions(ctx context.Context) error {
@@ -181,12 +194,14 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	available := make(map[queueJobKey]int64, len(rows))
 	ages := make(map[string]time.Duration, len(sampler.config.queues))
 	seenAges := make(map[string]float64, len(sampler.config.queues))
+	running := make(map[string]int64, len(sampler.config.queues))
 	var localRunning int64
 	var unsupported bool
 	for index, row := range rows {
 		key := queueJobKey{queue: row.queue, kind: row.kind}
-		if row.available < 0 || row.localRunning < 0 || math.IsNaN(row.oldestAgeSeconds) ||
-			math.IsInf(row.oldestAgeSeconds, 0) || row.oldestAgeSeconds < 0 {
+		if row.available < 0 || row.localRunning < 0 || row.queueRunning < 0 ||
+			math.IsNaN(row.oldestAgeSeconds) || math.IsInf(row.oldestAgeSeconds, 0) ||
+			row.oldestAgeSeconds < 0 {
 			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
 		}
 		if _, duplicate := available[key]; duplicate || !sampler.hasJob(key) {
@@ -198,6 +213,10 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 		}
 		seenAges[row.queue] = row.oldestAgeSeconds
 		ages[row.queue] = durationFromSeconds(row.oldestAgeSeconds)
+		if previous, ok := running[row.queue]; ok && previous != row.queueRunning {
+			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+		}
+		running[row.queue] = row.queueRunning
 		if index == 0 {
 			localRunning = row.localRunning
 			unsupported = row.unsupportedAvailable
@@ -207,9 +226,9 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	}
 
 	result := QueueTelemetrySnapshot{
-		Profile:             sampler.config.profile,
 		Jobs:                make([]QueueJobTelemetry, 0, len(sampler.config.jobs)),
 		Queues:              make([]QueueAgeTelemetry, 0, len(sampler.config.queues)),
+		QueueCapacities:     make([]QueueCapacityTelemetry, 0, len(sampler.config.queues)),
 		LocalRunning:        localRunning,
 		ExecutionSaturation: executionSaturation(localRunning, sampler.config.executionCapacity),
 	}
@@ -222,6 +241,13 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	for _, queue := range sampler.config.queues {
 		result.Queues = append(result.Queues, QueueAgeTelemetry{
 			Queue: queue.Name, OldestAvailableAge: ages[queue.Name],
+		})
+		queueRunning := running[queue.Name]
+		result.QueueCapacities = append(result.QueueCapacities, QueueCapacityTelemetry{
+			Queue:      queue.Name,
+			Capacity:   int64(queue.MaxWorkers),
+			Running:    queueRunning,
+			Saturation: executionSaturation(queueRunning, int64(queue.MaxWorkers)),
 		})
 	}
 	return result, unsupported, nil
@@ -237,7 +263,7 @@ func (sampler *QueueTelemetrySampler) hasJob(key queueJobKey) bool {
 }
 
 func normalizeQueueTelemetryConfig(config QueueTelemetryConfig) (normalizedQueueTelemetryConfig, error) {
-	if !validIdentifier(config.Schema) || !telemetryLabel(config.Profile, 32) ||
+	if !validIdentifier(config.Schema) ||
 		len(config.ClientID) == 0 || len(config.ClientID) > 100 || strings.ContainsRune(config.ClientID, '\x00') ||
 		len(config.Queues) == 0 || len(config.Queues) > maximumQueueTelemetryQueues ||
 		len(config.Jobs) == 0 || len(config.Jobs) > maximumQueueTelemetryJobs ||
@@ -306,7 +332,6 @@ func normalizeQueueTelemetryConfig(config QueueTelemetryConfig) (normalizedQueue
 	}
 
 	normalized := normalizedQueueTelemetryConfig{
-		profile:           config.Profile,
 		clientID:          config.ClientID,
 		queryTimeout:      timeout,
 		executionCapacity: capacity,
@@ -391,6 +416,7 @@ func readQueueTelemetry(
 			&row.available,
 			&row.oldestAgeSeconds,
 			&row.localRunning,
+			&row.queueRunning,
 			&row.unsupportedAvailable,
 		); err != nil {
 			return nil, err
@@ -441,6 +467,25 @@ local_running AS (
         AND river_job.state = 'running'
         AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
 ),
+queue_running AS (
+    -- Scoped to THIS client, like local_running above. The capacity this count
+    -- is divided by is QueueCapacityTelemetry.Capacity, which is this
+    -- process's MaxWorkers, so a fleet-wide numerator made every replica
+    -- report saturation of roughly N at N replicas -- clamped to 1.0, so the
+    -- signal an operator would use to decide scale-out was pegged at 100%
+    -- exactly under scale-out (CHAOS-3867). Per-process is also what the
+    -- sibling LocalRunning/ExecutionSaturation metrics already report, and it
+    -- aggregates correctly: averaging the ratio across replicas gives fleet
+    -- utilization without depending on presence-table freshness.
+    SELECT
+        river_job.queue,
+        count(*)::bigint AS running
+    FROM {{river_job}} AS river_job
+    WHERE river_job.queue = ANY($3::text[])
+        AND river_job.state = 'running'
+        AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
+    GROUP BY river_job.queue
+),
 unsupported_available AS (
     SELECT EXISTS (
         SELECT 1
@@ -463,9 +508,11 @@ SELECT
     available_counts.available,
     queue_ages.oldest_age_seconds,
     local_running.count,
+    coalesce(queue_running.running, 0),
     unsupported_available.present
 FROM available_counts
 JOIN queue_ages USING (queue)
+LEFT JOIN queue_running USING (queue)
 CROSS JOIN local_running
 CROSS JOIN unsupported_available
 ORDER BY available_counts.queue, available_counts.kind

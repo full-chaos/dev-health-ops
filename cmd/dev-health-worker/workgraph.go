@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -11,24 +10,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-type workgraphWorkerComponent struct{ client *river.Client[pgx.Tx] }
-
-func (component workgraphWorkerComponent) Name() string { return "river-workgraph-worker" }
-func (component workgraphWorkerComponent) Start(ctx context.Context) error {
-	return component.client.Start(ctx)
-}
-func (component workgraphWorkerComponent) Shutdown(ctx context.Context) error {
-	return component.client.Stop(ctx)
-}
-
-func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *jobruntime.Registry, observer jobruntime.Observer, logger *slog.Logger) (workerFamily, error) {
-	if cfg.Profile != "heavy" || registry == nil {
+func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *jobruntime.Registry, observer jobruntime.Observer, logger *slog.Logger, workers *river.Workers) (workerFamily, error) {
+	if !anyQueueSelected(cfg.Queues, "workgraph", "investment") || registry == nil {
 		return workerFamily{}, nil
+	}
+	if workers == nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	kinds := []string{jobcontract.KindWorkGraphBuild, jobcontract.KindInvestmentMaterialize, jobcontract.KindInvestmentDispatch, jobcontract.KindInvestmentChunk, jobcontract.KindInvestmentFinalize}
 	specs := make([]jobruntime.HandlerSpec, 0, len(kinds))
@@ -37,15 +27,12 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		if !ok {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
-		if descriptor.Executable() {
+		if queueSelected(cfg.Queues, descriptor.Queue) && descriptor.Executable() {
 			specs = append(specs, descriptor)
 		}
 	}
 	if len(specs) == 0 {
 		return workerFamily{}, nil
-	}
-	if len(specs) != len(kinds) {
-		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
@@ -58,8 +45,9 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
 		workgraphCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 		workgraph.HTTPCompatibilityConfig{
-			Endpoint:    strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
-			BearerToken: cfg.OperationalBridgeToken.Reveal(),
+			Endpoint:              strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
+			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
 		},
 	)
 	if err != nil {
@@ -69,8 +57,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(), Idempotency: idempotency}
-	workers := river.NewWorkers()
+	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency}
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
 		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies); err != nil {
@@ -78,22 +65,12 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		}
 		registered = append(registered, spec)
 	}
-	budgets := []jobruntime.QueueBudget{
-		{Queue: "workgraph", MaxWorkers: 1},
-		{Queue: "investment", MaxWorkers: 1},
-	}
-	queues := make(map[string]river.QueueConfig, len(budgets))
-	for _, budget := range budgets {
-		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
-	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers})
-	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
+	budgets := selectedQueueBudgets(
+		cfg.Queues, []string{"workgraph", "investment"}, cfg.WorkerQueueConcurrency,
+	)
 	return workerFamily{
-		component: workgraphWorkerComponent{client: client},
-		handlers:  registered,
-		queues:    budgets,
+		handlers: registered,
+		queues:   budgets,
 	}, nil
 }
 

@@ -13,6 +13,7 @@ from dev_health_ops.models import (
     JobRun,
     JobRunStatus,
     ProviderRateLimitObservation,
+    ScheduledSyncOccurrence,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunPostDispatch,
@@ -483,11 +484,20 @@ def _dispatchable_run_ids(
     session, stale_dispatch_cutoff: datetime, limit: int
 ) -> set[str]:
     now = datetime.now(timezone.utc)
+    # The completed-state constraint makes sync_run_id the durable readiness
+    # fence: it remains NULL until the coordinator transaction atomically links
+    # both plan ids and marks the occurrence completed.
+    scheduled_plan_ready = (
+        session.query(ScheduledSyncOccurrence.occurrence_id)
+        .filter(ScheduledSyncOccurrence.sync_run_id == SyncRun.id)
+        .exists()
+    )
     rows = (
         session.query(SyncRunUnit.sync_run_id)
         .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
         .filter(
             SyncRun.status.not_in(_TERMINAL_RUN_STATUSES),
+            or_(SyncRun.triggered_by != "schedule", scheduled_plan_ready),
             (
                 (SyncRunUnit.status == SyncRunUnitStatus.PLANNED.value)
                 | (
@@ -530,9 +540,15 @@ def _finalizable_run_ids(session, limit: int) -> set[str]:
         )
         .exists()
     )
+    scheduled_plan_ready = (
+        session.query(ScheduledSyncOccurrence.occurrence_id)
+        .filter(ScheduledSyncOccurrence.sync_run_id == SyncRun.id)
+        .exists()
+    )
     rows = (
         session.query(SyncRun.id)
         .filter(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+        .filter(or_(SyncRun.triggered_by != "schedule", scheduled_plan_ready))
         .filter(~nonterminal_unit_exists)
         .filter(~inflight_discovery_exists)
         .order_by(SyncRun.created_at.asc(), SyncRun.id.asc())

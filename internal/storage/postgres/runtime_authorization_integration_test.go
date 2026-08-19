@@ -10,6 +10,7 @@ import (
 
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -39,16 +40,25 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.integration_sources (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.provider_oauth_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at
 		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_run_unit_effect_snapshots (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
+		"CREATE TABLE public.backfill_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_coverage_projections (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
@@ -76,6 +86,8 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigserial PRIMARY KEY, state text NOT NULL)",
@@ -87,18 +99,36 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, UPDATE ON TABLE public.sync_runs, public.sync_run_units, public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.backfill_jobs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + runtimeAuthorizationDomainRole,
+		// The domain role needs DELETE but explicitly NOT UPDATE here:
+		// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class, and the
+		// snapshot read-back must never be able to take a row lock.
+		"GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + runtimeAuthorizationDomainRole,
+		// Chunked provider persistence (migration 0102) -- see the matching note
+		// in domain_authorization_integration_test.go.
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.sync_runs TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.sync_run_units TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
@@ -119,6 +149,29 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "INSERT INTO public.worker_job_delivery_abandonments (dedupe_key) VALUES ('report.run:abandoned')"); err != nil {
+		t.Fatalf("queue cannot preserve minimal delivery-abandonment evidence: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.worker_job_delivery_abandonments SET dedupe_key=dedupe_key"); err == nil {
+		t.Fatal("queue unexpectedly mutates delivery-abandonment evidence")
+	}
+	if _, err := queue.Exec(ctx, "DELETE FROM public.worker_job_delivery_abandonments"); err == nil {
+		t.Fatal("queue unexpectedly deletes delivery-abandonment evidence")
+	}
+	if _, err := domain.Exec(ctx, "INSERT INTO public.sync_run_units (id, state) VALUES (1, 'planned')"); err != nil {
+		t.Fatalf("domain materializer cannot insert sync-run-unit state: %v", err)
+	}
+	_, err = queue.Exec(ctx, "INSERT INTO public.sync_run_units (id, state) VALUES (2, 'forbidden')")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("queue domain materializer write-boundary error = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := queue.Exec(ctx, "SELECT id FROM public.sync_run_units LIMIT 1"); err != nil {
+		t.Fatalf("queue cannot read sync-run-unit recovery state: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.sync_run_units SET state = state"); err == nil {
+		t.Fatal("queue unexpectedly mutates sync-run-unit recovery state")
 	}
 	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE worker_test TO PUBLIC"); err != nil {
 		t.Fatal(err)

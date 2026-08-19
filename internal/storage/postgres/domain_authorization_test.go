@@ -98,10 +98,23 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 		"'TEMPORARY'",
 		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[], $9::BOOLEAN[])",
 		"UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[])",
+		"UNNEST($10::TEXT[])",
 	} {
 		if !strings.Contains(upperQuery, required) {
 			t.Fatalf("role posture query omits %q", required)
 		}
+	}
+}
+
+func TestCoordinatorPostureRequiresOnlyItsAuditSequence(t *testing.T) {
+	t.Parallel()
+
+	sequences := coordinatorPosture().RequiredSequences
+	if len(sequences) != 1 || sequences[0] != "worker_operator_audits_id_seq" {
+		t.Fatalf("coordinator sequences = %v, want only worker_operator_audits_id_seq", sequences)
+	}
+	if len(domainPosture().RequiredSequences) != 0 {
+		t.Fatalf("domain sequences = %v, want none", domainPosture().RequiredSequences)
 	}
 }
 
@@ -123,6 +136,7 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 		"integration_sources",
 		"integration_datasets",
 		"integration_credentials",
+		"provider_oauth_credentials",
 		"sync_runs",
 		"sync_dispatch_transport_routes",
 		"sync_run_units",
@@ -132,6 +146,115 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 	} {
 		if counts[table] != 1 {
 			t.Fatalf("domain posture must inventory %q exactly once, got %d", table, counts[table])
+		}
+	}
+}
+
+func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) {
+	t.Parallel()
+	var matches []TablePrivilege
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "provider_oauth_credentials" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("provider OAuth posture entries=%d, want 1", len(matches))
+	}
+	grant := matches[0]
+	if grant.AllowInsert || !grant.AllowUpdate || grant.AllowDelete {
+		t.Fatalf("provider OAuth posture=%+v, want SELECT+UPDATE only", grant)
+	}
+}
+
+func TestDomainPostureUsesWorkerInstancesTable(t *testing.T) {
+	t.Parallel()
+
+	var matches []TablePrivilege
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "worker_instances" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("worker_instances posture entries=%d, want 1", len(matches))
+	}
+	if grant := matches[0]; !grant.AllowInsert || !grant.AllowUpdate || !grant.AllowDelete {
+		t.Fatalf("worker_instances posture=%+v, want SELECT+INSERT+UPDATE+DELETE", grant)
+	}
+}
+
+func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
+	t.Parallel()
+	want := map[string]TablePrivilege{
+		"scheduled_jobs":               {TableName: "scheduled_jobs", AllowUpdate: true},
+		"scheduled_report_occurrences": {TableName: "scheduled_report_occurrences"},
+		"backfill_jobs":                {TableName: "backfill_jobs"},
+		"sync_coverage_projections":    {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
+	}
+	for _, table := range domainPosture().RequiredTables {
+		expected, ok := want[table.TableName]
+		if !ok {
+			continue
+		}
+		if table != expected {
+			t.Fatalf("%s posture = %+v, want %+v", table.TableName, table, expected)
+		}
+		delete(want, table.TableName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("sync coverage posture is missing tables: %v", want)
+	}
+}
+
+func TestSyncDispatchOutboxPosturesKeepBothRolesLeastPrivilege(t *testing.T) {
+	t.Parallel()
+
+	find := func(t *testing.T, posture RolePosture) TablePrivilege {
+		t.Helper()
+		var matches []TablePrivilege
+		for _, table := range posture.RequiredTables {
+			if table.TableName == "sync_dispatch_outbox" {
+				matches = append(matches, table)
+			}
+		}
+		if len(matches) != 1 {
+			t.Fatalf("sync_dispatch_outbox posture rows = %d, want exactly 1", len(matches))
+		}
+		return matches[0]
+	}
+
+	coordinator := find(t, coordinatorPosture())
+	if !coordinator.AllowInsert || !coordinator.AllowUpdate || coordinator.AllowDelete {
+		t.Errorf("coordinator sync_dispatch_outbox = %+v, want SELECT+INSERT+UPDATE without DELETE", coordinator)
+	}
+
+	// The coordinator fix must not widen or narrow the independently required
+	// domain posture for provider-sync execution.
+	domain := find(t, domainPosture())
+	if !domain.AllowInsert || !domain.AllowUpdate || domain.AllowDelete {
+		t.Errorf("domain sync_dispatch_outbox = %+v, want unchanged SELECT+INSERT+UPDATE without DELETE", domain)
+	}
+}
+
+func TestDeliveryAbandonmentEvidenceIsCoordinatorReadOnly(t *testing.T) {
+	t.Parallel()
+
+	var matches []TablePrivilege
+	for _, table := range coordinatorPosture().RequiredTables {
+		if table.TableName == "worker_job_delivery_abandonments" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("delivery-abandonment posture rows = %d, want exactly 1", len(matches))
+	}
+	if grant := matches[0]; grant.AllowInsert || grant.AllowUpdate || grant.AllowDelete {
+		t.Fatalf("coordinator delivery-abandonment posture = %+v, want SELECT only", grant)
+	}
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "worker_job_delivery_abandonments" {
+			t.Fatal("domain runtime must not receive delivery-abandonment access")
 		}
 	}
 }

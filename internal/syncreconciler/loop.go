@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,11 @@ type LoopConfig struct {
 	// this caller-owned dependency, so a contract-violating recorder can strand
 	// at most one goroutine without holding readiness or process shutdown.
 	Recorder ObservationRecorder
+	// Logger names why an observation step failed. It is optional so tests and
+	// embedders need not supply one; a nil Logger discards. Without it this
+	// loop could flip readiness closed forever and emit nothing at all
+	// (CHAOS-3907).
+	Logger *slog.Logger
 }
 
 // DefaultLoopConfig allows two seconds for one indexed read of at most 101
@@ -163,6 +169,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 
 	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
 		cancel()
 		close(done)
 		return fmt.Errorf("initial sync dispatch observation: %w", err)
@@ -178,6 +185,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 		ticker.Stop()
 		cancel()
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "sync dispatch observer stopped before its polling loop started", "error", startErr.Error())
 		close(done)
 		return startErr
 	}
@@ -186,6 +194,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 	go loop.run(loopCtx, ticker, done)
 	if err := loopCtx.Err(); err != nil {
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "sync dispatch observer context failed after start", "error", err.Error())
 		return err
 	}
 	return nil
@@ -197,6 +206,7 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 	defer ticker.Stop()
 	defer func() {
 		if fatal != nil {
+			loop.logger().ErrorContext(ctx, "sync dispatch observer step failed", "error", fatal.Error())
 			loop.reportError(ctx, fatal)
 		}
 	}()
@@ -315,6 +325,16 @@ func (loop *Loop) setFailed() {
 	loop.up = false
 	loop.ready.Store(false)
 	loop.mu.Unlock()
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by observer output appearing on a logger it did not choose.
+func (loop *Loop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *Loop) readiness(context.Context) error {

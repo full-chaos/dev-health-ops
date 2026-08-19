@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,14 +16,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
+// DefaultShutdownTimeout is the shutdown grace used when neither
+// --shutdown-timeout nor DEV_HEALTH_SHUTDOWN_TIMEOUT is supplied. The worker
+// compares against it to tell an unset timeout from one an operator chose.
+const DefaultShutdownTimeout = 30 * time.Second
+
 const (
 	defaultHTTPAddress       = ":8080"
-	defaultShutdownTimeout   = 30 * time.Second
+	defaultShutdownTimeout   = DefaultShutdownTimeout
+	maximumShutdownTimeout   = 3 * time.Hour
 	defaultHealthCheckTimout = 2 * time.Second
 	defaultDomainMaxConns    = 4
 	defaultQueueMaxConns     = 2
 	// 2 matches the checked-in per-process coordinator_max_connections in
-	// deploy/go-workers/profiles.json for every coordinator process today
+	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
 	defaultCoordinatorMaxConns = 2
 	defaultCompletedRetention  = 7 * 24 * time.Hour
@@ -37,12 +44,19 @@ const (
 	// scripts/worker/provision_river_roles.sql (deployed environments).
 	defaultCoordinatorDatabaseRole = "devhealth_coordinator"
 	defaultStreamReplicas          = 1
+	localStatusMappingPath         = "/app/config/status_mapping.yaml"
+	localInvestmentAreasPath       = "/app/config/investment_areas.yaml"
+)
+
+const (
+	providerRoutesPresetEnv = "GO_PROVIDER_ROUTES"
+	devHealthEnv            = "DEV_HEALTH_ENV"
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
-// Phase 0 proved direct PostgreSQL. Session mode remains unavailable until it
-// passes the same compatibility matrix, and transaction mode cannot propagate
-// cancellation to a running River worker.
+// Direct PostgreSQL and PgBouncer session pooling preserve River's required
+// session semantics. Transaction pooling cannot propagate cancellation to a
+// running River worker.
 type QueueControlMode string
 
 const (
@@ -53,22 +67,46 @@ const (
 
 // Spec describes the immutable configuration surface of one executable.
 type Spec struct {
-	Service        string
-	Profiles       []string
-	DefaultProfile string
-	Profile        string
-	LookupEnv      secrets.LookupEnv
+	Service string
+	// Profile is already resolved and validated by the caller; config does not
+	// own profile selection (CHAOS-3875).
+	Profile          string
+	RequireQueues    bool
+	Queues           []string
+	QueueConcurrency []string
+	WorkerGroup      string
+	ShutdownTimeout  string
+	LookupEnv        secrets.LookupEnv
 }
 
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
 // which redacts itself from formatting, slog, and JSON.
 type Config struct {
-	Service            string
-	Profile            string
-	HTTPAddress        string
-	ShutdownTimeout    time.Duration
-	HealthCheckTimeout time.Duration
-	LogLevel           slog.Level
+	Service string
+	Profile string
+	Queues  []string
+	// WorkerInstanceID is generated once inside the process and is the one
+	// River client's attempted_by identity.
+	WorkerInstanceID string
+	// WorkerQueueConcurrency is populated from the selected deployment group
+	// and must cover Worker Queues exactly. Worker families may use it, but they
+	// must not define queue capacity in application code.
+	WorkerQueueConcurrency map[string]int
+	// WorkerGroup is an observability identity only. It never selects queues or
+	// changes handler construction.
+	WorkerGroup string
+
+	HTTPAddress     string
+	ShutdownTimeout time.Duration
+	// ShutdownTimeoutExplicit records whether ShutdownTimeout came from the
+	// operator rather than the package default. The worker's drain budget is
+	// ShutdownTimeout minus a finalization buffer and must cover the longest
+	// selected job timeout, which the 30s default cannot do for any real queue
+	// selection -- so an unset timeout is derived from the selection instead of
+	// failing every default-configured worker (CHAOS-3873).
+	ShutdownTimeoutExplicit bool
+	HealthCheckTimeout      time.Duration
+	LogLevel                slog.Level
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -76,8 +114,12 @@ type Config struct {
 	ClickHouseURI          secrets.Value
 	ValkeyURI              secrets.Value
 	SettingsEncryptionKey  secrets.Value
+	SettingsEncryptionSalt secrets.Value
+	PagerDutyOAuthClientID secrets.Value
+	PagerDutyOAuthSecret   secrets.Value
 
 	QueueDatabaseMode              QueueControlMode
+	CoordinatorDatabaseMode        QueueControlMode
 	RiverDatabaseSchema            string
 	DomainDatabaseRole             string
 	QueueDatabaseRole              string
@@ -95,6 +137,7 @@ type Config struct {
 	OperationalBridgeTimeout       time.Duration
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
+	LocalAllProviderRoutes         bool
 
 	WorkerLinearWorkItemsEnabled          bool
 	WorkerJiraWorkItemsEnabled            bool
@@ -108,14 +151,85 @@ type Config struct {
 	// and the executor must agree on the route or a dispatched unit finds no
 	// handler.
 	WorkerGithubRepoMetadataEnabled bool
+	// WorkerGitlabRepoMetadataEnabled is the independently gated native
+	// (gitlab, repo-metadata) route. It defaults false and does not activate
+	// traffic merely because the capability matrix is ready.
+	WorkerGitlabRepoMetadataEnabled bool
+	// WorkerGitlabCommitsEnabled gates the isolated (gitlab, commits) route.
+	WorkerGitlabCommitsEnabled bool
+	// WorkerGitlabCommitStatsEnabled gates the isolated aggregate commit-stat route.
+	WorkerGitlabCommitStatsEnabled bool
+	// WorkerGitlabCICDEnabled and WorkerGitlabTestsEnabled gate mutually
+	// exclusive aliases for one complete GitLab TestOps writer.
+	WorkerGitlabCICDEnabled  bool
+	WorkerGitlabTestsEnabled bool
+	// WorkerGitlabIncidentsEnabled gates the canonical operational incident route.
+	WorkerGitlabIncidentsEnabled bool
+	// The remaining GitLab flags gate independently completed native routes.
+	// PR aliases are the exception: all three delegate to one complete PR-social
+	// writer and Load rejects enabling more than one alias at a time.
+	WorkerGitlabDeploymentsEnabled  bool
+	WorkerGitlabFeatureFlagsEnabled bool
+	WorkerGitlabFilesEnabled        bool
+	WorkerGitlabBlameEnabled        bool
+	WorkerGitlabPRsEnabled          bool
+	WorkerGitlabPRReviewsEnabled    bool
+	WorkerGitlabPRCommentsEnabled   bool
+	WorkerGitlabSecurityEnabled     bool
+	// WorkerGitlabWorkItemsEnabled gates the one complete five-alias GitLab
+	// work-item family; sibling alias identities are not independent routes.
+	WorkerGitlabWorkItemsEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
 	// Its Python counterpart is ProviderUnitRouteSwitches.github_prs, read
 	// from the same WORKER_GITHUB_PRS_ENABLED name.
 	WorkerGithubPRsEnabled bool
+	// WorkerGithubPRReviewsEnabled and WorkerGithubPRCommentsEnabled gate the
+	// two remaining dataset aliases for the same complete PR-social unit.
+	WorkerGithubPRReviewsEnabled  bool
+	WorkerGithubPRCommentsEnabled bool
 	// WorkerGithubCICDEnabled gates the isolated (github, cicd) route.
 	WorkerGithubCICDEnabled bool
+	// WorkerGithubCommitsEnabled gates the isolated (github, commits) route.
+	WorkerGithubCommitsEnabled bool
+	// WorkerGithubDeploymentsEnabled gates the isolated (github, deployments) route.
+	WorkerGithubDeploymentsEnabled bool
+	// WorkerGithubSecurityEnabled gates the isolated (github, security) route.
+	WorkerGithubSecurityEnabled bool
+	// WorkerGithubFilesEnabled gates the isolated (github, files) route.
+	WorkerGithubFilesEnabled bool
+	// WorkerGithubCommitStatsEnabled gates the isolated (github, commit-stats) route.
+	WorkerGithubCommitStatsEnabled bool
+	// WorkerGithubBlameEnabled gates the resumable (github, blame) route.
+	WorkerGithubBlameEnabled bool
+	// WorkerGithubTestsEnabled gates the complete six-effect (github, tests) route.
+	WorkerGithubTestsEnabled bool
+	// WorkerGithubWorkItemsEnabled gates the one complete five-alias GitHub
+	// work-item family. The Python planner emits only canonical work-items
+	// claims; sibling alias identities survive in processor flags, watermark,
+	// and audit metadata rather than becoming partial writers.
+	WorkerGithubWorkItemsEnabled bool
+	// WorkerGithubWorkItemsStatusMappingPath and
+	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
+	// for the two Python-parity config engines. Production has no source-relative
+	// default; the local-only all-routes preset selects artifacts packaged at
+	// fixed image paths. When the route is enabled, cmd/dev-health-worker validates
+	// both paths and rejects ambient STATUS_MAPPING_PATH overrides.
+	WorkerGithubWorkItemsStatusMappingPath    string
+	WorkerGithubWorkItemsInvestmentConfigPath string
+
+	// PagerDuty route switches are default-off and independent. The incidents
+	// switch owns the complete incidents family, including alert, log-entry,
+	// and note alias datasets; those aliases are not separately activatable.
+	WorkerPagerDutyServicesEnabled           bool
+	WorkerPagerDutyBusinessServicesEnabled   bool
+	WorkerPagerDutyEscalationPoliciesEnabled bool
+	WorkerPagerDutySchedulesEnabled          bool
+	WorkerPagerDutyOnCallsEnabled            bool
+	WorkerPagerDutyUsersEnabled              bool
+	WorkerPagerDutyTeamsEnabled              bool
+	WorkerPagerDutyIncidentsEnabled          bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -133,8 +247,9 @@ const (
 	PagerDutyTransportRiver  = "river"
 )
 
-// Load reads and validates the process environment. CLI profile selection, if
-// supplied by Spec.Profile, takes precedence over DEV_HEALTH_PROFILE.
+// Load reads and validates explicit process arguments plus environment-backed
+// dependencies. A command argument and its environment fallback may not both
+// be set.
 func Load(spec Spec) (Config, error) {
 	lookup := spec.LookupEnv
 	if lookup == nil {
@@ -152,22 +267,31 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	var err error
-	cfg.ShutdownTimeout, err = durationEnv(
+	cfg.ShutdownTimeout, err = durationArgumentOrEnv(
+		spec.ShutdownTimeout,
 		lookup,
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT",
 		defaultShutdownTimeout,
 		500*time.Millisecond,
-		5*time.Minute,
+		maximumShutdownTimeout,
 	)
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.ShutdownTimeoutExplicit = durationArgumentOrEnvSet(
+		spec.ShutdownTimeout, lookup, "DEV_HEALTH_SHUTDOWN_TIMEOUT",
+	)
 	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)
 	if err != nil {
 		return Config{}, err
 	}
+	allProviderRoutes, err := localAllProviderRoutes(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LocalAllProviderRoutes = allProviderRoutes
 	for _, item := range []struct {
 		name   string
 		target *bool
@@ -193,19 +317,200 @@ func Load(spec Spec) (Config, error) {
 			target: &cfg.WorkerGithubRepoMetadataEnabled,
 		},
 		{
+			name:   "WORKER_GITLAB_REPO_METADATA_ENABLED",
+			target: &cfg.WorkerGitlabRepoMetadataEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_COMMITS_ENABLED",
+			target: &cfg.WorkerGitlabCommitsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_COMMIT_STATS_ENABLED",
+			target: &cfg.WorkerGitlabCommitStatsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_CICD_ENABLED",
+			target: &cfg.WorkerGitlabCICDEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_TESTS_ENABLED",
+			target: &cfg.WorkerGitlabTestsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_INCIDENTS_ENABLED",
+			target: &cfg.WorkerGitlabIncidentsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+			target: &cfg.WorkerGitlabDeploymentsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
+			target: &cfg.WorkerGitlabFeatureFlagsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_FILES_ENABLED",
+			target: &cfg.WorkerGitlabFilesEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_BLAME_ENABLED",
+			target: &cfg.WorkerGitlabBlameEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PRS_ENABLED",
+			target: &cfg.WorkerGitlabPRsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PR_REVIEWS_ENABLED",
+			target: &cfg.WorkerGitlabPRReviewsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PR_COMMENTS_ENABLED",
+			target: &cfg.WorkerGitlabPRCommentsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_SECURITY_ENABLED",
+			target: &cfg.WorkerGitlabSecurityEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerGitlabWorkItemsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_SERVICES_ENABLED",
+			target: &cfg.WorkerPagerDutyServicesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
+			target: &cfg.WorkerPagerDutyBusinessServicesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
+			target: &cfg.WorkerPagerDutyEscalationPoliciesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
+			target: &cfg.WorkerPagerDutySchedulesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
+			target: &cfg.WorkerPagerDutyOnCallsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_USERS_ENABLED",
+			target: &cfg.WorkerPagerDutyUsersEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_TEAMS_ENABLED",
+			target: &cfg.WorkerPagerDutyTeamsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+			target: &cfg.WorkerPagerDutyIncidentsEnabled,
+		},
+		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
 			target: &cfg.WorkerGithubPRsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_PR_REVIEWS_ENABLED",
+			target: &cfg.WorkerGithubPRReviewsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_PR_COMMENTS_ENABLED",
+			target: &cfg.WorkerGithubPRCommentsEnabled,
 		},
 		{
 			name:   "WORKER_GITHUB_CICD_ENABLED",
 			target: &cfg.WorkerGithubCICDEnabled,
 		},
+		{
+			name:   "WORKER_GITHUB_COMMITS_ENABLED",
+			target: &cfg.WorkerGithubCommitsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_DEPLOYMENTS_ENABLED",
+			target: &cfg.WorkerGithubDeploymentsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_SECURITY_ENABLED",
+			target: &cfg.WorkerGithubSecurityEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_FILES_ENABLED",
+			target: &cfg.WorkerGithubFilesEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_COMMIT_STATS_ENABLED",
+			target: &cfg.WorkerGithubCommitStatsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_BLAME_ENABLED",
+			target: &cfg.WorkerGithubBlameEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_TESTS_ENABLED",
+			target: &cfg.WorkerGithubTestsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerGithubWorkItemsEnabled,
+		},
 	} {
-		*item.target, err = boolEnv(lookup, item.name, false)
+		fallback := false
+		if allProviderRoutes {
+			fallback, err = providerRoutePresetDefault(lookup, item.name)
+			if err != nil {
+				return Config{}, err
+			}
+		}
+		*item.target, err = boolEnv(lookup, item.name, fallback)
 		if err != nil {
 			return Config{}, err
 		}
 	}
+	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
+		return Config{}, fmt.Errorf("WORKER_GITHUB_CICD_ENABLED and WORKER_GITHUB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+	}
+	githubPRSocialAliases := 0
+	for _, enabled := range []bool{
+		cfg.WorkerGithubPRsEnabled,
+		cfg.WorkerGithubPRReviewsEnabled,
+		cfg.WorkerGithubPRCommentsEnabled,
+	} {
+		if enabled {
+			githubPRSocialAliases++
+		}
+	}
+	if githubPRSocialAliases > 1 {
+		return Config{}, fmt.Errorf("WORKER_GITHUB_PRS_ENABLED, WORKER_GITHUB_PR_REVIEWS_ENABLED, and WORKER_GITHUB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
+	}
+	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
+		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+	}
+	gitlabPRSocialAliases := 0
+	for _, enabled := range []bool{
+		cfg.WorkerGitlabPRsEnabled,
+		cfg.WorkerGitlabPRReviewsEnabled,
+		cfg.WorkerGitlabPRCommentsEnabled,
+	} {
+		if enabled {
+			gitlabPRSocialAliases++
+		}
+	}
+	if gitlabPRSocialAliases > 1 {
+		return Config{}, fmt.Errorf("WORKER_GITLAB_PRS_ENABLED, WORKER_GITLAB_PR_REVIEWS_ENABLED, and WORKER_GITLAB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
+	}
+	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
+		lookup,
+		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+		conditionalDefault(allProviderRoutes, localStatusMappingPath),
+	)
+	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
+		lookup,
+		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+		conditionalDefault(allProviderRoutes, localInvestmentAreasPath),
+	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_HEALTH_CHECK_TIMEOUT",
@@ -221,7 +526,12 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.Profile, err = profile(spec, lookup)
+	cfg.Profile = spec.Profile
+	cfg.Queues, err = queueSelection(spec, lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.WorkerGroup, cfg.WorkerQueueConcurrency, err = workerQueueRuntime(spec, lookup, cfg.Queues)
 	if err != nil {
 		return Config{}, err
 	}
@@ -240,6 +550,9 @@ func Load(spec Spec) (Config, error) {
 		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
 		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
+		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
+		{name: "PAGER_DUTY_CLIENT_ID", target: &cfg.PagerDutyOAuthClientID},
+		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
 		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
 	for _, item := range secretTargets {
@@ -288,6 +601,10 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	cfg.QueueDatabaseMode, err = queueControlModeEnv(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.CoordinatorDatabaseMode, err = coordinatorDatabaseModeEnv(lookup)
 	if err != nil {
 		return Config{}, err
 	}
@@ -428,6 +745,71 @@ func Load(spec Spec) (Config, error) {
 	return cfg, nil
 }
 
+func localAllProviderRoutes(lookup secrets.LookupEnv) (bool, error) {
+	preset, _ := lookup(providerRoutesPresetEnv)
+	preset = strings.ToLower(strings.TrimSpace(preset))
+	if preset == "" {
+		return false, nil
+	}
+	if preset != "all" {
+		return false, fmt.Errorf("%s must be empty or all", providerRoutesPresetEnv)
+	}
+	environment, _ := lookup(devHealthEnv)
+	if strings.ToLower(strings.TrimSpace(environment)) != "local" {
+		return false, fmt.Errorf("%s=all requires %s=local", providerRoutesPresetEnv, devHealthEnv)
+	}
+	return true, nil
+}
+
+func providerRoutePresetDisabledAlias(name string) bool {
+	switch name {
+	case "WORKER_GITHUB_PR_REVIEWS_ENABLED",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED",
+		"WORKER_GITHUB_TESTS_ENABLED",
+		"WORKER_GITLAB_PR_REVIEWS_ENABLED",
+		"WORKER_GITLAB_PR_COMMENTS_ENABLED",
+		"WORKER_GITLAB_TESTS_ENABLED":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerRoutePresetDefault(lookup secrets.LookupEnv, name string) (bool, error) {
+	if providerRoutePresetDisabledAlias(name) {
+		return false, nil
+	}
+	alternatives := map[string][]string{
+		"WORKER_GITHUB_PRS_ENABLED": {
+			"WORKER_GITHUB_PR_REVIEWS_ENABLED",
+			"WORKER_GITHUB_PR_COMMENTS_ENABLED",
+		},
+		"WORKER_GITHUB_CICD_ENABLED": {"WORKER_GITHUB_TESTS_ENABLED"},
+		"WORKER_GITLAB_PRS_ENABLED": {
+			"WORKER_GITLAB_PR_REVIEWS_ENABLED",
+			"WORKER_GITLAB_PR_COMMENTS_ENABLED",
+		},
+		"WORKER_GITLAB_CICD_ENABLED": {"WORKER_GITLAB_TESTS_ENABLED"},
+	}
+	for _, alternative := range alternatives[name] {
+		enabled, err := boolEnv(lookup, alternative, false)
+		if err != nil {
+			return false, err
+		}
+		if enabled {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func conditionalDefault(enabled bool, value string) string {
+	if enabled {
+		return value
+	}
+	return ""
+}
+
 // SafeAttrs is the only supported startup-config logging surface. It includes
 // booleans for dependency configuration, never the corresponding DSNs.
 func (c Config) SafeAttrs() []slog.Attr {
@@ -441,6 +823,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
 		slog.String("queue_database_mode", string(c.QueueDatabaseMode)),
+		slog.String("coordinator_database_mode", string(c.CoordinatorDatabaseMode)),
 		slog.String("river_database_schema", c.RiverDatabaseSchema),
 		slog.String("river_domain_database_role", c.DomainDatabaseRole),
 		slog.String("river_queue_database_role", c.QueueDatabaseRole),
@@ -463,13 +846,63 @@ func (c Config) SafeAttrs() []slog.Attr {
 			c.WorkerLaunchDarklyFeatureFlagsEnabled,
 		),
 		slog.Bool("worker_github_repo_metadata_enabled", c.WorkerGithubRepoMetadataEnabled),
+		slog.Bool("worker_gitlab_repo_metadata_enabled", c.WorkerGitlabRepoMetadataEnabled),
+		slog.Bool("worker_gitlab_commits_enabled", c.WorkerGitlabCommitsEnabled),
+		slog.Bool("worker_gitlab_commit_stats_enabled", c.WorkerGitlabCommitStatsEnabled),
+		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
+		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
+		slog.Bool("worker_gitlab_incidents_enabled", c.WorkerGitlabIncidentsEnabled),
+		slog.Bool("worker_gitlab_deployments_enabled", c.WorkerGitlabDeploymentsEnabled),
+		slog.Bool("worker_gitlab_feature_flags_enabled", c.WorkerGitlabFeatureFlagsEnabled),
+		slog.Bool("worker_gitlab_files_enabled", c.WorkerGitlabFilesEnabled),
+		slog.Bool("worker_gitlab_blame_enabled", c.WorkerGitlabBlameEnabled),
+		slog.Bool("worker_gitlab_prs_enabled", c.WorkerGitlabPRsEnabled),
+		slog.Bool("worker_gitlab_pr_reviews_enabled", c.WorkerGitlabPRReviewsEnabled),
+		slog.Bool("worker_gitlab_pr_comments_enabled", c.WorkerGitlabPRCommentsEnabled),
+		slog.Bool("worker_gitlab_security_enabled", c.WorkerGitlabSecurityEnabled),
+		slog.Bool("worker_gitlab_work_items_enabled", c.WorkerGitlabWorkItemsEnabled),
+		slog.Bool("worker_pagerduty_services_enabled", c.WorkerPagerDutyServicesEnabled),
+		slog.Bool("worker_pagerduty_business_services_enabled", c.WorkerPagerDutyBusinessServicesEnabled),
+		slog.Bool("worker_pagerduty_escalation_policies_enabled", c.WorkerPagerDutyEscalationPoliciesEnabled),
+		slog.Bool("worker_pagerduty_schedules_enabled", c.WorkerPagerDutySchedulesEnabled),
+		slog.Bool("worker_pagerduty_on_calls_enabled", c.WorkerPagerDutyOnCallsEnabled),
+		slog.Bool("worker_pagerduty_users_enabled", c.WorkerPagerDutyUsersEnabled),
+		slog.Bool("worker_pagerduty_teams_enabled", c.WorkerPagerDutyTeamsEnabled),
+		slog.Bool("worker_pagerduty_incidents_enabled", c.WorkerPagerDutyIncidentsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
+		slog.Bool("worker_github_pr_reviews_enabled", c.WorkerGithubPRReviewsEnabled),
+		slog.Bool("worker_github_pr_comments_enabled", c.WorkerGithubPRCommentsEnabled),
+		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
+		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
+		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),
+		slog.Bool("worker_github_tests_enabled", c.WorkerGithubTestsEnabled),
+		slog.Bool("worker_github_work_items_enabled", c.WorkerGithubWorkItemsEnabled),
+		slog.Bool(
+			"worker_github_work_items_status_mapping_path_configured",
+			c.WorkerGithubWorkItemsStatusMappingPath != "",
+		),
+		slog.Bool(
+			"worker_github_work_items_investment_config_path_configured",
+			c.WorkerGithubWorkItemsInvestmentConfigPath != "",
+		),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),
+		slog.Bool("settings_encryption_salt_configured", c.SettingsEncryptionSalt.Configured()),
+		slog.Bool("pagerduty_oauth_client_id_configured", c.PagerDutyOAuthClientID.Configured()),
+		slog.Bool("pagerduty_oauth_secret_configured", c.PagerDutyOAuthSecret.Configured()),
 	}
 	if c.Profile != "" {
 		attrs = append(attrs, slog.String("profile", c.Profile))
+	}
+	if len(c.Queues) > 0 {
+		attrs = append(attrs, slog.String("queues", strings.Join(c.Queues, ",")))
+	}
+	if c.WorkerGroup != "" {
+		attrs = append(attrs,
+			slog.String("worker_group", c.WorkerGroup),
+			slog.String("queue_workers", formatQueueConcurrency(c.WorkerQueueConcurrency)),
+		)
 	}
 	return attrs
 }
@@ -500,12 +933,20 @@ func validateIdentifier(key, value string) error {
 }
 
 func queueControlModeEnv(lookup secrets.LookupEnv) (QueueControlMode, error) {
-	mode := QueueControlMode(strings.ToLower(envOrDefault(lookup, "WORKER_DATABASE_MODE", string(QueueControlDirect))))
+	return databaseModeEnv(lookup, "WORKER_DATABASE_MODE", QueueControlDirect)
+}
+
+func coordinatorDatabaseModeEnv(lookup secrets.LookupEnv) (QueueControlMode, error) {
+	return databaseModeEnv(lookup, "COORDINATOR_DATABASE_MODE", QueueControlDirect)
+}
+
+func databaseModeEnv(lookup secrets.LookupEnv, key string, fallback QueueControlMode) (QueueControlMode, error) {
+	mode := QueueControlMode(strings.ToLower(envOrDefault(lookup, key, string(fallback))))
 	switch mode {
 	case QueueControlDirect, QueueControlSession, QueueControlTransaction:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("WORKER_DATABASE_MODE must be direct, session, or transaction")
+		return "", fmt.Errorf("%s must be direct, session, or transaction", key)
 	}
 }
 
@@ -551,6 +992,41 @@ func durationEnv(
 	return value, nil
 }
 
+// durationArgumentOrEnvSet reports whether a duration was supplied by flag or
+// environment, as opposed to falling back to the package default.
+func durationArgumentOrEnvSet(argument string, lookup secrets.LookupEnv, key string) bool {
+	if strings.TrimSpace(argument) != "" {
+		return true
+	}
+	value, set := lookup(key)
+	return set && strings.TrimSpace(value) != ""
+}
+
+func durationArgumentOrEnv(
+	argument string,
+	lookup secrets.LookupEnv,
+	key string,
+	fallback, minimum, maximum time.Duration,
+) (time.Duration, error) {
+	argument = strings.TrimSpace(argument)
+	environment, environmentSet := lookup(key)
+	environment = strings.TrimSpace(environment)
+	if argument != "" && environmentSet && environment != "" {
+		return 0, fmt.Errorf("--shutdown-timeout conflicts with %s", key)
+	}
+	if argument == "" {
+		return durationEnv(lookup, key, fallback, minimum, maximum)
+	}
+	value, err := time.ParseDuration(argument)
+	if err != nil {
+		return 0, errors.New("--shutdown-timeout must be a duration")
+	}
+	if value < minimum || value > maximum {
+		return 0, fmt.Errorf("--shutdown-timeout must be between %s and %s", minimum, maximum)
+	}
+	return value, nil
+}
+
 func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	value := strings.ToLower(envOrDefault(lookup, "DEV_HEALTH_LOG_LEVEL", "info"))
 	switch value {
@@ -567,21 +1043,142 @@ func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	}
 }
 
-func profile(spec Spec, lookup secrets.LookupEnv) (string, error) {
-	selected := spec.Profile
-	if selected == "" {
-		selected = envOrDefault(lookup, "DEV_HEALTH_PROFILE", spec.DefaultProfile)
-	}
-	if len(spec.Profiles) == 0 {
-		if selected != "" {
-			return "", fmt.Errorf("%s does not accept a profile", spec.Service)
+func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
+	if !spec.RequireQueues {
+		if len(spec.Queues) > 0 {
+			return nil, fmt.Errorf("%s does not accept queue selection", spec.Service)
 		}
-		return "", nil
+		return nil, nil
 	}
-	if !slices.Contains(spec.Profiles, selected) {
-		return "", fmt.Errorf("profile must be one of %s", strings.Join(spec.Profiles, ", "))
+	if spec.Profile != "" {
+		return nil, fmt.Errorf("%s cannot combine queue selection with profiles", spec.Service)
 	}
-	return selected, nil
+
+	// Queue topology is flag-only on purpose (CHAOS-3875). Every deploy
+	// artifact -- Compose, Swarm, raw Kubernetes, and the Helm chart -- passes
+	// --queues, so the parallel DEV_HEALTH_QUEUES env path bought nothing but a
+	// second way to say the same thing and a conflict branch to detect the two
+	// disagreeing.
+	rawValues := append([]string(nil), spec.Queues...)
+	if len(rawValues) == 0 {
+		return nil, errors.New("at least one worker queue is required")
+	}
+
+	seen := make(map[string]struct{})
+	queues := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		for _, item := range strings.Split(raw, ",") {
+			queue := strings.TrimSpace(item)
+			if !validQueueName(queue) {
+				return nil, fmt.Errorf("worker queue %q is not a valid registered queue name", queue)
+			}
+			if _, duplicate := seen[queue]; duplicate {
+				return nil, fmt.Errorf("worker queue %q is selected more than once", queue)
+			}
+			seen[queue] = struct{}{}
+			queues = append(queues, queue)
+		}
+	}
+	slices.Sort(queues)
+	return queues, nil
+}
+
+func workerQueueRuntime(spec Spec, lookup secrets.LookupEnv, queues []string) (string, map[string]int, error) {
+	group, groupSet := lookup("DEV_HEALTH_WORKER_GROUP")
+	encoded, concurrencySet := lookup("DEV_HEALTH_QUEUE_CONCURRENCY")
+	group = strings.TrimSpace(group)
+	encoded = strings.TrimSpace(encoded)
+	argumentGroup := strings.TrimSpace(spec.WorkerGroup)
+	argumentConcurrency := append([]string(nil), spec.QueueConcurrency...)
+	if !spec.RequireQueues {
+		if argumentGroup != "" || len(argumentConcurrency) > 0 ||
+			(groupSet && group != "") || (concurrencySet && encoded != "") {
+			return "", nil, fmt.Errorf("%s does not accept worker queue runtime settings", spec.Service)
+		}
+		return "", nil, nil
+	}
+	if argumentGroup != "" && groupSet && group != "" {
+		return "", nil, errors.New("--worker-group conflicts with DEV_HEALTH_WORKER_GROUP")
+	}
+	if len(argumentConcurrency) > 0 && concurrencySet && encoded != "" {
+		return "", nil, errors.New("--queue-concurrency conflicts with DEV_HEALTH_QUEUE_CONCURRENCY")
+	}
+	if argumentGroup != "" {
+		group = argumentGroup
+	}
+	groupSetting := "DEV_HEALTH_WORKER_GROUP"
+	if argumentGroup != "" {
+		groupSetting = "--worker-group"
+	}
+	if group == "" {
+		group = "worker"
+	}
+	if len(group) > 64 {
+		return "", nil, fmt.Errorf("%s exceeds 64 characters", groupSetting)
+	}
+	if err := validateName(groupSetting, group); err != nil {
+		return "", nil, err
+	}
+	if len(argumentConcurrency) == 0 && encoded != "" {
+		argumentConcurrency = []string{encoded}
+	}
+	if len(argumentConcurrency) == 0 {
+		return "", nil, errors.New("queue concurrency is required")
+	}
+	concurrency := make(map[string]int)
+	for _, raw := range argumentConcurrency {
+		for _, item := range strings.Split(raw, ",") {
+			parts := strings.Split(item, "=")
+			if len(parts) != 2 {
+				return "", nil, errors.New("queue concurrency must use queue=workers entries")
+			}
+			queue := strings.TrimSpace(parts[0])
+			workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
+				return "", nil, errors.New("queue concurrency has an invalid entry")
+			}
+			if _, duplicate := concurrency[queue]; duplicate {
+				return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
+			}
+			concurrency[queue] = workers
+		}
+	}
+	if len(concurrency) != len(queues) {
+		return "", nil, errors.New("queue concurrency must cover the selected queues exactly")
+	}
+	for _, queue := range queues {
+		if concurrency[queue] < 1 {
+			return "", nil, errors.New("queue concurrency must cover the selected queues exactly")
+		}
+	}
+	return group, concurrency, nil
+}
+
+func formatQueueConcurrency(concurrency map[string]int) string {
+	queues := make([]string, 0, len(concurrency))
+	for queue := range concurrency {
+		queues = append(queues, queue)
+	}
+	slices.Sort(queues)
+	values := make([]string, 0, len(queues))
+	for _, queue := range queues {
+		values = append(values, fmt.Sprintf("%s=%d", queue, concurrency[queue]))
+	}
+	return strings.Join(values, ",")
+}
+
+func validQueueName(value string) bool {
+	if len(value) == 0 || len(value) > 96 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, char := range value[1:] {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') ||
+			char == '.' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateName(kind, value string) error {

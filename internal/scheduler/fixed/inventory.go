@@ -12,12 +12,12 @@ import (
 // declaration table stays comparable against the legacy Beat inventory without
 // linking executable producer code.
 const (
-	ProducerScheduledMetricsDispatch = "scheduled_metrics_dispatch"
-	ProducerDailyMetricsFanout       = "daily_metrics_fanout"
-	ProducerRemainingMetricsFanout   = "remaining_metrics_fanout"
-	ProducerScheduledReports         = "scheduled_reports"
-	ProducerHeartbeat                = "heartbeat"
-	ProducerRetentionCleanup         = "retention_cleanup"
+	ProducerDailyMetricsFanout     = "daily_metrics_fanout"
+	ProducerRemainingMetricsFanout = "remaining_metrics_fanout"
+	ProducerScheduledReports       = "scheduled_reports"
+	ProducerHeartbeat              = "heartbeat"
+	ProducerSyncCoverageRefresh    = "sync_coverage_refresh"
+	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
 // UTC is the only zone the checked-in inventory uses. Every legacy Beat
@@ -32,24 +32,6 @@ const inventoryTimezone = "UTC"
 // Celery Beat entries; ScheduleCoverage proves that against the Python source.
 func checkedInSchedules() []Schedule {
 	return []Schedule{
-		{
-			ID:              "scheduled_metrics_dispatch",
-			LegacyBeatEntry: "dispatch-scheduled-metrics",
-			Cadence:         EveryInterval(300 * time.Second),
-			Timezone:        inventoryTimezone,
-			// A 300 second sweep repairs itself on the next tick, and each tick
-			// re-reads the durable due set, so replaying an older bucket would
-			// only duplicate work the next tick already covers.
-			CatchUp:          CatchUpSkip,
-			UniquenessWindow: time.Hour,
-			TargetKind:       jobcontract.KindDailyMetricsDispatch,
-			ProducerID:       ProducerScheduledMetricsDispatch,
-			MaxAttempts:      3,
-			AlertThreshold:   30 * time.Minute,
-			Rationale: "Replaces the 300s dispatch-scheduled-metrics sweep over ScheduledJob " +
-				"rows with job_type='metrics'. Due-ness stays in the durable schedule row; " +
-				"the fixed cadence only decides when the sweep runs.",
-		},
 		{
 			ID:              "daily_metrics_fanout",
 			LegacyBeatEntry: "run-daily-metrics",
@@ -154,6 +136,21 @@ func checkedInSchedules() []Schedule {
 				"materializes a ReportRun per due SavedReport before enqueueing.",
 		},
 		{
+			ID:               "sync_coverage_refresh",
+			Native:           true,
+			Cadence:          EveryInterval(300 * time.Second),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: time.Hour,
+			TargetKind:       jobcontract.KindSyncCoverageRefresh,
+			ProducerID:       ProducerSyncCoverageRefresh,
+			MaxAttempts:      3,
+			AlertThreshold:   30 * time.Minute,
+			Rationale: "Rebuilds cold, invalidated, and oldest sync coverage projections " +
+				"from retained PostgreSQL facts in bounded batches. Due work is re-read on the " +
+				"next tick, so replaying an older bucket adds no recovery value.",
+		},
+		{
 			ID:              "phone_home_heartbeat",
 			LegacyBeatEntry: "phone-home-heartbeat",
 			Cadence:         DailyAt(0, 0),
@@ -203,10 +200,57 @@ func checkedInSchedules() []Schedule {
 				"Immediately after the rate-limit prune, terminal-status rows only.",
 		},
 		{
-			ID:       "prune_ask_dev_conversations",
-			Native:   true,
-			Cadence:  DailyAt(5, 30),
-			Timezone: inventoryTimezone,
+			ID: "prune_ask_dev_conversations",
+			// Declared Native by CHAOS-3209, which built this schedule before
+			// any Python one existed. CHAOS-3404 then added the Celery beat
+			// entry `ask-dev-retention-sweep` for the SAME work at the SAME
+			// 05:30 cadence, so the schedule stopped being native the moment
+			// that landed: it now has a legacy predecessor, and leaving Native
+			// set would have kept it out of the bidirectional inventory check
+			// -- the exact bypass the Native field's own comment warns about.
+			//
+			// WHAT THIS OWNERSHIP CLAIM DOES *NOT* SAY, because both halves
+			// were overstated once and are load-bearing for whoever decides
+			// the Celery cutover (CHAOS-3481):
+			//
+			// 1. THIS SCHEDULE EMITS NOTHING TODAY. producers.go pins
+			//    prune_ask_dev_conversations to ContractVersionV3, while
+			//    contracts/jobs/v1/migration-state.json declares
+			//    system.retention_cleanup at producer_version 2. Produce()
+			//    therefore returns SkipReason "consumer_version_incompatible"
+			//    on every occurrence, and engine.go records that as a normal
+			//    skipped occurrence -- deliberately NOT promoted to a failure.
+			//    So a nightly run that publishes no job reads as healthy. The
+			//    Beat entry is the ONLY thing purging expired conversations
+			//    until producer_version reaches 3, and must not be deleted on
+			//    cadence evidence alone. The machine-checkable bar in
+			//    contracts/jobs/v1/transitional-inventory.json's
+			//    deletion_evidence_requirement for `ask-dev-retention-sweep`
+			//    names that precondition so this cannot be missed by reading
+			//    cadences alone.
+			//
+			// 2. THE GO DRAIN-COMPLETION CONTRACT IS STRICTLY WEAKER than
+			//    Python's. The two agree on the selection predicate, the
+			//    ordering, the FOR UPDATE SKIP LOCKED selection, the tombstone
+			//    reason mapping and the chunked commits -- see
+			//    AskDevConversationStore in
+			//    internal/jobs/system/retention_postgres.go against
+			//    DevPersistenceService.cleanup_expired/_purge_conversation.
+			//    They do NOT agree on how a drain ENDS. Python runs a
+			//    non-locking count_expired() after its batch loop and reports
+			//    "partial" unless the backlog is confirmed empty, precisely
+			//    because SKIP LOCKED makes a short read indistinguishable from
+			//    a contended one (ask_dev_retention.py's module docstring
+			//    records this as a confirmed HIGH review finding). Go has no
+			//    equivalent: deleteInChunks treats a short chunk as done, and
+			//    the handler discards DeleteBefore's count entirely, so a
+			//    contended pass reports success. Porting that is CHAOS-3481's,
+			//    not this PR's -- but the earlier version of this comment
+			//    listed the five matching properties and omitted this one,
+			//    which reads as full parity. It is not full parity.
+			LegacyBeatEntry: "ask-dev-retention-sweep",
+			Cadence:         DailyAt(5, 30),
+			Timezone:        inventoryTimezone,
 			// Product reads enforce expires_at immediately. The scheduled pass
 			// durably removes expired content and is cumulative, so a missed run
 			// is repaired by the next occurrence without replaying stale buckets.
@@ -293,6 +337,34 @@ type LegacyEntry struct {
 	Note string
 }
 
+// RetiredLegacyEntry is a former Beat entry that is deliberately absent from
+// the current Python configuration. It is separate from LegacyEntry because
+// LegacyBeatInventory is a bidirectional mirror of live source: putting a
+// retired entry there would correctly fail the source-equality gate, but would
+// make the audited retirement invisible.
+type RetiredLegacyEntry struct {
+	Name     string
+	Cadence  Cadence
+	Reason   string
+	Evidence string
+}
+
+// RetiredBeatInventory records reviewed Beat removals. It is a ledger, not a
+// replacement map: each name must remain absent from the live Beat source.
+func RetiredBeatInventory() []RetiredLegacyEntry {
+	return []RetiredLegacyEntry{
+		{
+			Name:    "dispatch-scheduled-metrics",
+			Cadence: EveryInterval(300 * time.Second),
+			Reason: "No production writer creates ScheduledJob rows with job_type='metrics', " +
+				"and the Go daily-metrics durable contract cannot safely turn an arbitrary " +
+				"legacy configuration into a zero-repository run.",
+			Evidence: "CHAOS-3128 retirement decision: source audit found zero production " +
+				"writers; the local feature-stack PostgreSQL read-only audit found zero rows.",
+		},
+	}
+}
+
 // LegacyBeatInventory is the checked replacement map for every Celery Beat
 // entry. It is the single place a reviewer reads to answer "who owns this
 // now?", and the coverage test proves it stays equal to the Python source.
@@ -305,12 +377,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			OwnerRef: "internal/scheduler/sync",
 			Note: "Database-backed product schedule with tenant cron expressions. Owned by " +
 				"the sync scheduler loop and its materializing coordinator, not by a fixed cadence.",
-		},
-		{
-			Name:     "dispatch-scheduled-metrics",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "scheduled_metrics_dispatch",
 		},
 		{
 			Name:     "run-daily-metrics",
@@ -429,12 +495,10 @@ func LegacyBeatInventory() []LegacyEntry {
 			OwnerRef: "prune_external_ingest_batches",
 		},
 		{
-			Name:     "refresh-sync-coverage-projections",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerRemoved,
-			OwnerRef: "coverage projection refresh",
-			Note: "Temporary safety net while exact summaries are rebuilt from retained facts. " +
-				"A native write-side projector makes this periodic Celery refresh unnecessary.",
+			Name:     "ask-dev-retention-sweep",
+			Cadence:  DailyAt(5, 30),
+			Owner:    OwnerFixedSchedule,
+			OwnerRef: "prune_ask_dev_conversations",
 		},
 		{
 			Name:     "consume-pending-scheduled-sync-occurrences",

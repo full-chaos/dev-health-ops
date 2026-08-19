@@ -1,0 +1,4 @@
+version: 1
+status_categories:
+  todo: {alpha: 1, beta: 2}
+providers: {}

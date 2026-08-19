@@ -17,6 +17,12 @@ type LeaseRepairStepper interface {
 	Step(context.Context, time.Time, int) (LeaseRepairResult, error)
 }
 
+// TerminalDeliveryRepairStepper is the queue-side recovery seam for a River
+// maintenance discard that occurred before the authoritative domain work ran.
+type TerminalDeliveryRepairStepper interface {
+	Step(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error)
+}
+
 // MaterializerStepper is the bounded wakeup materialization seam used by the
 // command-owned mutation pipeline.
 type MaterializerStepper interface {
@@ -63,12 +69,11 @@ func (config MutationPipelineConfig) valid() bool {
 // committed mutation stages so the existing lifecycle loop and parity metrics
 // describe the resulting database state.
 //
-// Construction and execution do not change transport routes. With the
-// checked-in Celery-only registry, Kernel performs no transport transaction.
-// A future River route still fails closed unless a concrete publisher is
-// supplied by command composition.
+// Construction and execution do not change transport routes. River routes
+// fail closed unless command composition supplies a concrete publisher.
 type MutationPipeline struct {
 	repair       LeaseRepairStepper
+	terminal     TerminalDeliveryRepairStepper
 	materializer MaterializerStepper
 	kernel       KernelStepper
 	observer     Stepper
@@ -79,6 +84,7 @@ type MutationPipeline struct {
 
 func NewMutationPipeline(
 	repair LeaseRepairStepper,
+	terminal TerminalDeliveryRepairStepper,
 	materializer MaterializerStepper,
 	kernel KernelStepper,
 	observer Stepper,
@@ -86,11 +92,12 @@ func NewMutationPipeline(
 	postSync PostSyncHandoff,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
-	if repair == nil || materializer == nil || kernel == nil || observer == nil || !config.valid() {
+	if repair == nil || terminal == nil || materializer == nil || kernel == nil || observer == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	return &MutationPipeline{
 		repair:       repair,
+		terminal:     terminal,
 		materializer: materializer,
 		kernel:       kernel,
 		observer:     observer,
@@ -115,6 +122,9 @@ func (pipeline *MutationPipeline) Step(
 	}
 	now = now.UTC()
 	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
+		return Observation{}, err
+	}
+	if _, err := pipeline.terminal.Step(ctx, now, limit); err != nil {
 		return Observation{}, err
 	}
 	if _, err := pipeline.materializer.Step(

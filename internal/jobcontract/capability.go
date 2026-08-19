@@ -15,28 +15,43 @@ type ContractCapability struct {
 }
 
 // CapabilityReport is safe to expose from readiness/operator surfaces: it
-// contains only kind/version/schema support, never encoded arguments.
+// contains only queue/version/schema support, never encoded arguments.
 type CapabilityReport struct {
 	SchemaVersion int                  `json:"schema_version"`
-	Profile       string               `json:"profile"`
+	Queues        []string             `json:"queues"`
 	Contracts     []ContractCapability `json:"contracts"`
 }
 
-// CapabilitiesForProfile derives the exact support advertised by this binary.
-func CapabilitiesForProfile(root string, registry Registry, profile string) (CapabilityReport, error) {
-	if profile == "" {
-		return CapabilityReport{}, fmt.Errorf("profile is required")
+// CapabilitiesForQueues derives the exact support advertised by this binary.
+func CapabilitiesForQueues(root string, registry Registry, queues []string) (CapabilityReport, error) {
+	if len(queues) == 0 {
+		return CapabilityReport{}, fmt.Errorf("queues are required")
 	}
-	report := CapabilityReport{SchemaVersion: 1, Profile: profile}
+	queueSet := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		if !matchesBounded(queuePattern, queue, 96) {
+			return CapabilityReport{}, fmt.Errorf("invalid queue %q", queue)
+		}
+		queueSet[queue] = struct{}{}
+	}
+
+	reportQueues := make([]string, 0, len(queueSet))
+	for queue := range queueSet {
+		reportQueues = append(reportQueues, queue)
+	}
+	sort.Strings(reportQueues)
+	report := CapabilityReport{SchemaVersion: 1, Queues: reportQueues}
+	registryQueues := make(map[string]struct{})
+	envelopeSchema, err := readContractFile(root, registry.EnvelopeSchema)
+	if err != nil {
+		return CapabilityReport{}, err
+	}
 	for _, job := range registry.Jobs {
-		if job.Profile != profile {
+		registryQueues[job.Queue] = struct{}{}
+		if _, ok := queueSet[job.Queue]; !ok {
 			continue
 		}
 		digests := make(map[string]string, len(job.SupportedVersions))
-		envelopeSchema, err := readContractFile(root, registry.EnvelopeSchema)
-		if err != nil {
-			return CapabilityReport{}, err
-		}
 		for _, version := range job.SupportedVersions {
 			versionKey := strconv.Itoa(version)
 			data, err := readContractFile(root, job.SchemaVersions[versionKey])
@@ -56,7 +71,12 @@ func CapabilitiesForProfile(root string, registry Registry, profile string) (Cap
 		})
 	}
 	if len(report.Contracts) == 0 {
-		return CapabilityReport{}, fmt.Errorf("profile %q has no registered contracts", profile)
+		return CapabilityReport{}, fmt.Errorf("queues %v have no registered contracts", report.Queues)
+	}
+	for _, queue := range report.Queues {
+		if _, ok := registryQueues[queue]; !ok {
+			return CapabilityReport{}, fmt.Errorf("queue %q is not registered", queue)
+		}
 	}
 	return report, nil
 }
@@ -88,8 +108,16 @@ func LoadCapabilityReport(path string) (CapabilityReport, error) {
 }
 
 func (report CapabilityReport) Validate() error {
-	if report.SchemaVersion != 1 || report.Profile == "" {
+	if report.SchemaVersion != 1 || len(report.Queues) == 0 {
 		return fmt.Errorf("invalid capability report identity")
+	}
+	if !sortedUniqueStrings(report.Queues) {
+		return fmt.Errorf("capability queues must be sorted unique values")
+	}
+	for _, queue := range report.Queues {
+		if !matchesBounded(queuePattern, queue, 96) {
+			return fmt.Errorf("capability report has an invalid queue")
+		}
 	}
 	previous := ""
 	for _, contract := range report.Contracts {
@@ -113,38 +141,46 @@ func (report CapabilityReport) Validate() error {
 	return nil
 }
 
-// CheckRollout proves that every supplied live report for every required
-// profile can consume the producer version. It fails closed if a profile has no
-// report or one old replica still lacks support.
+// CheckRollout proves that every supplied live report for every required queue
+// can consume the producer version. It fails closed if a queue has no report or
+// one old replica still lacks support.
 func CheckRollout(root string, registry Registry, state MigrationState, reports []CapabilityReport) error {
-	byProfile := make(map[string][]CapabilityReport)
+	byQueue := make(map[string][]CapabilityReport)
 	for _, report := range reports {
 		if err := report.Validate(); err != nil {
 			return err
 		}
-		byProfile[report.Profile] = append(byProfile[report.Profile], report)
+		for _, queue := range report.Queues {
+			byQueue[queue] = append(byQueue[queue], report)
+		}
 	}
 
 	var failures []string
+	definitionsByKind := make(map[string]JobDefinition, len(registry.Jobs))
+	for _, definition := range registry.Jobs {
+		definitionsByKind[definition.Kind] = definition
+	}
 	for _, job := range state.Jobs {
-		for _, profile := range job.RequiredProfiles {
-			expected, err := CapabilitiesForProfile(root, registry, profile)
-			if err != nil {
-				return err
-			}
-			expectedDigest, ok := reportDigest(expected, job.Kind, job.ProducerVersion)
-			if !ok {
-				return fmt.Errorf("registry profile %s lacks %s@%d", profile, job.Kind, job.ProducerVersion)
-			}
-			profileReports := byProfile[profile]
-			if len(profileReports) == 0 {
-				failures = append(failures, fmt.Sprintf("%s@%d: profile %s has no capability report", job.Kind, job.ProducerVersion, profile))
-				continue
-			}
-			for index, report := range profileReports {
-				if !reportSupports(report, job.Kind, job.ProducerVersion, expectedDigest) {
-					failures = append(failures, fmt.Sprintf("%s@%d: profile %s report %d lacks support", job.Kind, job.ProducerVersion, profile, index+1))
-				}
+		definition, ok := definitionsByKind[job.Kind]
+		if !ok {
+			return fmt.Errorf("migration job %s is not registered", job.Kind)
+		}
+		expected, err := CapabilitiesForQueues(root, registry, []string{definition.Queue})
+		if err != nil {
+			return err
+		}
+		expectedDigest, ok := reportDigest(expected, job.Kind, job.ProducerVersion)
+		if !ok {
+			return fmt.Errorf("registry queue %s lacks %s@%d", definition.Queue, job.Kind, job.ProducerVersion)
+		}
+		queueReports := byQueue[definition.Queue]
+		if len(queueReports) == 0 {
+			failures = append(failures, fmt.Sprintf("%s@%d: queue %s has no capability report", job.Kind, job.ProducerVersion, definition.Queue))
+			continue
+		}
+		for index, report := range queueReports {
+			if !reportSupports(report, job.Kind, job.ProducerVersion, expectedDigest) {
+				failures = append(failures, fmt.Sprintf("%s@%d: queue %s report %d lacks support", job.Kind, job.ProducerVersion, definition.Queue, index+1))
 			}
 		}
 	}

@@ -3,6 +3,7 @@ package joboperator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -243,6 +244,32 @@ func TestRouteControlsPreserveAuthorizationAndDurableAudit(t *testing.T) {
 	}
 }
 
+func TestApplyCheckedInRoutePreservesAuthorizationAndDurableAudit(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.state = syncroute.RouteState{
+		Kind: "reference_discovery", Transport: "river", Generation: 2,
+		RollbackTransport: "celery",
+	}
+	state, err := fixture.service.ApplyCheckedInRoute(
+		context.Background(), testPrincipal(), "reference_discovery", "local_start", "corr-route-apply",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "river" ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_apply,audit_succeeded" {
+		t.Fatalf("route apply state=%+v order=%v", state, fixture.order)
+	}
+	if fixture.auditor.event.Action != ActionApplyRoute ||
+		fixture.auditor.event.ResourceType != "sync_route" {
+		t.Fatalf("route apply audit=%+v", fixture.auditor.event)
+	}
+	if got := string(fixture.auditor.event.Action); got != "job_routes.apply_checked_in" {
+		t.Fatalf("route apply schema-compatible action=%q", got)
+	}
+}
+
 func TestRouteResumeFailsClosedWithoutCapabilityAndAuditsFailure(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
@@ -289,22 +316,49 @@ func TestQueueInspectionRequiresExactSanitizedProfileCoverage(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	fixture.backend.queues = []QueueSummary{
-		{Name: "retention", Profile: "ops", Available: 2, Running: 1},
-		{Name: "heartbeat", Profile: "ops", Scheduled: 1},
-		{Name: "webhooks", Profile: "ops"},
+		{Name: "coverage", Group: "ops"},
+		{Name: "retention", Group: "ops", Available: 2, Running: 1},
+		{Name: "heartbeat", Group: "ops", Scheduled: 1},
+		{Name: "webhooks", Group: "ops"},
 	}
-	queues, err := fixture.service.Queues(context.Background(), testPrincipal(), "ops")
+	queues, err := fixture.service.Queues(context.Background(), testPrincipal(), "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	})
 	if err != nil {
 		t.Fatalf("Queues: %v", err)
 	}
-	if len(queues) != 3 || queues[0].Name != "heartbeat" ||
-		queues[1].Name != "retention" || queues[2].Name != "webhooks" {
+	if len(queues) != 4 || queues[0].Name != "coverage" || queues[1].Name != "heartbeat" ||
+		queues[2].Name != "retention" || queues[3].Name != "webhooks" {
 		t.Fatalf("queues were not sanitized/sorted: %+v", queues)
 	}
 
 	fixture.backend.queues = fixture.backend.queues[:1]
-	if _, err := fixture.service.Queues(context.Background(), testPrincipal(), "ops"); err == nil {
+	if _, err := fixture.service.Queues(context.Background(), testPrincipal(), "ops", []string{
+		"coverage", "heartbeat", "retention", "webhooks",
+	}); err == nil {
 		t.Fatal("incomplete queue coverage passed")
+	}
+}
+
+func TestQueueContractsUseExplicitQueues(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	contracts, err := fixture.service.Contracts(context.Background(), testPrincipal(), []string{
+		"heartbeat", "retention",
+	})
+	if err != nil {
+		t.Fatalf("Contracts: %v", err)
+	}
+	if len(contracts) == 0 {
+		t.Fatal("no contracts returned")
+	}
+	for _, summary := range contracts {
+		if summary.Queue != "heartbeat" && summary.Queue != "retention" {
+			t.Fatalf("unexpected contract queue: %+v", summary)
+		}
+		if summary.Group == "" {
+			t.Fatalf("missing worker group in contract summary: %+v", summary)
+		}
 	}
 }
 
@@ -323,12 +377,25 @@ func TestQueueAndDrainMutationsAreValidatedAndAudited(t *testing.T) {
 	if err := fixture.service.ResumeQueue(ctx, principal, "unknown", "incident_response", "corr-op-3"); err == nil {
 		t.Fatal("unknown queue resumed")
 	}
-	result, err := fixture.service.Drain(ctx, principal, "ops", "deploy_drain", "corr-op-4")
+	result, err := fixture.service.Drain(ctx, principal, "ops", []string{"heartbeat", "retention"}, "deploy_drain", "corr-op-4")
 	if err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
-	if result.Profile != "ops" || result.QueuesPaused != 2 || fixture.backend.drainCalls != 1 {
+	if result.Group != "ops" || result.QueuesPaused != 2 || fixture.backend.drainCalls != 1 {
 		t.Fatalf("drain result: %+v", result)
+	}
+	if len(fixture.backend.drainQueues) != 1 || strings.Join(fixture.backend.drainQueues[0], ",") != "heartbeat,retention" {
+		t.Fatalf("drain queues: %#v", fixture.backend.drainQueues)
+	}
+	result, err = fixture.service.Undrain(ctx, principal, "ops", []string{"heartbeat", "retention"}, "deploy_resume", "corr-op-5")
+	if err != nil {
+		t.Fatalf("Undrain: %v", err)
+	}
+	if result.Group != "ops" || fixture.backend.undrainCalls != 1 {
+		t.Fatalf("undrain result: %+v", result)
+	}
+	if len(fixture.backend.undrainQueues) != 1 || strings.Join(fixture.backend.undrainQueues[0], ",") != "heartbeat,retention" {
+		t.Fatalf("undrain queues: %#v", fixture.backend.undrainQueues)
 	}
 }
 
@@ -470,6 +537,38 @@ func TestJobRouteApplyIsAuthorizedAndDurablyAudited(t *testing.T) {
 	}
 }
 
+// TestJobRouteRollbackClassifiesQuiesceProbeFailureAsBackendNotPrecondition
+// covers the joboperator side of CHAOS-3904: once jobroute.Controller.Rollback
+// stops relabelling a failed quiescence probe as ErrLiveClaims, the error it
+// returns (ErrUnavailable wrapping the driver cause) must route through
+// mapBackendError -> CodeBackend, not mapJobRouteError -> CodePrecondition.
+func TestJobRouteRollbackClassifiesQuiesceProbeFailureAsBackendNotPrecondition(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.err = fmt.Errorf("%w: %w", jobroute.ErrUnavailable, errors.New("dial tcp: connection refused"))
+
+	_, err := fixture.service.RollbackJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"rollback", "corr-job-route-outage",
+	)
+	assertCode(t, err, CodeBackend)
+}
+
+// TestJobRouteRollbackNegativeControlStillClassifiesLiveClaimsAsPrecondition
+// is the negative control for the test above: a genuine live-claims error
+// must still classify as CodePrecondition after the fix.
+func TestJobRouteRollbackNegativeControlStillClassifiesLiveClaimsAsPrecondition(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.err = jobroute.ErrLiveClaims
+
+	_, err := fixture.service.RollbackJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"rollback", "corr-job-route-live-claims",
+	)
+	assertCode(t, err, CodePrecondition)
+}
+
 type fakeRouteController struct {
 	order *[]string
 	state syncroute.RouteState
@@ -478,6 +577,10 @@ type fakeRouteController struct {
 
 func (controller *fakeRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
 	*controller.order = append(*controller.order, "route_inspect")
+	return controller.state, controller.err
+}
+func (controller *fakeRouteController) ApplyCheckedIn(context.Context, string) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_apply")
 	return controller.state, controller.err
 }
 func (controller *fakeRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {
@@ -597,6 +700,8 @@ type fakeBackend struct {
 	job                 JobSummary
 	jobs                []JobSummary
 	queues              []QueueSummary
+	drainQueues         [][]string
+	undrainQueues       [][]string
 	mutation            Mutation
 	getCalls            int
 	cancelCalls         int
@@ -604,6 +709,7 @@ type fakeBackend struct {
 	pauseCalls          int
 	resumeCalls         int
 	drainCalls          int
+	undrainCalls        int
 	runningCancellation bool
 	cancelErr           error
 }
@@ -619,9 +725,20 @@ func (backend *fakeBackend) List(context.Context, ListFilter) ([]JobSummary, err
 	return backend.jobs, nil
 }
 
-func (backend *fakeBackend) Queues(context.Context, string) ([]QueueSummary, error) {
+func (backend *fakeBackend) Queues(_ context.Context, queues []string) ([]QueueSummary, error) {
 	*backend.order = append(*backend.order, "queues")
-	return backend.queues, nil
+	requested := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		requested[queue] = struct{}{}
+	}
+	result := make([]QueueSummary, 0, len(queues))
+	for _, summary := range backend.queues {
+		if _, ok := requested[summary.Name]; !ok {
+			continue
+		}
+		result = append(result, summary)
+	}
+	return result, nil
 }
 
 func (backend *fakeBackend) Cancel(_ context.Context, _ int64, mutation Mutation) (JobSummary, error) {
@@ -660,11 +777,20 @@ func (backend *fakeBackend) ResumeQueue(_ context.Context, _ string, mutation Mu
 	return nil
 }
 
-func (backend *fakeBackend) Drain(_ context.Context, profile string, mutation Mutation) (DrainResult, error) {
+func (backend *fakeBackend) Drain(_ context.Context, queues []string, mutation Mutation) (DrainResult, error) {
 	backend.drainCalls++
 	backend.mutation = mutation
 	*backend.order = append(*backend.order, "drain")
-	return DrainResult{Profile: profile, QueuesPaused: 2, RunningAtStart: 1}, nil
+	backend.drainQueues = append(backend.drainQueues, append([]string(nil), queues...))
+	return DrainResult{Group: mutation.ResourceID, QueuesPaused: len(queues), RunningAtStart: 1}, nil
+}
+
+func (backend *fakeBackend) Undrain(_ context.Context, queues []string, mutation Mutation) (DrainResult, error) {
+	backend.undrainCalls++
+	backend.mutation = mutation
+	*backend.order = append(*backend.order, "undrain")
+	backend.undrainQueues = append(backend.undrainQueues, append([]string(nil), queues...))
+	return DrainResult{Group: mutation.ResourceID, QueuesPaused: len(queues), RunningAtStart: 1}, nil
 }
 
 func (backend *fakeBackend) SupportsRunningCancellation() bool {

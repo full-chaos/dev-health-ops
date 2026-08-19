@@ -61,9 +61,7 @@ func (committer EffectCommitter) Commit(
 	}
 	normalizedAt = normalizedAt.UTC()
 	ordered := append([]EffectBatch(nil), batches...)
-	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].Destination < ordered[right].Destination
-	})
+	sortEffectBatches(ordered)
 	desired, err := NewEffectLedgerState(claim, ordered, normalizedAt)
 	if err != nil {
 		return EffectCommitResult{}, err
@@ -74,6 +72,38 @@ func (committer EffectCommitter) Commit(
 	if err != nil {
 		return EffectCommitResult{}, err
 	}
+	return committer.commitPrepared(ctx, claim, ordered, persisted)
+}
+
+// CommitPrepared continues an effect commit after the ledger and an optional
+// exact recovery snapshot were durably prepared together. It deliberately
+// does not call PrepareEffects again: doing so would split the atomic prepare
+// boundary that the snapshot sidecar exists to provide.
+func (committer EffectCommitter) CommitPrepared(
+	ctx context.Context,
+	claim Claim,
+	batches []EffectBatch,
+	persisted EffectLedgerState,
+) (EffectCommitResult, error) {
+	if ctx == nil || claim.Validate() != nil || committer.Ledger == nil ||
+		committer.Sink == nil || persisted.validate() != nil {
+		return EffectCommitResult{}, ErrInvalidConfiguration
+	}
+	ordered := append([]EffectBatch(nil), batches...)
+	sortEffectBatches(ordered)
+	desired, err := NewEffectLedgerState(claim, ordered, persisted.CreatedAt)
+	if err != nil || !sameEffectEntries(persisted, desired) {
+		return EffectCommitResult{}, ErrEffectLedgerConflict
+	}
+	return committer.commitPrepared(ctx, claim, ordered, persisted)
+}
+
+func (committer EffectCommitter) commitPrepared(
+	ctx context.Context,
+	claim Claim,
+	ordered []EffectBatch,
+	persisted EffectLedgerState,
+) (EffectCommitResult, error) {
 	var result EffectCommitResult
 	for index, batch := range ordered {
 		effect := &persisted.Effects[index]
@@ -154,4 +184,36 @@ func (committer EffectCommitter) Commit(
 		result.Written++
 	}
 	return result, nil
+}
+
+// sortEffectBatches is THE ordering for effect batches. It exists as one
+// function because it used to exist as three inline comparators, and two of
+// them ordered by destination alone while the ledger ordered priority-first.
+// They agree only while no priority destination participates -- and recovery
+// pairs snapshot effects to ledger entries BY POSITION, so the day one joined,
+// a recovering route would have committed each destination's rows against a
+// different destination's ledger entry. Callers must not re-implement this.
+func sortEffectBatches(batches []EffectBatch) {
+	sort.Slice(batches, func(left, right int) bool {
+		return effectBatchLess(batches[left], batches[right])
+	})
+}
+
+func effectBatchLess(left, right EffectBatch) bool {
+	leftPriority := effectCommitPriority(left.Destination)
+	rightPriority := effectCommitPriority(right.Destination)
+	if leftPriority != rightPriority {
+		return leftPriority < rightPriority
+	}
+	return left.Destination < right.Destination
+}
+
+func effectCommitPriority(destination string) int {
+	// GitHub blame path identity must be durable before any blame row can be
+	// accepted. A later retry can then reconstruct the exact in-flight batch
+	// before coverage excludes those accepted rows.
+	if destination == "github_blame_path_progress" {
+		return -1
+	}
+	return 0
 }

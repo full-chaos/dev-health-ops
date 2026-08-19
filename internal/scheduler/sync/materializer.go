@@ -1,0 +1,1136 @@
+package sync
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	materializerNamespace  = uuid.MustParse("0f17e412-bca5-4cc1-a1e2-c1a6d15104a5")
+	ErrInvalidMaterializer = errors.New("invalid scheduled sync materializer")
+)
+
+// NativeMaterializer owns the domain-side transaction that persists a planned
+// sync run. The caller retains its coordinator transaction for policy locks,
+// coordinator ledgers, and the final occurrence link.
+type NativeMaterializer struct {
+	domainPool        *pgxpool.Pool
+	afterDomainCommit func() error
+	watermarkOverlap  time.Duration
+	defaultUnitCap    int
+}
+
+// NewNativeMaterializer constructs the scheduled-sync materializer. The pool
+// must be authenticated as the domain role; no coordinator fallback exists.
+func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error) {
+	if domainPool == nil {
+		return nil, ErrInvalidMaterializer
+	}
+	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
+	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
+	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
+}
+
+// boundedEnvInt mirrors the two Python settings readers this materializer
+// ports: _watermark_overlap_seconds' max(0, int(os.getenv(...)))
+// (src/dev_health_ops/sync/watermarks.py:113-122) and _env_int's
+// max(1, int(raw)) (src/dev_health_ops/sync/guard.py:296-304).
+//
+// The TrimSpace is load-bearing parity, not tidiness: Python's int() strips
+// surrounding whitespace before parsing, so " 604800 " -- a value an operator
+// gets for free from a YAML block scalar, a here-doc, or a secret file with a
+// trailing newline -- is 604800 to the Python worker. A bare Atoi rejects it
+// and silently takes the fallback, which for SYNC_WATERMARK_OVERLAP is 0: the
+// two workers then read different incremental windows from one configuration,
+// and the HEAVY ratchet's C8 overlap clamp (effectiveHeavyMaxWindow) never
+// fires, because the overlap it clamps against was parsed away. Go's
+// unicode.IsSpace set matches CPython's whitespace stripping across the ASCII
+// controls, NBSP and the Unicode separators.
+//
+// Two int() acceptances are DELIBERATELY not ported, as an accepted grammar
+// restriction: underscore digit separators (Python int("3_0") == 30) and
+// non-ASCII decimal digits (Python int("٣٠") == 30). Neither has a
+// legitimate use in a deployment env var, and honouring them would mean
+// hand-rolling a parser that has to stay bug-compatible with CPython forever.
+// They are not left SILENT, though: an unparseable value warns with the raw
+// text, so an operator who writes one sees why the setting did not take
+// effect instead of quietly running on the fallback.
+func boundedEnvInt(key string, fallback, minimum int) int {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		warnUnparseableEnvInt(key, value, fallback)
+		return fallback
+	}
+	if parsed < minimum {
+		return minimum
+	}
+	return parsed
+}
+
+// Materialize loads and locks policy state on the coordinator transaction,
+// commits the deterministic domain graph, then writes coordinator ledgers.
+func (materializer *NativeMaterializer) Materialize(
+	ctx context.Context,
+	coordinatorTx pgx.Tx,
+	occurrence PendingOccurrence,
+) (PlanResult, error) {
+	if materializer == nil || materializer.domainPool == nil || ctx == nil || coordinatorTx == nil {
+		return PlanResult{}, ErrInvalidMaterializer
+	}
+	if !occurrence.ConfigActive || occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
+		return PlanResult{}, ErrOccurrenceIneligible
+	}
+	ids, err := deterministicMaterializationIDs(occurrence.ID)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	loaded, err := loadMaterializationPlan(ctx, coordinatorTx, occurrence, materializer.watermarkOverlap, materializer.defaultUnitCap)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	var units []PlannedUnit
+	if loaded.terminalReason == "" {
+		units, err = BuildScheduledPlan(loaded.input)
+		if err != nil {
+			return PlanResult{}, err
+		}
+	}
+	if len(units) > loaded.totalUnitCap {
+		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
+	}
+	if len(units) > 0 && loaded.terminalReason == "" {
+		if err := resolveCredentialStamp(ctx, coordinatorTx, &loaded); err != nil {
+			return PlanResult{}, err
+		}
+	}
+
+	domainTx, err := materializer.domainPool.Begin(ctx)
+	if err != nil {
+		return PlanResult{}, fmt.Errorf("begin scheduled sync domain transaction: %w", err)
+	}
+	domainCommitted := false
+	defer func() {
+		if !domainCommitted {
+			_ = domainTx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+	if err := applyDomainPlanMutations(ctx, domainTx, loaded, occurrence.ScheduledFor); err != nil {
+		return PlanResult{}, err
+	}
+	if err := persistDomainGraph(ctx, domainTx, ids, loaded, units, occurrence.ScheduledFor); err != nil {
+		return PlanResult{}, err
+	}
+	if err := domainTx.Commit(ctx); err != nil {
+		return PlanResult{}, fmt.Errorf("commit scheduled sync domain graph: %w", err)
+	}
+	domainCommitted = true
+	if materializer.afterDomainCommit != nil {
+		if err := materializer.afterDomainCommit(); err != nil {
+			return PlanResult{}, err
+		}
+	}
+	if err := persistCoordinatorGraph(ctx, coordinatorTx, ids, occurrence, len(units), loaded.terminalReason); err != nil {
+		return PlanResult{}, err
+	}
+	return PlanResult{JobRunID: ids.JobRunID, SyncRunID: ids.SyncRunID}, nil
+}
+
+type loadedMaterializationPlan struct {
+	input                  PlannerInput
+	provider               string
+	configuredCredentialID *string
+	credentialID           *string
+	authSource             *string
+	totalUnitCap           int
+	terminalReason         string
+	ensureSecurityDataset  bool
+	pagerDutyRepair        *pagerDutyDomainRepair
+}
+
+type syncConfigOptions struct {
+	FullResync bool   `json:"full_resync"`
+	Mode       string `json:"mode"`
+	Schedule   string `json:"schedule_cron"`
+}
+
+type integrationOptions struct {
+	InitialSyncDepth int `json:"initial_sync_depth"`
+}
+
+func loadMaterializationPlan(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence, watermarkOverlap time.Duration, defaultUnitCap int) (loadedMaterializationPlan, error) {
+	var integrationID, orgID, provider string
+	var credentialID *string
+	var sourceID *string
+	var plannerManaged bool
+	var syncTargetsJSON, syncOptionsJSON, integrationOptionsJSON []byte
+	err := tx.QueryRow(ctx, `
+SELECT integration.id::text, integration.org_id, lower(integration.provider),
+       integration.credential_id::text, config.sync_targets::jsonb, config.sync_options::jsonb,
+       integration.config::jsonb,config.source_id::text,config.planner_managed
+FROM public.sync_configurations AS config
+JOIN public.integrations AS integration
+  ON integration.id = config.integration_id AND integration.org_id = config.org_id
+WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, occurrence.ConfigID, occurrence.OrgID).Scan(
+		&integrationID, &orgID, &provider, &credentialID, &syncTargetsJSON, &syncOptionsJSON,
+		&integrationOptionsJSON, &sourceID, &plannerManaged,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+	}
+	if err != nil {
+		return loadedMaterializationPlan{}, fmt.Errorf("load scheduled sync integration: %w", err)
+	}
+	var targets []string
+	if err := json.Unmarshal(syncTargetsJSON, &targets); err != nil {
+		return loadedMaterializationPlan{}, fmt.Errorf("decode sync targets: %w", err)
+	}
+	var options syncConfigOptions
+	if err := json.Unmarshal(syncOptionsJSON, &options); err != nil {
+		return loadedMaterializationPlan{}, fmt.Errorf("decode sync options: %w", err)
+	}
+	if strings.TrimSpace(options.Schedule) == "" {
+		return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+	}
+	var integrationConfig integrationOptions
+	if err := json.Unmarshal(integrationOptionsJSON, &integrationConfig); err != nil {
+		return loadedMaterializationPlan{}, fmt.Errorf("decode integration options: %w", err)
+	}
+	mode := SyncModeIncremental
+	if options.Mode == SyncModeBackfill {
+		return loadedMaterializationPlan{}, ErrBackfillScheduled
+	}
+	if options.Mode != "" && options.Mode != SyncModeIncremental && options.Mode != SyncModeFullResync {
+		return loadedMaterializationPlan{}, fmt.Errorf("%w: unsupported scheduled mode %q", ErrInvalidPlan, options.Mode)
+	}
+	if options.FullResync {
+		mode = SyncModeFullResync
+	} else if options.Mode == SyncModeFullResync {
+		mode = SyncModeFullResync
+	}
+	if err := lockScheduledOrganization(ctx, tx, orgID); err != nil {
+		return loadedMaterializationPlan{}, err
+	}
+	if syncTargetsRequireCanonicalIncident(targets) {
+		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+		if !allowed {
+			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+		}
+	}
+	var pagerDutyRepair *pagerDutyDomainRepair
+	pagerDutyCredentialUnavailable := false
+	if provider == "pagerduty" {
+		repair, unavailable, reason, err := preparePagerDutyRepair(ctx, tx, orgID, integrationID, credentialID, occurrence.ScheduledFor)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+		if reason != "" {
+			return loadedMaterializationPlan{
+				input:    PlannerInput{OrgID: orgID, IntegrationID: integrationID, Mode: mode, Now: occurrence.ScheduledFor.UTC()},
+				provider: provider, totalUnitCap: defaultUnitCap, terminalReason: reason,
+			}, nil
+		}
+		pagerDutyRepair = repair
+		pagerDutyCredentialUnavailable = unavailable
+	}
+
+	var sources []PlanSource
+	var datasets []PlanDataset
+	ensureSecurityDataset := false
+	if pagerDutyCredentialUnavailable {
+		// Match the Python planner: a missing, inactive, wrong-provider, or
+		// cross-tenant PagerDuty credential leaves the integration untouched and
+		// deliberately produces a zero-unit plan.
+		sources = nil
+		datasets = nil
+	} else if pagerDutyRepair != nil {
+		sources = []PlanSource{pagerDutyRepair.source}
+		datasets = pagerDutyRepair.datasets
+	} else {
+		sources, err = loadPlanSources(ctx, tx, orgID, integrationID, occurrence.ConfigID, sourceID, plannerManaged)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+	}
+	if planDatasetsRequireCanonicalIncident(provider, datasets) {
+		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
+		if err != nil {
+			return loadedMaterializationPlan{}, err
+		}
+		if !allowed {
+			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+		}
+	}
+	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
+	}
+	tierCap, totalUnitCap, err := loadPlanLimits(ctx, tx, orgID, defaultUnitCap)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
+	}
+	var depth *int
+	if integrationConfig.InitialSyncDepth > 0 {
+		depth = &integrationConfig.InitialSyncDepth
+	}
+	return loadedMaterializationPlan{
+		input: PlannerInput{
+			OrgID: orgID, IntegrationID: integrationID, Mode: mode,
+			Now: occurrence.ScheduledFor.UTC(), Before: pointerTime(occurrence.ScheduledFor.UTC()),
+			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
+			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
+		},
+		provider:               provider,
+		configuredCredentialID: credentialID,
+		totalUnitCap:           totalUnitCap,
+		ensureSecurityDataset:  ensureSecurityDataset,
+		pagerDutyRepair:        pagerDutyRepair,
+	}, nil
+}
+
+func lockScheduledOrganization(ctx context.Context, tx pgx.Tx, orgID string) error {
+	parsed, err := uuid.Parse(orgID)
+	if err != nil || orgID == "default" {
+		// Preserve Python's compatibility behavior for legacy/default and other
+		// non-UUID organization identifiers: no UUID-scoped row exists to lock.
+		return nil
+	}
+	var locked string
+	err = tx.QueryRow(ctx, `SELECT id::text FROM public.organizations WHERE id=$1::uuid FOR KEY SHARE`, parsed).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOccurrenceIneligible
+	}
+	if err != nil {
+		return fmt.Errorf("lock scheduled sync organization: %w", err)
+	}
+	return nil
+}
+
+func resolveCredentialStamp(ctx context.Context, tx pgx.Tx, loaded *loadedMaterializationPlan) error {
+	if loaded == nil {
+		return ErrInvalidMaterializer
+	}
+	provider := strings.ToLower(loaded.provider)
+	if loaded.configuredCredentialID == nil {
+		if provider == "pagerduty" {
+			return fmt.Errorf("%w: PagerDuty requires an active credential", ErrInvalidPlan)
+		}
+		auth := "environment"
+		loaded.authSource = &auth
+		return nil
+	}
+	var active bool
+	var credentialOrg, credentialProvider string
+	if err := tx.QueryRow(ctx, `SELECT org_id,lower(provider),is_active FROM public.integration_credentials WHERE id=$1::uuid`, *loaded.configuredCredentialID).Scan(&credentialOrg, &credentialProvider, &active); err != nil {
+		return fmt.Errorf("load scheduled sync credential metadata: %w", err)
+	}
+	if !active || credentialOrg != loaded.input.OrgID || credentialProvider != provider {
+		return ErrOccurrenceIneligible
+	}
+	credential := *loaded.configuredCredentialID
+	auth := "integration_credential"
+	loaded.credentialID = &credential
+	loaded.authSource = &auth
+	return nil
+}
+
+func pointerTime(value time.Time) *time.Time { return &value }
+
+var pagerDutyOperationalDatasets = func() []string {
+	keys := make([]string, 0, len(supportedProviderDatasets["pagerduty"]))
+	for key := range supportedProviderDatasets["pagerduty"] {
+		spec, ok := datasetSpecification("pagerduty", key)
+		if ok && slices.Contains(spec.LegacyTargets, "operational") {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}()
+
+type pagerDutyDomainRepair struct {
+	source         PlanSource
+	datasets       []PlanDataset
+	datasetOptions map[string][]byte
+}
+
+func preparePagerDutyRepair(ctx context.Context, tx pgx.Tx, orgID, integrationID string, credentialID *string, now time.Time) (*pagerDutyDomainRepair, bool, string, error) {
+	var targetsValid bool
+	if err := tx.QueryRow(ctx, `
+WITH locked AS (
+ SELECT sync_targets FROM public.sync_configurations
+ WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='pagerduty'
+ FOR UPDATE
+)
+SELECT coalesce(bool_and(sync_targets::jsonb='["operational"]'::jsonb),FALSE) FROM locked`, orgID, integrationID).Scan(&targetsValid); err != nil {
+		return nil, false, "", fmt.Errorf("lock PagerDuty sync configurations: %w", err)
+	}
+	if !targetsValid {
+		reason := "PagerDuty sync target must be operational; malformed configs were disabled"
+		return nil, false, reason, disablePagerDutyConfigs(ctx, tx, orgID, integrationID, now, reason)
+	}
+	if credentialID == nil {
+		return nil, true, "", nil
+	}
+	var configJSON []byte
+	err := tx.QueryRow(ctx, `
+SELECT config::jsonb
+FROM public.integration_credentials
+WHERE id=$1::uuid AND org_id=$2 AND lower(provider)='pagerduty' AND is_active`, *credentialID, orgID).Scan(&configJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, true, "", nil
+	}
+	if err != nil {
+		return nil, false, "", fmt.Errorf("load PagerDuty credential metadata: %w", err)
+	}
+	var credentialConfig struct {
+		AccountID string `json:"account_id"`
+		Subdomain string `json:"subdomain"`
+	}
+	if err := json.Unmarshal(configJSON, &credentialConfig); err != nil {
+		return nil, false, "", fmt.Errorf("decode PagerDuty credential metadata: %w", err)
+	}
+	accountID := strings.TrimSpace(credentialConfig.AccountID)
+	if accountID == "" || strings.TrimSpace(credentialConfig.Subdomain) == "" {
+		reason := "PagerDuty credential account identity is invalid"
+		return nil, false, reason, disablePagerDutyConfigs(ctx, tx, orgID, integrationID, now, reason)
+	}
+	var sourceID string
+	err = tx.QueryRow(ctx, `SELECT id::text FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='pagerduty' AND external_id=$3 ORDER BY id LIMIT 1`, orgID, integrationID, accountID).Scan(&sourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		sourceID = uuid.NewSHA1(materializerNamespace, []byte(integrationID+":pagerduty-source:"+accountID)).String()
+	} else if err != nil {
+		return nil, false, "", fmt.Errorf("load PagerDuty canonical source: %w", err)
+	}
+	repair := &pagerDutyDomainRepair{source: PlanSource{ID: sourceID, ExternalID: accountID, Provider: "pagerduty", FullName: accountID}, datasetOptions: make(map[string][]byte)}
+	rows, err := tx.Query(ctx, `SELECT dataset_key,options::jsonb FROM public.integration_datasets WHERE org_id=$1 AND integration_id=$2::uuid`, orgID, integrationID)
+	if err != nil {
+		return nil, false, "", fmt.Errorf("load PagerDuty datasets: %w", err)
+	}
+	existing := make(map[string][]byte)
+	for rows.Next() {
+		var key string
+		var options []byte
+		if err := rows.Scan(&key, &options); err != nil {
+			rows.Close()
+			return nil, false, "", err
+		}
+		existing[key] = options
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, false, "", err
+	}
+	rows.Close()
+	for _, dataset := range pagerDutyOperationalDatasets {
+		options := map[string]any{}
+		if raw := existing[dataset]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &options)
+		}
+		options["legacy_targets"] = []string{"operational"}
+		encoded, err := json.Marshal(options)
+		if err != nil {
+			return nil, false, "", err
+		}
+		repair.datasetOptions[dataset] = encoded
+		var depth *int
+		if value, ok := options["initial_sync_depth"].(float64); ok && value > 0 {
+			parsed := int(value)
+			depth = &parsed
+		}
+		repair.datasets = append(repair.datasets, PlanDataset{Key: dataset, InitialDepthDays: depth})
+	}
+	return repair, false, "", nil
+}
+
+func disablePagerDutyConfigs(ctx context.Context, tx pgx.Tx, orgID, integrationID string, now time.Time, reason string) error {
+	_, err := tx.Exec(ctx, `
+UPDATE public.sync_configurations
+SET is_active=FALSE,last_sync_at=$3,last_sync_success=FALSE,last_sync_error=$4,
+    last_sync_stats='{"error_category":"pagerduty_sync_disabled"}'::jsonb,updated_at=$3
+WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='pagerduty'`, orgID, integrationID, now, reason)
+	if err != nil {
+		return fmt.Errorf("disable invalid PagerDuty sync configurations: %w", err)
+	}
+	return nil
+}
+
+func loadPlanLimits(ctx context.Context, tx pgx.Tx, orgID string, defaultUnitCap int) (*int, int, error) {
+	if _, err := uuid.Parse(orgID); err != nil {
+		value := 30
+		return &value, defaultUnitCap, nil
+	}
+	var orgTier *string
+	var licenseTier *string
+	var overridesJSON []byte
+	err := tx.QueryRow(ctx, `
+SELECT coalesce(organization.tier,'community'),license.tier,license.limits_override::jsonb
+FROM public.organizations AS organization
+LEFT JOIN public.org_licenses AS license ON license.org_id=organization.id
+WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, ErrOccurrenceIneligible
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("load scheduled sync organization limits: %w", err)
+	}
+	resolvedTier := "community"
+	if orgTier != nil {
+		resolvedTier = *orgTier
+	}
+	if licenseTier != nil {
+		resolvedTier = *licenseTier
+	}
+	if resolvedTier != "community" && resolvedTier != "team" && resolvedTier != "enterprise" {
+		resolvedTier = "community"
+	}
+	var overrides map[string]json.RawMessage
+	_ = json.Unmarshal(overridesJSON, &overrides)
+	resolveOverride := func(key string) (*int, bool) {
+		raw, ok := overrides[key]
+		if !ok {
+			return nil, false
+		}
+		if string(raw) == "null" {
+			return nil, true
+		}
+		var value int
+		if json.Unmarshal(raw, &value) != nil || value < 1 {
+			return nil, false
+		}
+		return &value, true
+	}
+	backfill, backfillSet := resolveOverride("backfill_days")
+	unitCap, unitCapSet := resolveOverride("max_sync_units")
+	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key IN ('backfill_days','max_sync_units')`, resolvedTier)
+	if err != nil {
+		return nil, 0, fmt.Errorf("load scheduled sync tier limits: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var value *string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, 0, err
+		}
+		if key == "backfill_days" && !backfillSet {
+			backfill, backfillSet = parseOptionalPositiveInt(value)
+		}
+		if key == "max_sync_units" && !unitCapSet {
+			unitCap, unitCapSet = parseOptionalPositiveInt(value)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if !backfillSet {
+		switch resolvedTier {
+		case "community":
+			value := 30
+			backfill = &value
+		case "team":
+			value := 90
+			backfill = &value
+		}
+	}
+	totalCap := defaultUnitCap
+	if unitCap != nil {
+		totalCap = *unitCap
+	}
+	return backfill, totalCap, nil
+}
+
+func parseOptionalPositiveInt(value *string) (*int, bool) {
+	if value == nil {
+		return nil, true
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(*value, "%d", &parsed); err != nil || parsed < 1 {
+		return nil, false
+	}
+	return &parsed, true
+}
+
+func planDatasetsRequireCanonicalIncident(provider string, datasets []PlanDataset) bool {
+	for _, dataset := range datasets {
+		spec, ok := datasetSpecification(provider, dataset.Key)
+		if !ok {
+			continue
+		}
+		for _, target := range spec.LegacyTargets {
+			if target == "incidents" || target == "operational" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
+	if _, err := uuid.Parse(orgID); err != nil {
+		return false, nil
+	}
+	var featureID, minTier string
+	var globallyEnabled bool
+	err := tx.QueryRow(ctx, `
+SELECT id::text,min_tier,is_enabled
+FROM public.feature_flags
+WHERE key='canonical_incident_ingestion'
+FOR UPDATE`).Scan(&featureID, &minTier, &globallyEnabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock canonical incident feature: %w", err)
+	}
+	tierRank := map[string]int{"community": 0, "team": 1, "enterprise": 2}
+	minimumRank, validMinimum := tierRank[minTier]
+	if !globallyEnabled || !validMinimum {
+		return false, nil
+	}
+	var overrideEnabled *bool
+	var overrideExpires *time.Time
+	err = tx.QueryRow(ctx, `
+SELECT is_enabled,expires_at
+FROM public.org_feature_overrides
+WHERE org_id=$1::uuid AND feature_id=$2::uuid
+FOR UPDATE`, orgID, featureID).Scan(&overrideEnabled, &overrideExpires)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("lock canonical incident override: %w", err)
+	}
+	if overrideEnabled != nil && (overrideExpires == nil || overrideExpires.After(now.UTC())) {
+		return *overrideEnabled, nil
+	}
+	var orgTier *string
+	var licenseTier *string
+	var licenseFeatures []byte
+	err = tx.QueryRow(ctx, `
+SELECT coalesce(organization.tier,'community'),license.tier,license.features_override::jsonb
+FROM public.organizations AS organization
+LEFT JOIN public.org_licenses AS license ON license.org_id=organization.id
+WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &licenseFeatures)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load canonical incident entitlement: %w", err)
+	}
+	if len(licenseFeatures) > 0 {
+		var overrides map[string]bool
+		if json.Unmarshal(licenseFeatures, &overrides) == nil {
+			if allowed, ok := overrides["canonical_incident_ingestion"]; ok {
+				return allowed, nil
+			}
+		}
+	}
+	resolvedTier := "community"
+	if orgTier != nil {
+		resolvedTier = *orgTier
+	}
+	if licenseTier != nil {
+		resolvedTier = *licenseTier
+	}
+	orgRank, validOrgTier := tierRank[resolvedTier]
+	if !validOrgTier {
+		orgRank = tierRank["community"]
+	}
+	return orgRank >= minimumRank, nil
+}
+
+func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, sourceID *string, plannerManaged bool) ([]PlanSource, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id::text, external_id, lower(provider), full_name
+FROM public.integration_sources
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
+  AND ($3::uuid IS NULL OR id=$3::uuid)
+  AND ($3::uuid IS NOT NULL OR NOT $4 OR metadata->>'planner_managed_sync_config_id'=$5)
+ORDER BY full_name, id`, orgID, integrationID, sourceID, plannerManaged, configID)
+	if err != nil {
+		return nil, fmt.Errorf("load scheduled sync sources: %w", err)
+	}
+	defer rows.Close()
+	var result []PlanSource
+	for rows.Next() {
+		var source PlanSource
+		if err := rows.Scan(&source.ID, &source.ExternalID, &source.Provider, &source.FullName); err != nil {
+			return nil, fmt.Errorf("scan scheduled sync source: %w", err)
+		}
+		result = append(result, source)
+	}
+	return result, rows.Err()
+}
+
+func requestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {
+	// Python's plan_request_for_config leaves parent dataset scope unset. Child
+	// configs derive dataset keys only from the provider registry's legacy
+	// targets; an empty mapping deliberately falls back to all enabled datasets.
+	if sourceID == nil || len(targets) == 0 {
+		return nil
+	}
+	requested := make(map[string]bool)
+	for _, target := range targets {
+		target = strings.ToLower(strings.TrimSpace(target))
+		for dataset := range supportedProviderDatasets[provider] {
+			if spec, ok := datasetSpecification(provider, dataset); ok {
+				for _, candidate := range spec.LegacyTargets {
+					if candidate == target {
+						requested[dataset] = true
+					}
+				}
+			}
+		}
+	}
+	if len(requested) == 0 {
+		return nil
+	}
+	return requested
+}
+
+func syncTargetsRequireCanonicalIncident(targets []string) bool {
+	for _, target := range targets {
+		target = strings.ToLower(strings.TrimSpace(target))
+		if target == "incidents" || target == "operational" {
+			return true
+		}
+	}
+	return false
+}
+
+func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string) ([]PlanDataset, bool, error) {
+	requested := requestedDatasetKeys(provider, targets, sourceID)
+	securityRequested := false
+	if provider == "github" || provider == "gitlab" {
+		securityRequested = true
+		if requested != nil {
+			requested["security"] = true
+		}
+	}
+	rows, err := tx.Query(ctx, `
+SELECT dataset_key,is_enabled,options::jsonb
+FROM public.integration_datasets
+WHERE org_id = $1 AND integration_id = $2::uuid
+ORDER BY dataset_key`, orgID, integrationID)
+	if err != nil {
+		return nil, false, fmt.Errorf("load scheduled sync datasets: %w", err)
+	}
+	defer rows.Close()
+	var result []PlanDataset
+	securityExists := false
+	for rows.Next() {
+		var key string
+		var enabled bool
+		var raw []byte
+		if err := rows.Scan(&key, &enabled, &raw); err != nil {
+			return nil, false, err
+		}
+		if key == "security" {
+			securityExists = true
+		}
+		if !enabled || (requested != nil && !requested[key]) {
+			continue
+		}
+		var option struct {
+			InitialSyncDepth int `json:"initial_sync_depth"`
+		}
+		if err := json.Unmarshal(raw, &option); err != nil {
+			return nil, false, fmt.Errorf("decode dataset %s options: %w", key, err)
+		}
+		var depth *int
+		if option.InitialSyncDepth > 0 {
+			depth = &option.InitialSyncDepth
+		}
+		result = append(result, PlanDataset{Key: key, InitialDepthDays: depth})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	ensureSecurity := securityRequested && !securityExists
+	if ensureSecurity {
+		result = append(result, PlanDataset{Key: "security"})
+	}
+	return result, ensureSecurity, nil
+}
+
+func loadPlanWatermarks(ctx context.Context, tx pgx.Tx, orgID string, sources []PlanSource, datasets []PlanDataset) (map[WatermarkKey]time.Time, error) {
+	result := make(map[WatermarkKey]time.Time)
+	rows, err := tx.Query(ctx, `
+SELECT source_id,dataset_key,repo_id,target,last_synced_at
+FROM public.sync_watermarks
+WHERE org_id=$1 AND last_synced_at IS NOT NULL`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("load scheduled sync watermarks: %w", err)
+	}
+	defer rows.Close()
+	type watermarkRow struct {
+		sourceID string
+		dataset  string
+		repoID   string
+		target   string
+		at       time.Time
+	}
+	var loaded []watermarkRow
+	for rows.Next() {
+		var row watermarkRow
+		if err := rows.Scan(&row.sourceID, &row.dataset, &row.repoID, &row.target, &row.at); err != nil {
+			return nil, err
+		}
+		loaded = append(loaded, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, source := range sources {
+		for _, dataset := range datasets {
+			key := WatermarkKey{SourceID: source.ExternalID, Dataset: dataset.Key}
+			for _, row := range loaded {
+				if row.sourceID == source.ExternalID && row.dataset == dataset.Key {
+					result[key] = row.at.UTC()
+					break
+				}
+			}
+			if _, ok := result[key]; ok {
+				continue
+			}
+			for _, row := range loaded {
+				if row.repoID == source.ExternalID && row.target == dataset.Key {
+					result[key] = row.at.UTC()
+					break
+				}
+			}
+			if _, ok := result[key]; ok {
+				continue
+			}
+			for _, legacy := range legacyTargetsByDataset[dataset.Key] {
+				for _, row := range loaded {
+					if row.repoID == source.ExternalID && row.target == legacy && row.dataset == legacy {
+						result[key] = row.at.UTC()
+						break
+					}
+				}
+				if _, ok := result[key]; ok {
+					break
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func applyDomainPlanMutations(ctx context.Context, tx pgx.Tx, loaded loadedMaterializationPlan, now time.Time) error {
+	if loaded.ensureSecurityDataset {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
+VALUES ($1::uuid,$2,$3::uuid,'security',TRUE,'{"auto_enabled_by":"scheduled_code_host_sync"}'::jsonb)
+ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID); err != nil {
+			return fmt.Errorf("ensure scheduled security dataset: %w", err)
+		}
+	}
+	repair := loaded.pagerDutyRepair
+	if repair == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO public.integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,$3::uuid,'pagerduty','account',$4,$4,$4,'{}'::jsonb,TRUE,$5,$5)
+ON CONFLICT (org_id,integration_id,provider,external_id) DO UPDATE
+SET source_type='account',name=EXCLUDED.name,full_name=EXCLUDED.full_name,is_enabled=TRUE,last_seen_at=EXCLUDED.last_seen_at`, repair.source.ID, loaded.input.OrgID, loaded.input.IntegrationID, repair.source.ExternalID, now); err != nil {
+		return fmt.Errorf("repair PagerDuty canonical source: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET is_enabled=FALSE WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='pagerduty' AND external_id<>$3 AND is_enabled`, loaded.input.OrgID, loaded.input.IntegrationID, repair.source.ExternalID); err != nil {
+		return fmt.Errorf("disable stale PagerDuty sources: %w", err)
+	}
+	wanted := make([]string, 0, len(repair.datasets))
+	for _, dataset := range repair.datasets {
+		wanted = append(wanted, dataset.Key)
+		datasetID := uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:"+dataset.Key)).String()
+		if _, err := tx.Exec(ctx, `
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
+VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,$5::jsonb)
+ON CONFLICT (org_id,integration_id,dataset_key) DO UPDATE SET is_enabled=TRUE,options=EXCLUDED.options`, datasetID, loaded.input.OrgID, loaded.input.IntegrationID, dataset.Key, repair.datasetOptions[dataset.Key]); err != nil {
+			return fmt.Errorf("repair PagerDuty dataset %s: %w", dataset.Key, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE public.integration_datasets SET is_enabled=FALSE WHERE org_id=$1 AND integration_id=$2::uuid AND NOT (dataset_key=ANY($3::text[])) AND is_enabled`, loaded.input.OrgID, loaded.input.IntegrationID, wanted); err != nil {
+		return fmt.Errorf("disable stale PagerDuty datasets: %w", err)
+	}
+	return nil
+}
+
+func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, loaded loadedMaterializationPlan, units []PlannedUnit, createdAt time.Time) error {
+	// Replay occurs only for the crash window after this domain graph commits
+	// but before the coordinator readiness fence commits. Both reconcilers now
+	// exclude such scheduled graphs, so every lifecycle field must still equal
+	// its initialized value. Once the fence commits, the occurrence link makes
+	// the reconciler return the existing plan without calling this verifier.
+	expectedStatus := "planned"
+	var completedAt *time.Time
+	var resultJSON []byte
+	var runError *string
+	if loaded.terminalReason != "" {
+		expectedStatus = "failed"
+		completedAt = pointerTime(createdAt)
+		runError = &loaded.terminalReason
+		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
+	}
+	_, err := tx.Exec(ctx, `
+INSERT INTO public.sync_runs
+ (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units,
+  credential_id, credential_fingerprint, auth_source,completed_at,result,error,created_at)
+VALUES ($1::uuid,$2,$3::uuid,'schedule',$4,$5,$6,0,0,$7::uuid,NULL,$8,$9,$10::jsonb,$11,$12)
+ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.IntegrationID,
+		loaded.input.Mode, expectedStatus, len(units), loaded.credentialID, loaded.authSource, completedAt, resultJSON, runError, createdAt)
+	if err != nil {
+		return fmt.Errorf("persist scheduled sync run: %w", err)
+	}
+	var org, integration, triggeredBy, mode, status string
+	var total, completed, failed int
+	var credential, auth, fingerprint, persistedError *string
+	var persistedStartedAt, persistedCompletedAt *time.Time
+	var persistedCreatedAt time.Time
+	var persistedResult []byte
+	if err := tx.QueryRow(ctx, `SELECT org_id,integration_id::text,triggered_by,mode,status,total_units,completed_units,failed_units,credential_id::text,auth_source,credential_fingerprint,started_at,completed_at,result::jsonb,error,created_at FROM public.sync_runs WHERE id=$1::uuid`, ids.SyncRunID).Scan(&org, &integration, &triggeredBy, &mode, &status, &total, &completed, &failed, &credential, &auth, &fingerprint, &persistedStartedAt, &persistedCompletedAt, &persistedResult, &persistedError, &persistedCreatedAt); err != nil {
+		return fmt.Errorf("verify scheduled sync run: %w", err)
+	}
+	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != "schedule" || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || fingerprint != nil || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
+		return fmt.Errorf("%w: deterministic sync run identity maps to different state", ErrInvalidPlan)
+	}
+	type expectedUnit struct {
+		unit  PlannedUnit
+		flags map[string]bool
+	}
+	expectedUnits := make(map[string]expectedUnit, len(units))
+	batch := &pgx.Batch{}
+	for ordinal, unit := range units {
+		unitID, err := deterministicUnitID(ids.SyncRunID, ordinal)
+		if err != nil {
+			return err
+		}
+		flags, err := json.Marshal(unit.ProcessorFlags)
+		if err != nil {
+			return err
+		}
+		batch.Queue(`
+INSERT INTO public.sync_run_units
+ (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,cost_class,mode,since_at,before_at,status,attempts,processor_flags,created_at,updated_at)
+VALUES ($1::uuid,$2,$3::uuid,$4::uuid,$5::uuid,$6,$7,$8,$9,$10,$11,'planned',0,$12::jsonb,$13,$13)
+ON CONFLICT (id) DO NOTHING`, unitID, unit.OrgID, ids.SyncRunID, unit.IntegrationID, unit.SourceID, unit.Provider,
+			unit.Dataset, unit.CostClass, unit.Mode, unit.WindowStart, unit.WindowEnd, flags, createdAt)
+		expectedUnits[unitID] = expectedUnit{unit: unit, flags: unit.ProcessorFlags}
+	}
+	results := tx.SendBatch(ctx, batch)
+	for ordinal := range units {
+		if _, err := results.Exec(); err != nil {
+			_ = results.Close()
+			return fmt.Errorf("persist scheduled sync unit %d: %w", ordinal, err)
+		}
+	}
+	if err := results.Close(); err != nil {
+		return fmt.Errorf("finish scheduled sync unit batch: %w", err)
+	}
+	rows, err := tx.Query(ctx, `
+SELECT id::text,org_id,sync_run_id::text,integration_id::text,source_id::text,provider,dataset_key,
+       cost_class,mode,since_at,before_at,status,attempts,available_at,rate_limit_deferrals,
+       rate_limit_first_seen_at,expired_lease_retry_count,last_retry_reason,retry_exhausted_at,
+       duration_seconds,error,result::jsonb,processor_flags::jsonb,lease_owner,lease_expires_at,
+       last_heartbeat_at,created_at,updated_at
+FROM public.sync_run_units WHERE sync_run_id=$1::uuid`, ids.SyncRunID)
+	if err != nil {
+		return fmt.Errorf("verify scheduled sync units: %w", err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var id, org, runID, integrationID, sourceID, provider, dataset, cost, mode, status string
+		var since, before, availableAt, rateLimitFirstSeenAt, retryExhaustedAt *time.Time
+		var leaseExpiresAt, lastHeartbeatAt *time.Time
+		var attempts, rateLimitDeferrals, expiredLeaseRetryCount int
+		var durationSeconds *int
+		var lastRetryReason, unitError, leaseOwner *string
+		var resultJSON, flagsJSON []byte
+		var persistedCreatedAt, persistedUpdatedAt time.Time
+		if err := rows.Scan(
+			&id, &org, &runID, &integrationID, &sourceID, &provider, &dataset, &cost, &mode,
+			&since, &before, &status, &attempts, &availableAt, &rateLimitDeferrals,
+			&rateLimitFirstSeenAt, &expiredLeaseRetryCount, &lastRetryReason, &retryExhaustedAt,
+			&durationSeconds, &unitError, &resultJSON, &flagsJSON, &leaseOwner, &leaseExpiresAt,
+			&lastHeartbeatAt, &persistedCreatedAt, &persistedUpdatedAt,
+		); err != nil {
+			return err
+		}
+		expected, ok := expectedUnits[id]
+		if !ok {
+			return fmt.Errorf("%w: deterministic sync run contains unexpected unit %s", ErrInvalidPlan, id)
+		}
+		var flags map[string]bool
+		if err := json.Unmarshal(flagsJSON, &flags); err != nil {
+			return err
+		}
+		unit := expected.unit
+		if org != unit.OrgID || runID != ids.SyncRunID || integrationID != unit.IntegrationID || sourceID != unit.SourceID || provider != unit.Provider || dataset != unit.Dataset || cost != unit.CostClass || mode != unit.Mode || !equalOptionalTime(since, unit.WindowStart) || !equalOptionalTime(before, unit.WindowEnd) || status != "planned" || attempts != 0 || availableAt != nil || rateLimitDeferrals != 0 || rateLimitFirstSeenAt != nil || expiredLeaseRetryCount != 0 || lastRetryReason != nil || retryExhaustedAt != nil || durationSeconds != nil || unitError != nil || len(resultJSON) != 0 || !reflect.DeepEqual(flags, expected.flags) || leaseOwner != nil || leaseExpiresAt != nil || lastHeartbeatAt != nil || !persistedCreatedAt.Equal(createdAt) || !persistedUpdatedAt.Equal(createdAt) {
+			return fmt.Errorf("%w: deterministic sync unit %s maps to different state", ErrInvalidPlan, id)
+		}
+		seen++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if seen != len(units) {
+		return fmt.Errorf("%w: deterministic sync run has %d units, expected %d", ErrInvalidPlan, seen, len(units))
+	}
+	return nil
+}
+
+func equalOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+func equalOptionalJSON(left, right []byte) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == 0 && len(right) == 0
+	}
+	var a, b any
+	if json.Unmarshal(left, &a) != nil || json.Unmarshal(right, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+func persistCoordinatorGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, occurrence PendingOccurrence, totalUnits int, terminalReason string) error {
+	jobStatus := 0
+	resultValue := map[string]any{"sync_run_id": ids.SyncRunID}
+	if terminalReason != "" {
+		jobStatus = 3
+		resultValue["terminal_status"] = "pagerduty_sync_disabled"
+		resultValue["reason"] = terminalReason
+		resultValue["total_units"] = totalUnits
+	}
+	result, _ := json.Marshal(resultValue)
+	var completedAt *time.Time
+	var jobError *string
+	if terminalReason != "" {
+		completedAt = pointerTime(occurrence.ScheduledFor)
+		jobError = &terminalReason
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO public.job_runs (id,job_id,status,result,triggered_by,completed_at,error,created_at)
+VALUES ($1::uuid,$2::uuid,$3,$4::jsonb,'schedule',$5,$6,$7)
+ON CONFLICT (id) DO NOTHING`, ids.JobRunID, occurrence.JobID, jobStatus, result, completedAt, jobError, occurrence.ScheduledFor); err != nil {
+		return fmt.Errorf("persist scheduled job run: %w", err)
+	}
+	var persistedJobID, persistedTriggeredBy string
+	var persistedJobStatus int
+	var persistedJobResult []byte
+	var persistedJobStarted, persistedJobCompleted *time.Time
+	var persistedJobDuration *int
+	var persistedJobError, persistedJobTraceback *string
+	var persistedJobCreatedAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT job_id::text,status,started_at,completed_at,duration_seconds,result::jsonb,error,error_traceback,triggered_by,created_at FROM public.job_runs WHERE id=$1::uuid`, ids.JobRunID).Scan(&persistedJobID, &persistedJobStatus, &persistedJobStarted, &persistedJobCompleted, &persistedJobDuration, &persistedJobResult, &persistedJobError, &persistedJobTraceback, &persistedTriggeredBy, &persistedJobCreatedAt); err != nil {
+		return fmt.Errorf("verify scheduled job run: %w", err)
+	}
+	if persistedJobID != occurrence.JobID || persistedJobStatus != jobStatus || persistedJobStarted != nil || !equalOptionalTime(persistedJobCompleted, completedAt) || persistedJobDuration != nil || !equalOptionalJSON(persistedJobResult, result) || !equalOptionalString(persistedJobError, jobError) || persistedJobTraceback != nil || persistedTriggeredBy != "schedule" || !persistedJobCreatedAt.Equal(occurrence.ScheduledFor) {
+		return fmt.Errorf("%w: deterministic job run identity maps to different state", ErrInvalidPlan)
+	}
+	if terminalReason != "" {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO public.sync_run_reference_discoveries
+ (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ($1::uuid,$2::uuid,$3,'planned',0,$4,$4,$4)
+ON CONFLICT (sync_run_id) DO NOTHING`, ids.ReferenceDiscoveryID, ids.SyncRunID, occurrence.OrgID, occurrence.ScheduledFor); err != nil {
+		return fmt.Errorf("persist scheduled reference discovery: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO public.sync_dispatch_outbox
+ (id,org_id,sync_run_id,kind,status,available_at,attempts,created_at,updated_at)
+VALUES ($1::uuid,$2,$3::uuid,'reference_discovery','pending',$4,0,$4,$4)
+ON CONFLICT (sync_run_id,kind) DO NOTHING`, ids.DispatchOutboxID, occurrence.OrgID, ids.SyncRunID, occurrence.ScheduledFor); err != nil {
+		return fmt.Errorf("persist scheduled discovery outbox: %w", err)
+	}
+	var discoveryID, discoveryRunID, discoveryOrg, discoveryStatus string
+	var discoveryAttempts int
+	var discoveryAvailable, discoveryCreated, discoveryUpdated time.Time
+	var discoveryLeaseOwner, discoveryError *string
+	var discoveryLeaseExpires, discoveryHeartbeat, discoveryCompleted *time.Time
+	var discoveryResult []byte
+	if err := tx.QueryRow(ctx, `SELECT id::text,sync_run_id::text,org_id,status,attempts,available_at,lease_owner,lease_expires_at,last_heartbeat_at,completed_at,error,result::jsonb,created_at,updated_at FROM public.sync_run_reference_discoveries WHERE sync_run_id=$1::uuid`, ids.SyncRunID).Scan(&discoveryID, &discoveryRunID, &discoveryOrg, &discoveryStatus, &discoveryAttempts, &discoveryAvailable, &discoveryLeaseOwner, &discoveryLeaseExpires, &discoveryHeartbeat, &discoveryCompleted, &discoveryError, &discoveryResult, &discoveryCreated, &discoveryUpdated); err != nil {
+		return fmt.Errorf("verify scheduled reference discovery: %w", err)
+	}
+	var outboxID, outboxOrg, outboxRunID, outboxKind, outboxStatus string
+	var outboxAttempts int
+	var outboxAvailable, outboxCreated, outboxUpdated time.Time
+	var outboxLastError, outboxClaimToken, outboxClaimTransport *string
+	var outboxDispatchedTransport, outboxTransportJobID *string
+	var outboxDispatchedAt, outboxClaimExpires *time.Time
+	var outboxClaimGeneration, outboxDispatchedGeneration *int64
+	if err := tx.QueryRow(ctx, `SELECT id::text,org_id,sync_run_id::text,kind,status,attempts,available_at,last_error,dispatched_at,claim_token,claim_expires_at,claim_transport,claim_route_generation,dispatched_transport,dispatched_route_generation,transport_job_id,created_at,updated_at FROM public.sync_dispatch_outbox WHERE sync_run_id=$1::uuid AND kind='reference_discovery'`, ids.SyncRunID).Scan(&outboxID, &outboxOrg, &outboxRunID, &outboxKind, &outboxStatus, &outboxAttempts, &outboxAvailable, &outboxLastError, &outboxDispatchedAt, &outboxClaimToken, &outboxClaimExpires, &outboxClaimTransport, &outboxClaimGeneration, &outboxDispatchedTransport, &outboxDispatchedGeneration, &outboxTransportJobID, &outboxCreated, &outboxUpdated); err != nil {
+		return fmt.Errorf("verify scheduled discovery outbox: %w", err)
+	}
+	expectedAt := occurrence.ScheduledFor
+	if discoveryID != ids.ReferenceDiscoveryID || discoveryRunID != ids.SyncRunID || discoveryOrg != occurrence.OrgID || discoveryStatus != "planned" || discoveryAttempts != 0 || !discoveryAvailable.Equal(expectedAt) || discoveryLeaseOwner != nil || discoveryLeaseExpires != nil || discoveryHeartbeat != nil || discoveryCompleted != nil || discoveryError != nil || len(discoveryResult) != 0 || !discoveryCreated.Equal(expectedAt) || !discoveryUpdated.Equal(expectedAt) || outboxID != ids.DispatchOutboxID || outboxOrg != occurrence.OrgID || outboxRunID != ids.SyncRunID || outboxKind != "reference_discovery" || outboxStatus != "pending" || outboxAttempts != 0 || !outboxAvailable.Equal(expectedAt) || outboxLastError != nil || outboxDispatchedAt != nil || outboxClaimToken != nil || outboxClaimExpires != nil || outboxClaimTransport != nil || outboxClaimGeneration != nil || outboxDispatchedTransport != nil || outboxDispatchedGeneration != nil || outboxTransportJobID != nil || !outboxCreated.Equal(expectedAt) || !outboxUpdated.Equal(expectedAt) {
+		return fmt.Errorf("%w: deterministic coordinator graph maps to different state", ErrInvalidPlan)
+	}
+	return nil
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+type materializationIDs struct {
+	JobRunID             string
+	SyncRunID            string
+	ReferenceDiscoveryID string
+	DispatchOutboxID     string
+}
+
+func deterministicMaterializationIDs(occurrenceID string) (materializationIDs, error) {
+	if occurrenceID == "" {
+		return materializationIDs{}, ErrInvalidMaterializer
+	}
+	derive := func(kind string) string {
+		return uuid.NewSHA1(materializerNamespace, []byte(occurrenceID+":"+kind)).String()
+	}
+	return materializationIDs{
+		JobRunID:             derive("job-run"),
+		SyncRunID:            derive("sync-run"),
+		ReferenceDiscoveryID: derive("reference-discovery"),
+		DispatchOutboxID:     derive("dispatch-outbox"),
+	}, nil
+}
+
+func deterministicUnitID(syncRunID string, ordinal int) (string, error) {
+	runID, err := uuid.Parse(syncRunID)
+	if err != nil || ordinal < 0 {
+		return "", ErrInvalidMaterializer
+	}
+	return uuid.NewSHA1(runID, []byte(fmt.Sprintf("unit:%d", ordinal))).String(), nil
+}

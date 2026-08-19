@@ -182,7 +182,7 @@ CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
 Phase 1 of the Go worker migration plan
 adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
 operator foundations for future worker, scheduler, reconciler, and
-stream-runner processes. Every Go deployment profile remains disabled and all
+stream-runner processes. Every Go deployment group remains disabled and all
 registered jobs still route to Celery. A binary building—or even reporting its
 storage dependencies healthy—does not make a job migrated or canary-ready.
 Keep the required Celery workers and Beat schedules running until the issue for

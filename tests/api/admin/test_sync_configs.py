@@ -1240,6 +1240,209 @@ async def test_update_source_scoped_child_sync_config_does_not_touch_shared_data
 
 
 @pytest.mark.asyncio
+async def test_github_work_item_defaults_and_patch_controls_reach_stale_planned_claim(
+    client, session_maker, monkeypatch
+):
+    ac, _ = client
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "false")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "false")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "7")
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "github-work-item-runtime-controls",
+            "provider": "github",
+            "sync_targets": ["work-items"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["api"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["parent"]["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        assert config.sync_options["fetch_comments"] is False
+        assert config.sync_options["fetch_milestones"] is False
+        assert config.sync_options["comments_limit"] == 7
+        assert dataset.options["fetch_comments"] is False
+        assert dataset.options["fetch_milestones"] is False
+        assert dataset.options["comments_limit"] == 7
+
+        # Reproduce a legacy planner-managed config created before runtime
+        # options were durable. The planner repair must snapshot the current
+        # environment into the integration and dataset, while this older
+        # SyncConfiguration row remains sparse until a later PATCH.
+        runtime_keys = {"fetch_comments", "fetch_milestones", "comments_limit"}
+        config.sync_options = {
+            key: value
+            for key, value in config.sync_options.items()
+            if key not in runtime_keys
+        }
+        integration.config = {
+            key: value
+            for key, value in integration.config.items()
+            if key not in runtime_keys
+        }
+        dataset.options = {
+            **{
+                key: value
+                for key, value in dataset.options.items()
+                if key not in runtime_keys
+            },
+            "unrelated": "preserve",
+        }
+        await session.commit()
+
+    dispatch = MagicMock()
+    dispatch.apply_async.return_value = MagicMock(id="stale-unit-dispatch")
+    with patch(
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        dispatch.apply_async,
+    ):
+        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+    assert trigger_resp.status_code == 202, trigger_resp.text
+    assert trigger_resp.json()["total_units"] == 1
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        assert "fetch_comments" not in config.sync_options
+        assert "fetch_milestones" not in config.sync_options
+        assert "comments_limit" not in config.sync_options
+        assert integration.config["fetch_comments"] is False
+        assert integration.config["fetch_milestones"] is False
+        assert integration.config["comments_limit"] == 7
+        assert dataset.options["fetch_comments"] is False
+        assert dataset.options["fetch_milestones"] is False
+        assert dataset.options["comments_limit"] == 7
+
+        # Keep only the dataset snapshot before the unrelated PATCH. This pins
+        # that durable boundary independently instead of letting the identical
+        # integration copy mask a missing dataset-precedence clause.
+        integration.config = {
+            key: value
+            for key, value in integration.config.items()
+            if key not in runtime_keys
+        }
+        await session.commit()
+
+    monkeypatch.setenv("GITHUB_FETCH_COMMENTS", "true")
+    monkeypatch.setenv("GITHUB_FETCH_MILESTONES", "true")
+    monkeypatch.setenv("GITHUB_COMMENTS_LIMIT", "999")
+    unrelated_update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"is_active": False},
+    )
+    assert unrelated_update_resp.status_code == 200, unrelated_update_resp.text
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        for durable_options in (
+            config.sync_options,
+            integration.config,
+            dataset.options,
+        ):
+            assert durable_options["fetch_comments"] is False
+            assert durable_options["fetch_milestones"] is False
+            assert durable_options["comments_limit"] == 7
+
+        # The unrelated PATCH repaired all three stores. Keep only the
+        # integration snapshot before the partial runtime PATCH so its
+        # precedence is measured independently, while comments_limit=37 below
+        # still proves explicit PATCH values win over durable state.
+        config.sync_options = {
+            key: value
+            for key, value in config.sync_options.items()
+            if key not in runtime_keys
+        }
+        dataset.options = {
+            key: value
+            for key, value in dataset.options.items()
+            if key not in runtime_keys
+        }
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={
+            "sync_options": {
+                "comments_limit": 37,
+            }
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "work-items",
+                )
+            )
+        ).scalar_one()
+        stale_units = (
+            (
+                await session.execute(
+                    select(SyncRunUnit).where(
+                        SyncRunUnit.integration_id == config.integration_id,
+                        SyncRunUnit.dataset_key == "work-items",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(stale_units) == 1
+    assert config.sync_options["fetch_comments"] is False
+    assert config.sync_options["fetch_milestones"] is False
+    assert config.sync_options["comments_limit"] == 37
+    for durable_options in (integration.config, dataset.options):
+        assert durable_options["fetch_comments"] is False
+        assert durable_options["fetch_milestones"] is False
+        assert durable_options["comments_limit"] == 37
+    assert dataset.options["unrelated"] == "preserve"
+
+
+@pytest.mark.asyncio
 async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
     client, session_maker
 ):
@@ -2043,13 +2246,14 @@ async def test_create_non_git_sync_config_is_integration_native_and_triggerable(
     mock_dispatch = MagicMock()
     mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["total_units"] >= 1
-    mock_dispatch.apply_async.assert_called_once()
+    mock_dispatch.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2095,13 +2299,14 @@ async def test_batch_create_git_sync_config_is_triggerable_with_units(
     mock_dispatch = MagicMock()
     mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["total_units"] >= 1
-    mock_dispatch.apply_async.assert_called_once()
+    mock_dispatch.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2164,7 +2369,8 @@ async def test_trigger_sync_config_returns_202_for_migrated_config(
     mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
 
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
@@ -2173,10 +2379,22 @@ async def test_trigger_sync_config_returns_202_for_migrated_config(
     assert data["status"] == "triggered"
     assert data["config_id"] == config_id
     assert data["sync_run_id"]
-    # Fan-out dispatch enqueues the planner run on the shared sync queue.
-    mock_dispatch.apply_async.assert_called_once()
-    assert mock_dispatch.apply_async.call_args.kwargs["queue"] == "sync"
-    assert mock_dispatch.apply_async.call_args.kwargs["args"] == (data["sync_run_id"],)
+    mock_dispatch.apply_async.assert_not_called()
+
+    async with session_maker() as session:
+        sync_run = await session.get(SyncRun, uuid.UUID(data["sync_run_id"]))
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(data["sync_run_id"]),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
+
+    assert sync_run is not None
+    assert sync_run.status == "planned"
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio
@@ -2189,9 +2407,7 @@ async def test_trigger_sync_config_nonexistent_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_celery_unavailable_returns_503(
-    client, session_maker
-):
+async def test_trigger_sync_config_does_not_depend_on_celery(client, session_maker):
     ac, seeded_state = client
     config_id = await _create_migrated_config(
         session_maker, seeded_state["org_id"], name="celery-fail-test"
@@ -2203,12 +2419,32 @@ async def test_trigger_sync_config_celery_unavailable_returns_503(
     )
 
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 503
-    assert "unavailable" in resp.json()["detail"].lower()
+    assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_not_called()
+
+    data = resp.json()
+    async with session_maker() as session:
+        job_run = await session.get(JobRun, uuid.UUID(data["run_id"]))
+        sync_run = await session.get(SyncRun, uuid.UUID(data["sync_run_id"]))
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(data["sync_run_id"]),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
+
+    assert job_run is not None
+    assert job_run.status == JobRunStatus.PENDING.value
+    assert sync_run is not None
+    assert sync_run.status == "planned"
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio
@@ -2563,7 +2799,7 @@ async def test_update_targets_correct_provider(client):
 
 @pytest.mark.asyncio
 async def test_trigger_creates_pending_job_run(client, session_maker):
-    """Trigger must persist a PENDING JobRun before dispatching the fan-out run."""
+    """Trigger persists a PENDING JobRun without publishing a Celery task."""
     from dev_health_ops.models.settings import JobRun, JobRunStatus
 
     ac, seeded_state = client
@@ -2575,7 +2811,8 @@ async def test_trigger_creates_pending_job_run(client, session_maker):
     mock_dispatch.apply_async.return_value = MagicMock(id="pending-task-id")
 
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
@@ -2584,6 +2821,7 @@ async def test_trigger_creates_pending_job_run(client, session_maker):
     assert data["status"] == "triggered"
     assert "run_id" in data
     run_id = data["run_id"]
+    mock_dispatch.apply_async.assert_not_called()
 
     # Verify a PENDING JobRun row was persisted.
     async with session_maker() as session:
@@ -2598,42 +2836,49 @@ async def test_trigger_creates_pending_job_run(client, session_maker):
 
 
 @pytest.mark.asyncio
-async def test_trigger_commits_pending_job_run_before_enqueue(client, session_maker):
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-
+async def test_trigger_commits_pending_job_run_with_durable_outbox(
+    client, session_maker
+):
     ac, seeded_state = client
     config_id = await _create_migrated_config(
         session_maker, seeded_state["org_id"], name="pre-enqueue-commit-test"
     )
-    sync_url = str(session_maker.kw["bind"].url).replace("sqlite+aiosqlite", "sqlite")
-
-    def assert_pending_run_is_visible(*_args, **_kwargs):
-        engine = create_engine(sync_url)
-        try:
-            with Session(engine) as session:
-                assert session.query(JobRun).count() == 1
-        finally:
-            engine.dispose()
-        return MagicMock(id="visible-task-id")
 
     mock_dispatch = MagicMock()
-    mock_dispatch.apply_async.side_effect = assert_pending_run_is_visible
 
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_not_called()
+
+    data = resp.json()
+    async with session_maker() as session:
+        job_run = await session.get(JobRun, uuid.UUID(data["run_id"]))
+        sync_run = await session.get(SyncRun, uuid.UUID(data["sync_run_id"]))
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(data["sync_run_id"]),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
+
+    assert job_run is not None
+    assert job_run.status == JobRunStatus.PENDING.value
+    assert sync_run is not None
+    assert sync_run.status == "planned"
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
+async def test_trigger_keeps_runs_pending_when_celery_is_unavailable(
     client, session_maker
 ):
-    from dev_health_ops.models.settings import JobRunStatus
-
     ac, seeded_state = client
     config_id = await _create_migrated_config(
         session_maker, seeded_state["org_id"], name="enqueue-failure-test"
@@ -2643,22 +2888,30 @@ async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
     mock_dispatch.apply_async.side_effect = RuntimeError("broker down")
 
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 503
-    assert "broker down" in resp.json()["detail"]
+    assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
-        result = await session.execute(select(JobRun))
-        runs = list(result.scalars().all())
+        job_runs = list((await session.execute(select(JobRun))).scalars().all())
+        sync_runs = list((await session.execute(select(SyncRun))).scalars().all())
+        outboxes = list(
+            (await session.execute(select(SyncDispatchOutbox))).scalars().all()
+        )
 
-    assert len(runs) == 1
-    run = runs[0]
-    assert run.status == JobRunStatus.FAILED.value
-    assert run.completed_at is not None
-    assert run.error == "RuntimeError: broker down"
+    assert len(job_runs) == 1
+    assert job_runs[0].status == JobRunStatus.PENDING.value
+    assert job_runs[0].completed_at is None
+    assert job_runs[0].error is None
+    assert len(sync_runs) == 1
+    assert sync_runs[0].status == "planned"
+    assert len(outboxes) == 1
+    assert outboxes[0].kind == "reference_discovery"
+    assert outboxes[0].status == "pending"
 
 
 @pytest.mark.asyncio
@@ -2697,7 +2950,8 @@ async def test_trigger_inactive_config_returns_409_without_execution(
 
     mock_dispatch = MagicMock()
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{target_id}/trigger")
 
@@ -3338,18 +3592,19 @@ async def test_sync_starts_only_after_explicit_select_and_start(client, session_
     # Selecting repositories enables the config but starts no sync run.
     assert runs_after_select == []
 
-    # Step 2 (explicit start): trigger dispatches a run and persists a PENDING
-    # JobRun. dispatch is mocked so no Celery broker is needed.
+    # Step 2 (explicit start): trigger plans a run and persists its PENDING
+    # JobRun plus the durable reference-discovery wakeup.
     mock_dispatch = MagicMock()
     mock_dispatch.apply_async.return_value = MagicMock(id="task-id")
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert trigger_resp.status_code == 202, trigger_resp.text
     assert trigger_resp.json()["status"] == "triggered"
-    mock_dispatch.apply_async.assert_called_once()
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         runs_after_start = (await session.execute(select(JobRun))).scalars().all()

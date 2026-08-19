@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"regexp"
-	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -91,11 +91,10 @@ func (backend *PostgresBackend) List(ctx context.Context, filter ListFilter) ([]
 	return result, nil
 }
 
-func (backend *PostgresBackend) Queues(ctx context.Context, profile string) ([]QueueSummary, error) {
+func (backend *PostgresBackend) Queues(ctx context.Context, queues []string) ([]QueueSummary, error) {
 	if backend == nil || backend.pool == nil {
 		return nil, ErrBackendConfiguration
 	}
-	queues := backend.profileQueues(profile)
 	if len(queues) == 0 {
 		return nil, ErrBackendConfiguration
 	}
@@ -127,7 +126,6 @@ func (backend *PostgresBackend) Queues(ctx context.Context, profile string) ([]Q
 	result := make([]QueueSummary, 0, len(queues))
 	for rows.Next() {
 		var summary QueueSummary
-		summary.Profile = profile
 		if err := rows.Scan(
 			&summary.Name,
 			&summary.Paused,
@@ -182,6 +180,9 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 		return JobSummary{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := backend.lockCurrentDelivery(ctx, tx, id); err != nil {
+		return JobSummary{}, err
+	}
 	if err := backend.compareLockedState(ctx, tx, id, mutation.ExpectedState); err != nil {
 		return JobSummary{}, err
 	}
@@ -199,6 +200,63 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 	return summary, nil
 }
 
+// lockCurrentDelivery serializes an audited retry with terminal delivery
+// recovery. Recoverable jobs are only retryable while their durable outbox
+// still names that exact River row. Locking the outbox before the River row
+// matches both reconcilers' lock order and prevents an old job plus a new
+// outbox attempt from becoming runnable together.
+func (backend *PostgresBackend) lockCurrentDelivery(
+	ctx context.Context,
+	tx pgx.Tx,
+	id int64,
+) error {
+	var kind string
+	if err := tx.QueryRow(ctx, "SELECT kind FROM "+backend.jobTable+" WHERE id = $1", id).Scan(&kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	var outboxID string
+	var err error
+	switch {
+	case isSyncDispatchKind(kind):
+		err = tx.QueryRow(ctx, `
+			SELECT id::text
+			FROM public.sync_dispatch_outbox
+			WHERE transport_job_id = ($1::bigint)::text
+				AND kind = $2
+				AND status = 'dispatched'
+			FOR UPDATE`, id, kind).Scan(&outboxID)
+	case kind == jobcontract.KindSyncProviderUnit:
+		err = tx.QueryRow(ctx, `
+			SELECT id::text
+			FROM public.worker_job_outbox
+			WHERE river_job_id = $1
+				AND job_kind = $2
+				AND status = 'delivered'
+			FOR UPDATE`, id, kind).Scan(&outboxID)
+	default:
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrStateConflict
+	}
+	return err
+}
+
+func isSyncDispatchKind(kind string) bool {
+	switch kind {
+	case syncdispatchcontract.KindDispatchSyncRun,
+		syncdispatchcontract.KindFinalizeSyncRun,
+		syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.KindReferenceDiscovery:
+		return true
+	default:
+		return false
+	}
+}
+
 func (backend *PostgresBackend) PauseQueue(ctx context.Context, queue string, _ Mutation) error {
 	return backend.setQueuePaused(ctx, queue, true)
 }
@@ -207,11 +265,18 @@ func (backend *PostgresBackend) ResumeQueue(ctx context.Context, queue string, _
 	return backend.setQueuePaused(ctx, queue, false)
 }
 
-func (backend *PostgresBackend) Drain(ctx context.Context, profile string, _ Mutation) (DrainResult, error) {
+func (backend *PostgresBackend) Drain(ctx context.Context, queues []string, _ Mutation) (DrainResult, error) {
+	return backend.mutateQueues(ctx, queues, true)
+}
+
+func (backend *PostgresBackend) Undrain(ctx context.Context, queues []string, _ Mutation) (DrainResult, error) {
+	return backend.mutateQueues(ctx, queues, false)
+}
+
+func (backend *PostgresBackend) mutateQueues(ctx context.Context, queues []string, pause bool) (DrainResult, error) {
 	if backend == nil || backend.pool == nil || backend.client == nil {
 		return DrainResult{}, ErrBackendConfiguration
 	}
-	queues := backend.profileQueues(profile)
 	if len(queues) == 0 {
 		return DrainResult{}, ErrBackendConfiguration
 	}
@@ -245,14 +310,20 @@ func (backend *PostgresBackend) Drain(ctx context.Context, profile string, _ Mut
 		return DrainResult{}, err
 	}
 	for _, queue := range queues {
-		if err := backend.client.QueuePauseTx(ctx, tx, queue, nil); err != nil {
-			return DrainResult{}, err
+		var opErr error
+		if pause {
+			opErr = backend.client.QueuePauseTx(ctx, tx, queue, nil)
+		} else {
+			opErr = backend.client.QueueResumeTx(ctx, tx, queue, nil)
+		}
+		if opErr != nil {
+			return DrainResult{}, opErr
 		}
 	}
 	if err := commitMutation(ctx, tx); err != nil {
 		return DrainResult{}, err
 	}
-	return DrainResult{Profile: profile, QueuesPaused: len(queues), RunningAtStart: running}, nil
+	return DrainResult{QueuesPaused: len(queues), RunningAtStart: running}, nil
 }
 
 func (backend *PostgresBackend) setQueuePaused(ctx context.Context, queue string, paused bool) error {
@@ -321,21 +392,6 @@ func (backend *PostgresBackend) compareLockedState(ctx context.Context, tx pgx.T
 		return ErrStateConflict
 	}
 	return nil
-}
-
-func (backend *PostgresBackend) profileQueues(profile string) []string {
-	descriptors := backend.registry.Profile(profile)
-	seen := make(map[string]struct{}, len(descriptors))
-	queues := make([]string, 0, len(descriptors))
-	for _, descriptor := range descriptors {
-		if _, duplicate := seen[descriptor.Queue]; duplicate {
-			continue
-		}
-		seen[descriptor.Queue] = struct{}{}
-		queues = append(queues, descriptor.Queue)
-	}
-	sort.Strings(queues)
-	return queues
 }
 
 func (backend *PostgresBackend) summaryQuery() string {

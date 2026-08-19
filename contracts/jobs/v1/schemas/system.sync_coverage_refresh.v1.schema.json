@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dev-health.jobs/system.sync_coverage_refresh.v1",
+  "title": "Sync coverage projection refresh v1 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheduled_for", "limit"],
+  "properties": {
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    }
+  }
+}

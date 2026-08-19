@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
@@ -22,6 +25,20 @@ const (
 
 type recordingRemainingStore struct {
 	requests []remaining.StartRunRequest
+}
+
+type recordingDailyFanoutStore struct {
+	requests []daily.ScheduledFanoutRequest
+}
+
+func (store *recordingDailyFanoutStore) StartScheduledFanoutRunTx(
+	_ context.Context,
+	_ pgx.Tx,
+	request daily.ScheduledFanoutRequest,
+	_ daily.RunPublisher,
+) (daily.Run, error) {
+	store.requests = append(store.requests, request)
+	return daily.Run{ID: uuid.NewString(), OrganizationID: request.OrganizationID}, nil
 }
 
 func (store *recordingRemainingStore) StartRunTx(
@@ -94,6 +111,27 @@ func (nopPartitionPublisher) PublishPartitionTx(
 	return nil
 }
 
+type nopDailyRunPublisher struct{}
+
+func (nopDailyRunPublisher) PublishDispatchTx(
+	context.Context, pgx.Tx, daily.Run, string,
+) error {
+	return nil
+}
+
+func dailyFanoutProducer(
+	t *testing.T,
+	lister OrganizationLister,
+) (*DailyMetricsFanoutProducer, *recordingDailyFanoutStore) {
+	t.Helper()
+	store := &recordingDailyFanoutStore{}
+	producer, err := NewDailyMetricsFanoutProducer(store, nopDailyRunPublisher{}, lister)
+	if err != nil {
+		t.Fatalf("NewDailyMetricsFanoutProducer() = %v", err)
+	}
+	return producer.(*DailyMetricsFanoutProducer), store
+}
+
 func fanoutProducer(
 	t *testing.T,
 	lister OrganizationLister,
@@ -123,6 +161,82 @@ func scheduleByID(t *testing.T, id string) Schedule {
 	}
 	t.Fatalf("schedule %s is not declared", id)
 	return Schedule{}
+}
+
+func TestSyncCoverageRefreshProducerEmitsOneBoundedDeterministicSweep(t *testing.T) {
+	t.Parallel()
+	schedule := scheduleByID(t, "sync_coverage_refresh")
+	occurrence := NewOccurrence(
+		schedule,
+		mustTime(t, "2026-08-12T12:00:00Z"),
+		mustTime(t, "2026-08-12T12:00:03Z"),
+	)
+	producer := NewSyncCoverageRefreshProducer()
+	first, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	second, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("replay Produce() = %v", err)
+	}
+	if len(first.Requests) != 1 || len(second.Requests) != 1 {
+		t.Fatalf("requests = %d/%d, want one each", len(first.Requests), len(second.Requests))
+	}
+	request := first.Requests[0]
+	if request.Kind != jobcontract.KindSyncCoverageRefresh || request.Envelope != second.Requests[0].Envelope {
+		t.Fatalf("refresh request is not deterministic: first=%+v second=%+v", request, second.Requests[0])
+	}
+	payload, ok := request.Envelope.Payload.(jobcontract.SyncCoverageRefreshPayload)
+	if !ok {
+		t.Fatalf("payload = %T", request.Envelope.Payload)
+	}
+	if payload.Limit != 100 || payload.ScheduledFor != "2026-08-12T12:00:00Z" {
+		t.Fatalf("payload = %+v", payload)
+	}
+	if request.Envelope.OrganizationID != nil || request.Envelope.Domain.Type != "schedule_occurrence" {
+		t.Fatalf("global occurrence envelope = %+v", request.Envelope)
+	}
+}
+
+func TestDailyMetricsFanoutCreatesOnlyDurablePerOrganizationRuns(t *testing.T) {
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	producer, store := dailyFanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}})
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-08-12T01:00:00Z"), mustTime(t, "2026-08-12T01:00:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if outcome.Handoffs != 2 || len(store.requests) != 2 {
+		t.Fatalf("outcome=%+v requests=%d", outcome, len(store.requests))
+	}
+	for index, request := range store.requests {
+		wantOrganization := []string{testOrgA, testOrgB}[index]
+		if request.OrganizationID != wantOrganization ||
+			request.TargetDay != mustTime(t, "2026-08-12T01:00:00Z") ||
+			request.Generation != "fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z" {
+			t.Fatalf("request[%d]=%+v", index, request)
+		}
+	}
+}
+
+func TestDailyMetricsFanoutReportsNoActiveOrganizations(t *testing.T) {
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	producer, store := dailyFanoutProducer(t, fixedOrganizationLister{})
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-08-12T01:00:00Z"), mustTime(t, "2026-08-12T01:00:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if outcome.SkipReason != SkipNoActiveOrganizations || len(store.requests) != 0 {
+		t.Fatalf("outcome=%+v requests=%d", outcome, len(store.requests))
+	}
 }
 
 // The remaining-metrics store requires an immutable generation seed for exactly
@@ -700,5 +814,91 @@ func TestZeroHorizonEmitsACutoffExactlyAtTheDueTime(t *testing.T) {
 	// refuses outright.
 	if parsed.After(dueTime) {
 		t.Fatalf("zero-horizon cutoff %s is in the future", payload.DeleteBefore)
+	}
+}
+
+// rejectingRemainingStore permanently refuses ONE organization and accepts
+// every other, modelling the real failure: an organization row whose id the
+// job contract rejects (jobcontract.uuidPattern enforces RFC 4122, which
+// uuid.Parse does not).
+type rejectingRemainingStore struct {
+	reject   string
+	err      error
+	accepted []string
+}
+
+func (store *rejectingRemainingStore) StartRunTx(
+	_ context.Context,
+	_ pgx.Tx,
+	request remaining.StartRunRequest,
+	_ remaining.PartitionPublisher,
+) (remaining.Run, error) {
+	if request.OrganizationID == store.reject {
+		return remaining.Run{}, store.err
+	}
+	store.accepted = append(store.accepted, request.OrganizationID)
+	return remaining.Run{ID: uuid.NewString(), OrganizationID: request.OrganizationID}, nil
+}
+
+// One tenant the contract can never accept must not cost every other tenant
+// its work. Before CHAOS-3903 this returned an error, which rolled the
+// engine's whole transaction back on every 15s window, so a single bad
+// organization row held the fixed scheduler permanently unready.
+func TestFanoutIsolatesAnOrganizationTheContractPermanentlyRejects(t *testing.T) {
+	schedule := scheduleByID(t, "complexity_daily_fanout")
+	store := &rejectingRemainingStore{
+		reject: testOrgA,
+		err:    fmt.Errorf("%w: %w", remaining.ErrInvalidState, joboutbox.ErrContractRejected),
+	}
+	producer, err := NewRemainingMetricsFanoutProducer(
+		store, nopPartitionPublisher{},
+		fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}},
+		&recordingGraphWriter{},
+	)
+	if err != nil {
+		t.Fatalf("NewRemainingMetricsFanoutProducer() = %v", err)
+	}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T03:30:00Z"), mustTime(t, "2026-07-24T03:30:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v, want the window to survive one rejected organization", err)
+	}
+	if len(store.accepted) != 1 || store.accepted[0] != testOrgB {
+		t.Fatalf("accepted = %v, want only %s", store.accepted, testOrgB)
+	}
+	if outcome.Handoffs != 1 {
+		t.Errorf("Handoffs = %d, want 1 (the accepted organization only)", outcome.Handoffs)
+	}
+	// The rejected tenant must stay VISIBLE. Isolating it silently would be a
+	// different defect: an operator would see a healthy window and never learn
+	// that one organization produces nothing.
+	if outcome.Degraded != DegradedRejectedOrganizations {
+		t.Errorf("Degraded = %q, want %q", outcome.Degraded, DegradedRejectedOrganizations)
+	}
+}
+
+// The mirror image, and the reason the predicate is not simply "any error":
+// a transient fault MUST still fail the window. Skipping a tenant on a dropped
+// connection would drop its work for that occurrence while the ledger recorded
+// the window as healthy.
+func TestFanoutStillFailsTheWindowOnATransientOrganizationFault(t *testing.T) {
+	schedule := scheduleByID(t, "complexity_daily_fanout")
+	store := &rejectingRemainingStore{reject: testOrgA, err: remaining.ErrUnavailable}
+	producer, err := NewRemainingMetricsFanoutProducer(
+		store, nopPartitionPublisher{},
+		fixedOrganizationLister{identifiers: []string{testOrgA, testOrgB}},
+		&recordingGraphWriter{},
+	)
+	if err != nil {
+		t.Fatalf("NewRemainingMetricsFanoutProducer() = %v", err)
+	}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T03:30:00Z"), mustTime(t, "2026-07-24T03:30:05Z"),
+	)
+	if _, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence); err == nil {
+		t.Fatal("Produce() = nil, want a transient organization fault to fail the window")
 	}
 }

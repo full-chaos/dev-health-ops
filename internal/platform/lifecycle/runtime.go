@@ -25,6 +25,13 @@ type ErrorSource interface {
 	Errors() <-chan error
 }
 
+// ShutdownBudgetSource reserves a reviewed part of the global shutdown
+// deadline for a component. Later components are still attempted if it uses
+// the remaining deadline.
+type ShutdownBudgetSource interface {
+	ShutdownBudget() time.Duration
+}
+
 type Options struct {
 	Logger          *slog.Logger
 	ShutdownTimeout time.Duration
@@ -99,16 +106,38 @@ func (r *Runtime) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		r.logger.InfoContext(context.Background(), "shutdown requested")
 	case runErr = <-failures:
-		r.logger.ErrorContext(
-			context.Background(),
-			"runtime component failed",
-			"error_category",
-			"component_failure",
-		)
+		// The component name is a bounded, compile-time-known identifier
+		// (never operator input), and the error is attached as a raw
+		// attribute value rather than pre-stringified so the logging
+		// handler's redacting ReplaceAttr still processes it (CHAOS-3873).
+		attributes := []any{"error_category", "component_failure"}
+		var failed *componentFailure
+		if errors.As(runErr, &failed) {
+			attributes = append(attributes, "component", failed.name, "error", failed.err)
+		} else {
+			attributes = append(attributes, "error", runErr)
+		}
+		r.logger.ErrorContext(context.Background(), "runtime component failed", attributes...)
 	}
 	stopWatching()
 	return errors.Join(runErr, r.shutdown(ctx, started))
 }
+
+// componentFailure names the component whose asynchronous error triggered
+// runtime shutdown, so callers can recover a bounded, safe identifier via
+// errors.As instead of parsing it back out of formatted error text. It
+// still wraps the underlying error so errors.As/errors.Is keep working for
+// callers (e.g. a component-supplied DependencyReason) further up the chain.
+type componentFailure struct {
+	name string
+	err  error
+}
+
+func (failure *componentFailure) Error() string {
+	return fmt.Sprintf("component %s: %s", failure.name, failure.err)
+}
+
+func (failure *componentFailure) Unwrap() error { return failure.err }
 
 func watchErrors(ctx context.Context, name string, source <-chan error, failures chan<- error) {
 	select {
@@ -119,7 +148,7 @@ func watchErrors(ctx context.Context, name string, source <-chan error, failures
 			return
 		}
 		select {
-		case failures <- fmt.Errorf("component %s: %w", name, err):
+		case failures <- &componentFailure{name: name, err: err}:
 		case <-ctx.Done():
 		}
 	}
@@ -146,6 +175,9 @@ func (r *Runtime) shutdown(parent context.Context, started []Component) error {
 		attemptBudget := time.Duration(0)
 		if remainingBudget > 0 {
 			attemptBudget = remainingBudget / time.Duration(remainingComponents)
+		}
+		if source, ok := component.(ShutdownBudgetSource); ok && source.ShutdownBudget() > attemptBudget {
+			attemptBudget = min(source.ShutdownBudget(), remainingBudget)
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(shutdownCtx, attemptBudget)
 		result, dispatched := dispatchShutdown(attemptCtx, component)

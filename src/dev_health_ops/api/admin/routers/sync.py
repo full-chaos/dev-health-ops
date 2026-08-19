@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
@@ -60,6 +60,10 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.providers.github.work_item_options import (
+    canonical_github_work_item_runtime_options,
+    snapshot_github_work_item_runtime_options,
+)
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
     is_canonical_incident_feature_enabled_async,
@@ -82,11 +86,8 @@ from dev_health_ops.sync.pagerduty_repair import (
     PagerDutyOperationalTargetError,
     repair_pagerduty_operational_integration,
 )
-from dev_health_ops.sync.trigger_routing import (
-    mark_sync_run_failed,
-)
+from dev_health_ops.sync.planner import BackfillSelector as SyncBackfillSelector
 from dev_health_ops.utils.datetime import validate_timezone_name
-from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
 
@@ -1366,6 +1367,8 @@ def _planner_dataset_options(
         and isinstance(mappings, dict)
     ):
         options["service_repository_mappings"] = mappings
+    if provider == "github" and dataset_key == "work-items":
+        options.update(canonical_github_work_item_runtime_options(parent_options))
     return options
 
 
@@ -1395,6 +1398,11 @@ async def _create_planner_managed_config(
     ``SyncConfiguration`` carries no credential column of its own, so there is
     exactly one place a credential attaches to sync work.
     """
+    if provider.lower() == "github":
+        parent_options = {
+            **parent_options,
+            **snapshot_github_work_item_runtime_options(parent_options),
+        }
     credential_uuid = uuid.UUID(credential_id) if credential_id else None
     integration = Integration(
         org_id=org_id,
@@ -2233,6 +2241,64 @@ async def update_sync_config(
             merged_options.pop(key, None)
         mutable_config.sync_options = merged_options
     if (
+        str(getattr(config, "provider", "")).lower() == "github"
+        and (integration_id := getattr(config, "integration_id", None)) is not None
+    ):
+        current_options = dict(getattr(config, "sync_options") or {})
+        integration = await session.get(Integration, integration_id)
+        scoped_integration = (
+            integration
+            if integration is not None and str(integration.org_id) == org_id
+            else None
+        )
+        integration_options = (
+            dict(scoped_integration.config or {})
+            if scoped_integration is not None
+            else {}
+        )
+        dataset_result = await session.execute(
+            select(IntegrationDataset).where(
+                IntegrationDataset.org_id == org_id,
+                IntegrationDataset.integration_id == integration_id,
+                IntegrationDataset.dataset_key == "work-items",
+            )
+        )
+        work_items_dataset = dataset_result.scalar_one_or_none()
+        dataset_options = (
+            dict(work_items_dataset.options or {})
+            if work_items_dataset is not None
+            else {}
+        )
+
+        # A planner repair can durably snapshot legacy runtime defaults in the
+        # Integration and work-items dataset before the older
+        # SyncConfiguration row has those keys. Read every durable store before
+        # consulting the environment; explicit PATCH values win last. Dataset
+        # options outrank the integration for the same reason they do in the
+        # planner repair: they are the dataset-specific execution contract.
+        canonical_runtime_options = snapshot_github_work_item_runtime_options(
+            {
+                **current_options,
+                **integration_options,
+                **dataset_options,
+                **sync_options,
+            }
+        )
+        mutable_config.sync_options = {
+            **current_options,
+            **canonical_runtime_options,
+        }
+        if scoped_integration is not None:
+            scoped_integration.config = {
+                **integration_options,
+                **canonical_runtime_options,
+            }
+        if work_items_dataset is not None:
+            work_items_dataset.options = {
+                **dataset_options,
+                **canonical_runtime_options,
+            }
+    if (
         str(getattr(config, "provider", "")).lower() == "pagerduty"
         and "service_repository_mappings" in sync_options
         and isinstance(sync_options["service_repository_mappings"], dict)
@@ -2428,42 +2494,10 @@ async def trigger_sync_config(
             "total_units": trigger.total_units,
         }
     await session.commit()
-    try:
-        dispatch_result = getattr(dispatch_sync_run, "apply_async")(
-            args=(trigger.sync_run_id,), queue="sync"
-        )
-    except Exception as exc:
-        # Bind to a plain local before closing over it in the lambdas below:
-        # `except ... as exc` implicitly deletes `exc` at the end of THIS
-        # block, which a closure captures by reference, not by value (ruff
-        # F821 catches this). The raw exception is passed straight through
-        # to the sink (_mark_job_run_failed -> sanitize_error_text), not
-        # pre-formatted into a string here -- a Celery/broker enqueue
-        # failure can embed the broker/result-backend URL, credentials
-        # included (CHAOS-2766 codex review finding).
-        dispatch_exc = exc
-        await session.run_sync(
-            lambda s: mark_sync_run_failed(
-                s, trigger.sync_run_id, "dispatch enqueue failed"
-            )
-        )
-        await session.run_sync(
-            lambda s: _mark_job_run_failed(s, trigger.job_run_id, dispatch_exc)
-        )
-        await session.commit()
-        raise HTTPException(
-            status_code=503,
-            detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
-        )
-    dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
-    await session.run_sync(
-        lambda s: _merge_job_run_result(
-            s,
-            trigger.job_run_id,
-            {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
-        )
-    )
-    await session.commit()
+    # create_sync_execution_trigger persists the planner's reference-discovery
+    # outbox wakeup with the run. The reconciler publishes that wakeup through
+    # the durable sync-dispatch route; publishing a second Celery task here
+    # would bypass the route and strand work when Python workers are absent.
     return {
         "status": "triggered",
         "config_id": str(config.id),
@@ -2495,7 +2529,23 @@ async def trigger_sync_config_backfill(
             detail="Sync configuration is paused and cannot be backfilled",
         )
 
-    requested_days = (payload.before - payload.since).days
+    selector = payload.resolved_selector()
+    structured_selector = payload.selector
+    if structured_selector is None:
+        # BackfillRequest validates the legacy pair. Preserve the explicit
+        # local narrowing so the route cannot accidentally reintroduce a
+        # date-only fallback for structured half-open selectors.
+        legacy_since = payload.since
+        legacy_before = payload.before
+        if legacy_since is None or legacy_before is None:
+            raise HTTPException(status_code=422, detail="Backfill dates are required")
+    else:
+        # These values are used only by the legacy response/history branches
+        # below. Keeping them concrete also makes the branch distinction
+        # explicit to static checking.
+        legacy_since = selector.since.date()
+        legacy_before = (selector.before - timedelta(microseconds=1)).date()
+    requested_days = (selector.before - selector.since).days
 
     def _check_backfill_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
@@ -2523,12 +2573,28 @@ async def trigger_sync_config_backfill(
                     org_id,
                     triggered_by="backfill",
                     mode="backfill",
+                    backfill_selector=SyncBackfillSelector(
+                        since=selector.since,
+                        before=selector.before,
+                        source_ids=tuple(selector.source_ids)
+                        if selector.source_ids is not None
+                        else None,
+                        dataset_keys=tuple(selector.dataset_keys)
+                        if selector.dataset_keys is not None
+                        else None,
+                    )
+                    if structured_selector is not None
+                    else None,
                     since=datetime.combine(
-                        payload.since, datetime.min.time(), tzinfo=timezone.utc
-                    ),
+                        legacy_since, datetime.min.time(), tzinfo=timezone.utc
+                    )
+                    if structured_selector is None
+                    else None,
                     before=datetime.combine(
-                        payload.before, datetime.max.time(), tzinfo=timezone.utc
-                    ),
+                        legacy_before, datetime.max.time(), tzinfo=timezone.utc
+                    )
+                    if structured_selector is None
+                    else None,
                     initial_job_result={"planner_managed": True},
                 )
             )
@@ -2562,8 +2628,13 @@ async def trigger_sync_config_backfill(
             org_id=org_id,
             sync_config_id=uuid.UUID(config_id),
             status="pending",
-            since_date=payload.since,
-            before_date=payload.before,
+            # BackfillJob is the legacy, inclusive calendar-date history
+            # anchor. The linked SyncRunUnit rows retain the authoritative
+            # exact structured-selector boundaries used for coverage.
+            since_date=selector.since.date(),
+            before_date=(selector.before - timedelta(microseconds=1)).date()
+            if structured_selector is not None
+            else legacy_before,
             total_chunks=0,
         )
         session.add(backfill_job)
@@ -2573,50 +2644,20 @@ async def trigger_sync_config_backfill(
 
         await session.commit()
 
-        try:
-            result = getattr(dispatch_sync_run, "apply_async")(
-                args=(trigger.sync_run_id,), queue="sync"
-            )
-        except Exception as e:
-            # Bind to a plain local before closing over it below -- see the
-            # matching comment in trigger_sync_config above (ruff F821: a
-            # closure over a bare `except ... as e` name is unreliable,
-            # since the name is implicitly deleted at block exit). Same
-            # sink-sanitizes-not-caller rationale (CHAOS-2766 codex review
-            # finding).
-            dispatch_exc = e
-            completed_at = datetime.now(timezone.utc)
-            await session.run_sync(
-                lambda sync_session: _mark_backfill_job_failed(
-                    sync_session, backfill_job_id, dispatch_exc, completed_at
-                )
-            )
-            await session.run_sync(
-                lambda sync_session: _mark_job_run_failed(
-                    sync_session, trigger.job_run_id, dispatch_exc
-                )
-            )
-            await session.run_sync(
-                lambda sync_session: mark_sync_run_failed(
-                    sync_session, trigger.sync_run_id, "dispatch enqueue failed"
-                )
-            )
-            await session.commit()
-            raise HTTPException(
-                status_code=503,
-                detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
-            )
-        backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
-        await session.commit()
+        dispatch_id = f"sync_run:{trigger.sync_run_id}"
         return {
             "status": "accepted",
             "config_id": str(config.id),
-            "task_id": result.id,
+            "task_id": dispatch_id,
             "backfill_job_id": backfill_job_id,
             "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",
-            "since": payload.since.isoformat(),
-            "before": payload.before.isoformat(),
+            "since": selector.since.isoformat()
+            if structured_selector is not None
+            else legacy_since.isoformat(),
+            "before": selector.before.isoformat()
+            if structured_selector is not None
+            else legacy_before.isoformat(),
         }
     except HTTPException:
         raise

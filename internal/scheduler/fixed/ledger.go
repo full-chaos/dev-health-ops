@@ -49,10 +49,21 @@ type Ledger interface {
 	// persisted identity and reports ClaimDuplicate.
 	Claim(ctx context.Context, tx pgx.Tx, occurrence Occurrence) (ClaimResult, error)
 	// Complete records the producer outcome for a claimed occurrence.
-	Complete(ctx context.Context, tx pgx.Tx, occurrence Occurrence, status string, handoffs int, skipReason string) error
+	Complete(
+		ctx context.Context,
+		tx pgx.Tx,
+		occurrence Occurrence,
+		status string,
+		handoffs int,
+		skipReason string,
+		degradedReason string,
+	) error
 	// LastOccurrence returns the newest recorded occurrence for a schedule.
 	// A false second result means no occurrence exists.
 	LastOccurrence(ctx context.Context, tx pgx.Tx, scheduleID string) (Anchor, bool, error)
+	// LastEvaluation returns the degraded verdict from the newest committed
+	// producer evaluation. Baselines are not evaluations and are excluded.
+	LastEvaluation(ctx context.Context, tx pgx.Tx, scheduleID string) (Evaluation, bool, error)
 }
 
 // PostgresLedger is the production ledger.
@@ -135,6 +146,7 @@ func (PostgresLedger) Complete(
 	status string,
 	handoffs int,
 	skipReason string,
+	degradedReason string,
 ) error {
 	if ctx == nil || tx == nil || handoffs < 0 {
 		return ErrLedgerUnavailable
@@ -161,9 +173,16 @@ func (PostgresLedger) Complete(
 	default:
 		return fmt.Errorf("%w: unknown occurrence status %q", ErrLedgerUnavailable, status)
 	}
+	if len(degradedReason) > 64 {
+		degradedReason = degradedReason[:64]
+	}
 	var reason *string
 	if skipReason != "" {
 		reason = &skipReason
+	}
+	var degraded *string
+	if degradedReason != "" {
+		degraded = &degradedReason
 	}
 	command, err := tx.Exec(
 		ctx,
@@ -171,6 +190,7 @@ func (PostgresLedger) Complete(
 		status,
 		handoffs,
 		reason,
+		degraded,
 		occurrence.ObservedAt,
 		occurrence.Key,
 	)
@@ -192,6 +212,11 @@ func (PostgresLedger) Complete(
 type Anchor struct {
 	ScheduledFor time.Time
 	ObservedAt   time.Time
+}
+
+// Evaluation is the newest durable producer verdict for one schedule.
+type Evaluation struct {
+	Degraded string
 }
 
 // LastOccurrence supports both due-ness anchoring and missed-occurrence
@@ -216,6 +241,29 @@ func (PostgresLedger) LastOccurrence(
 	anchor.ScheduledFor = anchor.ScheduledFor.UTC()
 	anchor.ObservedAt = anchor.ObservedAt.UTC()
 	return anchor, true, nil
+}
+
+// LastEvaluation reads shared telemetry state. It deliberately skips
+// cold-start and stale-gap baselines because their producers did not run and
+// therefore had no verdict that could raise or clear degradation.
+func (PostgresLedger) LastEvaluation(
+	ctx context.Context,
+	tx pgx.Tx,
+	scheduleID string,
+) (Evaluation, bool, error) {
+	if ctx == nil || tx == nil || scheduleID == "" {
+		return Evaluation{}, false, ErrLedgerUnavailable
+	}
+	var evaluation Evaluation
+	if err := tx.QueryRow(
+		ctx, selectLastEvaluationSQL, scheduleID, coldStartBaselineReason,
+	).Scan(&evaluation.Degraded); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Evaluation{}, false, nil
+		}
+		return Evaluation{}, false, fmt.Errorf("read last fixed schedule evaluation: %w", err)
+	}
+	return evaluation, true, nil
 }
 
 func validateOccurrence(occurrence Occurrence) error {
@@ -256,9 +304,10 @@ UPDATE public.fixed_schedule_occurrences
 SET status = $1,
     handoff_count = $2,
     skip_reason = $3,
-    completed_at = $4,
-    updated_at = $4
-WHERE occurrence_key = $5
+    degraded_reason = $4,
+    completed_at = $5,
+    updated_at = $5
+WHERE occurrence_key = $6
   AND status = 'claimed'
 `
 
@@ -266,6 +315,16 @@ const selectLastOccurrenceSQL = `
 SELECT scheduled_for, observed_at
 FROM public.fixed_schedule_occurrences
 WHERE schedule_id = $1
+ORDER BY scheduled_for DESC
+LIMIT 1
+`
+
+const selectLastEvaluationSQL = `
+SELECT COALESCE(degraded_reason, '')
+FROM public.fixed_schedule_occurrences
+WHERE schedule_id = $1
+  AND status IN ('materialized', 'skipped')
+  AND skip_reason IS DISTINCT FROM $2
 ORDER BY scheduled_for DESC
 LIMIT 1
 `

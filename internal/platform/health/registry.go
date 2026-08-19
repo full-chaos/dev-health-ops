@@ -55,6 +55,21 @@ type checkExecution struct {
 type Readiness struct {
 	Ready  bool
 	Failed []string
+	// Checks is the per-check result for every required dependency, sorted by
+	// name. It is populated only when CheckRequired actually ran the required
+	// checks (the normal, gate-open path); the fail-closed sentinel paths
+	// below ("runtime", "dependencies") leave it nil since there is no real
+	// per-check data to report. Names come from RegisterRequired, which
+	// rejects anything not matching checkNamePattern, so every Name here is
+	// already a safe, unquoted-friendly label value.
+	Checks []CheckStatus
+}
+
+// CheckStatus is one required check's pass/fail result. Name is always a
+// pre-registered identifier matching checkNamePattern.
+type CheckStatus struct {
+	Name   string
+	Failed bool
 }
 
 func NewRegistry(checkTimeout time.Duration) *Registry {
@@ -231,7 +246,13 @@ func (r *Registry) Readiness(ctx context.Context) Readiness {
 	if !r.ready.Load() {
 		return Readiness{Ready: false, Failed: []string{"runtime"}}
 	}
+	return r.CheckRequired(ctx)
+}
 
+// CheckRequired runs required dependency checks without opening the public
+// readiness gate. Worker processes use it before starting River consumers so
+// a replica cannot claim work before its dependencies pass.
+func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	r.mu.RLock()
 	checks := make(map[string]*requiredCheck, len(r.required))
 	for name, check := range r.required {
@@ -242,25 +263,29 @@ func (r *Registry) Readiness(ctx context.Context) Readiness {
 		return Readiness{Ready: false, Failed: []string{"dependencies"}}
 	}
 
-	results := make(chan string, len(checks))
+	type outcome struct {
+		name   string
+		failed bool
+	}
+	results := make(chan outcome, len(checks))
 	for name, check := range checks {
 		go func() {
-			if !check.run(ctx, r.checkTimeout) {
-				results <- name
-				return
-			}
-			results <- ""
+			results <- outcome{name: name, failed: !check.run(ctx, r.checkTimeout)}
 		}()
 	}
 
 	failed := make([]string, 0)
+	statuses := make([]CheckStatus, 0, len(checks))
 	for range checks {
-		if name := <-results; name != "" {
-			failed = append(failed, name)
+		result := <-results
+		statuses = append(statuses, CheckStatus{Name: result.name, Failed: result.failed})
+		if result.failed {
+			failed = append(failed, result.name)
 		}
 	}
 	sort.Strings(failed)
-	return Readiness{Ready: len(failed) == 0, Failed: failed}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
+	return Readiness{Ready: len(failed) == 0, Failed: failed, Checks: statuses}
 }
 
 // run shares a single in-flight execution across callers. A check that ignores

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dev_health_ops.workers import provider_unit_route
+from dev_health_ops.workers.provider_family_contract import WORK_ITEM_DATASETS
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteError,
     ProviderUnitRouteSwitches,
@@ -35,17 +36,304 @@ def test_route_switch_is_exact_and_independent() -> None:
     assert not switches.routes_to_river("gitlab", "feature-flags")
 
 
+def test_local_all_routes_preset_enables_every_compatible_family() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "all"}
+    )
+
+    disabled_aliases = {
+        "github_pr_reviews",
+        "github_pr_comments",
+        "github_tests",
+        "gitlab_pr_reviews",
+        "gitlab_pr_comments",
+        "gitlab_tests",
+    }
+    for field_name in switches.__dataclass_fields__:
+        assert getattr(switches, field_name) is (field_name not in disabled_aliases)
+
+
+def test_local_all_routes_preset_preserves_explicit_switch_override() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {
+            "DEV_HEALTH_ENV": "local",
+            "GO_PROVIDER_ROUTES": "all",
+            "WORKER_GITHUB_FILES_ENABLED": "false",
+            "WORKER_GITLAB_PR_REVIEWS_ENABLED": "true",
+        }
+    )
+
+    assert switches.github_files is False
+    assert switches.github_commits is True
+    assert switches.gitlab_pr_reviews is True
+    assert switches.gitlab_prs is False
+
+
 @pytest.mark.parametrize(
-    "name",
+    ("provider", "canonical", "aliases"),
     (
-        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_INCIDENTS_ENABLED",
+        ("github", "prs", ("pr-reviews", "pr-comments")),
+        ("github", "cicd", ("tests",)),
+        ("gitlab", "prs", ("pr-reviews", "pr-comments")),
+        ("gitlab", "cicd", ("tests",)),
     ),
 )
-def test_incomplete_routes_fail_closed(name: str) -> None:
-    with pytest.raises(ProviderUnitRouteError, match="incomplete"):
-        ProviderUnitRouteSwitches.from_environment({name: "true"})
+def test_local_all_routes_selected_complete_writer_accepts_equivalent_aliases(
+    provider: str, canonical: str, aliases: tuple[str, ...]
+) -> None:
+    """Local Go-only mode cannot leave complete-writer aliases on Celery."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "all"}
+    )
+
+    assert switches.routes_to_river(provider, canonical)
+    for alias in aliases:
+        assert switches.routes_to_river(provider, alias)
+
+
+def test_explicit_nonlocal_complete_writer_switch_stays_identity_scoped() -> None:
+    """The local convenience preset must not widen an explicit deployment switch."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": "true"}
+    )
+
+    assert switches.routes_to_river("github", "prs")
+    assert not switches.routes_to_river("github", "pr-reviews")
+    assert not switches.routes_to_river("github", "pr-comments")
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset", "switch"),
+    [
+        ("github", "pr-reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("github", "tests", "WORKER_GITHUB_TESTS_ENABLED"),
+        ("gitlab", "pr-comments", "WORKER_GITLAB_PR_COMMENTS_ENABLED"),
+        ("gitlab", "tests", "WORKER_GITLAB_TESTS_ENABLED"),
+    ],
+)
+def test_local_all_explicit_alias_wins_over_canonical_inheritance(
+    provider: str, dataset: str, switch: str
+) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {
+            "DEV_HEALTH_ENV": "local",
+            "GO_PROVIDER_ROUTES": "all",
+            switch: "true",
+        }
+    )
+
+    assert switches.routes_to_river(provider, dataset)
+
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"GO_PROVIDER_ROUTES": "all"},
+        {"DEV_HEALTH_ENV": "production", "GO_PROVIDER_ROUTES": "all"},
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "some"},
+    ),
+)
+def test_routes_preset_rejects_nonlocal_or_unknown_configuration(
+    environment: dict[str, str],
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(environment)
+
+
+_AGGREGATE_ROUTE_SWITCH_CASES = (
+    (
+        "gitlab",
+        "deployments",
+        "gitlab_deployments",
+        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+    ),
+    (
+        "gitlab",
+        "feature-flags",
+        "gitlab_feature_flags",
+        "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
+    ),
+    ("gitlab", "files", "gitlab_files", "WORKER_GITLAB_FILES_ENABLED"),
+    ("gitlab", "blame", "gitlab_blame", "WORKER_GITLAB_BLAME_ENABLED"),
+    ("gitlab", "prs", "gitlab_prs", "WORKER_GITLAB_PRS_ENABLED"),
+    (
+        "gitlab",
+        "pr-reviews",
+        "gitlab_pr_reviews",
+        "WORKER_GITLAB_PR_REVIEWS_ENABLED",
+    ),
+    (
+        "gitlab",
+        "pr-comments",
+        "gitlab_pr_comments",
+        "WORKER_GITLAB_PR_COMMENTS_ENABLED",
+    ),
+    ("gitlab", "security", "gitlab_security", "WORKER_GITLAB_SECURITY_ENABLED"),
+    (
+        "gitlab",
+        "work-items",
+        "gitlab_work_items",
+        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+    ),
+    ("jira", "work-items", "jira_work_items", "WORKER_JIRA_WORK_ITEMS_ENABLED"),
+    (
+        "linear",
+        "work-items",
+        "linear_work_items",
+        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "services",
+        "pagerduty_services",
+        "WORKER_PAGERDUTY_SERVICES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "business-services",
+        "pagerduty_business_services",
+        "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "escalation-policies",
+        "pagerduty_escalation_policies",
+        "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "schedules",
+        "pagerduty_schedules",
+        "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "on-calls",
+        "pagerduty_on_calls",
+        "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "users",
+        "pagerduty_users",
+        "WORKER_PAGERDUTY_USERS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "teams",
+        "pagerduty_teams",
+        "WORKER_PAGERDUTY_TEAMS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incidents",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-alerts",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-log-entries",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-notes",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset", "field", "environment_name"),
+    _AGGREGATE_ROUTE_SWITCH_CASES,
+)
+def test_aggregate_route_switches_are_exact_and_default_off(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    dataset: str,
+    field: str,
+    environment_name: str,
+) -> None:
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset)
+            )
+        ),
+    )
+
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert getattr(off, field) is False
+    assert not off.routes_to_river(provider, dataset)
+
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert getattr(on, field) is True
+    assert on.routes_to_river(provider, dataset)
+
+
+@pytest.mark.parametrize(
+    "environment_name",
+    sorted({case[3] for case in _AGGREGATE_ROUTE_SWITCH_CASES}),
+)
+def test_aggregate_route_switches_reject_invalid_values(
+    environment_name: str,
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment({environment_name: "sometimes"})
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
+def test_aggregate_work_item_families_have_one_canonical_writer(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    environment_name = f"WORKER_{provider.upper()}_WORK_ITEMS_ENABLED"
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                candidate_provider.strip().lower() == provider
+                and candidate_dataset.strip().lower() in WORK_ITEM_DATASETS
+            )
+        ),
+    )
+
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert not off.routes_to_river(provider, "work-items")
+
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert provider_unit_route.provider_family_strict_admission_enabled(
+        provider, "work-items", {environment_name: "true"}
+    )
+    assert on.routes_to_river(provider, "work-items")
+    for alias in set(WORK_ITEM_DATASETS) - {"work-items"}:
+        assert not on.routes_to_river(provider, alias)
+
+
+def test_gitlab_pr_social_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITLAB_PRS_ENABLED": "true",
+                "WORKER_GITLAB_PR_REVIEWS_ENABLED": "true",
+            }
+        )
 
 
 def test_invalid_switch_fails_closed_without_echoing_value() -> None:
@@ -55,6 +343,16 @@ def test_invalid_switch_fails_closed_without_echoing_value() -> None:
             {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": value}
         )
     assert value not in str(raised.value)
+
+
+def test_jira_incidents_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("jira", "incidents")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "jira", "incidents"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_JIRA_INCIDENTS_ENABLED": "true"}
+    ).routes_to_river("jira", "incidents")
 
 
 # ---------------------------------------------------------------------------
@@ -113,16 +411,133 @@ def test_github_repo_metadata_switch_is_the_second_required_key() -> None:
 
 
 def test_github_repo_metadata_switch_does_not_open_gitlab_repo_metadata() -> None:
-    """Mirrors the Go-side TestGithubRepoMetadataSwitchDoesNotOpenGitLab:
-    gitlab/repo-metadata shares the repo-metadata dataset name but has no
-    native handler and stays route_ready=false in the matrix, so turning on
-    the github switch must never widen gitlab's route open."""
+    """The two ready repository routes still require independent switches."""
 
     switches = ProviderUnitRouteSwitches.from_environment(
         {"WORKER_GITHUB_REPO_METADATA_ENABLED": "true"}
     )
-    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
     assert not switches.routes_to_river("gitlab", "repo-metadata")
+
+
+def test_gitlab_repo_metadata_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_repo_metadata is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
+    assert not off.routes_to_river("gitlab", "repo-metadata")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_REPO_METADATA_ENABLED": "true"}
+    )
+    assert on.gitlab_repo_metadata is True
+    assert on.routes_to_river("gitlab", "repo-metadata")
+    assert not on.routes_to_river("github", "repo-metadata")
+
+
+def test_gitlab_repo_metadata_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_REPO_METADATA_ENABLED": "sometimes"}
+        )
+
+
+def test_gitlab_commits_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_commits is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "commits")
+    assert not off.routes_to_river("gitlab", "commits")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_COMMITS_ENABLED": "true"}
+    )
+    assert on.gitlab_commits is True
+    assert on.routes_to_river("gitlab", "commits")
+    assert not on.routes_to_river("github", "commits")
+
+
+def test_gitlab_commits_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_COMMITS_ENABLED": "sometimes"}
+        )
+
+
+def test_gitlab_commit_stats_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_commit_stats is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "commit-stats")
+    assert not off.routes_to_river("gitlab", "commit-stats")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_COMMIT_STATS_ENABLED": "true"}
+    )
+    assert on.gitlab_commit_stats is True
+    assert on.routes_to_river("gitlab", "commit-stats")
+    assert not on.routes_to_river("github", "commit-stats")
+
+
+def test_gitlab_commit_stats_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_COMMIT_STATS_ENABLED": "sometimes"}
+        )
+
+
+def test_gitlab_complete_unit_aliases_route_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_cicd is False
+    assert off.gitlab_tests is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "cicd")
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "tests")
+    assert not off.routes_to_river("gitlab", "cicd")
+    assert not off.routes_to_river("gitlab", "tests")
+
+    cicd = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_CICD_ENABLED": "true"}
+    )
+    assert cicd.routes_to_river("gitlab", "cicd")
+    assert not cicd.routes_to_river("gitlab", "tests")
+    tests = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_TESTS_ENABLED": "true"}
+    )
+    assert tests.routes_to_river("gitlab", "tests")
+    assert not tests.routes_to_river("gitlab", "cicd")
+
+
+def test_gitlab_complete_unit_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITLAB_CICD_ENABLED": "true",
+                "WORKER_GITLAB_TESTS_ENABLED": "true",
+            }
+        )
+
+
+def test_gitlab_cicd_invalid_value_fails_closed() -> None:
+    for name in ("WORKER_GITLAB_CICD_ENABLED", "WORKER_GITLAB_TESTS_ENABLED"):
+        with pytest.raises(ProviderUnitRouteError):
+            ProviderUnitRouteSwitches.from_environment({name: "sometimes"})
+
+
+def test_gitlab_incidents_defaults_off_and_routes_independently() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert off.gitlab_incidents is False
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "incidents")
+    assert not off.routes_to_river("gitlab", "incidents")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITLAB_INCIDENTS_ENABLED": "true"}
+    )
+    assert on.routes_to_river("gitlab", "incidents")
+    assert not on.routes_to_river("jira", "incidents")
+
+
+def test_gitlab_incidents_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITLAB_INCIDENTS_ENABLED": "sometimes"}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -162,37 +577,51 @@ def test_github_prs_invalid_value_fails_closed() -> None:
         )
 
 
-def test_github_prs_is_not_yet_route_ready() -> None:
-    """(github, prs) has a real Go handler (CHAOS-3122) but is deliberately
-    NOT route_ready: codex H1 found that first_review_at/reviews_count/
-    changes_requested_count on git_pull_requests are owned by Python's
-    review-enrichment phase, which the Go handler does not perform, so it
-    would always write fabricated zeros into columns it does not own. The
-    switch exists and is wired end to end (so flipping RouteReady later is a
-    one-line change, not new plumbing) but can never route traffic while the
-    matrix says not-ready -- routes_to_river must stay False even with the
-    switch on."""
+@pytest.mark.parametrize(
+    ("dataset", "field", "environment_name"),
+    [
+        ("prs", "github_prs", "WORKER_GITHUB_PRS_ENABLED"),
+        ("pr-reviews", "github_pr_reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("pr-comments", "github_pr_comments", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+    ],
+)
+def test_github_pr_social_routes_require_their_own_switch(
+    dataset: str, field: str, environment_name: str
+) -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", dataset)
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert getattr(off, field) is False
+    assert not off.routes_to_river("github", dataset)
 
-    assert not ProviderUnitRouteSwitches.is_route_ready("github", "prs")
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert getattr(on, field) is True
+    assert on.routes_to_river("github", dataset)
+    for other in {"prs", "pr-reviews", "pr-comments"} - {dataset}:
+        assert not on.routes_to_river("github", other)
 
-    on = ProviderUnitRouteSwitches.from_environment(
-        {"WORKER_GITHUB_PRS_ENABLED": "true"}
-    )
-    assert not on.routes_to_river("github", "prs")
+
+@pytest.mark.parametrize(
+    "environment_name",
+    ["WORKER_GITHUB_PR_REVIEWS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"],
+)
+def test_github_pr_social_alias_invalid_values_fail_closed(
+    environment_name: str,
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment({environment_name: "sometimes"})
 
 
-def test_github_prs_switch_does_not_open_pr_reviews_or_pr_comments() -> None:
-    """github/pr-reviews and github/pr-comments share the "prs" legacy target
-    in Python (they are the same _sync_github_prs_to_store_async execution),
-    but neither has its own Go handler yet and both stay route_ready=false in
-    the matrix, so turning on GithubPRs must never widen either open."""
-
-    switches = ProviderUnitRouteSwitches.from_environment(
-        {"WORKER_GITHUB_PRS_ENABLED": "true"}
-    )
-    for dataset in ("pr-reviews", "pr-comments"):
-        assert not ProviderUnitRouteSwitches.is_route_ready("github", dataset)
-        assert not switches.routes_to_river("github", dataset)
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("WORKER_GITHUB_PRS_ENABLED", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("WORKER_GITHUB_PRS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+        ("WORKER_GITHUB_PR_REVIEWS_ENABLED", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
+    ],
+)
+def test_github_pr_social_aliases_are_mutually_exclusive(left: str, right: str) -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment({left: "true", right: "true"})
 
 
 def test_github_cicd_defaults_to_false() -> None:
@@ -227,6 +656,297 @@ def test_github_cicd_invalid_value_fails_closed() -> None:
         )
 
 
+def test_github_security_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "security")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "github", "security"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_SECURITY_ENABLED": "true"}
+    ).routes_to_river("github", "security")
+
+
+def test_github_files_switch_is_the_second_required_key() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "files")
+    assert not ProviderUnitRouteSwitches.from_environment({}).routes_to_river(
+        "github", "files"
+    )
+    assert ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_FILES_ENABLED": "true"}
+    ).routes_to_river("github", "files")
+
+
+def test_github_commit_stats_switch_routes_only_when_enabled() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_COMMIT_STATS_ENABLED": "true"}
+    )
+    assert off.github_commit_stats is False
+    assert not off.routes_to_river("github", "commit-stats")
+    assert on.github_commit_stats is True
+    assert on.routes_to_river("github", "commit-stats")
+
+
+def test_github_commit_stats_invalid_switch_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_COMMIT_STATS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_blame_switch_routes_only_when_enabled() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_BLAME_ENABLED": "true"}
+    )
+    assert off.github_blame is False
+    assert on.github_blame is True
+    assert off.routes_to_river("github", "blame") is False
+    assert on.routes_to_river("github", "blame") is True
+
+
+def test_github_blame_invalid_switch_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_BLAME_ENABLED": "sometimes"}
+        )
+
+
+def test_github_tests_switch_routes_only_when_enabled() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_TESTS_ENABLED": "true"}
+    )
+    assert off.github_tests is False
+    assert on.github_tests is True
+    assert off.routes_to_river("github", "tests") is False
+    assert on.routes_to_river("github", "tests") is True
+
+
+def test_github_tests_invalid_switch_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_TESTS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_cicd_and_tests_complete_unit_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITHUB_CICD_ENABLED": "true",
+                "WORKER_GITHUB_TESTS_ENABLED": "true",
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3606: GitHub's five planner-collapsed work-item aliases are one Go
+# family. Matrix readiness remains visible for every alias; only canonical
+# work-items can be admitted to the Go producer route.
+# ---------------------------------------------------------------------------
+
+
+_GITHUB_WORK_ITEM_FAMILY_FLAGS = {
+    "family_dataset_work_items": True,
+    "family_dataset_work_item_labels": True,
+    "family_dataset_work_item_projects": True,
+    "family_dataset_work_item_history": True,
+    "family_dataset_work_item_comments": True,
+}
+
+
+def test_github_work_items_switch_routes_only_the_canonical_claim() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": "true"}
+    )
+    datasets = (
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+    )
+    for dataset in datasets:
+        assert ProviderUnitRouteSwitches.is_route_ready("github", dataset)
+        assert not off.routes_to_river("github", dataset)
+    assert on.routes_to_river("github", "work-items")
+    for alias in datasets[1:]:
+        assert not on.routes_to_river("github", alias)
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._TRUE))
+def test_github_work_items_switch_parses_true_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": value}
+    )
+    assert switches.github_work_items is True
+    assert switches.routes_to_river("github", "work-items")
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._FALSE))
+def test_github_work_items_switch_parses_false_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": value}
+    )
+    assert switches.github_work_items is False
+    assert not switches.routes_to_river("github", "work-items")
+
+
+def test_github_work_items_switch_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_WORK_ITEMS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_work_item_family_admission_requires_exact_boolean_flags() -> None:
+    assert provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-items", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+    for missing in _GITHUB_WORK_ITEM_FAMILY_FLAGS:
+        flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        del flags[missing]
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", flags
+        )
+        flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        flags[missing] = False
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", flags
+        )
+    for value in ("true", "false", 1, 0):
+        malformed_flags: dict[str, object] = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        malformed_flags["family_dataset_work_items"] = value
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", malformed_flags
+        )
+    flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+    flags["family_dataset_unexpected"] = True
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-items", flags
+    )
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-item-comments", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "prs", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "canonical", "aliases", "complete_flags"),
+    (
+        pytest.param(
+            provider,
+            "work-items",
+            (
+                "work-item-labels",
+                "work-item-projects",
+                "work-item-history",
+                "work-item-comments",
+            ),
+            _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+            id=f"{provider}-work-items",
+        )
+        for provider in ("github", "gitlab", "jira", "linear")
+    ),
+)
+def test_provider_work_item_family_policy_is_exact_and_provider_neutral(
+    provider: str,
+    canonical: str,
+    aliases: tuple[str, ...],
+    complete_flags: dict[str, bool],
+) -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        provider, canonical, complete_flags, strict_atomic=True
+    )
+    for alias in aliases:
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, alias, complete_flags, strict_atomic=True
+        )
+    for flag in complete_flags:
+        missing = dict(complete_flags)
+        del missing[flag]
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, canonical, missing, strict_atomic=True
+        )
+        false = dict(complete_flags)
+        false[flag] = False
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, canonical, false, strict_atomic=True
+        )
+    unknown = dict(complete_flags)
+    unknown["family_dataset_unknown"] = True
+    assert not provider_unit_route.validate_provider_family_claim(
+        provider, canonical, unknown, strict_atomic=True
+    )
+
+
+def test_neutral_work_item_family_matches_the_live_planner_boundary() -> None:
+    assert (
+        set(WORK_ITEM_DATASETS) == provider_unit_route._GITHUB_WORK_ITEM_FAMILY_DATASETS
+    )
+
+
+@pytest.mark.parametrize(
+    "dataset",
+    (
+        "incidents",
+        "incident-alerts",
+        "incident-log-entries",
+        "incident-notes",
+    ),
+)
+def test_pagerduty_incident_family_preserves_d16_independent_claims(
+    dataset: str,
+) -> None:
+    # PagerDuty currently plans four independent units. D16 forbids collapsing
+    # that boundary inside the baseline port, so the neutral family catalog
+    # identifies the relationship without imposing canonical/flag admission.
+    assert provider_unit_route.validate_provider_family_claim(
+        "pagerduty", dataset, {}, strict_atomic=True
+    )
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
+def test_default_off_work_item_family_keeps_legacy_claims_admissible(
+    provider: str,
+) -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        provider,
+        "work-items",
+        {"family_dataset_work_items": True},
+        strict_atomic=False,
+    )
+
+
+def test_gitlab_family_catalog_uses_the_family_activation_switch() -> None:
+    assert provider_unit_route.provider_family_strict_admission_enabled(
+        "gitlab",
+        "work-items",
+        {"WORKER_GITLAB_WORK_ITEMS_ENABLED": "true"},
+    )
+    assert not provider_unit_route.provider_family_strict_admission_enabled(
+        "gitlab",
+        "work-items",
+        {},
+    )
+
+
+def test_provider_family_policy_leaves_independent_routes_unchanged() -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "prs", {"sync_prs": True}, strict_atomic=True
+    )
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "cicd", {"sync_cicd": True}, strict_atomic=True
+    )
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "tests", {"sync_tests": True}, strict_atomic=True
+    )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.
@@ -235,17 +955,20 @@ def test_github_cicd_invalid_value_fails_closed() -> None:
 
 def test_is_route_ready_reflects_the_checked_in_matrix() -> None:
     assert ProviderUnitRouteSwitches.is_route_ready("launchdarkly", "feature-flags")
-    # Same dataset name, different provider: the matrix marks gitlab's
-    # feature-flags pair route_ready=false, so it must stay closed even
-    # though the string "feature-flags" matches.
-    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "feature-flags")
+    # Same dataset name, different provider: both independently constructed
+    # routes are ready in the aggregate matrix. Readiness is still exact pair
+    # membership rather than a dataset-name wildcard.
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "feature-flags")
+    assert not ProviderUnitRouteSwitches.is_route_ready(
+        "not-a-provider", "feature-flags"
+    )
     # Case/whitespace must not matter -- callers pass live DB column values.
     assert ProviderUnitRouteSwitches.is_route_ready(" LaunchDarkly ", "Feature-Flags")
 
 
 def test_is_route_ready_fails_closed_for_unknown_pairs() -> None:
     assert not ProviderUnitRouteSwitches.is_route_ready("acme", "widgets")
-    assert not ProviderUnitRouteSwitches.is_route_ready("github", "commits")
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "commits")
 
 
 def _write_matrix_fixture(path: Path, *, ready_pairs: set[tuple[str, str]]) -> None:

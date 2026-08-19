@@ -104,7 +104,7 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 > ⚠️ **Warning (CHAOS-2475):** Sync commands run inline and require provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, or `LINEAR_API_KEY`) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which plans a `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Trigger the sync via `POST /api/v1/admin/sync-configs/{config_id}/trigger`. The API plans the `SyncRun` and commits a durable reference-discovery wakeup; the reconciler publishes it through the active sync-dispatch route.
 
 ### `sync git`
 
@@ -962,7 +962,7 @@ python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-
 
 > ⚠️ **Warning (CHAOS-2475):** The `backfill run` command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.
 >
-> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which plans a backfill-mode `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Trigger the backfill via `POST /api/v1/admin/sync-configs/{config_id}/backfill`. The API plans a backfill-mode `SyncRun` and commits the same durable reference-discovery wakeup used by full and continuation syncs.
 
 Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
 
@@ -1053,6 +1053,11 @@ authenticated, payload-redacted Go operator binary:
 ```bash
 dev-health-workerctl routes status dispatch_sync_run
 
+dev-health-workerctl routes apply \
+  --reason deployment \
+  --correlation-id change-123 \
+  dispatch_sync_run
+
 dev-health-workerctl routes pause \
   --reason maintenance \
   --correlation-id change-123 \
@@ -1073,15 +1078,19 @@ dev-health-workerctl routes resume \
 The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 `reference_discovery`. Supply the one-time service credential through
 `WORKER_OPERATOR_TOKEN` or `WORKER_OPERATOR_TOKEN_FILE`; status requires
-`workers:read`, while pause/drain/resume require `workers:operate`. Mutations
+`workers:read`, while apply/pause/drain/resume require `workers:operate`. Mutations
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
-The shipped capability registry is empty and every checked-in route remains
-Celery. These commands can therefore pause, drain, and resume the same Celery
-route for operational proof, including `post_sync`, but cannot activate River.
-A transport-changing `post_sync` resume remains blocked until a concrete
-external quiescer is registered for the old transport.
+The checked-in transport for all four sync-dispatch kinds is River and the
+rollback transport is Celery. `routes apply` converges one unpaused Celery
+route to its checked-in River transport after proving the matching capability
+exists and no live outbox claim remains. It is idempotent when the route is
+already active. `routes resume --transport celery` remains the explicit
+rollback path. Before resuming on Celery, drain the external River queue for
+the kind as well as the database claims: there must be no queued or running
+River job and no pending or claimed outbox row. `routes drain` proves the
+database-claim condition only; it does not inspect River job state.
 
 ---
 
@@ -1264,7 +1273,7 @@ Each report requires a `ReportPlan` that defines scope, time range, sections, an
 
 ### Scheduling
 
-Reports can be scheduled with a cron expression (via `scheduleCron` in the create/update mutation). The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
+Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
 
 ### Worker Configuration
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,7 +48,9 @@ func (store *PostgresIdempotency) Supports(policy string) bool {
 	case "unique_schedule_occurrence", "maintenance_run_checkpoint",
 		"billing_notification", "webhook_delivery", "daily_metrics_run",
 		"daily_metrics_partition", "daily_metrics_finalize",
-		"remaining_metrics_partition",
+		"remaining_metrics_partition", "work_graph_request",
+		"investment_request", "investment_dispatch", "investment_chunk",
+		"investment_finalize",
 		// report_run fences the River attempt. The report package separately
 		// owns the report_runs row transition and the notification lease; both
 		// fences are required because an artifact and its notification are two
@@ -93,7 +96,7 @@ func (store *PostgresIdempotency) Begin(ctx context.Context, request ClaimReques
 		if err := tx.Commit(ctx); err != nil {
 			return nil, errIdempotencyUnavailable
 		}
-		return &postgresClaim{store: store, id: runID, token: token, state: ClaimProceed}, nil
+		return newProceedingClaim(store, runID, token, now), nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, errIdempotencyUnavailable
@@ -140,7 +143,7 @@ func (store *PostgresIdempotency) Begin(ctx context.Context, request ClaimReques
 		if err := tx.Commit(ctx); err != nil {
 			return nil, errIdempotencyUnavailable
 		}
-		return &postgresClaim{store: store, id: runID, token: token, state: ClaimProceed}, nil
+		return newProceedingClaim(store, runID, token, now), nil
 	default:
 		return nil, errIdempotencyUnavailable
 	}
@@ -151,6 +154,80 @@ type postgresClaim struct {
 	id    uuid.UUID
 	token uuid.UUID
 	state ClaimState
+
+	stopRenewal chan struct{}
+	renewalDone chan struct{}
+	stopOnce    sync.Once
+}
+
+// newProceedingClaim starts lease renewal alongside the claim.
+func newProceedingClaim(
+	store *PostgresIdempotency, runID uuid.UUID, token uuid.UUID, leasedAt time.Time,
+) *postgresClaim {
+	claim := &postgresClaim{
+		store: store, id: runID, token: token, state: ClaimProceed,
+		stopRenewal: make(chan struct{}), renewalDone: make(chan struct{}),
+	}
+	go claim.renew(leasedAt)
+	return claim
+}
+
+// renew keeps this claim's lease ahead of the clock for as long as the handler
+// runs. The lease is 10 minutes but registered timeouts reach 2 hours, and the
+// running-with-expired-lease branch in Begin lets a duplicate claim take over
+// concurrently with the still-running original -- the exact double execution
+// this store exists to fence (CHAOS-3866). Renewing bounds crash takeover at
+// one lease rather than one job timeout, which simply leasing for the full
+// descriptor timeout would not.
+//
+// Renewal is token-fenced and retries transient failures until the lease could
+// actually have expired, matching the budget lease's semantics.
+func (claim *postgresClaim) renew(leasedAt time.Time) {
+	defer close(claim.renewalDone)
+	interval := claim.store.leaseDuration / 3
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	expiry := leasedAt.Add(claim.store.leaseDuration)
+	for {
+		select {
+		case <-claim.stopRenewal:
+			return
+		case <-ticker.C:
+			attemptedAt := claim.store.now().UTC()
+			ctx, cancel := context.WithTimeout(context.Background(), renewalQueryTimeout(interval))
+			command, err := claim.store.pool.Exec(ctx, `
+				UPDATE public.worker_job_runs
+				SET lease_expires_at = $1, updated_at = $2
+				WHERE id = $3 AND claim_token = $4 AND status = 'running'`,
+				attemptedAt.Add(claim.store.leaseDuration), attemptedAt, claim.id, claim.token)
+			cancel()
+			switch {
+			case err == nil && command.RowsAffected() == 1:
+				expiry = attemptedAt.Add(claim.store.leaseDuration)
+			case err == nil:
+				// The run is no longer ours: it finished, or another claim
+				// fenced us out. Nothing left to renew.
+				return
+			case attemptedAt.Before(expiry):
+				// Transient database failure with lease time still left.
+			default:
+				return
+			}
+		}
+	}
+}
+
+func (claim *postgresClaim) stopRenewing() {
+	if claim == nil || claim.stopRenewal == nil {
+		return
+	}
+	claim.stopOnce.Do(func() { close(claim.stopRenewal) })
+	if claim.renewalDone != nil {
+		<-claim.renewalDone
+	}
 }
 
 func (claim *postgresClaim) State() ClaimState {
@@ -166,6 +243,9 @@ func (claim *postgresClaim) Finish(ctx context.Context, completion Completion) e
 		claim.store.now == nil {
 		return errIdempotencyUnavailable
 	}
+	// Stop renewal before the terminal write so a renewal in flight cannot
+	// reinstate a lease on a run this call is about to finish.
+	claim.stopRenewing()
 	status, err := runStatus(completion)
 	if err != nil {
 		return errIdempotencyUnavailable
@@ -204,7 +284,16 @@ func runStatus(completion Completion) (string, error) {
 		return "succeeded", nil
 	case ResultRetry:
 		return "retryable", nil
-	case ResultDiscard, ResultCancel:
+	case ResultCancel:
+		// Only an explicit domain-terminal decision is terminal. A drain or a
+		// budget-lease loss also arrives as ResultCancel, and River will retry
+		// it -- stamping those "terminal" made Begin return ClaimTerminal on
+		// the retry, which the adapter auto-cancelled forever (CHAOS-3865).
+		if completion.Terminal {
+			return "terminal", nil
+		}
+		return "retryable", nil
+	case ResultDiscard:
 		return "terminal", nil
 	default:
 		return "", fmt.Errorf("unsupported completion result")

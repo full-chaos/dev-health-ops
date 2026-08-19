@@ -1276,6 +1276,51 @@ def _closed_vocabulary(discovered: list[Surface]) -> dict[str, set[str]]:
     return vocab
 
 
+def validate_retired_beat_entries(
+    inventory: dict, discovered: list[Surface]
+) -> list[str]:
+    """Validate the separate ledger for deliberately removed Beat entries.
+
+    Inventory ``rows`` mirror surfaces that still exist. A retired Beat entry
+    must not be represented as a phantom row merely to preserve history; it
+    belongs in ``retired_beat_entries`` with the decision evidence that lets a
+    reviewer distinguish intentional removal from a dropped ownership row.
+    """
+    errors: list[str] = []
+    retired = inventory.get("retired_beat_entries", [])
+    if not isinstance(retired, list):
+        return ["INVALID RETIRED BEAT INVENTORY: retired_beat_entries must be a list"]
+
+    seen: set[str] = set()
+    discovered_names = {
+        surface.name
+        for surface in discovered
+        if surface.cls in (CLASS_BEAT_ENTRY, CLASS_BEAT_ENTRY_CONDITIONAL)
+    }
+    for entry in retired:
+        if not isinstance(entry, dict):
+            errors.append("INVALID RETIRED BEAT INVENTORY: entry must be an object")
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            errors.append("INVALID RETIRED BEAT INVENTORY: entry has no name")
+            continue
+        if name in seen:
+            errors.append(f"DUPLICATE RETIRED BEAT ENTRY: {name!r}")
+        seen.add(name)
+        for field in ("cadence", "reason", "evidence"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                errors.append(
+                    f"INVALID RETIRED BEAT INVENTORY: {name!r} has no {field}"
+                )
+        if name in discovered_names:
+            errors.append(
+                f"RETIRED BEAT REINTRODUCED: {name!r} appears in source and must "
+                "either be removed again or deleted from retired_beat_entries after review"
+            )
+    return errors
+
+
 def check(root: Path, inventory_path: Path) -> list[str]:
     errors: list[str] = []
     inventory = load_inventory(inventory_path)
@@ -1289,6 +1334,7 @@ def check(root: Path, inventory_path: Path) -> list[str]:
     #    direction lets a miss and a phantom net to zero (Codex round-2
     #    MED-3).
     discovered = discover_all(root)
+    errors.extend(validate_retired_beat_entries(inventory, discovered))
     discovered_keys = {s.key() for s in discovered}
     for s in discovered:
         if s.key() not in row_keys:

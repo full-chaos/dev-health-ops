@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,8 @@ type operatorRuntime struct {
 	lockTx                pgx.Tx
 	streamDeploymentState string
 	streams               []streamProfileStatus
+	queueStatusSource     workerQueueStatusSource
+	queueControlMode      platformconfig.QueueControlMode
 }
 
 type streamProfileStatus struct {
@@ -62,9 +65,168 @@ type streamProfileStatus struct {
 	MaxReplicas      int    `json:"max_replicas"`
 }
 
+// workerQueueStatus is the operator view for a River worker group and its
+// explicit canonical queue set. Stream runners keep profile-based commands.
+type workerQueueStatus struct {
+	Group                string   `json:"group"`
+	Queues               []string `json:"queues"`
+	ConfiguredInManifest bool     `json:"configured_in_manifest"`
+	DesiredReplicas      int      `json:"desired_replicas"`
+	LiveReplicas         int      `json:"live_replicas"`
+	MaxReplicas          int      `json:"max_replicas"`
+	QueueBacklog         int64    `json:"queue_backlog"`
+	ActiveJobs           int64    `json:"active_jobs"`
+	DrainState           string   `json:"drain_state"`
+}
+
+type workerQueueStatusSource interface {
+	Status(context.Context) (workerQueueStatusResponse, error)
+}
+
+type workerQueueStatusSourceFunc func(context.Context) (workerQueueStatusResponse, error)
+
+func (source workerQueueStatusSourceFunc) Status(ctx context.Context) (workerQueueStatusResponse, error) {
+	return source(ctx)
+}
+
 type streamStatusResponse struct {
 	DeploymentState string                `json:"deployment_state"`
 	Profiles        []streamProfileStatus `json:"profiles"`
+}
+
+type workerQueueStatusResponse struct {
+	DeploymentState  string                       `json:"deployment_state"`
+	ConnectionBudget workerConnectionBudgetStatus `json:"connection_budget"`
+	Groups           []workerQueueStatus          `json:"groups"`
+}
+
+type connectionBudgetStatus struct {
+	Used     int `json:"used"`
+	Limit    int `json:"limit"`
+	Headroom int `json:"headroom"`
+}
+
+type workerConnectionBudgetStatus struct {
+	QueueSession       connectionBudgetStatus `json:"queue_session"`
+	CoordinatorSession connectionBudgetStatus `json:"coordinator_session"`
+	DomainTransaction  connectionBudgetStatus `json:"domain_transaction"`
+	Server             connectionBudgetStatus `json:"server"`
+}
+
+type manifestQueueStatusSource struct {
+	service   *joboperator.Service
+	principal joboperator.Principal
+	manifest  deploymentcontract.Manifest
+	budget    deploymentcontract.BudgetSummary
+	presence  func(context.Context) ([]jobruntime.WorkerPresenceSummary, error)
+}
+
+func (source manifestQueueStatusSource) Status(ctx context.Context) (workerQueueStatusResponse, error) {
+	if source.service == nil || source.presence == nil {
+		return workerQueueStatusResponse{}, errors.New("queue status source is unavailable")
+	}
+	presenceRows, err := source.presence(ctx)
+	if err != nil {
+		return workerQueueStatusResponse{}, err
+	}
+	presence := make(map[string]jobruntime.WorkerPresenceSummary, len(presenceRows))
+	for _, summary := range presenceRows {
+		if _, duplicate := presence[summary.WorkerGroup]; duplicate {
+			return workerQueueStatusResponse{}, errors.New("duplicate worker presence summary")
+		}
+		presence[summary.WorkerGroup] = summary
+	}
+	groups := make([]workerQueueStatus, 0, len(source.manifest.Processes)+len(presence))
+	appendGroup := func(group string, queues []string, summary *jobruntime.WorkerPresenceSummary, desired, maximum int, configured bool) error {
+		queueSummaries, err := source.service.Queues(ctx, source.principal, group, queues)
+		if err != nil {
+			return err
+		}
+		status := workerQueueStatus{
+			Group: group, Queues: append([]string(nil), queues...),
+			ConfiguredInManifest: configured,
+			DesiredReplicas:      desired, MaxReplicas: maximum, DrainState: "inactive",
+		}
+		if summary != nil {
+			status.LiveReplicas = summary.Live
+			if summary.Draining > 0 {
+				status.DrainState = "draining"
+			} else {
+				status.DrainState = "active"
+			}
+		}
+		for _, queue := range queueSummaries {
+			status.QueueBacklog += queue.Available + queue.Retryable + queue.Scheduled
+			status.ActiveJobs += queue.Running
+			if queue.Paused {
+				status.DrainState = "draining"
+			}
+		}
+		groups = append(groups, status)
+		return nil
+	}
+	for _, process := range source.manifest.Processes {
+		if process.Runtime != "river" {
+			continue
+		}
+		if len(process.Queues) == 0 {
+			return workerQueueStatusResponse{}, errors.New("river process is missing explicit queues")
+		}
+		queues := append([]string(nil), process.Queues...)
+		var live *jobruntime.WorkerPresenceSummary
+		if summary, ok := presence[process.Name]; ok {
+			if !slices.Equal(summary.Queues, queues) {
+				return workerQueueStatusResponse{}, errors.New("worker presence queue set differs from the deployment manifest")
+			}
+			live = &summary
+			delete(presence, process.Name)
+		}
+		if err := appendGroup(process.Name, queues, live, process.DesiredReplicas, process.MaxReplicas, true); err != nil {
+			return workerQueueStatusResponse{}, err
+		}
+	}
+	customGroups := make([]string, 0, len(presence))
+	for group := range presence {
+		customGroups = append(customGroups, group)
+	}
+	sort.Strings(customGroups)
+	for _, group := range customGroups {
+		summary := presence[group]
+		if err := appendGroup(group, summary.Queues, &summary, 0, 0, false); err != nil {
+			return workerQueueStatusResponse{}, err
+		}
+	}
+	if len(groups) == 0 {
+		return workerQueueStatusResponse{}, errors.New("deployment manifest has no River worker groups")
+	}
+	return workerQueueStatusResponse{
+		DeploymentState: source.manifest.DeploymentState,
+		ConnectionBudget: workerConnectionBudgetStatus{
+			QueueSession: connectionBudgetStatus{
+				Used: source.budget.QueueSessionClientConnections,
+				Limit: min(source.manifest.PostgresBudget.PgBouncerQueueSessionMaxClientConnections,
+					source.manifest.PostgresBudget.PgBouncerQueueSessionPoolSize),
+				Headroom: source.budget.QueueSessionHeadroom,
+			},
+			CoordinatorSession: connectionBudgetStatus{
+				Used: source.budget.CoordinatorSessionClientConnections,
+				Limit: min(source.manifest.PostgresBudget.PgBouncerCoordinatorSessionMaxClientConnections,
+					source.manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize),
+				Headroom: source.budget.CoordinatorSessionHeadroom,
+			},
+			DomainTransaction: connectionBudgetStatus{
+				Used:     source.budget.DomainTransactionClientConnections,
+				Limit:    source.manifest.PostgresBudget.PgBouncerTransactionMaxClientConnections,
+				Headroom: source.budget.DomainTransactionHeadroom,
+			},
+			Server: connectionBudgetStatus{
+				Used:     source.budget.ServerConnectionFootprint,
+				Limit:    source.manifest.PostgresBudget.ServerMaxConnections,
+				Headroom: source.budget.ServerConnectionHeadroom,
+			},
+		},
+		Groups: groups,
+	}, nil
 }
 
 func (runtime *operatorRuntime) close() {
@@ -126,12 +288,13 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if !ok {
 		return nil, writeError(stderr, "authentication_failed")
 	}
-	mode := platformconfig.QueueControlDirect
-	if raw, configured := lookup("WORKER_DATABASE_MODE"); configured && raw != "" {
-		mode = platformconfig.QueueControlMode(strings.ToLower(raw))
-	}
-	if mode != platformconfig.QueueControlDirect {
+	mode := databaseMode(lookup, "WORKER_DATABASE_MODE")
+	if !sessionSafeMode(mode) {
 		return nil, writeError(stderr, "queue_control_mode_unsupported")
+	}
+	coordinatorMode := databaseMode(lookup, "COORDINATOR_DATABASE_MODE")
+	if !sessionSafeMode(coordinatorMode) {
+		return nil, writeError(stderr, "coordinator_database_mode_unsupported")
 	}
 	domainRole := resolveName("RIVER_DOMAIN_DATABASE_ROLE", defaultDomainRole, lookup)
 	queueRole := resolveName("RIVER_QUEUE_DATABASE_ROLE", defaultQueueRole, lookup)
@@ -150,6 +313,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		domainURI.Reveal(), queueURI.Reveal(), domainRole, queueRole,
 	).WithCoordinator()
 	runtimeConfig.QueueControlMode = mode
+	runtimeConfig.CoordinatorMode = coordinatorMode
 	runtimeConfig.RiverSchema = schema
 	runtimeConfig.DomainTransactionPooler = domainTransactionPooler
 	runtimeConfig.DomainMaxConns = 2
@@ -157,7 +321,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	runtimeConfig.CoordinatorURI = coordinatorURI.Reveal()
 	runtimeConfig.CoordinatorRole = coordinatorRole
 	// 2 matches operator_cli.coordinator_max_connections in
-	// deploy/go-workers/profiles.json, the same way DomainMaxConns and
+	// deploy/go-workers/deployment.json, the same way DomainMaxConns and
 	// QueueMaxConns above match their fields there.
 	runtimeConfig.CoordinatorMaxConns = 2
 	pools, err := postgresstore.OpenRuntimePools(ctx, runtimeConfig)
@@ -221,7 +385,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
-	manifest, _, err := deploymentcontract.Load("deploy/go-workers/profiles.json", contractRegistry)
+	manifest, budget, err := deploymentcontract.Load("deploy/go-workers/deployment.json", contractRegistry)
 	if err != nil {
 		return nil, writeError(stderr, "deployment_contract_invalid")
 	}
@@ -291,10 +455,28 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	}
 	failed = false
 	lockHeld = false
-	return &operatorRuntime{
+	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
-		streamDeploymentState: manifest.DeploymentState, streams: streams,
-	}, 0
+		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
+	}
+	runtime.queueStatusSource = manifestQueueStatusSource{
+		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
+		presence: func(ctx context.Context) ([]jobruntime.WorkerPresenceSummary, error) {
+			return jobruntime.ReadWorkerPresence(ctx, pools.Domain)
+		},
+	}
+	return runtime, 0
+}
+
+func databaseMode(lookup platformsecrets.LookupEnv, key string) platformconfig.QueueControlMode {
+	if raw, configured := lookup(key); configured && raw != "" {
+		return platformconfig.QueueControlMode(strings.ToLower(raw))
+	}
+	return platformconfig.QueueControlDirect
+}
+
+func sessionSafeMode(mode platformconfig.QueueControlMode) bool {
+	return mode == platformconfig.QueueControlDirect || mode == platformconfig.QueueControlSession
 }
 
 // newJobRouteController composes the only currently approved forward cutover:
@@ -353,7 +535,7 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 			return writeServiceError(stderr, err)
 		}
 		return writeResult(stdout, stderr, map[string]any{
-			"queue_control_mode":   "direct",
+			"queue_control_mode":   runtime.queueControlMode,
 			"river_schema_version": riverstore.PinnedSchemaVersion,
 			"status":               "ready",
 		})
@@ -361,8 +543,6 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchJobs(ctx, runtime, args[1:], stdout, stderr)
 	case "queues":
 		return dispatchQueues(ctx, runtime, args[1:], stdout, stderr)
-	case "drain":
-		return dispatchDrain(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":
 		return dispatchContracts(ctx, runtime, args[1:], stdout, stderr)
 	case "routes":
@@ -449,6 +629,13 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 		err   error
 	)
 	switch args[0] {
+	case "apply":
+		if *transport != "" {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err = runtime.service.ApplyCheckedInRoute(
+			ctx, runtime.principal, kind, *reason, *correlation,
+		)
 	case "pause":
 		if *transport != "" {
 			return writeError(stderr, "invalid_request")
@@ -546,7 +733,23 @@ func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, 
 }
 
 func dispatchQueues(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && (args[0] == "pause" || args[0] == "resume") {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "status":
+		if len(args) != 1 || runtime.queueStatusSource == nil {
+			return writeError(stderr, "invalid_request")
+		}
+		if err := runtime.service.Status(ctx, runtime.principal); err != nil {
+			return writeServiceError(stderr, err)
+		}
+		status, err := runtime.queueStatusSource.Status(ctx)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		return writeResult(stdout, stderr, status)
+	case "pause", "resume":
 		action := args[0]
 		flags := quietFlags("queues " + action)
 		reason := flags.String("reason", "", "bounded reason code")
@@ -565,41 +768,43 @@ func dispatchQueues(ctx context.Context, runtime *operatorRuntime, args []string
 			return writeServiceError(stderr, err)
 		}
 		return writeResult(stdout, stderr, map[string]string{"queue": queue, "status": action + "d"})
-	}
-	flags := quietFlags("queues")
-	profile := flags.String("profile", "ops", "registered worker profile")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	case "drain", "undrain":
+		action := args[0]
+		flags := quietFlags("queues " + action)
+		group := flags.String("group", "", "worker group")
+		reason := flags.String("reason", "", "bounded reason code")
+		correlation := flags.String("correlation-id", "", "bounded correlation ID")
+		var queues stringList
+		flags.Var(&queues, "queue", "canonical queue (repeatable)")
+		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || *group == "" || *reason == "" || *correlation == "" || len(queues) == 0 {
+			return writeError(stderr, "invalid_request")
+		}
+		var (
+			result joboperator.DrainResult
+			err    error
+		)
+		if action == "drain" {
+			result, err = runtime.service.Drain(ctx, runtime.principal, *group, queues, *reason, *correlation)
+		} else {
+			result, err = runtime.service.Undrain(ctx, runtime.principal, *group, queues, *reason, *correlation)
+		}
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, result)
+	default:
 		return writeError(stderr, "invalid_request")
 	}
-	queues, err := runtime.service.Queues(ctx, runtime.principal, *profile)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, queues)
-}
-
-func dispatchDrain(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
-	flags := quietFlags("drain")
-	profile := flags.String("profile", "", "registered worker profile")
-	reason := flags.String("reason", "", "bounded reason code")
-	correlation := flags.String("correlation-id", "", "bounded correlation ID")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || *profile == "" || *reason == "" || *correlation == "" {
-		return writeError(stderr, "invalid_request")
-	}
-	result, err := runtime.service.Drain(ctx, runtime.principal, *profile, *reason, *correlation)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, result)
 }
 
 func dispatchContracts(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("contracts")
-	profile := flags.String("profile", "ops", "registered worker profile")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	var queues stringList
+	flags.Var(&queues, "queue", "canonical queue (repeatable)")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || len(queues) == 0 {
 		return writeError(stderr, "invalid_request")
 	}
-	contracts, err := runtime.service.Contracts(ctx, runtime.principal, *profile)
+	contracts, err := runtime.service.Contracts(ctx, runtime.principal, queues)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

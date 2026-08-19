@@ -15,8 +15,16 @@ import (
 // asynchronous, so recovery is readback-fenced rather than blind-replayed --
 // the identical discipline GitHubRepositoryClickHouseEffects (`repos`) uses.
 type GitHubPullRequestClickHouseEffects struct {
-	Conn  driver.Conn
-	Lease providerfoundation.LeaseGuard
+	Conn     driver.Conn
+	Lease    providerfoundation.LeaseGuard
+	Provider string
+}
+
+func (sink GitHubPullRequestClickHouseEffects) provider() string {
+	if sink.Provider == "" {
+		return "github"
+	}
+	return sink.Provider
 }
 
 func (sink GitHubPullRequestClickHouseEffects) WriteEffect(
@@ -24,8 +32,23 @@ func (sink GitHubPullRequestClickHouseEffects) WriteEffect(
 	claim Claim,
 	effect EffectBatch,
 ) error {
+	return sink.writePullRequestEffect(ctx, claim, effect, "prs")
+}
+
+// writePullRequestEffect owns the complete git_pull_requests row write. The
+// public prs sink deliberately restricts it to github/prs; the composed
+// github/pr-reviews route calls this same whole-row writer under its own unit
+// claim after it has enriched the three review-derived columns. Keeping the
+// SQL and validation here prevents two subtly different complete-row writers
+// from racing on a ReplacingMergeTree table, which has no partial-column merge.
+func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+	dataset string,
+) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "prs" ||
+		claim.Provider != sink.provider() || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return ErrInvalidConfiguration
 	}
@@ -89,8 +112,21 @@ func (sink GitHubPullRequestClickHouseEffects) InspectEffect(
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
+	return sink.inspectPullRequestEffect(ctx, claim, effect, "prs")
+}
+
+// inspectPullRequestEffect is the companion to writePullRequestEffect. It
+// uses the exact same FINAL whole-row readback for github/prs and the composed
+// github/pr-reviews unit, so crash recovery cannot bless a row whose review
+// columns came from a different physical version.
+func (sink GitHubPullRequestClickHouseEffects) inspectPullRequestEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+	dataset string,
+) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "prs" ||
+		claim.Provider != sink.provider() || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -266,11 +302,11 @@ type pullRequestVersion struct {
 // large conjunction. A monolithic `a && b && c && ...` is a single unit for
 // a mutation harness to kill -- deleting or weakening ONE clause inside it
 // can go unnoticed as long as the OTHER clauses in the same test's fixture
-// already differ, exactly the failure mode the shared mutation harness's
-// "mutate compound predicates clause by clause" rule exists to catch. Named,
-// separately-returning clauses make every field its own provable unit:
-// TestPullRequestReadbackClassifiesEveryVersionRelationship and the mutation
-// plan in testdata/mutation-plans kill each one independently.
+// already differ, exactly the failure mode the "mutate compound predicates
+// clause by clause" rule exists to catch. Named, separately-returning clauses
+// make every field its own provable unit:
+// TestPullRequestReadbackClassifiesEveryVersionRelationship kills each one
+// independently.
 func comparePullRequestVersion(
 	expected pullRequestRow,
 	actual pullRequestVersion,

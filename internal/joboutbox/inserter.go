@@ -57,6 +57,7 @@ func (inserter *RiverInserter) Insert(ctx context.Context, tx pgx.Tx, row Row) (
 	if err != nil {
 		return 0, ErrContractRejected
 	}
+	uniqueStates := uniqueStatesForKind(row.JobKind)
 	result, err := inserter.client.InsertTx(ctx, tx, args, &river.InsertOpts{
 		Queue:       descriptor.Queue,
 		Priority:    descriptor.Priority,
@@ -65,7 +66,7 @@ func (inserter *RiverInserter) Insert(ctx context.Context, tx pgx.Tx, row Row) (
 		Metadata:    metadata,
 		UniqueOpts: river.UniqueOpts{
 			ByArgs:  true,
-			ByState: rivertype.JobStates(),
+			ByState: uniqueStates,
 		},
 	})
 	if err != nil {
@@ -75,6 +76,16 @@ func (inserter *RiverInserter) Insert(ctx context.Context, tx pgx.Tx, row Row) (
 		return 0, err
 	}
 	return result.Job.ID, nil
+}
+
+func uniqueStatesForKind(kind string) []rivertype.JobState {
+	if kind == jobcontract.KindSyncProviderUnit {
+		// A discarded/cancelled provider transport row is not a successful
+		// logical delivery. Excluding terminal failures lets the fenced outbox
+		// repair create a replacement while active/completed jobs still dedupe.
+		return rivertype.UniqueOptsByStateDefault()
+	}
+	return rivertype.JobStates()
 }
 
 type relayArgs struct {

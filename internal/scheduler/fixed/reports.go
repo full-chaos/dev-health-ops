@@ -34,16 +34,16 @@ const SkipNoDueScheduledReportsClaimed = "scheduled_reports_already_claimed"
 // delivery budget. The occurrence still commits every other tenant's work; this
 // names the condition so it is visible without being fatal.
 //
-// It is a PERMANENT condition until an operator acts: nothing in the fixed
-// retention set emits worker_job_terminal, so no mechanism clears a dead outbox
-// row. The gauge therefore stays raised, which is the intended behaviour — it is
-// not a transient blip to be smoothed over. Locate the affected runs with:
+// It is a PERMANENT condition until an operator acts. Outbox retention replaces
+// the full dead row with a minimal delivery-abandonment fact, so the gauge stays
+// raised after retention instead of starting a fresh attempt budget. Locate the
+// affected runs with:
 //
 //	SELECT run.id, run.report_id
 //	FROM report_runs AS run
-//	JOIN worker_job_outbox AS handoff
-//	  ON handoff.dedupe_key = 'report.run:' || run.id::text
-//	WHERE run.status = 'pending' AND handoff.status = 'dead';
+//	JOIN worker_job_delivery_abandonments AS abandonment
+//	  ON abandonment.dedupe_key = 'report.run:' || run.id::text
+//	WHERE run.status = 'pending';
 const DegradedScheduledReportsUndeliverable = "scheduled_reports_undeliverable"
 
 // DegradedScheduledReportsDeferred marks a sweep that hit its per-occurrence
@@ -91,13 +91,20 @@ const (
 	// partial success, and the remainder is reported as a degraded condition.
 	maximumScheduledReportsPerOccurrence = 500
 
-	// maximumScheduledReportRowsRead bounds the sweep's READ so one pathological
-	// installation cannot make the scheduler allocate without limit. It is
-	// deliberately far above the materialization bound: this counts every active
-	// report schedule, including ones that are future-dated or belong to a deleted
-	// organization and will be filtered out, so conflating it with the work bound
-	// is what let 501 dormant schedules abort every tenant's dispatch.
-	maximumScheduledReportRowsRead = 20000
+	// maximumScheduledReportCandidatesPerOccurrence is one larger than the work
+	// budget so the producer can observe and signal a due remainder without ever
+	// locking an installation-sized report set. The SQL page is ordered by the
+	// durable next-run marker, so truncating here preserves the same oldest-due
+	// delivery bound as the in-memory order below.
+	maximumScheduledReportCandidatesPerOccurrence = maximumScheduledReportsPerOccurrence + 1
+
+	// scheduledReportFairnessWindow matches the checked-in report sweep cadence.
+	// Alternating class priority by this durable slot gives both never-materialized
+	// reports and already-durable replays a bounded opportunity to consume the
+	// fixed page and work budgets. A process-local toggle would disagree across
+	// replicas and reset on restart; ScheduledFor is shared, immutable occurrence
+	// state.
+	scheduledReportFairnessWindow = 5 * time.Minute
 )
 
 // ErrScheduledReportConfiguration identifies a persisted report schedule that
@@ -105,11 +112,10 @@ const (
 // deterministic croniter subset the Go evaluator implements.
 //
 // It fails the occurrence rather than skipping the offending row. That is a
-// deliberate blast-radius choice and it needs stating, because the row is
-// user-supplied: the report schedule write path
-// (src/dev_health_ops/api/graphql/resolvers/reports.py:320) validates the
-// timezone and NOT the cron string, so a tenant can persist an expression this
-// evaluator rejects.
+// deliberate blast-radius choice and it needs stating. New GraphQL writes
+// validate the cron through croniter; this backstop remains for legacy rows,
+// direct database writes, and corruption. None of those may turn one report's
+// missing runs into a healthy global sweep.
 //
 // Skipping the row instead would leave the schedule reporting success while one
 // tenant's reports silently never ran, which is the exact false-pass class the
@@ -137,8 +143,8 @@ var ErrScheduledReportConflict = errors.New("scheduled report occurrence conflic
 var ErrScheduledReportUndeliverable = errors.New("scheduled report run has no live delivery path")
 
 // outboxDeadStatus is joboutbox's terminal failure state (internal/joboutbox's
-// statusDead). Outbox retention deletes rows in this state, which is why a
-// replayed occurrence has to distinguish "handoff gone" from "handoff spent".
+// statusDead). Outbox retention deletes full rows in this state only after it
+// records a durable abandonment fact.
 const outboxDeadStatus = "dead"
 
 // reportRunNamespace derives the durable ReportRun identity for one occurrence.
@@ -205,6 +211,15 @@ type dueReportCandidate struct {
 	Cron           string
 	Timezone       string
 	ReportID       string
+	// NextDueAt is the SQL-sortable copy of the cron instant derived from Base.
+	// Migration 0097 backfills it and the schedule write paths maintain it. The
+	// producer still derives the value again, both to preserve the croniter oracle
+	// as authority and to repair a marker after a completed run changes Base.
+	NextDueAt *time.Time
+	// AlreadyMaterialized is true when the stable occurrence identity already
+	// exists. New work sorts before replays so an installation with many pending
+	// handoff repairs cannot consume every bounded page forever.
+	AlreadyMaterialized bool
 	// Base is the instant cron due-ness is measured from: the report's own last
 	// run, or its creation when it has never run. Python uses exactly this, and
 	// deliberately does not advance it here — only a completed run moves it — so
@@ -212,12 +227,6 @@ type dueReportCandidate struct {
 	// succeeds, and the occurrence table is what stops that from re-dispatching
 	// every tick.
 	Base time.Time
-	// OrganizationPresent mirrors workers.org_guard.organization_exists_sync:
-	// true for an empty, "default", or non-UUID organization identifier, and
-	// otherwise true only when the organization row exists. The guard is
-	// fail-open by design — it exists to stop work for already-deleted
-	// organizations, not to gate on organization health.
-	OrganizationPresent bool
 }
 
 // dueEntry is one report the sweep has established is owed, with the cron instant
@@ -239,13 +248,13 @@ type dueEntry struct {
 // never even classified as new or replayed, so a spent handoff behind it stays
 // undetected while the deferred reason masks it.
 //
-// scheduledFor is the right key and needs no new state: it is the cron instant the
-// report became owed, derived from durable inputs (the expression, the timezone, and
-// the report's last run), and it does not move while the report stays
-// unmaterialized. A report carried over from an earlier tick is therefore strictly
-// more overdue than anything that came due afterwards, so it advances toward the
-// front rather than being pushed back. The bound this buys is a function of
-// POPULATION, not arrival rate: a due report is materialized within
+// scheduledFor is the right key: it is the cron instant the report became owed,
+// derived from durable inputs (the expression, timezone, and report's last run).
+// ScheduledJob.next_run_at materializes that value so SQL can take a bounded page
+// in the same order; this in-memory sort verifies the page against the croniter
+// authority rather than replacing it. A carried-over report is therefore strictly
+// more overdue than anything that came due afterwards. The bound this buys is a
+// function of POPULATION, not arrival rate: a due report is materialized within
 // ceil(N/maximumScheduledReportsPerOccurrence) ticks, where N counts active
 // schedules whose due time is older or equal.
 //
@@ -265,6 +274,11 @@ func sortDueEntriesMostOverdueFirst(entries []dueEntry) {
 		}
 		return entries[first].candidate.ReportID < entries[second].candidate.ReportID
 	})
+}
+
+func scheduledReportSweepPrioritizesReplays(scheduledFor time.Time) bool {
+	windowSeconds := int64(scheduledReportFairnessWindow / time.Second)
+	return scheduledFor.UTC().Unix()/windowSeconds%2 != 0
 }
 
 // Produce sweeps the durable report schedule set and materializes every due
@@ -297,14 +311,14 @@ func (producer *ScheduledReportsProducer) Produce(
 	if err := refuseAmbiguousReportSchedules(ctx, tx); err != nil {
 		return Outcome{}, err
 	}
-	candidates, err := producer.lockDueCandidates(ctx, tx)
+	now := occurrence.ScheduledFor.UTC()
+	prioritizeReplays := scheduledReportSweepPrioritizesReplays(now)
+	candidates, err := producer.lockDueCandidates(ctx, tx, now, prioritizeReplays)
 	if err != nil {
 		return Outcome{}, err
 	}
-	now := occurrence.ScheduledFor.UTC()
 
-	// Due-ness is resolved once, then the sweep runs in TWO passes: new claims
-	// first, replays second.
+	// Due-ness is resolved once, then the sweep runs in two class-specific passes.
 	//
 	// The ordering is load-bearing, not tidiness. With a single pass, replayed
 	// occurrences competed for the same budget as new ones, so an installation with
@@ -312,18 +326,22 @@ func (producer *ScheduledReportsProducer) Produce(
 	// reports it had already materialized and never reach the remainder — on every
 	// tick, forever. "The deferred report stays due" is true but insufficient:
 	// staying due is not progress if the budget is refilled by replays each time.
-	// Claiming first guarantees that every tick makes forward progress on work that
-	// has never been materialized.
+	// Permanently claiming first, however, creates the inverse starvation failure:
+	// a continuously full new-work page can hide a durable replay forever. The SQL
+	// page and these passes therefore use the same deterministic alternating class
+	// priority. Every pair of five-minute occurrences gives both classes the first
+	// 500 request slots, while preserving a single bounded transaction and total
+	// oldest-first ordering within each class.
 	dueEntries := make([]dueEntry, 0, len(candidates))
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return Outcome{}, err
 		}
-		if !candidate.OrganizationPresent {
-			continue
-		}
 		scheduledFor, err := producer.nextRun(candidate, candidate.Base)
 		if err != nil {
+			return Outcome{}, err
+		}
+		if err := producer.recordNextDue(ctx, tx, occurrence, candidate, scheduledFor); err != nil {
 			return Outcome{}, err
 		}
 		if scheduledFor.After(now) {
@@ -338,58 +356,91 @@ func (producer *ScheduledReportsProducer) Produce(
 	due := len(dueEntries)
 	undeliverable := 0
 	deferred := 0
+	newEntries := make([]dueEntry, 0, len(dueEntries))
 	replays := make([]dueEntry, 0, len(dueEntries))
-
-	// Pass one: occurrences this tick is the first to see.
 	for _, entry := range dueEntries {
-		if err := ctx.Err(); err != nil {
-			return Outcome{}, err
-		}
-		if len(requests) >= maximumScheduledReportsPerOccurrence {
-			deferred++
-			continue
-		}
-		request, claimed, err := producer.claimNew(
-			ctx, tx, occurrence, entry.candidate, entry.scheduledFor,
-		)
-		if err != nil {
-			return Outcome{}, err
-		}
-		if !claimed {
+		if entry.candidate.AlreadyMaterialized {
 			replays = append(replays, entry)
-			continue
+		} else {
+			newEntries = append(newEntries, entry)
 		}
-		requests = append(requests, request)
 	}
 
-	// Pass two: already-durable occurrences, with whatever budget is left.
-	for _, entry := range replays {
-		if err := ctx.Err(); err != nil {
-			return Outcome{}, err
-		}
-		if len(requests) >= maximumScheduledReportsPerOccurrence {
-			deferred++
-			continue
-		}
-		request, rearm, err := producer.replayExisting(ctx, tx, entry.candidate, entry.scheduledFor)
-		if err != nil {
-			// A report whose durable handoff is spent is a per-row fault: it needs
-			// operator repair and it must NOT roll back the occurrence, because
-			// doing so would discard every other tenant's freshly materialized run
-			// and would do so on every subsequent tick, permanently. Nothing
-			// clears the dead row on its own, so this condition persists until
-			// someone acts on it — which is exactly why it must be visible rather
-			// than fatal. Every other error still fails the occurrence.
-			if errors.Is(err, ErrScheduledReportUndeliverable) {
-				undeliverable++
+	claimNewEntries := func(entries []dueEntry) error {
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if len(requests) >= maximumScheduledReportsPerOccurrence {
+				deferred++
 				continue
 			}
+			request, claimed, err := producer.claimNew(
+				ctx, tx, occurrence, entry.candidate, entry.scheduledFor,
+			)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				replays = append(replays, entry)
+				continue
+			}
+			requests = append(requests, request)
+		}
+		return nil
+	}
+	replayEntries := func(entries []dueEntry) error {
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if len(requests) >= maximumScheduledReportsPerOccurrence {
+				deferred++
+				continue
+			}
+			request, rearm, err := producer.replayExisting(ctx, tx, entry.candidate, entry.scheduledFor)
+			if err != nil {
+				// A report whose durable handoff is spent is a per-row fault: it needs
+				// operator repair and it must NOT roll back the occurrence, because
+				// doing so would discard every other tenant's freshly materialized run
+				// and would do so on every subsequent tick, permanently. Nothing
+				// clears the dead row on its own, so this condition persists until
+				// someone acts on it — which is exactly why it must be visible rather
+				// than fatal. Every other error still fails the occurrence.
+				if errors.Is(err, ErrScheduledReportUndeliverable) {
+					undeliverable++
+					continue
+				}
+				return err
+			}
+			if !rearm {
+				continue
+			}
+			requests = append(requests, request)
+		}
+		return nil
+	}
+
+	if prioritizeReplays {
+		initialReplayCount := len(replays)
+		if err := replayEntries(replays); err != nil {
 			return Outcome{}, err
 		}
-		if !rearm {
-			continue
+		if err := claimNewEntries(newEntries); err != nil {
+			return Outcome{}, err
 		}
-		requests = append(requests, request)
+		// A concurrent claimant can make a row selected as new lose its stable
+		// occurrence insert. Process that late replay with any remaining budget.
+		if err := replayEntries(replays[initialReplayCount:]); err != nil {
+			return Outcome{}, err
+		}
+	} else {
+		if err := claimNewEntries(newEntries); err != nil {
+			return Outcome{}, err
+		}
+		if err := replayEntries(replays); err != nil {
+			return Outcome{}, err
+		}
 	}
 
 	// Degraded is ordered most-actionable first: a stranded run needs a human,
@@ -442,26 +493,15 @@ func (producer *ScheduledReportsProducer) nextRun(
 // the handoff the engine should publish. The boolean is false when the
 // occurrence was already durable, in which case nothing was written.
 //
-// Replaying a durable occurrence does NOT unconditionally publish nothing. An
-// earlier version of this code did, on the argument that the outbox row committed
-// with the run is the durable handoff and therefore makes Python's re-nudge
-// unnecessary. That argument was half right and the missing half was a permanent
-// stall, found in adversarial review:
+// Replaying a durable occurrence does NOT unconditionally publish nothing. It
+// verifies the linked run and both durable delivery stores so recovery and
+// exhaustion cannot collapse into the same missing-row state:
 //
-// The outbox does remove the LOST-MESSAGE motivation for Python's re-nudge. It
-// does not remove the TERMINALIZED-DELIVERY one. joboutbox marks a row 'dead' once
-// its attempt budget is exhausted (repository.go's relay update), and outbox
-// retention DELETES dead rows outright. So a run could sit at status 'pending'
-// with its handoff dead or already pruned, while every subsequent sweep found the
-// occurrence, reported an already-claimed skip, and left the report permanently
-// undelivered behind a schedule that looked healthy — precisely the false pass
-// this producer exists to avoid. Python recovers from this case, because its
-// apply_async bypasses the outbox entirely.
-//
-// Replay therefore verifies the linked run and its delivery path, and takes one of
-// three paths, distinguished so that neither recovery nor exhaustion is silent:
-// re-arm when the handoff is simply gone, stay quiet while delivery is live or the
-// run has moved on, and fail loudly when the budget was genuinely spent.
+//   - no outbox row and no abandonment fact means there is no durable evidence
+//     that publication completed, so replay re-arms the linked run;
+//   - a live outbox row stays with the relay;
+//   - a dead outbox row, or the abandonment fact retention leaves in its place,
+//     keeps the run degraded without minting a fresh attempt budget.
 func (producer *ScheduledReportsProducer) claimNew(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -579,13 +619,13 @@ func (producer *ScheduledReportsProducer) handoff(
 //   - A pending run with a live (non-dead) outbox row is delivery in flight. Stay
 //     quiet: the relay owns it.
 //
-//   - A pending run with NO outbox row has had its handoff pruned by outbox
-//     retention after being terminalized. Re-publishing is safe and is the only
-//     way the report ever runs, so it is re-armed.
+//   - A pending run with NO outbox row and NO abandonment fact has no durable
+//     evidence of a handoff. Re-publishing is safe and is the only way the report
+//     ever runs, so it is re-armed.
 //
-//   - A pending run with a DEAD outbox row has spent its attempt budget. Re-arming
-//     silently would loop forever against a budget something already gave up on,
-//     so it fails loudly instead and names the run for repair.
+//   - A pending run with either a DEAD outbox row or a durable abandonment fact
+//     has spent its attempt budget. Re-arming silently would cycle fresh budgets
+//     forever, so it fails loudly instead and names the run for repair.
 func (producer *ScheduledReportsProducer) replayNeedsRearming(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -594,8 +634,9 @@ func (producer *ScheduledReportsProducer) replayNeedsRearming(
 	var linkedRunID *string
 	var runStatus *string
 	var handoffStatus *string
+	var handoffAbandoned bool
 	if err := tx.QueryRow(ctx, replayedReportRunSQL, occurrenceID).Scan(
-		&linkedRunID, &runStatus, &handoffStatus,
+		&linkedRunID, &runStatus, &handoffStatus, &handoffAbandoned,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// claimOccurrence proved the row exists, so losing it here is a
@@ -614,13 +655,13 @@ func (producer *ScheduledReportsProducer) replayNeedsRearming(
 		return "", false, nil
 	}
 	switch {
-	case handoffStatus == nil:
-		return *linkedRunID, true, nil
-	case *handoffStatus == outboxDeadStatus:
+	case handoffAbandoned || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):
 		return "", false, fmt.Errorf(
 			"%w: report run %s is pending but its handoff exhausted its delivery budget",
 			ErrScheduledReportUndeliverable, *linkedRunID,
 		)
+	case handoffStatus == nil:
+		return *linkedRunID, true, nil
 	default:
 		return "", false, nil
 	}
@@ -727,11 +768,43 @@ func (producer *ScheduledReportsProducer) insertRun(
 	return nil
 }
 
-// advanceNextRun writes the schedule's next projected fire time, matching the
-// Python dispatcher. It is operator-facing state (the ix_scheduled_job_next_run
-// index backs schedule listings) and is never read back as due-ness: due-ness
-// is recomputed from the cron and the report's last run on every sweep, so a
-// stale or absent next_run_at can never suppress a run.
+// recordNextDue keeps the SQL paging key equal to the croniter-derived authority.
+//
+// A NULL or stale marker can exist during a rolling upgrade or just after a report
+// completion invalidates it. The bounded page repairs it from the authoritative
+// cron inputs before making a due decision. A pending occurrence is different:
+// advanceNextRun has already written the following projected fire, and the replay
+// joins through its durable occurrence instead of moving that projection backward.
+func (producer *ScheduledReportsProducer) recordNextDue(
+	ctx context.Context,
+	tx pgx.Tx,
+	occurrence Occurrence,
+	candidate dueReportCandidate,
+	scheduledFor time.Time,
+) error {
+	if candidate.AlreadyMaterialized {
+		return nil
+	}
+	if candidate.NextDueAt != nil && candidate.NextDueAt.Equal(scheduledFor) {
+		return nil
+	}
+	command, err := tx.Exec(
+		ctx, recordScheduledJobNextDueSQL, candidate.JobID, scheduledFor, occurrence.ObservedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record scheduled report next due time: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("%w: scheduled job %s disappeared", ErrScheduledReportConflict, candidate.JobID)
+	}
+	return nil
+}
+
+// advanceNextRun writes the projected fire after a newly materialized
+// occurrence, matching the Python dispatcher and preserving the operator-facing
+// meaning of ScheduledJob.next_run_at. A pending occurrence remains independently
+// visible through scheduled_report_occurrences, so advancing this marker cannot
+// hide its replay or handoff-repair state from the bounded page.
 func (producer *ScheduledReportsProducer) advanceNextRun(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -744,14 +817,14 @@ func (producer *ScheduledReportsProducer) advanceNextRun(
 		return err
 	}
 	if _, err := tx.Exec(
-		ctx, advanceScheduledJobNextRunSQL, candidate.JobID, following, occurrence.ObservedAt,
+		ctx, recordScheduledJobNextDueSQL, candidate.JobID, following, occurrence.ObservedAt,
 	); err != nil {
 		return fmt.Errorf("advance scheduled report next run: %w", err)
 	}
 	return nil
 }
 
-// lockDueCandidates reads and locks every active report schedule.
+// lockDueCandidates reads and locks one bounded, oldest-first report page.
 //
 // The lock set is `FOR UPDATE OF job, report SKIP LOCKED`, which is the Python
 // dispatcher's lock set: it takes FOR UPDATE SKIP LOCKED on the ScheduledJob
@@ -773,7 +846,7 @@ func (producer *ScheduledReportsProducer) advanceNextRun(
 // tenant-triggered lock is a worse failure than a one-tick delay. It can never
 // produce work Python would not have.
 //
-// The organization guard is computed in SQL, in a CASE so its arms are ordered:
+// The organization guard is computed in SQL with ordered boolean arms:
 // evaluating organizations only for a UUID-shaped identifier is what keeps the
 // query free of a text-to-uuid cast that would raise on the "default" sentinel
 // and on legacy non-UUID identifiers. Comparing organizations.id::text against
@@ -782,19 +855,23 @@ func (producer *ScheduledReportsProducer) advanceNextRun(
 func (producer *ScheduledReportsProducer) lockDueCandidates(
 	ctx context.Context,
 	tx pgx.Tx,
+	dueThrough time.Time,
+	prioritizeReplays bool,
 ) ([]dueReportCandidate, error) {
 	rows, err := tx.Query(
 		ctx,
 		dueScheduledReportsSQL,
 		activeScheduledJobStatus,
-		maximumScheduledReportRowsRead+1,
+		dueThrough.UTC(),
+		maximumScheduledReportCandidatesPerOccurrence,
+		prioritizeReplays,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("read due scheduled reports: %w", err)
 	}
 	defer rows.Close()
 
-	candidates := make([]dueReportCandidate, 0, 16)
+	candidates := make([]dueReportCandidate, 0, maximumScheduledReportCandidatesPerOccurrence)
 	for rows.Next() {
 		var candidate dueReportCandidate
 		if err := rows.Scan(
@@ -804,25 +881,20 @@ func (producer *ScheduledReportsProducer) lockDueCandidates(
 			&candidate.Timezone,
 			&candidate.ReportID,
 			&candidate.Base,
-			&candidate.OrganizationPresent,
+			&candidate.NextDueAt,
+			&candidate.AlreadyMaterialized,
 		); err != nil {
 			return nil, fmt.Errorf("scan due scheduled report: %w", err)
 		}
 		candidate.Base = candidate.Base.UTC()
+		if candidate.NextDueAt != nil {
+			nextDueAt := candidate.NextDueAt.UTC()
+			candidate.NextDueAt = &nextDueAt
+		}
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read due scheduled reports: %w", err)
-	}
-	if len(candidates) > maximumScheduledReportRowsRead {
-		// This bound is an allocation guard, not a work limit. Reaching it means an
-		// installation has more active report schedules than this sweep is designed
-		// to hold in memory at once, which no amount of retrying fixes, so it fails
-		// rather than silently reading a prefix.
-		return nil, fmt.Errorf(
-			"active scheduled report rows exceed the %d read guard",
-			maximumScheduledReportRowsRead,
-		)
 	}
 	if err := rejectAmbiguousReportSchedules(candidates); err != nil {
 		return nil, err
@@ -873,11 +945,10 @@ func refuseAmbiguousReportSchedules(ctx context.Context, tx pgx.Tx) error {
 // rejectAmbiguousReportSchedules refuses a schedule that owns more than one
 // active report within the locked candidate set.
 //
-// saved_reports.schedule_id carries no unique constraint, so two active reports
-// can point at one ScheduledJob. Python resolves the report with one_or_none()
-// and raises MultipleResultsFound, which its outer except swallows into an
-// empty dispatch. Joining would instead fan out silently and advance one
-// schedule's next_run_at twice. Neither is a defensible reading of the data.
+// Alembic 0096 makes saved_reports.schedule_id unique. Keep this assertion for
+// a partially migrated or manually drifted schema: two active reports pointing
+// at one ScheduledJob would otherwise fan out silently and advance one
+// schedule's next_run_at twice. Python's one_or_none() also refuses that state.
 //
 // This is the SECONDARY guard and cannot be the only one: it sees the sweep's
 // post-SKIP-LOCKED result, where a locked sibling has already been removed.
@@ -930,9 +1001,13 @@ func writePythonDigestField(hasher io.Writer, name, value string) {
 	_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s\n", len(name), name, len(value), value)
 }
 
-// The sweep orders by job then report so a bounded sweep truncates at a stable
-// boundary and two replicas contend in the same order. The organization arm is
-// documented at lockDueCandidates.
+// The sweep alternates never-materialized and replay class priority on consecutive
+// canonical occurrences, then orders each set by its durable cron instant and
+// report id. That is the SQL form of Produce's two-pass fairness contract. A
+// pending/running ReportRun remains visible through
+// its occurrence even after next_run_at advances to the following projected fire.
+// NULL next_run_at is included for bounded rolling-upgrade repair. The organization
+// predicate is documented at lockDueCandidates.
 const dueScheduledReportsSQL = `
 SELECT job.id::text,
        job.org_id,
@@ -940,32 +1015,60 @@ SELECT job.id::text,
        job.timezone,
        report.id::text,
        COALESCE(report.last_run_at, report.created_at),
-       CASE
-           WHEN job.org_id IN ('', 'default') THEN TRUE
-           WHEN job.org_id !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-               THEN TRUE
-           ELSE EXISTS (
-               SELECT 1
-               FROM public.organizations AS organization
-               WHERE organization.id::text = lower(job.org_id)
-           )
-       END
+       job.next_run_at,
+       replay.occurrence_id IS NOT NULL
 FROM public.scheduled_jobs AS job
 JOIN public.saved_reports AS report
     ON report.schedule_id = job.id
    AND report.is_active
    -- Tenant ownership, not decoration. reports.execution_trigger._require_schedule
    -- rejects report.org_id != job.org_id explicitly, and the schema enforces only
-   -- the schedule_id foreign key, so legacy or inconsistent data can point one
-   -- tenant's job at another tenant's report. Without this the producer would
+   -- neither the schedule_id foreign key nor its unique constraint verifies
+   -- organization ownership, so inconsistent data can point one tenant's job
+   -- at another tenant's report. Without this the producer would
    -- file the occurrence under the JOB's organization while the global report
    -- worker executed the REPORT's tenant data.
    AND report.org_id = job.org_id
+LEFT JOIN LATERAL (
+    SELECT occurrence.occurrence_id, occurrence.scheduled_for
+    FROM public.scheduled_report_occurrences AS occurrence
+    WHERE occurrence.report_id = report.id
+      -- The report's base advances only after a terminal transition. An
+      -- occurrence newer than that base is therefore still the one this report
+      -- owes, regardless of whether its run is pending, terminal, deleted, or
+      -- no longer linked. Keeping terminal/corrupt rows in the replay page is
+      -- load-bearing: replayExisting owns the quiet-vs-conflict decision.
+      -- Conversely, the strict comparison excludes a completed/canceled
+      -- occurrence when last_run_at equals its scheduled_for, so the next cron
+      -- instant can be materialized.
+      AND occurrence.scheduled_for > COALESCE(report.last_run_at, report.created_at)
+    ORDER BY occurrence.scheduled_for
+    LIMIT 1
+) AS replay ON TRUE
 WHERE job.job_type = '` + reportJobType + `'
   AND job.status = $1
   AND job.is_running = FALSE
-ORDER BY job.id, report.id
-LIMIT $2
+  AND (
+      replay.occurrence_id IS NOT NULL
+      OR job.next_run_at IS NULL
+      OR job.next_run_at <= $2
+  )
+  AND (
+      job.org_id IN ('', 'default')
+      OR job.org_id !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      OR EXISTS (
+          SELECT 1
+          FROM public.organizations AS organization
+          WHERE organization.id::text = lower(job.org_id)
+      )
+  )
+ORDER BY CASE WHEN $4::boolean
+              THEN replay.occurrence_id IS NULL
+              ELSE replay.occurrence_id IS NOT NULL
+         END,
+         COALESCE(replay.scheduled_for, job.next_run_at, report.last_run_at, report.created_at),
+         report.id
+LIMIT $3
 FOR UPDATE OF job, report SKIP LOCKED
 `
 
@@ -1006,8 +1109,8 @@ WHERE occurrence_id = $1
   AND report_run_id IS NULL
 `
 
-// The outbox join is LEFT so an absent handoff is distinguishable from a dead
-// one: retention deletes dead rows, and those two cases need opposite responses.
+// Both delivery joins are LEFT so all lifecycle states stay distinct: never
+// published, live, dead before retention, and abandoned after retention.
 //
 // The dedupe key is derived IN SQL from the linked run rather than passed in,
 // because the authoritative run is whatever the occurrence links — which for a
@@ -1015,12 +1118,15 @@ WHERE occurrence_id = $1
 // Passing a caller-computed key would look up the handoff of a run that may not
 // be the one being replayed.
 const replayedReportRunSQL = `
-SELECT occurrence.report_run_id::text, run.status, handoff.status
+SELECT occurrence.report_run_id::text, run.status, handoff.status,
+       abandonment.dedupe_key IS NOT NULL
 FROM public.scheduled_report_occurrences AS occurrence
 LEFT JOIN public.report_runs AS run
     ON run.id = occurrence.report_run_id
 LEFT JOIN public.worker_job_outbox AS handoff
     ON handoff.dedupe_key = 'report.run:' || occurrence.report_run_id::text
+LEFT JOIN public.worker_job_delivery_abandonments AS abandonment
+    ON abandonment.dedupe_key = 'report.run:' || occurrence.report_run_id::text
 WHERE occurrence.occurrence_id = $1
 `
 
@@ -1045,7 +1151,7 @@ ORDER BY job.id, first_report.id, second_report.id
 LIMIT 1
 `
 
-const advanceScheduledJobNextRunSQL = `
+const recordScheduledJobNextDueSQL = `
 UPDATE public.scheduled_jobs
 SET next_run_at = $2,
     updated_at = $3

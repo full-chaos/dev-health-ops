@@ -81,7 +81,7 @@ def _migration_job(route: str) -> tuple[MigrationJob, ...]:
         MigrationJob(
             kind="system.heartbeat",
             producer_version=1,
-            required_profiles=("ops",),
+            required_queues=("heartbeat",),
             route=route,
         ),
     )

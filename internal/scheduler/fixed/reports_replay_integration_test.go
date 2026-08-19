@@ -72,32 +72,14 @@ func dueScheduledReport(t *testing.T, pool *pgxpool.Pool) (Schedule, Occurrence,
 	return schedule, occurrence, readReportState(t, pool).RunID
 }
 
-// A pending run whose handoff is ABSENT is re-armed. Without this the report is
-// permanently undelivered while every sweep reports a bounded already-claimed skip —
-// a schedule that looks healthy forever and never runs the report again.
-//
-// Codex adversarial review found that. The earlier code returned an unclaimed skip
-// unconditionally on replay, and its comment argued the durable outbox made Python's
-// re-nudge unnecessary. The outbox removed the lost-message motivation for that
-// nudge, not the terminalized-delivery one.
-//
-// KNOWN AMBIGUITY — this test models dead-then-pruned, and that case is NOT a
-// settled contract. Outbox retention deletes a dead row, so afterwards "the delivery
-// budget was spent" and "the handoff never existed" are indistinguishable from here:
-// both present as a missing row. Re-arming therefore resets the attempt budget of a
-// job that may be permanently invalid, which can cycle fresh budgets indefinitely
-// while the degraded signal clears on every re-arm.
-//
-// Distinguishing them needs a durable "this run's delivery was abandoned" fact that
-// retention does not delete — the same missing primitive as the outbox requeue path,
-// and out of this lane. Until that exists, treat this behaviour as the least-bad
-// reading of an ambiguous state rather than as the intended design, and do not cite
-// this test as evidence that re-arming a pruned handoff is correct.
-func TestReplayRearmsAPendingRunWhoseHandoffWasPruned(t *testing.T) {
+// A pending run with no durable evidence that its handoff was published is
+// re-armed. The abandonment ledger makes this absence unambiguous: terminal
+// retention cannot produce the same state.
+func TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	schedule, occurrence, runID := dueScheduledReport(t, pool)
-	// The engine published the handoff and outbox retention later deleted it as
-	// dead. This test never created it, which is that same end state.
+	// Calling the producer directly leaves both delivery stores empty and models
+	// the pre-existing/coexistence state replay must repair.
 	if handoffCount(t, pool) != 0 {
 		t.Fatal("the producer wrote an outbox row itself; the engine owns that")
 	}
@@ -373,8 +355,9 @@ VALUES ($1::uuid, $2, 'sibling', $3::uuid, TRUE, $4, $4)`,
 }
 
 // A job and a report belonging to DIFFERENT organizations must never be paired.
-// The schema enforces only the schedule_id foreign key, so this is reachable data,
-// and Python's _require_schedule rejects it explicitly. Pairing them would file
+// The schedule foreign key and unique constraint do not enforce organization
+// agreement, so this is reachable data, and Python's _require_schedule rejects
+// it explicitly. Pairing them would file
 // the occurrence under the job's tenant while the global report worker executed
 // the other tenant's data.
 func TestCrossTenantJobAndReportAreNeverPaired(t *testing.T) {
@@ -471,9 +454,9 @@ func TestPythonAuthoredOccurrenceIsRecognisedNotRejected(t *testing.T) {
 		wantRequest  bool
 		wantDegraded string
 	}{
-		// Pruned after terminalizing: re-arm, and the re-armed request must carry
-		// PYTHON's run id so the outbox dedupe key matches what Python enqueued.
-		{"handoff pruned", "", true, ""},
+		// No durable handoff evidence: re-arm, and the re-armed request must carry
+		// PYTHON's run id so the outbox dedupe key matches its run identity.
+		{"handoff absent", "", true, ""},
 		{"handoff live", "pending", false, ""},
 		// A spent handoff is a per-report degraded condition, NOT a failure: it must
 		// not roll back other tenants' work. It also must not be re-armed, since
@@ -593,10 +576,9 @@ func TestOccurrenceClaimIsAtomicUnderTrueContention(t *testing.T) {
 	occurrenceID := pythonOccurrenceID(t, testReportID, scheduledFor)
 	_, occurrence := reportOccurrence(t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC))
 	candidate := dueReportCandidate{
-		JobID:               testJobID,
-		OrganizationID:      testOrganizationID,
-		ReportID:            testReportID,
-		OrganizationPresent: true,
+		JobID:          testJobID,
+		OrganizationID: testOrganizationID,
+		ReportID:       testReportID,
 	}
 	producer := reportsProducer(t)
 
@@ -733,15 +715,15 @@ func TestCarriedOverReportLandsUnderContinuousArrival(t *testing.T) {
 		if _, err := pool.Exec(ctx, `
 WITH new_jobs AS (
     INSERT INTO public.scheduled_jobs
-        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:fill', 'report', $2, 'UTC', 0, FALSE, $3, $3
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:fill', 'report', $2, 'UTC', 0, FALSE, $5, $3, $3
     FROM generate_series(1, $4)
     RETURNING id
 )
 INSERT INTO public.saved_reports
     (id, org_id, name, schedule_id, is_active, last_run_at, created_at, updated_at)
 SELECT gen_random_uuid(), $1, 'fill', new_jobs.id, TRUE, $3, $3, $3
-FROM new_jobs`, testOrganizationID, cron, lastRun, count); err != nil {
+FROM new_jobs`, testOrganizationID, cron, lastRun, count, lastRun.Add(24*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -755,9 +737,9 @@ FROM new_jobs`, testOrganizationID, cron, lastRun, count); err != nil {
 	const victimJobID = "3c4d5e6f-7081-4c9d-8e0f-2a3b4c5d6e72"
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.scheduled_jobs
-    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-VALUES ($1::uuid, $2, 'report:victim', 'report', $3, 'UTC', 0, FALSE, $4, $4)`,
-		victimJobID, testOrganizationID, cron, victimLastRun); err != nil {
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:victim', 'report', $3, 'UTC', 0, FALSE, $5, $4, $4)`,
+		victimJobID, testOrganizationID, cron, victimLastRun, victimLastRun.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -819,15 +801,69 @@ VALUES ($1::uuid, $2, 'victim', $3::uuid, TRUE, $4, $4, $4)`,
 	)
 }
 
-// The sweep must READ well past the work bound.
-//
-// This replaces a test that compared the two bound constants against each other,
-// which was a tautology: it stayed green if the SQL used the work bound as its read
-// limit, and green if both drifted to any values in the same ratio. The property
-// that matters is not how the constants relate but that the QUERY returns entries
-// the occurrence will defer — if the read stopped at the work bound, deferral could
-// never observe a backlog and the fairness ordering would have nothing to order.
-func TestSweepReadsBeyondTheWorkBound(t *testing.T) {
+// A durable replay must not disappear behind a continuously full page of new
+// reports. The selector and the in-memory work budget are separate fairness
+// boundaries: selecting the replay is insufficient if pass one still spends all
+// 500 request slots on new claims before replayExisting runs.
+func TestDurableReplayProgressesWhenTheNewReportPageIsFull(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	schedule, _, replayedRunID := dueScheduledReport(t, pool)
+	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+	nextRunAt := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+WITH new_jobs AS (
+    INSERT INTO public.scheduled_jobs
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:new-fill', 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $3, $3
+    FROM generate_series(1, $4)
+    RETURNING id
+)
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+SELECT gen_random_uuid(), $1, 'new-fill', new_jobs.id, TRUE, $3, $3
+FROM new_jobs`, testOrganizationID, nextRunAt, createdAt,
+		maximumScheduledReportCandidatesPerOccurrence); err != nil {
+		t.Fatal(err)
+	}
+
+	// This canonical tick is the replay-priority half of the alternating policy.
+	// The test fixes the timestamp independently so changing or removing that
+	// production policy cannot make the fixture silently follow the defect.
+	_, occurrence := reportOccurrence(t, time.Date(2026, time.July, 25, 6, 15, 0, 0, time.UTC))
+	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("saturated replay sweep: %v", err)
+	}
+	assertNoDuplicateHandoffs(t, outcome)
+
+	replayedKey := "report.run:" + replayedRunID
+	foundReplay := false
+	for _, request := range outcome.Requests {
+		if request.Envelope.IdempotencyKey == replayedKey {
+			foundReplay = true
+			break
+		}
+	}
+	if !foundReplay {
+		t.Fatalf("durable replay %s was starved behind %d new reports",
+			replayedKey, maximumScheduledReportCandidatesPerOccurrence)
+	}
+	if len(outcome.Requests) != maximumScheduledReportsPerOccurrence {
+		t.Fatalf("published %d requests, want the bounded work budget %d",
+			len(outcome.Requests), maximumScheduledReportsPerOccurrence)
+	}
+	if outcome.Degraded != DegradedScheduledReportsDeferred {
+		t.Fatalf("degraded = %q, want %q", outcome.Degraded, DegradedScheduledReportsDeferred)
+	}
+}
+
+// The sweep must lock exactly one bounded page plus one row that proves a due
+// remainder exists. The extra row is what raises the deferred signal; reading all
+// 621 rows would restore the transaction-footprint bug this page replaced.
+func TestSweepReadsOneBoundedPageAndObservesTheRemainder(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -857,17 +893,145 @@ FROM new_jobs`,
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	candidates, err := reportsProducer(t).lockDueCandidates(ctx, tx)
+	candidates, err := reportsProducer(t).lockDueCandidates(
+		ctx, tx, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC), false,
+	)
 	if err != nil {
 		t.Fatalf("lockDueCandidates(): %v", err)
 	}
-	want := maximumScheduledReportsPerOccurrence + excess + 1
+	// This is the external transaction-footprint contract, not an oracle copied
+	// from the production constant. If the lock page grows, this assertion must
+	// fail and force an explicit operational decision.
+	const want = 501
 	if len(candidates) != want {
 		t.Fatalf(
-			"the sweep read %d candidates, want all %d active schedules; a read limited "+
-				"to the work bound (%d) cannot observe the backlog it defers",
-			len(candidates), want, maximumScheduledReportsPerOccurrence,
+			"the sweep read %d candidates, want the bounded %d-row page for a %d-row population",
+			len(candidates), want, maximumScheduledReportsPerOccurrence+excess+1,
 		)
+	}
+}
+
+// The replay selector uses a strict comparison against the report's terminal
+// base. A cancellation records last_run_at as the exact scheduled occurrence,
+// so equality means the OLD occurrence is complete and must not occupy the
+// bounded replay page while the paging marker is invalidated for recomputation.
+func TestTerminalBaseEqualityIsNotSelectedAsReplay(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	schedule, _, _ := dueScheduledReport(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	scheduledFor := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+UPDATE public.saved_reports
+SET last_run_at = $1, last_run_status = 'canceled'
+	WHERE id = $2::uuid`, scheduledFor, testReportID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE public.scheduled_jobs SET next_run_at = NULL WHERE id = $1::uuid`, testJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	candidates, err := reportsProducer(t).lockDueCandidates(
+		ctx, tx, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC), false,
+	)
+	if err != nil {
+		t.Fatalf("lockDueCandidates(): %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want one", len(candidates))
+	}
+	if candidates[0].AlreadyMaterialized {
+		t.Fatal("terminal occurrence equal to last_run_at was selected as replay")
+	}
+	if candidates[0].NextDueAt != nil {
+		t.Fatalf("invalidated next_run_at = %v, want NULL for recomputation", candidates[0].NextDueAt)
+	}
+	if schedule.ID != scheduledReportsScheduleID {
+		t.Fatalf("test schedule = %q", schedule.ID)
+	}
+}
+
+// One tenant's active schedule population must not abort the global sweep.
+//
+// The old allocation guard read every active report schedule in job-id order and
+// failed after 20,000 rows. That made volume itself a cross-tenant kill switch:
+// these attacker schedules are not due, but they still filled the read and kept
+// the due victim out of the transaction on every retry. The product property is
+// the victim's durable run, not whether an internal limit happened to trigger.
+func TestOneTenantsRowsBeyondTheFormerReadGuardDoNotBlockAnotherTenant(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	const (
+		formerMaximumScheduledReportRowsRead = 20000
+		attackerOrganizationID               = "11111111-1111-4111-8111-111111111111"
+		victimOrganizationID                 = "22222222-2222-4222-8222-222222222222"
+		victimJobID                          = "ffffffff-ffff-4fff-bfff-fffffffffff0"
+		victimReportID                       = "ffffffff-ffff-4fff-bfff-fffffffffff1"
+	)
+	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+	attackerBase := time.Date(2026, time.July, 26, 6, 0, 0, 0, time.UTC)
+	attackerNextDue := time.Date(2026, time.July, 27, 6, 0, 0, 0, time.UTC)
+	victimNextDue := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.organizations (id, name, is_active)
+VALUES ($1::uuid, 'attacker', TRUE), ($2::uuid, 'victim', TRUE)`,
+		attackerOrganizationID, victimOrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+WITH attacker_jobs AS (
+    INSERT INTO public.scheduled_jobs
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:attacker', 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $2, $2
+    FROM generate_series(1, $3)
+    RETURNING id
+)
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+SELECT gen_random_uuid(), $1, 'attacker', attacker_jobs.id, TRUE, $2, $2
+FROM attacker_jobs`, attackerOrganizationID, attackerBase, formerMaximumScheduledReportRowsRead+1, attackerNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.scheduled_jobs
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:victim', 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $3, $3)`,
+		victimJobID, victimOrganizationID, createdAt, victimNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+VALUES ($4::uuid, $2, 'victim', $1::uuid, TRUE, $3, $3)`,
+		victimJobID, victimOrganizationID, createdAt, victimReportID); err != nil {
+		t.Fatal(err)
+	}
+
+	schedule, occurrence := reportOccurrence(
+		t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
+	)
+	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce(): %v", err)
+	}
+	assertNoDuplicateHandoffs(t, outcome)
+
+	var victimRuns int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.report_runs WHERE report_id = $1::uuid`,
+		victimReportID).Scan(&victimRuns); err != nil {
+		t.Fatal(err)
+	}
+	if victimRuns != 1 {
+		t.Fatalf("victim report runs = %d, want 1", victimRuns)
 	}
 }
 
@@ -929,7 +1093,8 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 	}
 
 	// The polls that follow: no occurrence is due, so the producer never runs. Each
-	// must report Evaluated false and must not assert a verdict of its own.
+	// must report Evaluated false while still returning the persisted authoritative
+	// degraded verdict from the occurrence ledger.
 	for poll := 1; poll <= 3; poll++ {
 		nonEvaluating, err := engine.Step(ctx, observedAt.Add(time.Duration(poll)*15*time.Second))
 		if err != nil {
@@ -945,8 +1110,9 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 		if quiet.Evaluated {
 			t.Fatalf("poll %d claimed to have evaluated the schedule without an occurrence", poll)
 		}
-		if quiet.Degraded != "" {
-			t.Fatalf("poll %d asserted degraded %q without running the producer", poll, quiet.Degraded)
+		if quiet.Degraded != DegradedScheduledReportsUndeliverable {
+			t.Fatalf("poll %d degraded = %q, want persisted %q",
+				poll, quiet.Degraded, DegradedScheduledReportsUndeliverable)
 		}
 	}
 }

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
 from dev_health_ops.api.services.sync_coverage import (
+    SYNC_COVERAGE_PROJECTION_VERSION,
     _sync_coverage_lock_statement,
     invalidate_sync_coverage_projection_sync,
 )
@@ -59,7 +60,7 @@ def test_invalidation_waits_for_inflight_projection_publication():
                 org_id=org_id,
                 sync_config_id=config.id,
                 history_lookback_days=3650,
-                projection_version=1,
+                projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
                 generated_at=datetime.now(timezone.utc),
                 payload={"generation": "before"},
             )

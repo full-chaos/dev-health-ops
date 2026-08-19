@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypedDict
 
 import pytest
@@ -211,17 +210,10 @@ async def test_sync_config_update_is_denied_without_mutation(
 @pytest.mark.asyncio
 async def test_sync_config_trigger_is_denied_before_work_creation(
     canonical_api_state: ApiState,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
     state = canonical_api_state
     config_id = await seed_operational_config(state, state.disabled)
-    monkeypatch.setattr(
-        sync_router.dispatch_sync_run,
-        "apply_async",
-        lambda **_kwargs: SimpleNamespace(id="dispatch"),
-    )
-
     # When
     async with api_client(state, state.disabled) as client:
         response = await client.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
@@ -236,17 +228,10 @@ async def test_sync_config_trigger_is_denied_before_work_creation(
 @pytest.mark.asyncio
 async def test_sync_config_backfill_is_denied_before_work_creation(
     canonical_api_state: ApiState,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
     state = canonical_api_state
     config_id = await seed_operational_config(state, state.disabled)
-    monkeypatch.setattr(
-        sync_router.dispatch_sync_run,
-        "apply_async",
-        lambda **_kwargs: SimpleNamespace(id="dispatch"),
-    )
-
     # When
     async with api_client(state, state.disabled) as client:
         response = await client.post(

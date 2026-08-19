@@ -411,7 +411,7 @@ services:
       POOL_MODE: transaction
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-25}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
     ports:
       - "${PGBOUNCER_PORT:-6432}:6432"
     networks:
@@ -421,6 +421,49 @@ services:
         limits:
           memory: 256M
           cpus: "0.5"
+
+  # River listener/cancellation uses a session pool, never the transaction
+  # endpoint above. DB_USER and DB_NAME are fixed, so DEFAULT_POOL_SIZE caps
+  # the one relevant PgBouncer (database,user) backend pool.
+  pgbouncer-river-queue:
+    profiles: ["pooler"]
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT:-5432}
+      DB_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DB_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:?set RIVER_QUEUE_DATABASE_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+      LISTEN_PORT: "6433"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-23}
+    ports:
+      - "${PGBOUNCER_RIVER_QUEUE_PORT:-6433}:6433"
+    networks: [dev-health]
+
+  # Coordinator locks also need one stable session. This endpoint is separate
+  # from queue control so each role has an independently auditable hard cap.
+  pgbouncer-river-coordinator:
+    profiles: ["pooler"]
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT:-5432}
+      DB_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DB_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:?set RIVER_COORDINATOR_DATABASE_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+      LISTEN_PORT: "6434"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN:-32}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE:-11}
+    ports:
+      - "${PGBOUNCER_RIVER_COORDINATOR_PORT:-6434}:6434"
+    networks: [dev-health]
 
 volumes:
   clickhouse_data:

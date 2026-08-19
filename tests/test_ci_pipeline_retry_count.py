@@ -24,6 +24,7 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
+from dev_health_ops.exceptions import PaginationException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors.base_git import build_ci_pipeline_run
 from dev_health_ops.processors.github import (
@@ -128,14 +129,14 @@ class _GitHubWorkflowRunClient:
         return self.runs[:max_runs]
 
     def drain_usage_observations(self) -> list[dict[str, object]]:
-        return [{"route_family": "cicd", "request_count": 1}]
+        return [{"route_family": "tests", "request_count": 1}]
 
     async def close(self) -> None:
         self.closed = True
 
 
 @pytest.mark.asyncio
-async def test_github_workflow_run_async_drains_cicd_usage(monkeypatch):
+async def test_github_workflow_run_async_drains_tests_usage(monkeypatch):
     run = GitHubWorkflowRunData(
         run_id="200",
         status="success",
@@ -164,7 +165,41 @@ async def test_github_workflow_run_async_drains_cicd_usage(monkeypatch):
     assert len(runs) == 1
     assert runs[0].run_id == "200"
     assert runs[0].retry_count == 2
-    assert usage_sink == [{"route_family": "cicd", "request_count": 1}]
+    assert usage_sink == [{"route_family": "tests", "request_count": 1}]
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_github_workflow_run_async_propagates_incomplete_pagination(
+    monkeypatch,
+):
+    class _IncompleteGitHubWorkflowRunClient(_GitHubWorkflowRunClient):
+        async def get_workflow_runs(
+            self, owner: str, repo: str, *, max_runs: int
+        ) -> list[GitHubWorkflowRunData]:
+            raise PaginationException(
+                "github pagination incomplete for cicd workflow runs"
+            )
+
+    client = _IncompleteGitHubWorkflowRunClient([])
+    monkeypatch.setattr(
+        "dev_health_ops.processors.github._github_code_client_from_connector",
+        lambda connector: client,
+    )
+    usage_sink: list[dict[str, object]] = []
+
+    with pytest.raises(PaginationException, match="pagination incomplete"):
+        await _fetch_github_workflow_runs_async(
+            object(),
+            "acme",
+            "widgets",
+            repo_id=None,
+            max_runs=10,
+            since=None,
+            usage_sink=usage_sink,
+        )
+
+    assert usage_sink == [{"route_family": "tests", "request_count": 1}]
     assert client.closed is True
 
 

@@ -69,4 +69,15 @@ def test_local_post_install_requires_bundled_postgres() -> None:
     )
 
     assert rendered.returncode != 0
-    assert "/postgresql/enabled" in rendered.stderr
+    # Helm renders the offending schema path as a JSON Pointer
+    # ("/postgresql/enabled") in some versions and a dotted path
+    # ("postgresql.enabled") in others, and this repo pins no helm version --
+    # neither CI nor any ci/ script installs one, so the test would otherwise
+    # track whichever build happened to be on the author's PATH. Accept either
+    # rendering of the same pointer; the contract being asserted is that the
+    # chart refuses the combination AND names the field, which the sibling test
+    # above already checks in the version-agnostic bare-name form.
+    assert any(
+        form in rendered.stderr
+        for form in ("/postgresql/enabled", "postgresql.enabled")
+    ), rendered.stderr

@@ -13,7 +13,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
-_PROFILES = _REPO_ROOT / "deploy" / "go-workers" / "profiles.json"
+_DEPLOYMENT = _REPO_ROOT / "deploy" / "go-workers" / "deployment.json"
 _APP_DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 _GO_WORKER_DOCKERFILE = _REPO_ROOT / "docker" / "go-worker.Dockerfile"
 _PRODUCTION_COMPOSE = (
@@ -30,6 +30,11 @@ _GO_SWARM = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
 _GO_SWARM_ONLY = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers-only.yml"
 _GO_KUBERNETES = _KUBERNETES / "go-workers.yaml"
 _GO_KUBERNETES_ONLY = _KUBERNETES / "go-workers-only.yaml"
+
+_PACKAGED_WORK_ITEM_CONFIG = {
+    "status_mapping.yaml": "/app/config/status_mapping.yaml",
+    "investment_areas.yaml": "/app/config/investment_areas.yaml",
+}
 
 _MIGRATION_CONFIG_DEFAULTS = {
     "RIVER_DATABASE_SCHEMA": "river",
@@ -51,7 +56,7 @@ _KUBERNETES_API = _KUBERNETES / "api.yaml"
 # insecure opt-in) or is rejected with 401 (missing token).
 _PAGERDUTY_PROCESS = "stream-pagerduty"
 _PAGERDUTY_RUNTIME_PROFILE = "pagerduty"
-# Non-secret half of the contract. It cannot be driven from profiles.json:
+# Non-secret half of the contract. It cannot be driven from deployment.json:
 # `processes[]` entries carry only `secret_env`, and internal/deploymentcontract
 # decodes the manifest with DisallowUnknownFields, so a `config_env` key there
 # would fail the Go contract check until the Go schema grows the field.
@@ -70,6 +75,42 @@ _DEFAULT_WEBHOOK_TRANSPORT = "celery"
 # strconv.ParseBool's truthy spellings, lowercased.
 _TRUTHY = {"1", "t", "true"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+_RIVER_WORKER_SERVICES = {
+    "heavy": "go-worker-heavy",
+    "ops": "go-worker-ops",
+    "sync": "go-worker-sync-provider",
+}
+
+
+def _river_processes() -> dict[str, dict]:
+    return {
+        process["name"]: process
+        for process in _load_json(_DEPLOYMENT)["processes"]
+        if process["runtime"] == "river" and process["binary"] == "dev-health-worker"
+    }
+
+
+def _queue_env(value: object) -> list[str]:
+    return [queue for queue in str(value).split(",") if queue]
+
+
+def _queue_concurrency_env(process: dict) -> str:
+    return ",".join(
+        f"{entry['queue']}={entry['max_workers']}" for entry in process["queue_workers"]
+    )
+
+
+def _process_arguments(container: dict) -> dict[str, str]:
+    raw = container.get("command") or container.get("args") or []
+    assert isinstance(raw, list), "worker process arguments must use list form"
+    arguments: dict[str, str] = {}
+    for item in raw:
+        name, separator, value = str(item).partition("=")
+        assert separator and name.startswith("--"), f"invalid process argument: {item}"
+        assert name not in arguments, f"duplicate process argument: {name}"
+        arguments[name] = value
+    return arguments
 
 
 def _load_json(path: Path) -> dict:
@@ -115,7 +156,7 @@ def _bridge_secret_env() -> set[str]:
     """Bridge secrets the checked-in manifest declares for the process."""
     process = next(
         item
-        for item in _load_json(_PROFILES)["processes"]
+        for item in _load_json(_DEPLOYMENT)["processes"]
         if item["name"] == _PAGERDUTY_PROCESS
     )
     declared = {
@@ -125,7 +166,7 @@ def _bridge_secret_env() -> set[str]:
     }
     assert declared, (
         f"{_PAGERDUTY_PROCESS} must declare its bridge credential in "
-        "deploy/go-workers/profiles.json"
+        "deploy/go-workers/deployment.json"
     )
     return declared
 
@@ -201,7 +242,7 @@ def _kubernetes_container_profile(container: dict) -> str | None:
 def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
     """Deployments that run the PagerDuty profile, by effective env not label.
 
-    Discovering by `dev-health.io/profile` alone proved nothing: the label is
+    Discovering by `dev-health.io/worker-group` alone proved nothing: the label is
     metadata, so a Deployment labelled pagerduty whose container ran a different
     DEV_HEALTH_PROFILE passed every assertion here while, at cutover, running
     the wrong profile and leaving PagerDuty entries unconsumed after Celery
@@ -218,7 +259,7 @@ def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
             continue
         container = pod_containers[0]
         labelled = (document["metadata"].get("labels") or {}).get(
-            "dev-health.io/profile"
+            "dev-health.io/worker-group"
         ) == _PAGERDUTY_PROCESS
         runs_profile = (
             _kubernetes_container_profile(container) == _PAGERDUTY_RUNTIME_PROFILE
@@ -233,8 +274,8 @@ def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
     return containers
 
 
-def test_go_profiles_are_disabled_future_topology() -> None:
-    manifest = _load_json(_PROFILES)
+def test_go_worker_groups_are_disabled_future_topology() -> None:
+    manifest = _load_json(_DEPLOYMENT)
 
     assert manifest["deployment_state"] == "coexistence_disabled"
     assert manifest["runtime_role_env"] == [
@@ -254,6 +295,11 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         and "MIGRATION_DATABASE_URI" not in process["secret_env"]
         for process in manifest["processes"]
     )
+    assert {
+        process["name"]: process["max_replicas"]
+        for process in manifest["processes"]
+        if process["name"] in {"heavy", "ops"}
+    } == {"heavy": 2, "ops": 2}
     operator = manifest["operator_cli"]
     assert operator == {
         "name": "worker-operator",
@@ -267,6 +313,7 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         # carries a coordinator budget and requires the coordinator DSN.
         "coordinator_max_connections": 2,
         "config_env": [
+            "COORDINATOR_DATABASE_MODE",
             "PGBOUNCER_TRANSACTION_MODE",
             "RIVER_COORDINATOR_DATABASE_ROLE",
             "RIVER_DATABASE_SCHEMA",
@@ -283,13 +330,34 @@ def test_go_profiles_are_disabled_future_topology() -> None:
     }
 
 
-def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() -> None:
+def test_go_worker_image_packages_work_item_semantic_config() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    for filename, runtime_path in _PACKAGED_WORK_ITEM_CONFIG.items():
+        source = f"src/dev_health_ops/config/{filename}"
+        staged = f"/runtime/worker{runtime_path}"
+        assert (_REPO_ROOT / source).is_file()
+        assert f"COPY {source} ./src/dev_health_ops/config/{filename}" in dockerfile
+        assert staged in dockerfile
+
+
+def test_go_worker_image_packages_lifecycle_route_operator() -> None:
+    """The worker image must contain Compose's inherited stop-hook executable."""
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp /out/dev-health-workerctl "
+        "/runtime/worker/usr/local/bin/dev-health-workerctl;"
+    ) in dockerfile
+
+
+def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() -> None:
     """CHAOS-3052: every supported deploy surface renders an inert, hardened
     topology. It must never change the default Celery/Beat/Valkey deployment
     merely by being present in the repository.
     """
     expected_profiles = {
-        process["name"] for process in _load_json(_PROFILES)["processes"]
+        process["name"] for process in _load_json(_DEPLOYMENT)["processes"]
     }
     assert expected_profiles == {
         "heavy",
@@ -325,9 +393,15 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         assert service["user"] == "65532:65532"
         assert "no-new-privileges:true" in service["security_opt"]
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
-    assert (
-        compose["go-worker-sync-provider"]["environment"]["DEV_HEALTH_PROFILE"]
-        == "sync"
+        assert (
+            _compose_variable_default(
+                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+                "PGBOUNCER_TRANSACTION_MODE",
+            )
+            == "true"
+        )
+    assert _process_arguments(compose["go-worker-sync-provider"])["--queues"] == (
+        "sync,sync_provider"
     )
 
     swarm = _load_yaml(_GO_SWARM)["services"]
@@ -336,6 +410,13 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         assert service["read_only"] is True
         assert service["user"] == "65532:65532"
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
+        assert (
+            _compose_variable_default(
+                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+                "PGBOUNCER_TRANSACTION_MODE",
+            )
+            == "true"
+        )
         assert service["deploy"]["replicas"] == 0
         assert service["deploy"]["update_config"]["order"] == "start-first"
 
@@ -356,30 +437,240 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     sync_labels = deployments["dev-health-go-worker-sync-provider"]["metadata"][
         "labels"
     ]
-    assert sync_labels["dev-health.io/profile"] == "sync"
-    assert sync_labels["dev-health.io/queue"] == "sync_provider"
+    assert sync_labels["dev-health.io/worker-group"] == "sync"
+    assert "dev-health.io/profile" not in sync_labels
 
     values = _load_yaml(_HELM_CHART / "values.yaml")
     assert values["goWorkers"]["enabled"] is False
+    assert "profiles" not in values["goWorkers"]
+    assert "groups" in values["goWorkers"]
     assert {
-        profile["name"] for profile in values["goWorkers"]["profiles"]
+        group["name"] for group in values["goWorkers"]["groups"]
     } == expected_profiles
     sync_profile = next(
-        profile
-        for profile in values["goWorkers"]["profiles"]
-        if profile["name"] == "sync"
+        group for group in values["goWorkers"]["groups"] if group["name"] == "sync"
     )
-    assert sync_profile["runtimeProfile"] == "sync"
-    assert sync_profile["queue"] == "sync_provider"
-    assert "worker_jobs_available" in (
-        _HELM_CHART / "templates" / "go-workers.yaml"
-    ).read_text(encoding="utf-8")
-    assert "worker_job_oldest_age_seconds" in (
-        _HELM_CHART / "templates" / "go-workers.yaml"
-    ).read_text(encoding="utf-8")
-    assert "worker_execution_saturation_ratio" in (
-        _HELM_CHART / "templates" / "go-workers.yaml"
-    ).read_text(encoding="utf-8")
+    assert sync_profile["queues"] == ["sync", "sync_provider"]
+    helm_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert ".Values.goWorkers.profiles" not in helm_template
+    assert "$profile" not in helm_template
+    assert "worker_jobs_available" in helm_template
+    assert "worker_job_oldest_age_seconds" in helm_template
+    assert "worker_execution_saturation_ratio" in helm_template
+
+
+def test_river_worker_renderers_select_manifest_queues_without_profiles() -> None:
+    """CHAOS-3851: River workers are queue-selected, not profile-selected.
+
+    The queue sets are read from the deployment manifest instead of being
+    duplicated in the oracle. This keeps each renderer tied to the same
+    executable process contract while allowing overlapping worker groups.
+    """
+    river = _river_processes()
+    assert set(river) == set(_RIVER_WORKER_SERVICES)
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    for group, service_name in _RIVER_WORKER_SERVICES.items():
+        expected = river[group]["queues"]
+        expected_concurrency = _queue_concurrency_env(river[group])
+        for renderer_name, services in (("Compose", compose), ("Swarm", swarm)):
+            assert (
+                services[service_name]["labels"]["dev-health.io/worker-group"] == group
+            )
+            environment = services[service_name]["environment"]
+            assert "DEV_HEALTH_PROFILE" not in environment, (
+                f"{renderer_name} {service_name} must select queues explicitly"
+            )
+            assert "DEV_HEALTH_QUEUES" not in environment
+            assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+            assert "DEV_HEALTH_WORKER_GROUP" not in environment
+            arguments = _process_arguments(services[service_name])
+            assert _queue_env(arguments["--queues"]) == expected
+            assert arguments["--queue-concurrency"] == expected_concurrency
+            assert arguments["--worker-group"] == group
+
+    deployments = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+    for group, service_name in _RIVER_WORKER_SERVICES.items():
+        deployment = deployments[f"dev-health-{service_name}"]
+        labels = deployment["metadata"]["labels"]
+        assert labels["dev-health.io/worker-group"] == group
+        assert "dev-health.io/profile" not in labels
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        environment = {
+            item["name"]: item.get("value") for item in container.get("env", [])
+        }
+        assert "DEV_HEALTH_PROFILE" not in environment
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        arguments = _process_arguments(container)
+        assert _queue_env(arguments["--queues"]) == river[group]["queues"]
+        assert arguments["--queue-concurrency"] == _queue_concurrency_env(river[group])
+        assert arguments["--worker-group"] == group
+
+    horizontal_scalers = [
+        document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "HorizontalPodAutoscaler"
+    ]
+    for scaler in horizontal_scalers:
+        target = scaler["spec"]["scaleTargetRef"]["name"]
+        group = target.removeprefix("dev-health-go-worker-")
+        if group == "sync-provider":
+            group = "sync"
+        if group not in river:
+            continue
+        selectors = [
+            metric["external"]["metric"]["selector"]["matchLabels"]
+            for metric in scaler["spec"]["metrics"]
+        ]
+        assert all("profile" not in selector for selector in selectors)
+        assert {selector["queue"] for selector in selectors} == set(
+            river[group]["queues"]
+        )
+
+    stream_runtime_profiles = {
+        "stream-external": ("go-stream-external", "external"),
+        "stream-ingest": ("go-stream-ingest", "ingest"),
+        "stream-pagerduty": ("go-stream-pagerduty", "pagerduty"),
+    }
+    for group, (service_name, runtime_profile) in stream_runtime_profiles.items():
+        for services in (compose, swarm):
+            environment = services[service_name]["environment"]
+            assert environment["DEV_HEALTH_PROFILE"] == runtime_profile
+            assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+            assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        deployment = deployments[f"dev-health-{service_name}"]
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        assert _kubernetes_container_profile(container) == runtime_profile
+        values = _load_yaml(_HELM_CHART / "values.yaml")
+        helm_group = next(
+            group_values
+            for group_values in values["goWorkers"]["groups"]
+            if group_values["name"] == group
+        )
+        assert helm_group["runtimeProfile"] == runtime_profile
+
+    for service_name in ("go-reconciler", "go-scheduler"):
+        environment = compose[service_name]["environment"]
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+    for service_name in (
+        "go-stream-external",
+        "go-stream-ingest",
+        "go-stream-pagerduty",
+        "go-reconciler",
+        "go-scheduler",
+    ):
+        environment = swarm[service_name]["environment"]
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        deployment = deployments[f"dev-health-{service_name}"]
+        environment = {
+            item["name"]: item.get("value")
+            for item in deployment["spec"]["template"]["spec"]["containers"][0].get(
+                "env", []
+            )
+        }
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+
+
+def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
+    manifest = {
+        process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
+    }
+    services = {
+        "heavy": "go-worker-heavy",
+        "ops": "go-worker-ops",
+        "reconciler": "go-reconciler",
+        "scheduler": "go-scheduler",
+        "stream-external": "go-stream-external",
+        "stream-ingest": "go-stream-ingest",
+        "stream-pagerduty": "go-stream-pagerduty",
+        "sync": "go-worker-sync-provider",
+    }
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    kubernetes = {
+        document["metadata"]["labels"].get("dev-health.io/worker-group"): document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+    horizontal_scalers = {
+        document["spec"]["scaleTargetRef"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "HorizontalPodAutoscaler"
+    }
+    helm = {
+        group["name"]: group
+        for group in _load_yaml(_HELM_CHART / "values.yaml")["goWorkers"]["groups"]
+    }
+    for profile, service_name in services.items():
+        contract = manifest[profile]
+        desired = contract["desired_replicas"]
+        grace = contract["shutdown_grace_seconds"]
+        assert compose[service_name]["deploy"]["replicas"] == desired
+        assert compose[service_name]["stop_grace_period"] == f"{grace}s"
+        assert swarm[service_name]["deploy"]["replicas"] == desired
+        assert swarm[service_name]["stop_grace_period"] == f"{grace}s"
+        assert kubernetes[profile]["spec"]["replicas"] == desired
+        pod_spec = kubernetes[profile]["spec"]["template"]["spec"]
+        assert pod_spec["terminationGracePeriodSeconds"] == grace
+        if contract["runtime"] == "river":
+            assert (
+                _process_arguments(compose[service_name])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+            assert (
+                _process_arguments(swarm[service_name])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+            assert (
+                _process_arguments(pod_spec["containers"][0])["--shutdown-timeout"]
+                == f"{grace}s"
+            )
+        else:
+            assert (
+                compose[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                == f"{grace}s"
+            )
+            assert (
+                swarm[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                == f"{grace}s"
+            )
+            shutdown = next(
+                item
+                for item in pod_spec["containers"][0]["env"]
+                if item["name"] == "DEV_HEALTH_SHUTDOWN_TIMEOUT"
+            )
+            assert shutdown["value"] == f"{grace}s"
+        assert helm[profile]["replicas"] == desired
+        assert helm[profile]["terminationGracePeriodSeconds"] == grace
+        if contract["runtime"] == "river":
+            target = kubernetes[profile]["metadata"]["name"]
+            assert (
+                horizontal_scalers[target]["spec"]["minReplicas"]
+                == contract["min_replicas"]
+            )
+            assert (
+                horizontal_scalers[target]["spec"]["maxReplicas"]
+                == contract["max_replicas"]
+            )
+            assert (
+                helm[profile]["autoscaling"]["maxReplicas"] == contract["max_replicas"]
+            )
+    helm_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "--shutdown-timeout=" in helm_template
 
 
 def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> None:
@@ -395,6 +686,9 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
     provision_command = _command_string(provision)
     assert "psql" in provision_command
     assert "provision_river_roles.sql" in provision_command
+    assert "--set=coordinator_role" in provision_command
+    assert "--set=coordinator_password" in provision_command
+    assert "RIVER_COORDINATOR_DATABASE_PASSWORD" in provision["environment"]
     assert any(
         str(volume).endswith(
             "scripts/worker/provision_river_roles.sql:"
@@ -437,7 +731,7 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
 
     rendered = _GO_COMPOSE.read_text(encoding="utf-8")
     assert "workerctl route" not in rendered
-    assert _load_json(_PROFILES)["deployment_state"] == "coexistence_disabled"
+    assert _load_json(_DEPLOYMENT)["deployment_state"] == "coexistence_disabled"
 
 
 @pytest.mark.parametrize(
@@ -484,6 +778,25 @@ def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
     )
 
 
+def test_operator_image_packages_every_runtime_contract_it_loads() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/operator/app/contracts/jobs/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp -R /src/contracts/sync-dispatch/v1 "
+        + "/runtime/operator/app/contracts/sync-dispatch/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp /src/deploy/go-workers/deployment.json "
+        + "/runtime/operator/app/deploy/go-workers/deployment.json;"
+        in dockerfile
+    )
+
+
 def test_python_image_packages_and_validates_job_contracts() -> None:
     project = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
     data_files = project["tool"]["setuptools"]["data-files"]
@@ -520,8 +833,8 @@ def test_scheduler_image_packages_runtime_policy_inputs() -> None:
         in dockerfile
     )
     assert (
-        "cp /src/deploy/go-workers/profiles.json "
-        + "/runtime/scheduler/app/deploy/go-workers/profiles.json;"
+        "cp /src/deploy/go-workers/deployment.json "
+        + "/runtime/scheduler/app/deploy/go-workers/deployment.json;"
         in dockerfile
     )
     scheduler_target = dockerfile.split("FROM runtime AS scheduler", maxsplit=1)[1]
@@ -529,46 +842,71 @@ def test_scheduler_image_packages_runtime_policy_inputs() -> None:
     assert "WORKDIR /app" in scheduler_target
 
 
-def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
-    dockerfile = _APP_DOCKERFILE.read_text(encoding="utf-8")
-
-    for required in (
-        "FROM runtime AS sync-parity",
-        "COPY --from=go-migrator-builder /out/dev-health-sync-parity "
-        + "/usr/local/bin/dev-health-sync-parity",
-        "COPY --from=builder /build/contracts/sync-dispatch/v1 "
-        + "/app/contracts/sync-dispatch/v1",
-        "COPY --from=builder /build/scripts/worker/observe_sync_dispatch_parity.py "
-        + "/app/scripts/worker/observe_sync_dispatch_parity.py",
-        "ln -s /usr/local/bin/python /app/.venv/bin/python",
-        "ENV PYTHONPATH=/app/src",
-        'ENTRYPOINT ["dev-health-sync-parity"]',
-    ):
-        assert required in dockerfile
-
-
-def test_profile_pgbouncer_budget_matches_production_compose_defaults() -> None:
-    manifest = _load_json(_PROFILES)
+def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> None:
+    manifest = _load_json(_DEPLOYMENT)
     pgbouncer = _load_yaml(_PRODUCTION_COMPOSE)["services"]["pgbouncer"]
 
     assert pgbouncer["profiles"] == ["pooler"]
     environment = pgbouncer["environment"]
-    assert manifest["postgres_budget"]["pgbouncer_max_client_connections"] == (
-        _compose_default(environment["MAX_CLIENT_CONN"], "PGBOUNCER_MAX_CLIENT_CONN")
-    )
-    assert manifest["postgres_budget"]["pgbouncer_default_pool_size"] == (
+    assert manifest["postgres_budget"][
+        "pgbouncer_transaction_max_client_connections"
+    ] == (_compose_default(environment["MAX_CLIENT_CONN"], "PGBOUNCER_MAX_CLIENT_CONN"))
+    assert manifest["postgres_budget"]["pgbouncer_transaction_pool_size"] == (
         _compose_default(
             environment["DEFAULT_POOL_SIZE"], "PGBOUNCER_DEFAULT_POOL_SIZE"
         )
     )
     # Existing Celery/application traffic and the new Go domain role create
     # distinct (database,user) server pools in PgBouncer.
-    assert manifest["postgres_budget"]["pgbouncer_server_pool_count"] == 2
+    assert manifest["postgres_budget"]["pgbouncer_transaction_server_pool_count"] == 2
+
+    # The SESSION pools are bound to the manifest too. Only the transaction
+    # pool used to be, so the queue and coordinator defaults had drifted below
+    # the budget (22/10 against the manifest's 23/11) with nothing to catch it
+    # (CHAOS-3872).
+    services = _load_yaml(_PRODUCTION_COMPOSE)["services"]
+    session_pools = {
+        "pgbouncer-river-queue": (
+            "pgbouncer_queue_session_pool_size",
+            "PGBOUNCER_RIVER_QUEUE_POOL_SIZE",
+            "pgbouncer_queue_session_max_client_connections",
+            "PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN",
+        ),
+        "pgbouncer-river-coordinator": (
+            "pgbouncer_coordinator_session_pool_size",
+            "PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE",
+            "pgbouncer_coordinator_session_max_client_connections",
+            "PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN",
+        ),
+    }
+    for service, (pool_key, pool_var, client_key, client_var) in session_pools.items():
+        environment = services[service]["environment"]
+        assert manifest["postgres_budget"][pool_key] == _compose_default(
+            environment["DEFAULT_POOL_SIZE"], pool_var
+        ), f"{service} pool size drifted from the manifest budget"
+        assert manifest["postgres_budget"][client_key] == _compose_default(
+            environment["MAX_CLIENT_CONN"], client_var
+        ), f"{service} client cap drifted from the manifest budget"
+
+    # Helm renders the same three pools from values, so bind those too.
+    helm_pools = _load_yaml(_HELM_CHART / "values.yaml")["goWorkers"]["pgbouncer"]
+    assert (
+        manifest["postgres_budget"]["pgbouncer_transaction_pool_size"]
+        == helm_pools["transaction"]["poolSize"]
+    )
+    assert (
+        manifest["postgres_budget"]["pgbouncer_queue_session_pool_size"]
+        == helm_pools["queueSession"]["poolSize"]
+    )
+    assert (
+        manifest["postgres_budget"]["pgbouncer_coordinator_session_pool_size"]
+        == helm_pools["coordinatorSession"]["poolSize"]
+    )
 
 
 @pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])
 def test_compose_and_swarm_migration_wiring_matches_contract(path: Path) -> None:
-    manifest = _load_json(_PROFILES)
+    manifest = _load_json(_DEPLOYMENT)
     services = _load_yaml(path)["services"]
     migrate = services["migrate"]
     environment = migrate["environment"]
@@ -589,7 +927,7 @@ def test_compose_and_swarm_migration_wiring_matches_contract(path: Path) -> None
 
 
 def test_kubernetes_migration_wiring_matches_contract() -> None:
-    manifest = _load_json(_PROFILES)
+    manifest = _load_json(_DEPLOYMENT)
     config = _load_yaml(_KUBERNETES / "configmap.yaml")["data"]
     for name, default in _MIGRATION_CONFIG_DEFAULTS.items():
         assert config[name] == default
@@ -635,7 +973,7 @@ def test_kubernetes_migration_wiring_matches_contract() -> None:
 
 
 def test_helm_migration_wiring_matches_contract_and_isolates_elevated_dsn() -> None:
-    manifest = _load_json(_PROFILES)
+    manifest = _load_json(_DEPLOYMENT)
     values = _load_yaml(_HELM_CHART / "values.yaml")
 
     for name, default in _MIGRATION_CONFIG_DEFAULTS.items():
@@ -863,12 +1201,12 @@ def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env(
 
 def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
     values = _load_yaml(_HELM_CHART / "values.yaml")
-    profiles = [
-        profile
-        for profile in values["goWorkers"]["profiles"]
-        if profile.get("runtimeProfile") == _PAGERDUTY_RUNTIME_PROFILE
+    groups = [
+        group
+        for group in values["goWorkers"]["groups"]
+        if group.get("runtimeProfile") == _PAGERDUTY_RUNTIME_PROFILE
     ]
-    assert len(profiles) == 1
+    assert len(groups) == 1
 
     # values.runtimeProfile only controls the rendered process if the template
     # actually binds DEV_HEALTH_PROFILE to it. Asserting the values alone let a
@@ -878,11 +1216,11 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
         encoding="utf-8"
     )
     assert (
-        "{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}"
+        "{name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}"
         in workers_template
-    ), "the chart must render DEV_HEALTH_PROFILE from $profile.runtimeProfile"
+    ), "the chart must render DEV_HEALTH_PROFILE from $group.runtimeProfile"
 
-    # Every Go profile inherits the shared ConfigMap and Secret, so the chart's
+    # Every Go worker group inherits the shared ConfigMap and Secret, so the chart's
     # value surface is what decides whether the runner is wired.
     template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
         encoding="utf-8"
@@ -962,3 +1300,154 @@ def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> N
     values = _load_yaml(_HELM_CHART / "values.yaml")
     resolved = set(values["config"]) | set(values["secrets"]["data"])
     assert not _API_BRIDGE_ENV - resolved
+
+
+# Every manifest process mapped to the service/deployment name each renderer
+# uses for it. The river workers already have _RIVER_WORKER_SERVICES; this is
+# the complete set, including the coordinator and stream binaries.
+_MANIFEST_RENDERED_SERVICES = {
+    "heavy": "go-worker-heavy",
+    "ops": "go-worker-ops",
+    "sync": "go-worker-sync-provider",
+    "reconciler": "go-reconciler",
+    "scheduler": "go-scheduler",
+    "stream-external": "go-stream-external",
+    "stream-ingest": "go-stream-ingest",
+    "stream-pagerduty": "go-stream-pagerduty",
+}
+
+# The Go client speaks ClickHouse's native wire protocol and eagerly Ping()s at
+# construction. Python's clickhouse-connect speaks HTTP on 8123, so the same
+# variable name must resolve to a different port per runtime.
+_CLICKHOUSE_NATIVE_PORT = ":9000/"
+_CLICKHOUSE_HTTP_PORT = ":8123/"
+
+
+def _compose_environment(service: dict) -> dict[str, str]:
+    environment = service["environment"]
+    assert isinstance(environment, dict), (
+        "worker environments must use mapping form so the manifest binding can read them"
+    )
+    return {str(name): str(value) for name, value in environment.items()}
+
+
+def _manifest_required_env(process: dict) -> set[str]:
+    return set(process.get("secret_env") or []) | set(process.get("env") or [])
+
+
+def test_every_manifest_process_env_requirement_is_rendered_by_every_renderer() -> None:
+    """CHAOS-3872: bind deployment.json's env contract to what actually ships.
+
+    The queue/replica/drain contract was already test-locked across renderers,
+    but the credential and DSN layer was not -- so it drifted per renderer, and
+    it is the layer an operator hits FIRST on scale-up. Compose and Swarm never
+    passed the sync group SETTINGS_ENCRYPTION_KEY (handler construction fails
+    closed without it), and raw Kubernetes declared none of the four DSN/secret
+    keys its Go pods need.
+    """
+    processes = {
+        process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
+    }
+    assert set(processes) == set(_MANIFEST_RENDERED_SERVICES), (
+        "a manifest process has no renderer mapping; this test would silently skip it"
+    )
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    kubernetes = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+
+    for name, service_name in _MANIFEST_RENDERED_SERVICES.items():
+        required = _manifest_required_env(processes[name])
+        assert required, f"{name} declares no env requirements to bind"
+
+        for renderer, services in (("Compose", compose), ("Swarm", swarm)):
+            rendered = set(_compose_environment(services[service_name]))
+            missing = required - rendered
+            assert not missing, (
+                f"{renderer} {service_name} is missing manifest-required env {sorted(missing)}"
+            )
+
+        deployment = kubernetes[f"dev-health-{service_name}"]
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        rendered = _kubernetes_container_env(container)
+        missing = required - rendered
+        assert not missing, (
+            f"Kubernetes dev-health-{service_name} is missing manifest-required env "
+            f"{sorted(missing)}"
+        )
+
+
+def test_every_renderer_gives_go_workers_a_native_protocol_clickhouse_uri() -> None:
+    """CHAOS-3872: CLICKHOUSE_URI must be the native port for Go, HTTP for Python."""
+    processes = {
+        process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
+    }
+    clickhouse_groups = {
+        name
+        for name, process in processes.items()
+        if "CLICKHOUSE_URI" in _manifest_required_env(process)
+    }
+    assert clickhouse_groups, "no manifest process requires ClickHouse"
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    for name in clickhouse_groups:
+        service_name = _MANIFEST_RENDERED_SERVICES[name]
+        for renderer, services in (("Compose", compose), ("Swarm", swarm)):
+            uri = _compose_environment(services[service_name])["CLICKHOUSE_URI"]
+            assert _CLICKHOUSE_NATIVE_PORT in uri, (
+                f"{renderer} {service_name} CLICKHOUSE_URI is not the native port: {uri}"
+            )
+            assert _CLICKHOUSE_HTTP_PORT not in uri
+
+    # Raw Kubernetes shares one Secret between Python and Go, so the Go pods
+    # take a dedicated Secret listed AFTER it in envFrom; Kubernetes resolves
+    # duplicate keys in favour of the later source.
+    secrets = {
+        document["metadata"]["name"]: document.get("stringData") or {}
+        for document in _load_yaml_documents(_KUBERNETES_SECRETS)
+        if document["kind"] == "Secret"
+    }
+    go_secret = secrets["dev-health-go-worker-secrets"]
+    assert _CLICKHOUSE_NATIVE_PORT in go_secret["CLICKHOUSE_URI"]
+    assert _CLICKHOUSE_HTTP_PORT in secrets["dev-health-secrets"]["CLICKHOUSE_URI"], (
+        "the shared Secret still serves Python, which needs the HTTP interface"
+    )
+
+    kubernetes = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document.get("kind") == "Deployment"
+    }
+    for name in clickhouse_groups:
+        container = kubernetes[f"dev-health-{_MANIFEST_RENDERED_SERVICES[name]}"][
+            "spec"
+        ]["template"]["spec"]["containers"][0]
+        references = [
+            source["secretRef"]["name"]
+            for source in container.get("envFrom") or []
+            if "secretRef" in source
+        ]
+        assert "dev-health-go-worker-secrets" in references, (
+            f"dev-health-{_MANIFEST_RENDERED_SERVICES[name]} does not mount the Go secret"
+        )
+        assert references.index("dev-health-go-worker-secrets") > references.index(
+            "dev-health-secrets"
+        ), "the Go Secret must come last or the shared HTTP URI wins"
+
+    # Helm renders through templates, which are not parseable as YAML without
+    # the helm binary. Bind the wiring itself: the Go worker template must set
+    # CLICKHOUSE_URI as an explicit env entry (which beats envFrom) from the
+    # native-protocol helper, and that helper must use the native port.
+    go_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert 'include "dev-health.goWorkerClickhouseURI"' in go_template
+    assert "name: CLICKHOUSE_URI" in go_template
+    helpers = (_HELM_CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    native_helper = helpers.split('define "dev-health.goWorkerClickhouseURI"')[1]
+    assert "9000" in native_helper.split("{{- end }}")[0] or "9000" in native_helper

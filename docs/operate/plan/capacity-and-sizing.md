@@ -1,12 +1,12 @@
 ---
 page_id: op-sizing
-summary: Size API, Celery, dormant Go profiles, queues, direct and pooled PostgreSQL connections, ClickHouse, and provider capacity from measured workload.
+summary: Size API, Celery, deployment-selected Go queue groups, PostgreSQL connections, ClickHouse, and provider capacity from measured workload.
 content_type: reference
 owner: platform-operations
 source_of_truth:
   - docs/architecture/worker-scaling-readiness.md
   - docs/operate/configure/databases-and-storage.md
-  - deploy/go-workers/profiles.json
+  - deploy/go-workers/deployment.json
   - current worker and synchronization implementation
 applicability: current
 lifecycle: active
@@ -47,22 +47,44 @@ Count all server-side connection pools:
 - operator CLI invocation;
 - migration and administrative reserve.
 
-The current Go profile manifest budgets maximum replicas even while profiles are disabled. Its documented maximum topology includes bounded direct queue-control and pooled domain connections below the checked-in PostgreSQL ceiling. Run the contract checker after changing profile replicas or pool sizes.
+The Go deployment manifest describes each worker group selected by deployment.
+For each group, calculate the fleet budget from its replica range, one River
+client per process, its queue-control pool, and its domain pool. Run the
+contract checker after changing group replicas, queue concurrency, or pool
+limits. Include every group, even groups that are currently scaled to zero,
+when checking the declared upper bound.
 
-Do not size from current zero Go replicas and assume future activation is free. The profile's maximum topology is the admission budget.
+Do not assume that a zero current replica count makes future activation free.
+The real admission budget is the sum of the actual group maxima and the
+operator and migration processes, with PostgreSQL and PgBouncer headroom.
 
-## Go coexistence sizing
+## Deployment-selected Go sizing
 
-Current profiles have zero minimum replicas and Celery route ownership. Their maximum replicas and connection limits exist to validate future coexistence safely.
+Deployment chooses a worker group's queue set, per-queue concurrency, replicas,
+resources, and autoscaling policy. The application keeps only the canonical
+job-kind-to-queue mapping. A group can consume a disjoint set such as
+`sync,sync_provider`; another can consume `investment,metrics,reports`; and a
+third can intentionally overlap `metrics` with either group that needs the
+same queue. Groups scale independently.
 
-Before enabling a profile, confirm:
+For every group, confirm:
 
-- the job route is approved for shadow, canary, or River ownership;
-- handler coverage is complete for every admitted contract version;
-- direct queue-control and pooled domain connections fit the database budget;
-- `/readyz` passes role, schema, registry, and dependency checks;
-- queue depth, oldest eligible age, execution saturation, and both pool-saturation metrics are monitored;
+- every selected queue is registered and every emitted queue has a consumer;
+- handler coverage is complete for every admitted kind and contract version;
+- one River client is constructed for the process;
+- per-queue concurrency matches the deployment manifest;
+- queue-control and domain connections fit the database budget after replica
+  multiplication;
+- `/readyz` reports the selected queue set, worker identity, client count, and
+  effective connection limits;
+- queue depth, oldest eligible age, execution saturation, and both
+  pool-saturation metrics are monitored;
 - rollback can restore Celery ownership without duplicate effects.
+
+There is no global unique-queue-owner requirement. River claim semantics allow
+overlapping groups to share a queue. Budget the overlap as additional consumer
+capacity and verify the queue's total concurrency against provider and store
+limits.
 
 ## Provider and webhook capacity
 

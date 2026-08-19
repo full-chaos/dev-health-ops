@@ -18,11 +18,12 @@ import (
 // Claims are only visible to other engines after Complete commits, which is
 // what lets one process model two racing replicas.
 type memoryLedger struct {
-	mu       sync.Mutex
-	byKey    map[string]Occurrence
-	byTime   map[string]Anchor
-	statuses map[string]string
-	failNext error
+	mu          sync.Mutex
+	byKey       map[string]Occurrence
+	byTime      map[string]Anchor
+	statuses    map[string]string
+	evaluations map[string]Evaluation
+	failNext    error
 
 	// anchorRead and beforeClaim let a test pin the interleaving between two
 	// replicas rather than sample it. Both are set before any goroutine starts
@@ -33,9 +34,10 @@ type memoryLedger struct {
 
 func newMemoryLedger() *memoryLedger {
 	return &memoryLedger{
-		byKey:    map[string]Occurrence{},
-		byTime:   map[string]Anchor{},
-		statuses: map[string]string{},
+		byKey:       map[string]Occurrence{},
+		byTime:      map[string]Anchor{},
+		statuses:    map[string]string{},
+		evaluations: map[string]Evaluation{},
 	}
 }
 
@@ -71,6 +73,7 @@ func (ledger *memoryLedger) Claim(_ context.Context, _ pgx.Tx, occurrence Occurr
 
 func (ledger *memoryLedger) Complete(
 	_ context.Context, _ pgx.Tx, occurrence Occurrence, status string, handoffs int, reason string,
+	degraded string,
 ) error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
@@ -80,6 +83,9 @@ func (ledger *memoryLedger) Complete(
 	_ = handoffs
 	_ = reason
 	ledger.statuses[occurrence.Key] = status
+	if reason != coldStartBaselineReason {
+		ledger.evaluations[occurrence.ScheduleID] = Evaluation{Degraded: degraded}
+	}
 	return nil
 }
 
@@ -92,6 +98,15 @@ func (ledger *memoryLedger) LastOccurrence(
 	if ledger.anchorRead != nil {
 		ledger.anchorRead()
 	}
+	return value, ok, nil
+}
+
+func (ledger *memoryLedger) LastEvaluation(
+	_ context.Context, _ pgx.Tx, scheduleID string,
+) (Evaluation, bool, error) {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	value, ok := ledger.evaluations[scheduleID]
 	return value, ok, nil
 }
 
@@ -608,7 +623,7 @@ func TestAnchoredScheduleDoesNotRefireAnOwnedBoundary(t *testing.T) {
 func TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline(t *testing.T) {
 	schedule := Schedule{
 		ID:               "interval_probe",
-		LegacyBeatEntry:  "dispatch-scheduled-metrics",
+		LegacyBeatEntry:  "interval-probe",
 		Cadence:          EveryInterval(300 * time.Second),
 		Timezone:         "UTC",
 		CatchUp:          CatchUpSkip,

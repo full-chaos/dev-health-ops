@@ -1,0 +1,20 @@
+# DECLARED DIVERGENCE: a YAML 1.1 SEXAGESIMAL priority. `1:30` is the int 90
+# to PyYAML and a plain string to yaml.v3, so Python sorts 9 before 90 and
+# answers with the int rule, while this port cannot reproduce that order.
+#
+# It is NOT a mixed-type raise: 1:30 is an int to Python, so it sits in the
+# same ordering group as 9. A port that grouped it as a string would claim a
+# TypeError Python does not raise.
+rules:
+  - id: sexagesimal_priority
+    priority: 1:30
+    match:
+      always: true
+    output:
+      investment_area: sexagesimal_area
+  - id: plain_nine
+    priority: 9
+    match:
+      always: true
+    output:
+      investment_area: nine_area

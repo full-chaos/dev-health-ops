@@ -51,6 +51,22 @@ func (args HeartbeatArgs) ContractEnvelope() jobcontract.Envelope {
 	return args.envelope()
 }
 
+// SyncCoverageRefreshArgs is the River-facing typed form of
+// system.sync_coverage_refresh.v1.
+type SyncCoverageRefreshArgs struct {
+	EnvelopeArgs[jobcontract.SyncCoverageRefreshPayload]
+}
+
+func (SyncCoverageRefreshArgs) Kind() string { return jobcontract.KindSyncCoverageRefresh }
+
+func (SyncCoverageRefreshArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args SyncCoverageRefreshArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // RetentionCleanupArgs is the River-facing typed form of
 // system.retention_cleanup.v1.
 type RetentionCleanupArgs struct {
@@ -321,7 +337,11 @@ func (args ProviderUnitArgs) ContractEnvelope() jobcontract.Envelope {
 func (RetentionCleanupArgs) Kind() string { return jobcontract.KindRetentionCleanup }
 
 func (RetentionCleanupArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
+	return []int{
+		jobcontract.ContractVersionV1,
+		jobcontract.ContractVersionV2,
+		jobcontract.ContractVersionV3,
+	}
 }
 
 func (args RetentionCleanupArgs) ContractEnvelope() jobcontract.Envelope {

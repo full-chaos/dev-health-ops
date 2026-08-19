@@ -158,6 +158,7 @@ jobs:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           # No OTLP collector runs in CI; with OTEL on, the exporter retries to
           # localhost:4317 with backoff on every span/metric, flooding logs and
@@ -168,7 +169,7 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py --ignore=tests/api/dev/test_persistence_postgres.py
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_saved_report_schedule_unique_postgres_migration.py --ignore=tests/test_0097_backfill_report_schedule_next_run_postgres.py --ignore=tests/test_report_run_execution_lease_postgres_migration.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py --ignore=tests/api/dev/test_persistence_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
@@ -198,6 +199,9 @@ jobs:
         run: |
           pytest -q \
             tests/test_0066_celery_river_cutover_postgres.py \
+            tests/test_saved_report_schedule_unique_postgres_migration.py \
+            tests/test_0097_backfill_report_schedule_next_run_postgres.py \
+            tests/test_report_run_execution_lease_postgres_migration.py \
             tests/test_chaos_3337_source_class_postgres_migration.py \
             tests/test_canonical_incident_feature_flag_postgres_migration.py \
             tests/api/admin/test_add_member_visibility.py \
@@ -309,9 +313,9 @@ jobs:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           COVERAGE_THRESHOLD: "70"
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           # ci_tests() (ci/run_tests.sh) does not --ignore the postgres-gated
           # migration test files, so they run inline here; without the admin
           # URI they would pytest.fail() under CI (see the dedicated

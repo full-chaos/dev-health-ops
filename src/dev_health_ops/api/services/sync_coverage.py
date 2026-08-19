@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from croniter import croniter as Croniter
 from fastapi.encoders import jsonable_encoder
@@ -30,12 +30,19 @@ from dev_health_ops.models.integrations import (
 from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfiguration
 from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.sync.datasets import supported_datasets
-from dev_health_ops.sync.planner import family_dataset_keys_from_flags
+from dev_health_ops.sync.family_flags import (
+    family_dataset_keys_from_flags,
+)
 
 logger = logging.getLogger(__name__)
 
 HISTORY_LOOKBACK_DAYS = 3650
-SYNC_COVERAGE_PROJECTION_VERSION = 1
+# Bump whenever the persisted payload shape changes. The read path filters on
+# this value, so a stale-shaped row becomes unreadable and is rebuilt instead of
+# being served as current. Version 1 stored ``backfill_windows`` as bare
+# calendar dates with no source/dataset scope; version 2 stores exact UTC
+# instants plus scope, which is what BackfillSelectorRequest requires.
+SYNC_COVERAGE_PROJECTION_VERSION = 2
 STALE_MINIMUM_GRACE = timedelta(hours=6)
 STALE_FALLBACK_GRACE = timedelta(hours=48)
 INTERVAL_ADJACENCY_TOLERANCE = timedelta(microseconds=1)
@@ -364,6 +371,34 @@ def merge_intervals(
             continue
         merged.append(interval)
     return merged
+
+
+def merge_intervals_by_source_scope(
+    intervals: Iterable[CoverageInterval],
+    *,
+    tolerance: timedelta = INTERVAL_ADJACENCY_TOLERANCE,
+) -> list[CoverageInterval]:
+    """Merge intervals only when their source scopes match exactly.
+
+    Dataset coverage is displayed as a union across sources. That remains
+    useful for reporting, but a row-level backfill action must keep the source
+    scope that produced the gap. Otherwise adjacent gaps from two sources turn
+    into one broad actionable range.
+    """
+
+    by_source_scope: dict[tuple[str, ...], list[CoverageInterval]] = defaultdict(list)
+    for interval in intervals:
+        source_scope = tuple(sorted(set(interval.source_ids)))
+        by_source_scope[source_scope].append(interval)
+
+    return sorted(
+        (
+            merged
+            for scoped_intervals in by_source_scope.values()
+            for merged in merge_intervals(scoped_intervals, tolerance=tolerance)
+        ),
+        key=lambda interval: (interval.since, interval.before, interval.source_ids),
+    )
 
 
 def subtract_intervals(
@@ -1512,44 +1547,79 @@ def _data_basis_for_config(config: SyncConfiguration, scope: EffectiveScope) -> 
 
 
 def _canonical_backfill_windows(
-    datasets: Sequence[_DatasetCoverage],
+    pair_coverages: Sequence[_PairCoverage],
 ) -> list[dict[str, Any]]:
-    """Return inclusive date windows the existing backfill action can submit.
+    """Return exact, source/dataset-scoped actionable coverage windows.
 
-    Coverage intervals are half-open datetimes while the backfill endpoint is
-    inclusive by calendar date. An exclusive midnight boundary therefore maps
-    to the preceding date; any later time maps to its own calendar date.
+    Boundaries are emitted verbatim, at whatever instant the coverage interval
+    actually has. An earlier revision emitted a suggestion only when both
+    boundaries fell on exact UTC midnight; coverage intervals derive from sync
+    run unit windows, which start whenever a sync happened, so that gate
+    matched 0 of 138 real intervals in a populated org and the feature could
+    never produce a suggestion (CHAOS-3915).
+
+    Sub-day and off-midnight windows are safe to advertise because the planner
+    honours them: ``_backfill_windows`` chunks on whole days but
+    ``_chunk_to_window`` keeps the requested instants at the outer edges, so a
+    02:46:06.501450 boundary is planned as 02:46:06.501450, and a window inside
+    a single day still yields one unit rather than none.
+
+    Intervals no wider than ``INTERVAL_ADJACENCY_TOLERANCE`` are dropped. They
+    are not gaps: they are the seam between two ranges the merge step already
+    treats as adjacent, and they show up as ``23:59:59.999999 -> 00:00:00``
+    where one day-bounded window meets the next. On real data 66 of 114
+    candidate windows were exactly one microsecond wide, so advertising them
+    would hand the operator 66 buttons that each plan a run covering no time
+    at all. This subsumes the empty-interval case, which
+    BackfillSelectorRequest would reject outright with a 422.
     """
 
-    candidates: list[dict[str, Any]] = []
-    for dataset in datasets:
-        for interval, reason in (
-            *((interval, "gap") for interval in dataset.gaps),
-            *((interval, "failed") for interval in dataset.failed_ranges),
-        ):
-            inclusive_before = (
-                interval.before - timedelta(microseconds=1)
-                if interval.before.time() == time.min
-                else interval.before
+    candidates_by_scope: dict[
+        tuple[datetime, datetime, str, str], set[Literal["gap", "failed"]]
+    ] = defaultdict(set)
+    for pair in pair_coverages:
+        for interval in pair.gaps:
+            since = ensure_utc(interval.since)
+            before = ensure_utc(interval.before)
+            if before - since <= INTERVAL_ADJACENCY_TOLERANCE:
+                continue
+            candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
+                "gap"
             )
-            candidates.append(
-                {
-                    "since": interval.since.date(),
-                    "before": inclusive_before.date(),
-                    "reasons": [reason],
-                }
+        for interval in pair.failed_ranges:
+            since = ensure_utc(interval.since)
+            before = ensure_utc(interval.before)
+            if before - since <= INTERVAL_ADJACENCY_TOLERANCE:
+                continue
+            candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
+                "failed"
             )
-    candidates.sort(key=lambda item: (item["since"], item["before"]))
-    merged: list[dict[str, Any]] = []
-    for candidate in candidates:
-        if merged and candidate["since"] <= merged[-1]["before"] + timedelta(days=1):
-            merged[-1]["before"] = max(merged[-1]["before"], candidate["before"])
-            merged[-1]["reasons"] = sorted(
-                set(merged[-1]["reasons"]).union(candidate["reasons"])
-            )
-            continue
-        merged.append(candidate)
-    return merged
+
+    candidates = [
+        {
+            "since": since,
+            "before": before,
+            "source_ids": [source_id],
+            "dataset_keys": [dataset_key],
+            "reasons": sorted(reasons),
+        }
+        for (
+            since,
+            before,
+            source_id,
+            dataset_key,
+        ), reasons in candidates_by_scope.items()
+    ]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["since"],
+            item["before"],
+            item["dataset_keys"],
+            item["source_ids"],
+            item["reasons"],
+        ),
+    )
 
 
 def _sync_coverage_lock_name(org_id: str, sync_config_id: uuid.UUID) -> str:
@@ -1840,7 +1910,9 @@ def build_coverage_summary_payload(
         covered = merge_intervals(
             interval for pair in pairs for interval in pair.covered
         )
-        gaps = merge_intervals(interval for pair in pairs for interval in pair.gaps)
+        gaps = merge_intervals_by_source_scope(
+            interval for pair in pairs for interval in pair.gaps
+        )
         failed_ranges = merge_intervals(
             interval for pair in pairs for interval in pair.failed_ranges
         )
@@ -1990,7 +2062,7 @@ def build_coverage_summary_payload(
             for dataset_key in sorted(not_enabled_dataset_keys)
         ],
         "sources": source_payloads,
-        "backfill_windows": _canonical_backfill_windows(datasets),
+        "backfill_windows": _canonical_backfill_windows(pair_coverages),
     }
 
 
@@ -2181,7 +2253,14 @@ async def build_sync_coverage_summary(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return an O(1) read of the background-built durable projection."""
+    """Return the latest O(1) durable projection, including during refresh.
+
+    Invalidation marks the existing payload as needing replacement; it does not
+    erase the last completed coverage state. Serving that payload with an
+    explicit refresh marker keeps navigation and reloads truthful while the
+    background builder prepares its successor. A genuinely cold config still
+    raises ``SyncCoveragePendingError``.
+    """
 
     started_at = monotonic()
     log_context = {
@@ -2198,7 +2277,6 @@ async def build_sync_coverage_summary(
                 SyncCoverageProjection.history_lookback_days == lookback_days,
                 SyncCoverageProjection.projection_version
                 == SYNC_COVERAGE_PROJECTION_VERSION,
-                SyncCoverageProjection.invalidated_at.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -2206,6 +2284,7 @@ async def build_sync_coverage_summary(
         logger.info("sync_coverage_projection_pending", extra=log_context)
         raise SyncCoveragePendingError("Coverage is being prepared. Retry shortly.")
     payload = dict(projection.payload)
+    payload["projection_refreshing"] = projection.invalidated_at is not None
     logger.info(
         "sync_coverage_summary_completed",
         extra={
@@ -2214,6 +2293,7 @@ async def build_sync_coverage_summary(
             "gap_count": payload["overall"]["gap_count"],
             "failed_range_count": payload["overall"]["failed_range_count"],
             "projection_version": payload["projection_version"],
+            "projection_refreshing": payload["projection_refreshing"],
         },
     )
     return payload

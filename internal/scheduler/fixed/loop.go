@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,12 @@ type LoopConfig struct {
 	StepTimeout  time.Duration
 	MaxBackoff   time.Duration
 	Registry     *health.Registry
+	// Logger names the schedules that fail a window. It is optional so tests
+	// and embedders need not supply one; a nil Logger discards. Without it a
+	// loop can fail every window forever and emit nothing at all, which is how
+	// a single non-conformant organization row silently held this scheduler
+	// unready (CHAOS-3903).
+	Logger *slog.Logger
 }
 
 // DefaultLoopConfig is the production cadence. The poll interval is far
@@ -94,12 +101,13 @@ type scheduleState struct {
 	failures   uint64
 	overdue    bool
 	missingFor time.Duration
-	// degraded names a bounded, named non-fatal condition reported by a producer,
+	// degraded caches the newest durable, named non-fatal condition reported by a producer,
 	// for example a report run whose durable handoff has exhausted its delivery
 	// budget. It may coexist with produced work, so it is NOT a "no work" marker —
 	// an ordinary SkipReason is deliberately never promoted here, because this value
 	// persists until the schedule next evaluates and a skip would latch for a full
-	// period. It holds the last EVALUATED verdict, not the current instant.
+	// period. The occurrence ledger is authoritative; this value is only the
+	// latest successfully read snapshot used by the synchronous metrics writer.
 	degraded string
 	// coldStarts counts baseline records, which are expected exactly once per
 	// schedule on a new deployment and never again.
@@ -278,17 +286,35 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	}
 	loop.record(result, now)
 	if result.Failed() {
+		// Name every schedule that failed and why. Schedule IDs are declared
+		// compile-time constants, and the errors underneath are domain
+		// validation and durability failures that name fields and rules rather
+		// than values, so this is bounded operator detail, not a payload dump.
+		for _, schedule := range result.Schedules {
+			if schedule.Err == nil {
+				continue
+			}
+			loop.logger().ErrorContext(
+				parent, "fixed schedule failed",
+				"schedule", schedule.ScheduleID,
+				"error", schedule.Err.Error(),
+			)
+		}
 		return result.Err()
 	}
 	if overdue := loop.overdueSchedules(); len(overdue) > 0 {
 		return fmt.Errorf("%w: %s", errScheduleOverdue, strings.Join(overdue, ", "))
 	}
 	loop.mu.Lock()
+	if loop.stopping {
+		loop.mu.Unlock()
+		return context.Canceled
+	}
 	loop.windows++
 	loop.consecutive = 0
 	loop.lastOK, loop.up = now.UTC(), true
-	loop.mu.Unlock()
 	loop.ready.Store(true)
+	loop.mu.Unlock()
 	return nil
 }
 
@@ -311,12 +337,10 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 		state.handoffs += uint64(schedule.Handoffs)
 		state.skipped += uint64(schedule.Skipped)
 		state.missingFor = schedule.MissingFor
-		// Only a window that actually evaluated this schedule may change its
-		// degraded verdict. The loop polls far more often than any schedule is due,
-		// so overwriting unconditionally cleared a live reason on the very next
-		// poll: a permanent fault stayed visible for one poll interval and was
-		// missed by any realistic scrape.
-		if schedule.Evaluated {
+		// Every successful ledger read replaces this process's cache, including an
+		// empty verdict that clears a resolved condition. A failed read retains the
+		// last known value and closes the window instead of exporting a false clear.
+		if schedule.DegradedLoaded {
 			state.degraded = schedule.Degraded
 		}
 		if schedule.ColdStart {
@@ -359,6 +383,16 @@ func (loop *Loop) backoff() time.Duration {
 		return loop.config.MaxBackoff
 	}
 	return delay
+}
+
+// logger is nil-safe: an unset Logger discards rather than panicking, and
+// never falls back to slog.Default(), so an embedder cannot be surprised by
+// scheduler output appearing on a logger it did not choose.
+func (loop *Loop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *Loop) setFailed() {
@@ -416,11 +450,11 @@ func (loop *Loop) Shutdown(ctx context.Context) error {
 	if loop == nil || ctx == nil {
 		return ErrEngineUnavailable
 	}
-	loop.setFailed()
 	loop.mu.Lock()
 	loop.stopping = true
 	cancel, ticker, done := loop.cancel, loop.ticker, loop.done
 	loop.mu.Unlock()
+	loop.setFailed()
 	if ticker != nil {
 		ticker.Stop()
 	}
@@ -497,8 +531,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	// across the many polls that do not evaluate this schedule, so it describes the
 	// most recent verdict rather than this instant — and for an infrequent schedule
 	// that verdict can be up to a full period old. An operator reading it as current
-	// would draw the wrong conclusion. It is also process-local, so replicas can
-	// disagree and a restart begins empty (CHAOS-3161).
+	// would draw the wrong conclusion. Every loop refreshes this snapshot from the
+	// shared occurrence ledger, so replicas and restarted processes converge.
 	text.WriteString("# HELP fixed_scheduler_schedule_degraded Whether a schedule reported a bounded, named non-fatal condition at its last evaluation; it may coexist with produced work.\n# TYPE fixed_scheduler_schedule_degraded gauge\n")
 	for _, identifier := range identifiers {
 		reason := snapshot[identifier].degraded

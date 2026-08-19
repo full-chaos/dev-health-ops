@@ -12,6 +12,9 @@ from dev_health_ops.credentials.resolver import (
     resolve_gitlab_url,
 )
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
+from dev_health_ops.providers.github.work_item_options import (
+    canonical_github_work_item_runtime_options,
+)
 from dev_health_ops.providers.usage import (
     PROVIDER_USAGE_OBSERVATION_KEY,
     attach_partial_observations,
@@ -168,7 +171,7 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
     credentials = pagerduty_credentials_from_mapping(_credentials_mapping(context))
     if credentials is None:
         raise ValueError("Missing PagerDuty credentials for dataset unit")
-    auth: PagerDutyAuth
+    auth: PagerDutyAuth | None = None
     match credentials.auth_mode:
         case "oauth" | "client_credentials" as auth_mode:
             access_token = credentials.access_token
@@ -195,6 +198,8 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
                 )
         case auth_mode:
             raise ValueError(f"Unsupported PagerDuty auth mode: {auth_mode}")
+    if auth is None:
+        raise ValueError("PagerDuty dataset unit requires a supported auth mode")
     provider_instance_id = (
         credentials.subdomain.strip() if credentials.subdomain else ""
     )
@@ -292,14 +297,40 @@ def _work_item_kwargs(context: SyncTaskContext) -> dict[str, Any]:
             "gitlab_url": gitlab_url,
         }
     if context.provider == "github":
-        flags = _explicit_flags(context)
-        kwargs["include_issues"] = context.dataset_key in _WORK_ITEM_DATASETS
-        # CHAOS-646: only ingest PRs as work items when the PRS dataset is also
-        # enabled for this config. The planner stamps ``sync_prs`` on the github
-        # work-items unit (False when PRs are not selected); None would let the
-        # provider fall back to the GITHUB_INCLUDE_PRS env default (PRs ON).
-        kwargs["include_pull_requests"] = flags["sync_prs"]
+        kwargs.update(
+            {
+                name: value
+                for name, value in _github_work_item_options(context).items()
+                if value is not None
+            }
+        )
     return kwargs
+
+
+def _github_work_item_options(context: SyncTaskContext) -> dict[str, Any]:
+    """Return the runtime controls frozen onto a GitHub work-items claim."""
+    flags = _explicit_flags(context)
+    raw_dataset_options = getattr(context, "dataset_options", None)
+    if raw_dataset_options is None:
+        dataset_options: dict[str, Any] = {}
+    elif isinstance(raw_dataset_options, dict):
+        dataset_options = raw_dataset_options
+    else:
+        raise ValueError("GitHub work-items dataset_options must be a mapping")
+
+    runtime_options = canonical_github_work_item_runtime_options(dataset_options)
+
+    # Keep this literal exhaustive: the live Python-Go oracle reflects these
+    # keys from production rather than maintaining a hand-selected field list.
+    return {
+        "include_issues": context.dataset_key in _WORK_ITEM_DATASETS,
+        # CHAOS-646: only ingest PRs as work items when the PRS dataset is also
+        # enabled for this config. None would re-enable the environment default.
+        "include_pull_requests": flags["sync_prs"],
+        "fetch_comments": runtime_options["fetch_comments"],
+        "fetch_milestones": runtime_options["fetch_milestones"],
+        "comments_limit": runtime_options["comments_limit"],
+    }
 
 
 def _run_github_dataset(
@@ -318,8 +349,8 @@ def _run_github_dataset(
     # though the raise unwinds through run_async below.
     usage_sink: list[dict[str, Any]] = []
 
-    async def _handler(store: Any) -> None:
-        await process_github_repo(
+    async def _handler(store: Any) -> Any:
+        return await process_github_repo(
             store=store,
             owner=owner,
             repo_name=repo_name,
@@ -345,7 +376,9 @@ def _run_github_dataset(
         )
 
     try:
-        run_async(_run_with_reused_or_new_store(context, runtime, _handler))
+        inventory_status = run_async(
+            _run_with_reused_or_new_store(context, runtime, _handler)
+        )
     except Exception as exc:
         _attach_usage_sink_to_exception(exc, usage_sink)
         raise
@@ -366,6 +399,9 @@ def _run_github_dataset(
     }
     if usage_sink:
         result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: list(usage_sink)}
+    if context.dataset_key == DatasetKey.FILES.value:
+        if inventory_status is not None:
+            result["inventory_status"] = str(inventory_status)
     return result
 
 

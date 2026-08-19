@@ -25,20 +25,16 @@ const testContractRoot = "../../" + defaultContractRoot
 // It exists because ScheduleCoverage does not and cannot catch this. That test
 // proves every legacy Beat entry maps to an owner with a matching cadence, zone
 // and catch-up policy — an OWNERSHIP property. It never constructs a producer,
-// so a schedule whose producer fails every invocation passes it unchanged. Three
+// so a schedule whose producer fails every invocation passes it unchanged. Two
 // did, for long enough that their tickets were closed as done.
 //
 // Pinning the set here closes the loophole in both directions: adding a stub, or
 // forgetting to remove one after building the real producer, both fail the
 // build. It is deliberately data rather than a comment so the remaining gap is
 // visible to anyone reading the test output, not only to someone reading
-// buildFixedScheduleProducers.
-var checkedInUnbuiltSchedules = map[string]string{
-	"daily_metrics_fanout": "blocked: repository identity is ClickHouse-only and this process has no " +
-		"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-	"scheduled_metrics_dispatch": "blocked on the same ClickHouse-only repository discovery; separately, no " +
-		"code path creates a job_type='metrics' ScheduledJob for it to sweep",
-}
+// buildFixedScheduleProducers. It is empty only when every declared schedule
+// is executable.
+var checkedInUnbuiltSchedules = map[string]string{}
 
 // unconnectedPool is a constructed but never-dialled pool. The stores
 // buildFixedScheduleProducers wires reject a nil pool at construction, and
@@ -215,18 +211,24 @@ func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = refuseUnbuiltFixedSchedules(producers, schedules)
-	if err == nil {
-		t.Fatal("the runtime was accepted while schedules were unbuilt")
-	}
-	if !errors.Is(err, errFixedScheduleUnbuilt) {
-		t.Fatalf("error = %v, want an unbuilt-schedule refusal", err)
-	}
-	for id, reason := range checkedInUnbuiltSchedules {
-		if !strings.Contains(err.Error(), id) {
-			t.Errorf("refusal does not name unbuilt schedule %s: %v", id, err)
+	if len(checkedInUnbuiltSchedules) == 0 {
+		if err != nil {
+			t.Fatalf("the runtime was refused after every checked schedule was built: %v", err)
 		}
-		if !strings.Contains(err.Error(), reason) {
-			t.Errorf("refusal does not carry the reason for %s: %v", id, err)
+	} else {
+		if err == nil {
+			t.Fatal("the runtime was accepted while schedules were unbuilt")
+		}
+		if !errors.Is(err, errFixedScheduleUnbuilt) {
+			t.Fatalf("error = %v, want an unbuilt-schedule refusal", err)
+		}
+		for id, reason := range checkedInUnbuiltSchedules {
+			if !strings.Contains(err.Error(), id) {
+				t.Errorf("refusal does not name unbuilt schedule %s: %v", id, err)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("refusal does not carry the reason for %s: %v", id, err)
+			}
 		}
 	}
 	// A fully built set must be accepted, or the gate would refuse the runtime
@@ -238,6 +240,15 @@ func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
 	heartbeat := scheduleWithID(t, schedules, "phone_home_heartbeat")
 	if err := refuseUnbuiltFixedSchedules(built, []schedulerfixed.Schedule{heartbeat}); err != nil {
 		t.Fatalf("a fully built schedule set was refused: %v", err)
+	}
+	stub, err := schedulerfixed.NewProducerSet(
+		schedulerfixed.NewNotImplementedProducer(schedulerfixed.ProducerHeartbeat, "test stub"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseUnbuiltFixedSchedules(stub, []schedulerfixed.Schedule{heartbeat}); !errors.Is(err, errFixedScheduleUnbuilt) {
+		t.Fatalf("unbuilt producer error = %v, want unbuilt-schedule refusal", err)
 	}
 }
 

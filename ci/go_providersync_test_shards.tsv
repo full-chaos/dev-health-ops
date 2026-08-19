@@ -1,0 +1,15 @@
+# CHAOS-3141 deterministic top-level-test weights for providersync integration CI.
+#
+# internal/providersync alone exceeded the unchanged 25-minute workflow cap in
+# PR #1735. Its top-level tests are therefore assigned independently from the
+# other integration packages. ci/check_go.sh discovers the complete executable
+# test-name set from `go test -list`, identifies the active integration-tagged
+# source files through `go list`, and applies these relative weights before
+# deterministic longest-processing-time-first assignment.
+#
+# These are intentionally relative source classes, not invented wall-clock
+# seconds: integration-tagged tests dominate container-backed runtime, while
+# ordinary tests are retained in the exact-once partition at the base weight.
+shards	4
+integration-test-weight	100
+ordinary-test-weight	1

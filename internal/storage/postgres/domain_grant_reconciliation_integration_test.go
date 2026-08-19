@@ -69,10 +69,63 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
-			// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
-			// and fixed_schedule_occurrences moved to coordinatorPosture
-			// entirely under the Option B split and no longer appear here —
-			// the domain role has no grant on any of them.
+			// The native coverage projector reads fixed-schedule state on the
+			// domain worker. Report terminalization also clears next_run_at through
+			// the immutable occurrence link so the scheduler recomputes it.
+			name: "scheduled_jobs",
+			ddl: `CREATE TABLE public.scheduled_jobs (
+				id uuid PRIMARY KEY, org_id text NOT NULL, job_type text NOT NULL,
+				schedule_cron text NOT NULL, status integer NOT NULL DEFAULT 0,
+				sync_config_id uuid, next_run_at timestamptz,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT EXISTS (SELECT 1 FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync')",
+				"SELECT schedule_cron, next_run_at FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync' AND status = 0 ORDER BY next_run_at ASC NULLS LAST, created_at DESC LIMIT 1",
+				"UPDATE public.scheduled_jobs SET next_run_at = NULL, updated_at = now() WHERE id = gen_random_uuid()",
+			},
+		},
+		{
+			name: "scheduled_report_occurrences",
+			ddl: `CREATE TABLE public.scheduled_report_occurrences (
+				occurrence_id text PRIMARY KEY, scheduled_job_id uuid NOT NULL)`,
+			exercise: []string{
+				"SELECT occurrence_id, scheduled_job_id FROM public.scheduled_report_occurrences LIMIT 1",
+			},
+		},
+		{
+			name: "backfill_jobs",
+			ddl: `CREATE TABLE public.backfill_jobs (
+				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
+				celery_task_id text, since_date date NOT NULL, before_date date NOT NULL,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT id, celery_task_id, since_date, before_date FROM public.backfill_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND before_date >= CURRENT_DATE",
+				"SELECT max(updated_at) FROM public.backfill_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND before_date >= CURRENT_DATE",
+			},
+		},
+		{
+			name: "sync_coverage_projections",
+			ddl: `CREATE TABLE public.sync_coverage_projections (
+				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
+				history_lookback_days integer NOT NULL, projection_version integer NOT NULL,
+				generated_at timestamptz NOT NULL, source_updated_at timestamptz,
+				backfill_updated_at timestamptz, invalidated_at timestamptz, payload json NOT NULL,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+				UNIQUE (org_id, sync_config_id, history_lookback_days))`,
+			exercise: []string{
+				`INSERT INTO public.sync_coverage_projections
+					(id, org_id, sync_config_id, history_lookback_days, projection_version,
+					 generated_at, payload, created_at, updated_at)
+				 VALUES (gen_random_uuid(), 'o', gen_random_uuid(), 3650, 1, now(), '{}'::json, now(), now())`,
+				"SELECT payload FROM public.sync_coverage_projections WHERE org_id = 'o'",
+				"UPDATE public.sync_coverage_projections SET invalidated_at = NULL, updated_at = now() WHERE org_id = 'o'",
+			},
+		},
+		{
+			// worker_job_routes, scheduled_sync_occurrences, and
+			// fixed_schedule_occurrences moved to coordinatorPosture entirely
+			// under the Option B split and no longer appear here. scheduled_jobs
+			// remains dual-role for coverage reads and report marker invalidation.
 			name: "organizations",
 			ddl: "CREATE TABLE public.organizations (id uuid PRIMARY KEY, " +
 				"is_active boolean NOT NULL, tier text NOT NULL DEFAULT 'community')",
@@ -204,6 +257,44 @@ func reconciliationTables() []domainTable {
 				"DELETE FROM public.provider_rate_limit_observations WHERE id = gen_random_uuid()",
 			},
 		},
+		{
+			// Added after a FOR UPDATE on this table shipped to production and
+			// failed with "permission denied" on every re-prepare. The static
+			// analyzer could not see it: both the INSERT and the locking read
+			// live inside a closure passed to mutateGenerationJournalTx, so
+			// they came through as UNRESOLVED evidence -- and the analyzer then
+			// emitted an over-grant ADVISORY on INSERT, which was the
+			// fingerprint of an unanalyzed path rather than a real over-grant.
+			//
+			// Executing the statements under the restricted role is the check
+			// that does not care whether a call site is reachable by static
+			// analysis. All four shapes below are the real ones, including the
+			// read-back SELECT that must NOT carry a row-locking clause: the
+			// domain role has no UPDATE here, and PostgreSQL treats FOR UPDATE
+			// and FOR SHARE as UPDATE-class privileges.
+			name: "sync_run_unit_effect_snapshots",
+			ddl: `CREATE TABLE public.sync_run_unit_effect_snapshots (
+				org_id text NOT NULL, sync_run_unit_id uuid NOT NULL,
+				generation text NOT NULL, provider text NOT NULL,
+				dataset_key text NOT NULL, schema_version text NOT NULL,
+				content_digest varchar(64) NOT NULL, payload_bytes integer NOT NULL,
+				payload bytea NOT NULL, created_at timestamptz NOT NULL,
+				PRIMARY KEY (org_id, sync_run_unit_id, generation))`,
+			exercise: []string{
+				"INSERT INTO public.sync_run_unit_effect_snapshots (" +
+					"org_id, sync_run_unit_id, generation, provider, dataset_key, " +
+					"schema_version, content_digest, payload_bytes, payload, created_at) " +
+					"VALUES ('org-acme', gen_random_uuid(), 'g', 'github', 'work-items', " +
+					"'v1', repeat('a', 64), 2, '\\x7b7d'::bytea, now())",
+				"SELECT schema_version, content_digest, payload_bytes, payload " +
+					"FROM public.sync_run_unit_effect_snapshots " +
+					"WHERE org_id = 'org-acme' AND generation = 'g'",
+				"SELECT snapshot.payload FROM public.sync_run_unit_effect_snapshots AS snapshot " +
+					"WHERE snapshot.org_id = 'org-acme' AND snapshot.dataset_key = 'work-items'",
+				"DELETE FROM public.sync_run_unit_effect_snapshots " +
+					"WHERE org_id = 'org-acme' AND generation = 'g'",
+			},
+		},
 	}
 }
 
@@ -261,7 +352,11 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		`CREATE TABLE public.integration_credentials (
+			id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
+			is_active boolean NOT NULL, config json, credentials_encrypted text
+		)`,
+		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		// Carries the columns syncroute's real route-mutation statements name,
 		// so a privilege denial cannot be mistaken for an undefined column
@@ -276,8 +371,29 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Chunked provider persistence (migration 0102). These must exist BEFORE
+		// the grants run: every domain GRANT is wrapped in a to_regclass guard, so
+		// an absent table silently skips its grant while domainPosture() still
+		// requires it -- which is exactly how CheckDomainAuthorization came to
+		// fail here for every test in this file.
+		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
-		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Production-shaped enough for the reconciler materializer privilege proof:
+		// PostgreSQL resolves every named column and the ON CONFLICT arbiter before
+		// checking INSERT, so a one-column stand-in could only prove a 42703.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id uuid NOT NULL,
+			sync_run_id uuid NOT NULL,
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		// Production column shape, not a stub: the fixed-schedule engine's
 		// handoff INSERT names every one of these columns, and an undefined
 		// column (42703) is raised during parse analysis BEFORE the permission
@@ -304,7 +420,13 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		)`,
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		`CREATE TABLE public.daily_metrics_runs (
+			id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL,
+			generation text NOT NULL, status text NOT NULL,
+			finalization_status text NOT NULL, created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (org_id, target_day, generation)
+		)`,
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
@@ -318,7 +440,11 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		)`,
 		`CREATE TABLE public.org_licenses (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id uuid NOT NULL UNIQUE,
-			tier text NOT NULL, features_override json
+			tier text NOT NULL, features_override json, limits_override json
+		)`,
+		`CREATE TABLE public.tier_limits (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tier text NOT NULL,
+			limit_key text NOT NULL, limit_value text
 		)`,
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
@@ -326,6 +452,13 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
+		`CREATE TABLE public.job_runs (
+			id uuid PRIMARY KEY, job_id uuid NOT NULL, status integer NOT NULL,
+			result json, triggered_by text NOT NULL, completed_at timestamptz,error text,
+			created_at timestamptz NOT NULL
+		)`,
 	} {
 		setup = append(setup, ddl)
 	}
@@ -362,6 +495,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			Privilege:  column.Privilege,
 		})
 	}
+	coordinatorSequences := append([]string(nil), coordinatorPosture.RequiredSequences...)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:                  grantSchema,
 		DomainRole:              grantDomainRole,
@@ -369,6 +503,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		CoordinatorRole:         grantCoordinatorRole,
 		CoordinatorGrants:       coordinatorGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
+		CoordinatorSequences:    coordinatorSequences,
 	}); err != nil {
 		t.Fatal(err)
 	}

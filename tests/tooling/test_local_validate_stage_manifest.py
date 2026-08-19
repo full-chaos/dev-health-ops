@@ -271,7 +271,7 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
     """With every leaf gate stubbed to pass instantly (no lint/mypy/pytest/
     docker/ClickHouse actually run -- see the `--stage-manifest-probe` hook's
     own header comment in local_validate.sh), a clean run's executed-stage-id
-    set must equal the full 8-stage declared set, and the verdict line +
+    set must equal the full 9-stage declared set, and the verdict line +
     machine-readable manifest line must say so explicitly.
     """
     result = subprocess.run(

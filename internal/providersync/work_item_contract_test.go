@@ -16,8 +16,9 @@ type workItemContractVariant struct {
 	SyncPRs             bool  `json:"sync_prs"`
 	IncludeIssues       *bool `json:"include_issues"`
 	IncludePullRequests *bool `json:"include_pull_requests"`
-	HasFetchComments    bool  `json:"has_fetch_comments"`
-	HasFetchMilestones  bool  `json:"has_fetch_milestones"`
+	FetchComments       *bool `json:"fetch_comments"`
+	FetchMilestones     *bool `json:"fetch_milestones"`
+	CommentsLimit       *int  `json:"comments_limit"`
 }
 
 type workItemContractEntry struct {
@@ -53,16 +54,18 @@ func TestWorkItemCompatibilityContractComesFromLivePythonAdapter(t *testing.T) {
 				t.Fatalf("%s/%s entry=%+v", provider, dataset, entry)
 			}
 			for index, variant := range entry.Variants {
-				if variant.HasFetchComments || variant.HasFetchMilestones {
-					t.Fatalf("%s/%s unexpectedly partitions full work-item job: %+v", provider, dataset, variant)
-				}
 				if provider == "github" {
 					if variant.IncludeIssues == nil || !*variant.IncludeIssues ||
 						variant.IncludePullRequests == nil ||
-						*variant.IncludePullRequests != (index == 1) {
+						*variant.IncludePullRequests != (index == 1) ||
+						variant.FetchComments == nil || !*variant.FetchComments ||
+						variant.FetchMilestones == nil || !*variant.FetchMilestones ||
+						variant.CommentsLimit == nil || *variant.CommentsLimit != 500 {
 						t.Fatalf("%s/%s variant=%+v", provider, dataset, variant)
 					}
-				} else if variant.IncludeIssues != nil || variant.IncludePullRequests != nil {
+				} else if variant.IncludeIssues != nil || variant.IncludePullRequests != nil ||
+					variant.FetchComments != nil || variant.FetchMilestones != nil ||
+					variant.CommentsLimit != nil {
 					t.Fatalf("%s/%s GitLab flags drifted: %+v", provider, dataset, variant)
 				}
 			}
@@ -212,6 +215,8 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 			name:   "provider budget parity",
 			script: "python_provider_budget_oracle.py",
 			source: []string{
+				filepath.Join(root, "src", "dev_health_ops", "providers", "github", "budget.py"),
+				filepath.Join(root, "src", "dev_health_ops", "providers", "gitlab", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "linear", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "jira", "budget.py"),
 				filepath.Join(root, "src", "dev_health_ops", "providers", "launchdarkly", "budget.py"),

@@ -188,16 +188,42 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     )
 
     client = MagicMock()
-    client.iter_repo_milestones.return_value = []
-    client.iter_issues.return_value = [_issue(10)]
+    observed_at = datetime(2026, 5, 1, 14, tzinfo=timezone.utc)
+    issue = _issue(10)
+    issue.body = "depends on #9"
+    client.iter_repo_milestones.return_value = [
+        SimpleNamespace(
+            id=100,
+            number=1,
+            title="May",
+            state="open",
+            created_at=observed_at,
+            due_on=None,
+        )
+    ]
+    client.iter_issues.return_value = [issue]
     client.iter_pull_requests.return_value = [
         _pr(11, labels=["ai-assisted"]),
         _pr(12, author="claude-code[bot]"),
         _pr(13, body="Implementation details\n\nAI-Assisted-By: Claude Code"),
         _pr(14, body="Reviewed and implemented by a human."),
     ]
-    client.iter_issue_events.return_value = []
-    client.iter_issue_comments.return_value = []
+    client.iter_issue_events.return_value = [
+        SimpleNamespace(
+            event="reopened",
+            created_at=observed_at,
+            actor=_user("reopener"),
+            label=None,
+        )
+    ]
+    client.iter_issue_comments.return_value = [
+        SimpleNamespace(
+            id=200,
+            created_at=observed_at,
+            user=_user("commenter"),
+            body="following up",
+        )
+    ]
     client.iter_pr_comments_batch.return_value = []
 
     # Org-scoped runs resolve credentials org-first (ambient env no longer
@@ -229,6 +255,16 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     assert not any(
         row.subject_id == "ghpr:fullchaos/dev-health#14" for row in sink.ai_attributions
     )
+    for family in (
+        sink.work_items,
+        sink.transitions,
+        sink.dependencies,
+        sink.reopen_events,
+        sink.interactions,
+        sink.sprints,
+    ):
+        assert family
+        assert {getattr(row, "org_id") for row in family} == {str(org_id)}
 
 
 def _run_github_work_items_with_credentials(

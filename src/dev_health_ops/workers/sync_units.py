@@ -58,7 +58,7 @@ from sqlalchemy.orm import Session, SessionTransactionOrigin
 from dev_health_ops.api.services.sync_coverage import (
     invalidate_sync_coverage_projection_sync,
 )
-from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.exceptions import PaginationException, RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
     JobRun,
@@ -116,7 +116,13 @@ from dev_health_ops.workers.job_routes import (
     resolve_worker_job_route,
 )
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
-from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+from dev_health_ops.workers.provider_family_contract import (
+    validate_provider_family_claim,
+)
+from dev_health_ops.workers.provider_unit_route import (
+    ProviderUnitRouteSwitches,
+    provider_family_strict_admission_enabled,
+)
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
@@ -267,6 +273,8 @@ def _classify_error(exc: BaseException) -> str:
     """
     if isinstance(exc, CanonicalIncidentFeatureDisabledError):
         return FEATURE_DISABLED_ERROR_CATEGORY
+    if isinstance(exc, PaginationException):
+        return "pagination_incomplete"
     msg = str(exc).lower()
     for pattern, category in _PROVIDER_ERROR_PATTERNS:
         if pattern in msg:
@@ -992,26 +1000,37 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         for unit in units:
             unit_provider = str(unit.provider)
             unit_dataset = str(unit.dataset_key)
+            # Atomic provider families are admitted before transport selection,
+            # so a malformed claim can reach neither River nor rollback Celery.
+            # GitHub retains its already-landed always-exact ownership contract;
+            # the other work-item providers become strict only with their Go
+            # family switch enabled, preserving default-off D16 legacy claims.
+            strict_family = provider_family_strict_admission_enabled(
+                unit_provider, unit_dataset
+            )
+            if not validate_provider_family_claim(
+                unit_provider,
+                unit_dataset,
+                unit.processor_flags,
+                strict_atomic=strict_family,
+            ):
+                raise WorkerJobRouteError(
+                    "provider-unit claim requires the complete canonical family"
+                )
             # Routability is decided per pair, not per run: the matrix
             # (ProviderUnitRouteSwitches.is_route_ready) is the only source of
             # which pairs are even candidates, so a run mixing a route-ready
             # pair with 58 pairs the matrix has not marked ready dispatches a
             # mix of river and celery units in the same pass, by design.
-            if provider_unit_routes is not None and (
-                ProviderUnitRouteSwitches.is_route_ready(unit_provider, unit_dataset)
+            if (
+                provider_unit_routes is not None
+                and provider_unit_routes.routes_to_river(unit_provider, unit_dataset)
             ):
-                if not provider_unit_routes.routes_to_river(
-                    unit_provider, unit_dataset
-                ):
-                    # The matrix marks this pair complete and the durable
-                    # route makes the outbox transport live, but this pair's
-                    # own switch is off. That combination is an ownership
-                    # fault -- readiness and enablement fell out of step --
-                    # never a reason to silently fall back to legacy Celery
-                    # dispatch for a pair the matrix says is done.
-                    raise WorkerJobRouteError(
-                        "sync provider canary capability is unavailable"
-                    )
+                # Readiness and the pair/family switch must both select River.
+                # The `continue` is the one-writer fence: an admitted unit is
+                # staged in the durable outbox and never receives a Celery
+                # signature. A not-ready or default-off pair falls through to
+                # the existing Python writer, preserving mixed-run rollback.
                 enqueue_worker_job(
                     session,
                     ProviderUnitPayload(unit_id=str(unit.id)),

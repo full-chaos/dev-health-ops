@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +24,34 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestProductionMutationPipelineConstructsTerminalDeliveryRepair(t *testing.T) {
+	source, err := os.ReadFile("dependencies.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Count(text, "syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
+		t.Fatal("production reconciler does not construct the queue-side terminal delivery repair")
+	}
+	if !strings.Contains(text, "repair,\n\t\tterminalRepair,\n\t\tmaterializer,") {
+		t.Fatal("production mutation pipeline does not run terminal delivery recovery before materialization")
+	}
+}
+
+func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *testing.T) {
+	source, err := os.ReadFile("dependencies.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Count(text, "joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
+		t.Fatal("production generic relay does not construct provider-unit terminal delivery repair")
+	}
+	if strings.Count(text, "joboutbox.NewRelayWithRoutesAndRecovery(") != 1 {
+		t.Fatal("production generic relay does not run recovery before ordinary relay")
+	}
+}
 
 func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *testing.T) {
 	secret := "postgresql://queue:do-not-print@database.internal/app"
@@ -67,7 +96,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	database := &fakeReconcilerDatabase{}
 	calls := 0
 	syncCalls := 0
-	shadowBuilds := 0
+	mutationBuilds := 0
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
@@ -75,8 +104,11 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 			return joboutbox.StepResult{}, nil
 		}), nil
 	}
-	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
-		shadowBuilds++
+	sources.buildSyncMutation = func(
+		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
+		*syncdispatchcontract.Registry,
+	) (syncreconciler.Stepper, error) {
+		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			syncCalls++
 			return syncreconciler.Observation{}, nil
@@ -114,8 +146,8 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	if syncCalls != 1 {
 		t.Fatalf("immediate sync observer calls = %d, want 1", syncCalls)
 	}
-	if shadowBuilds != 1 {
-		t.Fatalf("sync shadow builds = %d, want 1", shadowBuilds)
+	if mutationBuilds != 1 {
+		t.Fatalf("sync mutation builds = %d, want 1", mutationBuilds)
 	}
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
@@ -191,6 +223,16 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		if err := components[index].Shutdown(context.Background()); err != nil {
 			t.Fatalf("shutdown %s: %v", components[index].Name(), err)
 		}
+	}
+}
+
+func TestSyncDispatchClaimPreservesDurableDeliveryAttempt(t *testing.T) {
+	claim := syncDispatchClaimForTransport(syncreconciler.TransportClaim{
+		ID: "10000000-0000-4000-8000-000000000001", Kind: "dispatch_sync_run",
+		RouteGeneration: 4, Attempts: 7,
+	})
+	if claim.DeliveryAttempt != 7 || claim.RouteGeneration != 4 {
+		t.Fatalf("transport claim = %#v, want attempt 7 at route generation 4", claim)
 	}
 }
 
@@ -359,12 +401,15 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	}
 }
 
-func TestReconcilerSyncShadowBuildFailureClosesDatabaseAndFailsReadiness(t *testing.T) {
+func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
-		return nil, errors.New("sync shadow construction failed")
+	sources.buildSyncMutation = func(
+		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
+		*syncdispatchcontract.Registry,
+	) (syncreconciler.Stepper, error) {
+		return nil, errors.New("sync mutation construction failed")
 	}
 
 	registry := health.NewRegistry(100 * time.Millisecond)
@@ -553,6 +598,14 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 		return syncrouteCheckFunc(func(context.Context) error { return nil }), nil
 	}
 	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
+			return syncreconciler.Observation{}, nil
+		}), nil
+	}
+	sources.buildSyncMutation = func(
+		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
+		*syncdispatchcontract.Registry,
+	) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil
 		}), nil

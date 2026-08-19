@@ -1,0 +1,315 @@
+package providerfoundation
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+)
+
+const pagerDutyOAuthRenewalWindow = 5 * time.Minute
+
+var pagerDutyOperationalReadScopes = strings.Fields(pagerDutyReadScopes)
+
+// PagerDutyOAuthTokenRecord is the encrypted token reference loaded for one
+// exact organization, provider, credential name, and OAuth binding.
+type PagerDutyOAuthTokenRecord struct {
+	Ciphertext secrets.Value
+	Version    int
+	BindingID  string
+}
+
+// PagerDutyOAuthTokenRotation is the optimistic replacement written after a
+// successful refresh. It never carries plaintext token values.
+type PagerDutyOAuthTokenRotation struct {
+	ExpectedVersion   int
+	ExpectedBindingID string
+	Ciphertext        secrets.Value
+	ExpiresAt         time.Time
+	GrantedScopes     []string
+	HasRefreshToken   bool
+}
+
+type PagerDutyOAuthTokenRepository interface {
+	Load(context.Context, string, string) (PagerDutyOAuthTokenRecord, error)
+	WithRefreshLock(
+		context.Context,
+		string,
+		string,
+		func(PagerDutyOAuthTokenRecord) (*PagerDutyOAuthTokenRotation, error),
+	) error
+}
+
+// PagerDutyOAuthHydrator resolves a tokenless OAuth descriptor through the
+// Python-owned provider_oauth_credentials store. The access token exists only
+// on the returned credential copy and is never added to the descriptor row,
+// process environment, logs, or job payload.
+type PagerDutyOAuthHydrator struct {
+	Repository      PagerDutyOAuthTokenRepository
+	Cipher          CredentialCipher
+	Doer            HTTPDoer
+	AppClientID     secrets.Value
+	AppClientSecret secrets.Value
+	Now             func() time.Time
+}
+
+type pagerDutyOAuthTokens struct {
+	AccessToken   string    `json:"access_token"`
+	RefreshToken  *string   `json:"refresh_token"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	GrantedScopes []string  `json:"granted_scopes"`
+}
+
+func (h PagerDutyOAuthHydrator) Hydrate(
+	ctx context.Context,
+	lease LeaseGuard,
+	scope TenantScope,
+	credential Credential,
+) (Credential, error) {
+	if credential.Provider != "pagerduty" || credentialValue(credential, "auth_mode") != "oauth" {
+		return credential, nil
+	}
+	if token, exists := credential.Secret("access_token"); exists && token.Configured() {
+		return credential, nil
+	}
+	if ctx == nil || lease == nil || h.Repository == nil || h.Cipher == nil {
+		return Credential{}, ErrCredentialInvalid
+	}
+	credentialName := credentialValue(credential, "oauth_credential_name")
+	bindingID := credentialValue(credential, "oauth_binding_id")
+	if scope.Provider != "pagerduty" || credentialName == "" || bindingID == "" {
+		return Credential{}, ErrCredentialInvalid
+	}
+	if err := lease.Assert(ctx); err != nil {
+		return Credential{}, err
+	}
+	record, err := h.Repository.Load(ctx, scope.OrgID, credentialName)
+	if err != nil {
+		return Credential{}, err
+	}
+	tokens, err := h.decode(ctx, lease, record, bindingID)
+	if err != nil {
+		return Credential{}, err
+	}
+	if !hasPagerDutyOperationalReadScopes(tokens.GrantedScopes) {
+		return Credential{}, ErrCredentialInvalid
+	}
+	if tokens.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {
+		return credential.WithEphemeralSecret(
+			"access_token", secrets.NewValue(tokens.AccessToken),
+		)
+	}
+	return h.refreshLocked(ctx, lease, scope.OrgID, credentialName, bindingID, credential)
+}
+
+func (h PagerDutyOAuthHydrator) decode(
+	ctx context.Context,
+	lease LeaseGuard,
+	record PagerDutyOAuthTokenRecord,
+	expectedBindingID string,
+) (pagerDutyOAuthTokens, error) {
+	if record.Version < 1 || record.BindingID != expectedBindingID ||
+		!record.Ciphertext.Configured() {
+		return pagerDutyOAuthTokens{}, ErrCredentialInvalid
+	}
+	if err := lease.Assert(ctx); err != nil {
+		return pagerDutyOAuthTokens{}, err
+	}
+	plaintext, err := h.Cipher.Decrypt(record.Ciphertext)
+	if err != nil {
+		return pagerDutyOAuthTokens{}, ErrCredentialInvalid
+	}
+	var tokens pagerDutyOAuthTokens
+	if json.Unmarshal(plaintext, &tokens) != nil ||
+		strings.TrimSpace(tokens.AccessToken) == "" || tokens.ExpiresAt.IsZero() {
+		return pagerDutyOAuthTokens{}, ErrCredentialInvalid
+	}
+	tokens.GrantedScopes = normalizedPagerDutyScopes(tokens.GrantedScopes)
+	return tokens, nil
+}
+
+func (h PagerDutyOAuthHydrator) refreshLocked(
+	ctx context.Context,
+	lease LeaseGuard,
+	orgID string,
+	credentialName string,
+	bindingID string,
+	credential Credential,
+) (Credential, error) {
+	var hydrated Credential
+	err := h.Repository.WithRefreshLock(
+		ctx,
+		orgID,
+		credentialName,
+		func(record PagerDutyOAuthTokenRecord) (*PagerDutyOAuthTokenRotation, error) {
+			current, err := h.decode(ctx, lease, record, bindingID)
+			if err != nil {
+				return nil, err
+			}
+			if !hasPagerDutyOperationalReadScopes(current.GrantedScopes) {
+				return nil, ErrCredentialInvalid
+			}
+			if current.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {
+				hydrated, err = credential.WithEphemeralSecret(
+					"access_token", secrets.NewValue(current.AccessToken),
+				)
+				return nil, err
+			}
+			var rotation PagerDutyOAuthTokenRotation
+			hydrated, rotation, err = h.refreshTokens(ctx, lease, credential, record, current)
+			if err != nil {
+				return nil, err
+			}
+			return &rotation, nil
+		},
+	)
+	if err != nil {
+		return Credential{}, err
+	}
+	return hydrated, nil
+}
+
+func (h PagerDutyOAuthHydrator) refreshTokens(
+	ctx context.Context,
+	lease LeaseGuard,
+	credential Credential,
+	record PagerDutyOAuthTokenRecord,
+	current pagerDutyOAuthTokens,
+) (Credential, PagerDutyOAuthTokenRotation, error) {
+	if h.Doer == nil || !h.AppClientID.Configured() || current.RefreshToken == nil ||
+		strings.TrimSpace(*current.RefreshToken) == "" {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	if err := lease.Assert(ctx); err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {h.AppClientID.Reveal()},
+		"client_secret": {h.AppClientSecret.Reveal()},
+		"refresh_token": {*current.RefreshToken},
+	}
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, pagerDutyTokenURL, strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := h.Doer.Do(request)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, &ProviderError{Class: ErrorTransient}
+	}
+	defer response.Body.Close()
+	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, classification
+	}
+	var payload struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    any    `json:"expires_in"`
+		Scope        string `json:"scope"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, maxProviderErrorBody)).Decode(&payload) != nil ||
+		strings.TrimSpace(payload.AccessToken) == "" {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	expiresIn := pagerDutyExpiresIn(payload.ExpiresIn)
+	refreshed := pagerDutyOAuthTokens{
+		AccessToken: payload.AccessToken,
+		ExpiresAt:   h.now().Add(time.Duration(expiresIn) * time.Second),
+	}
+	if payload.RefreshToken == "" {
+		refreshed.RefreshToken = current.RefreshToken
+	} else {
+		refreshed.RefreshToken = &payload.RefreshToken
+	}
+	if strings.TrimSpace(payload.Scope) == "" {
+		refreshed.GrantedScopes = current.GrantedScopes
+	} else {
+		refreshed.GrantedScopes = normalizedPagerDutyScopes(strings.Fields(payload.Scope))
+	}
+	if !hasPagerDutyOperationalReadScopes(refreshed.GrantedScopes) {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	encoded, err := json.Marshal(refreshed)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	ciphertext, err := h.Cipher.Encrypt(encoded)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
+	}
+	if err := lease.Assert(ctx); err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
+	}
+	rotation := PagerDutyOAuthTokenRotation{
+		ExpectedVersion: record.Version, ExpectedBindingID: record.BindingID,
+		Ciphertext: ciphertext, ExpiresAt: refreshed.ExpiresAt,
+		GrantedScopes: refreshed.GrantedScopes, HasRefreshToken: refreshed.RefreshToken != nil,
+	}
+	hydrated, err := credential.WithEphemeralSecret(
+		"access_token", secrets.NewValue(refreshed.AccessToken),
+	)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
+	}
+	return hydrated, rotation, nil
+}
+
+func (h PagerDutyOAuthHydrator) now() time.Time {
+	if h.Now != nil {
+		return h.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func normalizedPagerDutyScopes(scopes []string) []string {
+	result := make([]string, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		if _, exists := seen[scope]; exists {
+			continue
+		}
+		seen[scope] = struct{}{}
+		result = append(result, scope)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func hasPagerDutyOperationalReadScopes(scopes []string) bool {
+	normalized := normalizedPagerDutyScopes(scopes)
+	for _, required := range pagerDutyOperationalReadScopes {
+		if !slices.Contains(normalized, required) {
+			return false
+		}
+	}
+	return true
+}
+
+func pagerDutyExpiresIn(value any) int {
+	var seconds int
+	switch typed := value.(type) {
+	case float64:
+		seconds = int(typed)
+	case string:
+		seconds, _ = strconv.Atoi(typed)
+	}
+	if seconds < 1 {
+		return 3600
+	}
+	return seconds
+}

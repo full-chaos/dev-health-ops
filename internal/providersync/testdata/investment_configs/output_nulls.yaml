@@ -1,0 +1,41 @@
+# NULL values inside an output block. `output.get("investment_area", DEFAULT)`
+# returns None for a present-but-null key -- the default is not applied -- so
+# both fields reach InvestmentClassification as None despite the dataclass
+# annotating investment_area as `str`.
+#
+# The first rule is a null output BLOCK that does not match. It is here to
+# prove the null-output AttributeError is a property of MATCHING and not of
+# being iterated past: this file must classify cleanly.
+rules:
+  - id: never_fires_with_null_output
+    priority: 10
+    match:
+      label: ["neverfires"]
+    output:
+  - id: null_output_values
+    priority: 20
+    match:
+      label: ["nullvalues"]
+    output:
+      investment_area:
+      project_stream:
+
+  # ONE null value at a time, so each field's handling is measured on its own.
+  # The both-null rule above cannot distinguish a port that reads
+  # project_stream correctly from one that reads neither: a single case over a
+  # compound condition is exactly the shape that reports coverage it does not
+  # have.
+  - id: null_project_stream_only
+    priority: 30
+    match:
+      label: ["streamnull"]
+    output:
+      investment_area: stream_null_area
+      project_stream:
+  - id: null_investment_area_only
+    priority: 40
+    match:
+      label: ["areanull"]
+    output:
+      investment_area:
+      project_stream: area_null_stream

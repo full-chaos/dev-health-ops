@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"slices"
 	"strings"
 )
 
@@ -31,10 +30,69 @@ const (
 // compiled code only: a pair may be native_go while RouteReady is still false
 // because live parity evidence has not been captured.
 var providerExecutorRegistry = map[string]ExecutorKind{
-	"launchdarkly/feature-flags": ExecutorNativeGo,
-	"github/repo-metadata":       ExecutorNativeGo,
-	"github/prs":                 ExecutorNativeGo,
-	"github/cicd":                ExecutorNativeGo,
+	"launchdarkly/feature-flags":     ExecutorNativeGo,
+	"github/repo-metadata":           ExecutorNativeGo,
+	"github/prs":                     ExecutorNativeGo,
+	"github/pr-reviews":              ExecutorNativeGo,
+	"github/pr-comments":             ExecutorNativeGo,
+	"github/cicd":                    ExecutorNativeGo,
+	"github/commits":                 ExecutorNativeGo,
+	"github/deployments":             ExecutorNativeGo,
+	"github/security":                ExecutorNativeGo,
+	"github/files":                   ExecutorNativeGo,
+	"github/commit-stats":            ExecutorNativeGo,
+	"jira/incidents":                 ExecutorNativeGo,
+	"gitlab/repo-metadata":           ExecutorNativeGo,
+	"gitlab/commits":                 ExecutorNativeGo,
+	"gitlab/commit-stats":            ExecutorNativeGo,
+	"gitlab/cicd":                    ExecutorNativeGo,
+	"gitlab/tests":                   ExecutorNativeGo,
+	"gitlab/incidents":               ExecutorNativeGo,
+	"gitlab/deployments":             ExecutorNativeGo,
+	"gitlab/feature-flags":           ExecutorNativeGo,
+	"gitlab/files":                   ExecutorNativeGo,
+	"gitlab/blame":                   ExecutorNativeGo,
+	"gitlab/prs":                     ExecutorNativeGo,
+	"gitlab/pr-reviews":              ExecutorNativeGo,
+	"gitlab/pr-comments":             ExecutorNativeGo,
+	"gitlab/security":                ExecutorNativeGo,
+	"gitlab/work-items":              ExecutorNativeGo,
+	"gitlab/work-item-labels":        ExecutorNativeGo,
+	"gitlab/work-item-projects":      ExecutorNativeGo,
+	"gitlab/work-item-history":       ExecutorNativeGo,
+	"gitlab/work-item-comments":      ExecutorNativeGo,
+	"jira/work-items":                ExecutorNativeGo,
+	"jira/work-item-labels":          ExecutorNativeGo,
+	"jira/work-item-projects":        ExecutorNativeGo,
+	"jira/work-item-history":         ExecutorNativeGo,
+	"jira/work-item-comments":        ExecutorNativeGo,
+	"linear/work-items":              ExecutorNativeGo,
+	"linear/work-item-labels":        ExecutorNativeGo,
+	"linear/work-item-projects":      ExecutorNativeGo,
+	"linear/work-item-history":       ExecutorNativeGo,
+	"linear/work-item-comments":      ExecutorNativeGo,
+	"pagerduty/services":             ExecutorNativeGo,
+	"pagerduty/business-services":    ExecutorNativeGo,
+	"pagerduty/escalation-policies":  ExecutorNativeGo,
+	"pagerduty/schedules":            ExecutorNativeGo,
+	"pagerduty/on-calls":             ExecutorNativeGo,
+	"pagerduty/users":                ExecutorNativeGo,
+	"pagerduty/teams":                ExecutorNativeGo,
+	"pagerduty/incidents":            ExecutorNativeGo,
+	"pagerduty/incident-alerts":      ExecutorNativeGo,
+	"pagerduty/incident-log-entries": ExecutorNativeGo,
+	"pagerduty/incident-notes":       ExecutorNativeGo,
+	"github/blame":                   ExecutorNativeGo,
+	"github/tests":                   ExecutorNativeGo,
+	// GitHub's five work-item dataset identities are one complete native
+	// execution family. The planner emits only a canonical `work-items` claim;
+	// the four sibling identities remain in the capability contract so their
+	// per-alias watermark/audit completion stays visible.
+	"github/work-items":         ExecutorNativeGo,
+	"github/work-item-labels":   ExecutorNativeGo,
+	"github/work-item-projects": ExecutorNativeGo,
+	"github/work-item-history":  ExecutorNativeGo,
+	"github/work-item-comments": ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -76,6 +134,16 @@ type CompleteRouteDescriptor struct {
 	// against the Python-owned sink for parity evidence. Shadow eligibility
 	// never implies routing.
 	NativeShadow bool
+	// PreparedManifestRecovery requires an exact Postgres sidecar snapshot
+	// before the first sink effect. It is currently reserved for GitHub's
+	// mutable, multi-source work-items composition and does not imply routing.
+	PreparedManifestRecovery bool
+	// Chunked opts a route into the additive durable checkpoint/sidecar path.
+	// It is independent from PreparedManifestRecovery: the former persists a
+	// sequence of bounded normalized chunks, while the latter persists one
+	// complete mutable-provider manifest.
+	Chunked      bool
+	ChunkPolicy  ChunkPolicy
 	RouteReady   bool
 	RouteEnabled bool
 }
@@ -111,27 +179,88 @@ func (descriptor CompleteRouteDescriptor) Shadow(write bool) (ShadowDescriptor, 
 // why adding github, gitlab, and pagerduty descriptors in CUT-08 cannot widen
 // the live route surface.
 type CompleteRouteSwitches struct {
+	// LocalAllRoutes is set only by the validated local GO_PROVIDER_ROUTES=all
+	// preset. Equivalent persisted aliases inherit its selected complete writer;
+	// explicit deployment switches remain identity-scoped.
+	LocalAllRoutes           bool
 	LinearWorkItems          bool
 	JiraWorkItems            bool
 	JiraIncidents            bool
 	LaunchDarklyFeatureFlags bool
 	// GithubRepoMetadata gates (github, repo-metadata) only. It must never
-	// gate gitlab/repo-metadata: GitLab has fixture fetch code only and no
-	// CompleteRouteHandler, so it stays RouteReady=false regardless of this
-	// field (see Descriptor's separate gitlab case below).
+	// gate gitlab/repo-metadata, whose independently completed route has its
+	// own switch below.
 	GithubRepoMetadata bool
-	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
-	// It must never gate github/pr-reviews or github/pr-comments: those two
-	// datasets share the "prs" legacy target and processor flag in Python
-	// (they are the SAME _sync_github_prs_to_store_async execution), but
-	// GitHubPullRequestRouteHandler only emits the git_pull_requests effect.
-	// Review-derived enrichment (first_review_at, reviews_count,
-	// changes_requested_count) and the git_pull_request_reviews table are
-	// left for github/pr-reviews, which needs its own GraphQL fetch — see
-	// deploy/go-workers/provider-sync-porting-recipe.md.
-	GithubPRs bool
-	// GithubCICD gates the isolated ci_pipeline_runs writer only.
-	GithubCICD bool
+	// GitlabRepoMetadata independently gates the native GitLab repository
+	// route. It intentionally does not share GithubRepoMetadata: the two pairs
+	// have different API and persisted-instance semantics.
+	GitlabRepoMetadata bool
+	// GitlabCommits independently gates the native GitLab commit route. It
+	// shares the git_commits destination with GitHub but not route ownership.
+	GitlabCommits bool
+	// GitlabCommitStats gates the isolated aggregate git_commit_stats writer.
+	GitlabCommitStats bool
+	// GitlabCICD and GitlabTests are mutually-exclusive aliases for the same
+	// complete TestOps writer.
+	GitlabCICD  bool
+	GitlabTests bool
+	// GitlabIncidents gates the three-destination canonical operational batch.
+	GitlabIncidents    bool
+	GitlabDeployments  bool
+	GitlabFeatureFlags bool
+	GitlabFiles        bool
+	GitlabBlame        bool
+	GitlabPRs          bool
+	GitlabPRReviews    bool
+	GitlabPRComments   bool
+	GitlabSecurity     bool
+	// GitlabWorkItems gates one canonical, atomic five-alias family. Direct
+	// alias descriptors remain ready for matrix/audit truth but disabled.
+	GitlabWorkItems bool
+	// PagerDuty incident-family identities remain independent D16 claims. The
+	// single incidents switch deliberately gates each of the four claims.
+	PagerDutyServices           bool
+	PagerDutyBusinessServices   bool
+	PagerDutyEscalationPolicies bool
+	PagerDutySchedules          bool
+	PagerDutyOnCalls            bool
+	PagerDutyUsers              bool
+	PagerDutyTeams              bool
+	PagerDutyIncidents          bool
+	PagerDutyIncidentAlerts     bool
+	PagerDutyIncidentLogEntries bool
+	PagerDutyIncidentNotes      bool
+	// GithubPRs, GithubPRReviews, and GithubPRComments independently gate the
+	// three dataset identities Python maps to one complete PR-social execution.
+	// Every identity constructs the same enriched git_pull_requests and
+	// git_pull_request_reviews effects while retaining its own claim ledger.
+	// Go startup and Python admission reject enabling more than one alias.
+	GithubPRs        bool
+	GithubPRReviews  bool
+	GithubPRComments bool
+	// GithubCICD gates the shared complete TestOps route and its six effects.
+	// Configuration rejects enabling it together with GithubTests, so both
+	// aliases share one complete writer and one admission identity.
+	GithubCICD        bool
+	GithubCommits     bool
+	GithubDeployments bool
+	// GithubSecurity gates the isolated tenant-scoped security_alerts writer.
+	GithubSecurity bool
+	// GithubFiles gates the isolated git_files writer only.
+	GithubFiles bool
+	// GithubCommitStats gates the isolated git_commit_stats writer only.
+	GithubCommitStats bool
+	// GithubBlame gates the resumable, tenant-scoped git_blame writer.
+	GithubBlame bool
+	// GithubTests gates the shared complete TestOps route and its six effects.
+	GithubTests bool
+	// GithubWorkItems gates the one complete GitHub work-items execution family.
+	// Python only ever plans its canonical `work-items` claim; the four alias
+	// descriptors stay route-ready for capability/audit truth but intentionally
+	// remain disabled for a direct persisted alias claim. That rejects malformed
+	// direct aliases before credentials, HTTP, effects, or watermarks rather
+	// than treating one alias as a partial writer.
+	GithubWorkItems bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -156,15 +285,52 @@ func (switches CompleteRouteSwitches) Descriptor(
 		Executor:     ProviderExecutor(provider, dataset),
 		NativeShadow: nativeShadowReady(provider, dataset),
 	}
-	workItemAlias := slices.Contains(linearBackfillWorkItemDatasets, dataset)
+	// The GitHub work-item implementation owns this family identity. Do not
+	// derive route activation from Linear's expired-lease recovery oracle: both
+	// happen to name the five planner aliases, but their evolution is separate.
+	workItemAlias := isWorkItemFamilyDataset(dataset)
 	switch {
-	case (provider == "linear" || provider == "jira") && workItemAlias:
+	case provider == "github" && workItemAlias:
+		// The five Python dataset identities describe one indivisible work-item
+		// crawl. The capability matrix deliberately reports all five as native
+		// and ready so producer/matrix drift cannot re-open one partial alias.
+		// Only the canonical claim can execute, however: planner.py collapses a
+		// family into dataset="work-items" plus per-alias processor flags. A
+		// direct sibling alias is malformed persisted state and must trip the
+		// providerunit route-reconciliation guard before construction/I/O.
+		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.GithubWorkItems
+			// Mutable provider selection requires exact prepared-snapshot recovery
+			// before the first sink effect. It is a canonical-claim property, not
+			// a reason to pretend a direct sibling alias is executable.
+			descriptor.PreparedManifestRecovery = true
+		}
+	case provider == "linear" && workItemAlias:
 		descriptor.RouteDataset = "work-items"
 		descriptor.Destinations = workItemRouteDestinations()
-		// The aliases are one complete Python collector, but the complete native
-		// handler is not wired yet. Preserve the manifest while failing closed.
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.LinearWorkItems
+		}
+	case provider == "gitlab" && workItemAlias:
+		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.GitlabWorkItems
+		}
+	case provider == "jira" && workItemAlias:
+		descriptor.RouteDataset = "work-items"
+		descriptor.Destinations = append(workItemRouteDestinations(), "worklogs")
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.JiraWorkItems
+		}
 	case provider == "jira" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.JiraIncidents
 	case provider == "launchdarkly" && dataset == "feature-flags":
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true
@@ -185,47 +351,190 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubRepoMetadata
 	case provider == "gitlab" && dataset == "repo-metadata":
-		// GitLab has fixture fetch code only and no CompleteRouteHandler, so
-		// it stays behind the shadow-only stage. Do not fold this back into
-		// the github case above: doing so would make GithubRepoMetadata
-		// enable a route with no handler behind it.
 		descriptor.Destinations = []string{"repos"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabRepoMetadata
+	case provider == "gitlab" && dataset == "commits":
+		descriptor.Destinations = []string{"git_commits"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabCommits
+	case provider == "gitlab" && dataset == "commit-stats":
+		descriptor.Destinations = []string{"git_commit_stats"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabCommitStats
+	case provider == "gitlab" && dataset == "cicd":
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabCICD
+	case provider == "gitlab" && dataset == "tests":
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabTests ||
+			(switches.LocalAllRoutes && switches.GitlabCICD)
+	case provider == "gitlab" && dataset == "incidents":
+		descriptor.Destinations = []string{
+			"operational_services", "operational_service_repository_mappings",
+			"operational_incidents",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabIncidents
+	case provider == "gitlab" && dataset == "deployments":
+		descriptor.Destinations = []string{"deployments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabDeployments
+	case provider == "gitlab" && dataset == "feature-flags":
+		descriptor.Destinations = []string{"feature_flag", "feature_flag_event", "work_graph_edges"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabFeatureFlags
+	case provider == "gitlab" && dataset == "files":
+		descriptor.Destinations = []string{"git_files"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabFiles
+	case provider == "gitlab" && dataset == "blame":
+		descriptor.Destinations = []string{"git_blame"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabBlame
+	case provider == "gitlab" && dataset == "prs":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRs
+	case provider == "gitlab" && dataset == "pr-reviews":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRReviews ||
+			(switches.LocalAllRoutes && switches.GitlabPRs)
+	case provider == "gitlab" && dataset == "pr-comments":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRComments ||
+			(switches.LocalAllRoutes && switches.GitlabPRs)
+	case provider == "gitlab" && dataset == "security":
+		descriptor.Destinations = []string{"security_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabSecurity
+	case provider == "pagerduty" && dataset == "services":
+		descriptor.Destinations = []string{"operational_services", "operational_service_repository_mappings"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyServices
+	case provider == "pagerduty" && dataset == "business-services":
+		descriptor.Destinations = []string{"operational_services"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyBusinessServices
+	case provider == "pagerduty" && dataset == "escalation-policies":
+		descriptor.Destinations = []string{"operational_escalation_policies"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyEscalationPolicies
+	case provider == "pagerduty" && dataset == "schedules":
+		descriptor.Destinations = []string{"operational_on_call_schedules"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutySchedules
+	case provider == "pagerduty" && dataset == "on-calls":
+		descriptor.Destinations = []string{"operational_on_call_assignments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyOnCalls
+	case provider == "pagerduty" && dataset == "users":
+		descriptor.Destinations = []string{"operational_users"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyUsers
+	case provider == "pagerduty" && dataset == "teams":
+		descriptor.Destinations = []string{"operational_teams"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyTeams
+	case provider == "pagerduty" && dataset == "incidents":
+		descriptor.Destinations = []string{"operational_incidents"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidents
+	case provider == "pagerduty" && dataset == "incident-alerts":
+		descriptor.Destinations = []string{"operational_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentAlerts
+	case provider == "pagerduty" && dataset == "incident-log-entries":
+		descriptor.Destinations = []string{"operational_incident_timeline_events"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentLogEntries
+	case provider == "pagerduty" && dataset == "incident-notes":
+		descriptor.Destinations = []string{"operational_incident_notes"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentNotes
 	case provider == "github" && dataset == "prs":
-		// GitHub has a native complete-route handler
-		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink
-		// (GitHubPullRequestClickHouseEffects), fixture-level field parity
-		// evidence against the production Python collector
-		// (_collect_github_pr_objects / build_git_pull_request /
-		// normalize_pr_state / get_repo_uuid_from_repo /
-		// ClickHouseStore.insert_git_pull_requests), and a codex adversarial
-		// pass that found and fixed four HIGH-severity silent-data-loss
-		// defects (CHAOS-3122).
-		//
-		// RouteReady stays false deliberately -- this is NOT the same waiver
-		// CHAOS-3123 used for repo-metadata. The codex H1 finding: three
-		// columns on this pair's own destination table
-		// (first_review_at, reviews_count, changes_requested_count) are
-		// owned by Python's review-enrichment phase
-		// (_enrich_prs_with_reviews_batch), which this handler does not
-		// perform, so it always writes them as zero. route_ready is a
-		// promise that the Go path produces the product data for a pair;
-		// writing fabricated zeros into columns this pair does not own would
-		// let review-latency/rework/AI-impact tiles read "no reviews
-		// fetched" as "no reviews exist". github/prs and github/pr-reviews
-		// share one row (git_pull_requests) but are scheduled as
-		// independent, separately-committed units — see
-		// deploy/go-workers/provider-sync-porting-recipe.md's "column versus
-		// unit ownership" section for the write-conflict analysis this
-		// forced. Both pairs flip to RouteReady together when
-		// github/pr-reviews lands with a real review fetch. GithubPRs
-		// (below) stays wired and off by default in the meantime, so this
-		// is a no-op today and a one-line flip later, not new plumbing.
-		descriptor.Destinations = []string{"git_pull_requests"}
+		// The PR-social route mirrors Python's one
+		// _sync_github_prs_to_store_async boundary: REST PR detail (including
+		// comments_count), GraphQL review enrichment, the complete
+		// git_pull_requests row, and raw git_pull_request_reviews. D16 keeps
+		// the three dataset identities independent while their effects stay
+		// byte-identical. Every switch defaults off, so readiness alone moves
+		// no traffic.
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubPRs
+	case provider == "github" && dataset == "pr-reviews":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubPRReviews ||
+			(switches.LocalAllRoutes && switches.GithubPRs)
+	case provider == "github" && dataset == "pr-comments":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubPRComments ||
+			(switches.LocalAllRoutes && switches.GithubPRs)
 	case provider == "github" && dataset == "cicd":
-		descriptor.Destinations = []string{"ci_pipeline_runs"}
+		// cicd and tests delegate to one complete-row unit. Startup rejects both
+		// switches enabled together, so ci_pipeline_runs has one active writer.
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GithubCICD
+	case provider == "github" && dataset == "commits":
+		descriptor.Destinations = []string{"git_commits"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubCommits
+	case provider == "github" && dataset == "deployments":
+		descriptor.Destinations = []string{"deployments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubDeployments
+	case provider == "github" && dataset == "security":
+		descriptor.Destinations = []string{"security_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubSecurity
+	case provider == "github" && dataset == "files":
+		descriptor.Destinations = []string{"git_files"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubFiles
+	case provider == "github" && dataset == "commit-stats":
+		descriptor.Destinations = []string{"git_commit_stats"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubCommitStats
+	case provider == "github" && dataset == "blame":
+		// The path-progress effect sorts before git_blame in EffectCommitter.
+		// That ordering is the crash-safety contract: accepted blame rows must
+		// always have a durable selection identity available for recovery.
+		descriptor.Destinations = []string{"github_blame_path_progress", "git_blame"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubBlame
+	case provider == "github" && dataset == "tests":
+		descriptor.Destinations = []string{
+			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
+			"test_suite_results", "test_case_results", "coverage_snapshots",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubTests ||
+			(switches.LocalAllRoutes && switches.GithubCICD)
+	}
+	// TestOps is the first opt-in chunked route family. The policy is fixed in
+	// code so all workers and recovery attempts agree on the same bounds; every
+	// other route retains the legacy one-batch persistence contract.
+	if (provider == "github" || provider == "gitlab") &&
+		(dataset == "cicd" || dataset == "tests") {
+		descriptor.Chunked = true
+		descriptor.ChunkPolicy = DefaultChunkPolicy()
 	}
 	return descriptor, true
 }
@@ -239,22 +548,13 @@ func launchDarklyRouteDestinations() []string {
 	}
 }
 
+func githubPRSocialRouteDestinations() []string {
+	return []string{"git_pull_requests", "git_pull_request_reviews"}
+}
+
 func workItemRouteDestinations() []string {
-	return []string{
-		"estimate_coverage_metrics_daily",
-		"investment_classifications_daily",
-		"investment_metrics_daily",
-		"issue_type_metrics_daily",
-		"sprints",
-		"work_item_cycle_times",
-		"work_item_dependencies",
-		"work_item_interactions",
-		"work_item_metrics_daily",
-		"work_item_reopen_events",
-		"work_item_state_durations_daily",
-		"work_item_team_attributions",
-		"work_item_transitions",
-		"work_item_user_metrics_daily",
-		"work_items",
-	}
+	// The effect construction manifest is the neutral semantic owner of the
+	// GitHub family. Linear expired-lease recovery retains an independent retry
+	// eligibility policy, even where it currently names the same destinations.
+	return githubWorkItemRouteDestinations()
 }

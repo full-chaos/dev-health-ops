@@ -16,7 +16,7 @@ type BreakingChange struct {
 // CompareTrees reports breaking edits made in place to an existing envelope
 // or kind/version schema. Adding a new optional property is compatible.
 func CompareTrees(baseRoot, candidateRoot string) ([]BreakingChange, error) {
-	baseRegistry, err := loadRegistry(baseRoot, false)
+	baseRegistry, err := loadBaseRegistryForComparison(baseRoot)
 	if err != nil {
 		return nil, fmt.Errorf("load base registry: %w", err)
 	}

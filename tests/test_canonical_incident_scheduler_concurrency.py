@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 from threading import Event, Lock
 from time import monotonic_ns
 from unittest.mock import MagicMock
@@ -17,11 +16,12 @@ from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.users import Organization
 from tests.canonical_incident_orchestration_support import (
     FEATURE_KEY,
+    SYNC_FIXTURE_BEFORE,
     CanonicalState,
     create_canonical_graph,
 )
 
-NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+NOW = SYNC_FIXTURE_BEFORE
 
 
 def _seed_due_schedule(session: Session) -> tuple[uuid.UUID, uuid.UUID]:

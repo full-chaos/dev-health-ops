@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,33 +22,6 @@ const (
 	leaseRepairWorkerLostCategory           = "worker_lost"
 	leaseRepairRetryExhaustedCategory       = "worker_lost_retry_exhausted"
 )
-
-var linearBackfillWorkItemDatasets = map[string]struct{}{
-	"work_items":         {},
-	"work_item_labels":   {},
-	"work_item_projects": {},
-	"work_item_history":  {},
-	"work_item_comments": {},
-}
-
-var linearBackfillRetrySurfaces = []string{
-	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
-	"sprints",
-	"work_item_cycle_times",
-	"work_item_dependencies",
-	"work_item_interactions",
-	"work_item_metrics_daily",
-	"work_item_reopen_events",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
-	"work_item_transitions",
-	"work_item_user_metrics_daily",
-	"work_items",
-}
 
 type leaseRepairBeginFunc func(context.Context) (pgx.Tx, error)
 
@@ -81,10 +55,10 @@ func (config LeaseRepairConfig) valid() bool {
 	return config.MaximumRetries >= 0 && config.RetryBackoff >= 0
 }
 
-// LeaseRepair is a dormant PostgreSQL-only repair primitive. Construction has
-// no side effects, and no command constructs it today. Its SQL locks a bounded
-// ordered candidate window and then uses the observed owner in every terminal
-// write so concurrent replicas cannot repair a live or replaced lease.
+// LeaseRepair is the PostgreSQL-only repair primitive used by the active
+// mutation pipeline. Construction has no side effects. Its SQL locks a
+// bounded ordered candidate window and then uses the observed owner in every
+// terminal write so concurrent replicas cannot repair a live or replaced lease.
 type LeaseRepair struct {
 	begin  leaseRepairBeginFunc
 	config LeaseRepairConfig
@@ -184,8 +158,8 @@ type expiredLeaseDecision struct {
 }
 
 func decideExpiredLeaseRepair(candidate expiredLeaseCandidate, config LeaseRepairConfig) expiredLeaseDecision {
-	_, eligibleDataset := linearBackfillWorkItemDatasets[candidate.datasetKey]
-	eligible := candidate.provider == "linear" && candidate.mode == "backfill" && eligibleDataset
+	eligible := candidate.provider == "linear" && candidate.mode == "backfill" &&
+		workitemcontract.IsLinearBackfillWorkItemDatasetKey(candidate.datasetKey)
 	return expiredLeaseDecision{
 		retry:     eligible && candidate.retryCount < config.MaximumRetries,
 		exhausted: eligible && candidate.retryCount >= config.MaximumRetries,
@@ -248,7 +222,8 @@ func markExpiredLeaseRetrying(
 ) (int64, error) {
 	retryAt := now.Add(config.RetryBackoff)
 	command, err := tx.Exec(ctx, markExpiredLeaseRetryingSQL,
-		candidate.id, candidate.leaseOwner, now, retryAt, linearBackfillRetrySurfaces)
+		candidate.id, candidate.leaseOwner, now, retryAt,
+		workitemcontract.LinearExpiredLeaseRetryDestinations())
 	if err != nil {
 		return 0, ErrUnavailable
 	}
@@ -266,7 +241,7 @@ func markExpiredLeaseFailed(
 	surfaces := []string{}
 	if exhausted {
 		category = leaseRepairRetryExhaustedCategory
-		surfaces = linearBackfillRetrySurfaces
+		surfaces = workitemcontract.LinearExpiredLeaseRetryDestinations()
 	}
 	command, err := tx.Exec(ctx, markExpiredLeaseFailedSQL,
 		candidate.id, candidate.leaseOwner, now, category, exhausted, surfaces)
@@ -343,6 +318,24 @@ func leaseRepairBucketAdvisoryID(orgID, provider, costClass string) int64 {
 // tenancy predicates. This CAS complements the advisory locks: it remains
 // correct if a future caller reuses the write helper without the selector and
 // fails closed if ownership changes before the write.
+//
+// CHAOS-3427 episode symmetry: this is a non-terminal RETRYING stamp, so it
+// clears BOTH per-episode pairs -- rate-limit (CHAOS-2760) and budget
+// (CHAOS-3412) -- exactly as the Python analogue
+// (src/dev_health_ops/workers/sync_reconciler.py's RETRYING stamp) does. An
+// expired lease is neither a rate-limit episode nor a budget episode, so
+// leaving either pair set lets a resolved episode's counters decide a later
+// exhaustion.
+//
+// It deliberately does NOT touch `first_blocked_at`, matching Python: the
+// AGGREGATE clock is started (COALESCE) only by real DEFERRAL stamps and
+// cleared only by SUCCESS and the dispatch claim. Resetting it here would let
+// worker churn clear the outer bound the alternating-episode case depends on.
+//
+// The result document is rebuilt with jsonb_build_object, so 'error_category'
+// is OVERWRITTEN with 'worker_lost'. Never change this into a merge that keeps
+// the prior value -- see lease_repair_test.go's
+// TestNoLeaseRepairStampPreservesAPriorErrorCategory.
 const markExpiredLeaseRetryingSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'retrying',
@@ -362,6 +355,8 @@ SET status = 'retrying',
 	retry_exhausted_at = NULL,
 	rate_limit_deferrals = 0,
 	rate_limit_first_seen_at = NULL,
+	budget_deferrals = 0,
+	budget_first_deferred_at = NULL,
 	updated_at = $3,
 	lease_owner = NULL,
 	lease_expires_at = NULL

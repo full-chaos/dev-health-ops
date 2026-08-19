@@ -68,6 +68,10 @@ type BudgetLease interface {
 	Release()
 }
 
+type budgetLeaseLoss interface {
+	Lost() <-chan struct{}
+}
+
 type Budget interface {
 	Supports(string, int) bool
 	Acquire(context.Context, BudgetRequest) (BudgetLease, error)
@@ -94,6 +98,13 @@ type ClaimRequest struct {
 type Completion struct {
 	Result   Result
 	Category ErrorCategory
+	// Terminal separates the two outcomes that both arrive as ResultCancel:
+	// an explicit domain-terminal decision (validation failure, permanent
+	// error, ClaimTerminal readback), which must never run again, from a
+	// process drain or budget-lease loss, which must stay retryable. Without
+	// it the idempotency store stamped every cancellation "terminal" and the
+	// River retry was auto-cancelled forever (CHAOS-3865).
+	Terminal bool
 }
 
 type IdempotencyClaim interface {
@@ -190,7 +201,17 @@ func (adapter *Adapter[T]) Timeout(*river.Job[T]) time.Duration {
 }
 
 func (adapter *Adapter[T]) NextRetry(job *river.Job[T]) time.Time {
-	if adapter.descriptor.RetryPolicy != "bounded_exponential_jitter" || job == nil || job.JobRow == nil {
+	if job == nil {
+		return time.Time{}
+	}
+	return NextRetryAt(adapter.descriptor, job.JobRow)
+}
+
+// NextRetryAt applies the checked-in retry policy without requiring an
+// executable handler. River maintenance clients use it when they carry
+// type-only workers for kinds executed by another queue.
+func NextRetryAt(descriptor Descriptor, job *rivertype.JobRow) time.Time {
+	if descriptor.RetryPolicy != "bounded_exponential_jitter" || job == nil {
 		return time.Time{}
 	}
 	attempt := job.Attempt
@@ -222,9 +243,8 @@ func (adapter *Adapter[T]) NextRetry(job *river.Job[T]) time.Time {
 func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error {
 	started := time.Now()
 	labels := JobLabels{
-		Profile: adapter.descriptor.Profile,
-		Queue:   adapter.descriptor.Queue,
-		Kind:    adapter.descriptor.Kind,
+		Queue: adapter.descriptor.Queue,
+		Kind:  adapter.descriptor.Kind,
 	}
 	// ScheduledAt is River's own "available to be worked" timestamp, so the gap
 	// to this Work() entry is exactly the availability-to-execution-start wait
@@ -266,12 +286,14 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 			if job != nil && job.JobRow != nil && job.Attempt > 0 {
 				attempt = job.Attempt
 			}
-			choice = retryDecision(CategoryPanic, attempt, adapter.descriptor.MaxAttempts)
-			returned = &safeError{category: CategoryPanic}
+			choice = retryDecision(CategoryPanic, ReasonHandlerPanic, attempt, adapter.descriptor.MaxAttempts)
+			returned = &safeError{category: CategoryPanic, reason: ReasonHandlerPanic}
 			observe(func() { adapter.observer.JobPanicked(parent, labels) })
 			if claim != nil && claim.State() == ClaimProceed {
-				if err := finishClaim(parent, claim, Completion{Result: choice.result, Category: choice.category}); err != nil {
-					choice = retryDecision(CategoryIdempotency, attempt, adapter.descriptor.MaxAttempts)
+				if err := finishClaim(parent, claim, Completion{
+					Result: choice.result, Category: choice.category, Terminal: choice.cancel,
+				}); err != nil {
+					choice = retryDecision(CategoryIdempotency, Reason{}, attempt, adapter.descriptor.MaxAttempts)
 					returned = &safeError{category: CategoryIdempotency}
 				}
 			}
@@ -344,6 +366,8 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	if lease == nil {
 		return choice, envelope, errors.New("budget returned nil lease")
 	}
+	ctx, cancelLeaseLoss := withBudgetLeaseLoss(ctx, lease)
+	defer cancelLeaseLoss()
 	defer lease.Release()
 
 	claim, err = adapter.idempotency.Begin(ctx, ClaimRequest{
@@ -393,18 +417,38 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 		),
 	}
 	handlerErr := adapter.handler.Work(ctx, execution)
-	if handlerErr == nil && ctx.Err() != nil {
-		handlerErr = ctx.Err()
-	}
+	// A handler that returned success completed its work; a drain or lease
+	// loss that lands between that return and this line must not rewrite the
+	// outcome. Promoting ctx.Err() here used to turn a succeeded run into a
+	// cancellation -- and, before the runStatus fix below, into a permanently
+	// terminal one (CHAOS-3865).
 	choice = classify(ctx, handlerErr, job.Attempt, adapter.descriptor.MaxAttempts)
 	if choice.category == CategoryTerminalDomain {
 		observe(func() { adapter.observer.DomainMismatch(ctx, envelope.Domain.Type) })
 	}
-	if err := finishClaim(ctx, claim, Completion{Result: choice.result, Category: choice.category}); err != nil {
+	if err := finishClaim(ctx, claim, Completion{
+		Result: choice.result, Category: choice.category, Terminal: choice.cancel,
+	}); err != nil {
 		choice = classify(ctx, mark(CategoryIdempotency, err, false), job.Attempt, adapter.descriptor.MaxAttempts)
 		return choice, envelope, err
 	}
 	return choice, envelope, handlerErr
+}
+
+func withBudgetLeaseLoss(ctx context.Context, lease BudgetLease) (context.Context, context.CancelFunc) {
+	lostLease, ok := lease.(budgetLeaseLoss)
+	if !ok || lostLease.Lost() == nil {
+		return ctx, func() {}
+	}
+	leaseContext, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-lostLease.Lost():
+			cancel()
+		case <-leaseContext.Done():
+		}
+	}()
+	return leaseContext, cancel
 }
 
 func finishClaim(ctx context.Context, claim IdempotencyClaim, completion Completion) error {
@@ -432,7 +476,6 @@ func (adapter *Adapter[T]) logStart(ctx context.Context, job *river.Job[T], enve
 		"job_id", job.ID,
 		"kind", adapter.descriptor.Kind,
 		"contract_version", envelope.ContractVersion,
-		"profile", adapter.descriptor.Profile,
 		"queue", adapter.descriptor.Queue,
 		"attempt", job.Attempt,
 		"correlation_id", envelope.CorrelationID,
@@ -444,7 +487,6 @@ func (adapter *Adapter[T]) logStart(ctx context.Context, job *river.Job[T], enve
 func (adapter *Adapter[T]) logFinish(ctx context.Context, job *river.Job[T], envelope jobcontract.Envelope, choice decision, started time.Time) {
 	attributes := []any{
 		"kind", adapter.descriptor.Kind,
-		"profile", adapter.descriptor.Profile,
 		"queue", adapter.descriptor.Queue,
 		"result", choice.result,
 		"error_category", choice.category,

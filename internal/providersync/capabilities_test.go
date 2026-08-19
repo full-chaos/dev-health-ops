@@ -9,8 +9,25 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 )
+
+const (
+	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
+	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
+)
+
+func requireLivePythonOracles(t *testing.T) {
+	t.Helper()
+	if os.Getenv(livePythonOraclesEnv) != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	if os.Getenv(livePythonOracleProofDir) == "" {
+		t.Fatal("live Python oracle opt-in requires a proof directory from ci/check_go.sh")
+	}
+}
 
 func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
 	python := pythonExecutable(t)
@@ -61,15 +78,83 @@ type registryEntry struct {
 
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
+	requireLivePythonOracles(t)
+	resolved := ""
 	if configured := os.Getenv("PYTHON"); configured != "" {
-		return configured
+		resolved = configured
+	} else if path, err := exec.LookPath("python3"); err == nil {
+		resolved = path
 	}
-	if path, err := exec.LookPath("python3"); err == nil {
-		return path
+	if resolved == "" {
+		t.Fatal("python3 is required for the cross-language dataset registry freshness check")
 	}
-	t.Fatal("python3 is required for the cross-language dataset registry freshness check")
-	return ""
+	assertPythonProducerIsThisWorktree(t, resolved)
+	return resolved
 }
+
+// assertPythonProducerIsThisWorktree fails unless the interpreter about to be
+// executed resolves `dev_health_ops` INSIDE this checkout.
+//
+// Every live-Python oracle in this package compares Go against "the real
+// production function". WHICH production function that is depends entirely on
+// sys.path, and nothing here previously checked it. On a machine with more than
+// one worktree -- the normal case for this repo -- an ambient interpreter (a
+// pyenv virtualenv editable-installed against a DIFFERENT checkout, say)
+// silently supplies another worktree's `dev_health_ops`, while the oracle pairs,
+// which resolve their own paths from `__file__`, keep reading THIS worktree's
+// config and testdata. The comparison then runs half against one checkout and
+// half against another, and reports a clean pass.
+//
+// That was reproduced directly on this machine, not hypothesised: with
+// PYTHONPATH unset, the investment classifier came from
+// ops-worktrees/chaos-3219-compose-env while its config came from here, and the
+// whole suite went green.
+//
+// ci/check_go.sh sets PYTHONPATH="${ROOT}/src" and is therefore safe, but a bare
+// `go test` with the opt-in env vars is not -- and a green run is exactly the
+// output that stops anyone looking. This turns that silent mis-measurement into
+// a hard failure naming both paths.
+//
+// find_spec LOCATES the package without executing it, so this can neither be
+// affected by nor disturb the stub namespace python_oracle_loader.py installs.
+func assertPythonProducerIsThisWorktree(t *testing.T, python string) {
+	t.Helper()
+	pythonProducerOnce.Do(func() {
+		output, err := exec.Command(python, "-c",
+			"import importlib.util;s=importlib.util.find_spec('dev_health_ops');"+
+				"print(s.origin if s else '')").CombinedOutput()
+		pythonProducerOrigin = strings.TrimSpace(string(output))
+		pythonProducerErr = err
+	})
+	if pythonProducerErr != nil {
+		t.Fatalf("cannot determine which dev_health_ops %s would import: %v: %s",
+			python, pythonProducerErr, pythonProducerOrigin)
+	}
+	if pythonProducerOrigin == "" {
+		t.Fatalf("%s cannot import dev_health_ops at all -- the live-Python oracles "+
+			"would compare against nothing. Set PYTHONPATH to this worktree's src/, "+
+			"or run through ci/check_go.sh, which does it for you", python)
+	}
+	_, currentFile, _, _ := runtime.Caller(0)
+	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
+	if !strings.HasPrefix(pythonProducerOrigin, root+string(filepath.Separator)) {
+		t.Fatalf("live-Python oracle producer is NOT in this worktree:\n"+
+			"  interpreter    %s\n"+
+			"  dev_health_ops %s\n"+
+			"  this worktree  %s\n"+
+			"Every oracle here would compare Go against ANOTHER checkout's Python "+
+			"while reading this one's config and testdata -- a mixed-source "+
+			"comparison that passes. Set PYTHONPATH=%s/src (ci/check_go.sh does it "+
+			"for you), or point PYTHON at this worktree's .venv.",
+			python, pythonProducerOrigin, root, root)
+	}
+}
+
+var (
+	pythonProducerOnce   sync.Once
+	pythonProducerOrigin string
+	pythonProducerErr    error
+)
 
 func TestCapabilityCostWatermarkAndFlagsAreExact(t *testing.T) {
 	t.Parallel()

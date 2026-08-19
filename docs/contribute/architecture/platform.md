@@ -46,7 +46,7 @@ versioned job contract + checked-in route
   → domain effect and audit
 ```
 
-Current checked-in routes still point to Celery and no production domain producer routes work to River.
+The checked-in sync-dispatch routes target River with Celery as the explicit rollback transport. Deployment still requires live Go consumers and an audited route apply; changing configuration alone does not activate a database route.
 
 ## Ask Dev and Context Fabric runtime
 
@@ -155,7 +155,7 @@ The foundation provides:
 
 Shared packages under `internal/` cover configuration, health, lifecycle, logging, secrets, PostgreSQL, ClickHouse, Valkey, River, job contracts, operator controls, outbox, scheduler, reconciler, and test harnesses.
 
-A process can be live and healthy while its profile is disabled. Production admission requires the route, job version, handler, deployment profile, role authorization, schema, parity, and canary gates to agree.
+A process can be live and healthy while its deployment group is disabled. Production admission requires the route, job version, handler, deployment manifest, role authorization, schema, parity, and canary gates to agree.
 
 ## Contract rules
 

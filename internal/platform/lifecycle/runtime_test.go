@@ -3,12 +3,52 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// capturingHandler records emitted slog.Record values so tests can assert on
+// structured attributes directly, without going through a text/JSON encoder.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, record.Clone())
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *capturingHandler) find(message string) (slog.Record, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, record := range h.records {
+		if record.Message == message {
+			return record, true
+		}
+	}
+	return slog.Record{}, false
+}
+
+func attrMap(record slog.Record) map[string]any {
+	attrs := make(map[string]any, record.NumAttrs())
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Any()
+		return true
+	})
+	return attrs
+}
 
 type recordingComponent struct {
 	name        string
@@ -41,6 +81,22 @@ type nonCooperativeComponent struct {
 	entered chan struct{}
 	release chan struct{}
 	exited  chan struct{}
+}
+
+type budgetedComponent struct {
+	*recordingComponent
+	budget    time.Duration
+	remaining time.Duration
+}
+
+func (component *budgetedComponent) ShutdownBudget() time.Duration { return component.budget }
+func (component *budgetedComponent) Shutdown(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("shutdown deadline is missing")
+	}
+	component.remaining = time.Until(deadline)
+	return component.recordingComponent.Shutdown(ctx)
 }
 
 func (c *nonCooperativeComponent) Name() string { return c.name }
@@ -144,6 +200,50 @@ func TestRuntimeStopsAfterAsynchronousComponentFailure(t *testing.T) {
 	}
 }
 
+// TestRuntimeComponentFailureLogsComponentNameAndCause pins CHAOS-3906: the
+// "runtime component failed" log line must carry which component failed (a
+// bounded, safe identifier) and the underlying cause, not just a category.
+func TestRuntimeComponentFailureLogsComponentNameAndCause(t *testing.T) {
+	t.Parallel()
+
+	handler := &capturingHandler{}
+	logger := slog.New(handler)
+	failures := make(chan error, 1)
+	component := &recordingComponent{
+		name:     "async",
+		record:   func(string) {},
+		failures: failures,
+	}
+	runtime, err := New(Options{Logger: logger, ShutdownTimeout: time.Second, Components: []Component{component}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(context.Background()) }()
+	cause := errors.New("serve failed")
+	failures <- cause
+	if err := <-done; err == nil {
+		t.Fatal("expected asynchronous failure")
+	}
+
+	record, ok := handler.find("runtime component failed")
+	if !ok {
+		t.Fatalf("did not log a runtime component failure: %+v", handler.records)
+	}
+	attrs := attrMap(record)
+	if got := attrs["error_category"]; got != "component_failure" {
+		t.Fatalf("error_category = %v, want component_failure", got)
+	}
+	if got := attrs["component"]; got != "async" {
+		t.Fatalf("component = %v, want %q", got, "async")
+	}
+	loggedErr, ok := attrs["error"].(error)
+	if !ok || !errors.Is(loggedErr, cause) {
+		t.Fatalf("error attribute = %#v, want to wrap %v", attrs["error"], cause)
+	}
+}
+
 func TestShutdownBoundsNonCooperativeComponentsAndAttemptsAllInReverse(t *testing.T) {
 	t.Parallel()
 
@@ -223,5 +323,25 @@ func TestShutdownBoundsNonCooperativeComponentsAndAttemptsAllInReverse(t *testin
 		case <-time.After(time.Second):
 			t.Fatalf("component %s did not exit after release", component.name)
 		}
+	}
+}
+
+func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {
+	t.Parallel()
+	record := func(string) {}
+	reserved := &budgetedComponent{
+		recordingComponent: &recordingComponent{name: "reserved", record: record},
+		budget:             80 * time.Millisecond,
+	}
+	tail := &recordingComponent{name: "tail", record: record}
+	runtime, err := New(Options{ShutdownTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.shutdown(context.Background(), []Component{tail, reserved}); err != nil {
+		t.Fatal(err)
+	}
+	if reserved.remaining < 70*time.Millisecond {
+		t.Fatalf("reserved shutdown budget = %s, want approximately 80ms", reserved.remaining)
 	}
 }

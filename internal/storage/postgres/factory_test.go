@@ -36,6 +36,18 @@ func TestSafeSurfaceRedactsURI(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigDoesNotPinIdleSessionPoolBackends(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultConfig("postgres://queue:secret@pgbouncer-river-queue:6433/app")
+	if config.MinConns != 0 {
+		t.Fatalf("MinConns = %d, want 0 so idle clients release session-pool backends", config.MinConns)
+	}
+	if config.MaxConnIdleTime <= 0 {
+		t.Fatalf("MaxConnIdleTime = %s, want bounded idle release", config.MaxConnIdleTime)
+	}
+}
+
 func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
 	t.Parallel()
 

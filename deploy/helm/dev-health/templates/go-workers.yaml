@@ -1,76 +1,114 @@
 {{- /* Additive Go/River topology. `goWorkers.enabled` is false by default. */ -}}
 {{- if .Values.goWorkers.enabled }}
-{{- range $profile := .Values.goWorkers.profiles }}
+{{- range $group := .Values.goWorkers.groups }}
+{{- $coordinator := has $group.name (list "reconciler" "scheduler") }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}
+  name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}
   namespace: {{ include "dev-health.namespace" $ }}
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "go-worker" "context" $) | nindent 4 }}
-    dev-health.io/profile: {{ $profile.name }}
-    {{- with $profile.queue }}
-    dev-health.io/queue: {{ . }}
+    dev-health.io/worker-group: {{ $group.name }}
+    {{- with $group.queues }}
+    dev-health.io/queue-set: {{ join "," . | quote }}
     {{- end }}
 spec:
-  replicas: {{ $profile.replicas }}
+  replicas: {{ $group.replicas }}
   strategy:
     type: RollingUpdate
     rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 6 }}
-      dev-health.io/profile: {{ $profile.name }}
+      dev-health.io/worker-group: {{ $group.name }}
   template:
     metadata:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 8 }}
-        dev-health.io/profile: {{ $profile.name }}
-        {{- with $profile.queue }}
-        dev-health.io/queue: {{ . }}
+        dev-health.io/worker-group: {{ $group.name }}
+        {{- with $group.queues }}
+        dev-health.io/queue-set: {{ join "," . | quote }}
         {{- end }}
     spec:
-      terminationGracePeriodSeconds: {{ $profile.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ $group.terminationGracePeriodSeconds }}
       {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" $ }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
-        - name: {{ $profile.name }}
-          image: {{ $profile.image }}
+        - name: {{ $group.name }}
+          image: {{ $group.image }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
-          {{- if $profile.runtimeProfile }}
-          env: [{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
-          {{- else }}
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          {{- if $group.queues }}
+          {{- $parts := list }}
+          {{- range $queue := $group.queues }}
+          {{- $parts = append $parts (printf "%s=%v" $queue (index $group.queueConcurrency $queue)) }}
           {{- end }}
+          args:
+            - {{ printf "--queues=%s" (join "," $group.queues) | quote }}
+            - {{ printf "--queue-concurrency=%s" (join "," $parts) | quote }}
+            - {{ printf "--worker-group=%s" $group.name | quote }}
+            - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
+          {{- end }}
+          env:
+            {{- if $group.runtimeProfile }}
+            - {name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}
+            {{- end }}
+            - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
+            # Explicit env beats the shared Secret mounted via envFrom below,
+            # so Go pods get the native port while Python keeps HTTP.
+            - {name: CLICKHOUSE_URI, value: {{ . | quote }}}
+            {{- end }}
+            {{- if not $group.queues }}
+            - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $group.terminationGracePeriodSeconds) | quote }}}
+            {{- end }}
+            {{- if $.Values.goWorkers.pgbouncer.enabled }}
+            # Every Go worker group uses the bounded domain transaction pool plus
+            # the River queue session pool. Only coordinator binaries receive
+            # the separate coordinator lock session endpoint.
+            - name: POSTGRES_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: POSTGRES_URI}}
+            - {name: PGBOUNCER_TRANSACTION_MODE, value: "true"}
+            - name: WORKER_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: WORKER_DATABASE_URI}}
+            - {name: WORKER_DATABASE_MODE, value: session}
+            {{- if $coordinator }}
+            - name: COORDINATOR_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}
+            - {name: COORDINATOR_DATABASE_MODE, value: session}
+            {{- end }}
+            {{- end }}
           envFrom:
             - configMapRef: {name: {{ include "dev-health.configMapName" $ }}}
             - secretRef: {name: {{ include "dev-health.secretName" $ }}}
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources:
-            {{- toYaml $profile.resources | nindent 12 }}
+            {{- toYaml $group.resources | nindent 12 }}
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
-{{- if $profile.autoscaling.enabled }}
+{{- if $group.autoscaling.enabled }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}
+  name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}
   namespace: {{ include "dev-health.namespace" $ }}
 spec:
-  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}}
-  minReplicas: {{ $profile.autoscaling.minReplicas }}
-  maxReplicas: {{ $profile.autoscaling.maxReplicas }}
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}}
+  minReplicas: {{ $group.autoscaling.minReplicas }}
+  maxReplicas: {{ $group.autoscaling.maxReplicas }}
   metrics:
+    {{- range $queue := $group.queues }}
     - type: External
-      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.queueDepth | quote }}}}
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.queueDepth | quote }}}}
     - type: External
-      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.oldestAgeSeconds | quote }}}}
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.oldestAgeSeconds | quote }}}}
     - type: External
-      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.saturationMilli | quote }}}}
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.saturationMilli | quote }}}}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

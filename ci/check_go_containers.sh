@@ -91,7 +91,7 @@ smoke_target() {
   local readiness_body
   local dependency
   local dependencies
-  local profile_env
+  local startup_env
 
   build_target "${target}" "${tag}"
 
@@ -100,35 +100,44 @@ smoke_target() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "${target} did not report injected version metadata"
+  # The root Compose worker service inherits a pre-stop route rollback hook.
+  # It overrides the worker entrypoint with this binary, so package it in the
+  # worker target and prove that exact override is executable.
+  if [ "${target}" = "worker" ]; then
+    docker run --rm --entrypoint /usr/local/bin/dev-health-workerctl \
+      "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
+      | grep -F '"version":"phase1-ci"' >/dev/null \
+      || die "worker image does not package the Compose lifecycle operator"
+  fi
 
   ACTIVE_CONTAINER="${container_name}"
-  # A profile is startup configuration, not a runtime dependency, so a target
-  # that requires one needs it even for this deliberately-unconfigured run.
-  # CUT-02 removed dev-health-worker's DefaultProfile on purpose: every profile
-  # it accepts owns registered job kinds, so a River consumer with nothing
-  # registered is unrepresentable rather than permanently unready (see
-  # cmd/dev-health-worker/main.go). Without DEV_HEALTH_PROFILE the worker now
-  # exits with `configuration error: profile must be one of sync, heavy, ops`
-  # before it ever binds :8080, and this check then reported only the much less
-  # obvious "no public port '8080/tcp' published".
+  # The worker requires an explicit queue set and an exact per-queue concurrency
+  # map even for this deliberately unconfigured dependency run. Keep these
+  # target-specific: scheduler and reconciler do not consume River queues, and
+  # the stream runner has its own separate stream-profile contract.
   #
-  # This must be set per target, not globally: DEV_HEALTH_PROFILE takes
-  # precedence OVER a spec's DefaultProfile (internal/platform/config's
-  # profile()), and scheduler and reconciler declare no Profiles at all, so any
-  # value at all makes them fail with "does not accept a profile". So pass the
-  # worker's required profile, leave stream-runner on its own default, and pass
-  # nothing to the two that accept nothing.
-  profile_env=()
+  # Queue topology is flag-only (CHAOS-3875), so it is passed as an argument
+  # after the image, exactly the way every deploy artifact passes it. The
+  # worker target declares an ENTRYPOINT and no CMD, so these append rather
+  # than override anything.
+  startup_env=()
+  startup_args=()
   case "${target}" in
-    worker) profile_env=(--env "DEV_HEALTH_PROFILE=sync") ;;
+    worker)
+      startup_env=(
+        --env "DEV_HEALTH_QUEUE_CONCURRENCY=sync=4,sync_provider=2"
+        --env "DEV_HEALTH_WORKER_GROUP=container-smoke"
+      )
+      startup_args=(--queues=sync,sync_provider)
+      ;;
   esac
   docker run --detach \
     --name "${container_name}" \
     --publish "127.0.0.1::8080" \
-    "${profile_env[@]}" \
+    "${startup_env[@]}" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    "${tag}" >/dev/null
-  published_address="$(docker port "${container_name}" 8080/tcp | head -n 1)"
+    "${tag}" "${startup_args[@]}" >/dev/null
+  published_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
   if [ -z "${published_address}" ]; then
     # Surface why the container is gone rather than only that the port is
     # missing: startup configuration errors are the likeliest cause and they
@@ -146,7 +155,7 @@ smoke_target() {
     || die "${target} reported ready without required dependencies"
   readiness_body="$(curl --silent --show-error --max-time 1 "http://${published_address}/readyz")"
   if [ "${target}" = "worker" ]; then
-    for dependency in domain_postgres profile_completeness queue_postgres river_schema; do
+    for dependency in domain_postgres queue_completeness queue_postgres river_schema; do
       grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
         || die "worker readiness omitted ${dependency}"
     done

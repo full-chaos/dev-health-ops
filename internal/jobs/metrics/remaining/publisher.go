@@ -3,6 +3,7 @@ package remaining
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -37,7 +38,13 @@ func NewPostgresPublisher(
 	registry *jobruntime.Registry,
 ) (*PostgresPublisher, error) {
 	producer, err := joboutbox.NewProducer(pool, registry)
-	if err != nil || registry == nil {
+	if err != nil {
+		// Keep the producer construction cause reachable, same as the publish
+		// path below -- a nil pool/registry error from joboutbox otherwise
+		// vanishes into an undifferentiated "unavailable" (CHAOS-3903/3905).
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if registry == nil {
 		return nil, ErrUnavailable
 	}
 	return &PostgresPublisher{producer: producer, registry: registry}, nil
@@ -99,9 +106,19 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) ||
 			errors.Is(err, joboutbox.ErrPolicyRejected) {
-			return ErrInvalidState
+			// Keep BOTH sentinels reachable. Callers switch on ErrInvalidState
+			// to classify the failure as permanent for this input, and the
+			// outbox reason underneath is what names which rule rejected the
+			// envelope -- replacing it left "remaining metrics durable state is
+			// invalid" as the only evidence of a field-level validation failure
+			// (CHAOS-3903).
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
-		return ErrUnavailable
+		// Any other producer error (e.g. a Postgres write failure) keeps its
+		// cause too -- dropping it here was the same defect CHAOS-3903 fixed
+		// on the contract/policy branch above, just left on this one
+		// (CHAOS-3905).
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
 }

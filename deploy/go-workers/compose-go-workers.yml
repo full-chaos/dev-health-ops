@@ -1,0 +1,359 @@
+# Go execution path overlay — the CHAOS-3142 compose services, kept under
+# version control here because the stack they belong to is not.
+#
+# The canonical local stack is the repo-root /dev-health/compose.yml, which
+# owns PostgreSQL, PgBouncer, ClickHouse, Valkey, the API/web services, the
+# Celery workers, and Beat. That file lives outside any git repository, so
+# these four service definitions would otherwise exist only as untracked text
+# on one machine. This copy is the reviewed, versioned source of truth for
+# them; treat the root file as a working copy of it.
+#
+# TWO WAYS TO USE IT
+#
+#   1. As an overlay, without editing the root file:
+#
+#        cd /path/to/dev-health
+#        docker compose -f compose.yml \
+#          -f ops/deploy/go-workers/compose-go-workers.yml \
+#          --profile go up -d
+#
+#      The root compose.yml MUST be the first -f. Compose resolves every
+#      relative path in every file against the project directory, which it
+#      takes from the first file — so ./ops below only means what it says when
+#      the root file leads.
+#
+#   2. Pasted into the root compose.yml, immediately before its `volumes:`
+#      block. This is how it is currently deployed.
+#
+# In both cases the services sit behind `profiles: [go]`, so a bare
+# `docker compose up -d` creates none of them and the default stack is
+# untouched. Put COMPOSE_PROFILES=go in a .env NEXT TO THE ROOT compose.yml
+# (not ops/.env — compose reads interpolation and COMPOSE_PROFILES only from
+# the .env beside the compose file, or the shell) to include them in a normal
+# `up`.
+#
+# To build against an unmerged ops worktree instead of ./ops:
+#
+#   DEV_HEALTH_OPS_ROOT=./ops/.claude/worktrees/<name> docker compose ... 
+#
+# That override deliberately does NOT apply to env_file — see the comment on
+# go-worker's env_file below for why, and what breaks silently if you change
+# it.
+#
+# Requires the `dev-health` network and the postgres/pgbouncer/clickhouse/
+# valkey/migrate services from the root compose.yml. It is not standalone.
+#
+# See ./README.md for the runbook: the coordinator DSN constraint, the
+# ClickHouse native-port distinction, the fail-closed crash-loop when both
+# route switches are off, and what the end-to-end proof did and did not
+# establish.
+
+services:
+  # ===========================================================================
+  # Go execution path (CHAOS-3142) — additive, profile-gated, default OFF.
+  #
+  # Every service below is behind `profiles: [go]`, so a bare
+  # `docker compose up -d` creates none of them and this stack behaves exactly
+  # as it did before. To run them:
+  #
+  #   docker compose --profile go up -d --build
+  #
+  # or, to have them come up as part of your normal `up`, put this in a `.env`
+  # file NEXT TO THIS FILE (repo root) — which is the intended setup for
+  # watching the Go path locally:
+  #
+  #   COMPOSE_PROFILES=go
+  #
+  # It must be the root .env, not ops/.env. Compose only reads the .env
+  # adjacent to the compose file (or the shell) for `${VAR}` interpolation and
+  # for COMPOSE_PROFILES; a service-level `env_file:` is injected into the
+  # container and cannot select a profile or feed an interpolation. Verified:
+  # ops/.env's POSTGRES_USER/POSTGRES_DB do not reach interpolation here — the
+  # DSNs below resolve to `devhealth` from their own defaults, which happen to
+  # agree.
+  #
+  # Celery and Beat remain the only scheduler and the owner of every route.
+  # Starting these containers does not transfer a queue or reroute a job: the
+  # durable route lives in worker_job_routes plus the checked-in policy at
+  # ops/contracts/jobs/v1/migration-state.json, and neither is touched here.
+  #
+  # NOTE: this is the `dev-health` project. ops/compose.yml is a SEPARATE
+  # project (dev-health-ops) with its own volumes — running `up` from that file
+  # used to recreate this project's containers with a conflicting postgres
+  # definition, which is what caused the CHAOS-3142 incident. Do not try to
+  # attach the Go services to this stack from there.
+  # ===========================================================================
+
+  # Creates the three runtime roles of the CHAOS-3033 Option B split
+  # (domain / queue-control / coordinator) idempotently — the SQL is guarded by
+  # `WHERE NOT EXISTS` per role and validates that all three names are
+  # distinct. Required on any cluster provisioned before the coordinator role
+  # existed: docker/init-extra-dbs.sh only creates roles on a FRESH volume, so
+  # an existing dev cluster has devhealth_domain and devhealth_queue but no
+  # devhealth_coordinator, and go-reconciler cannot start without it.
+  go-river-provision:
+    image: postgres:18-alpine
+    profiles: ["go"]
+    restart: "no"
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec psql \
+          --host=postgres \
+          --username="${POSTGRES_USER:-devhealth}" \
+          --dbname="${POSTGRES_DB:-devhealth}" \
+          --set=ON_ERROR_STOP=1 \
+          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
+          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
+          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
+          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+          --file=/opt/dev-health/provision_river_roles.sql
+    volumes:
+      - ${DEV_HEALTH_OPS_ROOT:-./ops}/scripts/worker/provision_river_roles.sql:/opt/dev-health/provision_river_roles.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev-health
+
+  # Applies the pinned River schema and the per-table grants for the three
+  # runtime roles. The elevated migration DSN is confined to this one-shot
+  # process; the long-running Go services below only ever receive unprivileged
+  # runtime DSNs. It must complete before either of them starts.
+  #
+  # It deliberately does NOT `depends_on: migrate`, even though the tables it
+  # grants against (worker_job_outbox, worker_job_completion_fences, ...) are
+  # created by the Python migrator. `depends_on` pulls a service in regardless
+  # of profile, so that edge made `--profile go up -d` run Alembic to *head* --
+  # which is 0066_activate_river_worker_job_routes, the cutover that retargets
+  # 23 job kinds from Celery to River. The Go services sit downstream of this
+  # one, so the graph guaranteed exactly the ordering 0066 forbids: routes flip
+  # to River before any River consumer can start, and work then accumulates in
+  # worker_job_outbox with nothing to execute it. Bringing up the Go path must
+  # never be able to move production traffic as a side effect.
+  #
+  # The Python schema is therefore an explicit, separately authorized
+  # prerequisite. Bring it to the last pre-cutover revision first:
+  #
+  #   docker compose run --rm --entrypoint sh migrate -c \
+  #     'python -m dev_health_ops.cli migrate postgres upgrade 0065'
+  #
+  # If it is behind that, the grants below silently no-op (they are
+  # to_regclass-guarded so a migration can never fail on a missing table) and
+  # go-reconciler stays unready -- but it now logs the precise missing
+  # table.privilege gaps via DiagnoseRolePosture, so the cause is legible
+  # instead of a bare "dependency unavailable". See CHAOS-3143.
+  go-worker-migrate:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: migrate
+    profiles: ["go"]
+    restart: "no"
+    labels:
+      logging.service.name: dev-health-go-worker-migrate
+      logging.service.namespace: dev-health
+    environment:
+      # Direct postgres:5432, never pgbouncer, and never a runtime role.
+      MIGRATION_DATABASE_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      go-river-provision:
+        condition: service_completed_successfully
+    networks:
+      - dev-health
+
+  # The provider-unit River handler, running the registered sync queue group
+  # from ops/deploy/go-workers/deployment.json.
+  #
+  # IMPORTANT — this service fails closed at startup unless at least one route
+  # switch is enabled, and will crash-loop until you enable one. That is
+  # intentional, not a wiring bug: the sync queue group constructs the
+  # sync.team_autoimport handler whenever sync_provider is selected and a domain
+  # DSN is present, then requires an exact match between what it constructed
+  # and the full job_kinds set the sync worker group declares — which includes
+  # sync.provider_unit. With every route switch off, that match fails. To watch the
+  # path actually execute, set this in the ROOT .env (next to this file) or in
+  # your shell — not ops/.env, which loses to the `environment:` interpolation
+  # below:
+  #
+  #   WORKER_GITHUB_REPO_METADATA_ENABLED=true
+  #
+  # The matrix now records 59 of 59 provider/dataset pairs as route-ready, but
+  # EVERY switch remains false here on purpose. Each must be flipped only with
+  # a reviewed route release; this does not activate a worker group or
+  # change cutover ownership. The SAME switch names are read by the Python
+  # producer gate (ops/src/dev_health_ops/workers/provider_unit_route.py) and
+  # by this Go worker, so one override moves both halves coherently — a unit
+  # the producer routes to River while the Go switch is off finds no handler.
+  # GitHub work-items additionally needs the two explicit config-file paths
+  # below; no ambient STATUS_MAPPING_PATH override is accepted.
+  go-worker:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: worker
+    profiles: ["go"]
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-go-worker
+      logging.service.namespace: dev-health
+    env_file:
+      # NOT ${DEV_HEALTH_OPS_ROOT} — deliberately. The build context follows
+      # that override so a worktree's Dockerfile and Go source get built, but
+      # the developer's real local configuration always lives at ./ops/.env and
+      # a worktree has none. Parameterizing this path made it resolve to a
+      # nonexistent file which `required: false` then skipped in silence, so
+      # SETTINGS_ENCRYPTION_KEY never reached the container and the sync
+      # worker group failed closed with a generic "configure runtime dependencies".
+      # deployment.json lists SETTINGS_ENCRYPTION_KEY in the sync process's
+      # secret_env, so it is required, not optional.
+      - path: ./ops/.env
+        required: false
+    command:
+      - --queues=sync,sync_provider
+      - --queue-concurrency=sync=4,sync_provider=2
+      - --worker-group=sync
+      - --shutdown-timeout=960s
+    environment:
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      # Native protocol port 9000, NOT the HTTP port 8123 every Python service
+      # in this file uses. internal/storage/clickhouse opens with
+      # ClickHouse/clickhouse-go/v2, which speaks the native wire protocol and
+      # Pings eagerly at construction — pointed at 8123 it fails immediately
+      # with "ClickHouse readiness check failed".
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      VALKEY_URI: redis://valkey:6379/1
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_LINEAR_WORK_ITEMS_ENABLED: ${WORKER_LINEAR_WORK_ITEMS_ENABLED:-false}
+      WORKER_JIRA_WORK_ITEMS_ENABLED: ${WORKER_JIRA_WORK_ITEMS_ENABLED:-false}
+      WORKER_JIRA_INCIDENTS_ENABLED: ${WORKER_JIRA_INCIDENTS_ENABLED:-false}
+      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
+      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
+      WORKER_GITHUB_PRS_ENABLED: ${WORKER_GITHUB_PRS_ENABLED:-false}
+      WORKER_GITHUB_PR_REVIEWS_ENABLED: ${WORKER_GITHUB_PR_REVIEWS_ENABLED:-false}
+      WORKER_GITHUB_PR_COMMENTS_ENABLED: ${WORKER_GITHUB_PR_COMMENTS_ENABLED:-false}
+      WORKER_GITHUB_CICD_ENABLED: ${WORKER_GITHUB_CICD_ENABLED:-false}
+      WORKER_GITHUB_COMMITS_ENABLED: ${WORKER_GITHUB_COMMITS_ENABLED:-false}
+      WORKER_GITHUB_DEPLOYMENTS_ENABLED: ${WORKER_GITHUB_DEPLOYMENTS_ENABLED:-false}
+      WORKER_GITHUB_SECURITY_ENABLED: ${WORKER_GITHUB_SECURITY_ENABLED:-false}
+      WORKER_GITHUB_FILES_ENABLED: ${WORKER_GITHUB_FILES_ENABLED:-false}
+      WORKER_GITHUB_COMMIT_STATS_ENABLED: ${WORKER_GITHUB_COMMIT_STATS_ENABLED:-false}
+      WORKER_GITHUB_BLAME_ENABLED: ${WORKER_GITHUB_BLAME_ENABLED:-false}
+      WORKER_GITHUB_TESTS_ENABLED: ${WORKER_GITHUB_TESTS_ENABLED:-false}
+      WORKER_GITHUB_WORK_ITEMS_ENABLED: ${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}
+      WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
+      WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
+      WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
+      WORKER_GITLAB_COMMITS_ENABLED: ${WORKER_GITLAB_COMMITS_ENABLED:-false}
+      WORKER_GITLAB_COMMIT_STATS_ENABLED: ${WORKER_GITLAB_COMMIT_STATS_ENABLED:-false}
+      WORKER_GITLAB_CICD_ENABLED: ${WORKER_GITLAB_CICD_ENABLED:-false}
+      WORKER_GITLAB_TESTS_ENABLED: ${WORKER_GITLAB_TESTS_ENABLED:-false}
+      WORKER_GITLAB_INCIDENTS_ENABLED: ${WORKER_GITLAB_INCIDENTS_ENABLED:-false}
+      WORKER_GITLAB_DEPLOYMENTS_ENABLED: ${WORKER_GITLAB_DEPLOYMENTS_ENABLED:-false}
+      WORKER_GITLAB_FEATURE_FLAGS_ENABLED: ${WORKER_GITLAB_FEATURE_FLAGS_ENABLED:-false}
+      WORKER_GITLAB_FILES_ENABLED: ${WORKER_GITLAB_FILES_ENABLED:-false}
+      WORKER_GITLAB_BLAME_ENABLED: ${WORKER_GITLAB_BLAME_ENABLED:-false}
+      WORKER_GITLAB_PRS_ENABLED: ${WORKER_GITLAB_PRS_ENABLED:-false}
+      WORKER_GITLAB_PR_REVIEWS_ENABLED: ${WORKER_GITLAB_PR_REVIEWS_ENABLED:-false}
+      WORKER_GITLAB_PR_COMMENTS_ENABLED: ${WORKER_GITLAB_PR_COMMENTS_ENABLED:-false}
+      WORKER_GITLAB_SECURITY_ENABLED: ${WORKER_GITLAB_SECURITY_ENABLED:-false}
+      WORKER_GITLAB_WORK_ITEMS_ENABLED: ${WORKER_GITLAB_WORK_ITEMS_ENABLED:-false}
+      WORKER_PAGERDUTY_SERVICES_ENABLED: ${WORKER_PAGERDUTY_SERVICES_ENABLED:-false}
+      WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED: ${WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED:-false}
+      WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED: ${WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED:-false}
+      WORKER_PAGERDUTY_SCHEDULES_ENABLED: ${WORKER_PAGERDUTY_SCHEDULES_ENABLED:-false}
+      WORKER_PAGERDUTY_ON_CALLS_ENABLED: ${WORKER_PAGERDUTY_ON_CALLS_ENABLED:-false}
+      WORKER_PAGERDUTY_USERS_ENABLED: ${WORKER_PAGERDUTY_USERS_ENABLED:-false}
+      WORKER_PAGERDUTY_TEAMS_ENABLED: ${WORKER_PAGERDUTY_TEAMS_ENABLED:-false}
+      WORKER_PAGERDUTY_INCIDENTS_ENABLED: ${WORKER_PAGERDUTY_INCIDENTS_ENABLED:-false}
+      # sync.team_autoimport's post-sync bridge is constructed unconditionally
+      # for the sync worker group, and the HTTP bridge fails closed on an empty
+      # base URL or token, so both are required for this service to start even
+      # though the group's secret_env list does not name them. The token
+      # below is a local placeholder, not a credential.
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    ports:
+      # Operator/readiness surface: /readyz, /healthz, /metrics.
+      - "${GO_WORKER_PORT:-8081}:8080"
+    networks:
+      - dev-health
+
+  # Relays worker_job_outbox rows into River and observes the sync-dispatch
+  # outbox. This is a coordinator-role binary, so COORDINATOR_DATABASE_URI is
+  # required and MUST use the dedicated session pool — transaction-mode pooling cannot
+  # hold the cross-statement row and table locks the coordinator takes, and the
+  # process rejects a pooled coordinator DSN at startup rather than risking
+  # them silently spanning connections. It declares no worker group, so
+  # DEV_HEALTH_PROFILE must not be set here.
+  go-reconciler:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/go-worker.Dockerfile
+      target: reconciler
+    profiles: ["go"]
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-go-reconciler
+      logging.service.namespace: dev-health
+    env_file:
+      - path: ./ops/.env
+        required: false
+    environment:
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-devhealth}
+      WORKER_DATABASE_MODE: session
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-devhealth}
+      COORDINATOR_DATABASE_MODE: session
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+    ports:
+      - "${GO_RECONCILER_PORT:-8082}:8080"
+    networks:
+      - dev-health

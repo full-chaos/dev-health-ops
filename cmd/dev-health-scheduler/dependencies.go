@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -40,7 +42,7 @@ type postgresSchedulerDatabase struct {
 // internal/storage/postgres/domain_authorization.go, and
 // internal/scheduler/sync/transaction.go's `FOR UPDATE OF config, job
 // SKIP LOCKED` requires UPDATE on those rows even though it writes nothing
-// else. deploy/go-workers/profiles.json already budgets
+// else. deploy/go-workers/deployment.json already budgets
 // coordinator_max_connections: 2 for the "scheduler" process, and both loops
 // are single-transaction-at-a-time (the sync loop hands off then reconciles
 // sequentially; the fixed engine runs one occurrence transaction at a time),
@@ -113,14 +115,10 @@ func (database *postgresSchedulerDatabase) RiverSchemaReady(
 	return err
 }
 
-// DomainPool exists for the readiness identity, not for composition: since
-// CHAOS-3114 repointed the fixed engine, no loop in this process is built on
-// the domain pool at all. The pool is still opened and still gated by
-// DomainReady, because the process's own domain login must be proven to hold
-// exactly domainPosture -- cross-role attribution is distributed, so a
-// privilege wrongly granted to the domain login is caught only by the domain
-// login's own check. Anything wired onto this pool again would need its own
-// justification against coordinatorPosture first.
+// DomainPool is the native scheduled-sync materializer's persistence pool.
+// Policy locks and coordinator ledgers stay on CoordinatorPool; sync_runs,
+// sync_run_units, and FK-dependent provider inventory repair commit together
+// on the domain transaction.
 func (database *postgresSchedulerDatabase) DomainPool() *pgxpool.Pool {
 	if database == nil || database.pools == nil {
 		return nil
@@ -247,12 +245,12 @@ type schedulerRuntimeSources struct {
 	// CHAOS-3114 it takes the COORDINATOR pool: its occurrence ledger is
 	// coordinator-exclusive and commits with the producers' domain rows in one
 	// transaction.
-	newFixedLoop func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error)
+	newFixedLoop func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error)
 	// newOccurrences builds the consumer for the occurrences the sync loop
 	// hands off. It is constructed in the same process for the same reason:
 	// the marker advances on handoff, so an unconsumed occurrence is stranded
 	// work rather than a delayed one.
-	newOccurrences func(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
+	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -276,12 +274,12 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
 	newFixedLoop:   buildFixedScheduleLoop,
-	newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
-		// The native planner does not exist yet, so this is deliberately the
-		// explicit missing-planner seam rather than a stub that succeeds. A
-		// scheduler with no pending occurrences stays healthy; the first real
-		// pending occurrence closes readiness until CUT-09/CUT-10 lands.
-		return schedulersync.NewOccurrenceReconciler(pool, schedulersync.NewUnavailableMaterializer())
+	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		materializer, err := schedulersync.NewNativeMaterializer(domainPool)
+		if err != nil {
+			return nil, err
+		}
+		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
 }
 
@@ -289,12 +287,14 @@ func buildProductionSchedulerLoop(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	loggers ...*slog.Logger,
 ) (lifecycle.Component, error) {
 	return buildSchedulerLoopWithSources(
 		ctx,
 		cfg,
 		registry,
 		productionSchedulerRuntimeSources,
+		loggers...,
 	)
 }
 
@@ -303,16 +303,50 @@ func buildSchedulerLoopWithSources(
 	cfg config.Config,
 	registry *health.Registry,
 	sources schedulerRuntimeSources,
+	loggers ...*slog.Logger,
 ) (lifecycle.Component, error) {
+	// Variadic for the same reason the worker's configure path is: existing
+	// callers and test doubles stay source-compatible, and a caller that has no
+	// logger to give is not forced to invent one.
+	var logger *slog.Logger
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	if ctx == nil || registry == nil || sources.openDatabase == nil ||
 		sources.newRepository == nil || sources.newCoordinator == nil ||
 		sources.newLoop == nil || sources.newFixedLoop == nil ||
 		sources.newOccurrences == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_build_sources_unavailable")
 	}
 	database, err := sources.openDatabase(ctx, cfg)
+	if err != nil && postgres.ConfigurationRejected(err) {
+		// A DECLARED configuration rejection -- most commonly no DSN supplied
+		// at all -- keeps the process live and unready, exactly as the worker
+		// does, so an operator scrapes named readiness failures instead of
+		// reading a crash loop (CHAOS-3873). The scheduler previously treated
+		// every open failure as fatal, so an unconfigured scheduler container
+		// exited before it could publish its operator port at all.
+		//
+		// The same five names the goOwnsMarkers gate closes are closed here,
+		// so the externally visible readiness surface does not change shape
+		// depending on WHY the loop is not running.
+		if registerErr := processreadiness.RegisterUnavailable(
+			registry,
+			"domain_postgres",
+			"queue_postgres",
+			"coordinator_postgres",
+			"river_schema",
+			"scheduler_loop",
+		); registerErr != nil {
+			return nil, registerErr
+		}
+		return nil, errSchedulerDatabaseUnconfigured
+	}
 	if err != nil || database == nil {
-		return nil, errSchedulerActivationUnavailable
+		// Operational failure -- unreachable host, refused credentials, an
+		// unparseable DSN. Crash-loop rather than idle as an alive-but-unready
+		// zombie.
+		return nil, dependencyUnavailable("scheduler_domain_database_open_failed")
 	}
 	closeOnError := true
 	defer func() {
@@ -349,27 +383,31 @@ func buildSchedulerLoopWithSources(
 	// closed with postgres.ErrUnavailable instead.
 	coordinatorPool, err := database.CoordinatorPool()
 	if err != nil || coordinatorPool == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_coordinator_pool_unavailable")
+	}
+	domainPool := database.DomainPool()
+	if domainPool == nil {
+		return nil, dependencyUnavailable("scheduler_domain_pool_unavailable")
 	}
 	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_handoff_repository_construction_failed")
 	}
 	coordinator := sources.newCoordinator()
 	if coordinator == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_occurrence_coordinator_unavailable")
 	}
-	occurrences, err := sources.newOccurrences(coordinatorPool)
+	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
 	if err != nil || occurrences == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
 	}
 	loop, err := sources.newLoop(
 		repository,
 		coordinator,
-		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences),
+		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences).WithLogger(logger),
 	)
 	if err != nil || loop == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_sync_loop_construction_failed")
 	}
 	// The fixed maintenance scheduler is deliberately optional. Product schedule
 	// handoff and pending-occurrence reconciliation are a different workload
@@ -402,7 +440,7 @@ func buildSchedulerLoopWithSources(
 	// The domain role deliberately did NOT gain fixed_schedule_occurrences:
 	// widening the login that provider-sync workers use is what the partition
 	// exists to prevent.
-	fixedLoop, err := sources.newFixedLoop(coordinatorPool, registry)
+	fixedLoop, err := sources.newFixedLoop(coordinatorPool, registry, logger)
 	if err != nil || fixedLoop == nil {
 		// The gate stays unattached, so both names report unavailable while the
 		// product loop below runs normally.

@@ -1,0 +1,4 @@
+# This file is ONLY comments, so yaml.safe_load returns None exactly as it
+# does for a zero-byte file -- and `data.get("rules", [])` is then an attribute
+# lookup on None. Kept separate from raises_empty.yaml because a reader would
+# reasonably expect a file with content in it to parse to something.

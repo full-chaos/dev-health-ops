@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -108,7 +109,7 @@ func TestReconcilerLoopImmediateNoopStepOpensReadiness(t *testing.T) {
 
 func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
-	results := []StepResult{{Claimed: 2, Delivered: 1, Retried: 1}, {Claimed: 3, Dead: 1, LeaseLost: 2}}
+	results := []StepResult{{Recovered: 1, PostRepairContractRejectionsRecovered: 1, Claimed: 2, Delivered: 1, Retried: 1}, {Recovered: 2, Claimed: 3, Dead: 1, LeaseLost: 2}}
 	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		result := results[0]
 		results = results[1:]
@@ -130,6 +131,8 @@ func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *test
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"worker_outbox_reconciler_terminal_deliveries_recovered_total 3",
+		"worker_outbox_reconciler_post_repair_contract_rejections_recovered_total 1",
 		"worker_outbox_reconciler_claimed_total 5",
 		"worker_outbox_reconciler_delivered_total 1",
 		"worker_outbox_reconciler_retried_total 1",
@@ -256,5 +259,33 @@ func TestReconcilerLoopRejectsUnboundedConfiguration(t *testing.T) {
 		if _, err := NewReconcilerLoop(stepper, config); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("NewReconcilerLoop(%#v) error = %v", config, err)
 		}
+	}
+}
+
+// TestReconcilerLoopWithoutALoggerDoesNotFallBackToSlogDefault proves the
+// mirror image of the logging tests above: a loop given no Logger must not
+// panic on a failed step, and it must not fall back to slog.Default() --
+// that would send output to a sink other than the process's configured JSON
+// logger, so a log-capturing test could pass while production ships nothing
+// (CHAOS-3907).
+func TestReconcilerLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(original)
+
+	failure := errors.New("initial step probe failure")
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, failure
+	})
+	loop, _ := newTestReconcilerLoop(t, stepper, &testReconcilerClock{})
+	if loop.config.Logger != nil {
+		t.Fatal("test loop unexpectedly has a logger")
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted initial step failure")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }

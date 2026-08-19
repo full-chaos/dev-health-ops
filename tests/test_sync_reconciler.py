@@ -16,6 +16,10 @@ from dev_health_ops.models import (
     Base,
     Integration,
     IntegrationSource,
+    JobRun,
+    ScheduledJob,
+    ScheduledSyncOccurrence,
+    SyncConfiguration,
     SyncDispatchOutbox,
     SyncDispatchTransportRoute,
     SyncRun,
@@ -36,6 +40,21 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from tests._helpers import sync_postgres_test_url
+
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+
+
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_TEST_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(f"{_POSTGRES_TEST_URI_ENV} must be configured for PostgreSQL tests")
+    pytest.skip(f"requires {_POSTGRES_TEST_URI_ENV}")
+
+
+@pytest.fixture(scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 @pytest.fixture
@@ -234,10 +253,7 @@ def test_reconciler_parity_logging_failure_does_not_change_claims(
     assert dispatches == [((str(run.id),), "sync")]
 
 
-@pytest.mark.skipif(
-    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
-    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
-)
+@pytest.mark.usefixtures("require_postgres_test_uri")
 def test_parity_capture_recovery_clears_real_postgres_statement_failure():
     from dev_health_ops.workers.sync_reconciler import (
         _recover_sync_dispatch_parity_capture_transaction,
@@ -375,6 +391,43 @@ def _seed_zero_unit_run(session):
     return run
 
 
+def _seed_scheduled_readiness_record(session, run):
+    run.triggered_by = "schedule"
+    config = SyncConfiguration(
+        name=f"scheduled-ready-config-{run.id}",
+        provider="github",
+        org_id=run.org_id,
+        sync_targets=["git"],
+        sync_options={"schedule_cron": "0 * * * *"},
+        integration_id=run.integration_id,
+    )
+    session.add(config)
+    session.flush()
+    job = ScheduledJob(
+        name=f"scheduled-ready-job-{run.id}",
+        job_type="sync",
+        schedule_cron="0 * * * *",
+        org_id=run.org_id,
+        provider="github",
+        sync_config_id=config.id,
+    )
+    session.add(job)
+    session.flush()
+    job_run = JobRun(job_id=job.id, triggered_by="schedule")
+    occurrence = ScheduledSyncOccurrence(
+        occurrence_id=f"scheduled-readiness-fence-{run.id}",
+        identity_version="sync_scheduler_occurrence_v1",
+        org_id=run.org_id,
+        sync_config_id=config.id,
+        scheduled_job_id=job.id,
+        scheduled_for=datetime.now(timezone.utc),
+        reconcile_status="pending",
+    )
+    session.add_all([job_run, occurrence])
+    session.flush()
+    return job_run, occurrence
+
+
 def _outbox_row(session, run, kind):
     return (
         session.query(SyncDispatchOutbox).filter_by(sync_run_id=run.id, kind=kind).one()
@@ -429,6 +482,69 @@ def test_reconciler_expires_dead_running_and_dispatches_pending(
     assert finalizers == []
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.claim_token is None
+
+
+def test_scheduled_dispatch_waits_for_committed_occurrence_readiness(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=1)
+    running.status = SyncRunUnitStatus.SUCCESS.value
+    running.lease_owner = None
+    running.lease_expires_at = None
+    job_run, occurrence = _seed_scheduled_readiness_record(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+
+    before_ready = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert before_ready["materialized_dispatch"] == 0
+    assert before_ready["relayed_dispatch"] == 0
+    assert dispatches == []
+    assert (
+        db_session.query(SyncDispatchOutbox)
+        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
+        .one_or_none()
+        is None
+    )
+
+    occurrence.job_run_id = job_run.id
+    occurrence.sync_run_id = run.id
+    occurrence.reconcile_status = "completed"
+    db_session.flush()
+
+    after_ready = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert after_ready["materialized_dispatch"] == 1
+    assert after_ready["relayed_dispatch"] == 1
+    assert dispatches == [((str(run.id),), "sync")]
+    assert _outbox_row(db_session, run, OUTBOX_KIND_DISPATCH).status == (
+        OUTBOX_STATUS_DISPATCHED
+    )
+
+
+def test_scheduled_zero_unit_finalize_waits_for_committed_occurrence_readiness(
+    db_session,
+):
+    from dev_health_ops.workers.sync_reconciler import _finalizable_run_ids
+
+    run = _seed_zero_unit_run(db_session)
+    job_run, occurrence = _seed_scheduled_readiness_record(db_session, run)
+
+    assert str(run.id) not in _finalizable_run_ids(db_session, 10)
+
+    occurrence.job_run_id = job_run.id
+    occurrence.sync_run_id = run.id
+    occurrence.reconcile_status = "completed"
+    db_session.flush()
+
+    assert _finalizable_run_ids(db_session, 10) == {str(run.id)}
 
 
 def test_reconciler_finalizes_when_dead_running_makes_run_terminal(

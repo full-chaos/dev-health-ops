@@ -5,12 +5,12 @@
 // PostgreSQL. It cannot receive a command, metric rows, SQL, credentials, or
 // caller-selected Python module.
 //
-// All three kinds deliberately use the existing heavy/metrics profile. Celery's
+// All three kinds deliberately use the registered metrics queue. Celery's
 // current all-org fanout is lightweight and uses default, but this dispatcher
 // owns durable run/partition publication and must share the same bounded
-// ClickHouse-facing topology as its partitions/finalizer. It does not create a
-// new profile, and the checked-in route remains Celery until this topology and
-// its compatibility executor are fully audited.
+// ClickHouse-facing queue as its partitions and finalizer. The checked-in route
+// remains Celery until this topology and its compatibility executor are fully
+// audited.
 package daily
 
 import (
@@ -33,6 +33,10 @@ type Run struct {
 	OrganizationID string
 	Generation     string
 	Status         string
+	// RepositoryDiscoveryRequired is true only for the fixed daily fan-out
+	// generation while it has no durable partitions. A metrics-queue worker owns the
+	// ClickHouse read and resolves this state before it can publish a partition.
+	RepositoryDiscoveryRequired bool
 }
 
 // StartRunRequest is the immutable post-sync input for one daily generation.
@@ -44,6 +48,16 @@ type StartRunRequest struct {
 	Generation                string
 	RepositoryIDs             []string
 	PrerequisiteCompletionKey string
+}
+
+// ScheduledFanoutRequest creates the durable state for the nightly all-org
+// fan-out. Repository discovery intentionally happens later in the heavy
+// worker: the scheduler owns only the coordinator Postgres transaction and
+// must never make a remote ClickHouse read while holding it.
+type ScheduledFanoutRequest struct {
+	OrganizationID string
+	TargetDay      time.Time
+	Generation     string
 }
 
 type Partition struct {
@@ -71,6 +85,7 @@ type Store interface {
 	LoadRun(context.Context, string) (Run, error)
 	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
+	MaterializeScheduledFanout(context.Context, Run, []string) (bool, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
@@ -79,6 +94,13 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
+}
+
+// RepositoryDiscoverer reads the authoritative repository IDs for one
+// organization. It is deliberately called only by the heavy worker after the
+// scheduler transaction has committed the daily run and dispatch handoff.
+type RepositoryDiscoverer interface {
+	RepositoryIDs(context.Context, string) ([]string, error)
 }
 
 // Publisher persists a child handoff. Its production implementation must use
@@ -100,19 +122,20 @@ type CompatibilityExecutor interface {
 }
 
 type Dispatcher struct {
-	store     Store
-	publisher Publisher
+	store      Store
+	publisher  Publisher
+	discoverer RepositoryDiscoverer
 }
 
-func NewDispatcher(store Store, publisher Publisher) (*Dispatcher, error) {
-	if store == nil || publisher == nil {
+func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscoverer) (*Dispatcher, error) {
+	if store == nil || publisher == nil || discoverer == nil {
 		return nil, ErrUnavailable
 	}
-	return &Dispatcher{store: store, publisher: publisher}, nil
+	return &Dispatcher{store: store, publisher: publisher, discoverer: discoverer}, nil
 }
 
 func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsDispatchArgs]) error {
-	if handler == nil || handler.store == nil || handler.publisher == nil || execution == nil {
+	if handler == nil || handler.store == nil || handler.publisher == nil || handler.discoverer == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	runID := execution.Args.Payload.RunID
@@ -131,6 +154,18 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	}
 	if run.ID != runID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		return jobruntime.Permanent(ErrInvalidState)
+	}
+	if run.RepositoryDiscoveryRequired {
+		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
+		if err != nil {
+			return jobruntime.Retryable(err)
+		}
+		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs); err != nil {
+			if errors.Is(err, ErrInvalidState) {
+				return jobruntime.Permanent(err)
+			}
+			return jobruntime.Retryable(err)
+		}
 	}
 	partitions, err := handler.store.DispatchablePartitions(ctx, runID)
 	if err != nil {

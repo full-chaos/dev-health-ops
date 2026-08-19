@@ -725,8 +725,8 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -779,8 +779,8 @@ async def test_integration_trigger_returns_terminal_plan_without_enqueue(
             return_value=terminal_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            dispatch.apply_async,
         ),
     ):
         response = await ac.post(
@@ -830,8 +830,8 @@ async def test_integration_triggers_translate_feature_denial_to_403(
             side_effect=denial,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         response = await ac.post(
@@ -845,7 +845,7 @@ async def test_integration_triggers_translate_feature_denial_to_403(
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_returns_202_when_enqueue_fails(
+async def test_trigger_sync_uses_durable_outbox_without_celery_publication(
     client,
     session_maker,
 ):
@@ -857,8 +857,8 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
     mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
     with patch(
-        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-        mock_dispatch,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(
             f"/api/v1/admin/integrations/{integration_id}/sync",
@@ -867,6 +867,7 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
 
     assert resp.status_code == 202
     assert resp.json()["status"] == "accepted"
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         result = await session.execute(
@@ -923,8 +924,8 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -943,7 +944,95 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_trigger_backfill_returns_202_when_enqueue_fails(
+async def test_trigger_backfill_selector_object_org_scoped(client, seeded_state):
+    """Selector-shaped backfill requests must still plan through the admin API."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    source_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    dataset_keys = ["work-item-labels", "work-item-comments"]
+
+    mock_plan = MagicMock()
+    mock_plan.sync_run_id = str(uuid.uuid4())
+    mock_plan.total_units = 0
+    mock_plan.unit_ids = ()
+
+    captured_request = {}
+
+    def _fake_plan(session, request):
+        captured_request["org_id"] = request.org_id
+        captured_request["mode"] = request.mode
+        captured_request["source_ids"] = request.source_ids
+        captured_request["dataset_keys"] = request.dataset_keys
+        captured_request["backfill_selector"] = request.backfill_selector
+        return mock_plan
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock()
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            side_effect=_fake_plan,
+        ),
+        patch(
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
+        ),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/backfill",
+            json={
+                "selector": {
+                    "since": "2024-01-01T00:00:00Z",
+                    "before": "2024-02-01T00:00:00Z",
+                    "source_ids": source_ids,
+                    "dataset_keys": dataset_keys,
+                }
+            },
+        )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert captured_request["org_id"] == seeded_state["org_id"]
+    assert captured_request["mode"] == "backfill"
+    assert captured_request["source_ids"] is None
+    assert captured_request["dataset_keys"] is None
+    assert captured_request["backfill_selector"] is not None
+    assert captured_request["backfill_selector"].source_ids == tuple(source_ids)
+    assert captured_request["backfill_selector"].dataset_keys == tuple(dataset_keys)
+
+
+@pytest.mark.asyncio
+async def test_trigger_backfill_rejects_mixed_selector_shapes(client):
+    """Structured selector plus legacy flat fields must fail validation."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    with patch(
+        "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+        side_effect=AssertionError("planner should not be called on invalid payload"),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/backfill",
+            json={
+                "selector": {
+                    "since": "2024-01-01T00:00:00Z",
+                    "before": "2024-02-01T00:00:00Z",
+                    "source_ids": [str(uuid.uuid4())],
+                },
+                "source_ids": [str(uuid.uuid4())],
+            },
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_trigger_backfill_uses_durable_outbox_without_celery_publication(
     client,
     session_maker,
 ):
@@ -955,8 +1044,8 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
     mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
     with patch(
-        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-        mock_dispatch,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(
             f"/api/v1/admin/integrations/{integration_id}/backfill",
@@ -968,6 +1057,7 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
 
     assert resp.status_code == 202
     assert resp.json()["status"] == "accepted"
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         result = await session.execute(
@@ -1454,8 +1544,8 @@ async def test_trigger_sync_empty_selection_is_zero_units_not_all(client):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -1731,8 +1821,8 @@ async def test_trigger_sync_full_resync_flag_sets_mode(client):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(

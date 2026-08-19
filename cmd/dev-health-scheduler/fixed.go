@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -29,37 +31,17 @@ const defaultContractRoot = "contracts/jobs/v1"
 // vague predecessors let two of these gaps stay invisible while their
 // tickets were closed.
 //
-// The two producers still registered as NewNotImplementedProducer below are
-// declared but not built. Registering a stub that quietly produced nothing would
-// make an unmigrated schedule indistinguishable from a healthy one, so each one
-// instead fails the window, which closes `fixed_scheduler_loop` readiness and
-// keeps the schedule out of any migration evidence until its blocker is cleared.
+// The daily-metrics fan-out now creates one durable per-organization run and
+// dispatch handoff in the coordinator transaction. The heavy worker claims that
+// run, reads ClickHouse repository identities, and atomically materializes only
+// non-empty partitions. An empty snapshot terminalizes as no_repositories,
+// without a synthetic zero-work partition.
 //
-// Both remaining gaps are ONE blocker, and it is architectural rather than
-// unstarted work — the reason strings say so, because the previous wording
-// ("needs Go per-organization repository discovery") read as a to-do and let the
-// gap stay invisible while CUT-12 was marked done:
-//
-// Both schedules target metrics.daily_dispatch, which requires a
-// daily_metrics_runs row whose partitions carry real repository IDs. The
-// partition compute iterates scope["repo_ids"] and reports success having done
-// nothing for an empty list (see _run_daily_direct in
-// src/dev_health_ops/api/internal/worker_metrics.py), so an empty-repo partition
-// is a false pass, not a whole-organization run. Repository identity lives only
-// in the ClickHouse `repos` table — there is no repositories table anywhere in
-// PostgreSQL — while this process has no ClickHouse dependency and every
-// producer runs inside Engine.runOccurrence's single coordinator transaction,
-// where a remote read is forbidden. The fix belongs on the worker side, which
-// already holds a ClickHouse connection: discovery should materialize partitions
-// from internal/jobs/metrics/daily after the run is claimed, leaving the
-// scheduler to create only the run.
-//
-// scheduled_metrics_dispatch carries a second, independent problem worth
-// recording next to the first: no code path in the product creates a
-// ScheduledJob with job_type='metrics'. Every writer produces 'sync' or
-// 'report'. The legacy sweep this schedule replaces has therefore never
-// dispatched anything, so whether the schedule should exist at all is a product
-// question, not a porting one.
+// `dispatch-scheduled-metrics` is no longer in this set. CHAOS-3128 retired it
+// after its source audit found no production ScheduledJob writer for
+// job_type='metrics' and a read-only audit found no live rows. The retirement
+// ledger in internal/scheduler/fixed/inventory.go pins that decision and fails
+// if the stale Beat key returns without a reviewed owner.
 // The parameter is named for the pool it actually receives, not generically:
 // the coordinator grant deriver re-seeds taint by naming convention at
 // function-typed struct-field call sites, and a bare `pool` reads as unattributed
@@ -73,6 +55,22 @@ func buildFixedScheduleProducers(
 		return nil, err
 	}
 	remainingPublisher, err := remaining.NewPostgresPublisher(coordinatorPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	dailyStore, err := daily.NewPostgresStore(coordinatorPool)
+	if err != nil {
+		return nil, err
+	}
+	dailyPublisher, err := daily.NewPostgresPublisher(coordinatorPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	dailyFanout, err := schedulerfixed.NewDailyMetricsFanoutProducer(
+		dailyStore,
+		dailyPublisher,
+		schedulerfixed.NewPostgresOrganizationLister(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -113,19 +111,11 @@ func buildFixedScheduleProducers(
 	}
 	return schedulerfixed.NewProducerSet(
 		schedulerfixed.NewHeartbeatProducer(),
+		schedulerfixed.NewSyncCoverageRefreshProducer(),
 		retention,
 		remainingFanout,
 		scheduledReports,
-		schedulerfixed.NewNotImplementedProducer(
-			schedulerfixed.ProducerDailyMetricsFanout,
-			"blocked: repository identity is ClickHouse-only and this process has no "+
-				"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-		),
-		schedulerfixed.NewNotImplementedProducer(
-			schedulerfixed.ProducerScheduledMetricsDispatch,
-			"blocked on the same ClickHouse-only repository discovery; separately, no "+
-				"code path creates a job_type='metrics' ScheduledJob for it to sweep",
-		),
+		dailyFanout,
 	)
 }
 
@@ -143,12 +133,12 @@ var errFixedScheduleUnbuilt = errors.New("declared fixed schedule has no built p
 // maps onto the schedule table with matching cadence, timezone and catch-up
 // policy, an ownership property, and never constructs a producer at all.
 //
-// This is currently SUBSUMED by the goOwnsMarkers gate: the process already
-// registers unavailable in main.go because checkedInSchedulerActivation
-// .goOwnsMarkers is false, so on today's tree this check never decides anything.
-// It is deliberately not dead code. It becomes load-bearing at the exact moment
-// someone flips that flag, which is the moment a paper-owned schedule must stop
-// the process rather than quietly never run.
+// This check is LOAD-BEARING on today's tree. It was previously subsumed by the
+// goOwnsMarkers gate -- the process registered unavailable in main.go because
+// checkedInSchedulerActivation.goOwnsMarkers was false, so the check never
+// decided anything -- but main.go now sets that flag TRUE. The moment it was
+// flipped is exactly the moment a paper-owned schedule must stop the process
+// rather than quietly never run, which is what this check does.
 func refuseUnbuiltFixedSchedules(
 	producers *schedulerfixed.ProducerSet,
 	schedules []schedulerfixed.Schedule,
@@ -197,9 +187,10 @@ func refuseUnbuiltFixedSchedules(
 func buildFixedScheduleLoop(
 	coordinatorPool *pgxpool.Pool,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) (fixedScheduleRuntime, error) {
 	if coordinatorPool == nil || registry == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_fixed_loop_inputs_unavailable")
 	}
 	jobs, err := jobruntime.Load(defaultContractRoot)
 	if err != nil {
@@ -231,5 +222,10 @@ func buildFixedScheduleLoop(
 	if err != nil {
 		return nil, err
 	}
-	return schedulerfixed.NewLoop(engine, schedulerfixed.DefaultLoopConfig(registry))
+	loopConfig := schedulerfixed.DefaultLoopConfig(registry)
+	// Without this the loop can fail every 15s window indefinitely and emit
+	// nothing, which is exactly how a single non-conformant organization row
+	// held this process unready with no attributable signal (CHAOS-3903).
+	loopConfig.Logger = logger
+	return schedulerfixed.NewLoop(engine, loopConfig)
 }

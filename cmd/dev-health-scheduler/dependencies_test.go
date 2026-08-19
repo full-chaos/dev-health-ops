@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,7 +85,7 @@ func (stubOccurrenceStepper) Reconcile(
 	return schedulersync.OccurrenceReconcileResult{}, nil
 }
 
-func stubOccurrenceSource(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+func stubOccurrenceSource(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
 	return stubOccurrenceStepper{}, nil
 }
 
@@ -184,15 +185,18 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			})
 		},
 		newLoop: schedulersync.NewLoop,
-		newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		newOccurrences: func(pool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
 			// CHAOS-3114: scheduled_sync_occurrences is coordinator-exclusive,
 			// so the reconciler must also run on the coordinator pool.
 			if pool != database.coordinatorPool {
 				t.Fatal("occurrence reconciler received the wrong pool; want the coordinator pool")
 			}
-			return stubOccurrenceSource(pool)
+			if domainPool != database.pool {
+				t.Fatal("materializer received the wrong pool; want the domain pool")
+			}
+			return stubOccurrenceSource(pool, domainPool)
 		},
-		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (fixedScheduleRuntime, error) {
+		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry, _ *slog.Logger) (fixedScheduleRuntime, error) {
 			// CHAOS-3114 (second half): the fixed engine runs on the
 			// coordinator pool as well. runOccurrence commits the
 			// coordinator-exclusive occurrence ledger together with the
@@ -269,7 +273,7 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
 			newOccurrences: stubOccurrenceSource,
-			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error) {
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
 				return nil, errors.New("fixed schedule loop unavailable")
 			},
 		},
@@ -307,7 +311,7 @@ func TestSyncLoopAndOccurrenceReconcilerRunWithoutTheFixedScheduler(t *testing.T
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
 			newOccurrences: stubOccurrenceSource,
-			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error) {
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
 				return nil, errors.New("fixed maintenance schedules are unavailable")
 			},
 		},
@@ -362,7 +366,7 @@ func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
 			newOccurrences: stubOccurrenceSource,
-			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error) {
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
 				return fixedLoop, nil
 			},
 		},
@@ -419,7 +423,7 @@ func TestFixedLoopConstructorFailureAfterClaimingReadinessNamesStillStartsTheSyn
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
 			newOccurrences: stubOccurrenceSource,
-			newFixedLoop: func(_ *pgxpool.Pool, reg *health.Registry) (fixedScheduleRuntime, error) {
+			newFixedLoop: func(_ *pgxpool.Pool, reg *health.Registry, _ *slog.Logger) (fixedScheduleRuntime, error) {
 				// Step 1: claim both readiness names, exactly as the old
 				// constructor did before its metrics registration.
 				for _, name := range []string{"fixed_scheduler_loop", "fixed_schedule_coverage"} {

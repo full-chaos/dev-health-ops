@@ -69,9 +69,7 @@ func TestRuntimePoolsObserveRealAcquireLatency(t *testing.T) {
 	}
 	defer pools.Close()
 
-	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
-		Profiles: []string{"ops"},
-	})
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -13,8 +14,8 @@ import (
 )
 
 var schedulerSpec = shell.Spec{
-	Service:               "dev-health-scheduler",
-	ConfigureDependencies: configureSchedulerDependencies,
+	Service:                         "dev-health-scheduler",
+	ConfigureDependenciesWithLogger: configureSchedulerDependencies,
 }
 
 // schedulerOwnership is intentionally fixed in the binary. Do not make it an
@@ -29,15 +30,10 @@ var schedulerSpec = shell.Spec{
 // uses, so this variable is the single source of truth for which ownership
 // policy the binary runs with, not a decorative check.
 //
-// Obtaining this policy does NOT make the binary write anything: it still
-// requires checkedInSchedulerActivation.goOwnsMarkers to be true before this
-// process opens a database pool at all (see below), and at minimum one
-// further precondition this change does not attempt to satisfy:
-//
-//   - sources.newOccurrences below still composes
-//     schedulersync.NewUnavailableMaterializer(): the native sync planner is
-//     CUT-09/CUT-10 work, not this change. Activating today would durably
-//     record occurrences Go can never materialize.
+// The checked-in activation below now makes this ownership effective. The
+// deployment contract must still provide the separate domain, queue, and
+// coordinator PostgreSQL connections, and must not run Celery Beat against the
+// same marker tables.
 //
 // CHAOS-3114 repointed every database call site in dependencies.go onto the
 // coordinator pool: first the sync-path repository and occurrence reconciler
@@ -45,17 +41,50 @@ var schedulerSpec = shell.Spec{
 // NewOccurrenceReconciler's SQL -- scheduled_jobs, sync_configurations
 // UPDATE, scheduled_sync_occurrences), then the fixed maintenance engine,
 // whose runOccurrence transaction is now covered end to end by
-// coordinatorPosture (internal/storage/postgres/domain_authorization.go). No
-// 42501 precondition remains. The unavailable materializer above is the sole
-// remaining blocker on goOwnsMarkers.
+// coordinatorPosture (internal/storage/postgres/domain_authorization.go).
+// The materializer now uses both role-specific pools: coordinator policy and
+// ledger work stays on the coordinator pool while sync_runs, sync_run_units,
+// and FK-dependent provider inventory repair commit on the domain pool.
 var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
 
+// dependencyFailure attaches a bounded reason code to the generic activation
+// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// exactly. Before this, every distinct construction failure in this binary --
+// a missing coordinator pool, a failed handoff repository, a broken sync loop
+// -- collapsed into the same bare errSchedulerActivationUnavailable, so the
+// shell logged "dependency_configuration_failed" with no reason and an
+// operator could not tell which knob was wrong (CHAOS-3873/CHAOS-3907). The
+// reason is always a compile-time constant, never interpolated input, so
+// logging it cannot leak a DSN or a secret.
+type dependencyFailure struct {
+	reason string
+}
+
+func (failure dependencyFailure) Error() string {
+	return errSchedulerActivationUnavailable.Error() + ": " + failure.reason
+}
+
+func (dependencyFailure) Unwrap() error { return errSchedulerActivationUnavailable }
+
+// DependencyReason satisfies the shell's reason-code interface.
+func (failure dependencyFailure) DependencyReason() string { return failure.reason }
+
+func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
+// errSchedulerDatabaseUnconfigured marks the one non-fatal outcome of building
+// the loop: the database contract was DECLARED-rejected (typically no DSN), so
+// buildSchedulerLoopWithSources has already closed the readiness names and the
+// process must stay live and unready rather than exit. It is a distinct
+// sentinel rather than a (nil, nil) return so that a loop factory returning nil
+// by mistake still fails loudly.
+var errSchedulerDatabaseUnconfigured = errors.New("scheduler database is not configured")
+
 // schedulerActivation is a source-reviewed, package-private composition seam.
 // It deliberately cannot be influenced by process environment or deployment
-// profile. The production loop factory is retained but remains unreachable
-// until a future change sets goOwnsMarkers true.
+// profile. The production loop factory is reached only through the checked-in
+// ownership decision below.
 //
 // coordinatorPolicyParity was removed deliberately (program-owner decision,
 // CHAOS-3114) rather than left at false: it was a bare bool with a prose
@@ -69,23 +98,17 @@ var errSchedulerActivationUnavailable = errors.New("scheduler activation is unav
 // proves.
 //
 // CHAOS-3128 transferred marker-mutation ownership itself (schedulerOwnership
-// above) but deliberately leaves goOwnsMarkers false, and CHAOS-3114 leaves it
-// false too: this binary's occurrence materializer is still the CUT-09/CUT-10
-// stub (see schedulerOwnership's doc comment). Flipping goOwnsMarkers to true
-// without also resolving that would ship a stranded-occurrence backlog on the
-// first real due schedule, not a working scheduler. The binary therefore stays
-// dormant -- it opens no database pool at all -- and the privilege work in
-// CHAOS-3114 changes nothing about that; it only means the composition this
-// gate guards would no longer fail on a privilege error once the materializer
-// exists.
+// above). The materializer and fixed-schedule producers now satisfy the source
+// precondition for activation; the deployment owner separately supplies the
+// required role-specific connections and removes the competing Beat process.
 type schedulerActivation struct {
 	goOwnsMarkers bool
 }
 
-var checkedInSchedulerActivation = schedulerActivation{}
+var checkedInSchedulerActivation = schedulerActivation{goOwnsMarkers: true}
 
 type schedulerDependencySources struct {
-	buildLoop func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error)
+	buildLoop func(context.Context, config.Config, *health.Registry, ...*slog.Logger) (lifecycle.Component, error)
 }
 
 var productionSchedulerDependencySources = schedulerDependencySources{
@@ -100,6 +123,7 @@ func configureSchedulerDependencies(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
 	return configureSchedulerDependenciesWithSources(
 		ctx,
@@ -107,6 +131,7 @@ func configureSchedulerDependencies(
 		registry,
 		checkedInSchedulerActivation,
 		productionSchedulerDependencySources,
+		logger,
 	)
 }
 
@@ -116,12 +141,13 @@ func configureSchedulerDependenciesWithSources(
 	registry *health.Registry,
 	activation schedulerActivation,
 	sources schedulerDependencySources,
+	loggers ...*slog.Logger,
 ) ([]lifecycle.Component, error) {
 	if err := schedulerOwnership.Validate(); err != nil {
 		return nil, err
 	}
 	if registry == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_registry_unavailable")
 	}
 	if !activation.goOwnsMarkers {
 		// schedulerOwnership alone (CHAOS-3128) is not activation: until this
@@ -137,11 +163,27 @@ func configureSchedulerDependenciesWithSources(
 		)
 	}
 	if sources.buildLoop == nil {
-		return nil, errSchedulerActivationUnavailable
+		return nil, dependencyUnavailable("scheduler_loop_factory_missing")
 	}
-	loop, err := sources.buildLoop(ctx, cfg, registry)
-	if err != nil || loop == nil {
-		return nil, errSchedulerActivationUnavailable
+	loop, err := sources.buildLoop(ctx, cfg, registry, loggers...)
+	if errors.Is(err, errSchedulerDatabaseUnconfigured) {
+		// Live, unready, no components: the readiness names are already
+		// registered unavailable by the loop factory.
+		return nil, nil
+	}
+	if err != nil {
+		// buildSchedulerLoopWithSources already names its own failing
+		// construction site with a bounded reason (see dependencies.go). Preserve
+		// it rather than flattening back to the bare sentinel here -- errors.Is
+		// still matches for any caller (or test double) that returns an
+		// unrelated error, which normalizes below to a reason of its own.
+		if errors.Is(err, errSchedulerActivationUnavailable) {
+			return nil, err
+		}
+		return nil, dependencyUnavailable("scheduler_loop_construction_failed")
+	}
+	if loop == nil {
+		return nil, dependencyUnavailable("scheduler_loop_unavailable")
 	}
 	return []lifecycle.Component{loop}, nil
 }

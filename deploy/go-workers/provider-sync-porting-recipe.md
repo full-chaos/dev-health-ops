@@ -24,6 +24,68 @@ same reasoning that produced the bugs. Treat an adversarial pass over the
 diff as a required step of this recipe, not a nice-to-have, and read the
 checklist below BEFORE writing the handler, not after a review flags it.
 
+**Tenant-isolation precondition:** every port must carry `org_id` through the
+row type, production construction, a mismatch-rejecting validation, the
+ClickHouse INSERT, and the readback predicate. Ship a cross-tenant test that
+is proven to FAIL when `org_id` is removed from the predicate. This is not
+defensive polish: a Critical cross-tenant leak was found on `github/cicd`, and
+making this a precondition let the next three ports ship it first-pass.
+
+**PR governance precondition:** when a change touches
+`src/dev_health_ops/workers/provider_unit_route.py`, the PR body must contain
+the `TEST-EVIDENCE` and `RISK-NOTES` markers required by the `governance`
+check. These are PR-body markers, not code markers; two lanes lost a CI round
+by omitting them.
+
+**Session audit precondition:** audits found a real defect in every port
+produced in this session, merged and unmerged alike, all with green CI. The
+preconditions below come from actual shipped or nearly-shipped defects; they
+are not style guidance.
+
+**Further port preconditions:**
+
+1. **A cited constructor is not proof of capability.** It must be reachable
+   with only its own switch enabled. `github/security` shipped a correct case
+   in `cmd/dev-health-worker/provider_sync.go:127`, but an upstream activation
+   gate returned an empty worker family because that switch was missing from
+   the gate condition. The registry said Go owned it; the binary could not
+   construct it. Add the switch to the activation condition and extend the
+   table-driven `TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch`
+   test, including `providerSyncRouteEnabled`, so only that pair's switch
+   enabled constructs a worker family. Remove the switch and prove the test
+   fails.
+2. **The cross-tenant test must be a true collision, not a one-sided check.**
+   A row under only the foreign tenant proves only that a foreign row is not
+   returned. Insert the SAME natural key under TWO `org_id` values with
+   distinguishable content; assert a tenant-scoped `SELECT ... FINAL` returns
+   exactly one row containing the claim tenant's content; assert `EffectExact`
+   in BOTH directions. Use
+   `internal/providersync/github_commit_stats_effects_integration_test.go` as
+   the example. This defect shipped twice on the same PR; both variants pass
+   an `org_id` predicate mutation proof and read the same in a PR summary.
+3. **Never both capped and successful.** If pagination reaches a cap, fail the
+   unit and do not advance the watermark. Otherwise the dropped records are
+   deterministic and every later run skips them. The rule is explicit at
+   `internal/providersync/github_prs_route.go:203`, but
+   `launchdarkly/feature-flags` and `github/cicd` currently truncate silently,
+   return success, and advance state at their 5,000-flag and 1,000-run caps.
+   Tracked as CHAOS-3192, CHAOS-3196, and CHAOS-3188.
+4. **An empty result must be distinguishable from a broken fetch.** A producer
+   that reports SUCCESS on an empty inventory passes seam tests while the
+   capability is absent. Emit an explicit status distinguishing `complete`,
+   `empty`, and `no_commit_at_bound`, as the `github/files` route does, and
+   assert it in a test. Also persist the computed `FetchEvidence.CapReached`
+   into the unit `Result`; `internal/providersync/native_rest.go:30` defines
+   the evidence, but `resultWithEvidence` currently returns it only inside
+   `FetchResult` at line 837. Truncation must remain queryable. CHAOS-3197.
+5. **A fail-open that also advances state is permanent data loss.** Swallowing
+   an error into an empty batch is survivable only if the unit remains
+   retryable. Trace the downstream consequence through
+   `internal/jobs/providerunit/`, `sync/sync_units.py`, and
+   `sync/watermarks.py` before allowing any error to be swallowed. CHAOS-3189
+   was live Python data loss found only by asking what state followed a
+   "successful" empty result.
+
 ## Defect classes to check for explicitly in every pair
 
 These are not hypothetical. Every one below was found by an adversarial
@@ -385,6 +447,34 @@ question.
       hard requirement for these tests, not a nice-to-have, and say so at
       the top of any new oracle pair file that reaches outside
       `testdata/`.
+    - **REQUIREMENT: set `PYTHON` to the worktree's `.venv` for any DIRECT
+      `go test` run of a live oracle.** `pythonExecutable`
+      (`capabilities_test.go`) uses `$PYTHON`, else `python3` from `PATH`. If
+      `PATH` resolves to an ambient virtualenv (a pyenv `VIRTUAL_ENV` exported
+      by a shell profile, say) whose `dev_health_ops` is editable-installed
+      against a DIFFERENT worktree, a pair that imports the producer directly
+      (`from dev_health_ops.metrics... import ...`) compares your branch's Go
+      against **another checkout's Python** and reports PASS.
+      `ci/check_go.sh live-python-oracles` is safe: it exports
+      `PYTHONPATH="${ROOT}/src"` before `go test` (check_go.sh:230), which
+      precedes site-packages on `sys.path`. A bare `go test` carrying only the
+      two oracle env vars has no such protection. Measured both ways on one
+      branch: the bare run FAILs with `ImportError: cannot import name X from
+      'dev_health_ops...' (/…/ops-worktrees/<other>/src/…)`; the identical
+      command with `PYTHONPATH=$PWD/src` passes. The import error is the LUCKY
+      shape — loud. The dangerous shape is a foreign producer that imports
+      cleanly and quietly answers the comparison.
+      SCOPE: this reaches pairs that import `dev_health_ops` directly. Pairs
+      going through `load_live_module` are protected by its own
+      origin assertion and module-shadowing, measured separately as producing
+      byte-identical output under either interpreter — so a green
+      `load_live_module` pair is NOT automatically suspect.
+      Do NOT verify with `import dev_health_ops`: it reports the installed
+      package rather than what the pair loaded, and false-alarms on
+      `load_live_module` pairs. Verify what the PAIR resolved — for a
+      direct-import pair, `inspect.getsourcefile(<the imported producer>)`
+      must land inside the current worktree. This trap consumed real evidence
+      twice in one session (CHAOS-3123).
     - **A shared mutation harness proof command with no cache-bypass can
       report a false SURVIVED (or, worse, a false KILLED) depending on
       unrelated prior `go test` invocations in the same session** —
@@ -419,15 +509,14 @@ question.
       root cause. What IS certain, independent of whichever exact
       mechanism is responsible: `go test -count=1` disables cache lookup
       entirely by design (documented Go behavior, not a workaround), so it
-      closes this hole regardless of what is ultimately causing it. Until
-      `scripts/mutation_harness.py` passes `-count=1` (or an equivalent
-      cache-bypass) in its own proof-command invocation, **always run `go
-      clean -testcache` immediately before any `mutation_harness.py run`**
-      — a full cache clear reliably reproduced the correct KILLED verdict
-      every single time it was tried, unlike `-count=1` on a single proof
-      command in isolation which was not separately re-verified against a
-      confirmed-concurrent-load reproduction of the bug. Do not trust a
-      lone SURVIVED or KILLED verdict produced against a warm cache without
+      closes this hole regardless of what is ultimately causing it.
+      **Always run `go clean -testcache` immediately before any hand-run
+      mutation proof** — a full cache clear reliably reproduced the correct
+      KILLED verdict every single time it was tried, unlike `-count=1` on a
+      single proof command in isolation which was not separately re-verified
+      against a confirmed-concurrent-load reproduction of the bug. Do not
+      trust a lone SURVIVED or KILLED verdict produced against a warm cache
+      without
       that step, and if you run a mutation plan while other `go`
       invocations are active in the same environment, clear the cache
       again afterward before trusting the result.
@@ -466,6 +555,123 @@ question.
       `python_github_prs_normalization_oracle.py`) — they keep working
       exactly as documented in step 8 below. Only NEW pairs should reach
       for the generic path first.
+17. **Optional-data fetch failures: emit durable incompleteness evidence.
+    Never a silent omission, never a whole-batch failure.** This is a
+    **ratified contract** (owner ruling, 2026-08-06), not a parity
+    observation — for this class it is what the port targets, and it is
+    ahead of Python on the recording half. It also resolves **CHAOS-3188**
+    (and gives `CHAOS-3192`/`CHAOS-3196` their answer): a cap or optional
+    failure is neither "truncate silently and report success" nor "fail the
+    whole unit"; it is "land what you have, and record what you lost".
+
+    Both halves failed in production code, in opposite directions:
+    - `launchdarkly/feature-flags` and `github/cicd` truncate at their
+      5,000-flag / 1,000-run caps, return success, and advance state —
+      **silent omission** (CHAOS-3188).
+    - `github/work-items` shipped the mirror-image error, which Codex
+      caught: the composite route turned every typed incompleteness —
+      including the phases `providers/github/provider.py` logs and
+      continues past — into a whole-unit failure with **zero** effects.
+      Executing the real Python producer against those failures returns the
+      work items every time (a milestone failure degrades sprints 1 → 0 and
+      nothing else); the Go route wrote nothing at all. A persistently
+      failing optional endpoint would block the entire five-alias family for
+      that repository **forever**, with no row ever landing.
+
+    **Enumerate the producer's continue sites; do not stop at the obvious
+    ones.** The first fix here mirrored three and the review found three
+    more, because they are scattered across ~300 lines and two of them are
+    `except` blocks wrapping whole loops rather than a single call. Grep the
+    producer for every `except`/`catch` that logs and falls through, and
+    write the list down next to the classification:
+
+    | site | phase |
+    |---|---|
+    | `provider.py:202-217` | milestones |
+    | `provider.py:293-301` | per-issue comments |
+    | `provider.py:339-343` | the `/pulls` listing itself |
+    | `provider.py:369-402` | the PR-social batch |
+    | `provider.py:495-500` | per-PR comment → interaction |
+    | `provider.py:503-507` | the whole per-PR processing loop |
+
+    A site with no reachable Go analogue (here `:495-500`: the comments have
+    already been decoded and re-marshalled by the adapter, so nothing
+    downstream can fail on them) gets a **written note saying so**, not a
+    branch. An unreachable mirror is dead code that a mutation harness
+    reports as SURVIVED and a reader mistakes for coverage.
+
+    Defect classes 1 and 5 and the fail-open precondition above are about
+    the FIRST failure — a fetch that loses records and still reports clean
+    success. They never licensed the second. What to hold:
+    - **Continue and record** when an optional-data fetch fails: build the
+      effects from what you collected, and put a typed entry (component,
+      subject, stable cause class — never provider response text) in the
+      unit `Result`.
+    - **Continuation is only a fail-open if state advances, so whatever
+      holds the watermark back is load-bearing — name it, and check it
+      exists.** In `github/work-items` today that is nothing but a
+      hardcoded `Watermark: nil` on every return path of an unregistered
+      route. Nothing reads the `incomplete` entries: the route is their only
+      producer and there is no consumer anywhere in the tree. **This is an
+      unmet obligation on the activation layer, not a mechanism that
+      exists.** Whoever registers the family MUST make it read `incomplete`
+      and refuse to advance the alias watermarks for a degraded run, and
+      must ship the test that proves a degraded run does not advance them.
+      Until then, "the watermark is withheld" is true only because no
+      watermark is ever emitted — do not cite it as a safety property of the
+      degradation path, and do not let a future change hand this route a
+      real watermark without building the reader first.
+    - **Durable, or it did not happen.** The evidence has to survive the
+      encoding the durable write performs (for the Go worker,
+      `workItemAliasCompletionMetadata` + `json.Marshal` into the unit row).
+      Test that round-trip directly; a degraded run that reads as clean on
+      disk is exactly the silent omission this rule exists to stop.
+    - **Rate limits, lease loss, cancellation, required-phase failures, and
+      pagination caps are NOT this class** and still abort the unit before
+      any effect is built. Continuing on a rate limit keeps spending an
+      exhausted budget and banks a batch from a window the provider refused
+      to serve. Make that boundary a test at the composed route, not only at
+      the collector — after this rule lands, widening the classification by
+      one clause silently converts a rate limit into a landed batch.
+    - **Classify on (component, cause), never component alone, and check
+      EVERY entry.** Both halves failed review here. A cap or a broken
+      cursor arrives on an *optional* component — `pr_social` carries
+      `pagination_cap` and `invalid_pagination` — so a component-keyed test
+      lands a deterministically truncated batch as a clean success, and it
+      is asymmetric with the REST side that already returns
+      `ErrPaginationCapExceeded`. Causes with no producer analogue at all
+      (`invalid_pagination` means *our* paging is broken) must never read as
+      routine degradation. Separately, the entries are a LIST: a loop that
+      decides on the first one passes every single-entry test while the
+      blocking entry sits at position two — and in this route the blocking
+      `projects_v2` entry is appended **last**, i.e. the exact ordering
+      production emits is the one a check-first loop gets wrong. Test a
+      **mixed** batch with the blocking entry last, and mutate the loop to
+      inspect only `incomplete[:1]` to prove the test sees it.
+    - **A component absent for a reason the producer does not share** (an
+      unported seam, an unresolved policy — `projects_v2` `policy_pending`)
+      is not an optional-data fetch failure. It still fails the unit closed.
+
+    Python does not yet satisfy the recording half — it logs and drops — and
+    is tracked separately to emit the same durable evidence (CHAOS-3467
+    covers the work-items case). Do **not** port the log-and-drop: this is
+    one of the few places the port is deliberately ahead of its source, so
+    `D16`'s mirror rule does not apply to it.
+
+    **The contract is about MISSING data, not WRONG data. Where a degraded
+    read produces a confidently incorrect value instead of an absent one,
+    fail closed — D17 ratifies that too.** The donor read in
+    `github_work_items_derivation_context.go` is the worked case: Python
+    (`job_work_items.py:1196-1210`) catches a donor-load failure and
+    continues with whatever inheritance survives, which does not omit a
+    team-attribution row — it writes a *different team* onto
+    `work_item_team_attributions` and every derived surface downstream, with
+    nothing in the row marking it as computed blind. "Land what you have and
+    record what you lost" has no meaning when what you'd land is wrong
+    rather than partial, so the unit fails and the 100k donor rail fails
+    with it. Ask which of the two you have before reaching for the
+    continue-and-record shape; the answer is not "is this data optional?"
+    but "if I continue, is the output absent or is it a lie?"
 
 ## The recipe
 
@@ -807,51 +1013,51 @@ Minimum test surface per pair (see `github_prs_route_test.go`,
    `legacy_target`/processor flag (see below), a test proving the new switch
    does NOT flip them ready too.
 
-**Use the shared mutation harness — `scripts/mutation_harness.py`, runbook
-`tests/tooling/README.md` — rather than a hand-rolled mutate/test/revert
-loop.** Three ad-hoc per-lane harnesses produced false results on the same
-day this pair was reviewed (a leaked mutation reported as restored, `git
-checkout` reverting unrelated uncommitted edits, a waiter that matched its
-own process and hung forever); the shared tool exists specifically to close
-those failure modes; do not re-open them by rolling your own again. Two
-rules from that runbook matter most for this recipe:
+**Mutation-test the new handler by hand; there is no shared harness.**
+`scripts/mutation_harness.py` and its checked-in plan JSONs were removed under
+CHAOS-3875 — no GitHub workflow ever ran them, and the plans had to be
+re-anchored by hand on every refactor of the files they pinned. Nothing
+replaces them: apply one mutation, run the proof command, revert by content
+digest, and report the result in the PR. Three rules survive the tool and
+still decide whether the exercise means anything:
 
 - **Mutate compound predicates clause by clause, never as a unit** — this is
-  defect class 4 above, restated as a harness discipline: a three-clause
-  condition mutated wholesale can report `KILLED` while one clause inside it
-  is both unasserted and wrong, because the OTHER clauses in whatever
-  fixture the proof test uses already made the outcome differ. Write one
-  mutation per named clause.
+  defect class 4 above, restated: a three-clause condition mutated wholesale
+  can report `KILLED` while one clause inside it is both unasserted and wrong,
+  because the OTHER clauses in whatever fixture the proof test uses already
+  made the outcome differ. Write one mutation per named clause.
+- **Never verify a restore with a build or a git check.** `go build` and
+  `go vet` both pass on `if false && (guard)`, and `git diff` calls an
+  *untracked* file clean whatever it contains. Compare the restored file's
+  SHA-256 against the pre-mutation one.
 - **A `SURVIVED` result is not automatically a coverage gap.** Running
-  `github/prs`'s own plan
-  (`internal/providersync/testdata/mutation-plans/github_prs.json`) found
-  exactly one: a mutated `if fullName == "" { ... }` guard survived because
-  `repositoryIdentity` (the function called two lines later) already
-  rejects an empty string with the identical error — the guard was dead
-  code duplicating a check its own callee makes. The fix was deleting the
-  redundant guard, not adding a test to justify keeping it; see that plan's
-  `$limitation` field for the full account. Classify every survivor
-  (missing test / invalid mutation / genuine redundancy) rather than
+  `github/prs`'s plan found exactly one: a mutated `if fullName == "" { ... }`
+  guard survived because `repositoryIdentity` (the function called two lines
+  later) already rejects an empty string with the identical error — the guard
+  was dead code duplicating a check its own callee makes. The fix was deleting
+  the redundant guard, not adding a test to justify keeping it. Classify every
+  survivor (missing test / invalid mutation / genuine redundancy) rather than
   reflexively adding assertions until everything shows `KILLED`.
-
-Write the plan to `internal/providersync/testdata/mutation-plans/<pair>.json`
-(checked in, reviewable) and run it with:
-
-```
-python3 scripts/mutation_harness.py run \
-  --plan internal/providersync/testdata/mutation-plans/<pair>.json \
-  --assert-all-killed
-```
 
 Report which mutation was caught by which test — that mapping is what makes
 "I mutation-tested this" a checkable claim instead of an assertion.
 
+**A proof that never ran is not a passing proof.** Proof commands resolve
+against `PATH`, so a `pytest …` proof runs whatever `pytest` `PATH` finds — a
+pyenv shim or a Homebrew install, not this tree's `.venv`. Measured instance:
+four `github/work-items` REST mutations reported a baseline failure from
+`ModuleNotFoundError: pytest_asyncio` and were carried in two consecutive
+reports as "pre-existing environment noise". They were neither pre-existing
+nor noise — with the venv synced (`uv sync --all-extras --dev`) and prefixed
+onto `PATH`, all four are `KILLED`. A mutation whose baseline was already red
+proved **nothing**; never total it alongside kills.
+
 ## Difficulty tiers for the remaining GitHub pairs
 
-Base confidence: `prs` and `repo-metadata` have proven, mutation-tested
-handlers (this document's own worked recipe, plus the CHAOS-3123 precedent)
-— `prs` is not yet `route_ready` (see defect class 9). Every tier below for
-the other 15 pairs is from a **targeted read** of
+Base confidence: the three PR-social identities (`prs`, `pr-reviews`, and
+`pr-comments`) and `repo-metadata` have proven, mutation-tested handlers (this
+document's own worked recipe, plus the CHAOS-3123 precedent). Every tier below
+for the remaining pairs is from a **targeted read** of
 `src/dev_health_ops/processors/github.py`'s fetch/write call sites (function
 names, insert targets) — not a line-by-line trace like `prs` got. Re-verify
 the exact semantics per step 1 before porting; treat the tier as a sizing
@@ -878,15 +1084,15 @@ see below).
 | `commits` | **Low-Medium** | `_sync_github_commits` → REST list, one destination table (`git_commits`). Straightforward, but confirm the commit-window/pagination semantics (`since`) exactly — GitHub's commits endpoint DOES support server-side `since`, unlike `/pulls`. |
 | `security` | **Medium** | `_fetch_github_security_alerts_async`, one destination (`insert_security_alerts`, gated behind a `getattr` — confirm the sink actually implements it in production, not just in the fixture path). Likely several distinct GitHub alert types (Dependabot/CodeQL/secret-scanning) behind one dataset — read this one carefully before estimating further. |
 | `commit-stats` | **Medium** | `_fetch_github_commit_stats_async` → REST list **plus per-commit stat fetch** (N+1, same shape as `prs`'s list+detail). One destination (`git_commit_stats`). Reuse the `prs` N+1 pagination pattern directly. |
-| `work-items` | **High** | Fetch/normalize logic partially exists (`NativeRESTHandler.fetchGitHub` case `"work-items"`), BUT the Go `Descriptor` already collapses this and its four sibling aliases (see below) onto ONE canonical route with **fifteen** destination tables (`workItemRouteDestinations()` in `execution_registry.go`: `work_items`, `work_item_transitions`, `work_item_dependencies`, `work_item_reopen_events`, `work_item_interactions`, `sprints`, plus six `*_daily` rollup tables and `ai_attribution`-adjacent surfaces). Several of those are metrics computed by separate downstream jobs in Python, not by the fetch/normalize step itself — scope this pair by first determining which of the 15 declared destinations `_ingest_with_client` (provider.py) actually produces directly vs. which are computed elsewhere, and consider whether the initial port should legitimately cover a subset with the rest tracked as explicit follow-on work. This is not a single-PR-sized port. |
-| `work-item-comments` | **Medium** (shares work-items complexity, narrower scope) | `fetchGitHubChildren` already fetches `/issues/{number}/comments`; write path only needs the `work_item_interactions`-style destination, not the full work-items fan-out — BUT the matrix's alias-collapse rule means this dataset can't become independently `route_ready` without either (a) the full `work-items` route landing first, or (b) a deliberate decision to decouple it, which itself needs a design call before coding. |
-| `work-item-history` | **Medium**, same caveat as `work-item-comments` (alias of `work-items`). |
-| `work-item-labels` | **Low**, same caveat — but the underlying fetch (`/labels`) and destination shape is close to trivial once the alias-collapse question is resolved. |
-| `work-item-projects` | **Low**, same caveat (`/milestones`). |
-| `pr-reviews` | **High, and load-bearing for `prs`** | Needs a **new capability**: GitHub GraphQL PR-reviews batch fetch (`GitHubWorkClient.iter_pr_reviews_batch`, Python's `_enrich_prs_with_reviews_batch`). `internal/providerfoundation` has a generic GraphQL POST helper (`CollectLinearGraphQLPages`) but no GitHub-specific query/schema handling yet — this is genuinely new Go surface, not adaptation. Shares `github/prs`'s repo-id derivation and PR-list fetch; the natural design is for `pr-reviews` to depend on/reuse `github/prs`'s handler rather than re-list PRs independently. Writes `git_pull_request_reviews` AND the `first_review_at`/`reviews_count`/`changes_requested_count` columns on `git_pull_requests` that `github/prs` deliberately leaves at zero (defect class 9) — **landing this pair is what flips BOTH `github/prs` and `github/pr-reviews` to `route_ready: true`** in `execution_registry.go`'s two Descriptor cases together, not `pr-reviews` alone. Resolve the write-conflict/column-ownership question from defect class 9 as part of scoping this pair, before writing the handler. |
-| `pr-comments` | **Low, once `pr-reviews` exists** | Shares the `prs` legacy target/processor flag; Python's actual PR-comments handling folds into `comments_count` on the `git_pull_requests` row itself (there is no dedicated PR-comments raw table in the ClickHouse schema, unlike `work_item_comments` for issues) — worth confirming there is even a distinct `route_destinations` manifest to give this pair before treating it as separate work rather than a `prs` field. |
+| `work-items` | **Ported; canonical five-alias family (CHAOS-3606).** | D16's ownership boundary remains: this and the four sibling aliases are one Python-parity execution, not independently scoped ports. The complete manifest has **sixteen** destinations: seven direct facts (`work_items`, transitions, dependencies, reopen events, interactions, sprints, and conditional `ai_attribution`) plus nine derived work-item/investment surfaces. All five matrix identities are `native_go` / `route_ready`; only this canonical claim is executable, and only when all five exact family flags are present. Direct aliases reconcile before I/O rather than becoming partial writers. The switch remains default-off, so this does not activate deployment/cutover ownership. |
+| `work-item-comments` | **Ported alias of canonical work-items family (CHAOS-3606).** | Comments contribute interactions and trusted Linear-bot dependency edges inside the same composite crawl. They report the complete manifest for planner/audit/watermark truth but cannot own an independent writer or reduced destination set. |
+| `work-item-history` | **Ported alias of canonical work-items family (CHAOS-3606).** | Issue/PR events contribute transitions, reopen events, and status timestamps inside the same composite crawl; no independent route is permitted. |
+| `work-item-labels` | **Ported alias of canonical work-items family (CHAOS-3606).** | Labels are embedded in `work_items` and drive status/type/priority normalization. They are not a standalone label-table write in this unit. |
+| `work-item-projects` | **Ported alias of canonical work-items family (CHAOS-3606).** | Milestones produce sprints and optional Projects v2 data contributes work items/transitions inside the same composite crawl. Projects v2 is durable integration/claim configuration only; environment-only configuration produces a startup warning. |
+| `pr-reviews` | **Ported (CHAOS-3123).** | The route composes the shared PR REST collector with the production GraphQL review batch, enriches the complete PR row, and writes `git_pull_request_reviews` in one crash-recoverable manifest. |
+| `pr-comments` | **Ported as a PR-social alias (CHAOS-3123).** | Python has no distinct raw PR-comments fetch/table in this execution: REST PR detail supplies `comments_count`. The alias therefore emits the same complete PR and review effects while preserving its independent claim ledger and watermark identity. Startup rejects enabling multiple PR-social aliases because they delegate to one writer. |
 | `files` | **Unclear / needs investigation first** | No `insert_git_files` call site was found anywhere under `src/dev_health_ops/processors/github.py` in this pass — either the write path lives in a different module (a local-clone git-walk processor, not the REST GitHub client) or this capability has no active production caller today. Confirm which before estimating; per repo convention, "no caller found" is a finding to verify, not a conclusion. |
-| `blame` | **Unclear / needs investigation first**, same caveat as `files`. `_fetch_github_blame_sync` exists but simulates blame via repeated `get_contents` calls rather than any GitHub blame API — a materially different (and likely much heavier) fetch shape than every other pair in this table if it does turn out to be the live path. |
+| `blame` | **Ported (CHAOS-3335 + CHAOS-3343).** The active producer is `_backfill_github_missing_data`, not the obsolete `_fetch_github_blame_sync` helper. The native handler resolves the bounded commit/tree, fetches GraphQL blame ranges, writes `git_blame`, and commits a separate tenant/repository/tree-scoped path-progress effect first. That effect reconstructs an in-flight batch after a crash, marks zero-range files without fake blame rows, and rotates retryable per-file failures behind never-attempted paths while preserving rate-limit aborts. A prepared manifest may be replanned only when the ordered ledger proves no later effect started, an exact-generation ClickHouse probe finds no progress row, and PostgreSQL atomically confirms the probed ledger snapshot is unchanged. Any accepted progress stays on exact readback recovery. The route is independently switch-gated and default-off. |
 | `tests` | **High** | TestOps report ingestion is a distinct, heavy pipeline (JUnit/report-format parsing, `_fetch_github_test_artifacts_sync` + `_sync_github_test_reports`), already flagged elsewhere as fixture-only in production (see the TestOps ingestion gap tracked separately). Do not estimate this as PRs-sized; it likely needs its own scoping pass before a Go port is even well-defined. |
 
 ## What to update when a pair lands
@@ -912,11 +1118,12 @@ Follow `github/prs`'s own additions as the template:
 
 ## Commit boundary
 
-Each provider/dataset pair is one sync unit and is independently executable
-and testable through its claim — no scheduler, no job-route activation, no
-occurrence materialization required. That makes the pair the right commit
-boundary: land one pair (code, tests, mutation plan, matrix/registry
-wiring, this document's updates) as its own commit before starting the
-next, rather than batching multiple pairs into one diff. A 17-pair diff is
-unreviewable, and one defective pair in a large batch blocks every good one
-alongside it.
+Each independently scoped provider/dataset pair is one sync unit and is
+independently executable and testable through its claim — no scheduler,
+job-route activation, or occurrence materialization required. The GitHub
+work-item five-alias family is the deliberate exception: its atomic canonical
+claim is the unit and its whole family is the commit boundary. Land each unit
+(code, tests, mutation plan, matrix/registry wiring, this document's updates)
+as its own commit before starting the next, rather than batching unrelated
+pairs into one diff. A 17-pair diff is unreviewable, and one defective pair in
+a large batch blocks every good one alongside it.

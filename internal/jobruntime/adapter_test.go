@@ -26,6 +26,7 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 		handler         HandlerFunc[RetentionCleanupArgs]
 		wantResult      Result
 		wantCategory    ErrorCategory
+		wantTerminal    bool
 		wantCancelError bool
 		wantPanic       bool
 		wantDomain      bool
@@ -44,6 +45,22 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			name: "retry", attempt: 1, claimState: ClaimProceed,
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return Retryable(errors.New("credential=do-not-log"))
+			},
+			wantResult: ResultRetry, wantCategory: CategoryRetryable,
+		},
+		{
+			name: "budget contention snooze at attempt ceiling", attempt: 3,
+			claimState: ClaimProceed,
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return BudgetContention(errors.New("provider budget contended"), 1500*time.Millisecond)
+			},
+			wantResult: ResultRetry, wantCategory: CategoryBudget,
+		},
+		{
+			name: "retryable contention snooze at attempt ceiling", attempt: 3,
+			claimState: ClaimProceed,
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return RetryableAfter(errors.New("lease still active"), 2*time.Second)
 			},
 			wantResult: ResultRetry, wantCategory: CategoryRetryable,
 		},
@@ -82,7 +99,23 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			handler: func(ctx context.Context, _ *Execution[RetentionCleanupArgs]) error {
 				return ctx.Err()
 			},
-			wantResult: ResultCancel, wantCategory: CategoryCancelled,
+			// A drain must leave the run retryable, never terminal.
+			wantResult: ResultCancel, wantCategory: CategoryCancelled, wantTerminal: false,
+		},
+		{
+			// CHAOS-3865: a drain or budget-lease loss landing between the
+			// handler's successful return and classification must not rewrite
+			// the outcome -- the work is already done.
+			name: "success survives late cancellation", attempt: 1, claimState: ClaimProceed,
+			parent: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, func() {}
+			},
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return nil
+			},
+			wantResult: ResultSuccess, wantCategory: CategoryNone,
 		},
 		{
 			name: "terminal domain", attempt: 1, claimState: ClaimTerminal,
@@ -106,7 +139,7 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return errors.New("unclassified-secret")
 			},
-			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantCancelError: true,
+			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantTerminal: true, wantCancelError: true,
 		},
 	}
 
@@ -137,6 +170,21 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			if errors.As(err, &cancelErr) != test.wantCancelError {
 				t.Fatalf("cancel wrapper = %v, want %v (err=%v)", errors.As(err, &cancelErr), test.wantCancelError, err)
 			}
+			var snoozeErr *rivertype.JobSnoozeError
+			wantSnooze := time.Duration(0)
+			switch test.name {
+			case "budget contention snooze at attempt ceiling":
+				wantSnooze = 1500 * time.Millisecond
+			case "retryable contention snooze at attempt ceiling":
+				wantSnooze = 2 * time.Second
+			}
+			if wantSnooze > 0 {
+				if !errors.As(err, &snoozeErr) || snoozeErr.Duration != wantSnooze {
+					t.Fatalf("snooze error = %#v, want %s River snooze", err, wantSnooze)
+				}
+			} else if errors.As(err, &snoozeErr) {
+				t.Fatalf("unexpected River snooze: %v", err)
+			}
 			if observer.result != test.wantResult || observer.category != test.wantCategory {
 				t.Fatalf("observed %s/%s, want %s/%s", observer.result, observer.category, test.wantResult, test.wantCategory)
 			}
@@ -149,6 +197,10 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			if test.claimState == ClaimProceed {
 				if len(claim.completions) != 1 || claim.completions[0].Result != test.wantResult {
 					t.Fatalf("claim completions: %+v", claim.completions)
+				}
+				if claim.completions[0].Terminal != test.wantTerminal {
+					t.Fatalf("completion terminal = %v, want %v (%+v)",
+						claim.completions[0].Terminal, test.wantTerminal, claim.completions[0])
 				}
 				if claim.finishContextErr != nil {
 					t.Fatalf("claim finalized with cancelled context: %v", claim.finishContextErr)
@@ -188,8 +240,7 @@ func TestAdapterObservesJobWaitFromRiverScheduledAt(t *testing.T) {
 		t.Fatal("missing retention descriptor")
 	}
 	collector, err := NewMetricsCollector(MetricDimensions{
-		Profiles: []string{spec.Profile},
-		Jobs:     []JobLabels{{Profile: spec.Profile, Queue: spec.Queue, Kind: spec.Kind}},
+		Jobs: []JobLabels{{Queue: spec.Queue, Kind: spec.Kind}},
 	})
 	if err != nil {
 		t.Fatalf("NewMetricsCollector: %v", err)
@@ -211,7 +262,7 @@ func TestAdapterObservesJobWaitFromRiverScheduledAt(t *testing.T) {
 	}
 
 	text := collector.PrometheusText()
-	labels := `profile="` + spec.Profile + `",queue="` + spec.Queue + `",kind="` + spec.Kind + `"`
+	labels := `queue="` + spec.Queue + `",kind="` + spec.Kind + `"`
 	if !strings.Contains(text, "worker_job_wait_seconds_count{"+labels+"} 1") {
 		t.Fatalf("expected a non-zero worker_job_wait_seconds series, got:\n%s", text)
 	}

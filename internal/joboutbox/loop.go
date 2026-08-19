@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ type ReconcilerLoopConfig struct {
 	PollInterval time.Duration
 	Limit        int
 	Registry     *health.Registry
+	// Logger names why a step failed. It is optional so tests and embedders
+	// need not supply one; a nil Logger discards. Without it this loop could
+	// flip readiness closed forever and emit nothing at all (CHAOS-3907).
+	Logger *slog.Logger
 }
 
 func DefaultReconcilerLoopConfig(registry *health.Registry) ReconcilerLoopConfig {
@@ -102,13 +107,15 @@ type ReconcilerLoop struct {
 	done     chan struct{}
 	ticker   reconcilerTicker
 
-	claimed   uint64
-	delivered uint64
-	retried   uint64
-	dead      uint64
-	leaseLost uint64
-	lastOK    time.Time
-	up        bool
+	recovered                    uint64
+	postRepairContractRejections uint64
+	claimed                      uint64
+	delivered                    uint64
+	retried                      uint64
+	dead                         uint64
+	leaseLost                    uint64
+	lastOK                       time.Time
+	up                           bool
 
 	errors chan error
 }
@@ -166,6 +173,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 
 	if err := loop.step(ctx, loop.clock.Now()); err != nil {
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "outbox reconciler initial step failed", "error", err.Error())
 		return fmt.Errorf("initial outbox reconciliation: %w", err)
 	}
 
@@ -178,6 +186,7 @@ func (loop *ReconcilerLoop) Start(ctx context.Context) error {
 		ticker.Stop()
 		cancel()
 		loop.setFailed()
+		loop.logger().ErrorContext(ctx, "outbox reconciler stopped before its polling loop started")
 		return context.Canceled
 	}
 	loop.cancel = cancel
@@ -200,6 +209,7 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 			}
 			if err := loop.step(ctx, now); err != nil {
 				loop.setFailed()
+				loop.logger().ErrorContext(ctx, "outbox reconciler step failed", "error", err.Error())
 				select {
 				case loop.errors <- fmt.Errorf("outbox reconciliation step: %w", err):
 				case <-ctx.Done():
@@ -216,6 +226,8 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 		return err
 	}
 	loop.mu.Lock()
+	loop.recovered += nonNegativeUint(result.Recovered)
+	loop.postRepairContractRejections += nonNegativeUint(result.PostRepairContractRejectionsRecovered)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -240,6 +252,16 @@ func (loop *ReconcilerLoop) setFailed() {
 	loop.mu.Lock()
 	loop.up = false
 	loop.mu.Unlock()
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by reconciler output appearing on a logger it did not choose.
+func (loop *ReconcilerLoop) logger() *slog.Logger {
+	if loop == nil || loop.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return loop.config.Logger
 }
 
 func (loop *ReconcilerLoop) readiness(context.Context) error {
@@ -298,6 +320,8 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 		return errors.New("Prometheus output is required")
 	}
 	loop.mu.Lock()
+	recovered := loop.recovered
+	postRepairContractRejections := loop.postRepairContractRejections
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -313,6 +337,8 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 		lastSuccessAge = now.Sub(lastOK).Seconds()
 	}
 	var text strings.Builder
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_terminal_deliveries_recovered_total", "Terminal River deliveries rearmed by the reconciler.", recovered)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_post_repair_contract_rejections_recovered_total", "Post-repair provider contract rejections recovered by the reconciler.", postRepairContractRejections)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

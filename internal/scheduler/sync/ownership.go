@@ -63,7 +63,7 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 // transfer of schedule-marker mutation authority from Celery to Go.
 //
 // This is the ownership transfer, not a step toward it. There is no
-// environment variable, deployment profile, or runtime flag that can produce
+// environment variable, deployment group, or runtime flag that can produce
 // this OwnershipPolicy value: OwnershipPolicy's fields stay unexported, so
 // this function and DefaultOwnershipPolicy are the complete, closed set of
 // policies any caller outside this package can ever obtain. Calling this
@@ -99,10 +99,10 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 //
 // What this policy does NOT prove: that Go's cron evaluation always agrees
 // with Python's for every schedule (see NextOccurrence's golden-vector tests
-// for that), and that Go can complete a materialization once it wins a race
-// (see the occurrence reconciler's Materializer — a stub until CUT-09/CUT-10
-// lands). Both are separate preconditions on the composition root's
-// goOwnsMarkers gate, and this function does not claim to satisfy either.
+// for that), provider-by-provider differential acceptance, or deployment-owner
+// approval. Those remain separate preconditions on the composition root's
+// goOwnsMarkers gate even though the native materializer now exists; this
+// function does not claim to satisfy them.
 func TransferScheduleMarkerOwnershipToGo() OwnershipPolicy {
 	return reviewedGoMutationOwnershipPolicy()
 }

@@ -48,7 +48,6 @@ func TestJobDefinitionRejectsRegistrySchemaViolations(t *testing.T) {
 		name   string
 		mutate func(*JobDefinition)
 	}{
-		{name: "profile", mutate: func(job *JobDefinition) { job.Profile = "Ops" }},
 		{name: "queue", mutate: func(job *JobDefinition) { job.Queue = "queue with spaces" }},
 		{name: "handler owner", mutate: func(job *JobDefinition) { job.HandlerOwner = "src/jobs/system" }},
 		{name: "timeout upper bound", mutate: func(job *JobDefinition) { job.TimeoutSeconds = 86401 }},
@@ -87,15 +86,17 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := CapabilitiesForProfile(root, registry, "ops")
+	opsQueues := []string{"coverage", "heartbeat", "retention", "webhooks"}
+	heavyQueues := []string{"investment", "metrics", "reports", "sync_provider", "workgraph"}
+	report, err := CapabilitiesForQueues(root, registry, opsQueues)
 	if err != nil {
 		t.Fatal(err)
 	}
-	heavy, err := CapabilitiesForProfile(root, registry, "heavy")
+	heavy, err := CapabilitiesForQueues(root, registry, heavyQueues)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sync, err := CapabilitiesForProfile(root, registry, "sync")
+	sync, err := CapabilitiesForQueues(root, registry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 		t.Fatal("CheckRollout() accepted an old schema revision")
 	}
 	if err := CheckRollout(root, registry, state, nil); err == nil {
-		t.Fatal("CheckRollout() accepted missing profile reports")
+		t.Fatal("CheckRollout() accepted missing queue reports")
 	}
 }
 
@@ -129,19 +130,19 @@ func TestRollingDeploymentHoldsProducerAtNMinusOne(t *testing.T) {
 		Kind:              KindHeartbeat,
 		CurrentVersion:    2,
 		SupportedVersions: []int{1, 2},
-		Profile:           "ops",
+		Queue:             "heartbeat",
 		SchemaVersions: map[string]string{
 			"1": "schemas/system.heartbeat.v1.schema.json",
 			"2": "schemas/system.heartbeat.v1.schema.json",
 		},
 	}}}
-	newBinary, err := CapabilitiesForProfile(root, registry, "ops")
+	newBinary, err := CapabilitiesForQueues(root, registry, []string{"heartbeat"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	oldBinary := CapabilityReport{
 		SchemaVersion: 1,
-		Profile:       "ops",
+		Queues:        []string{"heartbeat"},
 		Contracts: []ContractCapability{{
 			Kind:          KindHeartbeat,
 			Versions:      []int{1},
@@ -149,7 +150,7 @@ func TestRollingDeploymentHoldsProducerAtNMinusOne(t *testing.T) {
 		}},
 	}
 	state := MigrationState{SchemaVersion: 1, Jobs: []MigrationJob{{
-		Kind: KindHeartbeat, ProducerVersion: 1, RequiredProfiles: []string{"ops"},
+		Kind: KindHeartbeat, ProducerVersion: 1,
 	}}}
 	if err := CheckRollout(root, registry, state, []CapabilityReport{oldBinary, newBinary}); err != nil {
 		t.Fatalf("N-1 producer should remain safe during rolling deploy: %v", err)
@@ -194,27 +195,27 @@ func TestBreakingChangeDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBinary, err := CapabilitiesForProfile(base, baseRegistry, "ops")
+	oldBinary, err := CapabilitiesForQueues(base, baseRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newBinary, err := CapabilitiesForProfile(candidate, candidateRegistry, "ops")
+	newBinary, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldHeavy, err := CapabilitiesForProfile(base, baseRegistry, "heavy")
+	oldHeavy, err := CapabilitiesForQueues(base, baseRegistry, []string{"investment", "metrics", "reports", "sync_provider", "workgraph"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newHeavy, err := CapabilitiesForProfile(candidate, candidateRegistry, "heavy")
+	newHeavy, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"investment", "metrics", "reports", "sync_provider", "workgraph"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldSync, err := CapabilitiesForProfile(base, baseRegistry, "sync")
+	oldSync, err := CapabilitiesForQueues(base, baseRegistry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newSync, err := CapabilitiesForProfile(candidate, candidateRegistry, "sync")
+	newSync, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +275,11 @@ func TestEnvelopeOptionalFieldChangesEveryCapabilityDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldReport, err := CapabilitiesForProfile(base, baseRegistry, "ops")
+	oldReport, err := CapabilitiesForQueues(base, baseRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newReport, err := CapabilitiesForProfile(candidate, candidateRegistry, "ops")
+	newReport, err := CapabilitiesForQueues(candidate, candidateRegistry, []string{"coverage", "heartbeat", "retention", "webhooks"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,4 +353,97 @@ func writeJSONFile(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A MERGE BASE legitimately carries fields the current struct has dropped and
+// policy constants the current struct has renamed. Loading it strictly made
+// the compatibility gate unable to survive its own evolution: CHAOS-3851
+// removed `profile` and renamed same_version_rollout, and from that moment
+// every comparison against main died at LOAD with "decode registry.json: JSON
+// does not match contract" -- before a single compatibility rule ran. The gate
+// reported red while protecting nothing, and could only clear once the change
+// reached main, which required merging the branch it was blocking.
+func TestCompareTreesReadsABaseThatPredatesTodaysRegistryFields(t *testing.T) {
+	t.Parallel()
+	current := contractRoot(t)
+	base := filepath.Join(t.TempDir(), "v1")
+	copyTree(t, current, base)
+	agedRegistryTree(t, base)
+
+	changes, err := CompareTrees(base, current)
+	if err != nil {
+		t.Fatalf("CompareTrees(aged base) error = %v", err)
+	}
+	// Dropping deployment metadata is not a wire-breaking change: it is not a
+	// kind, a version, a domain link, an organization scope, or a schema.
+	if len(changes) != 0 {
+		t.Fatalf("CompareTrees(aged base) = %v, want no breaking changes", changes)
+	}
+}
+
+// The mirror image, and the reason the base loader is a SEPARATE function
+// rather than a blanket relaxation: the CANDIDATE is still decoded strictly,
+// so a typo or a stray field in the tree being proposed still fails.
+func TestCompareTreesStillRejectsAnUnknownFieldInTheCandidate(t *testing.T) {
+	t.Parallel()
+	base := contractRoot(t)
+	candidate := filepath.Join(t.TempDir(), "v1")
+	copyTree(t, base, candidate)
+	agedRegistryTree(t, candidate)
+
+	if _, err := CompareTrees(base, candidate); err == nil {
+		t.Fatal("CompareTrees() = nil error, want the candidate's unknown field rejected")
+	}
+}
+
+// The anti-vacuity control. A gate that cannot load its base reports red
+// forever; a gate that loads it but evaluates nothing reports green forever.
+// This proves the rules actually run against an aged base -- remove a kind the
+// base registers and the comparison must say so.
+func TestCompareTreesStillDetectsBreakageAgainstAnAgedBase(t *testing.T) {
+	t.Parallel()
+	current := contractRoot(t)
+	base := filepath.Join(t.TempDir(), "base")
+	copyTree(t, current, base)
+	agedRegistryTree(t, base)
+
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	copyTree(t, current, candidate)
+	var registry map[string]any
+	registryPath := filepath.Join(candidate, "registry.json")
+	readJSONFile(t, registryPath, &registry)
+	jobs := registry["jobs"].([]any)
+	removed := jobs[0].(map[string]any)["kind"].(string)
+	registry["jobs"] = jobs[1:]
+	writeJSONFile(t, registryPath, registry)
+
+	changes, err := CompareTrees(base, candidate)
+	if err != nil {
+		t.Fatalf("CompareTrees(removed kind) error = %v", err)
+	}
+	found := false
+	for _, change := range changes {
+		if change.Path == removed && change.Reason == "registered kind was removed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("CompareTrees() = %v, want %q reported as removed", changes, removed)
+	}
+}
+
+// agedRegistryTree rewrites a copied contract tree to look like a registry
+// written BEFORE CHAOS-3851: every job carries the dropped `profile` field and
+// the version policy names the old rollout constant.
+func agedRegistryTree(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, "registry.json")
+	var registry map[string]any
+	readJSONFile(t, path, &registry)
+	policy := registry["version_policy"].(map[string]any)
+	policy["same_version_rollout"] = "schema_digest_all_live_profiles"
+	for _, job := range registry["jobs"].([]any) {
+		job.(map[string]any)["profile"] = "sync"
+	}
+	writeJSONFile(t, path, registry)
 }

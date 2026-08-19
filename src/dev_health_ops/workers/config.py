@@ -37,7 +37,6 @@ task_reject_on_worker_lost = False
 
 late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-    "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
     "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
@@ -145,11 +144,6 @@ beat_schedule = {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
         "schedule": 300.0,
         "options": {"queue": "scheduler"},
-    },
-    "dispatch-scheduled-metrics": {
-        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
-        "schedule": 300.0,
-        "options": {"queue": "default"},
     },
     # Fans out per active organization (CHAOS-2849): discover_repos (job_daily.py)
     # scopes the repos query by org_id, so a single blank-org run would never
@@ -310,11 +304,6 @@ beat_schedule = {
         "task": "dev_health_ops.workers.tasks.run_ask_dev_retention_cleanup",
         "schedule": crontab(hour=5, minute=30),
         "options": {"queue": "default"},
-    },
-    "refresh-sync-coverage-projections": {
-        "task": "dev_health_ops.workers.tasks.refresh_sync_coverage_projections",
-        "schedule": 300.0,
-        "options": {"queue": "sync"},
     },
 }
 

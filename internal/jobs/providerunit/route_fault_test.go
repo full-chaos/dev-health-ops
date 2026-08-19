@@ -3,6 +3,7 @@ package providerunit
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -51,6 +52,16 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			provider: "linear", dataset: "work-item-labels",
 			costClass:         providersync.CostLight,
 			switches:          providersync.CompleteRouteSwitches{LinearWorkItems: true},
+			descriptorPresent: true,
+		},
+		"github work-item direct alias reconciles before executor construction": {
+			provider: "github", dataset: "work-item-comments",
+			costClass: providersync.CostLight,
+			// The full GitHub family is matrix-ready, but only the canonical
+			// work-items claim may construct the route. A persisted direct alias
+			// must reconcile before BuildExecutor can resolve credentials, create
+			// HTTP clients, or touch effects/watermarks.
+			switches:          providersync.CompleteRouteSwitches{GithubWorkItems: true},
 			descriptorPresent: true,
 		},
 	} {
@@ -110,6 +121,280 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 				t.Fatalf("fault=%+v", fault)
 			}
 		})
+	}
+}
+
+// TestGitHubWorkItemFamilyClaimReconcilesBeforeExecutorCredentialsOrEffects
+// pins the stale-River-job boundary. The planner normally emits one canonical
+// github/work-items claim with all five literal family flags, but a job queued
+// before that admission change (or a manually persisted malformed claim) must
+// never get as far as the Go executor. BuildExecutor is the production
+// construction boundary for credential resolution, HTTP clients, collectors,
+// and effect committers, so poisoning that boundary proves none of those
+// external paths are reachable for an invalid family shape.
+func TestGitHubWorkItemFamilyClaimReconcilesBeforeExecutorCredentialsOrEffects(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	completeFlags := map[string]bool{
+		"family_dataset_work_items":         true,
+		"family_dataset_work_item_labels":   true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history":  true,
+		"family_dataset_work_item_comments": true,
+	}
+	for name, test := range map[string]struct {
+		dataset string
+		flags   map[string]bool
+	}{
+		"direct labels alias": {
+			dataset: "work-item-labels", flags: completeFlags,
+		},
+		"direct projects alias": {
+			dataset: "work-item-projects", flags: completeFlags,
+		},
+		"direct history alias": {
+			dataset: "work-item-history", flags: completeFlags,
+		},
+		"direct comments alias": {
+			dataset: "work-item-comments", flags: completeFlags,
+		},
+		"canonical claim missing comments flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+			},
+		},
+		"canonical claim false comments flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": false,
+			},
+		},
+		"canonical claim has unknown family flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": true,
+				"family_dataset_unrecognized":       true,
+			},
+		},
+	} {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			unit := providerUnit()
+			capability, ok := providersync.Capability("github", test.dataset)
+			if !ok {
+				t.Fatalf("github/%s capability missing", test.dataset)
+			}
+			unit.Provider, unit.Dataset, unit.CostClass = "github", test.dataset, capability.CostClass
+			unit.SourceExternalID, unit.SourceName = "acme/api", "acme/api"
+			unit.ProcessorFlags = maps.Clone(test.flags)
+			repository := newMemoryUnitRepository(unit)
+			builds := 0
+			handler := &Handler{
+				Repository:    repository,
+				Switches:      providersync.CompleteRouteSwitches{GithubWorkItems: true},
+				LeaseDuration: time.Minute,
+				Heartbeat:     10 * time.Second,
+				Now:           func() time.Time { return now },
+				BuildExecutor: func(
+					*providersync.LeaseSession,
+				) (providersync.CompleteRouteExecutor, error) {
+					builds++
+					t.Fatal("invalid GitHub family claim reached executor/credential/I/O construction")
+					return providersync.CompleteRouteExecutor{}, nil
+				},
+			}
+
+			err := handler.Work(context.Background(), providerExecution(unit, now, 1))
+
+			if !errors.Is(err, providersync.ErrInvalidConfiguration) {
+				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+			}
+			if !errors.Is(err, ErrRouteReconciliationRequired) || err.Error() != retryableCategory {
+				t.Fatalf("error=%v want retryable route reconciliation", err)
+			}
+			if builds != 0 {
+				t.Fatalf("executor constructions=%d want 0", builds)
+			}
+			if repository.status != "dispatching" || repository.failures != 0 {
+				t.Fatalf("status=%q failures=%d", repository.status, repository.failures)
+			}
+		})
+	}
+}
+
+func TestEnabledProviderNeutralWorkItemFamilyReconcilesBeforeExecutorCredentialsOrEffects(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	completeFlags := map[string]bool{
+		"family_dataset_work_items":         true,
+		"family_dataset_work_item_labels":   true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history":  true,
+		"family_dataset_work_item_comments": true,
+	}
+	claims := map[string]struct {
+		dataset string
+		flags   map[string]bool
+	}{
+		"direct alias": {
+			dataset: "work-item-comments", flags: completeFlags,
+		},
+		"missing flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+			},
+		},
+		"false flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": false,
+			},
+		},
+		"unknown flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": true,
+				"family_dataset_unknown":            true,
+			},
+		},
+	}
+	providers := map[string]providersync.CompleteRouteSwitches{
+		"jira":   {JiraWorkItems: true},
+		"linear": {LinearWorkItems: true},
+	}
+	for provider, switches := range providers {
+		provider, switches := provider, switches
+		for name, claim := range claims {
+			name, claim := name, claim
+			t.Run(provider+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				unit := providerUnit()
+				capability, ok := providersync.Capability(provider, claim.dataset)
+				if !ok {
+					t.Fatalf("%s/%s capability missing", provider, claim.dataset)
+				}
+				unit.Provider, unit.Dataset, unit.CostClass = provider, claim.dataset, capability.CostClass
+				unit.ProcessorFlags = maps.Clone(claim.flags)
+				repository := newMemoryUnitRepository(unit)
+				builds := 0
+				handler := &Handler{
+					Repository:    repository,
+					Switches:      switches,
+					LeaseDuration: time.Minute,
+					Heartbeat:     10 * time.Second,
+					Now:           func() time.Time { return now },
+					BuildExecutor: func(
+						*providersync.LeaseSession,
+					) (providersync.CompleteRouteExecutor, error) {
+						builds++
+						t.Fatal("invalid family claim reached executor/credential/I/O construction")
+						return providersync.CompleteRouteExecutor{}, nil
+					},
+				}
+
+				err := handler.Work(context.Background(), providerExecution(unit, now, 1))
+
+				if !errors.Is(err, providersync.ErrInvalidConfiguration) {
+					t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+				}
+				if !errors.Is(err, ErrRouteReconciliationRequired) || err.Error() != retryableCategory {
+					t.Fatalf("error=%v want retryable route reconciliation", err)
+				}
+				if builds != 0 {
+					t.Fatalf("executor constructions=%d want 0", builds)
+				}
+			})
+		}
+	}
+}
+
+func TestDefaultOffProviderNeutralWorkItemFamilyKeepsLegacyClaimAdmissible(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"gitlab", "jira", "linear"} {
+		unit := providerUnit()
+		unit.Provider = provider
+		unit.Dataset = "work-items"
+		unit.ProcessorFlags = map[string]bool{"family_dataset_work_items": true}
+		claim := providersync.Claim{
+			Unit: unit,
+		}
+		if err := validateProviderFamilyExecutionClaim(
+			claim, providersync.CompleteRouteSwitches{},
+		); err != nil {
+			t.Fatalf("provider=%s error=%v", provider, err)
+		}
+	}
+}
+
+func TestGitHubWorkItemCompleteFamilyClaimReachesExecutorFactory(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	capability, ok := providersync.Capability("github", "work-items")
+	if !ok {
+		t.Fatal("github/work-items capability missing")
+	}
+	unit.Provider, unit.Dataset, unit.CostClass = "github", "work-items", capability.CostClass
+	unit.SourceExternalID, unit.SourceName = "acme/api", "acme/api"
+	unit.ProcessorFlags = map[string]bool{
+		"family_dataset_work_items":         true,
+		"family_dataset_work_item_labels":   true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history":  true,
+		"family_dataset_work_item_comments": true,
+	}
+	repository := newMemoryUnitRepository(unit)
+	buildErr := errors.New("executor factory reached after family admission")
+	builds := 0
+	handler := &Handler{
+		Repository:    repository,
+		Switches:      providersync.CompleteRouteSwitches{GithubWorkItems: true},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(
+			*providersync.LeaseSession,
+		) (providersync.CompleteRouteExecutor, error) {
+			builds++
+			return providersync.CompleteRouteExecutor{}, buildErr
+		},
+	}
+
+	err := handler.Work(context.Background(), providerExecution(unit, now, 1))
+
+	if !errors.Is(err, buildErr) {
+		t.Fatalf("error=%v want executor factory error", err)
+	}
+	if builds != 1 {
+		t.Fatalf("executor constructions=%d want 1", builds)
+	}
+	if repository.status != "dispatching" || repository.failures != 0 {
+		t.Fatalf("status=%q failures=%d", repository.status, repository.failures)
 	}
 }
 

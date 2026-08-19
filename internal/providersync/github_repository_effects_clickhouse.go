@@ -18,13 +18,70 @@ type GitHubRepositoryClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
+// GitLabRepositoryClickHouseEffects applies the same tenant-keyed,
+// readback-fenced `repos` persistence contract to GitLab repository rows.
+type GitLabRepositoryClickHouseEffects struct {
+	Conn  driver.Conn
+	Lease providerfoundation.LeaseGuard
+}
+
+type repositoryClickHouseEffects struct {
+	Conn     driver.Conn
+	Lease    providerfoundation.LeaseGuard
+	Provider string
+}
+
 func (sink GitHubRepositoryClickHouseEffects) WriteEffect(
 	ctx context.Context,
 	claim Claim,
 	effect EffectBatch,
 ) error {
+	return sink.shared().WriteEffect(ctx, claim, effect)
+}
+
+func (sink GitHubRepositoryClickHouseEffects) InspectEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	return sink.shared().InspectEffect(ctx, claim, effect)
+}
+
+func (sink GitHubRepositoryClickHouseEffects) shared() repositoryClickHouseEffects {
+	return repositoryClickHouseEffects{
+		Conn: sink.Conn, Lease: sink.Lease, Provider: "github",
+	}
+}
+
+func (sink GitLabRepositoryClickHouseEffects) WriteEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) error {
+	return sink.shared().WriteEffect(ctx, claim, effect)
+}
+
+func (sink GitLabRepositoryClickHouseEffects) InspectEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	return sink.shared().InspectEffect(ctx, claim, effect)
+}
+
+func (sink GitLabRepositoryClickHouseEffects) shared() repositoryClickHouseEffects {
+	return repositoryClickHouseEffects{
+		Conn: sink.Conn, Lease: sink.Lease, Provider: "gitlab",
+	}
+}
+
+func (sink repositoryClickHouseEffects) WriteEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "repo-metadata" ||
+		claim.Provider != sink.Provider || claim.Dataset != "repo-metadata" ||
 		effect.Destination != "repos" {
 		return ErrInvalidConfiguration
 	}
@@ -72,13 +129,13 @@ INSERT INTO repos (
 // asynchronously, so a blind reinsert would expose two physical `repos` rows
 // to raw readers that join without FINAL/argMax until the next merge. Reading
 // the row back turns "we may have written this" into an exact answer.
-func (sink GitHubRepositoryClickHouseEffects) InspectEffect(
+func (sink repositoryClickHouseEffects) InspectEffect(
 	ctx context.Context,
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "repo-metadata" ||
+		claim.Provider != sink.Provider || claim.Dataset != "repo-metadata" ||
 		effect.Destination != "repos" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -135,7 +192,7 @@ func (sink GitHubRepositoryClickHouseEffects) InspectEffect(
 // ReplacingMergeTree(last_synced), so argMax over last_synced is the
 // engine-defined winner — the same argMax/FINAL discipline every raw reader
 // of this table owes.
-func (sink GitHubRepositoryClickHouseEffects) inspectRepository(
+func (sink repositoryClickHouseEffects) inspectRepository(
 	ctx context.Context,
 	expected repositoryRow,
 ) (EffectInspection, error) {
@@ -241,3 +298,5 @@ func compareRepositoryVersion(
 
 var _ EffectSink = GitHubRepositoryClickHouseEffects{}
 var _ EffectReadback = GitHubRepositoryClickHouseEffects{}
+var _ EffectSink = GitLabRepositoryClickHouseEffects{}
+var _ EffectReadback = GitLabRepositoryClickHouseEffects{}

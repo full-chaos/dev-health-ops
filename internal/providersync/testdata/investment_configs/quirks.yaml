@@ -1,0 +1,108 @@
+# Synthetic investment config, for the matcher forms the REAL config never
+# reaches. It is deliberately small: the real file
+# (src/dev_health_ops/config/investment_areas.yaml) is the primary oracle input
+# and covers the ordinary label path with its own 44 rules. This one exists
+# only for the quirks that file cannot express.
+#
+# Rule ORDER is load-bearing for the stable-sort cases, and so are the
+# priorities: every quirk rule below carries a DISTINCT label so it cannot
+# shadow a lower-priority one. An earlier draft gave the always:false rule no
+# label, which made it match everything at priority 50 and silently swallow the
+# priority-100, -950 and -960 cases -- three cases that still passed while
+# testing something other than their names. Keep each quirk uniquely reachable.
+rules:
+  # STABLE SORT: three rules share priority 10 and all three match the label
+  # "shared". classify() returns on FIRST match, so the winner is decided by
+  # file order among equals -- which only a STABLE sort preserves. If Go used
+  # sort.Slice, any of the three could win.
+  - id: tie_first
+    priority: 10
+    match:
+      label: ["shared"]
+    output:
+      investment_area: tie_area_first
+      project_stream: tie_stream_first
+  - id: tie_second
+    priority: 10
+    match:
+      label: ["shared"]
+    output:
+      investment_area: tie_area_second
+      project_stream: tie_stream_second
+  - id: tie_third
+    priority: 10
+    match:
+      label: ["shared"]
+    output:
+      investment_area: tie_area_third
+      project_stream: tie_stream_third
+
+  # ALWAYS: FALSE is tested for TRUTHINESS, so it does NOT short-circuit to a
+  # match -- it falls through to the remaining criteria exactly as an absent
+  # key would. The label is what makes this measurable: if `always: false` were
+  # (wrongly) treated as a match, this rule would fire for EVERY artifact and
+  # every case below would return it instead of its own rule.
+  - id: always_false_falls_through_to_label
+    priority: 20
+    match:
+      always: false
+      label: ["alwaysfalse"]
+    output:
+      investment_area: always_false_area
+      project_stream: always_false_stream
+
+  # COMPONENT containing the empty string. From the work-item call site the
+  # component is ALWAYS "", so this is the only shape of component rule that
+  # can ever fire from that path. The real config's data_component lists
+  # ['Data Platform', 'Analytics'] and therefore cannot.
+  - id: component_accepts_empty
+    priority: 30
+    match:
+      label: ["componentcase"]
+      component: ["", "Data Platform"]
+    output:
+      investment_area: component_area
+      project_stream: component_stream
+
+  # PATH_PREFIX, reachable ONLY when the caller supplies paths. The work-item
+  # call site never does. This rule exists so the arm is proven to work when
+  # fed, which is what makes "dead from that call site" a statement about the
+  # CALLER rather than about the matcher.
+  - id: path_reachable_when_fed
+    priority: 40
+    match:
+      label: ["pathcase"]
+      path_prefix: ["services/api/"]
+    output:
+      investment_area: path_area
+      project_stream: path_stream
+
+  # NO PRIORITY KEY: sorts as 100 via `x.get("priority", 100)` -- after every
+  # rule above and before the two catch-alls below.
+  - id: no_priority_defaults_to_100
+    match:
+      label: ["unprioritised"]
+    output:
+      investment_area: default_priority_area
+      project_stream: default_priority_stream
+
+  # OUTPUT omitted entirely: both fields fall back to the legacy defaults
+  # (product/general) while confidence is still 1.0 and the rule id is this
+  # rule's OWN -- not "legacy_default", which only the no-match fallback uses.
+  # That distinction is the whole point of this rule, and it must sit ABOVE the
+  # empty-match catch-all to be reachable at all.
+  - id: matched_but_no_output
+    priority: 950
+    match:
+      label: ["nooutput"]
+
+  # EMPTY match:{} matches EVERYTHING -- it reaches the final return-true
+  # without testing anything. The real config expresses its catch-all as
+  # `always: true`, so this form is only reachable here. Lowest priority, so it
+  # answers only when nothing above matched.
+  - id: empty_match_matches_everything
+    priority: 960
+    match: {}
+    output:
+      investment_area: empty_match_area
+      project_stream: empty_match_stream

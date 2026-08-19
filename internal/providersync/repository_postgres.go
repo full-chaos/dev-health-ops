@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -104,6 +105,98 @@ func (repository *PostgresRepository) Complete(
 		completedAt.Before(startedAt) {
 		return ErrInvalidConfiguration
 	}
+	var err error
+	result, watermark, err = applyGitHubWorkItemsIncompletePolicy(
+		claim.Provider, claim.Dataset, result, watermark,
+	)
+	if err != nil {
+		return err
+	}
+	datasetKeys, auditedResult, err := workItemAliasCompletionMetadata(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, result,
+	)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(auditedResult)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, completeUnitSQL,
+		claim.ID, claim.Owner, completedAt.UTC(),
+		int(completedAt.Sub(startedAt).Seconds()), encoded,
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	// The prepared effect payload is recovery state, not a product record.
+	// Delete it in the same transaction that terminalizes the unit so any
+	// later watermark/outbox failure rolls both operations back together.
+	if _, err := tx.Exec(
+		ctx, deletePreparedRouteSnapshotSQL,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	// The chunk tables are additive during rolling migration. Older test and
+	// deployment fixtures may terminalize a legacy unit before 0102 is
+	// installed, so probe the catalog before issuing the cleanup statement.
+	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
+		return err
+	}
+	if watermark != nil {
+		for _, datasetKey := range datasetKeys {
+			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
+			// watermark write routes through normalizeWatermarkWrite: routes
+			// that prefer a provider-supplied watermark over claim.BeforeAt
+			// bypass every planner-side clamp otherwise, and the INSERT half
+			// of the upsert has no monotonic gate at all to fall back on.
+			normalized := normalizeWatermarkWrite(
+				*watermark, claim.BeforeAt, completedAt,
+				claim.OrgID, claim.SourceExternalID, datasetKey,
+			)
+			if _, err := tx.Exec(ctx, upsertWatermarkSQL,
+				uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
+				normalized, completedAt.UTC(),
+			); err != nil {
+				return ErrInvalidConfiguration
+			}
+		}
+	}
+	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
+		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrInvalidConfiguration
+	}
+	return nil
+}
+
+// CompleteLinearWorkItemFamily is the typed completion boundary for the
+// Linear five-alias family. It writes the canonical unit audit and all five
+// alias watermarks in one PostgreSQL transaction; callers cannot accidentally
+// complete one alias while leaving the others unadvanced. The generic
+// Complete method remains for legacy providers and is intentionally not used
+// by this proof path.
+func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
+	ctx context.Context,
+	claim Claim,
+	result LinearWorkItemsCompletionResult,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || startedAt.IsZero() || completedAt.Before(startedAt) ||
+		ValidateLinearWorkItemsCompletion(claim, result) != nil {
+		return ErrInvalidConfiguration
+	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return ErrInvalidConfiguration
@@ -120,10 +213,19 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if watermark != nil {
+	if _, err := tx.Exec(ctx, deletePreparedRouteSnapshotSQL,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	for _, datasetKey := range workitemcontract.FamilyDatasets() {
+		normalized := normalizeWatermarkWrite(
+			result.Watermark, claim.BeforeAt, completedAt,
+			claim.OrgID, claim.SourceExternalID, datasetKey,
+		)
 		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
-			uuid.New(), claim.OrgID, claim.SourceExternalID, claim.Dataset,
-			watermark.UTC(), completedAt.UTC(),
+			uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
+			normalized, completedAt.UTC(),
 		); err != nil {
 			return ErrInvalidConfiguration
 		}
@@ -139,6 +241,10 @@ func (repository *PostgresRepository) Complete(
 	return nil
 }
 
+const deletePreparedRouteSnapshotSQL = `
+DELETE FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`
+
 // ReleaseForRetry returns a live claim to dispatching for the same River job's
 // bounded retry. A process death cannot call this method; expired-lease
 // recovery remains the fresh-process path in Claim.
@@ -153,6 +259,116 @@ func (repository *PostgresRepository) ReleaseForRetry(
 	}
 	command, err := repository.Pool.Exec(ctx, releaseForRetrySQL,
 		claim.ID, claim.Owner, now.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// DeferForBudgetContention records a healthy request-reservation collision.
+// It is intentionally separate from the Python planner's intrinsic
+// budget_deferred episode: a sibling holding a short-lived HTTP slot says
+// nothing about whether this unit can fit the configured sync budget.
+// RateLimitEpisode is the persisted rate-limit deferral bookkeeping for one
+// unit. Python carries the equivalent state in task kwargs
+// (rate_limit_deferrals / rate_limit_first_seen_at); Go keeps it on the row so
+// a process restart resumes the same episode rather than starting a fresh
+// 2-hour budget.
+type RateLimitEpisode struct {
+	Deferrals   int
+	FirstSeenAt *time.Time
+}
+
+// RateLimitEpisode reads the current deferral counters for a leased unit.
+func (repository *PostgresRepository) RateLimitEpisode(
+	ctx context.Context,
+	claim Claim,
+) (RateLimitEpisode, error) {
+	if repository == nil || repository.Pool == nil || ctx == nil || claim.Validate() != nil {
+		return RateLimitEpisode{}, ErrInvalidConfiguration
+	}
+	var episode RateLimitEpisode
+	if err := repository.Pool.QueryRow(ctx, `
+		SELECT COALESCE(rate_limit_deferrals, 0), rate_limit_first_seen_at
+		FROM public.sync_run_units
+		WHERE id = $1::uuid`, claim.ID,
+	).Scan(&episode.Deferrals, &episode.FirstSeenAt); err != nil {
+		return RateLimitEpisode{}, ErrInvalidConfiguration
+	}
+	return episode, nil
+}
+
+// DeferForRateLimit keeps a rate-limited unit claimable without consuming its
+// bounded failure budget, mirroring Python's treatment of a 429 as deferred
+// work rather than a failure. The attempt decrement matches
+// DeferForBudgetContention: River's snooze is already attempt-neutral, and the
+// authoritative sync-unit attempt must stay neutral with it.
+func (repository *PostgresRepository) DeferForRateLimit(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > rateLimitMaxTotalWait {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForRateLimitSQL,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// rateLimitMaxTotalWait bounds a single deferral's not-before fence. It equals
+// the episode wall-clock budget in internal/jobs/providerunit, which is the
+// longest a deferral could legitimately be scheduled for.
+const rateLimitMaxTotalWait = 2 * time.Hour
+
+func (repository *PostgresRepository) DeferForBudgetContention(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > 5*time.Minute {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForBudgetContentionSQL,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// DeferChunkContinuation keeps a prepared chunk unit claimable for the same
+// River job without consuming either River's attempt or the authoritative
+// sync-unit attempt. The durable checkpoint remains fenced by the generation;
+// the next claim resumes from its next ordinal.
+func (repository *PostgresRepository) DeferChunkContinuation(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > 15*time.Minute {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
+		now.UTC(), availableAt.UTC(),
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -188,6 +404,13 @@ func (repository *PostgresRepository) Fail(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
+	// resumable by a RUNNING unit of the same generation. Terminalizing the
+	// unit makes its sidecars unreachable, so keeping them would retain
+	// provider payloads that nothing can read and nothing else reclaims.
+	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
 		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
@@ -247,7 +470,10 @@ WITH candidate AS (
     WHERE unit.id = $1::uuid
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
       AND (
-        unit.status = 'dispatching'
+        (
+          unit.status = 'dispatching'
+          AND (unit.available_at IS NULL OR unit.available_at <= $3)
+        )
         OR (
           $5::boolean
           AND unit.status = 'running'
@@ -346,6 +572,27 @@ WHERE unit.id = $1::uuid
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
   )`
 
+// completeUnitSQL mirrors the Python SUCCESS stamp
+// (src/dev_health_ops/workers/sync_units.py, the `status=SUCCESS` UPDATE) in
+// its episode bookkeeping, not only in its status transition. Python clears
+// THREE things there and every one of them is load-bearing:
+//
+//   - the rate-limit episode pair (CHAOS-2760),
+//   - the budget episode pair (CHAOS-3412) -- SUCCESS proves the unit is not
+//     permanently oversized, so its next budget deferral must start a fresh
+//     count and a fresh wall clock instead of inheriting a resolved episode's,
+//   - the AGGREGATE blocked clock `first_blocked_at` -- the unit got through,
+//     so it is not "going nowhere" any more.
+//
+// Leaving any of them set here hands `sync/budget_guard.py`'s exhaustion
+// predicates a resolved episode's counters on the unit's NEXT deferral, and
+// terminalizes a healthy unit early. Python cannot see this SQL, so its own
+// derivation guard (test_deferral_lifecycle_columns_are_classified_and_stamped_correctly)
+// cannot catch a half-wired Go stamp -- repository_postgres_sql_test.go asserts
+// it on this side.
+//
+// releaseForRetrySQL below deliberately does NOT clear any of them; see its
+// own comment.
 const completeUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'success',
@@ -354,6 +601,9 @@ SET status = 'success',
     error = NULL,
     rate_limit_deferrals = 0,
     rate_limit_first_seen_at = NULL,
+    budget_deferrals = 0,
+    budget_first_deferred_at = NULL,
+    first_blocked_at = NULL,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,
@@ -384,6 +634,20 @@ WHERE unit.id = $1::uuid
 // EffectReadbackRequired pair. A single UPDATE's SET expression reads the
 // current row atomically -- no separate lock is needed the way
 // mutateGenerationJournal's two-round-trip read-modify-write requires.
+//
+// CHAOS-3427: this stamp deliberately clears NEITHER episode pair nor the
+// aggregate blocked clock. That asymmetry with completeUnitSQL is the same one
+// Python has, and it is load-bearing: `_RATE_LIMIT_EPISODE_ERROR_CATEGORIES`
+// (budget_guard.py) does not contain 'provider_unit_retryable', so a release
+// for retry is not a rate-limit or budget episode boundary and must not reset
+// an episode that is still genuinely in progress. Do not "fix" it into
+// symmetry with the SUCCESS stamp.
+//
+// The jsonb merge here keeps OTHER result keys (go_effect_ledger_v1) but the
+// concatenation puts jsonb_build_object on the RIGHT, so 'error_category' is
+// OVERWRITTEN, never preserved. That direction is a hard rule, not an
+// accident -- see repository_postgres_sql_test.go's
+// TestNoUnitStampPreservesAPriorErrorCategory.
 const releaseForRetrySQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'dispatching',
@@ -403,12 +667,146 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+// deferForBudgetContentionSQL keeps the unit claimable by the SAME snoozed
+// River job after $4, while stale-dispatch repair remains a much later safety
+// net. The distinct result counter survives process restarts and does not
+// increment or clear either existing Python deferral episode. The claim's
+// domain attempt is restored under the same lease CAS because healthy sibling
+// contention is neutral in both River and sync_run_units. The aggregate
+// first_blocked_at clock remains set until SUCCESS.
+const deferForBudgetContentionSQL = `
+WITH contention AS (
+    SELECT unit.id,
+           COALESCE(
+             CASE
+               WHEN jsonb_typeof(unit.result::jsonb) = 'object'
+               THEN (unit.result::jsonb -> 'provider_budget_contention_deferrals')::integer
+               ELSE 0
+             END,
+             0
+           ) + 1 AS next_deferrals
+    FROM public.sync_run_units AS unit
+    WHERE unit.id = $1::uuid
+)
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_budget_contention',
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_budget_contention',
+        'not_before', to_jsonb($4::timestamptz),
+        'provider_budget_contention_deferrals', contention.next_deferrals
+      )
+    ),
+    first_blocked_at = COALESCE(unit.first_blocked_at, $3),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_budget_contention',
+    updated_at = $3
+FROM contention
+WHERE unit.id = contention.id
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const deferForRateLimitSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_rate_limited',
+    rate_limit_deferrals = COALESCE(unit.rate_limit_deferrals, 0) + 1,
+    rate_limit_first_seen_at = COALESCE(unit.rate_limit_first_seen_at, $3),
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_rate_limited',
+        'not_before', to_jsonb($4::timestamptz),
+        'rate_limit_deferrals', COALESCE(unit.rate_limit_deferrals, 0) + 1
+      )
+    ),
+    first_blocked_at = COALESCE(unit.first_blocked_at, $3),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_rate_limited',
+    updated_at = $3
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const deferForChunkContinuationSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_unit_chunk_continuation',
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_unit_chunk_continuation',
+        'not_before', to_jsonb($4::timestamptz)
+      )
+    ),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_unit_chunk_continuation',
+    updated_at = $3
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+// failUnitSQL carries forward EXACTLY ONE key and drops the rest.
+//
+// A wholesale replace lost go_effect_ledger_v1, and with it the prepared
+// snapshot reference. Contract point 5 retains the snapshot on failure, and
+// the reference is what makes the retained row VALIDATABLE -- the row is still
+// findable by sync_run_unit_id, but without the digest, size and schema
+// recorded in the ledger nothing can tell a good payload from a corrupt one.
+//
+// A blanket `unit.result || $6` overcorrected. The result document also
+// accumulates CLAIMABLE-STATE keys -- next_retry_at, retry_exhausted,
+// retry_reason, and the rate-limit and budget deferral keys -- written by
+// markExpiredLeaseRetryingSQL, the soft-timeout retry path, rate-limit
+// deferral and the budget guard. Nothing clears them on claim, so preserving
+// everything freezes a live "will retry at T" claim onto a unit that is
+// terminally failed. The admin integrations API projects these keys with no
+// status gate and treats them as authoritative, and every other terminal stamp
+// in the repo deliberately nulls next_retry_at (lease_repair.go,
+// sync_units.py) -- this was the only one that would not have.
+//
+// The CASE is not decoration: unit.result is sa.JSON, so it can hold a JSON
+// literal `null`, and `'null'::jsonb || '{...}'::jsonb` does NOT raise -- it
+// ARRAY-concatenates to `[null, {...}]`. The failure document then has no
+// readable error_category at all, because `->>` on an array returns NULL. A
+// raise would have been the kinder outcome; this loses the reason a unit
+// failed, silently. Verified on PostgreSQL 18.4 rather than assumed.
+//
+// `?` returns false for every non-object, so it is the whole guard: a null,
+// array or scalar predecessor takes the ELSE branch, and the THEN branch only
+// ever concatenates two objects.
 const failUnitSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'failed',
     duration_seconds = $4,
     error = $5,
-    result = $6::jsonb,
+    result = CASE
+      WHEN unit.result::jsonb ? 'go_effect_ledger_v1'
+      THEN jsonb_build_object(
+             'go_effect_ledger_v1', unit.result::jsonb -> 'go_effect_ledger_v1'
+           ) || $6::jsonb
+      ELSE $6::jsonb
+    END,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,
@@ -419,16 +817,44 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+// upsertWatermarkSQL is monotonic (CHAOS-2578) with ONE narrow exception
+// (CHAOS-3412 clause C10(b), mirrored from Python's `_monotonic_update`):
+// when the STORED value is in the future and the incoming one is not, the
+// incoming value wins.
+//
+// The exception is gated on provably-invalid state only. A watermark marks
+// data ALREADY synced, so it can never legitimately sit ahead of now; such a
+// value can only come from a skewed provider record or from pre-fix planner
+// code that persisted a future window end. Because the write is otherwise
+// monotonic, nothing could ever lower it again: the planner's window would
+// start in the future, plan no unit, and the run would finalize FAILED
+// forever with nothing left to repair it. C10(a) (the planner-side recovery
+// clamp) and this clause only work together -- without this, the healing
+// re-stamp is silently discarded by GREATEST and every tick re-syncs a
+// recovery window forever.
+//
+// Widening this to "any lower value wins" would be a defect, not a
+// simplification: it destroys the CHAOS-2578 guarantee that a late or
+// out-of-order result cannot roll a LEGITIMATE watermark backwards. Python
+// pinned that by mutation; repository_postgres_sql_test.go pins it here.
+//
+// $6 is the write instant, used as `now` for the future test in-database so
+// the decision stays atomic against concurrent writers.
 const upsertWatermarkSQL = `
 INSERT INTO public.sync_watermarks (
     id, org_id, repo_id, source_id, target, dataset_key,
     last_synced_at, updated_at
 ) VALUES ($1, $2, $3, $3, $4, $4, $5, $6)
 ON CONFLICT (org_id, source_id, dataset_key) DO UPDATE
-SET last_synced_at = GREATEST(
-        public.sync_watermarks.last_synced_at,
-        EXCLUDED.last_synced_at
-    ),
+SET last_synced_at = CASE
+        WHEN public.sync_watermarks.last_synced_at > $6::timestamptz
+         AND EXCLUDED.last_synced_at <= $6::timestamptz
+        THEN EXCLUDED.last_synced_at
+        ELSE GREATEST(
+            public.sync_watermarks.last_synced_at,
+            EXCLUDED.last_synced_at
+        )
+    END,
     updated_at = EXCLUDED.updated_at`
 
 const upsertFinalizeSQL = `

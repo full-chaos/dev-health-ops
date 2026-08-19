@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -40,6 +41,15 @@ type Config struct {
 	PollInterval  time.Duration
 	InflightRetry time.Duration
 	BatchSize     int
+	// Logger receives step failures from the durable drain loop. It is
+	// optional so tests and embedders need not supply one; a nil Logger
+	// discards. Before this field existed, this controller had zero slog
+	// references at all: a failed step was discarded outright with no
+	// counter and no readiness flip (CHAOS-3907). It must never fall back to
+	// slog.Default(): that sends output to a sink other than the process's
+	// configured JSON logger, so log-capturing tests would pass while
+	// production ships nothing.
+	Logger *slog.Logger
 }
 
 func DefaultConfig() Config {
@@ -121,7 +131,9 @@ func (controller *Controller) run(ctx context.Context, done chan struct{}) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			_ = controller.step(ctx)
+			if err := controller.step(ctx); err != nil {
+				controller.logger().ErrorContext(ctx, "external recompute step failed", "error", err.Error())
+			}
 			timer.Reset(controller.config.PollInterval)
 		}
 	}
@@ -151,6 +163,16 @@ func (controller *Controller) step(ctx context.Context) error {
 		}
 	}
 	return errors.Join(pendingErr, claimErr, errors.Join(dispatchErrors...))
+}
+
+// logger is nil-safe: an unset Config.Logger discards rather than panicking,
+// and never falls back to slog.Default(), so an embedder cannot be surprised
+// by controller output appearing on a logger it did not choose.
+func (controller *Controller) logger() *slog.Logger {
+	if controller == nil || controller.config.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return controller.config.Logger
 }
 
 func (controller *Controller) Shutdown(ctx context.Context) error {

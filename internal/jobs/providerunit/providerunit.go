@@ -4,11 +4,19 @@ package providerunit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 )
@@ -35,14 +43,93 @@ const RouteReconciliationCategory = "route_reconciliation_required"
 // first attempt because retrying a deterministic fault cannot change it.
 const RepositoryIdentityCategory = "repository_identity_ambiguous"
 
+// GitHubFilesInventoryFailureCategory marks an exhausted file-inventory sync;
+// unlike a successful empty repository, it says inventory completeness was
+// never established.
+const GitHubFilesInventoryFailureCategory = "github_files_inventory_failed"
+
+// EffectRecoveryAmbiguousCategory records a unit whose effect recovery cannot
+// be reconciled: a readback found a stored row that disagrees with the effect
+// being replayed, the effect was marked recovery-blocked, or the committer had
+// no readback to consult (effect_committer.go:128,158,163).
+//
+// Every one of those is decided by state already durably persisted, so a later
+// attempt re-reads the same rows and reaches the same verdict. Retrying burns
+// the remaining attempts and then buries the real cause under the generic
+// provider_unit_exhausted category, which is exactly the outcome that makes a
+// wedged effect hard to find.
+const EffectRecoveryAmbiguousCategory = "effect_recovery_ambiguous"
+
+// ProviderDatasetUnavailableCategory records an account-level provider
+// capability limitation. It is distinct from authentication and exhaustion:
+// retrying the same valid credential cannot make the dataset available.
+const ProviderDatasetUnavailableCategory = "provider_dataset_unavailable"
+
 // deterministicTerminalCategory maps executor failures that no retry can clear
 // onto their own durable category. Anything not listed keeps the ordinary
 // bounded-retry path.
+//
+// This is ADAPTER-INDEPENDENT: it reclassifies ErrEffectRecoveryAmbiguous for
+// every route that reaches the shared committer, not only the three derived
+// destinations this lane adds. That is intended -- the error means the same
+// thing wherever it comes from -- but it does change the recorded category and
+// the retry count for existing adapters that previously exhausted instead.
+// Categories matching Python's vocabulary in
+// src/dev_health_ops/workers/sync_units.py (_PROVIDER_ERROR_PATTERNS and
+// _classify_error), so a unit that fails for the same reason in either runtime
+// reports the same category.
+const (
+	// AuthCategory covers 401 and non-rate-limit 403.
+	AuthCategory = "auth"
+	// NotFoundCategory covers 404.
+	NotFoundCategory = "not_found"
+	// PaginationIncompleteCategory covers a fail-closed pagination or row-cap
+	// refusal -- Python's PaginationException category.
+	PaginationIncompleteCategory = "pagination_incomplete"
+)
+
 func deterministicTerminalCategory(err error) (string, bool) {
+	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
+		return ProviderDatasetUnavailableCategory, true
+	}
+	// A fail-closed pagination or row-cap refusal is deterministic given the
+	// provider's current state: a repo with more in-window rows than the cap
+	// returns the same refusal on every attempt. Retrying it re-fetched up to
+	// 100 list pages and 10k detail GETs on each of 5 attempts, then again on
+	// every scheduled tick, and finally reported the generic exhaustion
+	// category. The refusal itself is correct; the repetition is not
+	// (CHAOS-3871).
+	if errors.Is(err, providersync.ErrPaginationCapExceeded) {
+		return PaginationIncompleteCategory, true
+	}
+	// Authentication and not-found are already non-retryable at the HTTP layer
+	// (providerfoundation.ProviderError.Retryable), so the unit handler was
+	// spending four more full executions against a dead credential or a
+	// deleted repository before collapsing the precise cause into
+	// provider_unit_exhausted. Python fails these once, with the category.
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.Class {
+		case providerfoundation.ErrorAuthentication:
+			return AuthCategory, true
+		case providerfoundation.ErrorNotFound:
+			return NotFoundCategory, true
+		}
+	}
 	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
 		return RepositoryIdentityCategory, true
 	}
+	if errors.Is(err, providersync.ErrEffectRecoveryAmbiguous) {
+		return EffectRecoveryAmbiguousCategory, true
+	}
 	return "", false
+}
+
+func exhaustedFailureCategory(claim providersync.Claim) string {
+	if claim.Provider == "github" && claim.Dataset == "files" {
+		return GitHubFilesInventoryFailureCategory
+	}
+	return "provider_unit_exhausted"
 }
 
 // RouteFault describes a producer/consumer capability disagreement for
@@ -79,6 +166,7 @@ type UnitRepository interface {
 		time.Time,
 	) error
 	ReleaseForRetry(context.Context, providersync.Claim, time.Time) error
+	DeferForBudgetContention(context.Context, providersync.Claim, time.Time, time.Time) error
 	Fail(
 		context.Context,
 		providersync.Claim,
@@ -86,6 +174,27 @@ type UnitRepository interface {
 		time.Time,
 		time.Time,
 	) error
+}
+
+// RateLimitCategory is the terminal category for a unit whose rate-limit
+// deferral episode is spent. Python fails with a rate-limit category rather
+// than a generic exhaustion, so an operator can tell "the provider kept
+// throttling us for two hours" from "this unit is broken".
+const RateLimitCategory = "rate_limit"
+
+// RateLimitDeferralRepository is optional so existing repository test doubles
+// and older rolling binaries stay source-compatible, exactly like
+// ChunkContinuationRepository. Production's PostgresRepository implements it.
+type RateLimitDeferralRepository interface {
+	RateLimitEpisode(context.Context, providersync.Claim) (providersync.RateLimitEpisode, error)
+	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time) error
+}
+
+// ChunkContinuationRepository is optional so legacy repository test doubles
+// and older rolling binaries remain source-compatible. Production's
+// PostgresRepository implements it for the opt-in chunk route.
+type ChunkContinuationRepository interface {
+	DeferChunkContinuation(context.Context, providersync.Claim, time.Time, time.Time) error
 }
 
 type Handler struct {
@@ -106,6 +215,57 @@ type Handler struct {
 	// attempt to retrying (ReleaseForRetry) or failed (Fail). A nil value
 	// keeps behavior unchanged.
 	LeaseMetrics jobruntime.SyncLeaseObserver
+}
+
+// logLifecycle records the safe, authoritative identity of one provider-unit
+// attempt. River arguments deliberately carry only the unit ID, so provider,
+// dataset, mode, and run identity become available only after Claim. Keep this
+// record out of generic queue metrics: provider/dataset would make that scrape
+// surface unbounded as the configured provider matrix grows.
+func (handler *Handler) logLifecycle(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	event string,
+	result string,
+	err error,
+) {
+	if execution == nil {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attributes := []any{
+		"provider", claim.Provider,
+		"dataset", claim.Dataset,
+		"mode", claim.Mode,
+		"kind", execution.Definition.Kind,
+		"queue", execution.Definition.Queue,
+		"job_id", execution.JobID,
+		"attempt", execution.Attempt,
+		"sync_run_id", claim.SyncRunID,
+		"sync_unit_id", claim.ID,
+	}
+	if result != "" {
+		attributes = append(attributes, "result", result)
+	}
+	if detail := lifecycleErrorDetail(err); detail != "" {
+		attributes = append(attributes, "error_detail", detail)
+	}
+	logger.InfoContext(ctx, event, attributes...)
+}
+
+func lifecycleErrorDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := logging.RedactText(err.Error())
+	if detail == "" {
+		return ""
+	}
+	return detail
 }
 
 func (handler *Handler) observeRouteFault(fault RouteFault) {
@@ -136,6 +296,101 @@ func (handler *Handler) now() time.Time {
 	return time.Now().UTC()
 }
 
+// reconcileRouteFault preserves a claimed unit for the producer/reconciler
+// when either route enablement or the activated GitHub work-item family shape
+// is invalid. The latter carries ErrInvalidConfiguration as its cause while
+// retaining the existing durable route-reconciliation lifecycle: a malformed
+// persisted unit is real work that must be repaired, not silently dropped.
+func (handler *Handler) reconcileRouteFault(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	descriptor providersync.CompleteRouteDescriptor,
+	descriptorPresent bool,
+	startedAt time.Time,
+	configurationErr error,
+) error {
+	// TRD non-negotiable #3: a provider unit delivered to River must never
+	// terminalize as route_disabled. A unit only reaches here when the Python
+	// producer gate routed a scope the Go descriptor does not serve, or a
+	// persisted GitHub family claim is malformed. The sync data is real and the
+	// gate or stored claim needs reconciliation. Terminalizing it as
+	// route_disabled would silently discard that scope's data for the whole run.
+	fault := RouteFault{
+		Provider: claim.Provider, Dataset: claim.Dataset,
+		DescriptorPresent: descriptorPresent, RouteReady: descriptor.RouteReady,
+		RouteEnabled: descriptor.RouteEnabled,
+		Attempt:      execution.Attempt,
+		MaxAttempts:  execution.Definition.MaxAttempts,
+	}
+	// Releasing on the terminal attempt would strand the unit: River discards
+	// the job after the last attempt, leaving the unit `dispatching` with no
+	// live consumer, and the producer outbox dedupe row makes a stale
+	// redispatch report "queued" without enqueueing anything. Record an explicit
+	// durable reconciliation-required state instead — terminal and alertable,
+	// but never the silent route_disabled drop.
+	if execution.Attempt >= execution.Definition.MaxAttempts {
+		fault.Terminal = true
+		handler.observeRouteFault(fault)
+		if failErr := handler.Repository.Fail(
+			context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
+			startedAt, handler.now(),
+		); failErr != nil {
+			return jobruntime.Retryable(failErr)
+		}
+		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
+		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed", configurationErr)
+		return jobruntime.Retryable(routeReconciliationError(configurationErr))
+	}
+	releaseErr := handler.Repository.ReleaseForRetry(
+		context.WithoutCancel(ctx), claim, handler.now(),
+	)
+	fault.Released = releaseErr == nil
+	handler.observeRouteFault(fault)
+	if releaseErr != nil {
+		return jobruntime.Retryable(releaseErr)
+	}
+	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", configurationErr)
+	return jobruntime.Retryable(routeReconciliationError(configurationErr))
+}
+
+func routeReconciliationError(configurationErr error) error {
+	if configurationErr == nil {
+		return ErrRouteReconciliationRequired
+	}
+	return fmt.Errorf("%w: %w", ErrRouteReconciliationRequired, configurationErr)
+}
+
+func validateProviderFamilyExecutionClaim(
+	claim providersync.Claim,
+	switches providersync.CompleteRouteSwitches,
+) error {
+	policy, family := providerfamilycontract.PolicyFor(claim.Provider, claim.Dataset)
+	if !family || policy.Mode == providerfamilycontract.Independent {
+		return nil
+	}
+	// GitHub retains its already-landed always-exact claim contract. Other
+	// work-item providers remain on their D16 legacy claim shape until their
+	// actual typed Go switch is enabled. GitLab deliberately has no switch yet,
+	// so cataloguing its family cannot activate admission or execution.
+	strict := false
+	switch strings.ToLower(strings.TrimSpace(claim.Provider)) {
+	case "github":
+		strict = true
+	case "jira":
+		strict = switches.JiraWorkItems
+	case "linear":
+		strict = switches.LinearWorkItems
+	}
+	if err := providerfamilycontract.ValidateClaim(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, strict,
+	); err != nil {
+		return fmt.Errorf("%w: %w", providersync.ErrInvalidConfiguration, err)
+	}
+	return nil
+}
+
 func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -164,51 +419,18 @@ func (handler *Handler) Work(
 		}
 		return jobruntime.Permanent(err)
 	}
-	descriptor, ok := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
-	if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-		// TRD non-negotiable #3: a provider unit delivered to River must never
-		// terminalize as route_disabled. A unit only reaches here when the
-		// Python producer gate routed a scope the Go descriptor does not
-		// serve, so the sync data is real and the gate is wrong. Terminalizing
-		// would silently discard that scope's data for the whole run. Instead
-		// hand the claim back to dispatching, alert, and fail retryably so the
-		// unit stays recoverable by the Celery route or the reconciler.
-		fault := RouteFault{
-			Provider: claim.Provider, Dataset: claim.Dataset,
-			DescriptorPresent: ok, RouteReady: descriptor.RouteReady,
-			RouteEnabled: descriptor.RouteEnabled,
-			Attempt:      execution.Attempt,
-			MaxAttempts:  execution.Definition.MaxAttempts,
-		}
-		// Releasing on the terminal attempt would strand the unit: River
-		// discards the job after the last attempt, leaving the unit
-		// `dispatching` with no live consumer, and the producer outbox dedupe
-		// row makes a stale redispatch report "queued" without enqueueing
-		// anything. The sync run would then never finalize. Record an explicit
-		// durable reconciliation-required state instead — terminal and
-		// alertable, but never the silent route_disabled drop.
-		if execution.Attempt >= execution.Definition.MaxAttempts {
-			fault.Terminal = true
-			handler.observeRouteFault(fault)
-			if failErr := handler.Repository.Fail(
-				context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
-				startedAt, handler.now(),
-			); failErr != nil {
-				return jobruntime.Retryable(failErr)
-			}
-			handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
-			return jobruntime.Retryable(ErrRouteReconciliationRequired)
-		}
-		releaseErr := handler.Repository.ReleaseForRetry(
-			context.WithoutCancel(ctx), claim, handler.now(),
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "", nil)
+	descriptor, descriptorPresent := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
+	// This admission boundary is intentionally before LeaseSession and
+	// BuildExecutor. A stale River unit can otherwise fetch credentials and
+	// commit an incomplete work-item family before the completion-side
+	// defense-in-depth check observes its flags.
+	familyClaimErr := validateProviderFamilyExecutionClaim(claim, handler.Switches)
+	if familyClaimErr != nil || !descriptorPresent ||
+		!descriptor.RouteReady || !descriptor.RouteEnabled {
+		return handler.reconcileRouteFault(
+			ctx, execution, claim, descriptor, descriptorPresent, startedAt, familyClaimErr,
 		)
-		fault.Released = releaseErr == nil
-		handler.observeRouteFault(fault)
-		if releaseErr != nil {
-			return jobruntime.Retryable(releaseErr)
-		}
-		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
-		return jobruntime.Retryable(ErrRouteReconciliationRequired)
 	}
 	session := &providersync.LeaseSession{
 		Repository: handler.Repository,
@@ -221,6 +443,9 @@ func (handler *Handler) Work(
 		result, err = executor.Execute(ctx, session, descriptor)
 		if err == nil {
 			payload := cloneResult(result.Result)
+			if len(result.WorklogObservations) > 0 {
+				payload["go_worklog_observations"] = result.WorklogObservations
+			}
 			payload["go_provider_route"] = map[string]any{
 				"effects_written": result.Effects.Written,
 				"effects_skipped": result.Effects.Skipped,
@@ -232,11 +457,84 @@ func (handler *Handler) Work(
 			); completeErr != nil {
 				err = completeErr
 			} else {
+				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded", nil)
 				return nil
 			}
 		}
 	}
 	completedAt := handler.now()
+	// A prepared chunk can be continued after a bounded number of commits.
+	// Persist the claimable not-before fence before returning an attempt-neutral
+	// River snooze. Do not call ReleaseForRetry: that would turn a healthy
+	// continuation into an ordinary failure attempt and erase the checkpoint's
+	// lease-generation context.
+	if delay, continuation := providersync.ChunkContinuationDelay(err); continuation {
+		deferrer, supported := handler.Repository.(ChunkContinuationRepository)
+		if !supported {
+			return jobruntime.Retryable(err)
+		}
+		availableAt := completedAt.Add(delay)
+		if deferErr := deferrer.DeferChunkContinuation(
+			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
+		); deferErr != nil {
+			return jobruntime.Retryable(deferErr)
+		}
+		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
+		return jobruntime.RetryableAfter(err, delay)
+	}
+	// A provider rate limit is the provider scheduling us, not the unit
+	// failing. Python defers it up to 10 times over 2 hours without consuming
+	// the failure budget; Go had no branch at all, so a 429 burned one of five
+	// attempts on a 5s-5m backoff and a 30-60 minute reset window terminalized
+	// the unit in two or three minutes (CHAOS-3868).
+	if retryAfter, rateLimited := providerRateLimitDelay(err); rateLimited {
+		if deferrer, supported := handler.Repository.(RateLimitDeferralRepository); supported {
+			episode, episodeErr := deferrer.RateLimitEpisode(context.WithoutCancel(ctx), session.Claim)
+			if episodeErr != nil {
+				return jobruntime.Retryable(episodeErr)
+			}
+			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
+			if granted {
+				if deferErr := deferrer.DeferForRateLimit(
+					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
+				); deferErr != nil {
+					return jobruntime.Retryable(deferErr)
+				}
+				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err)
+				return jobruntime.RateLimited(err, plan.countdown)
+			}
+			// The episode's count or wall-clock budget is spent. Fail with the
+			// rate-limit category rather than letting it fall through to the
+			// generic provider_unit_exhausted, which buries the real cause.
+			if failErr := handler.Repository.Fail(
+				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
+				startedAt, completedAt,
+			); failErr != nil {
+				return jobruntime.Retryable(failErr)
+			}
+			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
+			return jobruntime.Permanent(err)
+		}
+	}
+	// A healthy shared request bucket can be full when sibling provider units
+	// overlap. That is scheduling contention, not an execution failure. Persist
+	// the domain deferral before returning River's attempt-neutral snooze so a
+	// process restart keeps the same not-before fence and operator evidence.
+	if errors.Is(err, providerfoundation.ErrBudgetContended) {
+		delay := providerBudgetContentionDelay(session.Claim.ID)
+		availableAt := completedAt.Add(delay)
+		if deferErr := handler.Repository.DeferForBudgetContention(
+			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
+		); deferErr != nil {
+			return jobruntime.Retryable(deferErr)
+		}
+		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err)
+		return jobruntime.BudgetContention(err, delay)
+	}
 	// A deterministic fault cannot succeed on a later attempt. Burning the
 	// remaining attempts would only delay the outcome and then bury the real
 	// cause under the generic provider_unit_exhausted category.
@@ -252,6 +550,7 @@ func (handler *Handler) Work(
 			return jobruntime.Retryable(failErr)
 		}
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
@@ -260,11 +559,12 @@ func (handler *Handler) Work(
 		// only adds the ability to gate the metric on true success; it does
 		// not change the existing best-effort, always-retryable behavior.
 		failErr := handler.Repository.Fail(
-			context.WithoutCancel(ctx), session.Claim, "provider_unit_exhausted",
+			context.WithoutCancel(ctx), session.Claim, exhaustedFailureCategory(session.Claim),
 			startedAt, completedAt,
 		)
 		if failErr == nil {
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		}
 		return jobruntime.Retryable(err)
 	}
@@ -274,7 +574,25 @@ func (handler *Handler) Work(
 		return jobruntime.Retryable(releaseErr)
 	}
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying", err)
 	return jobruntime.Retryable(err)
+}
+
+// providerRateLimitDelay reports whether the failure is a provider rate limit
+// and, if so, the delay the provider asked for (already resolved from
+// Retry-After or the reset headers by providerfoundation).
+func providerRateLimitDelay(err error) (time.Duration, bool) {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		return 0, false
+	}
+	return providerErr.RetryAfter, true
+}
+
+func providerBudgetContentionDelay(unitID string) time.Duration {
+	digest := sha256.Sum256([]byte(unitID))
+	jitter := time.Duration(binary.BigEndian.Uint64(digest[:8])%1000) * time.Millisecond
+	return time.Second + jitter
 }
 
 func cloneResult(input map[string]any) map[string]any {

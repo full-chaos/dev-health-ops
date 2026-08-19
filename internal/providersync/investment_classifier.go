@@ -1,0 +1,1189 @@
+package providersync
+
+import (
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Go port of the legacy rule-based investment classifier
+// (analytics/investment.py). It is a DEPRECATED path in Python -- the canonical
+// Investment View is WorkUnit-based -- and this port exists only to serve the
+// legacy daily investment_* destinations, exactly as the Python one does.
+//
+// The rules are read from the REAL config file rather than transcribed into Go.
+// A transcribed copy is a second, unversioned source of truth: the same defect
+// class that left the derived-destination integration tests asserting against a
+// pre-053 enum while production emitted values the copy could not represent. The
+// path is supplied by the caller, mirroring Python's `InvestmentClassifier(
+// config_path)`, so both engines can be pointed at one file and compared.
+//
+// Per D16 this mirrors Python bug-for-bug. Four of the 44 rules in the checked-in
+// config are UNREACHABLE from the work-item call site, and that is reproduced
+// rather than corrected; see investment_classifier_reachability_test.go, which
+// DERIVES that dead set by execution and fails if a future config edit revives
+// one.
+//
+// # Why the config is decoded as yaml.Node and not into typed structs
+//
+// Python reads the file with `yaml.safe_load` into plain dicts, and every
+// lookup is `d.get(key, default)`. That makes an EXPLICIT NULL and an ABSENT
+// KEY two different things everywhere: `priority:` yields None (and blows up
+// the sort), while an absent `priority` yields 100; `match:` yields None (and
+// blows up `_matches`), while an absent `match` yields {} and matches
+// everything. A typed decode -- including one using pointers per field --
+// collapses those two into each other, because yaml.v3 decodes an explicit
+// null into the same nil a missing key leaves behind. The first version of this
+// port did exactly that, and the result was a classifier that returned a
+// plausible product/general/0.0/legacy_default (or, worse, FIRED a rule whose
+// `match:` was null) for eight config shapes on which Python raises. That is
+// fail-open in the one direction D16 says is unacceptable: during Python/Go
+// coexistence both engines read the SAME file, so a Go engine that invents an
+// answer where Python refuses silently writes rows Python would never have
+// written.
+//
+// So the document is walked as yaml.Nodes, where "absent", "present and null"
+// and "present with a value" are three distinguishable states, and every shape
+// on which Python raises returns an *InvestmentConfigError naming the exception
+// class Python raises for it. Those classes are MEASURED, not inferred: the
+// refusal oracle pair (testdata/oracle_pairs/analytics_investment_refusal.py)
+// executes the real Python classifier against the same files and compares the
+// exception type name against what this file produces.
+//
+// # Declared divergences (Go refuses where Python proceeds)
+//
+// Node-walking removed the two divergences an earlier typed decode had -- a
+// duplicate mapping key (PyYAML keeps the LAST, yaml.v3's typed decoder
+// rejects the document) and a bare-string `component:`/`label:` (Python does
+// substring containment / character iteration) are both mirrored exactly now,
+// each pinned by its own oracle case. What remains, and is NOT mirrored:
+//
+//  1. A non-string scalar where Python would yield a non-string VALUE:
+//     `id: 7`, `investment_area: true`. Python puts the int/bool straight into
+//     InvestmentClassification, whose Python annotation is `str` and is not
+//     enforced. Go's *string cannot hold it, so this refuses rather than
+//     silently coerce to "7".
+//  2. Two or more rules whose priorities share ONE orderable non-numeric Python
+//     type -- every rule `priority: "a"`-style strings, or every rule a list.
+//     Python's sort succeeds lexicographically; this orders only numbers, so it
+//     refuses rather than impose an order Python would not produce. A single
+//     rule with such a priority is MIRRORED, since sorted() never calls the
+//     comparator for one element. A MIXED config (`1` and `"a"`), or any null
+//     or mapping priority, is a mirrored TypeError instead -- Python really
+//     does raise there.
+//  3. A leading-zero integer priority, which PyYAML's YAML 1.1 resolver reads
+//     as octal and yaml.v3's 1.2 reads as decimal. Both engines sort; neither
+//     order is the mirror.
+//  4. A merge key whose anchor chain refers back to its own mapping.
+//  5. A SEXAGESIMAL priority (`1:30`), which PyYAML resolves to the number 90
+//     and yaml.v3 leaves as a string. Both engines sort; the orders differ.
+//     Note this is a divergence only for PRIORITY -- the same literal in a
+//     `label` list is a MIRRORED AttributeError (an int has no .lower()), and
+//     as an id or output value it is refused as unrepresentable, because
+//     Python's value there is the int 90.
+//  6. An all-DATE set of priorities. PyYAML resolves a plain `2024-01-02` to
+//     datetime.date and orders dates among themselves; a date beside an int
+//     still raises in Python and is mirrored as a TypeError.
+//
+// All six are Go-erroring-where-Python-proceeds, which is the loud/safe
+// direction: the job fails visibly rather than emitting a row Python would not
+// have. None of them occurs in the checked-in config, and each is pinned by the
+// analytics/investment/divergence oracle pair -- which asserts the divergence
+// STILL EXISTS, so making the engines agree without deleting the declaration
+// fails the build rather than leaving a stale note behind.
+//
+// One residual is NOT a declared divergence because no instance of it is known:
+// the two YAML PARSERS could in principle disagree at the syntax level. Every
+// candidate tried lands the same way on both (a tab indent is rejected by
+// both), and this is recorded as a risk rather than a claim precisely because
+// there is nothing to pin.
+
+const (
+	legacyDefaultInvestmentArea = "product"
+	legacyDefaultProjectStream  = "general"
+	// legacyDefaultRulePriority mirrors `x.get("priority", 100)`: a rule with no
+	// priority sorts as 100, which is AFTER the 40-and-below rules and BEFORE
+	// the 999 catch-all.
+	legacyDefaultRulePriority = 100
+	legacyFallbackRuleID      = "legacy_default"
+	legacyUnnamedRuleID       = "legacy_rule"
+)
+
+// YAML resolved tags this file distinguishes. Compared as strings rather than
+// re-derived per call site so a typo cannot silently make a branch dead.
+const (
+	yamlNullTag      = "!!null"
+	yamlBoolTag      = "!!bool"
+	yamlIntTag       = "!!int"
+	yamlFloatTag     = "!!float"
+	yamlStrTag       = "!!str"
+	yamlSeqTag       = "!!seq"
+	yamlTimestampTag = "!!timestamp"
+	yamlMapTag       = "!!map"
+)
+
+// InvestmentConfigError is returned for every config/artifact combination on
+// which the Python classifier RAISES, plus the small declared set on which
+// Python proceeds and this port refuses rather than emit a value it cannot
+// represent (see the file comment).
+//
+// PythonException names the exception CLASS Python raises -- "AttributeError"
+// or "TypeError" -- and is the value the refusal oracle compares, so a Go
+// refusal for the wrong reason cannot pass as agreement. It is EMPTY for the
+// declared divergences, which is the type-level marker that Python does not
+// raise there at all.
+type InvestmentConfigError struct {
+	PythonException string
+	Detail          string
+}
+
+func (err *InvestmentConfigError) Error() string {
+	if err.PythonException == "" {
+		return fmt.Sprintf(
+			"investment config: declared divergence, Python proceeds but this port "+
+				"refuses: %s", err.Detail)
+	}
+	return fmt.Sprintf(
+		"investment config: Python raises %s here: %s", err.PythonException, err.Detail)
+}
+
+func investmentAttributeError(format string, args ...any) error {
+	return &InvestmentConfigError{
+		PythonException: "AttributeError",
+		Detail:          fmt.Sprintf(format, args...),
+	}
+}
+
+func investmentTypeError(format string, args ...any) error {
+	return &InvestmentConfigError{
+		PythonException: "TypeError",
+		Detail:          fmt.Sprintf(format, args...),
+	}
+}
+
+// investmentUnrepresentable is the DECLARED-divergence constructor: Python
+// proceeds and produces a value this port's types cannot hold. It carries no
+// exception class precisely so it can never be mistaken for a mirrored raise.
+func investmentUnrepresentable(format string, args ...any) error {
+	return &InvestmentConfigError{Detail: fmt.Sprintf(format, args...)}
+}
+
+// InvestmentClassification mirrors the Python dataclass of the same name.
+//
+// Three of its four fields are *string rather than string because Python can
+// and does put None in each of them: `id:`, `investment_area:` and
+// `project_stream:` are all read with `.get(key, default)`, so a key that is
+// PRESENT AND NULL returns None rather than the default. The Python dataclass
+// annotates investment_area and rule_id as `str`, but a dataclass does not
+// enforce annotations, so None reaches the call site regardless. A plain Go
+// string would have to invent "product"/"general"/"legacy_rule" there, which is
+// a silent value divergence in the fail-open direction.
+type InvestmentClassification struct {
+	InvestmentArea *string `json:"investment_area"`
+	ProjectStream  *string `json:"project_stream"`
+	Confidence     float64 `json:"confidence"`
+	RuleID         *string `json:"rule_id"`
+}
+
+// investmentRule is one entry of the config's `rules:` list, held as raw nodes.
+// Nothing about a rule is interpreted at load time except its priority, because
+// Python interprets nothing else at load time either: `_load_rules` only sorts,
+// so a rule whose `match:` is null is inert until classify() actually REACHES
+// it, and a rule whose `output:` is null is inert until it MATCHES. Interpreting
+// eagerly here would move those raises earlier than Python's and turn a config
+// that Python classifies fine into a Go-side load failure.
+type investmentRule struct {
+	id       *yaml.Node
+	priority *yaml.Node
+	match    *yaml.Node
+	output   *yaml.Node
+	// sortKey is `x.get("priority", 100)` as a float, valid only when
+	// priorityKind is investmentPriorityNumeric.
+	sortKey      float64
+	priorityKind investmentPriorityKind
+}
+
+// InvestmentArtifact is the classifier's input. Python passes a plain dict and
+// the call site (job_work_items.py:1377) supplies exactly four keys: labels,
+// component, title and provider.
+//
+// Title and Provider are carried here even though NOTHING reads them, because
+// the Python matcher does not read them either -- it inspects only labels,
+// paths and component. Dropping them would make the Go signature quietly
+// narrower than the contract it ports, and the docstring's claim that `title`
+// and `epic` participate would then have no visible counter-evidence.
+type InvestmentArtifact struct {
+	Labels []string
+	// Paths is what the matcher's path_prefix arm reads. The work-item call
+	// site never populates it, which is precisely why every path_prefix rule is
+	// dead on that path; it stays here because the field is what makes that
+	// deadness a property of the CALLER rather than of this engine.
+	Paths []string
+	// Component is a POINTER because Python reads it with
+	// `artifact.get("component")` -- no default -- so an absent key yields None,
+	// which is a different value from "" for both the `in` membership test AND
+	// the bare-string containment path (`None in "analytics"` raises where
+	// `"" in "analytics"` is True). The work-item call site always supplies the
+	// key, and always as "" (WorkItem has no `component` attribute, so
+	// `getattr(item, "component", "")` cannot return anything else), so nil is
+	// unreachable from production -- but the contract this ports can express it
+	// and so must this.
+	Component *string
+	// Read by neither engine. See the type comment.
+	Title    string
+	Provider string
+}
+
+// InvestmentClassifier holds the priority-ordered rules.
+type InvestmentClassifier struct {
+	rules []investmentRule
+}
+
+// NewInvestmentClassifier mirrors `InvestmentClassifier.__init__` +
+// `_load_rules`, including its MISSING-FILE behaviour: Python logs a warning
+// and returns an empty rule list rather than raising, so a classifier built
+// against an absent path still answers, always with the legacy default. That
+// is reproduced instead of failing closed, because failing closed here would
+// change which rows the legacy destinations emit.
+func NewInvestmentClassifier(configPath string) (*InvestmentClassifier, error) {
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Python: logger.warning(...); return []
+			return &InvestmentClassifier{rules: nil}, nil
+		}
+		return nil, err
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(contents, &root); err != nil {
+		// Declared divergence 3: a document yaml.v3's PARSER rejects. Note that
+		// duplicate mapping keys do NOT land here -- yaml.v3 only rejects those
+		// when decoding into a typed value, and this decodes into a Node.
+		return nil, fmt.Errorf("investment config %s: %w", configPath, err)
+	}
+	if err := investmentExpandMergeKeys(
+		&root, map[*yaml.Node]bool{}, map[*yaml.Node]bool{},
+	); err != nil {
+		return nil, err
+	}
+	investmentApplyPyYAMLBooleans(&root)
+	document := investmentDocumentBody(&root)
+	if document == nil || document.Tag == yamlNullTag {
+		// An empty or comment-only file is `yaml.safe_load(...) is None`, and
+		// `data.get("rules", [])` is then an attribute lookup on None.
+		return nil, investmentAttributeError(
+			"'NoneType' object has no attribute 'get': %s parsed to nothing", configPath)
+	}
+	if document.Kind != yaml.MappingNode {
+		return nil, investmentAttributeError(
+			"'%s' object has no attribute 'get': %s is not a mapping",
+			investmentPythonTypeName(document), configPath)
+	}
+	rules, err := investmentDecodeRules(investmentMappingValue(document, "rules"))
+	if err != nil {
+		return nil, err
+	}
+	if err := investmentResolvePriorities(rules); err != nil {
+		return nil, err
+	}
+	// Python sorts with sorted(), which is STABLE, and the checked-in config
+	// relies on that: 37 of its 44 rules share priority 10 and a further 2
+	// share priority 30. Among equal priorities the FILE ORDER decides which
+	// rule classify() reaches first, and classify() returns on first match --
+	// so an unstable sort would silently change the answer for any artifact
+	// matching more than one priority-10 rule. sort.Slice is NOT stable.
+	sort.SliceStable(rules, func(left, right int) bool {
+		return rules[left].sortKey < rules[right].sortKey
+	})
+	return &InvestmentClassifier{rules: rules}, nil
+}
+
+// investmentDecodeRules mirrors `sorted(data.get("rules", []), key=...)`'s
+// treatment of whatever sits under `rules:`. sorted() ITERATES its argument and
+// calls `.get` on every element, so the shape of `rules` decides between a
+// TypeError (not iterable at all) and an AttributeError (iterable, but its
+// elements are not dicts) -- both measured against the real Python.
+func investmentDecodeRules(node *yaml.Node) ([]investmentRule, error) {
+	if node == nil {
+		// `data.get("rules", [])` -- an absent key is an empty list, not an error.
+		return nil, nil
+	}
+	elements, err := investmentIterate(node)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]investmentRule, 0, len(elements))
+	for _, element := range elements {
+		element = investmentResolveAlias(element)
+		if element == nil || element.Kind != yaml.MappingNode {
+			// sorted()'s key function runs on every element BEFORE any
+			// comparison, so a non-dict rule raises at load even for a
+			// single-element list.
+			return nil, investmentAttributeError(
+				"'%s' object has no attribute 'get': a rules entry is not a mapping",
+				investmentPythonTypeName(element))
+		}
+		rules = append(rules, investmentRule{
+			id:       investmentMappingValue(element, "id"),
+			priority: investmentMappingValue(element, "priority"),
+			match:    investmentMappingValue(element, "match"),
+			output:   investmentMappingValue(element, "output"),
+		})
+	}
+	return rules, nil
+}
+
+// investmentResolvePriorities computes `x.get("priority", 100)` for every rule
+// and reproduces WHEN sorted() blows up on the result.
+//
+// The subtlety that makes this worth its own function: sorted() computes every
+// key first and only then compares, so a single rule with `priority:` null does
+// NOT raise -- there is nothing to compare it against. Two rules do. Measured
+// on the real Python both ways; an "any null priority is fatal" shortcut would
+// refuse a config Python classifies fine.
+func investmentResolvePriorities(rules []investmentRule) error {
+	for index := range rules {
+		key, kind := investmentPrioritySortKey(rules[index].priority)
+		rules[index].sortKey = key
+		rules[index].priorityKind = kind
+	}
+	// With fewer than two rules sorted() never calls the comparator, so
+	// nothing about the key's type or spelling can matter yet.
+	if len(rules) < 2 {
+		return nil
+	}
+	// Python's `<` is defined WITHIN a type, not across types, so what decides
+	// between "sorted() raises" and "sorted() succeeds and we cannot reproduce
+	// its order" is whether every key shares one orderable Python type. Both
+	// halves are measured: sorted(["b","a"]) and sorted([[2],[1]]) succeed,
+	// while sorted([1,"a"]), sorted([None,None]) and sorted([{},{}]) all raise.
+	// Collapsing that into "not a number means Python raises" would have this
+	// port CLAIM a mirrored TypeError for an all-string config Python sorts
+	// happily -- a false mirror, which is worse than an admitted divergence.
+	groups := map[string]bool{}
+	declared := ""
+	for _, rule := range rules {
+		if rule.priorityKind == investmentPriorityUnorderable {
+			return investmentTypeError(
+				"'<' not supported between instances of 'int' and '%s': a rule's "+
+					"priority is of a type Python cannot order at all, and there is "+
+					"more than one rule to order",
+				investmentPythonTypeName(rule.priority))
+		}
+		// Every kind below is one Python CAN order among its own type; what
+		// differs is whether this port can reproduce that order. Each records
+		// why not, and the mixed-type check still runs first, because a mixed
+		// config is a mirrored raise no matter which kinds are mixed.
+		switch rule.priorityKind {
+		case investmentPriorityAmbiguousNumeric:
+			declared = "a priority is written with a leading zero, which is octal to " +
+				"PyYAML's YAML 1.1 resolver and decimal to yaml.v3's 1.2 one"
+		case investmentPrioritySexagesimal:
+			declared = "a priority is written in YAML 1.1 sexagesimal (`1:30`), which " +
+				"PyYAML resolves to the number 90 and yaml.v3 leaves as a string"
+		case investmentPriorityDate:
+			declared = "every priority is a date, which PyYAML resolves to " +
+				"datetime.date and orders among its own type"
+		}
+		groups[investmentPriorityPythonType(rule.priorityKind)] = true
+	}
+	if len(groups) > 1 {
+		return investmentTypeError(
+			"'<' not supported between instances of %s: the rules mix priority "+
+				"types, and Python compares only within one",
+			investmentSortedQuoted(groups))
+	}
+	if groups["str"] || groups["list"] {
+		return investmentUnrepresentable(
+			"every rule's priority is a %s, which Python orders lexicographically; "+
+				"this port orders only numbers, so it refuses rather than impose an "+
+				"order Python would not produce", investmentSortedQuoted(groups))
+	}
+	if declared != "" {
+		return investmentUnrepresentable(
+			"%s, so no ordering here is the mirror", declared)
+	}
+	return nil
+}
+
+func investmentSortedQuoted(values map[string]bool) string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, "'"+name+"'")
+	}
+	sort.Strings(names)
+	return strings.Join(names, " and ")
+}
+
+// investmentPriorityKind is how `x.get("priority", 100)` behaves as a sort key.
+type investmentPriorityKind int
+
+const (
+	// An int, float or bool: Python orders them together (bool IS an int), and
+	// both YAML resolvers agree on the value.
+	investmentPriorityNumeric investmentPriorityKind = iota
+	// An int literal the two resolvers read differently (a leading zero is
+	// octal to PyYAML, decimal to yaml.v3). Both engines sort; they would sort
+	// DIFFERENTLY, so this is a declared divergence, not a mirrored raise.
+	investmentPriorityAmbiguousNumeric
+	// A string. Python orders these lexicographically among themselves.
+	investmentPriorityString
+	// A sequence. Python orders these lexicographically among themselves too.
+	investmentPrioritySequence
+	// YAML 1.1 sexagesimal (`1:30`). PyYAML resolves it to the INT 90, so it
+	// groups with the other ints -- `1:30` beside `9` sorts in Python and must
+	// not be reported as a mixed-type raise -- but yaml.v3 sees a string, so
+	// the ORDER cannot be reproduced. Declared, like the octal case.
+	investmentPrioritySexagesimal
+	// A plain timestamp. PyYAML resolves it to datetime.date, which orders
+	// among dates and raises against an int.
+	investmentPriorityDate
+	// null or a mapping: Python raises on the first comparison, even against
+	// another value of the same type (`None < None` and `{} < {}` both raise).
+	investmentPriorityUnorderable
+)
+
+// investmentPriorityPythonType names the Python type whose ordering applies, so
+// two kinds that share one type (a plain int and an ambiguous one) group
+// together and a mixed config is detected as mixed.
+func investmentPriorityPythonType(kind investmentPriorityKind) string {
+	switch kind {
+	case investmentPriorityString:
+		return "str"
+	case investmentPrioritySequence:
+		return "list"
+	case investmentPriorityDate:
+		return "date"
+	default:
+		// Numeric, ambiguous-numeric and sexagesimal are all `int` (or float)
+		// to Python, which is why a sexagesimal priority beside a plain one is
+		// NOT a mixed-type raise.
+		return "int"
+	}
+}
+
+// investmentPrioritySortKey returns the numeric sort key and how Python would
+// treat it. bool counts as numeric because Python's bool IS an int subclass, so
+// `priority: true` sorts as 1 rather than raising.
+func investmentPrioritySortKey(node *yaml.Node) (float64, investmentPriorityKind) {
+	if node == nil {
+		return legacyDefaultRulePriority, investmentPriorityNumeric
+	}
+	node = investmentResolveAlias(node)
+	if node == nil {
+		return 0, investmentPriorityUnorderable
+	}
+	if node.Kind == yaml.SequenceNode {
+		return 0, investmentPrioritySequence
+	}
+	if node.Kind != yaml.ScalarNode {
+		// A mapping: Python cannot order two of them either.
+		return 0, investmentPriorityUnorderable
+	}
+	switch node.Tag {
+	case yamlBoolTag:
+		// Python's bool IS an int subclass, so `priority: true` sorts as 1
+		// alongside ordinary ints rather than raising -- measured:
+		// sorted([True, 2]) succeeds, and a `priority: true` rule really does
+		// order before a `priority: 9` one. This case exists because
+		// node.Decode(&float64) REFUSES a !!bool, which sent every boolean
+		// priority to Unorderable and made this port CLAIM a Python TypeError
+		// that Python does not raise. The comment above said bool was numeric
+		// while the code disagreed; this is what makes the comment true.
+		var flag bool
+		if err := node.Decode(&flag); err != nil {
+			return 0, investmentPriorityUnorderable
+		}
+		if flag {
+			return 1, investmentPriorityNumeric
+		}
+		return 0, investmentPriorityNumeric
+	case yamlTimestampTag:
+		// PyYAML resolves a plain `2024-01-02` to datetime.date, and dates
+		// order fine AMONG THEMSELVES (measured: two date priorities sort;
+		// a date beside an int raises). Go has no ordering to offer that is
+		// Python's, so an all-date config is a declared divergence -- while a
+		// MIXED one still reaches the mirrored TypeError below, because the
+		// group check sees two types.
+		return 0, investmentPriorityDate
+	case investmentSexagesimalTag:
+		// `1:30` is the INT 90 to PyYAML's YAML 1.1 resolver and a plain
+		// string to yaml.v3's 1.2 one, so it sorts as a number on one side
+		// and not at all on the other. It groups with "int" because that is
+		// the Python TYPE -- `1:30` beside `9` sorts in Python and must not be
+		// reported as a mixed-type TypeError.
+		return 0, investmentPrioritySexagesimal
+	case yamlStrTag:
+		return 0, investmentPriorityString
+	case yamlIntTag:
+		// A leading zero is the one integer literal the two resolvers read
+		// differently: PyYAML's YAML 1.1 makes `010` OCTAL (8), yaml.v3's 1.2
+		// makes it decimal 10. Sorting by either is a guess, and the wrong
+		// guess reorders rules silently. No rule in the checked-in config has
+		// one.
+		digits := strings.TrimLeft(node.Value, "-+")
+		if len(digits) > 1 && digits[0] == '0' {
+			return 0, investmentPriorityAmbiguousNumeric
+		}
+	case yamlFloatTag:
+	default:
+		// A null, or a scalar carrying some other tag (a plain timestamp, say).
+		return 0, investmentPriorityUnorderable
+	}
+	var number float64
+	if err := node.Decode(&number); err != nil {
+		return 0, investmentPriorityUnorderable
+	}
+	return number, investmentPriorityNumeric
+}
+
+// Classify mirrors InvestmentClassifier.classify: first matching rule wins, and
+// an unmatched artifact falls back to the legacy product/general bucket with
+// confidence 0.0 rather than to anything unknown-like.
+//
+// It returns an error because Python RAISES here for several config shapes, and
+// which rule the artifact reaches decides whether it does: a rule with a null
+// `match:` is harmless until classify() gets to it, and a rule with a null
+// `output:` is harmless until it MATCHES. Both are pinned by cases that
+// classify the same file with and without reaching the offending rule.
+func (classifier *InvestmentClassifier) Classify(
+	artifact InvestmentArtifact,
+) (InvestmentClassification, error) {
+	for _, rule := range classifier.rules {
+		matched, err := investmentRuleMatches(rule.match, artifact)
+		if err != nil {
+			return InvestmentClassification{}, err
+		}
+		if !matched {
+			continue
+		}
+		// Python evaluates `output = rule.get("output", {})` before the match
+		// test but only DEREFERENCES it after, and `.get` on a dict cannot
+		// raise -- so the null-output AttributeError is a property of matching,
+		// not of iterating.
+		area, stream, err := investmentRuleOutput(rule.output)
+		if err != nil {
+			return InvestmentClassification{}, err
+		}
+		id, err := investmentRuleID(rule.id)
+		if err != nil {
+			return InvestmentClassification{}, err
+		}
+		return InvestmentClassification{
+			InvestmentArea: area,
+			ProjectStream:  stream,
+			Confidence:     1.0,
+			RuleID:         id,
+		}, nil
+	}
+	return InvestmentClassification{
+		InvestmentArea: investmentString(legacyDefaultInvestmentArea),
+		ProjectStream:  investmentString(legacyDefaultProjectStream),
+		Confidence:     0.0,
+		RuleID:         investmentString(legacyFallbackRuleID),
+	}, nil
+}
+
+// investmentRuleID mirrors `rule.get("id", "legacy_rule")`.
+//
+// Absent, present-and-null and present-and-empty are THREE different answers --
+// "legacy_rule", None and "" -- and each has its own oracle case. The previous
+// version of this port collapsed the first two into "legacy_rule" and claimed a
+// synthetic case pinned it; no such case existed, and the behaviour diverged.
+func investmentRuleID(node *yaml.Node) (*string, error) {
+	return investmentOptionalString(node, legacyUnnamedRuleID, "id")
+}
+
+// investmentRuleOutput mirrors the two `output.get(...)` reads.
+func investmentRuleOutput(node *yaml.Node) (*string, *string, error) {
+	if node == nil {
+		// `rule.get("output", {})` -- an absent block is {}, so both reads take
+		// their defaults.
+		return investmentString(legacyDefaultInvestmentArea),
+			investmentString(legacyDefaultProjectStream), nil
+	}
+	node = investmentResolveAlias(node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil, nil, investmentAttributeError(
+			"'%s' object has no attribute 'get': a matched rule's output block is "+
+				"not a mapping", investmentPythonTypeName(node))
+	}
+	area, err := investmentOptionalString(
+		investmentMappingValue(node, "investment_area"),
+		legacyDefaultInvestmentArea, "investment_area")
+	if err != nil {
+		return nil, nil, err
+	}
+	stream, err := investmentOptionalString(
+		investmentMappingValue(node, "project_stream"),
+		legacyDefaultProjectStream, "project_stream")
+	if err != nil {
+		return nil, nil, err
+	}
+	return area, stream, nil
+}
+
+// investmentOptionalString is the shared `.get(key, default)` for the three
+// fields that reach InvestmentClassification as strings: absent yields the
+// default, explicit null yields None, a string yields itself.
+func investmentOptionalString(
+	node *yaml.Node, fallback string, key string,
+) (*string, error) {
+	if node == nil {
+		return investmentString(fallback), nil
+	}
+	node = investmentResolveAlias(node)
+	if node == nil || node.Tag == yamlNullTag {
+		return nil, nil
+	}
+	if node.Kind == yaml.ScalarNode && node.Tag == yamlStrTag {
+		return investmentString(node.Value), nil
+	}
+	// Declared divergence 1: Python would put this non-string straight into the
+	// dataclass. Coercing it to text here would be a silent value change.
+	return nil, investmentUnrepresentable(
+		"%s is a %s; Python would carry that value into InvestmentClassification "+
+			"unchanged and this port's *string cannot hold it",
+		key, investmentPythonTypeName(node))
+}
+
+// investmentRuleMatches mirrors `_matches`.
+//
+// The structure matters as much as the conditions: each arm is a REJECTION
+// test, and a criterion that is absent is not tested at all. So an EMPTY
+// `match: {}` reaches the final `return true` and matches every artifact --
+// including one with no labels at all. The real config expresses its catch-all
+// as `always: true` instead, so only a synthetic config reaches the empty-map
+// form; it is pinned there.
+func investmentRuleMatches(match *yaml.Node, artifact InvestmentArtifact) (bool, error) {
+	if match == nil {
+		// `rule.get("match", {})` yields {} for an absent key, and {} matches
+		// everything by the rule above.
+		return true, nil
+	}
+	match = investmentResolveAlias(match)
+	if match == nil || match.Kind != yaml.MappingNode {
+		// A null (or otherwise non-dict) `match:` is inert until classify()
+		// reaches this rule, and then `match_criteria.get("always")` raises.
+		return false, investmentAttributeError(
+			"'%s' object has no attribute 'get': a rule's match block is not a mapping",
+			investmentPythonTypeName(match))
+	}
+	// Python tests `match_criteria.get("always")` for TRUTHINESS, so
+	// `always: false` does not short-circuit -- it falls through to the
+	// remaining criteria exactly as an absent key would. A non-empty string,
+	// including the `always: 'no'` that YAML would otherwise fold to false,
+	// IS truthy.
+	if investmentTruthy(investmentMappingValue(match, "always")) {
+		return true, nil
+	}
+	if label := investmentMappingValue(match, "label"); label != nil {
+		targets, err := investmentLoweredStrings(label)
+		if err != nil {
+			return false, err
+		}
+		labels := make(map[string]struct{}, len(artifact.Labels))
+		for _, value := range artifact.Labels {
+			labels[strings.ToLower(value)] = struct{}{}
+		}
+		intersects := false
+		for _, target := range targets {
+			if _, ok := labels[target]; ok {
+				intersects = true
+				break
+			}
+		}
+		if !intersects {
+			return false, nil
+		}
+	}
+	if prefixes := investmentMappingValue(match, "path_prefix"); prefixes != nil {
+		// Reads artifact PATHS, not path_prefix. The work-item call site
+		// supplies none, so this arm rejects every artifact reaching it from
+		// that path -- the reason three real rules are dead.
+		//
+		// The prefix list is resolved INSIDE the loop over artifact paths,
+		// exactly where Python's inner `for prefix in target_prefixes` sits.
+		// That is load-bearing, not stylistic: with a null `path_prefix:` and
+		// an artifact carrying no paths, Python never enters the inner loop and
+		// never raises -- it just rejects. Hoisting the resolution would refuse
+		// a config Python classifies. Both directions are pinned by cases over
+		// the same file.
+		found := false
+		for _, path := range artifact.Paths {
+			targets, err := investmentIterate(prefixes)
+			if err != nil {
+				return false, err
+			}
+			for _, target := range targets {
+				target = investmentResolveAlias(target)
+				if target == nil || target.Kind != yaml.ScalarNode || target.Tag != yamlStrTag {
+					return false, investmentTypeError(
+						"startswith first arg must be str or a tuple of str, not %s: a "+
+							"path_prefix entry is not a string",
+						investmentPythonTypeName(target))
+				}
+				if strings.HasPrefix(path, target.Value) {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			return false, nil
+		}
+	}
+	if component := investmentMappingValue(match, "component"); component != nil {
+		contains, err := investmentComponentContains(component, artifact.Component)
+		if err != nil {
+			return false, err
+		}
+		if !contains {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// investmentComponentContains mirrors
+// `artifact.get("component") not in match_criteria["component"]`, negated.
+//
+// `in` is overloaded in Python and the config's shape picks the meaning. A LIST
+// (or dict) is membership -- exact equality, NOT case-folded, unlike the label
+// arm. A bare STRING is substring containment, which is a latent Python bug
+// this mirrors rather than fixes: `component: analytics` matches the work-item
+// call site's "" for every artifact, because "" is a substring of everything.
+func investmentComponentContains(node *yaml.Node, component *string) (bool, error) {
+	node = investmentResolveAlias(node)
+	if node == nil || node.Tag == yamlNullTag {
+		return false, investmentTypeError(
+			"argument of type 'NoneType' is not a container or iterable: a rule's " +
+				"component criterion is null")
+	}
+	if node.Kind == yaml.ScalarNode && node.Tag == yamlStrTag {
+		if component == nil {
+			return false, investmentTypeError(
+				"'in <string>' requires string as left operand, not NoneType: the " +
+					"artifact has no component key and the criterion is a bare string")
+		}
+		return strings.Contains(node.Value, *component), nil
+	}
+	candidates, err := investmentIterate(node)
+	if err != nil {
+		// `x in 5` reports containment, not iteration, so the message differs
+		// from investmentIterate's even though the class is the same.
+		return false, investmentTypeError(
+			"argument of type '%s' is not iterable: a rule's component criterion "+
+				"is not a container", investmentPythonTypeName(node))
+	}
+	for _, candidate := range candidates {
+		candidate = investmentResolveAlias(candidate)
+		if candidate == nil {
+			continue
+		}
+		if candidate.Tag == yamlNullTag {
+			if component == nil {
+				return true, nil
+			}
+			continue
+		}
+		if candidate.Kind == yaml.ScalarNode && candidate.Tag == yamlStrTag &&
+			component != nil && candidate.Value == *component {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// investmentLoweredStrings mirrors
+// `set(lbl.lower() for lbl in match_criteria["label"])`.
+//
+// The generator is consumed in full before the intersection is taken, so a
+// non-string entry raises even when an earlier entry would have matched.
+func investmentLoweredStrings(node *yaml.Node) ([]string, error) {
+	entries, err := investmentIterate(node)
+	if err != nil {
+		return nil, err
+	}
+	lowered := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		entry = investmentResolveAlias(entry)
+		if entry == nil || entry.Kind != yaml.ScalarNode || entry.Tag != yamlStrTag {
+			return nil, investmentAttributeError(
+				"'%s' object has no attribute 'lower': a label entry is not a string",
+				investmentPythonTypeName(entry))
+		}
+		lowered = append(lowered, strings.ToLower(entry.Value))
+	}
+	return lowered, nil
+}
+
+// investmentIterate mirrors `for x in obj` over a safe_load'ed value: a list
+// yields its items, a dict yields its KEYS, and a string yields its CHARACTERS
+// (which is why a bare-string `label:` silently matches single letters rather
+// than the word). Anything else is not iterable and raises TypeError.
+func investmentIterate(node *yaml.Node) ([]*yaml.Node, error) {
+	node = investmentResolveAlias(node)
+	if node == nil || node.Tag == yamlNullTag {
+		return nil, investmentTypeError("'NoneType' object is not iterable")
+	}
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return node.Content, nil
+	case yaml.MappingNode:
+		keys := make([]*yaml.Node, 0, len(node.Content)/2)
+		seen := make(map[string]struct{}, len(node.Content)/2)
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			key := node.Content[index]
+			if _, duplicate := seen[key.Value]; duplicate {
+				continue
+			}
+			seen[key.Value] = struct{}{}
+			keys = append(keys, key)
+		}
+		return keys, nil
+	case yaml.ScalarNode:
+		if node.Tag != yamlStrTag {
+			return nil, investmentTypeError(
+				"'%s' object is not iterable", investmentPythonTypeName(node))
+		}
+		characters := make([]*yaml.Node, 0, len(node.Value))
+		for _, character := range node.Value {
+			characters = append(characters, &yaml.Node{
+				Kind: yaml.ScalarNode, Tag: yamlStrTag, Value: string(character),
+			})
+		}
+		return characters, nil
+	default:
+		return nil, investmentTypeError(
+			"'%s' object is not iterable", investmentPythonTypeName(node))
+	}
+}
+
+// investmentTruthy mirrors Python truthiness for a safe_load'ed value, which is
+// what `if match_criteria.get("always")` actually tests. An absent key is None
+// and therefore false; so are false, 0, "" and the empty container.
+func investmentTruthy(node *yaml.Node) bool {
+	node = investmentResolveAlias(node)
+	if node == nil || node.Tag == yamlNullTag {
+		return false
+	}
+	switch node.Kind {
+	case yaml.SequenceNode, yaml.MappingNode:
+		return len(node.Content) > 0
+	case yaml.ScalarNode:
+		switch node.Tag {
+		case yamlBoolTag:
+			var value bool
+			return node.Decode(&value) == nil && value
+		case yamlIntTag, yamlFloatTag:
+			var value float64
+			return node.Decode(&value) == nil && value != 0
+		default:
+			return node.Value != ""
+		}
+	default:
+		return true
+	}
+}
+
+// investmentExpandMergeKeys resolves YAML merge keys (`<<: *anchor`) into the
+// mapping that carries them, as PyYAML's constructor does before the classifier
+// ever sees a dict.
+//
+// Without this the node walk treats `<<` as an ordinary key and never finds the
+// merged criteria -- and the direction is fail-open, which is why it is fixed
+// rather than declared. A rule written as
+//
+//	match:
+//	  <<: *shared_labels
+//
+// has, to this port, a match block with NO criteria, and a match block with no
+// criteria reaches `_matches`'s final `return True` and MATCHES EVERY ARTIFACT.
+// Python matches only the artifacts carrying the merged labels. Pinned by two
+// cases over one file that differ only in whether those labels are present.
+//
+// The precedence rules are PyYAML's, measured rather than assumed:
+//
+//   - an EXPLICIT key beats a merged one wherever it appears in the mapping,
+//     including after the `<<`;
+//   - for `<<: [*a, *b]`, the FIRST source wins a key both define;
+//   - a source that itself carries a `<<` is expanded first.
+func investmentExpandMergeKeys(node *yaml.Node, done, active map[*yaml.Node]bool) error {
+	node = investmentResolveAlias(node)
+	if node == nil || done[node] {
+		return nil
+	}
+	if active[node] {
+		// `a: &x {<<: *x}`. PyYAML recurses until it dies; refusing is the
+		// loud direction and no config can need this.
+		return investmentUnrepresentable("a merge key refers to its own mapping")
+	}
+	active[node] = true
+	defer func() {
+		delete(active, node)
+		done[node] = true
+	}()
+	for _, child := range node.Content {
+		if err := investmentExpandMergeKeys(child, done, active); err != nil {
+			return err
+		}
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	var explicit []*yaml.Node
+	var merges []*yaml.Node
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key, value := node.Content[index], node.Content[index+1]
+		if key.Tag == "!!merge" || key.Value == "<<" {
+			merges = append(merges, value)
+			continue
+		}
+		explicit = append(explicit, key, value)
+	}
+	if len(merges) == 0 {
+		return nil
+	}
+	claimed := make(map[string]bool, len(explicit)/2)
+	for index := 0; index < len(explicit); index += 2 {
+		claimed[explicit[index].Value] = true
+	}
+	for _, merge := range merges {
+		sources, err := investmentMergeSources(merge)
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			if err := investmentExpandMergeKeys(source, done, active); err != nil {
+				return err
+			}
+			for index := 0; index+1 < len(source.Content); index += 2 {
+				key, value := source.Content[index], source.Content[index+1]
+				if claimed[key.Value] {
+					continue
+				}
+				claimed[key.Value] = true
+				explicit = append(explicit, key, value)
+			}
+		}
+	}
+	node.Content = explicit
+	return nil
+}
+
+// investmentMergeSources flattens a merge value into the mappings it names.
+// PyYAML accepts one mapping or a sequence of mappings and raises
+// ConstructorError for anything else.
+func investmentMergeSources(node *yaml.Node) ([]*yaml.Node, error) {
+	node = investmentResolveAlias(node)
+	if node == nil {
+		return nil, investmentMergeTypeError()
+	}
+	if node.Kind == yaml.MappingNode {
+		return []*yaml.Node{node}, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, investmentMergeTypeError()
+	}
+	sources := make([]*yaml.Node, 0, len(node.Content))
+	for _, entry := range node.Content {
+		entry = investmentResolveAlias(entry)
+		if entry == nil || entry.Kind != yaml.MappingNode {
+			return nil, investmentMergeTypeError()
+		}
+		sources = append(sources, entry)
+	}
+	return sources, nil
+}
+
+func investmentMergeTypeError() error {
+	return &InvestmentConfigError{
+		PythonException: "ConstructorError",
+		Detail: "expected a mapping or a list of mappings for merging, " +
+			"but found another node",
+	}
+}
+
+// investmentPyYAMLBooleans are the plain scalars PyYAML's resolver reads as
+// BOOLEANS and yaml.v3's does not.
+//
+// PyYAML implements YAML 1.1, whose bool set is
+// yes/no/on/off/true/false in three casings each; yaml.v3 implements the YAML
+// 1.2 core schema, where only true/false are boolean and everything else is an
+// ordinary string. That difference is not cosmetic here, and it is not
+// symmetric either -- it was fail-open in the arm that matters most:
+//
+//	match:
+//	  always: no
+//
+// is False to Python, so the rule falls through to its remaining criteria; to
+// yaml.v3 it is the non-empty string "no", which is TRUTHY, so the rule
+// short-circuits and MATCHES EVERY ARTIFACT. One unquoted word in the config
+// and the Go engine classifies everything under one rule while Python does not.
+// The same difference makes `label: [no]` a bool (which has no .lower(), so
+// Python raises) rather than a label that simply never matches.
+//
+// Normalising here, once, over the whole document is deliberate: doing it at
+// each read site would leave whichever site was added last silently on the 1.2
+// reading. Only PLAIN scalars are rewritten -- a quoted "no" is a string to both
+// resolvers, and an explicitly tagged `!!str no` carries TaggedStyle, so both
+// keep their string reading.
+//
+// Residual, NOT mirrored and not plausible in this config: the two resolvers
+// also disagree about YAML 1.1 sexagesimals (`1:30` is 90 to PyYAML, a string
+// to yaml.v3) and about plain timestamps (`2024-01-02` is a date to PyYAML,
+// which this port then refuses as unrepresentable). Both land on Go refusing or
+// rejecting rather than inventing a value. Leading-zero integers are refused
+// explicitly; see investmentPrioritySortKey.
+var investmentPyYAMLBooleans = map[string]string{
+	"yes": "true", "Yes": "true", "YES": "true",
+	"on": "true", "On": "true", "ON": "true",
+	"no": "false", "No": "false", "NO": "false",
+	"off": "false", "Off": "false", "OFF": "false",
+}
+
+// investmentSexagesimalInt and investmentSexagesimalFloat are PyYAML's own
+// resolver patterns, transcribed rather than approximated -- a broader pattern
+// would retag legitimate strings and a narrower one would miss real cases.
+// Measured against PyYAML: `1:30`->90, `99:59`->5999, `1:30.5`->90.5, while
+// `0:30` (leading zero), `1:60` (group above 59) and `:30` stay strings.
+var (
+	investmentSexagesimalInt   = regexp.MustCompile(`^[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+$`)
+	investmentSexagesimalFloat = regexp.MustCompile(`^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$`)
+)
+
+// investmentSexagesimalTag marks a plain scalar PyYAML reads as a NUMBER and
+// yaml.v3 leaves as a string. It is retagged during normalisation, once, rather
+// than sniffed at each read site, for the same reason the booleans are: the
+// read site added last would otherwise keep the YAML 1.2 reading.
+//
+// Retagging (rather than resolving the value) is what makes all three places
+// this literal can appear land where Python lands, and the three differ:
+//
+//   - as a `priority`, both engines can sort but would sort DIFFERENTLY, so it
+//     is a declared divergence (see investmentPrioritySexagesimal);
+//   - as a `label` entry, Python raises AttributeError because an int has no
+//     .lower() -- so the tag check in investmentLoweredStrings MIRRORS it
+//     exactly, where a bare string would have been lowered and silently
+//     matched nothing. That one was fail-open;
+//   - as an `id` or output value, Python yields the int 90 where a *string
+//     cannot, so it refuses as an unrepresentable value rather than silently
+//     emitting "1:30".
+const investmentSexagesimalTag = "!!pyyaml-sexagesimal"
+
+func investmentApplyPyYAMLBooleans(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	if node.Kind == yaml.ScalarNode && node.Tag == yamlStrTag && node.Style == 0 {
+		if canonical, ok := investmentPyYAMLBooleans[node.Value]; ok {
+			node.Tag = yamlBoolTag
+			node.Value = canonical
+		} else if investmentSexagesimalInt.MatchString(node.Value) ||
+			investmentSexagesimalFloat.MatchString(node.Value) {
+			node.Tag = investmentSexagesimalTag
+		}
+	}
+	// Aliases carry no Content, so this cannot cycle; the anchor itself is
+	// reached once, in place, wherever it is defined.
+	for _, child := range node.Content {
+		investmentApplyPyYAMLBooleans(child)
+	}
+}
+
+// investmentDocumentBody unwraps the document node yaml.Unmarshal produces.
+// A file that is empty or only comments leaves the root node zero-valued, which
+// is how "safe_load returned None" is detected without confusing it with an
+// explicit `{}`.
+func investmentDocumentBody(root *yaml.Node) *yaml.Node {
+	if root == nil || root.Kind == 0 {
+		return nil
+	}
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return nil
+		}
+		return investmentResolveAlias(root.Content[0])
+	}
+	return investmentResolveAlias(root)
+}
+
+// investmentMappingValue returns the value for `key`, or nil when the key is
+// absent -- the distinction the whole node-walking decode exists to preserve.
+//
+// The LAST occurrence wins, because a duplicate mapping key is not an error in
+// PyYAML: it silently keeps the last one. yaml.v3's typed decoder rejects the
+// document instead, which is why this walks Content rather than decoding.
+func investmentMappingValue(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	var found *yaml.Node
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			found = mapping.Content[index+1]
+		}
+	}
+	return found
+}
+
+// investmentResolveAlias follows a YAML alias to its anchor, as PyYAML does
+// before any of the above ever sees the value.
+func investmentResolveAlias(node *yaml.Node) *yaml.Node {
+	for node != nil && node.Kind == yaml.AliasNode {
+		node = node.Alias
+	}
+	return node
+}
+
+// investmentPythonTypeName names the Python type `yaml.safe_load` would have
+// produced for a node, so a mirrored exception's message says what Python's
+// says. Only the CLASS is compared by the oracle; this is for the human reading
+// the failure.
+func investmentPythonTypeName(node *yaml.Node) string {
+	if node == nil {
+		return "NoneType"
+	}
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return "list"
+	case yaml.MappingNode:
+		return "dict"
+	}
+	switch node.Tag {
+	case yamlNullTag:
+		return "NoneType"
+	case yamlBoolTag:
+		return "bool"
+	case yamlIntTag:
+		return "int"
+	case yamlFloatTag:
+		return "float"
+	case yamlStrTag:
+		return "str"
+	case yamlSeqTag:
+		return "list"
+	case yamlMapTag:
+		return "dict"
+	case investmentSexagesimalTag:
+		// PyYAML resolved it to a number, so a message about it must say what
+		// Python would say -- "'int' object has no attribute 'lower'".
+		return "int"
+	case yamlTimestampTag:
+		return "date"
+	default:
+		return strings.TrimPrefix(node.Tag, "!!")
+	}
+}
+
+func investmentString(value string) *string {
+	return &value
+}

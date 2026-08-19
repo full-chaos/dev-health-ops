@@ -1,8 +1,9 @@
 # Provider/dataset capability matrix — v1
 
 `matrix.json` is the frozen provider × dataset contract required by CUT-08 of
-the Go worker cutover (`docs/plans/go-worker-cutover-implementation-plan.md`
-§9, `docs/architecture/go-worker-cutover-trd.md` §10).
+the Go worker cutover. The Go Worker Runtime Migration project documents in
+Linear remain the plan and design authority; this artifact is the checked-in,
+source-generated capability record.
 
 It exists because the matrix previously lived only as hand-maintained code in
 two languages, with no test asserting the sets were identical.
@@ -19,6 +20,48 @@ All **59** configured pairs across the six providers in TRD §10.1:
 | launchdarkly | 1 |
 | linear | 5 |
 | pagerduty | 11 |
+
+## Aggregate closure census
+
+The frozen aggregate head `1c5ba95536adb4e7752df5f40c9e2a4d098847d6`
+started at **25/59** route-ready pairs:
+
+| Provider | Frozen ready | Aggregate ready |
+|---|---:|---:|
+| github | 17/17 | 17/17 |
+| gitlab | 6/19 | 19/19 |
+| jira | 1/6 | 6/6 |
+| launchdarkly | 1/1 | 1/1 |
+| linear | 0/5 | 5/5 |
+| pagerduty | 0/11 | 11/11 |
+| **Total** | **25/59** | **59/59** |
+
+The 34-row delta was treated as an activation dependency, not as 34 provider
+defects. A row moved to `native_go` / `route_ready: true` only after the
+aggregate source contained all four parts of the route: a complete handler and
+sink/readback boundary, production worker construction, a typed default-off Go
+switch with startup admission, and Python producer admission with a one-writer
+River/Celery fence. The generated JSON and independent Go/Python census tests
+then close on the same 59 identities.
+
+Family boundaries remain explicit:
+
+- GitLab, Jira, Linear, and GitHub work-item aliases are audit identities for
+  one canonical `work-items` writer per provider. Direct sibling aliases never
+  acquire a partial writer. GitLab and Linear expose the canonical 16-effect
+  manifest; Jira additionally owns `worklogs` for 17 effects.
+- PagerDuty's 11 rows are scheduled provider-unit routes in
+  `dev-health-worker`. The incident quartet remains four independent claims
+  with four descriptors and no canonicalization or fan-out; the quartet shares
+  the one frozen incidents rollout flag. `dev-health-stream-runner` remains a
+  separate webhook-only surface and is not evidence for these rows.
+- GitLab's three PR-social identities share one complete handler/sink while
+  retaining independent claims and mutually exclusive rollout switches.
+
+This is capability publication, not deployment cutover. Every checked-in
+switch remains default-off, the transitional inventory remains
+`python_compatibility`, and non-enabled scopes continue through the existing
+Celery/Python path.
 
 Per pair: the Python source anchor, cost class, watermark behavior, legacy
 targets, processor flags, the fixed Go executor kind, shadow eligibility, the
@@ -42,7 +85,7 @@ Both languages regenerate their own side and fail on divergence:
 - Python — `tests/workers/test_provider_matrix_contract.py`, which rebuilds the
   pair set and per-pair metadata from `src/dev_health_ops/sync/datasets.py` and
   additionally binds producer route eligibility
-  (`ProviderUnitRouteSwitches.is_canary_scope`) to `route_ready`.
+  (`ProviderUnitRouteSwitches.is_route_ready`) to `route_ready`.
 
 Regenerate after an intentional registry change:
 
@@ -71,6 +114,36 @@ PROVIDER_MATRIX_UPDATE=1 go test ./internal/providersync \
 - `route_destinations` is empty for pairs with no known sink manifest yet.
   Recording a guessed manifest would be worse than recording none.
 
+## Activation status for the GitHub work-item family
+
+CHAOS-3606 makes all five planner-collapsed identities `native_go` and
+`route_ready: true`: `work-items`, `work-item-labels`, `work-item-projects`,
+`work-item-history`, and `work-item-comments`. Each reports the same complete,
+ordered sixteen-destination manifest for matrix, audit, and recovery truth.
+That is deliberately not five partial writers: only the canonical
+`github/work-items` claim is `RouteEnabled` when
+`WORKER_GITHUB_WORK_ITEMS_ENABLED=true`. A direct persisted sibling alias is
+released for route reconciliation before executor construction, credentials,
+HTTP, effects, or watermark work.
+
+The producer admits that canonical claim only when all five exact
+`family_dataset_*` flags are boolean `true`; missing, false, string-like, or
+unknown family flags and direct aliases are refused before either River outbox
+or Celery staging. The shared provider-unit switch is the single-writer
+boundary: forward selection stops the Python writer before Go can execute;
+rollback disables Go routing before the valid canonical Python claim becomes
+admissible again. This changes no deployment group, scheduler, or cutover
+ownership: every checked-in switch remains default-off.
+
+The native route requires explicit,
+`WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH` and
+`WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH` values. Readiness validates
+the same values the executor receives, and rejects any ambient
+`STATUS_MAPPING_PATH` override rather than silently loading a different file.
+GitHub Projects v2 is read only from durable enabled-integration configuration
+or claim credentials; an environment-only `GITHUB_PROJECTS_V2` setting emits a
+startup readiness warning and never becomes a collector configuration input.
+
 ## Activation status for `(github, repo-metadata)`
 
 CHAOS-3123 flipped the pair to `native_go` / `route_ready: true` on
@@ -98,6 +171,125 @@ What this activation waived and satisfied:
    `LaunchDarklyRouteHandler`/`LaunchDarklyClickHouseEffects` pair would fail
    closed on every claimed github unit rather than serve it.
 
+## Activation status for `(gitlab, repo-metadata)`
+
+CHAOS-3342 makes the pair `native_go` / `route_ready: true` with the same
+fail-closed boundary as the GitHub repository route. The production binary
+constructs a GitLab-specific handler and the tenant-keyed `repos` sink plus
+readback. Fixture parity constructs the production Python `Repo` model and
+executes the same persisted-row encoder used by `ClickHouseStore.insert_repo`,
+then compares that row with the production Go row type through the generic
+oracle. This boundary pins the model's `repo_tags` field rather than a
+hand-assembled `tags` surrogate. GitLab credential URL aliases follow the
+Python precedence `gitlab_url > url > base_url`, evaluating decrypted storage
+before config only within the same alias; self-managed URL path roots and
+non-default ports are retained. The fetched project id must equal the claimed
+source id.
+
+Routing remains off unless `WORKER_GITLAB_REPO_METADATA_ENABLED=true` is set
+for both the Python producer gate and Go worker. Every checked-in deployment
+keeps it false. This route-readiness change therefore transfers no live unit,
+does not activate a River scheduler path, and does not change migration 0066.
+
+## Activation status for `(gitlab, commits)`
+
+CHAOS-3346 makes this pair `native_go` / `route_ready: true` without changing
+the shared `git_commits` schema or claiming a provider-instance dimension.
+The handler resolves the canonical GitLab project, retains self-managed URL
+roots, paginates the repository commits endpoint, and fails the whole unit on
+an HTTP error or safety-cap hit; no partial batch or watermark is committed.
+Nullable commit messages remain nullable.
+
+Row parity is checked against the live production `_map_commit` function and
+the exact Python row builder used by `_fetch_gitlab_commits_sync`, with the
+complete `GitCommit` field set reflected from the production model. The
+ClickHouse effect requires recovery readback and compares the tenant-scoped
+winning row through `SELECT ... FINAL`; the integration fixture uses the same
+natural key under two organizations and verifies both directions.
+
+Routing remains off unless `WORKER_GITLAB_COMMITS_ENABLED=true` is set for
+both the Python producer gate and Go worker. Every checked-in deployment keeps
+it false. This route-readiness change therefore transfers no live unit, does
+not activate a River scheduler path, and does not change migration 0066.
+
+## Activation status for `(gitlab, commit-stats)`
+
+CHAOS-3349 makes this pair `native_go` / `route_ready: true` without changing
+the shared `git_commit_stats` schema or claiming a provider-instance
+dimension. It keeps Python's existing unit boundary: the commits window is
+fetched first, then at most 50 aggregate detail rows on full sync or
+`COMMIT_STATS_MAX_COMMITS` (default 300) rows on incremental sync. List errors
+and safety-cap hits fail the unit before effects or watermark advancement;
+accepted hashes are deduplicated in first-seen order before that selection, so
+one hash cannot emit duplicate natural-key/version rows. Python's soft detail
+behavior is retained only for ordinary non-auth failures: authentication, rate
+limits, lease or budget loss, and context cancellation/deadlines fail the unit
+without effects or watermark advancement. Unknown future provider error
+classes also fail closed; only the explicit non-auth detail classes are soft.
+
+Row parity executes the live GitLab `_map_commit_stats` normalizer and the
+production row builder, with the full `GitCommitStat` field set reflected from
+the production model. The shared ClickHouse commit-stat effect requires
+recovery readback through a tenant-scoped `SELECT ... FINAL`; its integration
+fixture collides the same natural key across two organizations and proves
+retry convergence.
+
+Routing remains off unless `WORKER_GITLAB_COMMIT_STATS_ENABLED=true` is set
+for both the Python producer gate and Go worker. Every checked-in deployment
+keeps it false. This route-readiness change therefore transfers no live unit,
+does not activate a River scheduler path, and does not change migration 0066.
+
+## Activation status for `(gitlab, cicd)` and `(gitlab, tests)`
+
+CHAOS-3356 closes CHAOS-3352's deliberate shared-table blocker and makes both
+aliases `native_go` / `route_ready: true`. They do not own independent partial
+rows: one `GitLabTestsRouteHandler` fetches and normalizes the complete TestOps
+unit for either claim, and one `TestOpsClickHouseEffects` implementation writes
+the same six destinations: `ci_pipeline_runs`, `ci_job_runs`,
+`ci_acceptance_checks`, `test_suite_results`, `test_case_results`, and
+`coverage_snapshots`. This single complete owner is required because
+`ci_pipeline_runs` is a `ReplacingMergeTree`; a newer partial row would replace
+the older whole row rather than merge columns.
+
+The aliases have separate, default-off deployment switches:
+`WORKER_GITLAB_CICD_ENABLED` and `WORKER_GITLAB_TESTS_ENABLED`. Go startup and
+the Python producer gate both reject a configuration that enables them
+together, so only one alias can claim the shared complete unit. Their preflight
+reservation is intentionally identical (`pipelines` / `rest_core`, the frozen
+Python estimator vocabulary), while executed Python usage remains attributable
+to the public alias: `cicd` records `pipelines` actuals and `tests` records
+`tests` actuals.
+
+The live row oracles execute the active Python adapter, native GitLab report
+normalizer, and coverage parser across the full persisted field sets. The
+selection oracle separately executes `_fetch_gitlab_test_reports_sync` through
+the real canonical GitLab code client. It pins updated-at traversal without a
+created-at early break, default-branch filtering before the pipeline cap, the
+inclusive upper-window behavior, fractional-second provider query bounds, the
+single-page 100-job artifact-discovery boundary, the 25-artifact cap, empty
+artifact truthiness, and `tests` usage labels. The superseded isolated partial
+pipeline handler and sink are removed, so only the complete six-effect owner is
+constructible. Existing Python quirks remain explicit
+compatibility behavior: malformed non-empty numeric durations persist as NULL,
+and `system_output` is duplicated in `stack_trace` when no explicit stack is
+present.
+
+Provider, pagination, malformed-payload, and control-plane failures fail the
+complete unit before effects or watermark advancement; only the active
+Python-authorized missing optional report/artifact behavior degrades to empty.
+Pipeline and acceptance rows are bound to `provider=gitlab_ci` on both write
+and recovery readback, preventing a GitHub row from satisfying a GitLab claim.
+Integration coverage writes both alias orders against the same natural key and
+proves that the newer complete 20-field row wins, including a newer NULL over
+an older non-NULL. All six effects use tenant-scoped `SELECT ... FINAL` exact
+readback and retry convergence. Each prepared destination batch is atomic;
+the six destinations are committed sequentially and recover through the effect
+ledger, not through a nonexistent cross-table ClickHouse transaction.
+
+Every checked-in deployment keeps both switches false. Route readiness alone
+therefore transfers no live unit, activates no River scheduler path, and does
+not change migration 0066.
+
 ## Effect timestamp stabilization (applies to every complete route)
 
 `BuildEffectBatch` digests the serialized rows, so any wall-clock value inside
@@ -124,13 +316,18 @@ otherwise read as a conflict.
    the next merge. `src/dev_health_ops/api/queries/heatmap.py` is a known
    pre-existing example and is not a regression introduced by this contract.
 
-## Activation status for `(github, prs)`
+## Activation status for GitHub PR-social datasets
 
 CHAOS-3122 built a real `CompleteRouteHandler`
 (`GitHubPullRequestRouteHandler`) and `EffectSink`
-(`GitHubPullRequestClickHouseEffects`) — `go_executor: native_go` — but the
-pair is deliberately **`route_ready: false`**, not `true`. This is not the
-same shape as `(github, repo-metadata)`'s waiver.
+(`GitHubPullRequestClickHouseEffects`). The CHAOS-3123 follow-on composes that
+REST PR collection with the production review-enrichment boundary, writes the
+complete `git_pull_requests` row plus `git_pull_request_reviews`, and exposes
+the same complete execution under the `prs`, `pr-reviews`, and `pr-comments`
+dataset identities. All three are now `go_executor: native_go` and
+`route_ready: true`; their switches remain off by default and startup rejects
+enabling more than one alias because each delegates to the same complete
+writer.
 
 An adversarial (codex) review of the first draft returned BLOCK with four
 HIGH-severity findings, all fixed before this pair's code landed:
@@ -164,12 +361,13 @@ HIGH-severity findings, all fixed before this pair's code landed:
    dataset pair's (`github/pr-reviews`) job in this port's per-unit model.
    Writing them as zero while claiming route readiness would let
    review-latency/rework/AI-impact tiles read "never fetched" as "doesn't
-   exist". **Resolution: `route_ready` stays `false` until `github/pr-reviews`
-   lands and both pairs flip together** — see `CompleteRouteSwitches.Descriptor`'s
-   `github`/`prs` case and
-   `deploy/go-workers/provider-sync-porting-recipe.md`'s defect class 9 for
-   the full column-versus-unit-ownership analysis and the three resolutions
-   it lays out for future pairs in the same situation.
+   exist". **Resolution:** the follow-on now executes the real review fetch,
+   enriches those columns, emits the raw review rows, and commits both effects
+   as one crash-recoverable manifest. The three PR-social aliases share those
+   byte-identical effects while preserving their own claim generation,
+   evidence, ledger, and watermark identity. `pr-comments` does not invent a
+   separate raw table: Python's active producer obtains `comments_count` from
+   REST PR detail inside this same unit.
 
 Five MEDIUM findings, also fixed, on the ClickHouse effect sink specifically
 (`GitHubPullRequestClickHouseEffects`):
@@ -206,11 +404,13 @@ What this activation actually proves, and how:
   finding: an earlier hand-authored fixture omitted the review-enrichment
   phase entirely and then asserted its own zero-valued output as "verified"
   parity, which cannot fail when the omitted phase is wrong.
-- A full mutation-testing pass via the shared harness
-  (`internal/providersync/testdata/mutation-plans/github_prs.json`, run with
-  `scripts/mutation_harness.py`), 12/12 mutations `KILLED` (one additional
+- A full mutation-testing pass, 12/12 mutations `KILLED` (one additional
   mutation `SURVIVED` on a first pass and identified genuinely dead/redundant
-  code — see the plan's `$limitation` field).
+  code, which was deleted). This is a record of a pass that was run, not a
+  reproducible command: the plan
+  (`internal/providersync/testdata/mutation-plans/github_prs.json`) and the
+  harness that executed it were removed under CHAOS-3875 and are recoverable
+  only from history.
 - `repo_id` is derived the same way `(github, repo-metadata)` derives its
   repository identity: `repositoryIdentity(fullName)` where `fullName` comes
   from a `GET /repos/{owner}/{repo}` call's `full_name` field, matching
@@ -259,13 +459,100 @@ surface:
   truncation had no sub-millisecond fixture of its own (a separate
   truncation call site from the one M5's first fix covered).
 
-All five (two HIGH, three MEDIUM) are proven via the shared mutation harness
-plan (`testdata/mutation-plans/github_prs.json`) alongside the first round's
-findings — 17/17 mutations `KILLED`.
+All five (two HIGH, three MEDIUM) were proven alongside the first round's
+findings — 17/17 mutations `KILLED` — under the same removed plan.
 
 Full recipe, the (now fifteen) defect classes above generalized into a
 checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in
 `deploy/go-workers/provider-sync-porting-recipe.md`.
+
+## Implementation status for `(github, blame)`
+
+CHAOS-3343 moves this pair to `go_executor: native_go` and
+`route_ready: true`. The independent `WORKER_GITHUB_BLAME_ENABLED` switch is
+false by default in both Python and Go, so landing the capability does not move
+traffic or change deployment ownership.
+
+The checked-in Go foundation can resolve a commit at the claim bound, walk the
+recursive tree, fetch GraphQL blame ranges, expand them to the production
+`git_blame` row shape, and exercise the sink/readback contract. Its 500-file
+resource cap remains unchanged. `GitHubBlameClickHouseCoverage` reads both the
+persisted `(org_id, repo_id, path)` coverage set from `git_blame FINAL` and the
+separate `github_blame_path_progress` journal. The progress effect is committed
+before `git_blame`, so a retry reconstructs the exact in-flight path set by the
+PostgreSQL effect generation before ordinary coverage selection. Empty files
+advance durably without fabricated line rows. Non-rate-limit per-file failures
+stay retryable and rotate behind never-attempted paths; provider rate limits
+still abort the whole unit. Successive syncs therefore advance without either
+manifest conflicts or permanently unblameable-path starvation.
+
+The one manifest that may be replanned is a GitHub-blame manifest that crashed
+before its first progress effect became durable. Replanning requires the first
+effect to be `pending` or `writing`, every later effect to remain `pending`, an
+exact-generation ClickHouse probe to find zero progress rows, and a
+transactional PostgreSQL comparison to prove the ledger has not changed since
+that probe. Any accepted progress row or concurrent ledger transition keeps
+the original manifest and uses normal exact readback recovery.
+
+Missing, failed, or over-bound coverage reads fail with
+`ErrGitHubBlameProgressUnavailable` before any blame GraphQL request, effect, or
+watermark. A live Python oracle executes `select_unblamed_paths` for empty,
+partial, complete, and bounded inventories.
+
+Readback is a full-order-key point lookup over `git_blame FINAL`, including
+`org_id`; integration tests cover both cross-tenant natural-key collisions and
+same-organization cross-repository progress isolation. A separate PostgreSQL +
+ClickHouse production-executor crash test proves that ordered progress and
+blame writes accepted before process death are reconciled as exact without
+inserting a duplicate physical version. Two additional executor tests cover
+crashes after manifest preparation and after beginning the progress effect but
+before its write; both safely replan when a transient per-file error clears.
+
+Foundation normalization parity is executed against the active Python
+`_backfill_github_missing_data` producer rather than a hand-authored expected
+row. The generic oracle derives the compared fields from the live `GitBlame`
+model and executes the real range-expansion/constructor path while replacing
+only provider and sink seams. Production construction pins the coverage reader,
+handler, effect sink, and readback together under the live lease. Deployment,
+scheduler activation, and migration 0066 remain unchanged.
+
+## Implementation status for `(github, tests)`
+
+CHAOS-3336 is `native_go` / `route_ready: true`. The complete route builds on
+the untrusted-report foundation: bounded in-memory
+ZIP traversal, a 200-report cap, DTD/entity rejection, JUnit suite/case
+normalization, LCOV aggregate normalization, stable IDs, fallback run
+timestamps, stack truncation, and incoherent-coverage rejection. A generic
+oracle executes the active Python `ingest_report_members` chain and compares
+every field in the production TestOps TypedDict contracts. Its LCOV cases
+include summary-bearing input, `DA`-only LF/LH fallback with duplicate line
+records, and multi-service input whose service is attributed by the majority
+of report files (with Python's first-seen tie behavior).
+
+The complete route also owns Actions run pagination, per-run job pagination,
+branch-protection acceptance checks, the authenticated-to-unauthenticated
+two-hop artifact download, Cobertura parsing, and six independently persisted
+destinations: `ci_pipeline_runs`, `ci_job_runs`, `ci_acceptance_checks`,
+`test_suite_results`, `test_case_results`, and `coverage_snapshots`. Bounded
+fetches fail closed when a next page or skipped classified report would make
+the unit incomplete, so no effect manifest or watermark is committed. The
+authenticated artifact request follows its pre-signed redirect with an
+explicitly unauthenticated, lease- and budget-governed request. Six
+tenant-prefixed FINAL readbacks fence retries. The independently named
+`WORKER_GITHUB_TESTS_ENABLED` switch defaults off in both runtimes; deployment,
+scheduler activation, and migration 0066 remain unchanged.
+
+### Shared `ci_pipeline_runs` ownership
+
+`github/tests` and `github/cicd` delegate to one native complete-row unit. It
+mirrors Python's `PipelineRunExtendedRow` producer and owns jobs, acceptance
+checks, and test reports in the same committed effect set. The legacy
+nine-column CICD handler is never constructed by the production worker:
+ReplacingMergeTree replaces whole rows, so a later partial write would erase
+extended columns with defaults rather than merge them. Both Go and Python
+startup configuration reject enabling the CICD and tests switches together.
+Thus either matrix name can select the complete unit while exactly one writer
+owns each natural key in a process; two independent writers are not permitted.
 
 ## Known Go/Python divergences (fail-closed by design)
 

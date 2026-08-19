@@ -81,7 +81,11 @@ type MigrationOptions struct {
 	// legitimate is supplying it without a role, which is rejected alongside
 	// CoordinatorGrants for the same reason.
 	CoordinatorColumnGrants []ColumnGrant
-	Logger                  *slog.Logger
+	// CoordinatorSequences are the exact public-schema sequences the
+	// coordinator may use. Each receives USAGE only; all other sequence
+	// privileges remain revoked.
+	CoordinatorSequences []string
+	Logger               *slog.Logger
 }
 
 // columnGrantablePrivileges is PostgreSQL's closed set of column-level
@@ -266,7 +270,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		// No coordinator provisioning requested. Grants supplied without a role
 		// are a caller bug, not a no-op: it would silently skip the grants the
 		// caller believed it was applying.
-		if len(options.CoordinatorGrants) != 0 || len(options.CoordinatorColumnGrants) != 0 {
+		if len(options.CoordinatorGrants) != 0 || len(options.CoordinatorColumnGrants) != 0 || len(options.CoordinatorSequences) != 0 {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -309,6 +313,16 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 			return ErrMigrationConfiguration
 		}
 		seenColumns[key] = struct{}{}
+	}
+	seenSequences := make(map[string]struct{}, len(options.CoordinatorSequences))
+	for _, sequence := range options.CoordinatorSequences {
+		if !validIdentifier(sequence) {
+			return ErrMigrationConfiguration
+		}
+		if _, duplicate := seenSequences[sequence]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seenSequences[sequence] = struct{}{}
 	}
 	return nil
 }
@@ -368,10 +382,11 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + domainRole,
 		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
-		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
+		// worker_job_routes, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split (role-partition manifest, removed in
 		// e23ede618; see git history at eda2d6b91) and deliberately have no
@@ -380,19 +395,36 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// MigrationOptions.CoordinatorRole is set, coordinatorGrantStatements
 		// below emits them from the injected posture in this same transaction,
 		// so local dev and CI are self-provisioning for all three roles.
+		// scheduled_jobs is dual-role. The native sync-coverage projector reads
+		// schedule facts, and the report worker clears next_run_at through the
+		// immutable scheduled occurrence whenever a run terminalizes so the fixed
+		// scheduler recomputes the next cron instant. That repair also reads the
+		// scheduled_report_occurrences link; it never mutates the occurrence row.
 		// sync_configurations is SELECT-only for the domain role: its
 		// coordinator-side FOR UPDATE row-locking use does not make the
 		// domain role's own posture require UPDATE. sync_runs, by contrast,
 		// is one of the six dual-grant ("both") tables and genuinely needs
 		// UPDATE on the domain side (Fanout's FOR SHARE + the providersync
-		// hot path).
-		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
+		// hot path). CHAOS-3145 adds INSERT on sync_runs and sync_run_units
+		// for the native scheduler materializer's separate domain transaction.
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + domainRole + "; END IF; END $$",
+		// Prepared recovery snapshots are transient state cleared in the same
+		// transaction that terminalizes their unit, never updated in place, so
+		// they receive DELETE but no UPDATE. Worker lifecycle tables have their
+		// own bounded DELETE grants below.
+		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL THEN GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_report_occurrences') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_report_occurrences TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",
@@ -425,15 +457,20 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.saved_reports') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.saved_reports TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.webhook_deliveries') IS NOT NULL THEN GRANT SELECT ON TABLE public.webhook_deliveries TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.worker_job_runs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_concurrency_leases') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + domainRole + "; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO " + queueRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + queueRole,
 		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, " + domainRole + ", " + queueRole,
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + queueRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + queueRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO " + queueRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_run_units TO " + queueRole + "; END IF; END $$",
 		"REVOKE ALL PRIVILEGES ON SCHEMA " + schema + " FROM PUBLIC",
 		"REVOKE ALL PRIVILEGES ON SCHEMA " + schema + " FROM " + domainRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA " + schema + " FROM PUBLIC, " + domainRole,
@@ -519,6 +556,13 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
 				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
 				" TO "+coordinatorRole+"; END IF; END $$",
+		)
+	}
+	for _, sequence := range options.CoordinatorSequences {
+		qualified := "public." + sequence
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT USAGE ON SEQUENCE "+
+				pgx.Identifier{"public", sequence}.Sanitize()+" TO "+coordinatorRole+"; END IF; END $$",
 		)
 	}
 	return statements

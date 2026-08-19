@@ -14,6 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from dev_health_ops.api.services.sync_coverage import (
+    SYNC_COVERAGE_PROJECTION_VERSION,
+)
 from dev_health_ops.models import (
     BackfillJob,
     Base,
@@ -1152,6 +1155,75 @@ def test_run_sync_unit_failure_persists_failed_and_error(db_session, monkeypatch
     assert finalize_calls == [((str(run.id),), "sync")]
 
 
+def test_github_files_traversal_failure_cannot_succeed_or_advance_watermark(
+    db_session, monkeypatch
+):
+    """CHAOS-3189: exercise the real swallowed traversal boundary through the worker."""
+    from unittest.mock import AsyncMock, Mock
+
+    from dev_health_ops.processors import dataset_adapters, github
+    from dev_health_ops.processors.github import _backfill_github_missing_data
+    from dev_health_ops.workers.async_runner import run_async
+    from dev_health_ops.workers.sync_units import run_sync_unit
+
+    run, unit = _seed_run(
+        db_session,
+        dataset_key="files",
+        processor_flags={"sync_git": True, "sync_files": True},
+    )
+    _mark_dispatching(db_session, unit)
+    _patch_db_session(monkeypatch, db_session)
+    _patch_runtime(monkeypatch)
+    finalize_calls = _patch_finalize_apply(monkeypatch)
+    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    store = Mock()
+    store.has_any_git_files = AsyncMock(return_value=False)
+    store.has_any_git_commit_stats = AsyncMock(return_value=True)
+    store.has_any_git_blame = AsyncMock(return_value=True)
+    gh_repo = Mock()
+    gh_repo.get_branch.side_effect = RuntimeError("tree fetch failed")
+    connector = Mock()
+    connector.github.get_repo.return_value = gh_repo
+    code_client = Mock()
+    code_client.drain_usage_observations.return_value = []
+    code_client.close = AsyncMock()
+    monkeypatch.setattr(
+        github, "_github_code_client_from_connector", lambda _connector: code_client
+    )
+
+    def run_files_dataset(_ctx, _runtime):
+        inventory_status = run_async(
+            _backfill_github_missing_data(
+                store=store,
+                ingestion_sink=Mock(),
+                connector=connector,
+                db_repo=Mock(id=uuid.uuid4()),
+                repo_full_name="full-chaos/dev-health",
+                default_branch="main",
+                max_commits=None,
+                include_files=True,
+                include_blame=False,
+                include_commit_stats=False,
+            )
+        )
+        return {"inventory_status": inventory_status}
+
+    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", run_files_dataset)
+
+    result = getattr(run_sync_unit, "run")(str(unit.id))
+
+    db_session.refresh(unit)
+    assert result["status"] == "failed"
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error is not None
+    assert unit.error.startswith("GitHubFilesTraversalFailed:")
+    assert db_session.query(SyncWatermark).count() == 0
+    assert finalize_calls == [((str(run.id),), "sync")]
+
+
 def test_run_sync_unit_failure_sanitizes_credential_material(db_session, monkeypatch):
     """Mirrors CHAOS-2758's live-verify case B: a provider exception whose
     message embeds an Authorization header (e.g. "403 rate limited --
@@ -1948,7 +2020,7 @@ def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
         org_id=run.org_id,
         sync_config_id=config.id,
         history_lookback_days=3650,
-        projection_version=1,
+        projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
         generated_at=datetime.now(timezone.utc),
         payload={},
     )
@@ -2481,13 +2553,13 @@ def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
         sync_run_id=run.id,
         integration_id=launchdarkly.integration_id,
         source_id=launchdarkly.source_id,
-        provider="github",
-        dataset_key="commits",
+        provider="synthetic",
+        dataset_key="matrix-incomplete",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_git": True, "sync_commits": True},
+        processor_flags={},
     )
     run.total_units = 2
     db_session.add(celery_unit)
@@ -2568,11 +2640,613 @@ def test_dispatch_sync_run_durable_celery_route_overrides_enabled_capability(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
-def test_dispatch_sync_run_river_canary_requires_enabled_capability(
+_GITHUB_WORK_ITEM_FAMILY_FLAGS = {
+    "family_dataset_work_items": True,
+    "family_dataset_work_item_labels": True,
+    "family_dataset_work_item_projects": True,
+    "family_dataset_work_item_history": True,
+    "family_dataset_work_item_comments": True,
+}
+
+
+def _plan_caught_up_github_work_item_family(session):
+    """Build the ordinary caught-up-sibling planner shape for routing tests."""
+
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+    from dev_health_ops.sync.watermarks import set_watermark
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name="github-caught-up-family",
+        config={"initial_sync_depth": 30},
+        is_active=True,
+    )
+    session.add(integration)
+    session.flush()
+    source = IntegrationSource(
+        org_id=org_id,
+        integration_id=integration.id,
+        provider="github",
+        source_type="repo",
+        external_id="full-chaos/dev-health",
+        name="dev-health",
+        full_name="full-chaos/dev-health",
+        metadata_={},
+        is_enabled=True,
+    )
+    session.add_all(
+        [
+            source,
+            IntegrationDataset(
+                org_id=org_id,
+                integration_id=integration.id,
+                dataset_key="work-items",
+                is_enabled=True,
+                options={},
+            ),
+            IntegrationDataset(
+                org_id=org_id,
+                integration_id=integration.id,
+                dataset_key="work-item-labels",
+                is_enabled=True,
+                options={},
+            ),
+        ]
+    )
+    session.flush()
+    anchor = datetime.now(timezone.utc)
+    requested_before = anchor - timedelta(days=5)
+    set_watermark(
+        session, org_id, source.external_id, "work-items", anchor - timedelta(days=9)
+    )
+    set_watermark(
+        session,
+        org_id,
+        source.external_id,
+        "work-item-labels",
+        anchor - timedelta(days=2),
+    )
+    plan = plan_sync_run(
+        session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=org_id,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=requested_before,
+        ),
+    )
+    unit = session.get(SyncRunUnit, uuid.UUID(plan.unit_ids[0]))
+    assert unit is not None
+    assert unit.dataset_key == "work-items"
+    flags = unit.processor_flags or {}
+    assert {name: flags.get(name) for name in _GITHUB_WORK_ITEM_FAMILY_FLAGS} == (
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+    discovery = (
+        session.query(SyncRunReferenceDiscovery)
+        .filter_by(sync_run_id=uuid.UUID(plan.sync_run_id))
+        .one()
+    )
+    discovery.status = "success"
+    discovery.attempts = 1
+    discovery.completed_at = datetime.now(timezone.utc)
+    session.flush()
+    return session.get(SyncRun, uuid.UUID(plan.sync_run_id)), unit
+
+
+@pytest.mark.parametrize(
+    ("transport", "expects_river"),
+    (("river_canary", True), ("celery", False)),
+    ids=("forward-river-before-python", "rollback-celery-after-go-disabled"),
+)
+def test_dispatch_planned_caught_up_github_family_keeps_one_writer(
+    db_session, monkeypatch, transport: str, expects_river: bool
+):
+    """A real caught-up planner unit remains dispatchable in either cutover order."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _plan_caught_up_github_work_item_family(db_session)
+    assert run is not None
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    if expects_river:
+        assert unit_publish_calls == []
+        outbox = db_session.query(WorkerJobOutbox).all()
+        assert len(outbox) == 1
+        assert outbox[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+    else:
+        assert len(unit_publish_calls) == 1
+        assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_github_work_items_forward_excludes_python_writer(
+    db_session, monkeypatch
+):
+    """Forward selection sends the one valid family claim to River only."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert unit_publish_calls == []
+    outbox = db_session.query(WorkerJobOutbox).all()
+    assert len(outbox) == 1
+    assert outbox[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+
+
+def test_dispatch_sync_run_github_work_items_rollback_disables_go_before_python(
+    db_session, monkeypatch
+):
+    """The durable celery route is the rollback barrier, not a local toggle."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, _ = _seed_run(
+        db_session,
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    # Even with Go's per-family switch on, durable Celery selection removes Go
+    # routing before the legacy writer receives the valid canonical claim.
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize("transport", ("river_canary", "celery"))
+def test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer(
+    db_session, monkeypatch, transport: str
+):
+    """Malformed aliases reconcile before River *or* Celery staging."""
+
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(
+        db_session,
+        provider="github",
+        dataset_key="work-item-comments",
+        processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    with pytest.raises(WorkerJobRouteError, match="canonical"):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert unit_publish_calls == []
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize(
+    "processor_flags",
+    (
+        pytest.param(
+            {
+                "family_dataset_work_items": True,
+                "family_dataset_work_item_labels": True,
+                "family_dataset_work_item_projects": True,
+                "family_dataset_work_item_history": True,
+            },
+            id="missing-family-flag",
+        ),
+        pytest.param(
+            {
+                **_GITHUB_WORK_ITEM_FAMILY_FLAGS,
+                "family_dataset_unrecognized": True,
+            },
+            id="unknown-family-flag",
+        ),
+    ),
+)
+@pytest.mark.parametrize("transport", ("river_canary", "celery"))
+def test_dispatch_sync_run_github_work_items_rejects_partial_canonical_claim(
+    db_session, monkeypatch, processor_flags: dict[str, bool], transport: str
+):
+    """A stale non-exact family cannot stage either Go or Python writer."""
+
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(
+        db_session,
+        provider="github",
+        dataset_key="work-items",
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    with pytest.raises(WorkerJobRouteError, match="complete canonical"):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert unit_publish_calls == []
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
+@pytest.mark.parametrize("transport", ("river_canary", "celery"))
+@pytest.mark.parametrize(
+    ("dataset_key", "processor_flags"),
+    (
+        pytest.param(
+            "work-item-comments",
+            _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+            id="direct-alias",
+        ),
+        pytest.param(
+            "work-items",
+            {
+                "family_dataset_work_items": True,
+                "family_dataset_work_item_labels": True,
+                "family_dataset_work_item_projects": True,
+                "family_dataset_work_item_history": True,
+            },
+            id="missing-flag",
+        ),
+        pytest.param(
+            "work-items",
+            {
+                **_GITHUB_WORK_ITEM_FAMILY_FLAGS,
+                "family_dataset_work_item_comments": False,
+            },
+            id="false-flag",
+        ),
+        pytest.param(
+            "work-items",
+            {**_GITHUB_WORK_ITEM_FAMILY_FLAGS, "family_dataset_unknown": True},
+            id="unknown-flag",
+        ),
+    ),
+)
+def test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport(
+    db_session,
+    monkeypatch,
+    provider: str,
+    transport: str,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+) -> None:
+    """An enabled Go family rejects stale ownership before River or Celery."""
+
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(f"WORKER_{provider.upper()}_WORK_ITEMS_ENABLED", "true")
+
+    with pytest.raises(WorkerJobRouteError, match="complete canonical family"):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert unit_publish_calls == []
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
+@pytest.mark.parametrize("transport", ("river_canary", "celery"))
+def test_dispatch_default_off_work_item_family_keeps_legacy_claim_admissible(
+    db_session, monkeypatch, provider: str, transport: str
+) -> None:
+    """Default-off admission does not break D16's contributing-flag claims."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, _ = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key="work-items",
+        processor_flags={"family_dataset_work_items": True},
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("dataset_key", "processor_flags"),
+    (
+        ("incidents", {"sync_incidents": True}),
+        ("incident-alerts", {}),
+        ("incident-log-entries", {}),
+        ("incident-notes", {}),
+    ),
+)
+@pytest.mark.parametrize("transport", ("river_canary", "celery"))
+def test_dispatch_pagerduty_incident_family_preserves_independent_d16_claims(
+    db_session,
+    monkeypatch,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+    transport: str,
+) -> None:
+    from dev_health_ops.workers import sync_units
+
+    run, _ = _seed_run(
+        db_session,
+        provider="pagerduty",
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: transport})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        sync_units,
+        "require_canonical_incident_feature_for_update_sync",
+        lambda *_args: None,
+    )
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+_AGGREGATE_ROUTE_DISPATCH_CASES = (
+    pytest.param(
+        "gitlab",
+        "deployments",
+        {},
+        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+        id="gitlab-deployments",
+    ),
+    pytest.param(
+        "gitlab",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+        id="gitlab-work-items",
+    ),
+    pytest.param(
+        "jira",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_JIRA_WORK_ITEMS_ENABLED",
+        id="jira-work-items",
+    ),
+    pytest.param(
+        "linear",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+        id="linear-work-items",
+    ),
+    pytest.param(
+        "pagerduty",
+        "services",
+        {},
+        "WORKER_PAGERDUTY_SERVICES_ENABLED",
+        id="pagerduty-services",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incidents",
+        {"sync_incidents": True},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incidents",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-alerts",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-alerts",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-log-entries",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-log-entries",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-notes",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-notes",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key", "processor_flags", "environment_name"),
+    _AGGREGATE_ROUTE_DISPATCH_CASES,
+)
+def test_dispatch_enabled_aggregate_route_has_only_the_river_writer(
+    db_session,
+    monkeypatch,
+    provider: str,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+    environment_name: str,
+) -> None:
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
+    run, unit = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(environment_name, "true")
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset_key)
+            )
+        ),
+    )
+    if provider == "pagerduty":
+        monkeypatch.setattr(
+            sync_units,
+            "require_canonical_incident_feature_for_update_sync",
+            lambda *_args: None,
+        )
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    rows = db_session.query(WorkerJobOutbox).all()
+    assert unit_publish_calls == []
+    assert len(rows) == 1
+    assert rows[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key", "processor_flags", "environment_name"),
+    _AGGREGATE_ROUTE_DISPATCH_CASES,
+)
+def test_dispatch_default_off_aggregate_route_has_only_the_celery_writer(
+    db_session,
+    monkeypatch,
+    provider: str,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+    environment_name: str,
+) -> None:
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
+    run, _ = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.delenv(environment_name, raising=False)
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset_key)
+            )
+        ),
+    )
+    if provider == "pagerduty":
+        monkeypatch.setattr(
+            sync_units,
+            "require_canonical_incident_feature_for_update_sync",
+            lambda *_args: None,
+        )
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_river_canary_default_off_keeps_celery_writer(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -2588,12 +3262,14 @@ def test_dispatch_sync_run_river_canary_requires_enabled_capability(
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
 
-    with pytest.raises(WorkerJobRouteError, match="capability"):
-        sync_units.dispatch_sync_run(str(run.id))
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
 
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.PLANNED.value
-    assert len(unit_publish_calls) == 0
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert len(unit_publish_calls) == 1
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
@@ -2788,7 +3464,7 @@ def test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently
         integration_id=launchdarkly_unit.integration_id,
         source_id=launchdarkly_unit.source_id,
         provider="gitlab",
-        dataset_key="commits",
+        dataset_key="blame",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
@@ -2950,7 +3626,7 @@ def test_dispatch_sync_run_denial_fails_planned_units_regardless_of_transport(
         integration_id=river_running.integration_id,
         source_id=river_running.source_id,
         provider="github",
-        dataset_key="commits",
+        dataset_key="blame",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
@@ -3014,13 +3690,13 @@ def test_dispatch_sync_run_concurrency_cap_defers_regardless_of_transport(
         sync_run_id=run.id,
         integration_id=river_unit.integration_id,
         source_id=river_unit.source_id,
-        provider="github",
-        dataset_key="commits",
+        provider="synthetic",
+        dataset_key="matrix-incomplete",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_git": True, "sync_commits": True},
+        processor_flags={},
     )
     run.total_units = 2
     db_session.add(celery_unit)
@@ -3086,13 +3762,13 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
         sync_run_id=run.id,
         integration_id=river_unit.integration_id,
         source_id=river_unit.source_id,
-        provider="github",
-        dataset_key="commits",
+        provider="synthetic",
+        dataset_key="matrix-incomplete",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_git": True, "sync_commits": True},
+        processor_flags={},
     )
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
     river_unit.status = SyncRunUnitStatus.DISPATCHING.value
@@ -3120,6 +3796,123 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
     assert rows[0].dedupe_key == f"sync.provider_unit:{river_unit.id}"
     assert len(unit_publish_calls) == 1
     assert unit_publish_calls[0][0] == str(celery_unit.id)
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key"),
+    (
+        ("github", "pr-reviews"),
+        ("github", "pr-comments"),
+        ("github", "tests"),
+        ("gitlab", "pr-reviews"),
+        ("gitlab", "pr-comments"),
+        ("gitlab", "tests"),
+    ),
+)
+def test_local_all_reclaims_stale_complete_writer_alias_to_river_without_celery(
+    db_session, monkeypatch, provider: str, dataset_key: str
+) -> None:
+    """A local Go-only redispatch must durably recover every alias identity."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags={"sync_prs": True}
+        if dataset_key.startswith("pr-")
+        else {"sync_tests": True},
+    )
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    unit.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit_publish_calls == []
+    outbox = db_session.query(WorkerJobOutbox).all()
+    assert len(outbox) == 1
+    assert outbox[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+    assert outbox[0].args["payload"] == {"unit_id": str(unit.id)}
+
+
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+def test_local_all_routes_complete_writer_identity_set_only_to_river(
+    db_session, monkeypatch, provider: str
+) -> None:
+    """One Go-only pass must stage every persisted complete-writer identity."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key="prs",
+        processor_flags={"sync_prs": True},
+    )
+    units = [first]
+    for dataset_key, processor_flags in (
+        ("pr-reviews", {"sync_prs": True}),
+        ("pr-comments", {"sync_prs": True}),
+        ("cicd", {"sync_cicd": True}),
+        ("tests", {"sync_tests": True}),
+    ):
+        units.append(
+            SyncRunUnit(
+                org_id=run.org_id,
+                sync_run_id=run.id,
+                integration_id=first.integration_id,
+                source_id=first.source_id,
+                provider=provider,
+                dataset_key=dataset_key,
+                cost_class="medium",
+                mode=SyncRunMode.INCREMENTAL.value,
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                attempts=0,
+                processor_flags=processor_flags,
+            )
+        )
+    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+    for unit in units:
+        unit.status = SyncRunUnitStatus.DISPATCHING.value
+        unit.updated_at = stale
+    run.total_units = len(units)
+    db_session.add_all(units[1:])
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "20")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "20")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": len(units),
+    }
+
+    assert unit_publish_calls == []
+    assert {row.dedupe_key for row in db_session.query(WorkerJobOutbox).all()} == {
+        f"sync.provider_unit:{unit.id}" for unit in units
+    }
 
 
 def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(

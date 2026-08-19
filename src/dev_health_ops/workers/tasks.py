@@ -8,7 +8,6 @@ from dev_health_ops.workers.metrics_tasks import (
     dispatch_daily_metrics_for_all_orgs,
     dispatch_daily_metrics_partitioned,
     dispatch_release_impact,
-    dispatch_scheduled_metrics,
     run_complexity_job,
     run_daily_metrics,
     run_daily_metrics_batch,
@@ -25,7 +24,6 @@ from dev_health_ops.workers.recommendations_tasks import run_recommendations_job
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
-from dev_health_ops.workers.sync_coverage import refresh_sync_coverage_projections
 from dev_health_ops.workers.sync_reconciler import (
     prune_rate_limit_observations,
     reconcile_sync_dispatch,
@@ -78,7 +76,6 @@ __all__ = [
     "dispatch_investment_materialize_partitioned",
     "dispatch_release_impact",
     "dispatch_capacity_forecast",
-    "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",
     "consume_pending_scheduled_sync_occurrences",
@@ -93,7 +90,6 @@ __all__ = [
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
     "run_ask_dev_retention_cleanup",
-    "refresh_sync_coverage_projections",
     "dispatch_membership_backfill",
     "run_capacity_forecast_job",
     "run_complexity_job",

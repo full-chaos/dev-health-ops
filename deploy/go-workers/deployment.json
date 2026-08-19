@@ -13,7 +13,7 @@
     "pgbouncer_transaction_pool_size": 20,
     "pgbouncer_transaction_server_pool_count": 2,
     "pgbouncer_transaction_max_client_connections": 1000,
-    "pgbouncer_queue_session_pool_size": 23,
+    "pgbouncer_queue_session_pool_size": 27,
     "pgbouncer_queue_session_max_client_connections": 128,
     "pgbouncer_coordinator_session_pool_size": 11,
     "pgbouncer_coordinator_session_max_client_connections": 32
@@ -297,22 +297,50 @@
       "max_replicas": 2,
       "shutdown_grace_seconds": 960,
       "queues": [
-        "sync",
-        "sync_provider"
+        "sync"
       ],
       "queue_workers": [
         {
           "queue": "sync",
           "max_workers": 4
-        },
+        }
+      ],
+      "job_kinds": [
+        "sync.team_autoimport"
+      ],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "coordinator_max_connections": 0,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "SETTINGS_ENCRYPTION_KEY",
+        "VALKEY_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "sync-provider",
+      "binary": "dev-health-worker",
+      "runtime": "river",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "desired_replicas": 0,
+      "max_replicas": 2,
+      "shutdown_grace_seconds": 960,
+      "queues": [
+        "sync_provider"
+      ],
+      "queue_workers": [
         {
           "queue": "sync_provider",
           "max_workers": 2
         }
       ],
       "job_kinds": [
-        "sync.provider_unit",
-        "sync.team_autoimport"
+        "sync.provider_unit"
       ],
       "queue_control_max_connections": 2,
       "domain_max_connections": 4,

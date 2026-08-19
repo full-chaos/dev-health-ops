@@ -27,7 +27,10 @@ fix, which is precisely why the bug reached production.
 from __future__ import annotations
 
 import fnmatch
+import subprocess
+import sys
 import sysconfig
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -121,9 +124,7 @@ def test_resolver_falls_back_to_the_installed_data_path(
         )
 
 
-def test_loaders_resolve_from_the_installed_layout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_loaders_resolve_from_the_installed_layout() -> None:
     """Each loader -- not just the resolver -- must answer correctly when installed.
 
     This is the assertion that would have caught CHAOS-3933, and the one a
@@ -133,38 +134,61 @@ def test_loaders_resolve_from_the_installed_layout(
     on a ``parents[N]`` count answers under the interpreter's lib directory --
     the exact wrong path from the production traceback.
 
-    ``provider_unit_route`` computes its path at import time, so it is reloaded
-    under the patched anchor; ``dispatch_routes`` computes its path per call.
+    Run in a SUBPROCESS on purpose. ``provider_unit_route`` computes its path at
+    import time, so an in-process version of this test has to
+    ``importlib.reload`` it -- and reload installs a NEW module object while
+    every earlier ``from ... import`` in the session keeps binding the old one.
+    That divergence is not hypothetical: the reload version of this test made
+    tests/test_sync_units.py::test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently
+    fail whenever it ran first in the same process, and passed cleanly on its
+    own -- a full-suite-only failure that reads as someone else's flake. A fresh
+    interpreter proves the same property and mutates nothing.
     """
 
-    import importlib
+    probe = textwrap.dedent(
+        """
+        import pathlib, sysconfig
+        from dev_health_ops import contract_artifacts
 
-    from dev_health_ops.sync import dispatch_routes
-    from dev_health_ops.workers import provider_unit_route
+        # Simulate site-packages: an anchor with no contracts/ beneath it.
+        contract_artifacts._CHECKOUT_ROOT = pathlib.Path("/nonexistent-checkout-root")
+
+        from dev_health_ops.sync import dispatch_routes
+        from dev_health_ops.workers import provider_unit_route
+
+        print(provider_unit_route._DEFAULT_MATRIX_CONTRACT_PATH)
+        print(dispatch_routes.default_transport_routes_path())
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"installed-layout probe failed:\nstdout={completed.stdout}\nstderr={completed.stderr}"
+    )
+    printed = [line for line in completed.stdout.splitlines() if line.startswith("/")]
+    assert len(printed) == 2, f"probe printed {printed!r}, expected two paths"
 
     data_root = Path(sysconfig.get_path("data")) / "contracts"
-    monkeypatch.setattr(contract_artifacts, "_CHECKOUT_ROOT", ROOT / "does-not-exist")
-
-    try:
-        reloaded = importlib.reload(provider_unit_route)
-        resolved = {
-            "provider_unit_route._DEFAULT_MATRIX_CONTRACT_PATH": (
-                reloaded._DEFAULT_MATRIX_CONTRACT_PATH
-            ),
-            "dispatch_routes.default_transport_routes_path()": (
-                dispatch_routes.default_transport_routes_path()
-            ),
-        }
-        for name, path in resolved.items():
-            assert data_root in path.parents, (
-                f"{name} resolved to {path} under the installed layout. It is not "
-                "using contract_artifacts.contract_directory -- a parents[N] count "
-                "lands in the interpreter lib directory once installed, which is "
-                "how CHAOS-3933 reached production."
-            )
-    finally:
-        monkeypatch.undo()
-        importlib.reload(provider_unit_route)
+    for name, raw in zip(
+        (
+            "provider_unit_route._DEFAULT_MATRIX_CONTRACT_PATH",
+            "dispatch_routes.default_transport_routes_path()",
+        ),
+        printed,
+        strict=True,
+    ):
+        resolved = Path(raw)
+        assert data_root in resolved.parents, (
+            f"{name} resolved to {resolved} under the installed layout. It is not "
+            "using contract_artifacts.contract_directory -- a parents[N] count "
+            "lands in the interpreter lib directory once installed, which is "
+            "how CHAOS-3933 reached production."
+        )
 
 
 def test_loaders_use_the_shared_resolver(monkeypatch: pytest.MonkeyPatch) -> None:

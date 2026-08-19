@@ -429,10 +429,13 @@ func canonicalBackfillWindows(pairs []pairCoverage) []any {
 				// sync ran (CHAOS-3915). The planner honours these instants:
 				// it chunks on whole days but keeps the requested edges.
 				//
-				// BackfillSelectorRequest still requires since < before, so an
-				// empty interval would suggest a window the API rejects with a
-				// 422. Mirrors _canonical_backfill_windows.
-				if !since.Before(before) {
+				// Intervals no wider than the adjacency tolerance are not gaps:
+				// they are the seam where one day-bounded window meets the next
+				// (23:59:59.999999 -> 00:00:00). On real data 66 of 114
+				// candidates were exactly one microsecond wide. This subsumes
+				// the empty-interval case, which BackfillSelectorRequest would
+				// reject with a 422. Mirrors _canonical_backfill_windows.
+				if before.Sub(since) <= intervalAdjacencyTolerance {
 					continue
 				}
 				key := scope{

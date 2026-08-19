@@ -59,6 +59,13 @@ jobs:
               - '.dockerignore'
               - 'deploy/**'
               - 'Makefile'
+              # A change to this workflow IS a change to how images are built.
+              # Without this line the publish pipeline cannot republish itself:
+              # the CHAOS-3923 Go publish jobs merged to main and every build
+              # job skipped, because nothing in this list matches .github/**.
+              # `changes` went green while publishing zero images, so the run
+              # reported success and the registry stayed empty.
+              - '.github/workflows/docker-images.yml'
 
   build:
     name: Build Image

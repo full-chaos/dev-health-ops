@@ -76,3 +76,17 @@ def test_every_referenced_go_image_is_published() -> None:
     assert not unpublished, (
         f"deployment renderers name Go images that CI never publishes: {unpublished}"
     )
+
+
+def test_the_publish_workflow_rebuilds_when_it_changes() -> None:
+    """A change to the publish pipeline must republish.
+
+    The Go publish jobs landed on main and every build job skipped: the
+    `changes` filter matches src/cmd/internal/docker/deploy paths, none of
+    which a workflow edit touches. `changes` went green, the run reported
+    success, and the registry stayed empty -- the measurement said fine
+    because it never looked at the thing that changed.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    filters = yaml.safe_load(workflow["jobs"]["changes"]["steps"][1]["with"]["filters"])
+    assert ".github/workflows/docker-images.yml" in filters["code"]

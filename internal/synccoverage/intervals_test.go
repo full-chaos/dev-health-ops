@@ -79,22 +79,30 @@ func TestPayloadBackfillScheduleAndStatusSemantics(t *testing.T) {
 		len(workItems["gaps"].([]any)) != 1 {
 		t.Fatalf("work-items = %#v", workItems)
 	}
-	// The gap is real and still counted above -- but its range starts at
-	// 12:00, and the focused-backfill selector only accepts UTC-midnight
-	// boundaries, so no window is offered for it. Python's
-	// _canonical_backfill_windows skips it for the same reason; an empty list
-	// is the server saying "not safely representable by that selector".
+	// The gap starts at 12:00 and is advertised at exactly that instant. Two
+	// earlier revisions got this wrong in opposite directions: the first
+	// emitted {since: "2026-08-10", before: "2026-08-10"} -- a date-only,
+	// half-open range covering nothing, manufactured by truncating a partial
+	// day onto day boundaries -- and the second suppressed the window
+	// entirely, which made the dialog unable to offer any suggestion at all,
+	// since real gaps are almost never midnight-aligned (CHAOS-3915).
 	//
-	// This previously asserted a single {since: "2026-08-10", before:
-	// "2026-08-10"} window: a date-only, half-open range covering nothing,
-	// manufactured by truncating a partial day onto day boundaries. That was
-	// the defect, not the contract.
-	if backfillWindows := payload["backfill_windows"].([]any); len(backfillWindows) != 0 {
-		t.Fatalf("partial-day range must offer no backfill window, got %#v", backfillWindows)
+	// Verbatim boundaries are submittable: the planner chunks on whole days
+	// but keeps the requested instants at the outer edges.
+	backfillWindows := payload["backfill_windows"].([]any)
+	if len(backfillWindows) != 1 {
+		t.Fatalf("partial-day range must offer one backfill window, got %#v", backfillWindows)
+	}
+	window := backfillWindows[0].(map[string]any)
+	if window["since"] != "2026-08-10T12:00:00+00:00" {
+		t.Fatalf("window since = %#v, want the gap's exact start", window["since"])
+	}
+	if window["before"] != "2026-08-11T00:00:00+00:00" {
+		t.Fatalf("window before = %#v, want the gap's exact end", window["before"])
 	}
 }
 
-func TestCanonicalBackfillWindowsAreMidnightBoundedAndScoped(t *testing.T) {
+func TestCanonicalBackfillWindowsAreExactAndScoped(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
 	integrationID := uuid.New()
@@ -122,7 +130,8 @@ func TestCanonicalBackfillWindowsAreMidnightBoundedAndScoped(t *testing.T) {
 				SourceIDs: []string{second.String()}, DatasetKeys: []string{"commits"},
 			},
 			{
-				// Partial day on the `before` end -- skipped, not truncated.
+				// Partial day on the `before` end -- advertised verbatim, and
+				// neither truncated onto a day boundary nor suppressed.
 				Since: day(now.AddDate(0, 0, -5)), Before: now.AddDate(0, 0, -4),
 				SourceIDs: []string{first.String()}, DatasetKeys: []string{"prs"},
 			},
@@ -134,12 +143,17 @@ func TestCanonicalBackfillWindowsAreMidnightBoundedAndScoped(t *testing.T) {
 	}
 
 	windows := payload["backfill_windows"].([]any)
-	if len(windows) != 2 {
+	if len(windows) != 3 {
 		t.Fatalf("backfill windows = %#v", windows)
 	}
-	// Sorted by (since, before, dataset_keys, source_ids): "commits" precedes
-	// "prs" on an identical day range.
+	// Sorted by (since, before, dataset_keys, source_ids): the partial-day
+	// range sorts first on its earlier `since`, and "commits" precedes "prs"
+	// on an identical day range.
 	for index, want := range []map[string]any{
+		{
+			"since": "2026-08-07T00:00:00+00:00", "before": "2026-08-08T12:00:00+00:00",
+			"dataset_keys": "prs", "source_ids": first.String(),
+		},
 		{
 			"since": "2026-08-09T00:00:00+00:00", "before": "2026-08-10T00:00:00+00:00",
 			"dataset_keys": "commits", "source_ids": second.String(),

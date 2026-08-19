@@ -689,13 +689,16 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
     assert "--set=coordinator_role" in provision_command
     assert "--set=coordinator_password" in provision_command
     assert "RIVER_COORDINATOR_DATABASE_PASSWORD" in provision["environment"]
-    assert any(
-        str(volume).endswith(
-            "scripts/worker/provision_river_roles.sql:"
-            "/opt/dev-health/provision_river_roles.sql:ro"
-        )
-        for volume in provision["volumes"]
-    )
+    # The SQL travels in the image, not from the host. A relative bind-mount
+    # source is unproduceable on a pull-only host, and Docker answers a missing
+    # one by creating an empty DIRECTORY rather than failing -- which is how
+    # this reached production as `psql: ... Is a directory` (CHAOS-3925).
+    assert not [
+        volume
+        for volume in (provision.get("volumes") or [])
+        if "provision_river_roles.sql" in str(volume)
+    ]
+    assert "/usr/local/share/dev-health/provision_river_roles.sql" in provision_command
 
     river_migrate = services["go-river-migrate"]
     assert river_migrate["profiles"] == ["go-workers"]

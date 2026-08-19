@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -114,6 +115,78 @@ func fixedEngineStatements() []fixedEngineStatement {
 					degraded_reason = NULL,
 					completed_at = now(), updated_at = now()
 				WHERE occurrence_key = '` + occurrenceKey + `' AND status = 'claimed'`,
+		},
+		// The scheduled-report producer. These statements post-date CHAOS-3114 and
+		// were never added here, which is precisely why coordinatorPosture lacked
+		// saved_reports, scheduled_report_occurrences, and report_runs until the
+		// production scheduler failed every cycle with 42501 on saved_reports.
+		//
+		// deniedBeforeThisChange is false for all four: that field pins the
+		// CHAOS-3114 boundary specifically, and these tables were untouched by
+		// that change. Their own mutation control is
+		// TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants below.
+		{
+			name:      "report producer enumerates due schedules under a row lock",
+			site:      "internal/scheduler/fixed/reports.go Produce -> dueScheduledReportsSQL",
+			privilege: "saved_reports UPDATE (implied by FOR UPDATE OF report), scheduled_jobs UPDATE",
+			sql: `SELECT job.id::text, report.id::text
+				FROM public.scheduled_jobs AS job
+				JOIN public.saved_reports AS report
+				    ON report.schedule_id = job.id
+				   AND report.is_active
+				   AND report.org_id = job.org_id
+				WHERE job.job_type = 'report'
+				LIMIT 1
+				FOR UPDATE OF job, report SKIP LOCKED`,
+		},
+		{
+			// The reason the outage was a 42501 and not a planning error: this
+			// statement takes no locks and writes nothing, so a verb-only reading
+			// concludes the coordinator needs no grant on saved_reports at all.
+			// It still needs SELECT, and it runs FIRST, ahead of the locking read.
+			name:      "report producer refuses ambiguous schedules",
+			site:      "internal/scheduler/fixed/reports.go refuseAmbiguousReportSchedules -> ambiguousReportSchedulesSQL",
+			privilege: "saved_reports SELECT",
+			sql: `SELECT job.id::text, first_report.id::text, second_report.id::text
+				FROM public.scheduled_jobs AS job
+				JOIN public.saved_reports AS first_report
+				    ON first_report.schedule_id = job.id AND first_report.is_active
+				JOIN public.saved_reports AS second_report
+				    ON second_report.schedule_id = job.id AND second_report.is_active
+				   AND second_report.id > first_report.id
+				-- 0 is activeScheduledJobStatus (internal/scheduler/fixed/reports.go),
+				-- the value production binds here. A 'active' string literal would fail
+				-- coercion against the integer column (22P02) before the ACL check.
+				WHERE job.job_type = 'report' AND job.status = 0
+				LIMIT 1`,
+		},
+		{
+			name:      "report producer verifies a duplicate occurrence under a row lock",
+			site:      "internal/scheduler/fixed/reports.go -> selectScheduledReportOccurrenceSQL",
+			privilege: "scheduled_report_occurrences UPDATE (implied by FOR UPDATE)",
+			sql: `SELECT identity_version, org_id, report_id::text, scheduled_job_id::text, scheduled_for
+				FROM public.scheduled_report_occurrences
+				WHERE occurrence_id = 'scheduled-report:probe:2026-07-25T00:00:00Z'
+				FOR UPDATE`,
+		},
+		{
+			name:      "report producer links the occurrence to its run",
+			site:      "internal/scheduler/fixed/reports.go -> linkScheduledReportOccurrenceRunSQL",
+			privilege: "scheduled_report_occurrences UPDATE",
+			sql: `UPDATE public.scheduled_report_occurrences
+				SET report_run_id = NULL
+				WHERE occurrence_id = 'scheduled-report:probe:2026-07-25T00:00:00Z'
+				  AND report_run_id IS NULL`,
+		},
+		{
+			name:      "report producer reads a replayed run",
+			site:      "internal/scheduler/fixed/reports.go -> replayedReportRunSQL",
+			privilege: "report_runs SELECT",
+			sql: `SELECT run.id::text
+				FROM public.scheduled_report_occurrences AS occurrence
+				LEFT JOIN public.report_runs AS run
+				    ON run.scheduled_occurrence_id = occurrence.occurrence_id
+				WHERE occurrence.occurrence_id = 'scheduled-report:probe:2026-07-25T00:00:00Z'`,
 		},
 		{
 			name:      "fan-out producer enumerates active organizations",
@@ -444,5 +517,78 @@ func TestFixedEngineCompletionFenceGrantStaysColumnScoped(t *testing.T) {
 			t.Errorf("%s: expected insufficient_privilege (42501), got: %v\n  statement: %s",
 				forbidden.name, err, collapse(forbidden.sql))
 		}
+	}
+}
+
+// reportProducerStatements are the fixedEngineStatements belonging to the
+// scheduled-report producer, selected by name prefix so a statement added to
+// the list above is automatically covered by the mutation control below.
+func reportProducerStatements() []fixedEngineStatement {
+	var selected []fixedEngineStatement
+	for _, statement := range fixedEngineStatements() {
+		if strings.HasPrefix(statement.name, "report producer ") {
+			selected = append(selected, statement)
+		}
+	}
+	return selected
+}
+
+// TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants is the
+// mutation control for the report half of coordinatorPosture, mirroring
+// TestFixedEngineStatementsAreDeniedByThePreCHAOS3114CoordinatorGrants.
+//
+// It reproduces the production failure exactly: with the three report tables
+// revoked, every report-producer statement must fail with 42501, and the very
+// first one the producer runs is the ambiguity check on saved_reports -- the
+// statement that took no locks and wrote nothing, and so looked to a
+// verb-only reading like it needed no grant at all.
+//
+// Without this control, adding the tables to the posture could pass the
+// permitted-statements test for reasons unrelated to the grants.
+func TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startGrantHarness(t, ctx)
+
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+
+	statements := reportProducerStatements()
+	if len(statements) == 0 {
+		t.Fatal("no report-producer statements found, so this test proves nothing")
+	}
+	// Prove they PASS first. A revocation that denies statements which were
+	// already failing would measure nothing.
+	for _, statement := range statements {
+		if err := execInRolledBackTransaction(t, ctx, coordinator, statement.sql); err != nil {
+			t.Fatalf("%s: denied BEFORE the revocation, so the mutation below cannot be attributed\n  site: %s\n  error: %v",
+				statement.name, statement.site, err)
+		}
+	}
+
+	for _, table := range []string{"saved_reports", "scheduled_report_occurrences", "report_runs"} {
+		revocation := "REVOKE ALL PRIVILEGES ON TABLE public." + table + " FROM " + grantCoordinatorRole
+		if _, err := admin.Exec(ctx, revocation); err != nil {
+			t.Fatalf("%s: %v", revocation, err)
+		}
+	}
+
+	for _, statement := range statements {
+		err := execInRolledBackTransaction(t, ctx, coordinator, statement.sql)
+		if err == nil {
+			t.Errorf("%s: PERMITTED with the report tables revoked, so %s is not what unblocks it\n  site: %s\n  statement: %s",
+				statement.name, statement.privilege, statement.site, collapse(statement.sql))
+			continue
+		}
+		if !isInsufficientPrivilege(err) {
+			t.Errorf("%s: expected insufficient_privilege (42501), got a different failure: %v\n  site: %s\n  statement: %s",
+				statement.name, err, statement.site, collapse(statement.sql))
+		}
+	}
+
+	// The posture and the grants are one declaration, so a coordinator login
+	// missing the report grants must refuse to report ready rather than start
+	// and fail every schedule cycle -- which is exactly what production did.
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+		t.Error("coordinator readiness passed without the report table grants, so it is not checking the posture it declares")
 	}
 }

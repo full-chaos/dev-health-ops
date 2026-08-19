@@ -771,6 +771,27 @@ func coordinatorPosture() RolePosture {
 			{"scheduled_jobs", false, true, false},
 			{"scheduled_sync_occurrences", true, true, false},
 			{"fixed_schedule_occurrences", true, true, false},
+			// The fixed-schedule report producer (internal/scheduler/fixed/reports.go)
+			// runs entirely on the coordinator pool, so every table its SQL touches
+			// belongs in THIS manifest even when the domain role also declares it.
+			// Dual declaration is not a leak -- see CheckRolePosture's note on tables
+			// legitimately required by more than one role.
+			//
+			// saved_reports needs UPDATE, not merely SELECT: dueScheduledReportsSQL
+			// ends in `FOR UPDATE OF job, report SKIP LOCKED`, and `report` is the
+			// saved_reports alias. PostgreSQL requires the UPDATE privilege to take a
+			// FOR UPDATE row lock, exactly as scheduled_jobs above already reflects for
+			// the `job` alias in that same clause. A SELECT-only grant here would pass
+			// every DML-verb reading of the query and still fail at runtime.
+			{"saved_reports", false, true, false},
+			// scheduled_report_occurrences: INSERT (insertScheduledReportOccurrenceSQL),
+			// UPDATE (linkScheduledReportOccurrenceRunSQL), and an unqualified
+			// FOR UPDATE in selectScheduledReportOccurrenceSQL.
+			{"scheduled_report_occurrences", true, true, false},
+			// report_runs: INSERT (insertScheduledReportRunSQL) plus the SELECT in
+			// replayedReportRunSQL. The producer never updates a run row; the report
+			// worker does that on the domain pool, which declares UPDATE separately.
+			{"report_runs", true, false, false},
 			// syncreconciler.Materializer.Step executes coordinator-pool INSERTs at
 			// internal/syncreconciler/materializer.go:125,
 			// internal/syncreconciler/materializer.go:235,

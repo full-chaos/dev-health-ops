@@ -1564,9 +1564,14 @@ def _canonical_backfill_windows(
     02:46:06.501450 boundary is planned as 02:46:06.501450, and a window inside
     a single day still yields one unit rather than none.
 
-    Empty intervals are still dropped: BackfillSelectorRequest requires
-    ``since < before``, so emitting one would suggest a window the server
-    rejects with a 422.
+    Intervals no wider than ``INTERVAL_ADJACENCY_TOLERANCE`` are dropped. They
+    are not gaps: they are the seam between two ranges the merge step already
+    treats as adjacent, and they show up as ``23:59:59.999999 -> 00:00:00``
+    where one day-bounded window meets the next. On real data 66 of 114
+    candidate windows were exactly one microsecond wide, so advertising them
+    would hand the operator 66 buttons that each plan a run covering no time
+    at all. This subsumes the empty-interval case, which
+    BackfillSelectorRequest would reject outright with a 422.
     """
 
     candidates_by_scope: dict[
@@ -1576,7 +1581,7 @@ def _canonical_backfill_windows(
         for interval in pair.gaps:
             since = ensure_utc(interval.since)
             before = ensure_utc(interval.before)
-            if since >= before:
+            if before - since <= INTERVAL_ADJACENCY_TOLERANCE:
                 continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
                 "gap"
@@ -1584,7 +1589,7 @@ def _canonical_backfill_windows(
         for interval in pair.failed_ranges:
             since = ensure_utc(interval.since)
             before = ensure_utc(interval.before)
-            if since >= before:
+            if before - since <= INTERVAL_ADJACENCY_TOLERANCE:
                 continue
             candidates_by_scope[(since, before, pair.source_id, pair.dataset_key)].add(
                 "failed"

@@ -904,6 +904,35 @@ def test_canonical_backfill_windows_advertise_off_midnight_boundaries():
     ]
 
 
+def test_canonical_backfill_windows_drop_day_boundary_seams():
+    """A one-microsecond seam is not a gap.
+
+    Where one day-bounded window meets the next, coverage leaves a residue of
+    exactly INTERVAL_ADJACENCY_TOLERANCE -- the same span the merge step treats
+    as adjacent. These boundaries are taken verbatim from a live projection; 66
+    of 114 candidate windows in a populated org had this exact shape, and
+    advertising them would offer a backfill covering no time at all.
+    """
+    source_id = "11111111-1111-1111-1111-111111111111"
+    pair_coverages = [
+        sync_coverage_module._PairCoverage(
+            source_id=source_id,
+            dataset_key="commit-stats",
+            gaps=[
+                sync_coverage_module.CoverageInterval(
+                    since=datetime(
+                        2026, 3, 12, 23, 59, 59, 999999, tzinfo=timezone.utc
+                    ),
+                    before=datetime(2026, 3, 13, tzinfo=timezone.utc),
+                    source_ids=(source_id,),
+                )
+            ],
+        ),
+    ]
+
+    assert sync_coverage_module._canonical_backfill_windows(pair_coverages) == []
+
+
 def test_canonical_backfill_windows_drop_empty_intervals():
     """An empty interval is not a submittable selector.
 

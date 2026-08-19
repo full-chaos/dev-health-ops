@@ -28,6 +28,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     lock_outbox_claim_for_publish,
     mark_outbox_dispatched,
 )
+from tests.canonical_incident_orchestration_support import SYNC_FIXTURE_BEFORE
 from tests.test_canonical_incident_scheduler_concurrency import _seed_due_schedule
 
 
@@ -72,7 +73,7 @@ def _seed_claimed_discovery(
         assert sync_scheduler._maybe_dispatch_config(
             session,
             config,
-            datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+            SYNC_FIXTURE_BEFORE,
         )
         run = session.query(SyncRun).filter_by(org_id=str(config.org_id)).one()
         outbox = (

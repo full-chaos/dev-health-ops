@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,6 +22,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests.canonical_incident_orchestration_support import (
+    SYNC_FIXTURE_BEFORE,
     CanonicalState,
     canonical_state_context,
     create_canonical_graph,
@@ -44,7 +44,7 @@ def _request(
         org_id=org_id,
         mode=SyncRunMode.INCREMENTAL.value,
         triggered_by="test",
-        before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        before=SYNC_FIXTURE_BEFORE,
     )
 
 
@@ -195,7 +195,7 @@ def test_scheduler_skips_disabled_canonical_config_before_marker_or_work(
     dispatched = sync_scheduler._maybe_dispatch_config(
         state.session,
         graph.config,
-        datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        SYNC_FIXTURE_BEFORE,
     )
 
     # Then
@@ -253,7 +253,7 @@ def test_scheduler_rechecks_feature_immediately_before_enqueue(
     result = sync_scheduler._maybe_dispatch_config(
         state.session,
         graph.config,
-        datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        SYNC_FIXTURE_BEFORE,
     )
 
     # Then
@@ -306,7 +306,7 @@ def test_scheduler_skips_typed_pagerduty_disable_without_enqueuing(
     result = sync_scheduler._maybe_dispatch_config(
         state.session,
         graph.config,
-        datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        SYNC_FIXTURE_BEFORE,
     )
 
     assert result is False

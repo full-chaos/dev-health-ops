@@ -26,6 +26,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from tests.canonical_incident_orchestration_support import (
+    SYNC_FIXTURE_BEFORE,
     CanonicalGraph,
     CanonicalState,
     canonical_state_context,
@@ -33,7 +34,7 @@ from tests.canonical_incident_orchestration_support import (
     disable_feature_for_org,
 )
 
-NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+NOW = SYNC_FIXTURE_BEFORE
 
 
 @pytest.fixture

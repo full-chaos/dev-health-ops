@@ -85,9 +85,25 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
+			// Production column shape (alembic 0053), not a two-column stub: the
+			// scheduled-report producer's real statements name identity_version,
+			// org_id, report_id, scheduled_for and report_run_id, and an
+			// undefined column raises 42703 during parse analysis BEFORE the ACL
+			// check -- which would leave the privilege assertions in
+			// fixed_engine_statement_privileges_integration_test.go measuring
+			// nothing at all.
 			name: "scheduled_report_occurrences",
 			ddl: `CREATE TABLE public.scheduled_report_occurrences (
-				occurrence_id text PRIMARY KEY, scheduled_job_id uuid NOT NULL)`,
+				occurrence_id text PRIMARY KEY,
+				identity_version text NOT NULL,
+				org_id text NOT NULL,
+				report_id uuid NOT NULL,
+				scheduled_job_id uuid NOT NULL,
+				scheduled_for timestamptz NOT NULL,
+				report_run_id uuid UNIQUE,
+				created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT uq_scheduled_report_occurrence_report_time
+					UNIQUE (report_id, scheduled_for))`,
 			exercise: []string{
 				"SELECT occurrence_id, scheduled_job_id FROM public.scheduled_report_occurrences LIMIT 1",
 			},
@@ -448,8 +464,50 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		)`,
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
+		// The scheduled-report producer's tables, in their production column
+		// shape (alembic 0005/0053/0096) rather than as one-column stubs, for
+		// the same reason worker_job_outbox above is: the producer statements in
+		// fixed_engine_statement_privileges_integration_test.go name these
+		// columns, and PostgreSQL resolves every column during parse analysis
+		// BEFORE it checks the ACL. A stub table turns each of those privilege
+		// assertions into a 42703 that proves nothing about the grants.
+		//
+		// saved_reports.schedule_id carries alembic 0096's unique constraint so
+		// the harness cannot accept a schedule shape production rejects.
+		`CREATE TABLE public.report_runs (
+			id uuid PRIMARY KEY,
+			report_id uuid NOT NULL,
+			scheduled_occurrence_id text UNIQUE,
+			status text NOT NULL DEFAULT 'pending',
+			started_at timestamptz,
+			completed_at timestamptz,
+			duration_seconds double precision,
+			rendered_markdown text,
+			artifact_url text,
+			provenance_records json,
+			error text,
+			error_traceback text,
+			attempt_count integer NOT NULL DEFAULT 0,
+			artifact_fingerprint text,
+			notification_key text UNIQUE,
+			notification_status text NOT NULL DEFAULT 'pending',
+			notification_sent_at timestamptz,
+			triggered_by text NOT NULL DEFAULT 'manual',
+			created_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TABLE public.saved_reports (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL DEFAULT '',
+			name text NOT NULL DEFAULT '',
+			report_plan json NOT NULL DEFAULT '{}',
+			is_template boolean NOT NULL DEFAULT FALSE,
+			schedule_id uuid CONSTRAINT uq_saved_reports_schedule_id UNIQUE,
+			is_active boolean NOT NULL DEFAULT TRUE,
+			last_run_at timestamptz,
+			last_run_status text,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",

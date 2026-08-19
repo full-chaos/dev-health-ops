@@ -154,7 +154,10 @@ func fixedEngineStatements() []fixedEngineStatement {
 				JOIN public.saved_reports AS second_report
 				    ON second_report.schedule_id = job.id AND second_report.is_active
 				   AND second_report.id > first_report.id
-				WHERE job.job_type = 'report' AND job.status = 'active'
+				-- 0 is activeScheduledJobStatus (internal/scheduler/fixed/reports.go),
+				-- the value production binds here. A 'active' string literal would fail
+				-- coercion against the integer column (22P02) before the ACL check.
+				WHERE job.job_type = 'report' AND job.status = 0
 				LIMIT 1`,
 		},
 		{

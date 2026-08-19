@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,13 +26,42 @@ import (
 )
 
 const (
-	operatorIntegrationDomainRole = "operator_domain_runtime"
-	operatorIntegrationQueueRole  = "operator_queue_runtime"
-	operatorIntegrationDomainPass = "operator_domain_runtime_password"
-	operatorIntegrationQueuePass  = "operator_queue_runtime_password"
-	operatorIntegrationToken      = "svc_worker_0123456789abcdefghijklmnopqrstuvwxyzAB"
-	operatorIntegrationCredential = "00000000-0000-4000-8000-000000000303"
+	operatorIntegrationDomainRole      = "operator_domain_runtime"
+	operatorIntegrationQueueRole       = "operator_queue_runtime"
+	operatorIntegrationCoordinatorRole = "operator_coordinator_runtime"
+	operatorIntegrationDomainPass      = "operator_domain_runtime_password"
+	operatorIntegrationQueuePass       = "operator_queue_runtime_password"
+	operatorIntegrationCoordinatorPass = "operator_coordinator_runtime_password"
+	operatorIntegrationToken           = "svc_worker_0123456789abcdefghijklmnopqrstuvwxyzAB"
+	operatorIntegrationCredential      = "00000000-0000-4000-8000-000000000303"
 )
+
+// operatorIntegrationCoordinatorGrants translates postgres.CoordinatorPosture()
+// into the migration's grant shape. It is derived, never restated: the posture
+// is the same single authority CheckCoordinatorAuthorization asserts against
+// and cmd/dev-health-worker-migrate provisions from, so what this fixture
+// grants cannot drift from what production grants.
+func operatorIntegrationCoordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
+	posture := postgresstore.CoordinatorPosture()
+	tables := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
+	for _, table := range posture.RequiredTables {
+		tables = append(tables, riverstore.TableGrant{
+			TableName:   table.TableName,
+			AllowInsert: table.AllowInsert,
+			AllowUpdate: table.AllowUpdate,
+			AllowDelete: table.AllowDelete,
+		})
+	}
+	columns := make([]riverstore.ColumnGrant, 0, len(posture.ColumnScoped))
+	for _, column := range posture.ColumnScoped {
+		columns = append(columns, riverstore.ColumnGrant{
+			TableName:  column.TableName,
+			ColumnName: column.ColumnName,
+			Privilege:  column.Privilege,
+		})
+	}
+	return tables, columns, append([]string(nil), posture.RequiredSequences...)
+}
 
 type allowIntegrationDomainGuard struct{}
 
@@ -92,10 +122,15 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
 	defer adminPool.Close()
 	createOperatorIntegrationSchema(t, ctx, adminPool)
+	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
-		Schema:     "river",
-		DomainRole: operatorIntegrationDomainRole,
-		QueueRole:  operatorIntegrationQueueRole,
+		Schema:                  "river",
+		DomainRole:              operatorIntegrationDomainRole,
+		QueueRole:               operatorIntegrationQueueRole,
+		CoordinatorRole:         operatorIntegrationCoordinatorRole,
+		CoordinatorGrants:       coordinatorTables,
+		CoordinatorColumnGrants: coordinatorColumns,
+		CoordinatorSequences:    coordinatorSequences,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +142,10 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t, ctx, instance.URI, operatorIntegrationQueueRole, operatorIntegrationQueuePass,
 	)
 	defer queuePool.Close()
+	coordinatorPool := openOperatorIntegrationRolePool(
+		t, ctx, instance.URI, operatorIntegrationCoordinatorRole, operatorIntegrationCoordinatorPass,
+	)
+	defer coordinatorPool.Close()
 	if err := postgresstore.CheckDomainAuthorization(ctx, domainPool, operatorIntegrationDomainRole, "river"); err != nil {
 		t.Fatalf("domain role authorization: %v", err)
 	}
@@ -141,9 +180,15 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The operator credential store is intentionally outside the domain runtime
-	// allow-list, so authenticate through the fixture's operator/admin pool.
-	authenticator, err := NewAuthenticator(adminPool)
+	// CHAOS-3100. This used to authenticate through the fixture's ADMIN pool,
+	// on the reasoning that the credential store sits outside the domain
+	// allow-list. That reasoning was right and the fixture was still wrong:
+	// an admin pool can run any statement, so the test proved nothing about
+	// which runtime role can, and it would have passed identically while the
+	// real CLI was 100% broken. The restricted coordinator login is the pool
+	// cmd/dev-health-workerctl actually builds its authenticator on, so it is
+	// the only connection that measures the deployed privilege.
+	authenticator, err := NewAuthenticator(coordinatorPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +362,125 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	}
 }
 
+// TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials is the
+// CHAOS-3100 regression, and it deliberately proves BOTH halves of the fact
+// the ticket says must land together. Proving only that some role can
+// authenticate is what recreates the trap: the cheap way to make
+// authentication work is to widen the domain role, and that trades a runtime
+// 42501 for a permanent readiness failure across every domain worker, because
+// CheckDomainAuthorization asserts the domain role holds NOTHING outside its
+// own manifest.
+//
+//   - Half one: the restricted coordinator role -- the login
+//     cmd/dev-health-workerctl builds its authenticator on -- completes a real
+//     authentication against the real grants ApplyPinnedMigrations emits.
+//     Grants are derived from CoordinatorPosture(), so this fails if the
+//     migration and the posture ever disagree.
+//   - Half two: the domain role is still refused, and the domain role's own
+//     readiness still passes afterwards. A change that bought half one by
+//     granting the domain role fails the refusal; a change that bought it by
+//     granting without the matching allowlist row fails the readiness call.
+//
+// The refusal is also asserted by reason CODE, not merely by error identity.
+// Before this change auth.go collapsed a 42501 into a bare ErrAuthentication,
+// so workerctl printed `authentication_failed` for a missing grant and sent
+// operators to rotate a token that was never wrong. That assertion is the one
+// that fails without the auth.go half of this fix.
+func TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
+	t.Cleanup(adminPool.Close)
+	createOperatorIntegrationSchema(t, ctx, adminPool)
+	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema:                  "river",
+		DomainRole:              operatorIntegrationDomainRole,
+		QueueRole:               operatorIntegrationQueueRole,
+		CoordinatorRole:         operatorIntegrationCoordinatorRole,
+		CoordinatorGrants:       coordinatorTables,
+		CoordinatorColumnGrants: coordinatorColumns,
+		CoordinatorSequences:    coordinatorSequences,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinatorPool := openOperatorIntegrationRolePool(
+		t, ctx, instance.URI, operatorIntegrationCoordinatorRole, operatorIntegrationCoordinatorPass,
+	)
+	t.Cleanup(coordinatorPool.Close)
+	domainPool := openOperatorIntegrationRolePool(
+		t, ctx, instance.URI, operatorIntegrationDomainRole, operatorIntegrationDomainPass,
+	)
+	t.Cleanup(domainPool.Close)
+
+	// Half one. Authenticate runs SELECT and UPDATE in one CTE, so a role
+	// holding only SELECT would fail here too -- authentication is a write.
+	coordinatorAuthenticator, err := NewAuthenticator(coordinatorPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authentication, err := coordinatorAuthenticator.Authenticate(ctx, operatorIntegrationToken)
+	if err != nil {
+		t.Fatalf("restricted coordinator role cannot authenticate the operator token: %v", err)
+	}
+	if authentication.Principal().ID != operatorIntegrationCredential {
+		t.Fatalf("principal = %+v", authentication.Principal())
+	}
+
+	// Half two, part one: the domain role is refused, and says why. Note the
+	// token supplied is the VALID one -- so `authentication_failed` would be
+	// an actively false statement about it, not merely a vague one.
+	domainAuthenticator, err := NewAuthenticator(domainPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := domainAuthenticator.Authenticate(ctx, operatorIntegrationToken); err == nil {
+		t.Fatal("the domain role authenticated against the coordinator-exclusive credential store, " +
+			"so it now holds a privilege its own readiness posture forbids")
+	} else {
+		if !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("domain-role denial error = %v, want it to remain an ErrAuthentication", err)
+		}
+		if reason := AuthenticationReason(err); reason != ReasonCredentialStoreForbidden {
+			t.Fatalf("domain-role denial reason = %q, want %q -- a missing grant reported as a "+
+				"credential failure sends operators to rotate a token that was never wrong",
+				reason, ReasonCredentialStoreForbidden)
+		}
+	}
+
+	// Half two, part two: provisioning the coordinator did not widen the
+	// domain role. This is the assertion that fails if a future change fixes
+	// authentication by granting internal_service_credentials to the domain
+	// role -- readiness would then find an undeclared relation and every
+	// domain worker, not just workerctl, would fail closed at startup.
+	if err := postgresstore.CheckDomainAuthorization(
+		ctx, domainPool, operatorIntegrationDomainRole, "river",
+	); err != nil {
+		t.Fatalf("domain readiness broke once the coordinator was provisioned: %v", err)
+	}
+
+	// An invalid token on the correctly granted pool is the OTHER verdict, and
+	// must stay distinguishable from the denial above -- otherwise the two
+	// codes carry no information.
+	if _, err := coordinatorAuthenticator.Authenticate(ctx, "svc_worker_"+strings.Repeat("z", 40)); err == nil {
+		t.Fatal("an unknown token authenticated")
+	} else if reason := AuthenticationReason(err); reason != ReasonAuthenticationFailed {
+		t.Fatalf("unknown-token reason = %q, want %q", reason, ReasonAuthenticationFailed)
+	}
+}
+
 func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	digest := sha256.Sum256([]byte(operatorIntegrationToken))
@@ -329,6 +493,12 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
 		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
+		// Created here, before ApplyPinnedMigrations, because the migration's
+		// role-eligibility preflight rejects a coordinator role that does not
+		// yet exist as a least-privilege login. This mirrors the real deploy
+		// order: provision roles (scripts/worker/provision_river_roles.sql),
+		// then migrate.
+		"CREATE ROLE " + operatorIntegrationCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationCoordinatorPass + "'",
 		`CREATE TABLE public.internal_service_credentials (
 			id uuid PRIMARY KEY,
 			service_name text NOT NULL,
@@ -384,7 +554,16 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		// Carries the columns coordinatorPosture scopes its grants to. A
+		// column-level GRANT names the column, and PostgreSQL raises
+		// undefined_column (42703) for one that does not exist, so a
+		// one-column fixture would break the migration rather than exercise
+		// it. credentials_encrypted is present and deliberately NOT granted:
+		// it is the encrypted secret the coordinator must never reach.
+		`CREATE TABLE public.integration_credentials (
+			id uuid PRIMARY KEY, org_id text, provider text,
+			is_active boolean, config json, credentials_encrypted text
+		)`,
 		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
@@ -438,6 +617,19 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			kind text PRIMARY KEY,
 			generation bigint NOT NULL
 		)`,
+		// The remaining coordinator-exclusive relations. They exist here for
+		// the same reason the domain tables above do, and the ordering is
+		// load-bearing in the same way: every coordinator GRANT in
+		// coordinatorGrantStatements is wrapped in `IF to_regclass(...) IS NOT
+		// NULL`, so a table created after ApplyPinnedMigrations would silently
+		// receive no grant at all. This fixture would then still pass while
+		// asserting nothing -- the exact vacuity that let CHAOS-3100 survive.
+		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.fixed_schedule_occurrences (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(ctx, statement); err != nil {

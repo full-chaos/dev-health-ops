@@ -86,6 +86,29 @@ jobs:
               # test job and the gate went green (CHAOS-3482 Codex round 4).
               - 'docker/**'
               - 'deploy/**'
+              # CHAOS-3948: this filter had no Go paths at all, so a Go-only
+              # PR (internal/**, cmd/**, *.go, go.mod, go.sum -- 722 + 57
+              # files) reported code=false, skipped test-matrix/coverage
+              # entirely, and the required `test` check went green having run
+              # nothing. That is not a harmless skip: tests/tooling/*.py
+              # (already selected by 'tests/**' above, but only when a PR ALSO
+              # touches a Python file) polices Go artifacts directly --
+              # test_go_integration_sharding.py asserts the live Go package
+              # inventory against ci/go_integration_shards.tsv,
+              # test_go_image_publishing.py asserts published image names
+              # against deploy/ renderers, test_go_worker_stop_hook_packaging.py
+              # asserts the Dockerfile's staged binary path -- and a Go-only
+              # PR is exactly the PR that can break what those tests check
+              # while never running them. contracts/** and go.mod/go.sum are
+              # not covered by any existing pattern above (they sit outside
+              # src/, tests/, ci/, docker/, deploy/), so they are listed
+              # explicitly.
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/**'
+              - 'cmd/**'
+              - 'contracts/**'
 
   # Fast, pytest-xdist-parallelized unit suite on the supported Python
   # version. This is the per-PR signal that the required `test` gate (below)

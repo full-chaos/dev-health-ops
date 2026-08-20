@@ -22,7 +22,11 @@ jobs:
           python-version: "3.14"
 
       - name: Install pip-audit
-        run: pip install "pip-audit>=2.7.0"
+        # CHAOS-3948: pinned to the uv.lock version, same shape/fix as
+        # lint.yml's ruff pin (CHAOS-3946) -- a bare floor specifier resolves
+        # to whatever is newest on PyPI at CI run time, not the version
+        # contributors actually run locally via `uv sync`.
+        run: pip install "pip-audit==2.10.0"
 
       - name: Run pip-audit
         run: |

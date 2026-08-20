@@ -77,6 +77,17 @@ on:
       - '.github/workflows/go.yml'
   merge_group:
   workflow_dispatch:
+  # CHAOS-3948: push (above) stays off deliberately -- see the concurrency
+  # block below -- so main got zero Go CI between merges: go.yml only ran on
+  # the PR that introduced a change and on the merge_group queue run, never
+  # again afterward. A scheduled run against main's HEAD (`schedule` always
+  # targets the default branch) closes most of that gap at a fixed cost of
+  # one fan-out a day, which cannot amplify into a merge burst the way `push`
+  # did -- it does not touch the mechanism that exhausted the org's Actions
+  # concurrency. `workflow_dispatch` above also gives a one-click way to run
+  # the full matrix against main on demand between nightly runs.
+  schedule:
+    - cron: '17 8 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

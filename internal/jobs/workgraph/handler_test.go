@@ -31,6 +31,30 @@ func TestBuildRenewsFenceAndCompletes(t *testing.T) {
 	}
 }
 
+// A live lease must park the job rather than retire it. Retiring it is what
+// stranded the fanout in CHAOS-3991: the request's completion is the fence key
+// for everything gated on it, so a request nobody comes back to reclaim holds
+// its whole chain forever. The snooze is asserted rather than the eventual
+// outcome, because only the snooze proves the job survived to reclaim at all.
+func TestBuildParksWhileAnotherClaimantHoldsALiveLease(t *testing.T) {
+	store := &fakeStore{claimErr: &LeaseActiveError{RetryAfter: 7 * time.Minute}}
+	handler, err := NewBuildHandler(store, blockingExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), buildExecution())
+	if err == nil {
+		t.Fatal("a live lease was reported as a completed request")
+	}
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed || delay != 7*time.Minute {
+		t.Fatalf("snooze = %v/%t, want 7m", delay, snoozed)
+	}
+	if store.completions != 0 || store.ambiguous != 0 {
+		t.Fatalf("completions=%d ambiguous=%d, want the request untouched", store.completions, store.ambiguous)
+	}
+}
+
 func TestBuildLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	store := &fakeStore{claim: testClaim(30 * time.Millisecond), loseAt: 1}
 	executor := blockingExecutor{waitForCancellation: true}
@@ -86,12 +110,13 @@ func pointer(value string) *string { return &value }
 
 type fakeStore struct {
 	claim                                            *Claim
+	claimErr                                         error
 	claims, renewals, completions, ambiguous, loseAt int
 }
 
 func (s *fakeStore) Claim(context.Context, string, Kind) (*Claim, error) {
 	s.claims++
-	return s.claim, nil
+	return s.claim, s.claimErr
 }
 func (s *fakeStore) Renew(context.Context, Claim) error {
 	s.renewals++

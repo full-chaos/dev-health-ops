@@ -41,8 +41,19 @@ func TestPostgresStoreCrashRecoveryReplacesRequestAndLedgerToken(t *testing.T) {
 	if err != nil || first == nil {
 		t.Fatalf("first claim = %#v, %v", first, err)
 	}
-	if duplicate, err := store.Claim(ctx, testRequestID, KindBuild); err != nil || duplicate != nil {
-		t.Fatalf("unexpired duplicate = %#v, %v", duplicate, err)
+	// A live lease is reported with its exact remaining time, not swallowed as a
+	// finished request: swallowing it is what retired the only worker that could
+	// reclaim an orphaned lease, stranding every handoff fenced on this request.
+	duplicate, duplicateErr := store.Claim(ctx, testRequestID, KindBuild)
+	if duplicate != nil {
+		t.Fatalf("unexpired duplicate took a claim: %#v", duplicate)
+	}
+	var active *LeaseActiveError
+	if !errors.As(duplicateErr, &active) {
+		t.Fatalf("unexpired duplicate = %v, want a live-lease report", duplicateErr)
+	}
+	if active.RetryAfter != store.lease {
+		t.Fatalf("unexpired duplicate retry after = %v, want %v", active.RetryAfter, store.lease)
 	}
 	// A process crash leaves the first claimant with no completion write. A fresh
 	// store instance must reclaim only after the persisted lease expires and fence

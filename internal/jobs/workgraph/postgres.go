@@ -64,8 +64,15 @@ RETURNING id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
 		var state string
 		var leaseExpiresAt *time.Time
 		rowErr := tx.QueryRow(ctx, `SELECT state, lease_expires_at FROM public.work_graph_execution_requests WHERE id = $1::uuid AND kind = $2`, requestID, string(kind)).Scan(&state, &leaseExpiresAt)
-		if rowErr == nil && (state == "succeeded" || (state == "running" && leaseExpiresAt != nil && leaseExpiresAt.After(now))) {
+		if rowErr == nil && state == "succeeded" {
 			return nil, nil
+		}
+		// A live lease is reported rather than treated as a completed request.
+		// Both reach this branch by matching no row, but only one of them means
+		// the work is done; conflating them lets a retry that lands inside a
+		// lease orphaned by a dead claimant retire itself and strand the request.
+		if rowErr == nil && state == "running" && leaseExpiresAt != nil && leaseExpiresAt.After(now) {
+			return nil, &LeaseActiveError{RetryAfter: leaseExpiresAt.Sub(now)}
 		}
 		return nil, ErrInvalidState
 	}

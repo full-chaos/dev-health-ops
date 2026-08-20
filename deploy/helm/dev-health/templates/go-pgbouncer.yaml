@@ -75,16 +75,22 @@ spec:
             - {name: AUTH_TYPE, value: scram-sha-256}
             - {name: DEFAULT_POOL_SIZE, value: {{ $pooler.poolSize | quote }}}
             - {name: MAX_CLIENT_CONN, value: {{ $pooler.maxClientConnections | quote }}}
-          # CHAOS-3944: these are tcpSocket probes, so they prove the port
-          # answers, not that the pooler can serve. That is the same
-          # port-open-is-not-can-serve weakness the Compose healthchecks had
-          # before they were given an explicit -U/-d. An exec probe running
-          # `pg_isready -U <this pooler's role> -d <database>` would close the
-          # gap, but changing k8s probes has a different blast radius (a
-          # failing liveness probe restarts the pooler and drops every session
-          # on a session-mode endpoint), so it is deliberately left for its own
-          # change. Do not "fix" this by copying the Compose test in without
-          # first reworking the liveness/readiness split.
+          # CHAOS-3944: these are tcpSocket probes -- they prove the port
+          # answers, not that the pooler can serve. Note that swapping in the
+          # Compose `pg_isready -U <role> -d <database>` exec probe would NOT
+          # close that gap: pg_isready exits 0 for any server response,
+          # including a rejection for a nonexistent role or database. It is a
+          # liveness probe there too.
+          #
+          # Closing the gap needs a probe that opens a session and runs a
+          # query, and that is a genuinely bad trade on a session-mode
+          # endpoint sized to the declared fleet: the probe consumes a pool
+          # slot, and under the saturation it would be there to detect it
+          # blocks, times out, and a failing liveness probe then restarts the
+          # pooler and drops every live session. Saturation is observable
+          # through the PgBouncer admin console and the log_stats `wait` field
+          # instead. Do not "fix" this without reworking the
+          # liveness/readiness split first.
           readinessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 2, periodSeconds: 5}
           livenessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 10, periodSeconds: 10}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

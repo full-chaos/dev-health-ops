@@ -415,10 +415,27 @@ func TestPostgresStoreReportsALiveClaimInsteadOfNothingToDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	partitionID := deterministicPartitionID(run.ID, 1)
+	assertRunStatus := func(what, want string) {
+		t.Helper()
+		var got string
+		if err := pool.QueryRow(ctx,
+			"SELECT status FROM remaining_metric_runs WHERE id = $1::uuid", run.ID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("parent run status %s = %s, want %s", what, got, want)
+		}
+	}
+	assertRunStatus("before any claim", "pending")
+
 	first, err := store.ClaimPartition(ctx, partitionID)
 	if err != nil || first == nil {
 		t.Fatalf("first claim = %#v, %v", first, err)
 	}
+	// The claim carries a second durable effect besides taking the partition: it
+	// activates the parent run in the same statement. Asserted here so that any
+	// future restructuring of that CTE cannot pass on claim behaviour alone.
+	assertRunStatus("after the claim", "running")
 
 	// A second claimant arriving well inside the lease learns how long is left
 	// rather than being told the work is finished.

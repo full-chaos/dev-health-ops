@@ -99,6 +99,55 @@ func TestPartitionLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	}
 }
 
+// A completion that fails after the work succeeded used to be the ONE post-claim
+// exit that returned retryable without standing the row back down, which is the
+// most likely way the lease behind CHAOS-3991 was orphaned. Both layers must
+// release, or the row keeps a lease nobody is using for the rest of its term.
+func TestPartitionCompletionFailureReleasesTheClaim(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		completionErr: ErrUnavailable,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("completion failure = %v, want retryable", err)
+	}
+	if store.partitionCompletions != 1 || store.partitionReleases != 1 {
+		t.Fatalf("completions=%d releases=%d, want 1/1", store.partitionCompletions, store.partitionReleases)
+	}
+}
+
+func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
+	store := &fakeStore{
+		finalizeClaim: &FinalizeClaim{
+			Run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+			Token:         "00000000-0000-4000-8000-000000000004",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		completionErr: ErrUnavailable,
+	}
+	handler, err := NewFinalizeHandler(store, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), finalizeExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("completion failure = %v, want retryable", err)
+	}
+	if store.finalizeCompletions != 1 || store.finalizeReleases != 1 {
+		t.Fatalf("completions=%d releases=%d, want 1/1", store.finalizeCompletions, store.finalizeReleases)
+	}
+}
+
 func TestFinalizerRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
@@ -292,6 +341,8 @@ type fakeStore struct {
 	finalizeRenewals              int
 	finalizeRenewalFailureAt      int
 	finalizeCompletions           int
+	finalizeReleases              int
+	completionErr                 error
 	materialized                  int
 	dispatchListCalls             int
 	materializedAfterDispatchList bool
@@ -333,6 +384,9 @@ func (store *fakeStore) CompletePartition(
 	publisher Publisher,
 ) error {
 	store.partitionCompletions++
+	if store.completionErr != nil {
+		return store.completionErr
+	}
 	return publisher.PublishFinalizeTx(ctx, nil, store.run)
 }
 func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error {
@@ -354,9 +408,12 @@ func (store *fakeStore) RenewFinalize(context.Context, FinalizeClaim) error {
 }
 func (store *fakeStore) CompleteFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeCompletions++
+	return store.completionErr
+}
+func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
+	store.finalizeReleases++
 	return nil
 }
-func (*fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error { return nil }
 
 type fakePublisher struct{}
 

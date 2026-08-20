@@ -266,6 +266,12 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
+		// The one post-claim exit that used to return without releasing. If the
+		// completion failed while the lease was still ours, releasing makes the
+		// partition immediately re-claimable instead of parking the retry for the
+		// rest of the lease; if the lease was already lost the release is a
+		// no-op, and the store records that rather than dropping it.
+		releasePartition(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	return nil
@@ -316,6 +322,10 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
+		// Symmetric with the partition layer: this exit claimed and returned
+		// retryable without releasing, which is the most likely way the lease
+		// behind CHAOS-3991 was orphaned in the first place.
+		releaseFinalize(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	return nil

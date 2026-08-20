@@ -62,13 +62,20 @@ const (
 // DailyMetricsLeaseResult is the bounded durable outcome of one daily-metrics
 // claim that met an existing lease. Snoozed means the lease was still live and
 // the claimant parked until it expires instead of reporting "nothing to do";
-// reclaimed means an expired lease was durably taken over. Only these two
-// outcomes keep a stalled run recoverable, so both are counted.
+// reclaimed means an expired lease was durably taken over; release_lost means a
+// claimant could no longer stand its own row down. Each one is a durable fact
+// about a lease that a stalled run depends on, so each is counted.
 type DailyMetricsLeaseResult string
 
 const (
 	DailyMetricsLeaseResultSnoozed   DailyMetricsLeaseResult = "snoozed"
 	DailyMetricsLeaseResultReclaimed DailyMetricsLeaseResult = "reclaimed"
+	// DailyMetricsLeaseResultReleaseLost counts a claimant that tried to hand
+	// back a lease it no longer held. Release is fenced on a live lease, so a
+	// claimant that outlives its own lease cannot stand its row down; that used
+	// to vanish into a discarded error, and it is the leading indicator of the
+	// orphaned leases behind CHAOS-3991.
+	DailyMetricsLeaseResultReleaseLost DailyMetricsLeaseResult = "release_lost"
 )
 
 type dailyMetricsLeaseLabels struct {
@@ -888,7 +895,7 @@ func (collector *MetricsCollector) writeReportRunLeases(output *strings.Builder)
 }
 
 func (collector *MetricsCollector) writeDailyMetricsLeases(output *strings.Builder) {
-	writeMetadata(output, "worker_daily_metrics_lease_total", "Daily-metrics claims that met an existing lease, by stage and bounded durable result.", "counter")
+	writeMetadata(output, "worker_daily_metrics_lease_total", "Daily-metrics lease encounters by stage and bounded durable outcome.", "counter")
 	for _, labels := range dailyMetricsLeaseSeries() {
 		writeUintSample(output, "worker_daily_metrics_lease_total", []metricLabel{
 			{"stage", string(labels.Stage)}, {"result", string(labels.Result)},
@@ -1101,9 +1108,11 @@ func validReportRunLeaseResult(result ReportRunLeaseResult) bool {
 // Every series is pre-seeded so a scrape distinguishes "no stalls" from "the
 // worker never reached this code".
 func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
-	series := make([]dailyMetricsLeaseLabels, 0, 4)
+	series := make([]dailyMetricsLeaseLabels, 0, 6)
 	for _, stage := range []DailyMetricsLeaseStage{DailyMetricsLeaseStageFinalize, DailyMetricsLeaseStagePartition} {
-		for _, result := range []DailyMetricsLeaseResult{DailyMetricsLeaseResultReclaimed, DailyMetricsLeaseResultSnoozed} {
+		for _, result := range []DailyMetricsLeaseResult{
+			DailyMetricsLeaseResultReclaimed, DailyMetricsLeaseResultReleaseLost, DailyMetricsLeaseResultSnoozed,
+		} {
 			series = append(series, dailyMetricsLeaseLabels{Stage: stage, Result: result})
 		}
 	}

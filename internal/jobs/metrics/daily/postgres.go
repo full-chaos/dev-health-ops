@@ -670,8 +670,18 @@ WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); e
 	return nil
 }
 
+// ReleasePartition stands a claimed partition back down. Release is fenced on a
+// live lease, so a claimant that has already outlived its lease cannot release
+// it; that outcome is recorded rather than left for the caller to discard.
 func (store *PostgresStore) ReleasePartition(ctx context.Context, claim PartitionClaim) error {
-	return store.transitionPartition(ctx, claim, "failed")
+	err := store.transitionPartition(ctx, claim, "failed")
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeLease(
+			jobruntime.DailyMetricsLeaseStagePartition,
+			jobruntime.DailyMetricsLeaseResultReleaseLost,
+		)
+	}
+	return err
 }
 
 func (store *PostgresStore) transitionPartition(ctx context.Context, claim PartitionClaim, status string) error {
@@ -840,7 +850,14 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 }
 
 func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeClaim) error {
-	return store.transitionFinalize(ctx, claim, "failed")
+	err := store.transitionFinalize(ctx, claim, "failed")
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeLease(
+			jobruntime.DailyMetricsLeaseStageFinalize,
+			jobruntime.DailyMetricsLeaseResultReleaseLost,
+		)
+	}
+	return err
 }
 
 func (store *PostgresStore) transitionFinalize(ctx context.Context, claim FinalizeClaim, status string) error {

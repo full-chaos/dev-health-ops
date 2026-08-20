@@ -102,11 +102,33 @@ services:
       MIN_POOL_SIZE: "5"
       RESERVE_POOL_SIZE: "5"
       ADMIN_USERS: postgres
+      # CHAOS-3944: log_connections/log_disconnections default on and turn a
+      # Go worker fleet's steady attach/detach churn into a continuous,
+      # diagnostically worthless firehose (measured ~36 lines/min across the
+      # three production poolers). Keep log_pooler_errors and the default
+      # log_stats ON: the once-a-minute stats line is the only real pooler
+      # telemetry and it proved its worth in a live incident (wait
+      # 5683209 us during trouble, wait 16136 us after recovery). Do not
+      # "tidy away" that stats line.
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
     ports:
       - "6432:6432"
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # CHAOS-3944: pg_isready with no -U/-d probes as OS user "postgres",
+      # which happens to match DB_USER here, but the port would still be
+      # relying on the default (rejection = healthy) semantics otherwise.
+      # Pin the user/db explicitly so a healthy result means the pooler can
+      # actually serve, not just that the port answers.
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "postgres", "-d", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5

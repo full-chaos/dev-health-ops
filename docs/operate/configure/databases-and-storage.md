@@ -39,6 +39,15 @@ PGBOUNCER_TRANSACTION_MODE=true
 
 Run schema migrations against PostgreSQL directly, not through transaction-mode PgBouncer.
 
+PgBouncer's `log_connections` and `log_disconnections` default on. At Go
+worker fleet connection rates that logs every attach and detach with no
+diagnostic value — a firehose, not a signal. The compose poolers turn both
+off and keep `log_pooler_errors` and the default `log_stats` on: the
+once-a-minute stats line is the only telemetry that matters (it is what
+shows a growing `wait` time — average client wait for a server connection —
+during a pool-exhaustion incident). Do not enable connection logging as a
+debugging step; read the stats line instead.
+
 ### Go worker coexistence
 
 The Go foundation uses three distinct responsibilities:

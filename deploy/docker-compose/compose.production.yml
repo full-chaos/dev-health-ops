@@ -412,10 +412,33 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
       DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+      # CHAOS-3944: log_connections/log_disconnections default on and turn a
+      # Go worker fleet's steady attach/detach churn into a continuous,
+      # diagnostically worthless firehose (measured ~36 lines/min across the
+      # three poolers in production). Keep log_pooler_errors and the default
+      # log_stats ON: the once-a-minute stats line is the only real pooler
+      # telemetry and it proved its worth in a live incident (wait
+      # 5683209 us during trouble, wait 16136 us after recovery). Do not
+      # "tidy away" that stats line.
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
     ports:
       - "${PGBOUNCER_PORT:-6432}:6432"
     networks:
       - dev-health
+    healthcheck:
+      # CHAOS-3944: pg_isready with no -U/-d probes as OS user "postgres",
+      # which is not in PgBouncer's auth file. That prior probe logged
+      # "no such user: postgres" on every check AND still reported healthy,
+      # because pg_isready treats an auth rejection as "server responding".
+      # Probe with the real DB_USER/DB_NAME so a healthy result means the
+      # pooler can actually serve, not just that the port answers.
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "${POSTGRES_USER:?set POSTGRES_USER}", "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     deploy:
       resources:
         limits:
@@ -425,6 +448,26 @@ services:
   # River listener/cancellation uses a session pool, never the transaction
   # endpoint above. DB_USER and DB_NAME are fixed, so DEFAULT_POOL_SIZE caps
   # the one relevant PgBouncer (database,user) backend pool.
+  #
+  # CHAOS-3945: keep this budget current — it silently went stale once
+  # already. Every long-lived process below holds one session on this
+  # endpoint for its whole lifetime, and each replica costs THREE backends:
+  # two from WORKER_DATABASE_MAX_CONNS (a pgxpool) plus one long-lived River
+  # notifier session that sits outside that pool budget. Services declared in
+  # deploy/docker-compose/compose.go-workers.yml at replicas: 1 each:
+  #   go-worker-sync, go-worker-heavy, go-worker-ops, go-worker-sync-provider,
+  #   go-reconciler, go-scheduler,
+  #   go-stream-external, go-stream-ingest, go-stream-pagerduty
+  # = 9 processes x 3 backends = 27, plus occasional go-workerctl invocations
+  # and rolling-restart overlap (a stopping container's session lingers until
+  # server_idle_timeout, so an old and a new replica can briefly both hold
+  # one). DEFAULT_POOL_SIZE below (36) is that 27 plus headroom for both. If
+  # you add a new long-lived service on this endpoint, or raise a replica
+  # count, recompute and update this list and the number together — do not
+  # bump the number alone. A derived formula was considered instead of a
+  # hardcoded default, but the service list only exists in
+  # compose.go-workers.yml's `services:` keys, which plain YAML cannot
+  # introspect at parse time, so the count is written out by hand here.
   pgbouncer-river-queue:
     profiles: ["pooler"]
     image: edoburu/pgbouncer:latest
@@ -439,10 +482,29 @@ services:
       POOL_MODE: session
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-27}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-36}
+      # CHAOS-3945: admin_users defaults to "postgres", which is not in this
+      # pooler's auth file (only the River queue role is). Without this,
+      # SHOW POOLS/SHOW CLIENTS/SHOW STATS are unreachable on exactly the
+      # pooler where saturation matters most.
+      ADMIN_USERS: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # CHAOS-3944: see pgbouncer above for why connection logging is off and
+      # log_stats/log_pooler_errors stay on (5.7s vs 16ms wait during/after a
+      # real incident, read off the once-a-minute stats line).
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
     ports:
       - "${PGBOUNCER_RIVER_QUEUE_PORT:-6433}:6433"
     networks: [dev-health]
+    healthcheck:
+      # CHAOS-3944: probe as the real pool role, not the default "postgres"
+      # OS user, so healthy means the pooler can serve (see pgbouncer above).
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6433", "-U", "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}", "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   # Coordinator locks also need one stable session. This endpoint is separate
   # from queue control so each role has an independently auditable hard cap.
@@ -461,9 +523,26 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN:-32}
       DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE:-11}
+      # CHAOS-3945: same admin-console gap as the queue pooler above — set
+      # ADMIN_USERS to this pooler's own role so SHOW POOLS/CLIENTS/STATS work.
+      ADMIN_USERS: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      # CHAOS-3944: see pgbouncer above for why connection logging is off and
+      # log_stats/log_pooler_errors stay on (5.7s vs 16ms wait during/after a
+      # real incident, read off the once-a-minute stats line).
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
     ports:
       - "${PGBOUNCER_RIVER_COORDINATOR_PORT:-6434}:6434"
     networks: [dev-health]
+    healthcheck:
+      # CHAOS-3944: probe as the real pool role, not the default "postgres"
+      # OS user, so healthy means the pooler can serve (see pgbouncer above).
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6434", "-U", "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}", "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   clickhouse_data:

@@ -40,7 +40,7 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.QueueSessionClientConnections != 26 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 1 {
+	if summary.QueueSessionHeadroom != 10 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
@@ -55,10 +55,10 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 93 {
+	if summary.ServerConnectionFootprint != 102 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 7 {
+	if summary.ServerConnectionHeadroom != 98 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -127,7 +127,7 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.QueueSessionClientConnections != 26 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 1 {
+	if summary.QueueSessionHeadroom != 10 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
@@ -142,10 +142,10 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 93 {
+	if summary.ServerConnectionFootprint != 102 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 7 {
+	if summary.ServerConnectionHeadroom != 98 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -166,7 +166,7 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.QueueSessionClientConnections != 22 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 5 {
+	if summary.QueueSessionHeadroom != 14 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
@@ -181,15 +181,22 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.DomainTransactionHeadroom != 942 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 93 {
+	if summary.ServerConnectionFootprint != 102 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 7 {
+	if summary.ServerConnectionHeadroom != 98 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
 
 func TestManifestRejectsHeavyOrOpsReplicaBudgetXPlusOne(t *testing.T) {
+	// CHAOS-3945 raised pgbouncer_queue_session_pool_size to 36 (headroom 10
+	// at the reviewed heavy=2/ops=2 baseline) so the queue pooler is no
+	// longer pinned at its connection cap in normal operation. That headroom
+	// also means a single extra replica (3) no longer overflows the budget;
+	// 9 replicas of either group is the smallest bump that still does
+	// (26 clients + 2*(9-2) = 40 > 36), so this still proves an unreviewed
+	// replica increase is caught rather than silently accepted.
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -206,11 +213,11 @@ func TestManifestRejectsHeavyOrOpsReplicaBudgetXPlusOne(t *testing.T) {
 					manifest.Processes[index].MaxReplicas = 2
 				}
 				if manifest.Processes[index].Name == tc.changed {
-					manifest.Processes[index].MaxReplicas = 3
+					manifest.Processes[index].MaxReplicas = 9
 				}
 			}
 			if _, err := manifest.Validate(registry); err == nil {
-				t.Fatalf("expected %s at three replicas to fail validation", tc.changed)
+				t.Fatalf("expected %s at nine replicas to fail validation", tc.changed)
 			}
 		})
 	}

@@ -950,6 +950,40 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 		t.Fatalf("first pass result=%+v prepares=%d", first, ledger.preparedPrepares)
 	}
 
+	// Production's second attempt does NOT arrive on the first attempt's
+	// session. It arrives on a fresh claim with a new owner and an advanced
+	// attempt count -- either released back to `dispatching` after a failed
+	// Complete, or recovered from an expired lease after a crash. Reusing the
+	// original session would test a retry shape production never takes, so
+	// re-claim here. The expired-lease path is the stricter of the two: it is
+	// the one that also sets Recovered.
+	retryAt := now.Add(10 * time.Minute)
+	retryClaim, err := session.Repository.Claim(context.Background(), ClaimRequest{
+		UnitID: claim.ID, OrgID: claim.OrgID, Owner: uuid.NewString(), Now: retryAt,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatalf("second attempt could not claim the unit: %v", err)
+	}
+	if retryClaim.Attempt <= claim.Attempt || retryClaim.Owner == claim.Owner ||
+		!retryClaim.Recovered {
+		t.Fatalf(
+			"retry claim must be a distinct attempt: attempt %d->%d owner_changed=%v recovered=%v",
+			claim.Attempt, retryClaim.Attempt, retryClaim.Owner != claim.Owner,
+			retryClaim.Recovered,
+		)
+	}
+	// The generation key is derived from the unit id alone (lease.go:146), so
+	// the advanced attempt must still resolve to the same durable artifact.
+	if retryClaim.GenerationKey() != claim.GenerationKey() {
+		t.Fatalf("generation drifted across attempts: %q -> %q",
+			claim.GenerationKey(), retryClaim.GenerationKey())
+	}
+	retrySession := &LeaseSession{
+		Repository: session.Repository, Claim: retryClaim, LeaseDuration: time.Minute,
+		Deadline: retryAt.Add(time.Hour), Now: func() time.Time { return retryAt },
+	}
+
 	// The durable artifact must be resumable. Recovery re-reads it through
 	// JSON, so a nil slice persisted as `null` fails here and nowhere earlier.
 	recovering := &staticCompleteRouteHandler{
@@ -957,8 +991,8 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	}
 	recoverySink := &memoryEffectSink{}
 	second, err := completeRouteExecutor(
-		now.Add(10*time.Minute), recovering, ledger, recoverySink,
-	).Execute(context.Background(), session, descriptor)
+		retryAt, recovering, ledger, recoverySink,
+	).Execute(context.Background(), retrySession, descriptor)
 	if err != nil {
 		t.Fatalf("recovery refused the snapshot this route prepared: %v", err)
 	}

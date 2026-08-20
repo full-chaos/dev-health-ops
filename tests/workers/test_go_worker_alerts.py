@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 RULES_PATH = ROOT / "alerts" / "rules.yml"
+GO_WORKERS_K8S_PATH = ROOT / "deploy" / "kubernetes" / "go-workers.yaml"
 
 
 def _go_worker_rules() -> list[dict[str, object]]:
@@ -90,6 +92,59 @@ def test_go_worker_alerts_keep_labels_low_cardinality_and_payload_free() -> None
     )
     for label in prohibited:
         assert label not in serialized
+
+
+def test_go_worker_telemetry_target_down_regex_matches_the_naming_convention_every_kubernetes_deployment_follows() -> (
+    None
+):
+    """CHAOS-3985: the job regex previously said "stream-runner", which is the
+    shared binary/image name -- no real manifest (compose, swarm, kubernetes,
+    or helm) ever deploys a unit literally named that; every one uses a
+    per-profile name (stream-external, stream-ingest, stream-pagerduty). The
+    regex could therefore never match any deployed target's job label under
+    any topology, REGARDLESS of what an operator's scrape config assigns as
+    the job name (adversarial codex review, CHAOS-3985): this test checks
+    the regex against Kubernetes Deployment *names*, which are evidence of
+    the naming convention the regex is meant to track, not proof of what
+    Prometheus's `job` label will actually be in production -- nothing in
+    this repo configures scraping, so no test here can prove that. It pins
+    the regex-vs-naming-convention typo fix and nothing stronger.
+    """
+    rules = _go_worker_rules()
+    alerts = {str(rule["alert"]): str(rule["expr"]) for rule in rules}
+    match = re.search(r'job=~"([^"]+)"', alerts["GoWorkerTelemetryTargetDown"])
+    assert match, "GoWorkerTelemetryTargetDown must filter on a job regex"
+    job_pattern = re.compile(match.group(1))
+
+    documents = list(
+        yaml.safe_load_all(GO_WORKERS_K8S_PATH.read_text(encoding="utf-8"))
+    )
+    deployment_names = [
+        document["metadata"]["name"]
+        for document in documents
+        if document
+        and document.get("kind") == "Deployment"
+        and document.get("metadata", {})
+        .get("labels", {})
+        .get("app.kubernetes.io/component")
+        == "go-worker"
+    ]
+    # Exact, not a loose lower bound: a Deployment silently losing its
+    # go-worker label or being removed must fail this test, not slip under
+    # a loose ">=".
+    assert len(deployment_names) == 9, (
+        "expected exactly the 9 go-worker Deployments this manifest "
+        f"currently declares; found {deployment_names!r} -- update this "
+        "count deliberately if the manifest's shape changed"
+    )
+    unmatched = [name for name in deployment_names if not job_pattern.fullmatch(name)]
+    assert not unmatched, (
+        f"GoWorkerTelemetryTargetDown's job regex {job_pattern.pattern!r} does "
+        f"not match deployed unit name(s) {unmatched!r} in "
+        f"{GO_WORKERS_K8S_PATH.relative_to(ROOT)} -- an operator following "
+        "this naming convention for their scrape job names would have "
+        "targets this alert can never see"
+    )
 
 
 def test_alert_names_are_unique_across_rule_file() -> None:

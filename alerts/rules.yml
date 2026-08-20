@@ -300,10 +300,32 @@ groups:
             The {{ $labels.pool }} PostgreSQL pool is using more than 85% of
             its configured connection budget.
 
+      # CHAOS-3985: the job regex names the deployed unit, not the shared
+      # binary/image name -- every real manifest (compose, swarm, kubernetes,
+      # helm) deploys the stream runner under a per-profile name
+      # (stream-external/stream-ingest/stream-pagerduty), never literally
+      # "stream-runner"; only the binary and container image are called that.
+      # The regex previously said stream-runner and so could never match any
+      # deployed target's job label under any topology.
+      #
+      # An absent()-based branch for "nothing is scraping this at all" was
+      # considered and deliberately dropped: this fleet is additive and
+      # default-off (Helm `goWorkers.enabled=false`, Kubernetes Deployments
+      # at `replicas: 0` -- see deploy/kubernetes/go-workers.yaml's own
+      # header comment), so a fully empty `up{job=~...}` vector is the
+      # NORMAL state whenever Go workers simply aren't enabled yet, not
+      # evidence a configured target went dark. absent() cannot tell those
+      # two conditions apart (adversarial codex review, CHAOS-3985) -- it
+      # would page on every default deployment. This alert therefore still
+      # only detects a target that scraped successfully at least once and
+      # then stopped; it structurally cannot detect "never configured to
+      # scrape in the first place" without a durable, non-metric signal for
+      # "Go workers are expected to be running right now" that doesn't yet
+      # exist. See the CHAOS-3985 ticket for the full reasoning.
       - alert: GoWorkerTelemetryTargetDown
         expr: |
           max by (job, instance) (
-            up{job=~"dev-health-go-(worker|scheduler|reconciler|stream-runner).*"}
+            up{job=~"dev-health-go-(worker|scheduler|reconciler|stream).*"}
           ) == 0
         for: 5m
         labels:

@@ -52,6 +52,8 @@ The Go foundations expose bounded Prometheus signals for:
 
 A database sample failure makes the metric unavailable. It must not be emitted as a zero. These metrics describe the coexistence foundation and do not imply that River owns production jobs.
 
+Every Go worker, scheduler, reconciler, and stream-runner process serves these on `:8080/metrics` (`internal/platform/health/server.go`). Nothing in this repository configures a Prometheus scrape target for that endpoint, in any deployment topology (Compose, Swarm, Kubernetes, or Helm) — that wiring is the operator's responsibility, same as the rest of this repo's monitoring stack (CHAOS-3985). The `alerts/rules.yml` `go_workers` rule group assumes a scrape job named `dev-health-go-(worker|scheduler|reconciler|stream).*` — whatever scrape mechanism you configure must assign job names matching that pattern, or the rules will silently never match. The Kubernetes manifest (`deploy/kubernetes/go-workers.yaml`) already provides a `dev-health-go-workers` Service with a named `metrics` port across every go-worker pod, ready for a scrape config or ServiceMonitor to target; Compose and Swarm service names do not currently carry the `dev-health-go-` prefix and need an explicit `job_name` override wherever they're scraped from.
+
 Use the checked-in `deploy/grafana/dashboards/go-workers.json` as the current dashboard example. Keep profile and route state visible so a healthy disabled process is not mistaken for an active production consumer.
 
 ## Provider and incident delivery

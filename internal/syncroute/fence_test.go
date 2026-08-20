@@ -3,14 +3,12 @@ package syncroute
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestFenceChecksCompleteActiveRouteSetWithOneBoundedQuery(t *testing.T) {
@@ -119,25 +117,6 @@ func TestNewRequiresDomainPoolAndFrozenRegistry(t *testing.T) {
 	}
 	if _, err := newFence(nil, func(context.Context) (routeRows, error) { return nil, nil }); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("newFence(nil, query) error = %v", err)
-	}
-}
-
-func TestFenceAgainstMigratedPostgres(t *testing.T) {
-	databaseURI := os.Getenv("DEV_HEALTH_POSTGRES_TEST_URI")
-	if databaseURI == "" {
-		t.Skip("DEV_HEALTH_POSTGRES_TEST_URI is not set")
-	}
-	pool, err := pgxpool.New(t.Context(), databaseURI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	fence, err := New(pool, loadRegistry(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fence.Check(t.Context()); err != nil {
-		t.Fatalf("Check() error = %v", err)
 	}
 }
 

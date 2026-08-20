@@ -151,7 +151,13 @@ jobs:
           echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
 
       - name: Run Go quality gate
-        run: bash ci/check_go.sh all
+        # `ci`, not `all`: CHAOS-3948 made `all` genuinely execute the full
+        # unsharded integration suite (~24m measured) instead of only
+        # planning it, which this job's 20m timeout cannot absorb and would
+        # duplicate the coverage the separate go-storage-integration-plan/
+        # -shard jobs below already provide, sharded and parallel. `ci` is
+        # byte-for-byte what this step ran before CHAOS-3948.
+        run: bash ci/check_go.sh ci
 
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh

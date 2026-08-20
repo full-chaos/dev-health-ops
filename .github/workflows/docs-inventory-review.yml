@@ -33,7 +33,11 @@ jobs:
           python-version: '3.14'
 
       - name: Install inventory dependency
-        run: python -m pip install 'PyYAML>=6.0.3'
+        # CHAOS-3948: pinned to the uv.lock version, same shape/fix as
+        # lint.yml's ruff pin (CHAOS-3946) -- a bare floor specifier resolves
+        # to whatever is newest on PyPI at CI run time, not the version
+        # contributors actually run locally via `uv sync`.
+        run: python -m pip install 'PyYAML==6.0.3'
 
       - name: Validate the frozen Phase 1 inventory and dispositions
         run: |

@@ -55,6 +55,33 @@ The API and sync workers need the same app client values. The redirect URI is th
 
 ## Worker and schedule settings
 
+!!! note "Go workers are configured by flags first (CHAOS-4020)"
+
+    The Go worker binaries (`dev-health-worker`, `dev-health-reconciler`,
+    `dev-health-scheduler`, `dev-health-stream-runner`) resolve every setting
+    that has a flag **flag > environment > default**. The forty
+    `WORKER_*_ENABLED` provider route switches and the `OTEL_*` variables have
+    no flag and stay environment-only. `--help` is their single discovery
+    surface: it lists each flag with the environment variable it falls back to
+    and its default, so this page is a reference for the fallback names rather
+    than the way to find an option.
+
+    The environment names below remain supported and are unchanged — the
+    Python producer reads the same `WORKER_*_ENABLED` route switches, so
+    renaming them would split producer and executor. What changed is that the
+    shipped Compose, Swarm, Kubernetes, and Helm surfaces now pass the
+    flag-backed settings in `command:`/`args:`, and an unknown flag is rejected
+    at startup instead of a misspelled variable sitting inert.
+
+    Ten credentials have **no** flag and must stay in the environment, because
+    a process argument is readable through `ps` and `docker inspect`:
+    `POSTGRES_URI`, `WORKER_DATABASE_URI`, `COORDINATOR_DATABASE_URI`,
+    `CLICKHOUSE_URI`, `VALKEY_URI`, `SETTINGS_ENCRYPTION_KEY`,
+    `SETTINGS_ENCRYPTION_SALT`, `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`,
+    `WORKER_OPERATIONAL_BRIDGE_TOKEN`.
+
+    See [Workers and jobs](../../operate/run/workers-and-jobs.md#start-a-go-worker-group).
+
 Generate current entries for:
 
 - Celery broker, result backend, queue lists, concurrency, and shutdown grace;
@@ -112,7 +139,7 @@ runs and 10,000,000–500,000,000 microUSD.
 
 For every generated entry, include:
 
-- key and supported aliases;
+- key and supported aliases, including the canonical CLI flag for Go worker settings;
 - type and validation;
 - required, optional, or conditional state;
 - default, if the runtime defines one;

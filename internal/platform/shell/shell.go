@@ -42,14 +42,10 @@ type ConfigureDependenciesWithLogger func(
 ) ([]lifecycle.Component, error)
 
 type Spec struct {
-	Service        string
-	Profiles       []string
-	DefaultProfile string
-	RequireQueues  bool
-	// UnreclaimableSweep registers --unreclaimable-sweep for services that own
-	// the CHAOS-4005 safety net. Flag-first with an env fallback, per
-	// CHAOS-4020's direction away from per-knob environment variables.
-	UnreclaimableSweep              bool
+	Service                         string
+	Profiles                        []string
+	DefaultProfile                  string
+	RequireQueues                   bool
 	ConfigureDependencies           ConfigureDependencies
 	ConfigureDependenciesWithLogger ConfigureDependenciesWithLogger
 }
@@ -59,15 +55,100 @@ type IO struct {
 	Stderr io.Writer
 }
 
-type repeatedStringFlag []string
-
-func (values *repeatedStringFlag) String() string {
-	return fmt.Sprint([]string(*values))
+// optionValue is the flag.Value backing every declared option.
+//
+// It deliberately stores the raw string rather than parsing here: the very same
+// value can arrive through the option's environment fallback, and one parser at
+// one site (config.Load) is what keeps a flag and its variable from disagreeing
+// about what "16m" or "true" means. Parse errors surface from there naming both
+// surfaces.
+type optionValue struct {
+	kind       config.Kind
+	repeatable bool
+	raw        string
+	set        bool
 }
 
-func (values *repeatedStringFlag) Set(value string) error {
-	*values = append(*values, value)
+func (value *optionValue) String() string {
+	if value == nil {
+		return ""
+	}
+	return value.raw
+}
+
+func (value *optionValue) Set(raw string) error {
+	if value.repeatable && value.set {
+		value.raw += "," + raw
+	} else {
+		value.raw = raw
+	}
+	value.set = true
 	return nil
+}
+
+// IsBoolFlag lets the flag package accept a bare --flag for boolean options
+// while still honoring the explicit --flag=false form.
+func (value *optionValue) IsBoolFlag() bool { return value.kind == config.KindBool }
+
+// registerOptions binds every option this service offers onto flags and returns
+// the bound values keyed by canonical flag name. A short alias is registered
+// against the same value, so -q and --queues are one setting rather than two
+// that could disagree.
+func registerOptions(flags *flag.FlagSet, spec Spec) map[string]*optionValue {
+	bound := make(map[string]*optionValue)
+	for _, option := range config.OptionsFor(spec.Service, spec.RequireQueues) {
+		if option.Secret {
+			continue
+		}
+		// Profiles are declared by the Spec, not by the registry's service
+		// list; a binary that declares none must not advertise the flag.
+		if option.Flag == "profile" && len(spec.Profiles) == 0 {
+			continue
+		}
+		value := &optionValue{
+			kind: option.Kind,
+			// Queue topology is the one place operators habitually repeat a
+			// flag instead of writing one comma-separated value.
+			repeatable: option.Flag == "queues" || option.Flag == "concurrency",
+		}
+		flags.Var(value, option.Flag, option.Usage)
+		if option.Short != "" {
+			flags.Var(value, option.Short, option.Usage)
+		}
+		for _, alias := range option.Aliases {
+			flags.Var(value, alias, option.Usage)
+		}
+		bound[option.Flag] = value
+	}
+	return bound
+}
+
+// overridesFrom collects the options the operator actually supplied, keyed by
+// the environment variable each one shadows. Only options that were set appear,
+// which is what makes the environment a fallback rather than a competitor.
+//
+// A flag whose value is blank ("--shutdown-timeout=") counts as NOT supplied
+// and is omitted, so the environment still resolves beneath it. Every
+// resolution site in config treats a blank value as unset -- envOrDefault,
+// durationEnv, boolEnv, and the durationArgumentOrEnv this replaced all trim
+// and fall through -- so an empty flag that shadowed a real environment value
+// would be the one place in the surface where blank meant "override with
+// nothing". That would silently drop a deployment's shutdown budget to the
+// package default and flip ShutdownTimeoutExplicit, which feeds the worker's
+// drain-budget decision.
+func overridesFrom(bound map[string]*optionValue) map[string]string {
+	overrides := make(map[string]string)
+	for _, option := range config.Options() {
+		value, registered := bound[option.Flag]
+		if !registered || !value.set || option.Env == "" {
+			continue
+		}
+		if strings.TrimSpace(value.raw) == "" {
+			continue
+		}
+		overrides[option.Env] = value.raw
+	}
+	return overrides
 }
 
 // resolveProfile owns runtime-profile selection end to end (CHAOS-3875). Only
@@ -105,6 +186,24 @@ func resolveProfile(
 	return chosen, nil
 }
 
+// warnEnvOnlySettings reports configuration that arrived through an
+// environment variable although a canonical flag exists for it.
+//
+// The environment fallback is retained for 12-factor compatibility and to make
+// the migration incremental, but a deployment still configured that way is not
+// visible in `docker compose config`, so it is worth one warning per start
+// rather than silence.
+func warnEnvOnlySettings(logger *slog.Logger, cfg config.Config) {
+	if len(cfg.EnvOnlySettings) == 0 {
+		return
+	}
+	logger.Warn(
+		"configuration supplied through environment variables",
+		"settings", strings.Join(cfg.EnvOnlySettings, ","),
+		"guidance", "pass these as flags in the deployed command so the configuration is visible where it is deployed",
+	)
+}
+
 // Main runs a production command and exits with its status.
 func Main(spec Spec) {
 	os.Exit(Execute(context.Background(), spec, os.Args[1:], os.LookupEnv, IO{
@@ -137,44 +236,36 @@ func Execute(
 
 	flags := flag.NewFlagSet(spec.Service, flag.ContinueOnError)
 	flags.SetOutput(streams.Stdout)
+	// --help is the single discovery surface for this binary's configuration
+	// (CHAOS-4020), so it is rendered from the option registry rather than from
+	// the flag package's own defaults listing: the registry is what carries the
+	// environment fallback names, the documented defaults, and the route
+	// vocabulary.
+	flags.Usage = func() {
+		fmt.Fprint(streams.Stdout, config.HelpText(spec.Service, spec.RequireQueues))
+	}
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
-	var selectedProfile *string
-	var selectedQueues repeatedStringFlag
-	var queueConcurrency repeatedStringFlag
-	var workerGroup, shutdownTimeout, unreclaimableSweep string
-	if len(spec.Profiles) > 0 {
-		selectedProfile = flags.String("profile", "", "runtime profile")
-	}
-	if spec.RequireQueues {
-		flags.Var(&selectedQueues, "queues", "registered queues to consume (comma-separated or repeatable)")
-		flags.Var(
-			&queueConcurrency,
-			"queue-concurrency",
-			"queue worker budgets as queue=workers entries (comma-separated or repeatable)",
-		)
-		flags.StringVar(&workerGroup, "worker-group", "", "stable worker group label for logs and metrics")
-		flags.StringVar(&shutdownTimeout, "shutdown-timeout", "", "graceful shutdown timeout")
-	}
-	if spec.UnreclaimableSweep {
-		flags.StringVar(
-			&unreclaimableSweep,
-			"unreclaimable-sweep",
-			"",
-			"unreclaimable dispatch sweep: off|shadow|active (default shadow). "+
-				"Setting active asserts that no Celery consumer serves provider "+
-				"units for this deployment",
-		)
-	}
+	bound := registerOptions(flags, spec)
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		// An unrecognized flag lands here and stops the process. This is the
+		// half of the contract an environment variable could never offer: a
+		// misspelled variable name is indistinguishable from an unset one and
+		// stays silently inert, which is how OTEL_SERVICE_NAMEi survived in
+		// production.
 		fmt.Fprintf(streams.Stderr, "argument error: %s\n", logging.RedactText(err.Error()))
+		fmt.Fprintf(streams.Stderr, "run %s --help for the full option list\n", spec.Service)
 		return 2
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(streams.Stderr, "argument error: positional arguments are not accepted")
 		return 2
+	}
+	var selectedProfile *string
+	if profile, registered := bound["profile"]; registered {
+		selectedProfile = &profile.raw
 	}
 
 	build := version.Current(spec.Service)
@@ -191,25 +282,24 @@ func Execute(
 		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
 		return 1
 	}
-	cfg, err := config.Load(config.Spec{
+	loadSpec := config.Spec{
 		Service:       spec.Service,
 		Profile:       profile,
 		RequireQueues: spec.RequireQueues,
-		Queues:        append([]string(nil), selectedQueues...),
-		QueueConcurrency: append(
-			[]string(nil), queueConcurrency...,
-		),
-		WorkerGroup:        workerGroup,
-		ShutdownTimeout:    shutdownTimeout,
-		UnreclaimableSweep: unreclaimableSweep,
-		LookupEnv:          lookup,
-	})
+		Overrides:     overridesFrom(bound),
+		LookupEnv:     lookup,
+	}
+	if queues, registered := bound["queues"]; registered && queues.set {
+		loadSpec.Queues = []string{queues.raw}
+	}
+	cfg, err := config.Load(loadSpec)
 	if err != nil {
 		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
 		return 1
 	}
 
 	logger := logging.NewJSON(streams.Stdout, cfg.LogLevel)
+	warnEnvOnlySettings(logger, cfg)
 	tracingComponent := tracing.Init(logger)
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	operatorHTTP, err := health.NewServer(health.ServerOptions{

@@ -382,19 +382,27 @@ be served by the handlers it actually constructed. A deployment that selects
 both queues; a worker that selects only `sync` must not claim `sync_provider`.
 The same exact queue and handler checks apply to every group.
 
-Use `--queues`, `--queue-concurrency`, `--worker-group`, and
+Use `-Q/--queues`, `-c/--concurrency`, `--worker-group`, and
 `--shutdown-timeout` to declare the process topology. Do not use a named worker
 preset or rely on a service name to select queues. The process reports the
 canonical queue set, per-queue concurrency, worker identity, one River client,
 and effective database limits in its startup and readiness evidence.
 
-The `sync.team_autoimport` handler still needs
-`WORKER_OPERATIONAL_BRIDGE_URL` and `WORKER_OPERATIONAL_BRIDGE_TOKEN` when the
-selected queue requires that bridge. The constructor fails closed on an empty
-origin or token. If the origin is plain HTTP rather than HTTPS, also set
-`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`, matching the deployment
-examples. These settings are dependency requirements for the selected queue;
-they are not queue-selection aliases.
+Since CHAOS-4020 the same is true of the *rest* of the configuration: run
+`dev-health-worker --help` for the full option list, the environment variable
+each flag falls back to, and its default. Resolution is flag > environment >
+default, an unknown flag is rejected at startup with exit status 2, and the
+manifests in this directory pass their configuration in `command:` so
+`docker compose config` shows what each container actually runs.
+
+The `sync.team_autoimport` handler still needs an operational bridge when the
+selected queue requires it: pass `--operational-bridge-url` and set
+`WORKER_OPERATIONAL_BRIDGE_TOKEN` in the environment (the token is a credential
+and has no flag). The constructor fails closed on an empty origin or token. If
+the origin is plain HTTP rather than HTTPS, also pass
+`--operational-bridge-allow-insecure=true`, matching the deployment examples.
+These settings are dependency requirements for the selected queue; they are not
+queue-selection aliases.
 
 ### Provider credentials the Go executor can decrypt
 

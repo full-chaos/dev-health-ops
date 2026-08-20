@@ -40,29 +40,49 @@ spec:
         - name: {{ $group.name }}
           image: {{ $group.image }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
-          {{- if $group.queues }}
-          {{- $parts := list }}
-          {{- range $queue := $group.queues }}
-          {{- $parts = append $parts (printf "%s=%v" $queue (index $group.queueConcurrency $queue)) }}
-          {{- end }}
+          # CHAOS-4020: worker configuration is flags. Every setting a Go
+          # binary reads that is not a credential is rendered here, so
+          # `helm template` and `kubectl describe` show the deployed
+          # configuration in one place instead of spreading it across a
+          # ConfigMap, a Secret, and per-group env. Credentials stay in env:
+          # an argument is visible to anyone who can read the pod spec.
           args:
+            {{- if $group.queues }}
+            {{- $parts := list }}
+            {{- range $queue := $group.queues }}
+            {{- $parts = append $parts (printf "%s=%v" $queue (index $group.queueConcurrency $queue)) }}
+            {{- end }}
             - {{ printf "--queues=%s" (join "," $group.queues) | quote }}
             - {{ printf "--queue-concurrency=%s" (join "," $parts) | quote }}
             - {{ printf "--worker-group=%s" $group.name | quote }}
-            - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
-          {{- end }}
-          env:
-            {{- if $group.runtimeProfile }}
-            - {name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}
             {{- end }}
-            - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            {{- with $group.runtimeProfile }}
+            - {{ printf "--profile=%s" . | quote }}
+            {{- end }}
+            - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
+            - "--http-addr=:8080"
+            {{- if $.Values.goWorkers.pgbouncer.enabled }}
+            - "--domain-transaction-pooler=true"
+            - "--queue-database-mode=session"
+            {{- if $coordinator }}
+            - "--coordinator-database-mode=session"
+            {{- end }}
+            {{- end }}
+            {{- /*
+              Per-group only, deliberately. A chart-wide extraArgs would append
+              every flag to every group, and options are scoped per binary --
+              --unreclaimable-sweep is reconciler-only, so a global entry would
+              make the worker, scheduler, and stream-runner pods exit 2 on an
+              unknown flag. Scope the flag to the group that accepts it.
+            */}}
+            {{- with $group.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
             {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
             # Explicit env beats the shared Secret mounted via envFrom below,
             # so Go pods get the native port while Python keeps HTTP.
             - {name: CLICKHOUSE_URI, value: {{ . | quote }}}
-            {{- end }}
-            {{- if not $group.queues }}
-            - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $group.terminationGracePeriodSeconds) | quote }}}
             {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool plus
@@ -70,14 +90,11 @@ spec:
             # the separate coordinator lock session endpoint.
             - name: POSTGRES_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: POSTGRES_URI}}
-            - {name: PGBOUNCER_TRANSACTION_MODE, value: "true"}
             - name: WORKER_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: WORKER_DATABASE_URI}}
-            - {name: WORKER_DATABASE_MODE, value: session}
             {{- if $coordinator }}
             - name: COORDINATOR_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}
-            - {name: COORDINATOR_DATABASE_MODE, value: session}
             {{- end }}
             {{- end }}
           envFrom:

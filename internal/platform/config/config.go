@@ -44,8 +44,14 @@ const (
 	// scripts/worker/provision_river_roles.sql (deployed environments).
 	defaultCoordinatorDatabaseRole = "devhealth_coordinator"
 	defaultStreamReplicas          = 1
-	localStatusMappingPath         = "/app/config/status_mapping.yaml"
-	localInvestmentAreasPath       = "/app/config/investment_areas.yaml"
+	// The OpenTelemetry defaults mirror src/dev_health_ops/tracing.py exactly,
+	// so a sync run crossing the Python/Go boundary is sampled consistently.
+	defaultOTelServiceName   = "dev-health-ops"
+	defaultOTelEnvironment   = "production"
+	defaultOTelEndpoint      = "localhost:4317"
+	defaultOTelSampleRate    = 0.1
+	localStatusMappingPath   = "/app/config/status_mapping.yaml"
+	localInvestmentAreasPath = "/app/config/investment_areas.yaml"
 )
 
 const (
@@ -70,16 +76,24 @@ type Spec struct {
 	Service string
 	// Profile is already resolved and validated by the caller; config does not
 	// own profile selection (CHAOS-3875).
-	Profile          string
-	RequireQueues    bool
-	Queues           []string
-	QueueConcurrency []string
-	WorkerGroup      string
-	ShutdownTimeout  string
-	// UnreclaimableSweep is the raw --unreclaimable-sweep value. Empty means
-	// the flag was not given, in which case the environment is consulted.
-	UnreclaimableSweep string
-	LookupEnv          secrets.LookupEnv
+	Profile       string
+	RequireQueues bool
+	// Queues is flag-only on purpose (CHAOS-3875): every deploy artifact passes
+	// --queues, so a parallel environment path would only be a second way to
+	// say the same thing.
+	Queues []string
+	// Overrides carries the values the operator supplied as flags, keyed by the
+	// environment variable each flag shadows. Resolution is flag > env >
+	// default: an override is consulted first and the environment is the
+	// 12-factor fallback beneath it.
+	//
+	// This is precedence, not a conflict: CHAOS-4020 moves deployed
+	// configuration into `command:` while host .env files still carry the old
+	// variables, and a configuration that hard-failed whenever both surfaces
+	// named the same setting could not be rolled out one surface at a time.
+	// The shadowed environment value is reported at startup instead.
+	Overrides map[string]string
+	LookupEnv secrets.LookupEnv
 }
 
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
@@ -98,6 +112,11 @@ type Config struct {
 	// WorkerGroup is an observability identity only. It never selects queues or
 	// changes handler construction.
 	WorkerGroup string
+	// EnvOnlySettings names the settings that were resolved from the
+	// environment even though a canonical flag exists for them. The shell warns
+	// about each at startup so a deployment still configured the old way is
+	// visible rather than merely working.
+	EnvOnlySettings []string
 
 	HTTPAddress string
 	// UnreclaimableSweepMode is the resolved off|shadow|active choice for the
@@ -258,24 +277,30 @@ const (
 // dependencies. A command argument and its environment fallback may not both
 // be set.
 func Load(spec Spec) (Config, error) {
-	lookup := spec.LookupEnv
-	if lookup == nil {
-		lookup = os.LookupEnv
+	environment := spec.LookupEnv
+	if environment == nil {
+		environment = os.LookupEnv
 	}
+	if err := validateOverrides(spec.Overrides); err != nil {
+		return Config{}, err
+	}
+	lookup := layeredLookup(spec.Overrides, environment)
 
 	cfg := Config{Service: spec.Service}
+	cfg.EnvOnlySettings = envOnlySettings(spec, environment)
 	if err := validateName("service", cfg.Service); err != nil {
 		return Config{}, err
 	}
 
 	cfg.HTTPAddress = envOrDefault(lookup, "DEV_HEALTH_HTTP_ADDR", defaultHTTPAddress)
 	if _, _, err := net.SplitHostPort(cfg.HTTPAddress); err != nil {
-		return Config{}, fmt.Errorf("DEV_HEALTH_HTTP_ADDR must be a host:port address")
+		return Config{}, fmt.Errorf(
+			"%s must be a host:port address", settingLabel("DEV_HEALTH_HTTP_ADDR"),
+		)
 	}
 
 	var err error
-	cfg.ShutdownTimeout, err = durationArgumentOrEnv(
-		spec.ShutdownTimeout,
+	cfg.ShutdownTimeout, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_SHUTDOWN_TIMEOUT",
 		defaultShutdownTimeout,
@@ -285,17 +310,15 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.ShutdownTimeoutExplicit = durationArgumentOrEnvSet(
-		spec.ShutdownTimeout, lookup, "DEV_HEALTH_SHUTDOWN_TIMEOUT",
+	cfg.ShutdownTimeoutExplicit = settingConfigured(lookup, "DEV_HEALTH_SHUTDOWN_TIMEOUT")
+	// CHAOS-4005's sweep resolves through the same layered lookup as every
+	// other setting: --unreclaimable-sweep is an override keyed by
+	// SYNC_UNRECLAIMABLE_SWEEP, so flag > env > default falls out of the shared
+	// mechanism rather than a private branch. Empty means neither surface
+	// supplied a value and ParseSweepMode applies the shadow default.
+	cfg.UnreclaimableSweepMode = strings.TrimSpace(
+		envOrDefault(lookup, "SYNC_UNRECLAIMABLE_SWEEP", ""),
 	)
-	// Flag is canonical; the environment is only consulted when the flag was
-	// not given (CHAOS-4020).
-	cfg.UnreclaimableSweepMode = strings.TrimSpace(spec.UnreclaimableSweep)
-	if cfg.UnreclaimableSweepMode == "" {
-		if value, ok := lookup("SYNC_UNRECLAIMABLE_SWEEP"); ok {
-			cfg.UnreclaimableSweepMode = strings.TrimSpace(value)
-		}
-	}
 	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)
@@ -307,185 +330,11 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.LocalAllProviderRoutes = allProviderRoutes
-	for _, item := range []struct {
-		name   string
-		target *bool
-	}{
-		{
-			name:   "WORKER_LINEAR_WORK_ITEMS_ENABLED",
-			target: &cfg.WorkerLinearWorkItemsEnabled,
-		},
-		{
-			name:   "WORKER_JIRA_WORK_ITEMS_ENABLED",
-			target: &cfg.WorkerJiraWorkItemsEnabled,
-		},
-		{
-			name:   "WORKER_JIRA_INCIDENTS_ENABLED",
-			target: &cfg.WorkerJiraIncidentsEnabled,
-		},
-		{
-			name:   "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
-			target: &cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_REPO_METADATA_ENABLED",
-			target: &cfg.WorkerGithubRepoMetadataEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_REPO_METADATA_ENABLED",
-			target: &cfg.WorkerGitlabRepoMetadataEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_COMMITS_ENABLED",
-			target: &cfg.WorkerGitlabCommitsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_COMMIT_STATS_ENABLED",
-			target: &cfg.WorkerGitlabCommitStatsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_CICD_ENABLED",
-			target: &cfg.WorkerGitlabCICDEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_TESTS_ENABLED",
-			target: &cfg.WorkerGitlabTestsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_INCIDENTS_ENABLED",
-			target: &cfg.WorkerGitlabIncidentsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
-			target: &cfg.WorkerGitlabDeploymentsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
-			target: &cfg.WorkerGitlabFeatureFlagsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_FILES_ENABLED",
-			target: &cfg.WorkerGitlabFilesEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_BLAME_ENABLED",
-			target: &cfg.WorkerGitlabBlameEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_PRS_ENABLED",
-			target: &cfg.WorkerGitlabPRsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_PR_REVIEWS_ENABLED",
-			target: &cfg.WorkerGitlabPRReviewsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_PR_COMMENTS_ENABLED",
-			target: &cfg.WorkerGitlabPRCommentsEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_SECURITY_ENABLED",
-			target: &cfg.WorkerGitlabSecurityEnabled,
-		},
-		{
-			name:   "WORKER_GITLAB_WORK_ITEMS_ENABLED",
-			target: &cfg.WorkerGitlabWorkItemsEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_SERVICES_ENABLED",
-			target: &cfg.WorkerPagerDutyServicesEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
-			target: &cfg.WorkerPagerDutyBusinessServicesEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
-			target: &cfg.WorkerPagerDutyEscalationPoliciesEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
-			target: &cfg.WorkerPagerDutySchedulesEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
-			target: &cfg.WorkerPagerDutyOnCallsEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_USERS_ENABLED",
-			target: &cfg.WorkerPagerDutyUsersEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_TEAMS_ENABLED",
-			target: &cfg.WorkerPagerDutyTeamsEnabled,
-		},
-		{
-			name:   "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
-			target: &cfg.WorkerPagerDutyIncidentsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_PRS_ENABLED",
-			target: &cfg.WorkerGithubPRsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_PR_REVIEWS_ENABLED",
-			target: &cfg.WorkerGithubPRReviewsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_PR_COMMENTS_ENABLED",
-			target: &cfg.WorkerGithubPRCommentsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_CICD_ENABLED",
-			target: &cfg.WorkerGithubCICDEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_COMMITS_ENABLED",
-			target: &cfg.WorkerGithubCommitsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_DEPLOYMENTS_ENABLED",
-			target: &cfg.WorkerGithubDeploymentsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_SECURITY_ENABLED",
-			target: &cfg.WorkerGithubSecurityEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_FILES_ENABLED",
-			target: &cfg.WorkerGithubFilesEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_COMMIT_STATS_ENABLED",
-			target: &cfg.WorkerGithubCommitStatsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_BLAME_ENABLED",
-			target: &cfg.WorkerGithubBlameEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_TESTS_ENABLED",
-			target: &cfg.WorkerGithubTestsEnabled,
-		},
-		{
-			name:   "WORKER_GITHUB_WORK_ITEMS_ENABLED",
-			target: &cfg.WorkerGithubWorkItemsEnabled,
-		},
-	} {
-		fallback := false
-		if allProviderRoutes {
-			fallback, err = providerRoutePresetDefault(lookup, item.name)
-			if err != nil {
-				return Config{}, err
-			}
-		}
-		*item.target, err = boolEnv(lookup, item.name, fallback)
-		if err != nil {
-			return Config{}, err
-		}
+	if err := applyRoutes(&cfg, lookup, allProviderRoutes); err != nil {
+		return Config{}, err
 	}
 	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
-		return Config{}, fmt.Errorf("WORKER_GITHUB_CICD_ENABLED and WORKER_GITHUB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+		return Config{}, fmt.Errorf("github/cicd and github/tests are mutually exclusive: both delegate to one complete TestOps writer (WORKER_GITHUB_CICD_ENABLED, WORKER_GITHUB_TESTS_ENABLED)")
 	}
 	githubPRSocialAliases := 0
 	for _, enabled := range []bool{
@@ -498,10 +347,10 @@ func Load(spec Spec) (Config, error) {
 		}
 	}
 	if githubPRSocialAliases > 1 {
-		return Config{}, fmt.Errorf("WORKER_GITHUB_PRS_ENABLED, WORKER_GITHUB_PR_REVIEWS_ENABLED, and WORKER_GITHUB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
+		return Config{}, fmt.Errorf("github/prs, github/pr-reviews, and github/pr-comments are mutually exclusive: all delegate to one complete PR-social writer")
 	}
 	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
-		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+		return Config{}, fmt.Errorf("gitlab/cicd and gitlab/tests are mutually exclusive: both delegate to one complete TestOps writer (WORKER_GITLAB_CICD_ENABLED, WORKER_GITLAB_TESTS_ENABLED)")
 	}
 	gitlabPRSocialAliases := 0
 	for _, enabled := range []bool{
@@ -514,7 +363,7 @@ func Load(spec Spec) (Config, error) {
 		}
 	}
 	if gitlabPRSocialAliases > 1 {
-		return Config{}, fmt.Errorf("WORKER_GITLAB_PRS_ENABLED, WORKER_GITLAB_PR_REVIEWS_ENABLED, and WORKER_GITLAB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
+		return Config{}, fmt.Errorf("gitlab/prs, gitlab/pr-reviews, and gitlab/pr-comments are mutually exclusive: all delegate to one complete PR-social writer")
 	}
 	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
 		lookup,
@@ -769,8 +618,7 @@ func localAllProviderRoutes(lookup secrets.LookupEnv) (bool, error) {
 	if preset != "all" {
 		return false, fmt.Errorf("%s must be empty or all", providerRoutesPresetEnv)
 	}
-	environment, _ := lookup(devHealthEnv)
-	if strings.ToLower(strings.TrimSpace(environment)) != "local" {
+	if !environmentIsLocal(lookup) {
 		return false, fmt.Errorf("%s=all requires %s=local", providerRoutesPresetEnv, devHealthEnv)
 	}
 	return true, nil
@@ -1007,41 +855,6 @@ func durationEnv(
 	return value, nil
 }
 
-// durationArgumentOrEnvSet reports whether a duration was supplied by flag or
-// environment, as opposed to falling back to the package default.
-func durationArgumentOrEnvSet(argument string, lookup secrets.LookupEnv, key string) bool {
-	if strings.TrimSpace(argument) != "" {
-		return true
-	}
-	value, set := lookup(key)
-	return set && strings.TrimSpace(value) != ""
-}
-
-func durationArgumentOrEnv(
-	argument string,
-	lookup secrets.LookupEnv,
-	key string,
-	fallback, minimum, maximum time.Duration,
-) (time.Duration, error) {
-	argument = strings.TrimSpace(argument)
-	environment, environmentSet := lookup(key)
-	environment = strings.TrimSpace(environment)
-	if argument != "" && environmentSet && environment != "" {
-		return 0, fmt.Errorf("--shutdown-timeout conflicts with %s", key)
-	}
-	if argument == "" {
-		return durationEnv(lookup, key, fallback, minimum, maximum)
-	}
-	value, err := time.ParseDuration(argument)
-	if err != nil {
-		return 0, errors.New("--shutdown-timeout must be a duration")
-	}
-	if value < minimum || value > maximum {
-		return 0, fmt.Errorf("--shutdown-timeout must be between %s and %s", minimum, maximum)
-	}
-	return value, nil
-}
-
 func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	value := strings.ToLower(envOrDefault(lookup, "DEV_HEALTH_LOG_LEVEL", "info"))
 	switch value {
@@ -1054,7 +867,9 @@ func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return 0, fmt.Errorf("DEV_HEALTH_LOG_LEVEL must be debug, info, warn, or error")
+		return 0, fmt.Errorf(
+			"%s must be debug, info, warn, or error", settingLabel("DEV_HEALTH_LOG_LEVEL"),
+		)
 	}
 }
 
@@ -1099,64 +914,42 @@ func queueSelection(spec Spec, lookup secrets.LookupEnv) ([]string, error) {
 }
 
 func workerQueueRuntime(spec Spec, lookup secrets.LookupEnv, queues []string) (string, map[string]int, error) {
-	group, groupSet := lookup("DEV_HEALTH_WORKER_GROUP")
-	encoded, concurrencySet := lookup("DEV_HEALTH_QUEUE_CONCURRENCY")
-	group = strings.TrimSpace(group)
-	encoded = strings.TrimSpace(encoded)
-	argumentGroup := strings.TrimSpace(spec.WorkerGroup)
-	argumentConcurrency := append([]string(nil), spec.QueueConcurrency...)
+	group := strings.TrimSpace(envOrDefault(lookup, "DEV_HEALTH_WORKER_GROUP", ""))
+	encoded := strings.TrimSpace(envOrDefault(lookup, "DEV_HEALTH_QUEUE_CONCURRENCY", ""))
 	if !spec.RequireQueues {
-		if argumentGroup != "" || len(argumentConcurrency) > 0 ||
-			(groupSet && group != "") || (concurrencySet && encoded != "") {
+		if group != "" || encoded != "" {
 			return "", nil, fmt.Errorf("%s does not accept worker queue runtime settings", spec.Service)
 		}
 		return "", nil, nil
 	}
-	if argumentGroup != "" && groupSet && group != "" {
-		return "", nil, errors.New("--worker-group conflicts with DEV_HEALTH_WORKER_GROUP")
-	}
-	if len(argumentConcurrency) > 0 && concurrencySet && encoded != "" {
-		return "", nil, errors.New("--queue-concurrency conflicts with DEV_HEALTH_QUEUE_CONCURRENCY")
-	}
-	if argumentGroup != "" {
-		group = argumentGroup
-	}
-	groupSetting := "DEV_HEALTH_WORKER_GROUP"
-	if argumentGroup != "" {
-		groupSetting = "--worker-group"
-	}
 	if group == "" {
 		group = "worker"
 	}
+	groupSetting := settingLabel("DEV_HEALTH_WORKER_GROUP")
 	if len(group) > 64 {
 		return "", nil, fmt.Errorf("%s exceeds 64 characters", groupSetting)
 	}
 	if err := validateName(groupSetting, group); err != nil {
 		return "", nil, err
 	}
-	if len(argumentConcurrency) == 0 && encoded != "" {
-		argumentConcurrency = []string{encoded}
-	}
-	if len(argumentConcurrency) == 0 {
-		return "", nil, errors.New("queue concurrency is required")
+	if encoded == "" {
+		return "", nil, fmt.Errorf("%s is required", settingLabel("DEV_HEALTH_QUEUE_CONCURRENCY"))
 	}
 	concurrency := make(map[string]int)
-	for _, raw := range argumentConcurrency {
-		for _, item := range strings.Split(raw, ",") {
-			parts := strings.Split(item, "=")
-			if len(parts) != 2 {
-				return "", nil, errors.New("queue concurrency must use queue=workers entries")
-			}
-			queue := strings.TrimSpace(parts[0])
-			workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
-			if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
-				return "", nil, errors.New("queue concurrency has an invalid entry")
-			}
-			if _, duplicate := concurrency[queue]; duplicate {
-				return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
-			}
-			concurrency[queue] = workers
+	for _, item := range strings.Split(encoded, ",") {
+		parts := strings.Split(item, "=")
+		if len(parts) != 2 {
+			return "", nil, errors.New("queue concurrency must use queue=workers entries")
 		}
+		queue := strings.TrimSpace(parts[0])
+		workers, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if !validQueueName(queue) || parseErr != nil || workers < 1 || workers > 10_000 {
+			return "", nil, errors.New("queue concurrency has an invalid entry")
+		}
+		if _, duplicate := concurrency[queue]; duplicate {
+			return "", nil, fmt.Errorf("queue concurrency for %q is defined more than once", queue)
+		}
+		concurrency[queue] = workers
 	}
 	if len(concurrency) != len(queues) {
 		return "", nil, errors.New("queue concurrency must cover the selected queues exactly")

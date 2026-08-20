@@ -123,6 +123,18 @@ def _process_arguments(container: dict) -> dict[str, str]:
     return arguments
 
 
+def _optional_process_arguments(container: dict) -> dict[str, str]:
+    """Flags of a container whose command may not be a flag list at all.
+
+    go-contractcheck runs a subcommand rather than a configured worker, so a
+    selector that scans every service in a file cannot assume flag form.
+    """
+    raw = container.get("command") or container.get("args") or []
+    if not isinstance(raw, list) or not all(str(item).startswith("--") for item in raw):
+        return {}
+    return _process_arguments(container)
+
+
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -185,6 +197,17 @@ def _pagerduty_required_env() -> set[str]:
     return _bridge_secret_env() | _PAGERDUTY_CONFIG_ENV
 
 
+def _flag_variable_default(value: object, variable: str) -> str:
+    """A flag value that stays overridable through a Compose interpolation.
+
+    CHAOS-4020 moved worker configuration out of ``environment:`` and into
+    ``command:`` so ``docker compose config`` renders the deployed configuration
+    in one place. The operator-facing override keeps the same variable name and
+    the same default; only the surface it lands on changed.
+    """
+    return _compose_variable_default(value, variable)
+
+
 def _compose_variable_default(value: object, variable: str) -> str:
     match = re.fullmatch(rf"\$\{{{re.escape(variable)}:-(.*)\}}", str(value), re.DOTALL)
     assert match is not None, f"{variable} must stay overridable with a default"
@@ -195,7 +218,7 @@ def _compose_pagerduty_services(path: Path) -> dict[str, dict]:
     return {
         name: service
         for name, service in (_load_yaml(path).get("services") or {}).items()
-        if (service.get("environment") or {}).get("DEV_HEALTH_PROFILE")
+        if _optional_process_arguments(service).get("--profile")
         == _PAGERDUTY_RUNTIME_PROFILE
     }
 
@@ -232,12 +255,16 @@ def _kubernetes_container_env(container: dict) -> set[str]:
 
 
 def _kubernetes_container_profile(container: dict) -> str | None:
-    """The DEV_HEALTH_PROFILE this container actually runs with.
+    """The runtime profile this container actually runs with.
 
-    Inline env wins; otherwise the value is inherited from a referenced
-    ConfigMap. A label is metadata and does not reach the process, so it can
-    never stand in for this.
+    CHAOS-4020 made --profile the canonical surface, so the flag is checked
+    first; an inline env value is the 12-factor fallback beneath it, and a
+    referenced ConfigMap is beneath that. A label is metadata and does not reach
+    the process, so it can never stand in for any of these.
     """
+    flag = _optional_process_arguments(container).get("--profile")
+    if flag is not None:
+        return flag
     for item in container.get("env") or []:
         if item["name"] == "DEV_HEALTH_PROFILE":
             return item.get("value")
@@ -411,8 +438,8 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
         assert "no-new-privileges:true" in service["security_opt"]
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
         assert (
-            _compose_variable_default(
-                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+            _flag_variable_default(
+                _process_arguments(service)["--domain-transaction-pooler"],
                 "PGBOUNCER_TRANSACTION_MODE",
             )
             == "true"
@@ -431,8 +458,8 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
         assert service["user"] == "65532:65532"
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
         assert (
-            _compose_variable_default(
-                service["environment"]["PGBOUNCER_TRANSACTION_MODE"],
+            _flag_variable_default(
+                _process_arguments(service)["--domain-transaction-pooler"],
                 "PGBOUNCER_TRANSACTION_MODE",
             )
             == "true"
@@ -566,8 +593,12 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
     }
     for group, (service_name, runtime_profile) in stream_runtime_profiles.items():
         for services in (compose, swarm):
-            environment = services[service_name]["environment"]
-            assert environment["DEV_HEALTH_PROFILE"] == runtime_profile
+            service = services[service_name]
+            # CHAOS-4020: the runtime profile is a flag, so it is visible in
+            # the rendered `command:` rather than in a merged environment map.
+            assert _process_arguments(service)["--profile"] == runtime_profile
+            environment = service["environment"]
+            assert "DEV_HEALTH_PROFILE" not in environment
             assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
             assert "DEV_HEALTH_WORKER_GROUP" not in environment
         deployment = deployments[f"dev-health-{service_name}"]
@@ -662,20 +693,22 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
                 == f"{grace}s"
             )
         else:
+            # CHAOS-4020: coordinator and stream binaries carry the drain budget
+            # as --shutdown-timeout too, so every renderer states it the same
+            # way and `docker compose config` shows it without a merged
+            # environment map.
             assert (
-                compose[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                _process_arguments(compose[service_name])["--shutdown-timeout"]
                 == f"{grace}s"
             )
             assert (
-                swarm[service_name]["environment"]["DEV_HEALTH_SHUTDOWN_TIMEOUT"]
+                _process_arguments(swarm[service_name])["--shutdown-timeout"]
                 == f"{grace}s"
             )
-            shutdown = next(
-                item
-                for item in pod_spec["containers"][0]["env"]
-                if item["name"] == "DEV_HEALTH_SHUTDOWN_TIMEOUT"
+            assert (
+                _process_arguments(pod_spec["containers"][0])["--shutdown-timeout"]
+                == f"{grace}s"
             )
-            assert shutdown["value"] == f"{grace}s"
         assert helm[profile]["replicas"] == desired
         assert helm[profile]["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
@@ -1171,25 +1204,40 @@ def test_compose_surfaces_render_complete_pagerduty_bridge_env(
     services = _compose_pagerduty_services(path)
     assert bool(services) == required_declaration
 
-    required = _pagerduty_required_env()
+    # CHAOS-4020: every one of these settings except the bearer token moved
+    # from `environment:` to `command:`. The completeness requirement is
+    # unchanged -- the runner still cannot open readiness without all of them --
+    # only the surface each one is rendered on.
+    flag_for = {
+        "WORKER_OPERATIONAL_BRIDGE_URL": "--operational-bridge-url",
+        "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE": (
+            "--operational-bridge-allow-insecure"
+        ),
+        "PAGERDUTY_WEBHOOK_TRANSPORT": "--pagerduty-webhook-transport",
+    }
     for name, service in services.items():
         environment = service["environment"]
-        missing = required - set(environment)
+        arguments = _process_arguments(service)
+        missing = {
+            variable
+            for variable in _pagerduty_required_env()
+            if variable not in environment and flag_for.get(variable) not in arguments
+        }
         assert not missing, f"{path.name}:{name} drops {sorted(missing)}"
         _assert_insecure_optin_covers_endpoint(
-            _compose_variable_default(
-                environment["WORKER_OPERATIONAL_BRIDGE_URL"],
+            _flag_variable_default(
+                arguments["--operational-bridge-url"],
                 "WORKER_OPERATIONAL_BRIDGE_URL",
             ),
-            _compose_variable_default(
-                environment["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
+            _flag_variable_default(
+                arguments["--operational-bridge-allow-insecure"],
                 "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
             ),
             f"{path.name}:{name}",
         )
         assert (
-            _compose_variable_default(
-                environment["PAGERDUTY_WEBHOOK_TRANSPORT"],
+            _flag_variable_default(
+                arguments["--pagerduty-webhook-transport"],
                 "PAGERDUTY_WEBHOOK_TRANSPORT",
             )
             == _DEFAULT_WEBHOOK_TRANSPORT
@@ -1247,9 +1295,9 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
         encoding="utf-8"
     )
     assert (
-        "{name: DEV_HEALTH_PROFILE, value: {{ $group.runtimeProfile | quote }}}"
-        in workers_template
-    ), "the chart must render DEV_HEALTH_PROFILE from $group.runtimeProfile"
+        '- {{ printf "--profile=%s" . | quote }}' in workers_template
+        and "{{- with $group.runtimeProfile }}" in workers_template
+    ), "the chart must render --profile from $group.runtimeProfile"
 
     # Every Go worker group inherits the shared ConfigMap and Secret, so the chart's
     # value surface is what decides whether the runner is wired.

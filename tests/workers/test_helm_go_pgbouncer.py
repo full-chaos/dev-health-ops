@@ -226,8 +226,14 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
             environment["WORKER_DATABASE_URI"]["valueFrom"]["secretKeyRef"]["key"]
             == "WORKER_DATABASE_URI"
         )
-        assert environment["WORKER_DATABASE_MODE"]["value"] == "session"
-        assert environment["PGBOUNCER_TRANSACTION_MODE"]["value"] == "true"
+        # CHAOS-4020: the pool semantics are flags, not environment. Only the
+        # DSNs themselves stay in env, where a secretKeyRef can project them
+        # without exposing them in the pod's command line.
+        arguments = container["args"]
+        assert "--queue-database-mode=session" in arguments
+        assert "--domain-transaction-pooler=true" in arguments
+        assert "WORKER_DATABASE_MODE" not in environment
+        assert "PGBOUNCER_TRANSACTION_MODE" not in environment
         assert "MIGRATION_DATABASE_URI" not in environment
         assert "MIGRATION_DATABASE_URI_FILE" not in environment
         if profile in _COORDINATOR_GROUPS:
@@ -237,7 +243,8 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
                 ]
                 == "COORDINATOR_DATABASE_URI"
             )
-            assert environment["COORDINATOR_DATABASE_MODE"]["value"] == "session"
+            assert "--coordinator-database-mode=session" in arguments
+            assert "COORDINATOR_DATABASE_MODE" not in environment
         else:
             assert "COORDINATOR_DATABASE_URI" not in environment
             assert "COORDINATOR_DATABASE_MODE" not in environment
@@ -315,12 +322,19 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
         assert "DEV_HEALTH_QUEUES" not in environment
         assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
         assert "DEV_HEALTH_WORKER_GROUP" not in environment
-        assert container["args"] == [
+        # The queue topology leads the argument list; CHAOS-4020 appends the
+        # rest of the worker's configuration after it, so this pins the prefix
+        # and the settings it must carry rather than the exact whole list.
+        assert container["args"][:4] == [
             f"--queues={','.join(process['queues'])}",
             f"--queue-concurrency={_queue_concurrency(process)}",
             f"--worker-group={group}",
             f"--shutdown-timeout={process['shutdown_grace_seconds']}s",
         ]
+        assert "--http-addr=:8080" in container["args"]
+        assert not any(
+            argument.startswith("--profile=") for argument in container["args"]
+        ), f"{group} is a queue worker and must not run a runtime profile"
 
         scaler = next(
             doc

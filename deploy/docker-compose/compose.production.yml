@@ -412,6 +412,34 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
       DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+      # CHAOS-3944: PgBouncer defaults log_connections=1 and
+      # log_disconnections=1. The Go worker fleet cycles connections
+      # continuously, so those defaults are a permanent firehose carrying no
+      # diagnostic value -- measured at ~36 lines/minute across the three
+      # poolers, against 3/minute with them off.
+      #
+      # log_stats is deliberately LEFT ON -- do NOT add LOG_STATS: "0" here.
+      # That once-a-minute line is the only real telemetry PgBouncer emits,
+      # and it is what made a live pool-exhaustion incident diagnosable: the
+      # queue pooler reported `wait 5683209 us` (5.7 s mean connection wait)
+      # during the stall and `wait 16136 us` after recovery.
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
+    # CHAOS-3944: pg_isready with no -U falls back to the OS user
+    # `postgres`, which is not in PgBouncer's auth file. Every probe then
+    # logged `no such user: postgres` and STILL reported healthy, because
+    # pg_isready counts a rejection as "server responding". Naming this
+    # pooler's own role and database is what turns a port-open check into
+    # a can-serve check.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432",
+             "-U", "${POSTGRES_USER:?set POSTGRES_USER}",
+             "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     ports:
       - "${PGBOUNCER_PORT:-6432}:6432"
     networks:
@@ -440,6 +468,40 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
       DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-27}
+      # CHAOS-3944: PgBouncer defaults log_connections=1 and
+      # log_disconnections=1. The Go worker fleet cycles connections
+      # continuously, so those defaults are a permanent firehose carrying no
+      # diagnostic value -- measured at ~36 lines/minute across the three
+      # poolers, against 3/minute with them off.
+      #
+      # log_stats is deliberately LEFT ON -- do NOT add LOG_STATS: "0" here.
+      # That once-a-minute line is the only real telemetry PgBouncer emits,
+      # and it is what made a live pool-exhaustion incident diagnosable: the
+      # queue pooler reported `wait 5683209 us` (5.7 s mean connection wait)
+      # during the stall and `wait 16136 us` after recovery.
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
+      # CHAOS-3945: without ADMIN_USERS, admin_users defaults to `postgres`,
+      # which is not in this pooler's auth file, so `SHOW POOLS` / `SHOW
+      # CLIENTS` / `SHOW STATS` were refused on exactly the endpoint where
+      # saturation matters -- pool exhaustion had to be inferred from
+      # pg_stat_activity and a River elector stack trace.
+      ADMIN_USERS: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    # CHAOS-3944: pg_isready with no -U falls back to the OS user
+    # `postgres`, which is not in PgBouncer's auth file. Every probe then
+    # logged `no such user: postgres` and STILL reported healthy, because
+    # pg_isready counts a rejection as "server responding". Naming this
+    # pooler's own role and database is what turns a port-open check into
+    # a can-serve check.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6433",
+             "-U", "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}",
+             "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     ports:
       - "${PGBOUNCER_RIVER_QUEUE_PORT:-6433}:6433"
     networks: [dev-health]
@@ -461,6 +523,37 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN:-32}
       DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE:-11}
+      # CHAOS-3944: PgBouncer defaults log_connections=1 and
+      # log_disconnections=1. The Go worker fleet cycles connections
+      # continuously, so those defaults are a permanent firehose carrying no
+      # diagnostic value -- measured at ~36 lines/minute across the three
+      # poolers, against 3/minute with them off.
+      #
+      # log_stats is deliberately LEFT ON -- do NOT add LOG_STATS: "0" here.
+      # That once-a-minute line is the only real telemetry PgBouncer emits,
+      # and it is what made a live pool-exhaustion incident diagnosable: the
+      # queue pooler reported `wait 5683209 us` (5.7 s mean connection wait)
+      # during the stall and `wait 16136 us` after recovery.
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
+      # CHAOS-3945: see the queue pooler above -- admin_users must name this
+      # endpoint's own role or the SHOW commands are refused.
+      ADMIN_USERS: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+    # CHAOS-3944: pg_isready with no -U falls back to the OS user
+    # `postgres`, which is not in PgBouncer's auth file. Every probe then
+    # logged `no such user: postgres` and STILL reported healthy, because
+    # pg_isready counts a rejection as "server responding". Naming this
+    # pooler's own role and database is what turns a port-open check into
+    # a can-serve check.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6434",
+             "-U", "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}",
+             "-d", "${POSTGRES_DB:?set POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     ports:
       - "${PGBOUNCER_RIVER_COORDINATOR_PORT:-6434}:6434"
     networks: [dev-health]

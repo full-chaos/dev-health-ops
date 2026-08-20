@@ -101,7 +101,33 @@ services:
       DEFAULT_POOL_SIZE: "25"
       MIN_POOL_SIZE: "5"
       RESERVE_POOL_SIZE: "5"
+      # DB_USER above is `postgres`, so admin_users names a role that really
+      # is in the auth file here. The two River poolers in
+      # deploy/docker-compose/compose.production.yml did not have that luck --
+      # see CHAOS-3945.
       ADMIN_USERS: postgres
+      # CHAOS-3944: PgBouncer defaults log_connections=1 and
+      # log_disconnections=1. Even this single-pooler dev stack cycles
+      # connections continuously, so those defaults bury the useful lines.
+      #
+      # log_stats is deliberately LEFT ON -- do NOT add LOG_STATS: "0". That
+      # once-a-minute line is the only real telemetry PgBouncer emits (the
+      # `wait` field is what identifies a saturated pool).
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      LOG_POOLER_ERRORS: "1"
+    # CHAOS-3944: pg_isready with no -U falls back to the OS user `postgres`.
+    # That happens to be a real role on THIS pooler, but naming -U/-d
+    # explicitly is what makes the probe a can-serve check rather than a
+    # port-open one: pg_isready counts an auth rejection as "server
+    # responding" and reports healthy either way.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432",
+             "-U", "postgres", "-d", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     ports:
       - "6432:6432"
     depends_on:

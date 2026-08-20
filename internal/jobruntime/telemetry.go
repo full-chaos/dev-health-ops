@@ -49,6 +49,33 @@ const (
 	ReportRunLeaseResultFailed   ReportRunLeaseResult = "failed"
 )
 
+// DailyMetricsLeaseStage names which daily-metrics claim reported a lease it
+// could not take. The set is closed: partition and finalize are the only two
+// daily-metrics claims that hold a bounded lease a dead claimant can orphan.
+type DailyMetricsLeaseStage string
+
+const (
+	DailyMetricsLeaseStagePartition DailyMetricsLeaseStage = "partition"
+	DailyMetricsLeaseStageFinalize  DailyMetricsLeaseStage = "finalize"
+)
+
+// DailyMetricsLeaseResult is the bounded durable outcome of one daily-metrics
+// claim that met an existing lease. Snoozed means the lease was still live and
+// the claimant parked until it expires instead of reporting "nothing to do";
+// reclaimed means an expired lease was durably taken over. Only these two
+// outcomes keep a stalled run recoverable, so both are counted.
+type DailyMetricsLeaseResult string
+
+const (
+	DailyMetricsLeaseResultSnoozed   DailyMetricsLeaseResult = "snoozed"
+	DailyMetricsLeaseResultReclaimed DailyMetricsLeaseResult = "reclaimed"
+)
+
+type dailyMetricsLeaseLabels struct {
+	Stage  DailyMetricsLeaseStage
+	Result DailyMetricsLeaseResult
+}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -182,6 +209,7 @@ type MetricsCollector struct {
 	domainMismatch        map[string]uint64
 	syncLeaseExpired      map[syncLeaseResultLabels]uint64
 	reportRunLeaseExpired map[ReportRunLeaseResult]uint64
+	dailyMetricsLease     map[dailyMetricsLeaseLabels]uint64
 
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
@@ -198,6 +226,7 @@ type MetricsCollector struct {
 var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
 var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -230,6 +259,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		domainMismatch:            make(map[string]uint64, len(dimensions.DomainTypes)),
 		syncLeaseExpired:          make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
 		reportRunLeaseExpired:     make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		dailyMetricsLease:         make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		streamLag:                 make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamPending:             make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamOldestPending:       make(map[StreamLabels]float64, len(dimensions.Streams)),
@@ -288,6 +318,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, result := range reportRunLeaseResults() {
 		collector.reportRunLeaseExpired[result] = 0
+	}
+	for _, labels := range dailyMetricsLeaseSeries() {
+		collector.dailyMetricsLease[labels] = 0
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -522,6 +555,25 @@ func (collector *MetricsCollector) ObserveReportRunLeaseExpired(result ReportRun
 	return nil
 }
 
+// ObserveDailyMetricsLease records a daily-metrics claim that met an existing
+// lease and resolved it durably: either it parked for a live lease instead of
+// reporting success, or it took over an expired one. Callers must not record a
+// claim that simply found nothing to do -- that outcome is indistinguishable
+// from a healthy no-op and would make the counter useless as a stall signal.
+func (collector *MetricsCollector) ObserveDailyMetricsLease(
+	stage DailyMetricsLeaseStage,
+	result DailyMetricsLeaseResult,
+) error {
+	labels := dailyMetricsLeaseLabels{Stage: stage, Result: result}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.dailyMetricsLease[labels]; !ok {
+		return errors.New("daily metrics lease dimensions are not registered")
+	}
+	collector.dailyMetricsLease[labels]++
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -680,6 +732,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeJobs(&output)
 	collector.writeSyncLeases(&output)
 	collector.writeReportRunLeases(&output)
+	collector.writeDailyMetricsLeases(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
 	collector.writeConcurrencyBudgets(&output)
@@ -831,6 +884,15 @@ func (collector *MetricsCollector) writeReportRunLeases(output *strings.Builder)
 		writeUintSample(output, "worker_report_run_lease_expired_total", []metricLabel{
 			{"result", string(result)},
 		}, collector.reportRunLeaseExpired[result])
+	}
+}
+
+func (collector *MetricsCollector) writeDailyMetricsLeases(output *strings.Builder) {
+	writeMetadata(output, "worker_daily_metrics_lease_total", "Daily-metrics claims that met an existing lease, by stage and bounded durable result.", "counter")
+	for _, labels := range dailyMetricsLeaseSeries() {
+		writeUintSample(output, "worker_daily_metrics_lease_total", []metricLabel{
+			{"stage", string(labels.Stage)}, {"result", string(labels.Result)},
+		}, collector.dailyMetricsLease[labels])
 	}
 }
 
@@ -1033,6 +1095,19 @@ func syncLeaseResults() []SyncLeaseResult {
 
 func validReportRunLeaseResult(result ReportRunLeaseResult) bool {
 	return result == ReportRunLeaseResultRetrying || result == ReportRunLeaseResultFailed
+}
+
+// dailyMetricsLeaseSeries is the closed cross product of stages and results.
+// Every series is pre-seeded so a scrape distinguishes "no stalls" from "the
+// worker never reached this code".
+func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
+	series := make([]dailyMetricsLeaseLabels, 0, 4)
+	for _, stage := range []DailyMetricsLeaseStage{DailyMetricsLeaseStageFinalize, DailyMetricsLeaseStagePartition} {
+		for _, result := range []DailyMetricsLeaseResult{DailyMetricsLeaseResultReclaimed, DailyMetricsLeaseResultSnoozed} {
+			series = append(series, dailyMetricsLeaseLabels{Stage: stage, Result: result})
+		}
+	}
+	return series
 }
 
 func reportRunLeaseResults() []ReportRunLeaseResult {

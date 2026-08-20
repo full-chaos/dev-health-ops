@@ -160,8 +160,29 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
 		}
 	}
-	if strings.Contains(metrics.String(), " counter\n") ||
-		strings.Contains(metrics.String(), PredicateVersion) ||
+	// This replaced a blanket `!strings.Contains(metrics, " counter\n")`, whose
+	// intent is preserved verbatim from WritePrometheus: "It never accumulates
+	// snapshots: counters would misrepresent current queued work after rows are
+	// dispatched or claims expire." That rationale is about queued work, and it
+	// still holds for every metric it covered. This form is strictly tighter --
+	// the old substring check would have accepted a *gauge* named `_total`,
+	// which is the instrument that actually lies about a recovery event.
+	//
+	// Everything derived from an Observation snapshot must stay a gauge: a
+	// counter would keep reporting queued work that has since dispatched or
+	// expired. The exhausted-delivery total is the one deliberate exception --
+	// it counts events that already happened, where a gauge would instead
+	// erase the evidence on the next step (CHAOS-3951) -- so it is pinned by
+	// name here rather than blanket-permitting counters.
+	for _, line := range strings.Split(metrics.String(), "\n") {
+		if !strings.HasSuffix(line, " counter") {
+			continue
+		}
+		if line != "# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter" {
+			t.Fatalf("unexpected counter metric %q:\n%s", line, metrics.String())
+		}
+	}
+	if strings.Contains(metrics.String(), PredicateVersion) ||
 		strings.Contains(metrics.String(), DigestVersion) ||
 		strings.Contains(metrics.String(), canonicalObservedAt(testObservation().ObservedAt)) ||
 		strings.Contains(metrics.String(), "must-not-be-a-metric-label") {
@@ -670,4 +691,109 @@ func TestLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
+}
+
+// TestLoopAccumulatesExhaustedDeliveryRecoveriesAcrossSteps pins the recovery
+// total as monotonic. CHAOS-3951's reclaim returns a wedged coordinator
+// delivery to 'pending', which is indistinguishable from a healthy row the
+// moment it is republished; a repeat of this metric is the only thing that
+// separates a run that recovered once from one cycling forever. Reporting the
+// last step's count instead of the running total would show zero for every
+// scrape that did not land inside the same step as the reclaim.
+func TestLoopAccumulatesExhaustedDeliveryRecoveriesAcrossSteps(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
+	recoveries := []int64{2, 0, 1}
+	var index atomic.Int64
+	calls := make(chan struct{}, len(recoveries))
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		observation := testObservation()
+		position := int(index.Add(1)) - 1
+		if position < len(recoveries) {
+			observation.ExhaustedDeliveriesRecovered = recoveries[position]
+		}
+		calls <- struct{}{}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := loop.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	<-calls
+	assertRecoveryTotal(t, loop, 2)
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	for step := 1; step < len(recoveries); step++ {
+		ticker.ticks <- clock.Now().Add(time.Duration(step) * time.Second)
+		<-calls
+	}
+	// The middle step recovered nothing; the total must still carry the first
+	// step's two, and the last step's one must add rather than replace.
+	assertRecoveryTotal(t, loop, 3)
+}
+
+func assertRecoveryTotal(t *testing.T, loop *Loop, want int) {
+	t.Helper()
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	line := fmt.Sprintf("sync_dispatch_exhausted_delivery_recoveries_total %d\n", want)
+	if !strings.Contains(metrics.String(), line) {
+		t.Fatalf("metrics missing %q:\n%s", strings.TrimSuffix(line, "\n"), metrics.String())
+	}
+}
+
+// TestLoopCountsExhaustedDeliveryRecoveriesFromAFailedStep pins the count
+// against the step's own outcome. The repair commits before any later stage
+// runs, so its reclaims are durable even when the step as a whole fails.
+// Counting only successful steps would drop reclaims that happened while the
+// pipeline was degraded -- which is precisely when a delivery cycling on
+// exhaustion is a plausible cause of the degradation.
+func TestLoopCountsExhaustedDeliveryRecoveriesFromAFailedStep(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
+	calls := make(chan struct{}, 2)
+	var steps atomic.Int64
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		observation := testObservation()
+		defer func() { calls <- struct{}{} }()
+		// The loop refuses to start on a failed initial observation, so the
+		// failure under test has to be the second step.
+		if steps.Add(1) == 1 {
+			return observation, nil
+		}
+		observation.ExhaustedDeliveriesRecovered = 4
+		return observation, ErrUnknownKind
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := loop.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	<-calls
+	assertRecoveryTotal(t, loop, 0)
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+	select {
+	case err := <-loop.Errors():
+		if !errors.Is(err, ErrUnknownKind) {
+			t.Fatalf("loop error = %v, want ErrUnknownKind", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop never reported the failed step")
+	}
+	assertRecoveryTotal(t, loop, 4)
 }

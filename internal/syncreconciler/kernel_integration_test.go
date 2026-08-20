@@ -765,18 +765,40 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 			WHERE id::text = $1`, secondJobID, now.Add(5*time.Second)); err != nil {
 			t.Fatal(err)
 		}
+		// CHAOS-3951 reverses this case deliberately. It used to assert that a
+		// delivery at attempt = max_attempts stays excluded, on the rationale
+		// that domain retry budgets remain authoritative. For the coordinator
+		// kinds there is no domain budget -- River's MaxAttempts is the only
+		// one -- so excluding them deferred to nothing and left the SyncRun
+		// non-terminal forever. Exhaustion is now recoverable regardless of
+		// what the last error said, under its own evidence code.
+		//
+		// The genuine permanent-failure guard is the assertion above, which
+		// still holds: a discard at attempt 1 with an ordinary worker error is
+		// not reclaimed. That is the case where a budget really does remain.
 		exhausted, err := repair.Step(ctx, now.Add(6*time.Second), 10)
-		if err != nil || exhausted.Recovered != 0 {
-			t.Fatalf("exhausted rescue repair Step() = %#v, %v", exhausted, err)
+		if err != nil || exhausted.Recovered != 1 || exhausted.ExhaustedRecovered != 1 {
+			t.Fatalf("exhausted repair Step() = %#v, %v", exhausted, err)
 		}
+		var recoveredError string
+		var clearedJobID *string
 		if err := adminPool.QueryRow(ctx, `
-			SELECT status, transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`,
+			SELECT status, transport_job_id, last_error
+			FROM public.sync_dispatch_outbox WHERE id = $1`,
 			integrationDispatchID,
-		).Scan(&status, &secondJobID); err != nil {
+		).Scan(&status, &clearedJobID, &recoveredError); err != nil {
 			t.Fatal(err)
 		}
-		if status != "dispatched" {
-			t.Fatalf("real terminal failure reopened: status=%s job=%s", status, secondJobID)
+		if status != "pending" || recoveredError != riverDeliveryExhaustedEvidence {
+			t.Fatalf(
+				"exhausted delivery not reclaimed under its own evidence: status=%s last_error=%s",
+				status, recoveredError,
+			)
+		}
+		// The retired delivery must be unlinked, or the next repair pass would
+		// see the same discarded job still attached to a live row.
+		if clearedJobID != nil {
+			t.Fatalf("reclaimed row still points at the retired delivery %s", *clearedJobID)
 		}
 	})
 
@@ -843,6 +865,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		explainQuery = strings.ReplaceAll(explainQuery, "$2", "10")
 		explainQuery = strings.ReplaceAll(explainQuery, "$3", "'Stuck job rescued by JobRescuer'::text")
 		explainQuery = strings.ReplaceAll(explainQuery, "$4", "'river_unhandled_rescue'::text")
+		explainQuery = strings.ReplaceAll(explainQuery, "$5", "'river_delivery_exhausted'::text")
 		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+explainQuery)
 		if err != nil {
 			t.Fatal(err)

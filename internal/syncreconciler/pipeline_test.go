@@ -244,3 +244,133 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		t.Fatalf("missing terminal repair error = %v", err)
 	}
 }
+
+// TestMutationPipelineReportsExhaustedDeliveryRecoveries pins the count from
+// the terminal-delivery repair onto the observation the metrics loop reads.
+// The repair's own return value was previously discarded, which is why
+// CHAOS-3951's reclaim would otherwise be invisible: the row it rescues returns
+// to 'pending' and looks exactly like one that never wedged.
+func TestMutationPipelineReportsExhaustedDeliveryRecoveries(t *testing.T) {
+	pipeline, err := newRecoveryCountingPipeline(
+		t,
+		TerminalDeliveryRepairResult{Recovered: 3, ExhaustedRecovered: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.ExhaustedDeliveriesRecovered != 2 {
+		t.Fatalf(
+			"ExhaustedDeliveriesRecovered = %d, want the exhausted subset (2), not the total (3) or zero",
+			observation.ExhaustedDeliveriesRecovered,
+		)
+	}
+}
+
+// A repair reporting more exhausted recoveries than recoveries, or more
+// recoveries than its own window allows, is miscounting. Exporting that would
+// inflate the metric operators page on, so the step fails instead.
+func TestMutationPipelineRejectsImpossibleRecoveryCounts(t *testing.T) {
+	for name, result := range map[string]TerminalDeliveryRepairResult{
+		"exhausted exceeds recovered": {Recovered: 1, ExhaustedRecovered: 2},
+		"negative exhausted":          {Recovered: 1, ExhaustedRecovered: -1},
+		"recovered exceeds limit":     {Recovered: 18, ExhaustedRecovered: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pipeline, err := newRecoveryCountingPipeline(t, result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pipeline.Step(context.Background(), time.Now().UTC(), 17); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("err = %v, want ErrUnavailable", err)
+			}
+		})
+	}
+}
+
+func newRecoveryCountingPipeline(
+	t *testing.T,
+	terminal TerminalDeliveryRepairResult,
+) (*MutationPipeline, error) {
+	t.Helper()
+	return NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return terminal, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{CandidateDigest: "sha256:result"}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		DefaultMutationPipelineConfig(),
+	)
+}
+
+// TestMutationPipelineReportsRecoveriesWhenALaterStageFails closes the gap an
+// adversarial review found in the first attempt at this guard. Counting was
+// moved ahead of the observer's error path but NOT ahead of the materializer's
+// or the kernel's, both of which still returned a zero Observation -- so a
+// transient database error in either one silently discarded reclaims that the
+// repair had already committed, which is exactly the under-report that would
+// hold a cycling delivery below its alert threshold.
+func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
+	sentinel := errors.New("stage unavailable")
+	for name, stages := range map[string]struct{ failMaterializer, failKernel bool }{
+		"materializer fails": {failMaterializer: true},
+		"kernel fails":       {failKernel: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pipeline, err := NewMutationPipeline(
+				pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+					return LeaseRepairResult{}, nil
+				}),
+				pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+					return TerminalDeliveryRepairResult{Recovered: 4, ExhaustedRecovered: 4}, nil
+				}),
+				pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+					if stages.failMaterializer {
+						return MaterializerResult{}, sentinel
+					}
+					return MaterializerResult{}, nil
+				}),
+				pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+					if stages.failKernel {
+						return KernelResult{}, sentinel
+					}
+					return KernelResult{}, nil
+				}),
+				pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+					return Observation{CandidateDigest: "sha256:result"}, nil
+				}),
+				AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+				PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+				DefaultMutationPipelineConfig(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("err = %v, want the failing stage's error", err)
+			}
+			if observation.ExhaustedDeliveriesRecovered != 4 {
+				t.Fatalf(
+					"ExhaustedDeliveriesRecovered = %d, want 4: the repair already committed these reclaims",
+					observation.ExhaustedDeliveriesRecovered,
+				)
+			}
+		})
+	}
+}

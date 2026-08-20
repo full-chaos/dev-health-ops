@@ -189,6 +189,50 @@ groups:
             More than 10% of attempts for {{ $labels.kind }} are retrying,
             discarded, or canceled.
 
+      # CHAOS-3951. River bounds the sync-dispatch coordinator kinds at five
+      # attempts and nothing below them carries a second retry budget, so an
+      # exhausted delivery is reclaimed by the reconciler rather than left to
+      # wedge its SyncRun forever. One reclaim is that recovery working: a
+      # web-API outage outlived the attempt span and the run resumes.
+      #
+      # A sustained repeat is not. It means the same delivery is failing
+      # deterministically -- a bad bridge credential, a payload-shape bug --
+      # and the reclaim is cycling instead of healing. That is the wedge's
+      # replacement failure mode, and it is silent by construction: the
+      # reclaimed row returns to 'pending' and is indistinguishable from a
+      # healthy one. GoWorkerAttemptFailureRateHigh does not cover it, because
+      # a single looping run is a rounding error against fleet attempt volume
+      # -- which is exactly why the original wedge went unnoticed.
+      #
+      # Window sizing. One looping run reclaims every few minutes, so it
+      # clears this threshold on its own; a handful of unrelated runs each
+      # recovering once from the same outage does not.
+      #
+      # The case NO count threshold can separate is a fleet-wide outage
+      # recovery: many DISTINCT runs each reclaim once, at the same moment.
+      # Telling that apart from one run reclaiming many times would need a
+      # per-run label, and a run label is an organization identifier, which the
+      # PRD forbids on a metric. So the only lever left is how long a one-off
+      # spike keeps paging -- and a rolling window keeps an instantaneous spike
+      # above the line for the width of the window. 2h was chosen over a longer
+      # window for exactly that reason: a mass recovery pages for two hours
+      # instead of six, while a single looping run still clears the threshold
+      # comfortably (~7-8 reclaims per 2h at River's ~16-minute attempt span).
+      - alert: SyncDispatchExhaustedDeliveryRecoveryLoop
+        expr: |
+          sum(increase(sync_dispatch_exhausted_delivery_recoveries_total[2h])) > 3
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Sync-dispatch coordinator delivery is looping on exhaustion"
+          description: |
+            {{ $value | printf "%.0f" }} coordinator deliveries were reclaimed
+            after exhausting River's attempt budget in the last two hours. A
+            repeating reclaim means the compatibility bridge is failing
+            deterministically for a run, not recovering from an outage.
+
       - alert: GoWorkerDomainStateMismatch
         expr: |
           sum by (domain_type) (increase(worker_domain_state_mismatch_total[5m])) > 0

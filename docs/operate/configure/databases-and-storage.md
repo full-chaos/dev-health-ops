@@ -71,6 +71,37 @@ narrow `goWorkers.pgbouncer.postgres.networkPolicyCIDR`; the chart fails to
 render rather than silently blocking PgBouncer egress. The chart requires a
 digest-pinned PgBouncer image and adds TCP readiness probes for each endpoint.
 
+### Pooler logging and health probes
+
+The shipped Compose poolers set `LOG_CONNECTIONS=0` and `LOG_DISCONNECTIONS=0`.
+PgBouncer enables both by default, and a worker fleet that cycles connections
+continuously turns that into a permanent log firehose: roughly 36 lines per
+minute across the three poolers, against 3 per minute with them off. Nothing
+diagnostic is lost — the lines record that a connection happened, not how the
+pool is behaving.
+
+What is deliberately left on is `log_stats`, PgBouncer's once-a-minute
+aggregate line. Do not disable it. It is the only real telemetry PgBouncer
+emits without an exporter, and its `wait` field is the direct read on pool
+saturation: a healthy queue pooler reports a wait in the tens of milliseconds,
+while a saturated one reports seconds. `LOG_POOLER_ERRORS=1` keeps genuine
+rejections visible. If you want pooler telemetry in Prometheus rather than in
+logs, run a `pgbouncer_exporter` against the admin database — PgBouncer has no
+native Prometheus endpoint.
+
+Each pooler's healthcheck names its own role and database
+(`pg_isready -h localhost -p <port> -U <that pooler's role> -d <database>`).
+This matters more than it looks: `pg_isready` with no `-U` probes as the OS
+user `postgres`, which is not in the pooler's auth file, and it counts an
+authentication rejection as "server responding". Such a probe logs
+`no such user: postgres` on every interval and still reports the container
+healthy — it proves the port answers, never that the pooler can serve.
+
+The two River poolers also set `ADMIN_USERS` to their own role. PgBouncer
+otherwise defaults `admin_users` to `postgres`, so `SHOW POOLS`, `SHOW CLIENTS`
+and `SHOW STATS` are refused on exactly the endpoints where saturation matters
+and pool exhaustion has to be inferred from `pg_stat_activity` instead.
+
 ## Runtime roles
 
 Provision distinct unprivileged login roles for:

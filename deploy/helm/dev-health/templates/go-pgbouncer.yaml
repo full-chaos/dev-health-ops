@@ -75,6 +75,16 @@ spec:
             - {name: AUTH_TYPE, value: scram-sha-256}
             - {name: DEFAULT_POOL_SIZE, value: {{ $pooler.poolSize | quote }}}
             - {name: MAX_CLIENT_CONN, value: {{ $pooler.maxClientConnections | quote }}}
+          # CHAOS-3944: these are tcpSocket probes, so they prove the port
+          # answers, not that the pooler can serve. That is the same
+          # port-open-is-not-can-serve weakness the Compose healthchecks had
+          # before they were given an explicit -U/-d. An exec probe running
+          # `pg_isready -U <this pooler's role> -d <database>` would close the
+          # gap, but changing k8s probes has a different blast radius (a
+          # failing liveness probe restarts the pooler and drops every session
+          # on a session-mode endpoint), so it is deliberately left for its own
+          # change. Do not "fix" this by copying the Compose test in without
+          # first reworking the liveness/readiness split.
           readinessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 2, periodSeconds: 5}
           livenessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 10, periodSeconds: 10}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

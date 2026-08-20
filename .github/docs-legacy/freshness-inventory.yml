@@ -1,0 +1,60 @@
+- page: product/concepts.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views-index.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/investment-mix.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/investment-flows.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/investment-expense.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/code-hotspots.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/pr-flow.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/quadrants.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/flame-diagrams.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/capacity-planning.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/work-graph.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/ai-impact.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/ai-review-load.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/ai-risk.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'
+- page: user-guide/views/ai-attribution.md
+  disposition: refresh
+  owner: Dev Health documentation
+  last-reviewed: '2026-07-16'

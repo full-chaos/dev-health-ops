@@ -1,0 +1,123 @@
+# Webhook Setup Documentation
+
+This document describes how to configure webhooks for real-time data synchronization in Dev Health Ops.
+
+!!! note "Not the same thing as customer-push ingestion"
+    These provider webhooks (`/api/v1/webhooks/*`) are part of **FullChaos-managed sync** —
+    FullChaos reacting to GitHub/GitLab/Jira events on your behalf once you've connected an
+    integration. If instead you want to actively push normalized data from your own systems
+    (CI pipelines, ETL jobs, air-gapped environments) over a versioned REST API, see
+    [Customer Push Ingestion](customer-push-ingestion/overview.md) — a separate ingestion
+    path under `/api/v1/external-ingest/*`.
+
+## GitHub Configuration
+
+1. Go to your repository or organization **Settings**.
+2. Select **Webhooks** from the sidebar.
+3. Click **Add webhook**.
+4. Set **Payload URL** to `https://your-dev-health-instance.com/api/v1/webhooks/github`.
+5. Set **Content type** to `application/json`.
+6. Enter a **Secret** (must match `GITHUB_WEBHOOK_SECRET` environment variable).
+7. Select **Let me select individual events**:
+   - Pushes
+   - Pull requests
+   - Issues
+   - Deployments
+   - Workflow runs
+8. Click **Add webhook**.
+
+## GitLab Configuration
+
+1. Go to your project or group **Settings** > **Webhooks**.
+2. Set **URL** to `https://your-dev-health-instance.com/api/v1/webhooks/gitlab`.
+3. Set **Secret token** (must match `GITLAB_WEBHOOK_TOKEN` environment variable).
+4. Under **Trigger**, select:
+   - Push events
+   - Tag push events
+   - Merge request events
+   - Issue events
+   - Pipeline events
+   - Job events
+5. Click **Add webhook**.
+
+## Jira Configuration
+
+1. Log in as a Jira Administrator.
+2. Go to **System** > **Webhooks**.
+3. Click **Create a Webhook**.
+4. Set **URL** to `https://your-dev-health-instance.com/api/v1/webhooks/jira`.
+5. (Optional) Add `?secret=your_secret` to the URL if `JIRA_WEBHOOK_SECRET` is configured.
+6. Under **Events**, select:
+   - Issue: created, updated, deleted.
+7. Click **Create**.
+
+## Environment Variables
+
+Ensure the following variables are set in your deployment environment:
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret for GitHub signature validation |
+| `GITLAB_WEBHOOK_TOKEN` | Token for GitLab X-Gitlab-Token validation |
+| `JIRA_WEBHOOK_SECRET` | Optional secret for Jira validation |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (SaaS billing) |
+| `REDIS_URL` | Required for webhook delivery idempotency |
+
+## Stripe Configuration (SaaS Billing)
+
+Stripe webhooks are used for real-time subscription management in SaaS deployments. When a customer subscribes, upgrades, downgrades, or cancels, Stripe sends events directly to `dev-health-ops`.
+
+1. Go to your [Stripe Dashboard](https://dashboard.stripe.com/) > **Developers** > **Webhooks**.
+2. Click **Add endpoint**.
+3. Set **Endpoint URL** to `https://your-dev-health-instance.com/api/v1/billing/webhooks/stripe`.
+4. Under **Events to send**, select:
+   - `checkout.session.completed`
+   - `customer.subscription.created`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.created`
+   - `invoice.updated`
+   - `invoice.finalized`
+   - `invoice.paid`
+   - `invoice.payment_failed`
+   - `invoice.voided`
+   - `charge.refunded`
+   - `charge.refund.updated`
+5. Click **Add endpoint**.
+6. Copy the **Signing secret** and set it as `STRIPE_WEBHOOK_SECRET` in your environment.
+
+### Billing Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/billing/webhooks/stripe` | POST | Receives Stripe webhook events |
+| `/api/v1/billing/checkout` | POST | Creates a Stripe Checkout Session (auth required) |
+| `/api/v1/billing/portal` | POST | Creates a Stripe Customer Portal session (auth required) |
+| `/api/v1/billing/entitlements/{org_id}` | GET | Returns current tier, features, and limits for an org |
+
+### Required Environment Variables (Billing)
+
+| Variable | Description |
+|----------|-------------|
+| `STRIPE_SECRET_KEY` | Stripe API secret key |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret from step 6 above |
+| `STRIPE_PRICE_ID_TEAM` | Stripe Price ID for the Team tier product |
+| `STRIPE_PRICE_ID_ENTERPRISE` | Stripe Price ID for the Enterprise tier product |
+| `LICENSE_PRIVATE_KEY` | Ed25519 private key for signing JWT licenses (base64-encoded) |
+
+> **Note**: Stripe webhooks are only relevant for SaaS deployments. Self-hosted deployments use offline Ed25519 license keys and do not require Stripe configuration.
+
+### Email Notifications
+
+When billing events are processed, the webhook handler sends email notifications to the organization owner:
+
+| Stripe Event | Email Sent | Recipient |
+|-------------|-----------|-----------|
+| `invoice.paid` | Invoice receipt | Org owner |
+| `invoice.payment_failed` | Payment failed alert | Org owner |
+| `customer.subscription.updated` | Subscription changed (only if tier changed) | Org owner |
+| `customer.subscription.deleted` | Subscription cancelled | Org owner |
+
+Email delivery failures are logged but never prevent the webhook from returning a successful response. See [Email Setup](./email-setup.md) for provider configuration and troubleshooting.
+
+For full local/CI/ops guidance (Stripe CLI forwarding, replay/retry, reconciliation, and test cards), see the [Stripe Billing Runbook](./ops/stripe-billing-runbook.md).

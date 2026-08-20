@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "evidence_version": "v0-celery-baseline",
+  "capture_status": "recorded",
+  "scope": "local_one_shot",
+  "captured_date_local": "2026-07-20",
+  "captured_date_utc": "2026-07-21",
+  "source": "docker_stats_no_stream",
+  "authoritative_for_production": false,
+  "resources": [
+    {
+      "process": "worker",
+      "memory_value": 1.091,
+      "memory_unit": "GiB",
+      "cpu_percent": 0.07,
+      "pids": 13
+    },
+    {
+      "process": "worker-ingest",
+      "memory_value": 264.1,
+      "memory_unit": "MiB",
+      "cpu_percent": 0.02,
+      "pids": 3
+    },
+    {
+      "process": "worker-heavy",
+      "memory_value": 710.9,
+      "memory_unit": "MiB",
+      "cpu_percent": 0.02,
+      "pids": 17
+    },
+    {
+      "process": "worker-wi",
+      "role": "work_item_provider_medium",
+      "queues": [
+        "scheduler",
+        "sync",
+        "sync.linear",
+        "sync.jira",
+        "sync.launchdarkly",
+        "sync.jira.medium",
+        "sync.linear.medium"
+      ],
+      "concurrency": 2,
+      "memory_value": 661.3,
+      "memory_unit": "MiB",
+      "cpu_percent": 0.05,
+      "pids": 7
+    },
+    {
+      "process": "beat",
+      "memory_value": 215.9,
+      "memory_unit": "MiB",
+      "cpu_percent": 0.0,
+      "pids": 2
+    },
+    {
+      "process": "postgres",
+      "memory_value": 199.2,
+      "memory_unit": "MiB",
+      "cpu_percent": null,
+      "pids": null
+    },
+    {
+      "process": "pgbouncer",
+      "memory_value": 5.625,
+      "memory_unit": "MiB",
+      "cpu_percent": null,
+      "pids": null
+    },
+    {
+      "process": "valkey",
+      "memory_value": 95.75,
+      "memory_unit": "MiB",
+      "cpu_percent": null,
+      "pids": null
+    }
+  ],
+  "observability_check": {
+    "surface": "api_/metrics",
+    "result": "help_and_type_metadata_without_celery_samples",
+    "cause": "Celery custom metrics are process-local to workers, and workers expose no scrape endpoint.",
+    "required_production_source": "approved_OTLP_or_trace_capture_or_added_export_instrumentation"
+  },
+  "gate_effect": {
+    "phase_1_foundation": "not_blocked",
+    "production_canary": "still_blocked"
+  },
+  "redaction": {
+    "contains_raw_logs": false,
+    "contains_credentials_or_dsns": false,
+    "contains_tenant_identifiers": false
+  }
+}

@@ -82,21 +82,21 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 				handoffCtx context.Context,
 				transaction HandoffTransaction,
 				occurrence Occurrence,
-			) error {
+			) (HandoffOutcome, error) {
 				firstOccurrence = occurrence
 				if _, err := transaction.Exec(
 					handoffCtx,
 					"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 					occurrence.ID,
 				); err != nil {
-					return err
+					return "", err
 				}
 				close(firstEntered)
 				select {
 				case <-releaseFirst:
-					return nil
+					return OccurrenceMinted, nil
 				case <-handoffCtx.Done():
-					return handoffCtx.Err()
+					return "", handoffCtx.Err()
 				}
 			}),
 		)
@@ -115,8 +115,8 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 		ctx,
 		observedAt,
 		1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
-			return fmt.Errorf("second replica reached locked occurrence")
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return "", fmt.Errorf("second replica reached locked occurrence")
 		}),
 	)
 	if err != nil {
@@ -170,15 +170,15 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 			handoffCtx context.Context,
 			transaction HandoffTransaction,
 			occurrence Occurrence,
-		) error {
+		) (HandoffOutcome, error) {
 			if _, err := transaction.Exec(
 				handoffCtx,
 				"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 				occurrence.ID,
 			); err != nil {
-				return err
+				return "", err
 			}
-			return coordinatorErr
+			return "", coordinatorErr
 		}),
 	); !errors.Is(err, coordinatorErr) {
 		t.Fatalf("failed coordinator error = %v", err)
@@ -435,13 +435,13 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 		handoffCtx context.Context,
 		transaction HandoffTransaction,
 		occurrence Occurrence,
-	) error {
+	) (HandoffOutcome, error) {
 		if _, execErr := transaction.Exec(
 			handoffCtx,
 			"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 			occurrence.ID,
 		); execErr != nil {
-			return execErr
+			return "", execErr
 		}
 		postgresTransaction, ok := transaction.(postgresSchedulerTransaction)
 		if !ok {
@@ -456,7 +456,7 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 		if closeErr := postgresTransaction.Tx.Conn().Close(context.Background()); closeErr != nil {
 			t.Logf("closing simulated-crash connection: %v", closeErr)
 		}
-		return crashed
+		return "", crashed
 	}))
 	if err == nil {
 		t.Fatal("HandoffDue() succeeded despite a crashed connection")
@@ -494,6 +494,86 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 	}
 	if len(occurrences) != 1 {
 		t.Fatalf("post-crash HandoffDue() occurrences = %d, want 1", len(occurrences))
+	}
+}
+
+// CHAOS-3936: last_sync_at advances only when a sync COMPLETES. This fixture
+// never completes one, so before the fix every window recomputed the same
+// 11:00 instant, the ON CONFLICT DO NOTHING insert wrote nothing, and the
+// coordinator reported idempotent success -- forever, against real PostgreSQL.
+// Each window must instead durably add one new instant.
+func TestHandoffDuePostgresKeepsMintingWhileLastSyncStaysFrozen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"11:00", "12:00", "13:00"}
+	for index, observed := range []string{
+		"2026-01-01T12:00:00Z", "2026-01-01T13:00:00Z", "2026-01-01T14:00:00Z",
+	} {
+		result, err := repository.HandoffDueResult(ctx, at(observed), 4, NewOccurrenceCoordinator())
+		if err != nil {
+			t.Fatalf("window %d HandoffDueResult() err = %v", index, err)
+		}
+		if result.Minted() != 1 || len(result.Repeated) != 0 {
+			t.Fatalf("window %d minted=%d repeated=%d", index, result.Minted(), len(result.Repeated))
+		}
+		var frozen time.Time
+		if err := pool.QueryRow(ctx, `
+			SELECT last_sync_at FROM public.sync_configurations
+			WHERE id = '00000000-0000-4000-8000-000000003038'
+		`).Scan(&frozen); err != nil {
+			t.Fatal(err)
+		}
+		if !frozen.Equal(at("2026-01-01T10:00:00Z")) {
+			t.Fatalf("fixture no longer reproduces a run that never completes: last_sync_at = %s", frozen)
+		}
+		var minted []string
+		rows, err := pool.Query(ctx, `
+			SELECT to_char(scheduled_for AT TIME ZONE 'UTC', 'HH24:MI')
+			FROM public.scheduled_sync_occurrences
+			ORDER BY scheduled_for
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var instant string
+			if err := rows.Scan(&instant); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			minted = append(minted, instant)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(minted) != fmt.Sprint(want[:index+1]) {
+			t.Fatalf("after %d windows the occurrence ledger holds %v, want %v", index+1, minted, want[:index+1])
+		}
 	}
 }
 

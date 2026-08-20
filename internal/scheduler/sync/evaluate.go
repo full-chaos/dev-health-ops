@@ -68,9 +68,20 @@ func evaluateContext(ctx context.Context, candidate Candidate, observedAt time.T
 		result.Timezone = timezoneName
 	}
 
+	// CHAOS-3936: last_sync_at advances only when a sync COMPLETES, so a run
+	// that never completes freezes the base and every later tick recomputes the
+	// same already-minted instant forever -- the schedule stops making forward
+	// progress precisely when a failure means it must. The occurrence ledger
+	// records what was already handed off regardless of that run's outcome, so
+	// taking the later of the two keeps the base moving across a failed run
+	// while leaving a config that has never minted an occurrence (the Python
+	// dispatch path, or a brand new config) on the exact Python-parity base.
 	base := candidate.CreatedAt
 	if candidate.LastSyncAt != nil {
 		base = *candidate.LastSyncAt
+	}
+	if candidate.LastOccurrenceAt != nil && candidate.LastOccurrenceAt.After(base) {
+		base = *candidate.LastOccurrenceAt
 	}
 	result.Base = base.UTC()
 	next, fallback, err := nextOccurrenceContext(ctx, cronExpr, result.Base, result.Timezone)

@@ -52,7 +52,20 @@ type HandoffResult struct {
 	TimingEligible  int
 	UnsupportedCron int
 	InvalidCron     int
-	HandedOff       []Occurrence
+	// HandedOff is every occurrence durably present after this window,
+	// whichever window actually created it.
+	HandedOff []Occurrence
+	// Repeated is the subset of HandedOff that already existed when this
+	// window ran, so this window created no row for it. It exists because
+	// counting handoffs alone cannot tell a scheduler that is producing work
+	// from one that has re-confirmed the same frozen instant every tick for
+	// hours: both increment the handoff counter identically (CHAOS-3936).
+	Repeated []Occurrence
+}
+
+// Minted counts the occurrences this window actually created.
+func (result HandoffResult) Minted() int {
+	return len(result.HandedOff) - len(result.Repeated)
 }
 
 // HandoffTransaction is the same PostgreSQL transaction that protects the
@@ -64,24 +77,41 @@ type HandoffTransaction interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// HandoffOutcome distinguishes an occurrence a window actually created from
+// one that was already durably present. Both are successes and both permit the
+// marker to advance; only the first is scheduler productivity.
+type HandoffOutcome string
+
+const (
+	// OccurrenceMinted means this window created the occurrence row.
+	OccurrenceMinted HandoffOutcome = "minted"
+	// OccurrenceRepeated means the identical occurrence already existed, so
+	// this window wrote nothing. Sustained repetition is the signature of a
+	// schedule that has stopped advancing (CHAOS-3936).
+	OccurrenceRepeated HandoffOutcome = "repeated"
+)
+
 // Coordinator owns every non-timing eligibility decision, including
 // organization existence and feature entitlement, then persists the durable
-// handoff. Returning nil means the authorized handoff is present in the
+// handoff. Returning a nil error means the authorized handoff is present in the
 // supplied transaction and permits the kernel to advance the schedule marker.
+// The returned outcome must report whether this call created the row: reporting
+// OccurrenceMinted for a row that already existed makes an idle scheduler
+// indistinguishable from a productive one.
 type Coordinator interface {
-	Handoff(context.Context, HandoffTransaction, Occurrence) error
+	Handoff(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error)
 }
 
 // CoordinatorFunc adapts a function to Coordinator.
-type CoordinatorFunc func(context.Context, HandoffTransaction, Occurrence) error
+type CoordinatorFunc func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error)
 
 func (function CoordinatorFunc) Handoff(
 	ctx context.Context,
 	tx HandoffTransaction,
 	occurrence Occurrence,
-) error {
+) (HandoffOutcome, error) {
 	if function == nil {
-		return ErrInvalidTransactionRequest
+		return "", ErrInvalidTransactionRequest
 	}
 	return function(ctx, tx, occurrence)
 }
@@ -226,6 +256,15 @@ func (repository *Repository) HandoffDueResult(
 			locked.candidate.Job == nil {
 			continue
 		}
+		// The marker is computed from observedAt, not from the occurrence this
+		// window just minted, so a window that runs late leaves the instants
+		// between them unminted: the schedule resumes rather than backfilling.
+		// Combined with the base rebasing onto a long run's COMPLETION time,
+		// that is why a sync spanning a cron instant leaves that hour with no
+		// occurrence row at all (observed 2026-08-20 23:00 UTC). Recorded here
+		// deliberately: it is bounded and self-correcting, unlike the CHAOS-3936
+		// freeze above, and changing it changes how much work a recovering
+		// scheduler dispatches at once. See CHAOS-3936 for the decision.
 		nextRunAt, _, err := nextOccurrenceContext(
 			ctx,
 			locked.candidate.Job.ScheduleCron,
@@ -243,8 +282,15 @@ func (repository *Repository) HandoffDueResult(
 			observedAt,
 			nextRunAt,
 		)
-		if err := coordinator.Handoff(ctx, transaction, occurrence); err != nil {
+		outcome, err := coordinator.Handoff(ctx, transaction, occurrence)
+		if err != nil {
 			return HandoffResult{}, fmt.Errorf("handoff scheduler occurrence %s: %w", occurrence.ID, err)
+		}
+		if outcome != OccurrenceMinted && outcome != OccurrenceRepeated {
+			return HandoffResult{}, fmt.Errorf(
+				"handoff scheduler occurrence %s: %w: unknown outcome %q",
+				occurrence.ID, ErrInvalidTransactionRequest, outcome,
+			)
 		}
 		if err := ctx.Err(); err != nil {
 			return HandoffResult{}, err
@@ -263,6 +309,9 @@ func (repository *Repository) HandoffDueResult(
 			return HandoffResult{}, ErrScheduleMarkerLost
 		}
 		result.HandedOff = append(result.HandedOff, occurrence)
+		if outcome == OccurrenceRepeated {
+			result.Repeated = append(result.Repeated, occurrence)
+		}
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
@@ -303,6 +352,7 @@ func readLockedCandidates(
 			&job.LastRunAt,
 			&job.UpdatedAt,
 			&job.NextRunAt,
+			&locked.candidate.LastOccurrenceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -361,7 +411,13 @@ SELECT
     job.is_running,
     job.last_run_at,
     job.updated_at,
-    job.next_run_at
+    job.next_run_at,
+    (
+        SELECT MAX(occurrence.scheduled_for)
+        FROM public.scheduled_sync_occurrences AS occurrence
+        WHERE occurrence.org_id = config.org_id
+            AND occurrence.sync_config_id = config.id
+    )
 FROM public.sync_configurations AS config
 JOIN public.scheduled_jobs AS job
     ON job.org_id = config.org_id

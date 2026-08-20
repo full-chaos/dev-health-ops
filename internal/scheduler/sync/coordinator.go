@@ -26,18 +26,20 @@ func NewOccurrenceCoordinator() Coordinator {
 }
 
 // Handoff inserts or verifies the occurrence through the scheduler's locking
-// transaction. A matching row is an idempotent success.
+// transaction. A matching row is an idempotent success, reported as
+// OccurrenceRepeated so the caller can tell a window that produced work from
+// one that only re-confirmed a row an earlier window already wrote.
 func (OccurrenceCoordinator) Handoff(
 	ctx context.Context,
 	transaction HandoffTransaction,
 	occurrence Occurrence,
-) error {
+) (HandoffOutcome, error) {
 	if ctx == nil || transaction == nil || occurrence.ID == "" ||
 		occurrence.IdentityVersion != OccurrenceIdentityVersion ||
 		occurrence.ConfigID == "" || occurrence.OrgID == "" ||
 		occurrence.JobID == "" || occurrence.ScheduledFor.IsZero() ||
 		occurrence.ObservedAt.IsZero() {
-		return ErrInvalidTransactionRequest
+		return "", ErrInvalidTransactionRequest
 	}
 	var insertedID string
 	err := transaction.QueryRow(
@@ -53,12 +55,12 @@ func (OccurrenceCoordinator) Handoff(
 	).Scan(&insertedID)
 	if err == nil {
 		if insertedID != occurrence.ID {
-			return ErrOccurrenceConflict
+			return "", ErrOccurrenceConflict
 		}
-		return nil
+		return OccurrenceMinted, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("insert scheduled sync occurrence: %w", err)
+		return "", fmt.Errorf("insert scheduled sync occurrence: %w", err)
 	}
 
 	var identityVersion, orgID, configID, jobID string
@@ -75,18 +77,18 @@ func (OccurrenceCoordinator) Handoff(
 		&scheduledFor,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrOccurrenceConflict
+			return "", ErrOccurrenceConflict
 		}
-		return fmt.Errorf("verify scheduled sync occurrence: %w", err)
+		return "", fmt.Errorf("verify scheduled sync occurrence: %w", err)
 	}
 	if identityVersion != occurrence.IdentityVersion ||
 		orgID != occurrence.OrgID ||
 		configID != occurrence.ConfigID ||
 		jobID != occurrence.JobID ||
 		!scheduledFor.Equal(occurrence.ScheduledFor) {
-		return ErrOccurrenceConflict
+		return "", ErrOccurrenceConflict
 	}
-	return nil
+	return OccurrenceRepeated, nil
 }
 
 const schedulerInsertOccurrenceSQL = `

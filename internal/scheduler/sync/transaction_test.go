@@ -149,13 +149,13 @@ func TestHandoffDuePersistsHandoffBeforeAdvancingMarker(t *testing.T) {
 		_ context.Context,
 		handoff HandoffTransaction,
 		occurrence Occurrence,
-	) error {
+	) (HandoffOutcome, error) {
 		if handoff != transaction {
 			t.Fatal("coordinator did not receive the locking transaction")
 		}
 		transaction.events = append(transaction.events, "handoff")
 		received = occurrence
-		return nil
+		return OccurrenceMinted, nil
 	})
 
 	occurrences, err := repository.HandoffDue(context.Background(), observedAt, 2, coordinator)
@@ -205,9 +205,9 @@ func TestHandoffDueRollsBackWithoutMarkerWhenCoordinatorFails(t *testing.T) {
 		context.Background(),
 		observedAt,
 		1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
 			transaction.events = append(transaction.events, "handoff")
-			return handoffErr
+			return "", handoffErr
 		}),
 	)
 	if !errors.Is(err, handoffErr) {
@@ -236,9 +236,9 @@ func TestHandoffDueResultLeavesUnsupportedCronForCeleryWithoutMarkerMutation(t *
 	}
 	result, err := mutationRepository(transaction).HandoffDueResult(
 		context.Background(), observedAt, 1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
 			t.Fatal("unsupported cron reached coordinator")
-			return nil
+			return OccurrenceMinted, nil
 		}),
 	)
 	if !errors.Is(err, ErrSchedulerFallbackRequired) {
@@ -269,9 +269,9 @@ func TestHandoffDueResultFailsClosedBeforeMixedFallbackWindowWrites(t *testing.T
 	coordinatorCalls := 0
 	result, err := mutationRepository(transaction).HandoffDueResult(
 		context.Background(), observedAt, 2,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
 			coordinatorCalls++
-			return nil
+			return OccurrenceMinted, nil
 		}),
 	)
 	if !errors.Is(err, ErrSchedulerFallbackRequired) {
@@ -305,9 +305,9 @@ func TestHandoffDueRejectsLostMarkerAndRollsBackHandoff(t *testing.T) {
 		context.Background(),
 		observedAt,
 		1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
 			transaction.events = append(transaction.events, "handoff")
-			return nil
+			return OccurrenceMinted, nil
 		}),
 	)
 	if !errors.Is(err, ErrScheduleMarkerLost) {
@@ -400,8 +400,8 @@ func TestHandoffDueValidatesRequestBeforeOpeningTransaction(t *testing.T) {
 			return nil, errors.New("unexpected begin")
 		},
 	}
-	coordinator := CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
-		return nil
+	coordinator := CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+		return OccurrenceMinted, nil
 	})
 	for _, test := range []struct {
 		name        string
@@ -440,7 +440,9 @@ func TestDefaultOwnershipPreventsHandoffBeforeOpeningTransaction(t *testing.T) {
 		context.Background(),
 		time.Now(),
 		1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return OccurrenceMinted, nil
+		}),
 	)
 	if !errors.Is(err, ErrSchedulerMutationDisabled) {
 		t.Fatalf("HandoffDue() err = %v", err)

@@ -105,12 +105,12 @@ func readCandidates(ctx context.Context, rows candidateRows, capacity int) ([]Ca
 		var configCron, configTimezone, jobID, jobCron, jobTimezone *string
 		var jobStatus *int
 		var jobIsRunning *bool
-		var lastSyncAt, lastRunAt, updatedAt, nextRunAt *time.Time
+		var lastSyncAt, lastRunAt, updatedAt, nextRunAt, lastOccurrenceAt *time.Time
 		if err := rows.Scan(
 			&candidate.ConfigID, &candidate.Active, &configCron, &configTimezone,
 			&lastSyncAt, &candidate.CreatedAt,
 			&jobID, &jobCron, &jobTimezone, &jobStatus, &jobIsRunning,
-			&lastRunAt, &updatedAt, &nextRunAt,
+			&lastRunAt, &updatedAt, &nextRunAt, &lastOccurrenceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -118,6 +118,7 @@ func readCandidates(ctx context.Context, rows candidateRows, capacity int) ([]Ca
 			return nil, err
 		}
 		candidate.LastSyncAt = lastSyncAt
+		candidate.LastOccurrenceAt = lastOccurrenceAt
 		if configCron != nil {
 			candidate.ScheduleCron = *configCron
 		}
@@ -163,7 +164,13 @@ SELECT
     job.is_running,
     job.last_run_at,
     job.updated_at,
-    job.next_run_at
+    job.next_run_at,
+    (
+        SELECT MAX(occurrence.scheduled_for)
+        FROM public.scheduled_sync_occurrences AS occurrence
+        WHERE occurrence.org_id = config.org_id
+            AND occurrence.sync_config_id = config.id
+    )
 FROM public.sync_configurations AS config
 LEFT JOIN public.scheduled_jobs AS job
     ON job.org_id = config.org_id

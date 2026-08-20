@@ -61,8 +61,8 @@ func (ticker *testLoopTicker) Stop() {
 func newTestLoop(t *testing.T, stepper HandoffStepper, clock *testLoopClock) (*Loop, *health.Registry) {
 	t.Helper()
 	registry := health.NewRegistry(time.Second)
-	loop, err := newLoop(stepper, CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
-		return nil
+	loop, err := newLoop(stepper, CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+		return OccurrenceMinted, nil
 	}), LoopConfig{
 		PollInterval: minLoopPollInterval,
 		StepTimeout:  time.Second,
@@ -320,7 +320,9 @@ func TestLoopDrivesTheOccurrenceConsumerEveryWindow(t *testing.T) {
 		schedulerHandoffStepper(func() (HandoffResult, error) {
 			return HandoffResult{}, nil
 		}),
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return OccurrenceMinted, nil
+		}),
 		LoopConfig{
 			PollInterval: minLoopPollInterval,
 			StepTimeout:  time.Second,
@@ -367,7 +369,9 @@ func TestLoopFailsTheWindowWhenOccurrencesCannotBeConsumed(t *testing.T) {
 		schedulerHandoffStepper(func() (HandoffResult, error) {
 			return HandoffResult{}, nil
 		}),
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return OccurrenceMinted, nil
+		}),
 		LoopConfig{
 			PollInterval: minLoopPollInterval,
 			StepTimeout:  time.Second,
@@ -394,7 +398,9 @@ func TestLoopRequiresAnOccurrenceConsumer(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	_, err := newLoop(
 		schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }),
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return OccurrenceMinted, nil
+		}),
 		LoopConfig{
 			PollInterval: minLoopPollInterval,
 			StepTimeout:  time.Second,

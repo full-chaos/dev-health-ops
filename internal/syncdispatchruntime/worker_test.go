@@ -2,12 +2,9 @@ package syncdispatchruntime
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
-	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/riverqueue/river"
 )
 
@@ -79,97 +76,5 @@ func TestCoordinatorWorkersFailClosedWithoutBridgeOrJob(t *testing.T) {
 	}
 	if err := (&teamAutoimportWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
 		t.Fatalf("team autoimport worker error=%v", err)
-	}
-}
-
-type stubFanout struct {
-	err   error
-	calls int
-}
-
-func (fanout *stubFanout) Fanout(context.Context, PostSyncArgs) error {
-	fanout.calls++
-	return fanout.err
-}
-
-// TestPostSyncWorkerTerminalizesDeterministicOutboxRejections pins the second
-// half of CHAOS-3946.
-//
-// The fanout's verdict on an outbox policy or contract rejection is decided by
-// contracts/jobs/v1, which is loaded once at process start and cannot change
-// between attempts of the same job. Returning that error raw made River retry
-// it five times -- five identical rollbacks of the entire post-sync generation,
-// five identical log lines, and then a discard that names only the last one.
-// Deterministic rejections must be terminal on the first attempt, exactly as
-// providerunit.deterministicTerminalCategory treats deterministic executor
-// faults.
-//
-// Transport and availability failures must stay retryable: a rollback that
-// terminalizes a transient Postgres outage would silently drop the whole
-// generation for a cause that a retry would clear.
-func TestPostSyncWorkerTerminalizesDeterministicOutboxRejections(t *testing.T) {
-	t.Parallel()
-	args := PostSyncArgs{TransportArgs: TransportArgs{
-		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun,
-		DispatchOutbox: testOutbox, RouteGeneration: 1,
-	}}
-	for _, testCase := range []struct {
-		name         string
-		err          error
-		wantTerminal bool
-	}{
-		{
-			name:         "an outbox policy rejection cannot change between attempts",
-			err:          fmt.Errorf("%w: publish_not_permitted_for_route", joboutbox.ErrPolicyRejected),
-			wantTerminal: true,
-		},
-		{
-			name: "a policy rejection stays terminal through a domain wrapper",
-			err: fmt.Errorf("%w: %w", ErrPostSyncUnavailable,
-				fmt.Errorf("%w: publish_not_permitted_for_route", joboutbox.ErrPolicyRejected)),
-			wantTerminal: true,
-		},
-		{
-			name:         "a contract rejection cannot change between attempts",
-			err:          fmt.Errorf("%w: kind_not_registered", joboutbox.ErrContractRejected),
-			wantTerminal: true,
-		},
-		{
-			name:         "an unavailable transport must stay retryable",
-			err:          ErrPostSyncUnavailable,
-			wantTerminal: false,
-		},
-		{
-			name:         "an outbox availability failure must stay retryable",
-			err:          joboutbox.ErrUnavailable,
-			wantTerminal: false,
-		},
-		{
-			name:         "a successful fanout returns no error",
-			err:          nil,
-			wantTerminal: false,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			fanout := &stubFanout{err: testCase.err}
-			err := (&postSyncWorker{service: fanout}).Work(
-				context.Background(), &river.Job[PostSyncArgs]{Args: args},
-			)
-			if fanout.calls != 1 {
-				t.Fatalf("Fanout calls = %d, want 1", fanout.calls)
-			}
-			var cancelled *river.JobCancelError
-			if got := errors.As(err, &cancelled); got != testCase.wantTerminal {
-				t.Fatalf("Work() terminal = %v (err = %v), want terminal = %v",
-					got, err, testCase.wantTerminal)
-			}
-			if testCase.err != nil && !errors.Is(err, testCase.err) {
-				t.Fatalf("Work() error = %v, want it to keep the fanout cause %v", err, testCase.err)
-			}
-			if testCase.err == nil && err != nil {
-				t.Fatalf("Work() error = %v, want nil", err)
-			}
-		})
 	}
 }

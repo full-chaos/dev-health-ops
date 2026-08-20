@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -149,62 +150,92 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 			return err
 		}
 	}
-	service.publishTeamAutoimport(ctx, tx, *plan)
+	if err := service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrPostSyncUnavailable
 	}
 	return nil
 }
 
-// publishTeamAutoimport stages the team-autoimport handoff as BEST EFFORT: a
-// failure is recorded and swallowed, never propagated.
+// publishTeamAutoimport stages the team-autoimport handoff without letting a
+// verdict that can never change take the metric fanout down with it.
 //
-// This is the property the Python implementation states in writing at
-// src/dev_health_ops/workers/post_sync_dispatch.py:285-302 -- "Best-effort: a
-// dispatch failure must never break post-sync metric fan-out" -- and which the
-// Go port inverted. Team autoimport is a work-RELATIONSHIP refresh (teams,
-// projects, members); the rest of the fanout is work-UNIT metric work. They
-// have different lifecycles and Python dispatches the refresh as a separate
-// credential-resolving task for exactly that reason. Coupling the two meant a
-// single rejected publish discarded the complexity run, the daily dispatch, the
-// workgraph build, the investment materialize, the membership backfill and the
-// DORA run staged in the same transaction, on every sync, for every
-// organization with auto_import_teams enabled (CHAOS-3946).
+// src/dev_health_ops/workers/post_sync_dispatch.py:285-302 states the contract:
+// "Best-effort: a dispatch failure must never break post-sync metric fan-out."
+// Python dispatches this as a SEPARATE credential-resolving task, deliberately
+// outside the metric fanout, because a work-RELATIONSHIP refresh (teams,
+// projects, members) and work-UNIT metric work have different lifecycles. The
+// Go port published it inside the metric transaction as the last statement
+// before Commit and returned its error raw, so one permanently-rejected publish
+// discarded the complexity run, the daily dispatch, the workgraph build, the
+// investment materialize, the membership backfill and the DORA run with it, on
+// every sync, for every organization with auto_import_teams enabled
+// (CHAOS-3946).
 //
-// The publish runs inside its own SAVEPOINT. Swallowing the error alone would
-// not be enough: a failure that had already issued SQL leaves the enclosing
-// transaction aborted, so the following Commit would fail and the metric fanout
-// would still be lost -- silently, which is worse. Rolling back to the
-// savepoint returns the enclosing transaction to a committable state whatever
-// the writer did.
+// Only a DETERMINISTIC rejection is swallowed. An outbox policy or contract
+// rejection is a verdict about the checked-in contract and the envelope shape:
+// re-running the fanout reaches it again, so propagating it would only rebuild
+// the same transaction to throw it away again. Everything else -- a savepoint
+// that cannot be opened, a transient Postgres failure, a failed release -- is
+// returned, because the fanout is duplicate-stable (proved by
+// TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration) and a
+// retry re-stages all six handoffs AND gives this one another chance.
+// Swallowing those would trade a recoverable blip for a permanently missing
+// refresh whose only trace is a log line.
+//
+// The publish runs inside its own SAVEPOINT. Swallowing alone is not enough: a
+// rejection that had already issued SQL leaves the enclosing transaction
+// aborted, so the following Commit would fail and the metric fanout would be
+// lost anyway -- silently, which is worse than the loud failure this ticket
+// reported. Rolling back to the savepoint returns the enclosing transaction to
+// a committable state.
+//
+// A failed RELEASE SAVEPOINT is deliberately NOT followed by a rollback of the
+// nested transaction: pgx sets tx.closed before returning the error (tx.go:191)
+// and closes the underlying connection when the transaction status is not idle,
+// so that rollback would be a no-op returning ErrTxClosed while reading as
+// recovery. The error is returned instead and the outer Commit is skipped.
 //
 // Team autoimport takes no prerequisite completion key and produces none, so
 // nothing else in the fanout depends on it. The ordered chain
 // (complexity -> daily -> workgraph -> investment -> membership) keeps its
-// all-or-nothing transaction: those handoffs DO depend on each other's durable
+// all-or-nothing transaction: those handoffs DO pass each other's durable
 // completion fences.
 func (service *NativePostSyncService) publishTeamAutoimport(
 	ctx context.Context,
 	tx pgx.Tx,
 	plan PostSyncPlan,
-) {
+) error {
 	if !plan.TeamAutoimport {
-		return
+		return nil
 	}
 	nested, err := tx.Begin(ctx)
 	if err != nil {
-		service.observeTeamAutoimportFailure(ctx, plan, err)
-		return
+		return err
 	}
 	if err := service.teamImport.PublishTx(ctx, nested, plan); err != nil {
-		_ = nested.Rollback(ctx)
+		if rollbackErr := nested.Rollback(ctx); rollbackErr != nil {
+			return err
+		}
+		if !deterministicHandoffRejection(err) {
+			return err
+		}
 		service.observeTeamAutoimportFailure(ctx, plan, err)
-		return
+		return nil
 	}
-	if err := nested.Commit(ctx); err != nil {
-		_ = nested.Rollback(ctx)
-		service.observeTeamAutoimportFailure(ctx, plan, err)
-	}
+	return nested.Commit(ctx)
+}
+
+// deterministicHandoffRejection reports whether the outbox refused the envelope
+// on a rule that a later attempt of the same fanout would apply identically:
+// the kind's registered route, its contract version, and the envelope's own
+// shape. Availability and transport failures are excluded -- those a retry can
+// clear.
+func deterministicHandoffRejection(err error) bool {
+	return errors.Is(err, joboutbox.ErrPolicyRejected) ||
+		errors.Is(err, joboutbox.ErrContractRejected)
 }
 
 // PostSyncTeamAutoimportFailedMessage is the log message emitted when the

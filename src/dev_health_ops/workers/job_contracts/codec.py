@@ -72,6 +72,9 @@ _UUID = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
+# W3C Trace Context traceparent: version-traceid-spanid-flags, all lowercase
+# hex (https://www.w3.org/TR/trace-context/#traceparent-header-field-values).
+_TRACE_PARENT = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 _MAX_JSON_DEPTH = 16
 _REMAINING_PAYLOAD_TYPES = (
     RemainingCapacityPayload,
@@ -185,6 +188,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         trace_parent = None
     else:
         trace_parent = _expect_string(trace_parent_value, "trace_parent")
+        _validate_trace_parent(trace_parent)
 
     domain_raw = _expect_object(
         envelope["domain"], required={"type", "id"}, optional=set(), label="domain"
@@ -351,8 +355,13 @@ def encode_envelope(envelope: Envelope) -> bytes:
     document["idempotency_key"] = envelope.idempotency_key
     # Position matches internal/jobcontract.wireEnvelope's field order exactly:
     # canonical bytes must be identical between Python and Go for the shared
-    # payload_hash to match (CHAOS-3993).
-    if envelope.trace_parent is not None:
+    # payload_hash to match (CHAOS-3993). Checked truthy, not `is not None`:
+    # Go's `omitempty` drops an empty string, so an explicit "" here would
+    # otherwise emit a key Go's own canonical serializer never would, making
+    # the two languages' canonical bytes -- and payload_hash -- disagree for
+    # that one input.
+    if envelope.trace_parent:
+        _validate_trace_parent(envelope.trace_parent)
         document["trace_parent"] = envelope.trace_parent
     document.update(
         {
@@ -693,6 +702,11 @@ def _validate_safe_id(label: str, value: str, maximum: int) -> None:
 def _validate_uuid(label: str, value: str) -> None:
     if not _UUID.fullmatch(value):
         raise ContractDecodeError(f"{label} must be a lowercase UUID")
+
+
+def _validate_trace_parent(value: str) -> None:
+    if not _TRACE_PARENT.fullmatch(value):
+        raise ContractDecodeError("trace_parent must be a W3C traceparent value")
 
 
 def _validate_utc_timestamp(label: str, value: str) -> None:

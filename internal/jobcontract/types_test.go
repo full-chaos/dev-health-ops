@@ -128,6 +128,29 @@ func TestTraceParentOmittedWhenEmptyKeepsExistingFixturesUnchanged(t *testing.T)
 	}
 }
 
+func TestTraceParentRejectsMalformedNonemptyValues(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.heartbeat.v1.trace_parent.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range []string{
+		`"not-a-traceparent"`,
+		`"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"`,    // missing flags
+		`"01-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01"`, // uppercase
+	} {
+		candidate := strings.Replace(
+			string(fixture),
+			`"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`,
+			malformed,
+			1,
+		)
+		if _, err := Decode(KindHeartbeat, []byte(candidate)); err == nil {
+			t.Fatalf("Decode() accepted malformed trace_parent %s", malformed)
+		}
+	}
+}
+
 func TestSyncCoverageRefreshPayloadBounds(t *testing.T) {
 	t.Parallel()
 	fixture, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.sync_coverage_refresh.v1.json"))

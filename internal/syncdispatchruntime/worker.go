@@ -104,13 +104,17 @@ type dispatchWorker struct {
 	bridge CoordinatorBridge
 }
 
-func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchSyncRunArgs]) error {
+func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchSyncRunArgs]) (err error) {
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
-	err := worker.bridge.Dispatch(ctx, job.Args)
-	finishCoordinatorSpan(span, err)
+	// A deferred finish (not a direct call after Dispatch returns) so a panic
+	// from worker.bridge still ends and exports the span before the panic
+	// continues propagating to River's own panic-to-failure handling; this
+	// does not recover the panic, only observes it.
+	defer func() { finishCoordinatorSpan(span, err) }()
+	err = worker.bridge.Dispatch(ctx, job.Args)
 	return err
 }
 
@@ -119,13 +123,13 @@ type finalizeWorker struct {
 	bridge CoordinatorBridge
 }
 
-func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeSyncRunArgs]) error {
+func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeSyncRunArgs]) (err error) {
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
-	err := worker.bridge.Finalize(ctx, job.Args)
-	finishCoordinatorSpan(span, err)
+	defer func() { finishCoordinatorSpan(span, err) }()
+	err = worker.bridge.Finalize(ctx, job.Args)
 	return err
 }
 
@@ -134,13 +138,13 @@ type postSyncWorker struct {
 	service *NativePostSyncService
 }
 
-func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) error {
+func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) (err error) {
 	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
-	err := worker.service.Fanout(ctx, job.Args)
-	finishCoordinatorSpan(span, err)
+	defer func() { finishCoordinatorSpan(span, err) }()
+	err = worker.service.Fanout(ctx, job.Args)
 	return err
 }
 
@@ -154,7 +158,7 @@ type teamAutoimportWorker struct {
 	bridge CoordinatorBridge
 }
 
-func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[TeamAutoimportJobArgs]) error {
+func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[TeamAutoimportJobArgs]) (err error) {
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
@@ -162,20 +166,20 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 		return err
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID)
-	err := worker.bridge.TeamAutoImport(ctx, DomainReference{
+	defer func() { finishCoordinatorSpan(span, err) }()
+	err = worker.bridge.TeamAutoImport(ctx, DomainReference{
 		OrganizationID: job.Args.OrgID,
 		SyncRunID:      job.Args.Payload.SyncRunID,
 	})
-	finishCoordinatorSpan(span, err)
 	return err
 }
 
-func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job[ReferenceDiscoveryArgs]) error {
+func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job[ReferenceDiscoveryArgs]) (err error) {
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
-	err := worker.bridge.Discover(ctx, job.Args)
-	finishCoordinatorSpan(span, err)
+	defer func() { finishCoordinatorSpan(span, err) }()
+	err = worker.bridge.Discover(ctx, job.Args)
 	return err
 }

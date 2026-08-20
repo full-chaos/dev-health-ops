@@ -6,16 +6,20 @@
 //
 // Sampling is head-based and decided once, on the Python side, when a sync
 // run starts: the traceparent propagated into worker_job_outbox carries that
-// decision's sampled flag, and every Go span parented from it inherits it
-// rather than making its own call. At the default OTEL_SAMPLE_RATE=0.1, that
-// means roughly 9 of every 10 sync runs produce no trace at all in Tempo --
-// raise OTEL_SAMPLE_RATE (both sides must agree, since only Python's head
-// decision is live today) to see more of them.
+// decision's sampled flag, and every Go span parented from it (via
+// sdktrace.ParentBased) inherits it rather than making an independent call --
+// a Go span only makes its own ratio decision when it has no parent at all.
+// At the default OTEL_SAMPLE_RATE=0.1, that means roughly 9 of every 10 sync
+// runs produce no trace at all in Tempo -- raise OTEL_SAMPLE_RATE to see more
+// of them (both sides should agree on a value: it only changes root-span
+// decisions today, since only Python's head decision is live).
 package tracing
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -103,14 +107,7 @@ func Init(logger *slog.Logger) Component {
 }
 
 func newProvider(serviceName, environment, endpoint string, sampleRate float64) (*sdktrace.TracerProvider, error) {
-	exporter, err := otlptracegrpc.New(
-		context.Background(),
-		otlptracegrpc.WithEndpoint(endpoint),
-		// The default endpoint is a bare host:port pointing at a local
-		// otel-collector sidecar, the same target tracing.py's OTLPSpanExporter
-		// reaches with no TLS material configured anywhere in this deployment.
-		otlptracegrpc.WithInsecure(),
-	)
+	exporter, err := otlptracegrpc.New(context.Background(), dialOptions(endpoint)...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,16 +120,44 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 	}
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sampler(sampleRate)),
+		sdktrace.WithSampler(sdktrace.ParentBased(sampler(sampleRate))),
 		sdktrace.WithBatcher(exporter),
 	)
 	return provider, nil
 }
 
-// sampler is deliberately head-based like tracing.py's TraceIdRatioBased: it
-// is not wrapped in a ParentBased decision, so both sides of the Python/Go
-// boundary make the same kind of sampling call rather than one side
-// unconditionally deferring to the other's decision.
+// dialOptions picks the right otlptracegrpc option for the shape of endpoint.
+// WithEndpoint requires a bare host:port ("no scheme or path"); WithEndpointURL
+// requires a full URL. This package's own default ("localhost:4317") is bare,
+// but every deployed value (deploy/kubernetes/configmap.yaml,
+// deploy/helm/dev-health/values.yaml, deploy/docker-compose/compose.production.yml)
+// sets a URL-shaped value ("http://otel-collector...:4317") -- the same value
+// tracing.py's OTLPSpanExporter already receives and handles transparently.
+// Passing a URL-shaped value to WithEndpoint would make gRPC try to dial a
+// host literally containing "http://", so the two forms cannot share one
+// option: detect which one endpoint is instead of assuming the bare form.
+func dialOptions(endpoint string) []otlptracegrpc.Option {
+	scheme, _, hasScheme := strings.Cut(endpoint, "://")
+	if !hasScheme {
+		return []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(endpoint),
+			otlptracegrpc.WithInsecure(),
+		}
+	}
+	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpointURL(endpoint)}
+	if !strings.EqualFold(scheme, "https") {
+		options = append(options, otlptracegrpc.WithInsecure())
+	}
+	return options
+}
+
+// sampler is the root sampler tracing.py's raw TraceIdRatioBased mirrors: the
+// decision for a span with NO parent (the common case until CHAOS-3996 wires
+// trace-context propagation further). ParentBased wraps it in newProvider so
+// a span that DOES have a parent (extracted from envelope.TraceParent)
+// inherits that parent's sampled flag instead of making an independent
+// ratio decision that could disagree with it when the two languages'
+// OTEL_SAMPLE_RATE values differ.
 func sampler(rate float64) sdktrace.Sampler {
 	switch {
 	case rate >= 1.0:
@@ -166,5 +191,16 @@ func sampleRateFromEnv() (float64, error) {
 	if !ok {
 		return defaultSampleRate, nil
 	}
-	return strconv.ParseFloat(value, 64)
+	rate, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	// ParseFloat happily accepts "NaN", and NaN fails every comparison in
+	// sampler() (both the >=1.0 and <=0.0 branches), so it would silently
+	// fall through to TraceIDRatioBased(NaN) -- an always-undefined sampling
+	// decision rather than a caught configuration error.
+	if math.IsNaN(rate) {
+		return 0, fmt.Errorf("OTEL_SAMPLE_RATE must be a finite number, got %q", value)
+	}
+	return rate, nil
 }

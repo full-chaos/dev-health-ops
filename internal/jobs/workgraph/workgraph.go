@@ -13,8 +13,26 @@ import (
 var (
 	ErrInvalidState = errors.New("work graph execution state is invalid")
 	ErrLeaseLost    = errors.New("work graph execution lease was lost")
+	ErrLeaseActive  = errors.New("work graph execution lease is still active")
 	ErrUnavailable  = errors.New("work graph execution dependency is unavailable")
 )
+
+// LeaseActiveError reports that the request is held by a lease that has not
+// expired yet, and carries how long is left on it.
+//
+// A live lease is not the same answer as "already finished", even though the
+// claim reached both by matching no row. Reporting it as finished retires the
+// job, and that job is the only thing that would have returned to reclaim the
+// lease after it expired -- the retry budget is spent in tens of seconds
+// against a lease measured in minutes. Since this request's completion is the
+// fence key for every handoff gated on it, a request abandoned that way strands
+// its whole chain (CHAOS-3991).
+type LeaseActiveError struct {
+	RetryAfter time.Duration
+}
+
+func (err *LeaseActiveError) Error() string { return ErrLeaseActive.Error() }
+func (err *LeaseActiveError) Unwrap() error { return ErrLeaseActive }
 
 type Kind string
 

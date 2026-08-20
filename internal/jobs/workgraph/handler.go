@@ -31,6 +31,13 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.Permanent(err)
 		}
+		// Park until the lease expires instead of burning an attempt on it. A
+		// snooze does not consume one, so the reclaim stays reachable however
+		// long the current holder takes to die.
+		var active *LeaseActiveError
+		if errors.As(err, &active) {
+			return jobruntime.RetryableAfter(err, active.RetryAfter)
+		}
 		return jobruntime.Retryable(err)
 	}
 	if claim == nil { // a completed request is an idempotent success.

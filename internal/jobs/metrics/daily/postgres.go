@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,16 +28,65 @@ const scheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool  *pgxpool.Pool
-	lease time.Duration
-	now   func() time.Time
+	pool          *pgxpool.Pool
+	lease         time.Duration
+	now           func() time.Time
+	leaseObserver jobruntime.DailyMetricsLeaseObserver
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
+func NewPostgresStore(
+	pool *pgxpool.Pool,
+	observers ...jobruntime.DailyMetricsLeaseObserver,
+) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, ErrUnavailable
 	}
-	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now}, nil
+	var observer jobruntime.DailyMetricsLeaseObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now, leaseObserver: observer}, nil
+}
+
+// observeLease records a durably resolved lease encounter. Metric failures are
+// dropped: telemetry must never decide whether a run can make progress.
+func (store *PostgresStore) observeLease(
+	stage jobruntime.DailyMetricsLeaseStage,
+	result jobruntime.DailyMetricsLeaseResult,
+) {
+	if store.leaseObserver != nil {
+		_ = store.leaseObserver.ObserveDailyMetricsLease(stage, result)
+	}
+}
+
+// leaseDecision is the classification of a claim target read under a row lock.
+// It exists so a claim can tell a live lease apart from a genuine no-op; the
+// conditional UPDATE alone reports both as zero matched rows.
+type leaseDecision int
+
+const (
+	// leaseIdle means the target is claimable now.
+	leaseIdle leaseDecision = iota
+	// leaseReclaimable means an expired lease is being taken over.
+	leaseReclaimable
+	// leaseHeld means a live lease belongs to someone else.
+	leaseHeld
+	// leaseSettled means there is genuinely nothing to claim.
+	leaseSettled
+)
+
+// classifyLease resolves a target's lease state against the current clock.
+func classifyLease(claimable bool, status string, leaseExpiresAt *time.Time, now time.Time) leaseDecision {
+	if status == "running" && leaseExpiresAt != nil {
+		if leaseExpiresAt.After(now) {
+			return leaseHeld
+		}
+		return leaseReclaimable
+	}
+	if claimable {
+		return leaseIdle
+	}
+	return leaseSettled
 }
 
 // StartRunTx atomically creates or verifies a deterministic daily run, its
@@ -463,30 +513,69 @@ WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
 	return result, nil
 }
 
+// ClaimPartition fences one partition for execution. It reads the row under a
+// lock first so it can distinguish a live lease from a settled partition: a
+// live lease is reported as a LeaseActiveError so the caller parks and returns
+// after it expires, because returning "nothing to do" here retires the only
+// worker that could ever reclaim it.
 func (store *PostgresStore) ClaimPartition(ctx context.Context, partitionID string) (*PartitionClaim, error) {
 	if !store.valid() || !validUUID(partitionID) {
 		return nil, ErrUnavailable
 	}
 	now, token := store.now().UTC(), uuid.New()
-	var claim PartitionClaim
-	err := store.pool.QueryRow(ctx, `
-UPDATE public.daily_metrics_partitions
-SET status = 'running', claim_token = $2, lease_expires_at = $3,
-    attempt_count = attempt_count + 1, updated_at = $1
-WHERE id = $4::uuid AND (status IN ('pending', 'failed') OR
-      (status = 'running' AND lease_expires_at <= $1))
-  AND EXISTS (
-      SELECT 1 FROM public.daily_metrics_runs AS run
-      WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
-  )
-RETURNING id::text, run_id::text, claim_token::text`,
-		now, token, now.Add(store.lease), partitionID,
-	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Token)
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	var status, runStatus string
+	var leaseExpiresAt *time.Time
+	err = tx.QueryRow(ctx, `
+SELECT partition.status, partition.lease_expires_at, run.status
+FROM public.daily_metrics_partitions AS partition
+JOIN public.daily_metrics_runs AS run ON run.id = partition.run_id
+WHERE partition.id = $1::uuid
+FOR UPDATE OF partition`, partitionID).Scan(&status, &leaseExpiresAt, &runStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	// A run that is no longer running owns the decision; the partition must not
+	// be revived under it, and there is nothing for this job to come back for.
+	if runStatus != "running" {
+		return nil, nil
+	}
+	decision := classifyLease(status == "pending" || status == "failed", status, leaseExpiresAt, now)
+	switch decision {
+	case leaseHeld:
+		store.observeLease(jobruntime.DailyMetricsLeaseStagePartition, jobruntime.DailyMetricsLeaseResultSnoozed)
+		return nil, &LeaseActiveError{RetryAfter: leaseExpiresAt.Sub(now)}
+	case leaseSettled:
+		return nil, nil
+	}
+	var claim PartitionClaim
+	err = tx.QueryRow(ctx, `
+UPDATE public.daily_metrics_partitions
+SET status = 'running', claim_token = $2, lease_expires_at = $3,
+    attempt_count = attempt_count + 1, updated_at = $1
+WHERE id = $4::uuid
+RETURNING id::text, run_id::text, claim_token::text`,
+		now, token, now.Add(store.lease), partitionID,
+	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Token)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, ErrUnavailable
+	}
+	if decision == leaseReclaimable {
+		store.observeLease(jobruntime.DailyMetricsLeaseStagePartition, jobruntime.DailyMetricsLeaseResultReclaimed)
 	}
 	claim.LeaseDuration = store.lease
 	return &claim, nil
@@ -581,8 +670,18 @@ WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); e
 	return nil
 }
 
+// ReleasePartition stands a claimed partition back down. Release is fenced on a
+// live lease, so a claimant that has already outlived its lease cannot release
+// it; that outcome is recorded rather than left for the caller to discard.
 func (store *PostgresStore) ReleasePartition(ctx context.Context, claim PartitionClaim) error {
-	return store.transitionPartition(ctx, claim, "failed")
+	err := store.transitionPartition(ctx, claim, "failed")
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeLease(
+			jobruntime.DailyMetricsLeaseStagePartition,
+			jobruntime.DailyMetricsLeaseResultReleaseLost,
+		)
+	}
+	return err
 }
 
 func (store *PostgresStore) transitionPartition(ctx context.Context, claim PartitionClaim, status string) error {
@@ -610,31 +709,79 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
 	return nil
 }
 
+// ClaimFinalize fences a run's finalization. Like ClaimPartition it reads the
+// row under a lock first, so that a finalize lease orphaned by a dead claimant
+// is reported as a LeaseActiveError instead of as "nothing to do". This is the
+// claim that matters most: CompleteFinalize is the only writer of the run's
+// completion fence, so a finalize that quietly retires strands every handoff
+// gated on this run forever.
 func (store *PostgresStore) ClaimFinalize(ctx context.Context, runID string) (*FinalizeClaim, error) {
 	if !store.valid() || !validUUID(runID) {
 		return nil, ErrUnavailable
 	}
 	now, token := store.now().UTC(), uuid.New()
-	var claim FinalizeClaim
-	err := store.pool.QueryRow(ctx, `
-UPDATE public.daily_metrics_runs AS run
-SET finalization_status = 'running', finalization_claim_token = $2,
-    finalization_lease_expires_at = $3, updated_at = $1
-WHERE run.id = $4::uuid AND run.status = 'running'
-  AND NOT EXISTS (
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	var status, finalizationStatus string
+	var leaseExpiresAt *time.Time
+	var partitionsReady bool
+	err = tx.QueryRow(ctx, `
+SELECT run.status, run.finalization_status, run.finalization_lease_expires_at,
+  NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
-  AND (run.finalization_status IN ('pending', 'failed') OR
-      (run.finalization_status = 'running' AND run.finalization_lease_expires_at <= $1))
-RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text`,
-		now, token, now.Add(store.lease), runID,
-	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token)
+FROM public.daily_metrics_runs AS run
+WHERE run.id = $1::uuid
+FOR UPDATE OF run`, runID).Scan(&status, &finalizationStatus, &leaseExpiresAt, &partitionsReady)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	if status != "running" {
+		return nil, nil
+	}
+	claimable := partitionsReady && (finalizationStatus == "pending" || finalizationStatus == "failed")
+	decision := classifyLease(claimable, finalizationStatus, leaseExpiresAt, now)
+	switch decision {
+	case leaseHeld:
+		store.observeLease(jobruntime.DailyMetricsLeaseStageFinalize, jobruntime.DailyMetricsLeaseResultSnoozed)
+		return nil, &LeaseActiveError{RetryAfter: leaseExpiresAt.Sub(now)}
+	case leaseSettled:
+		return nil, nil
+	case leaseReclaimable:
+		// An expired finalize lease is only reclaimable once its partitions are
+		// all succeeded; otherwise the partition layer still owns the run.
+		if !partitionsReady {
+			return nil, nil
+		}
+	}
+	var claim FinalizeClaim
+	err = tx.QueryRow(ctx, `
+UPDATE public.daily_metrics_runs AS run
+SET finalization_status = 'running', finalization_claim_token = $2,
+    finalization_lease_expires_at = $3, updated_at = $1
+WHERE run.id = $4::uuid
+RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text`,
+		now, token, now.Add(store.lease), runID,
+	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, ErrUnavailable
+	}
+	if decision == leaseReclaimable {
+		store.observeLease(jobruntime.DailyMetricsLeaseStageFinalize, jobruntime.DailyMetricsLeaseResultReclaimed)
 	}
 	claim.LeaseDuration = store.lease
 	return &claim, nil
@@ -703,7 +850,14 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 }
 
 func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeClaim) error {
-	return store.transitionFinalize(ctx, claim, "failed")
+	err := store.transitionFinalize(ctx, claim, "failed")
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeLease(
+			jobruntime.DailyMetricsLeaseStageFinalize,
+			jobruntime.DailyMetricsLeaseResultReleaseLost,
+		)
+	}
+	return err
 }
 
 func (store *PostgresStore) transitionFinalize(ctx context.Context, claim FinalizeClaim, status string) error {

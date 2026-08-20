@@ -88,7 +88,14 @@ func buildDailyWorker(
 	registered := make([]jobruntime.HandlerSpec, 0, len(dailySpecs)+len(remainingSpecs))
 	var metricsClickHouse driver.Conn
 	if len(dailySpecs) > 0 {
-		store, storeErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
+		// The daily store reports lease encounters directly: generic middleware
+		// cannot tell a claim that parked for a live lease from one that found
+		// nothing to do, and only the former means a run may be stalling.
+		var leaseObservers []jobruntime.DailyMetricsLeaseObserver
+		if leaseObserver, ok := observer.(jobruntime.DailyMetricsLeaseObserver); ok {
+			leaseObservers = append(leaseObservers, leaseObserver)
+		}
+		store, storeErr := daily.NewPostgresStore(postgresDatabase.pools.Domain, leaseObservers...)
 		publisher, publisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 		clickhouseConnection, clickhouseErr := clickhousestore.Open(
 			context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),

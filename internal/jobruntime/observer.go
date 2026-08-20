@@ -64,6 +64,15 @@ type ReportRunLeaseObserver interface {
 	ObserveReportRunLeaseExpired(ReportRunLeaseResult) error
 }
 
+// DailyMetricsLeaseObserver is the narrow capability the daily-metrics store
+// depends on after it resolves an existing lease durably. Generic runtime
+// middleware cannot infer this: a claim that parks for a live lease and a claim
+// that finds nothing to do are the same job outcome, and only the code that ran
+// the claim knows which happened.
+type DailyMetricsLeaseObserver interface {
+	ObserveDailyMetricsLease(DailyMetricsLeaseStage, DailyMetricsLeaseResult) error
+}
+
 // RegisterRuntime validates the low-cardinality scrape-presence identity
 // before passing it to an Observer.
 func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) error {

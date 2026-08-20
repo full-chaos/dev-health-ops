@@ -285,17 +285,19 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if err != nil || first == nil {
 		t.Fatalf("first claim = %#v, %v", first, err)
 	}
-	if duplicate, err := store.ClaimPartition(ctx, partitionID); err != nil || duplicate != nil {
-		t.Fatalf("unexpired duplicate = %#v, %v", duplicate, err)
-	}
+	// A live lease is reported, not swallowed. Reporting "nothing to claim" here
+	// is what let a retry retire the only worker that could reclaim the lease.
+	duplicate, duplicateErr := store.ClaimPartition(ctx, partitionID)
+	assertLeaseHeld(t, "unexpired duplicate", duplicate, duplicateErr, store.lease)
 	now = now.Add(store.lease / 2)
 	if err := store.RenewPartition(ctx, *first); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(store.lease/2 + time.Second)
-	if duplicate, err := store.ClaimPartition(ctx, partitionID); err != nil || duplicate != nil {
-		t.Fatalf("healthy renewed partition was reclaimed = %#v, %v", duplicate, err)
-	}
+	renewedPartition, renewedPartitionErr := store.ClaimPartition(ctx, partitionID)
+	assertLeaseHeld(
+		t, "healthy renewed partition", renewedPartition, renewedPartitionErr, store.lease/2-time.Second,
+	)
 	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'canceled' WHERE id = $1::uuid", runID); err != nil {
 		t.Fatal(err)
 	}
@@ -381,9 +383,10 @@ WHERE job_kind=$1 AND dedupe_key=$2`,
 		t.Fatal(err)
 	}
 	now = now.Add(store.lease/2 + time.Second)
-	if duplicate, err := store.ClaimFinalize(ctx, runID); err != nil || duplicate != nil {
-		t.Fatalf("healthy renewed finalizer was reclaimed = %#v, %v", duplicate, err)
-	}
+	renewedFinalize, renewedFinalizeErr := store.ClaimFinalize(ctx, runID)
+	assertLeaseHeld(
+		t, "healthy renewed finalizer", renewedFinalize, renewedFinalizeErr, store.lease/2-time.Second,
+	)
 	now = now.Add(store.lease/2 + time.Second)
 	if err := store.RenewFinalize(ctx, *firstFinalize); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("expired unreclaimed finalizer renewed: %v", err)
@@ -412,6 +415,23 @@ WHERE completion_key = $1`, "daily_metrics_run:"+runID).Scan(&completionFences);
 	}
 	if duplicate, err := store.ClaimFinalize(ctx, runID); err != nil || duplicate != nil {
 		t.Fatalf("completed finalizer was reclaimed = %#v, %v", duplicate, err)
+	}
+}
+
+// assertLeaseHeld requires a claim to have reported a live lease and to have
+// carried the exact remaining time on it. Each call site states the remainder
+// it predicts, so a claim that reports the wrong deadline cannot pass.
+func assertLeaseHeld[T any](t *testing.T, what string, claim *T, err error, want time.Duration) {
+	t.Helper()
+	if claim != nil {
+		t.Fatalf("%s took a claim while the lease was live: %#v", what, claim)
+	}
+	var active *LeaseActiveError
+	if !errors.As(err, &active) {
+		t.Fatalf("%s = %v, want a live-lease report", what, err)
+	}
+	if active.RetryAfter != want {
+		t.Fatalf("%s retry after = %v, want %v", what, active.RetryAfter, want)
 	}
 }
 

@@ -376,3 +376,89 @@ CREATE TABLE worker_job_completion_fences (
 		t.Fatal(err)
 	}
 }
+
+// A live lease must be reported, not folded into the same nil that means
+// "nothing left to do". Folding them together is what let a retry landing
+// inside a lease orphaned by a dead claimant retire itself, leaving nothing to
+// reclaim the lease after it expired and stranding every handoff fenced on this
+// run's completion (CHAOS-3991).
+func TestPostgresStoreReportsALiveClaimInsteadOfNothingToDo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	now := time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC)
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+	run, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000109",
+		Family:         "capacity",
+		Generation:     "capacity-v1",
+		ScopeKey:       "all-teams",
+		GenerationSeed: int64Pointer(42),
+		Scopes:         []json.RawMessage{json.RawMessage(`{"version":1,"all_teams":true,"history_days":90,"simulations":10000}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(run.ID, 1)
+	assertRunStatus := func(what, want string) {
+		t.Helper()
+		var got string
+		if err := pool.QueryRow(ctx,
+			"SELECT status FROM remaining_metric_runs WHERE id = $1::uuid", run.ID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("parent run status %s = %s, want %s", what, got, want)
+		}
+	}
+	assertRunStatus("before any claim", "pending")
+
+	first, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || first == nil {
+		t.Fatalf("first claim = %#v, %v", first, err)
+	}
+	// The claim carries a second durable effect besides taking the partition: it
+	// activates the parent run in the same statement. Asserted here so that any
+	// future restructuring of that CTE cannot pass on claim behaviour alone.
+	assertRunStatus("after the claim", "running")
+
+	// A second claimant arriving well inside the lease learns how long is left
+	// rather than being told the work is finished.
+	now = now.Add(store.lease / 4)
+	duplicate, duplicateErr := store.ClaimPartition(ctx, partitionID)
+	if duplicate != nil {
+		t.Fatalf("duplicate took a claim while the lease was live: %#v", duplicate)
+	}
+	var active *LeaseActiveError
+	if !errors.As(duplicateErr, &active) {
+		t.Fatalf("duplicate = %v, want a live-lease report", duplicateErr)
+	}
+	if want := store.lease - store.lease/4; active.RetryAfter != want {
+		t.Fatalf("retry after = %v, want %v", active.RetryAfter, want)
+	}
+
+	// Once it expires the same partition is reclaimable, with a new token.
+	now = now.Add(store.lease + time.Second)
+	reclaimed, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || reclaimed == nil {
+		t.Fatalf("reclaim after expiry = %#v, %v", reclaimed, err)
+	}
+	if reclaimed.Token == first.Token {
+		t.Fatal("reclaim reused the orphaned claim token")
+	}
+}

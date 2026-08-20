@@ -25,8 +25,38 @@ import (
 var (
 	ErrInvalidState = errors.New("daily metrics durable state is invalid")
 	ErrLeaseLost    = errors.New("daily metrics execution lease was lost")
+	ErrLeaseActive  = errors.New("daily metrics execution lease is still active")
 	ErrUnavailable  = errors.New("daily metrics dependency is unavailable")
 )
+
+// LeaseActiveError reports that the claim target is held by a lease that has
+// not expired yet, and carries how long is left on it.
+//
+// It exists because "I could not take this lease" and "there is nothing to do"
+// are not the same answer, even though one conditional UPDATE reports both as
+// zero matched rows. A claimant that reports a live lease as success lets the
+// job runtime retire the job -- and that job is the only thing that would have
+// come back to reclaim the lease once it expired. The lease is bounded but the
+// retry budget that could outlive it is not: it is spent in tens of seconds
+// against a ten-minute lease, so an orphaned lease strands its run forever, and
+// with it every handoff fenced on that run's completion key.
+type LeaseActiveError struct {
+	RetryAfter time.Duration
+}
+
+func (err *LeaseActiveError) Error() string { return ErrLeaseActive.Error() }
+func (err *LeaseActiveError) Unwrap() error { return ErrLeaseActive }
+
+// retryClaim maps a failed claim onto the job runtime. A live lease becomes a
+// snooze that wakes when the lease expires, which does not consume an attempt,
+// so the reclaim path stays reachable however long the holder takes to die.
+func retryClaim(err error) error {
+	var active *LeaseActiveError
+	if errors.As(err, &active) {
+		return jobruntime.RetryableAfter(err, active.RetryAfter)
+	}
+	return jobruntime.Retryable(err)
+}
 
 type Run struct {
 	ID             string
@@ -205,7 +235,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	}
 	claim, err := handler.store.ClaimPartition(ctx, partitionID)
 	if err != nil {
-		return jobruntime.Retryable(err)
+		return retryClaim(err)
 	}
 	if claim == nil {
 		return nil
@@ -236,6 +266,12 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
+		// The one post-claim exit that used to return without releasing. If the
+		// completion failed while the lease was still ours, releasing makes the
+		// partition immediately re-claimable instead of parking the retry for the
+		// rest of the lease; if the lease was already lost the release is a
+		// no-op, and the store records that rather than dropping it.
+		releasePartition(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	return nil
@@ -263,7 +299,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 	}
 	claim, err := handler.store.ClaimFinalize(ctx, runID)
 	if err != nil {
-		return jobruntime.Retryable(err)
+		return retryClaim(err)
 	}
 	if claim == nil {
 		return nil
@@ -286,6 +322,10 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
+		// Symmetric with the partition layer: this exit claimed and returned
+		// retryable without releasing, which is the most likely way the lease
+		// behind CHAOS-3991 was orphaned in the first place.
+		releaseFinalize(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	return nil

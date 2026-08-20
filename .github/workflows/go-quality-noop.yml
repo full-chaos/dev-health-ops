@@ -1,0 +1,83 @@
+# Companion to go.yml: the go-quality job is a REQUIRED check on main, but go.yml
+# only triggers when Go-relevant paths change. GitHub treats a required check that
+# never reports as blocking, so non-Go PRs (docs, pure Python) could never merge.
+# This workflow supplies a passing go-quality context for exactly those changes:
+# paths-ignore mirrors go.yml's paths lists verbatim, so a change set made up
+# entirely of non-Go files runs this no-op instead. A mixed change set may run both;
+# both then report success, which is harmless. Keep the two lists in sync with go.yml.
+name: Go (non-Go changes)
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
+      - 'src/dev_health_ops/licensing/**'
+      - 'src/dev_health_ops/metrics/testops*.py'
+      - 'src/dev_health_ops/models/**'
+      - 'src/dev_health_ops/parsers/**'
+      - 'src/dev_health_ops/processors/**'
+      - 'src/dev_health_ops/providers/**'
+      - 'src/dev_health_ops/storage/repository_rows.py'
+      - 'src/dev_health_ops/sync/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'internal/providersync/testdata/**'
+      - 'internal/scheduler/sync/testdata/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_providersync_test_shards.tsv'
+      - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/check_go_containers.sh'
+      - 'ci/check_river_compat_static.sh'
+      - 'ci/evidence/go-worker-migration/**'
+  pull_request:
+    branches: ['**']
+    paths-ignore:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
+      - 'src/dev_health_ops/licensing/**'
+      - 'src/dev_health_ops/metrics/testops*.py'
+      - 'src/dev_health_ops/models/**'
+      - 'src/dev_health_ops/parsers/**'
+      - 'src/dev_health_ops/processors/**'
+      - 'src/dev_health_ops/providers/**'
+      - 'src/dev_health_ops/storage/repository_rows.py'
+      - 'src/dev_health_ops/sync/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'internal/providersync/testdata/**'
+      - 'internal/scheduler/sync/testdata/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/go_integration_shards.tsv'
+      - 'ci/go_providersync_test_shards.tsv'
+      - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/check_go_containers.sh'
+      - 'ci/check_river_compat_static.sh'
+      - 'ci/evidence/go-worker-migration/**'
+
+jobs:
+  go-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vacuously satisfy the required go-quality check
+        run: echo "No Go-relevant paths changed; go-quality is satisfied vacuously."

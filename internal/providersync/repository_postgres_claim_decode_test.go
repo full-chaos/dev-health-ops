@@ -49,6 +49,43 @@ func TestDecodeClaimDocumentsKeepsEachDocumentOnItsOwnTarget(t *testing.T) {
 	}
 }
 
+// The duplicate-key collapse is data-dependent: it fires whenever ANY subset
+// of the four columns is byte-identical, not only when all four are. Iterate
+// every assignment of four payload labels to the four columns — a superset of
+// all 15 set partitions, partial overlaps included — and assert each claim
+// field decodes exactly its own column's content.
+func TestDecodeClaimDocumentsEveryOverlapPartitionKeepsFieldContent(t *testing.T) {
+	documents := [4][]byte{
+		[]byte(`{"label":"0"}`), []byte(`{"label":"1"}`),
+		[]byte(`{"label":"2"}`), []byte(`{"label":"3"}`),
+	}
+	for assignment := 0; assignment < 256; assignment++ {
+		labels := [4]int{
+			assignment & 3, (assignment >> 2) & 3,
+			(assignment >> 4) & 3, (assignment >> 6) & 3,
+		}
+		var claim Claim
+		if err := decodeClaimDocuments(&claim,
+			documents[labels[0]], documents[labels[1]],
+			documents[labels[2]], documents[labels[3]],
+		); err != nil {
+			t.Fatalf("assignment %v: %v", labels, err)
+		}
+		for position, decoded := range []map[string]any{
+			claim.DatasetOptions, claim.Result,
+			claim.SourceMetadata, claim.IntegrationConfig,
+		} {
+			want := string(rune('0' + labels[position]))
+			if decoded == nil || decoded["label"] != want {
+				t.Fatalf(
+					"assignment %v position %d: decoded=%v want label %q",
+					labels, position, decoded, want,
+				)
+			}
+		}
+	}
+}
+
 func TestDecodeClaimDocumentsStillFailsClosedOnMalformedJSON(t *testing.T) {
 	var claim Claim
 	document := []byte(`{}`)

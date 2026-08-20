@@ -145,6 +145,7 @@ nav:
       - Run:
           - operate/run/index.md
           - Workers and jobs: operate/run/workers-and-jobs.md
+          - Job recovery lifecycle: operate/run/job-recovery-lifecycle.md
           - Ingestion and backfills: operate/run/ingestion-and-backfills.md
           - Operational controls: operate/run/operational-controls.md
           - Ask Dev rollout: operate/run/ask-dev-rollout.md

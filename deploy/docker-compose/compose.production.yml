@@ -426,12 +426,28 @@ services:
       LOG_CONNECTIONS: "0"
       LOG_DISCONNECTIONS: "0"
       LOG_POOLER_ERRORS: "1"
-    # CHAOS-3944: pg_isready with no -U falls back to the OS user
-    # `postgres`, which is not in PgBouncer's auth file. Every probe then
-    # logged `no such user: postgres` and STILL reported healthy, because
-    # pg_isready counts a rejection as "server responding". Naming this
-    # pooler's own role and database is what turns a port-open check into
-    # a can-serve check.
+    # CHAOS-3944. Know exactly what this proves and what it does not.
+    #
+    # pg_isready reports "accepting connections" and exits 0 for ANY server
+    # response, including a rejection -- measured against this image: a
+    # nonexistent role and a nonexistent database both exit 0. It exits 2 only
+    # when nothing answers the port. So this is a liveness probe, not a
+    # can-serve probe, and naming -U/-d does not change that.
+    #
+    # What -U/-d does buy: with no -U, pg_isready probes as the OS user
+    # `postgres`, which is not in this pooler's auth file, so every interval
+    # logged `no such user: postgres` -- and with LOG_POOLER_ERRORS=1 above
+    # that is now a WARNING, which has to stay meaningful. Naming the pooler's
+    # own role and database keeps the probe silent when healthy.
+    #
+    # A genuine can-serve probe would have to open a real session and run a
+    # query. That is deliberately rejected here: on a session-mode endpoint
+    # sized exactly to the declared fleet, the probe would consume a pool slot,
+    # and under the saturation it is meant to detect it would block, time out,
+    # mark the pooler unhealthy and restart it -- dropping every live session
+    # at the worst possible moment. Pool saturation is observable through the
+    # admin console (ADMIN_USERS, above) and the log_stats `wait` field
+    # instead.
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432",
              "-U", "${POSTGRES_USER:?set POSTGRES_USER}",
@@ -480,14 +496,18 @@ services:
   #   go-stream-pagerduty      stream   opens no queue pool   =  0
   #                                                            ---
   #                                              declared max   34
-  #   rolling-restart overlap: one replacement replica starts before the
-  #   stopping one's sessions expire at server_idle_timeout      +3
+  #   Rolling-restart reserve: every one of these is its own independently
+  #   rolled unit, so a single image or config change surges ALL of them at
+  #   once (Helm renders one Deployment each with maxSurge 1 /
+  #   maxUnavailable 0). Each briefly runs one replica beyond its declared
+  #   maximum while the outgoing replica's sessions linger until
+  #   server_idle_timeout: 3+3+3+3 river, 2+2 control            +16
   #                                                            ---
-  #                                            DEFAULT_POOL_SIZE 37
+  #                                            DEFAULT_POOL_SIZE 50
   #
   # This table is NOT the enforcement -- internal/deploymentcontract validates
   # the same arithmetic from deployment.json on every build, and rejects a pool
-  # that cannot absorb one rolling restart. Adding a service that opens
+  # that cannot absorb a fleet-wide rolling restart. Adding a service that opens
   # WORKER_DATABASE_URI means adding it to deployment.json, which moves this
   # number; the previous version of this comment went stale silently when
   # go-worker-sync-provider and the three stream runners were added.
@@ -506,7 +526,7 @@ services:
       POOL_MODE: session
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-37}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-50}
       # CHAOS-3944: PgBouncer defaults log_connections=1 and
       # log_disconnections=1. The Go worker fleet cycles connections
       # continuously, so those defaults are a permanent firehose carrying no
@@ -527,12 +547,28 @@ services:
       # saturation matters -- pool exhaustion had to be inferred from
       # pg_stat_activity and a River elector stack trace.
       ADMIN_USERS: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
-    # CHAOS-3944: pg_isready with no -U falls back to the OS user
-    # `postgres`, which is not in PgBouncer's auth file. Every probe then
-    # logged `no such user: postgres` and STILL reported healthy, because
-    # pg_isready counts a rejection as "server responding". Naming this
-    # pooler's own role and database is what turns a port-open check into
-    # a can-serve check.
+    # CHAOS-3944. Know exactly what this proves and what it does not.
+    #
+    # pg_isready reports "accepting connections" and exits 0 for ANY server
+    # response, including a rejection -- measured against this image: a
+    # nonexistent role and a nonexistent database both exit 0. It exits 2 only
+    # when nothing answers the port. So this is a liveness probe, not a
+    # can-serve probe, and naming -U/-d does not change that.
+    #
+    # What -U/-d does buy: with no -U, pg_isready probes as the OS user
+    # `postgres`, which is not in this pooler's auth file, so every interval
+    # logged `no such user: postgres` -- and with LOG_POOLER_ERRORS=1 above
+    # that is now a WARNING, which has to stay meaningful. Naming the pooler's
+    # own role and database keeps the probe silent when healthy.
+    #
+    # A genuine can-serve probe would have to open a real session and run a
+    # query. That is deliberately rejected here: on a session-mode endpoint
+    # sized exactly to the declared fleet, the probe would consume a pool slot,
+    # and under the saturation it is meant to detect it would block, time out,
+    # mark the pooler unhealthy and restart it -- dropping every live session
+    # at the worst possible moment. Pool saturation is observable through the
+    # admin console (ADMIN_USERS, above) and the log_stats `wait` field
+    # instead.
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6433",
              "-U", "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}",
@@ -561,7 +597,7 @@ services:
       POOL_MODE: session
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_COORDINATOR_MAX_CLIENT_CONN:-32}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE:-11}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_COORDINATOR_POOL_SIZE:-14}
       # CHAOS-3944: PgBouncer defaults log_connections=1 and
       # log_disconnections=1. The Go worker fleet cycles connections
       # continuously, so those defaults are a permanent firehose carrying no
@@ -579,12 +615,28 @@ services:
       # CHAOS-3945: see the queue pooler above -- admin_users must name this
       # endpoint's own role or the SHOW commands are refused.
       ADMIN_USERS: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
-    # CHAOS-3944: pg_isready with no -U falls back to the OS user
-    # `postgres`, which is not in PgBouncer's auth file. Every probe then
-    # logged `no such user: postgres` and STILL reported healthy, because
-    # pg_isready counts a rejection as "server responding". Naming this
-    # pooler's own role and database is what turns a port-open check into
-    # a can-serve check.
+    # CHAOS-3944. Know exactly what this proves and what it does not.
+    #
+    # pg_isready reports "accepting connections" and exits 0 for ANY server
+    # response, including a rejection -- measured against this image: a
+    # nonexistent role and a nonexistent database both exit 0. It exits 2 only
+    # when nothing answers the port. So this is a liveness probe, not a
+    # can-serve probe, and naming -U/-d does not change that.
+    #
+    # What -U/-d does buy: with no -U, pg_isready probes as the OS user
+    # `postgres`, which is not in this pooler's auth file, so every interval
+    # logged `no such user: postgres` -- and with LOG_POOLER_ERRORS=1 above
+    # that is now a WARNING, which has to stay meaningful. Naming the pooler's
+    # own role and database keeps the probe silent when healthy.
+    #
+    # A genuine can-serve probe would have to open a real session and run a
+    # query. That is deliberately rejected here: on a session-mode endpoint
+    # sized exactly to the declared fleet, the probe would consume a pool slot,
+    # and under the saturation it is meant to detect it would block, time out,
+    # mark the pooler unhealthy and restart it -- dropping every live session
+    # at the worst possible moment. Pool saturation is observable through the
+    # admin console (ADMIN_USERS, above) and the log_stats `wait` field
+    # instead.
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6434",
              "-U", "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}",

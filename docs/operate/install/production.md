@@ -102,6 +102,8 @@ MIGRATION_DATABASE_URI=postgres://devhealth_migrate:<secret>@postgres:5432/devhe
 
 Long-running workers must not receive `MIGRATION_DATABASE_URI`. Provision the domain and queue roles before the one-shot migration applies River grants.
 
+The Go topology requires `max_connections` on that PostgreSQL server to be at least the declared `postgres_budget.server_max_connections` in `deploy/go-workers/deployment.json` — currently **200**. Nothing in the stack checks this for you; a managed instance left at the common default of 100 cannot hold the three PgBouncer pools plus the migration and administrative reserve, and the shortfall only appears under the load that needs every pool at once. Confirm it with `psql "$MIGRATION_DATABASE_URI" -Atc 'SHOW max_connections'` before enabling the pooler profile.
+
 ## Docker Compose example
 
 Start from the checked-in [production Compose file](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-compose/compose.production.yml) and [environment template](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/docker-compose/.env.example).

@@ -352,13 +352,17 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 	// CHAOS-3945 then raised the queue-session figure again, from 26 to 34:
 	// a started River client holds one notifier LISTEN session outside its
 	// queue-control pool, so each of the four "river" runtime processes costs
-	// 3 per replica, not 2. The pool went 27 -> 37, which is that declared 34
-	// plus one whole replica of rolling-restart overlap, and the server
-	// requirement 100 -> 200. Every process ships at zero replicas, so runtime
-	// usage is unchanged; this is the declared worst case the budget covers.
-	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 34, Limit: 37, Headroom: 3}) ||
-		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 11, Headroom: 1}) ||
-		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 103, Limit: 200, Headroom: 97}) {
+	// 3 per replica, not 2.
+	//
+	// Both session pools now also carry a fleet-wide rolling-restart reserve,
+	// because every process rolls as its own unit and one image change surges
+	// all of them at once: queue 34 + 16 = 50, coordinator 10 + 4 = 14. That
+	// takes the server requirement to 119, declared 200 (was 100). Every
+	// process ships at zero replicas, so runtime usage is unchanged; this is
+	// the declared worst case the budget covers.
+	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 34, Limit: 50, Headroom: 16}) ||
+		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 14, Headroom: 4}) ||
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 119, Limit: 200, Headroom: 81}) {
 		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }

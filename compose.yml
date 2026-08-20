@@ -116,11 +116,13 @@ services:
       LOG_CONNECTIONS: "0"
       LOG_DISCONNECTIONS: "0"
       LOG_POOLER_ERRORS: "1"
-    # CHAOS-3944: pg_isready with no -U falls back to the OS user `postgres`.
-    # That happens to be a real role on THIS pooler, but naming -U/-d
-    # explicitly is what makes the probe a can-serve check rather than a
-    # port-open one: pg_isready counts an auth rejection as "server
-    # responding" and reports healthy either way.
+    # CHAOS-3944: a liveness probe, not a can-serve probe. pg_isready exits 0
+    # for any server response including a rejection, and exits 2 only when
+    # nothing answers the port. Naming -U/-d does not change that; it keeps
+    # the probe from logging a pooler error on every interval, which matters
+    # now that LOG_POOLER_ERRORS is on. See the longer note in
+    # deploy/docker-compose/compose.production.yml for why a real query probe
+    # is deliberately not used on a session-mode pooler.
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432",
              "-U", "postgres", "-d", "postgres"]

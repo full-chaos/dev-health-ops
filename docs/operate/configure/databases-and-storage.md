@@ -54,7 +54,15 @@ The Go foundation uses three distinct responsibilities:
 
 Do not give long-running workers the migration DSN. Do not reuse the migration role for domain or queue-control access.
 
-Size the queue session endpoint from the deployment manifest, not from `WORKER_DATABASE_MAX_CONNS`. A worker process that starts a River client also holds one long-lived notifier `LISTEN` session, and that session sits outside the queue-control pool, so such a replica costs three session backends where the environment variable declares two. Reconciler and scheduler drive River transactionally and hold only their pool; the stream runners open no queue pool at all. The pool must additionally have room for one whole replica beyond every declared maximum, because a rolling restart runs the stopping and starting containers together and the stopping one's sessions linger until `server_idle_timeout`. The deployment-contract check enforces this arithmetic on every build and rejects a pool that cannot absorb a restart; a saturated session pool does not degrade gracefully — clients past the cap wait for a backend that never frees and River leader election fails with `error beginning transaction: timeout`.
+The three pools plus the migration and administrative reserve are a requirement on the PostgreSQL server you point the stack at, and nothing in the stack verifies it: the deployment manifest declares the required `max_connections` and validates the topology against that declaration, but it cannot read your server. Check it once, against the declared figure in `deploy/go-workers/deployment.json` (`postgres_budget.server_max_connections`, currently 200), before enabling the Go topology:
+
+```bash
+psql "$MIGRATION_DATABASE_URI" -Atc 'SHOW max_connections'
+```
+
+A managed PostgreSQL left at the common default of 100 does not have room for it. Raise the server setting, or lower the declared pools and re-run the contract check; do not leave the two disagreeing.
+
+Size the queue session endpoint from the deployment manifest, not from `WORKER_DATABASE_MAX_CONNS`. A worker process that starts a River client also holds one long-lived notifier `LISTEN` session, and that session sits outside the queue-control pool, so such a replica costs three session backends where the environment variable declares two. Reconciler and scheduler drive River transactionally and hold only their pool; the stream runners open no queue pool at all. The pool must additionally have room for one surge replica of *every* group beyond their declared maxima, not just one: each group is rendered as its own independently rolled unit, so a single image or config change surges all of them at once, and each briefly runs an extra replica while the outgoing one's sessions linger until `server_idle_timeout`. The same reserve applies to the coordinator session pool. The deployment-contract check enforces this arithmetic on every build and rejects a pool that cannot absorb a restart; a saturated session pool does not degrade gracefully — clients past the cap wait for a backend that never frees and River leader election fails with `error beginning transaction: timeout`.
 
 ### Helm Go-worker poolers
 
@@ -93,11 +101,22 @@ native Prometheus endpoint.
 
 Each pooler's healthcheck names its own role and database
 (`pg_isready -h localhost -p <port> -U <that pooler's role> -d <database>`).
-This matters more than it looks: `pg_isready` with no `-U` probes as the OS
-user `postgres`, which is not in the pooler's auth file, and it counts an
-authentication rejection as "server responding". Such a probe logs
-`no such user: postgres` on every interval and still reports the container
-healthy — it proves the port answers, never that the pooler can serve.
+Read it as a liveness probe and nothing more. `pg_isready` reports "accepting
+connections" and exits 0 for any server response, including a rejection —
+measured against this image, a nonexistent role and a nonexistent database
+both exit 0 — and exits non-zero only when nothing answers the port. Naming
+`-U`/`-d` does not make it a can-serve check. What it does buy is silence: with
+no `-U` the probe falls back to the OS user `postgres`, which is not in the
+pooler's auth file, so every interval logged `no such user: postgres`, and with
+`LOG_POOLER_ERRORS=1` that becomes a warning you want to stay meaningful.
+
+A probe that really proved the pooler could serve would have to open a session
+and run a query. That is deliberately avoided on the session-mode endpoints: a
+pool sized to the declared fleet has no spare slot for a probe, and under the
+saturation such a probe is meant to detect it would block, time out, mark the
+pooler unhealthy and restart it — dropping every live session at the worst
+moment. Watch the admin console and the `log_stats` `wait` field for that
+instead.
 
 The two River poolers also set `ADMIN_USERS` to their own role. PgBouncer
 otherwise defaults `admin_users` to `postgres`, so `SHOW POOLS`, `SHOW CLIENTS`

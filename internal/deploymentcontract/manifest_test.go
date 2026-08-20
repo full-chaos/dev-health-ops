@@ -40,13 +40,13 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.QueueSessionClientConnections != 34 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 3 {
+	if summary.QueueSessionHeadroom != 16 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 66 {
@@ -55,10 +55,10 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 103 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 97 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -127,13 +127,13 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.QueueSessionClientConnections != 34 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 3 {
+	if summary.QueueSessionHeadroom != 16 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 66 {
@@ -142,10 +142,10 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 103 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 97 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -166,13 +166,13 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.QueueSessionClientConnections != 28 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 9 {
+	if summary.QueueSessionHeadroom != 22 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 58 {
@@ -181,10 +181,10 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.DomainTransactionHeadroom != 942 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 103 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 97 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -595,10 +595,12 @@ func TestManifestRejectsAZeroNotifierSessionDeclaration(t *testing.T) {
 	}
 }
 
-// Headroom of one connection is not headroom. A rolling restart runs the
-// stopping and starting container together -- the stopping one's session
-// lingers until server_idle_timeout -- so the queue pool must be able to
-// absorb one whole replica beyond every declared maximum.
+// Headroom of one connection is not headroom. Every process is rendered as its
+// own independently rolled unit, so one image or config change surges all of
+// them together: each briefly runs a replica beyond its declared maximum while
+// the outgoing replica's sessions linger until server_idle_timeout. Reserving
+// only the largest single replica would hold for a serialized replacement and
+// understate a fleet-wide rollout by the rest of the groups.
 func TestManifestRejectsQueuePoolThatCannotAbsorbARollingRestart(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)

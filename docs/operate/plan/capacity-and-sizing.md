@@ -57,7 +57,9 @@ when checking the declared upper bound.
 Count one River notifier session per replica that starts a River client, on
 top of that replica's queue-control pool. It is a separate long-lived session,
 not a pool member, and omitting it under-counts each such replica by a third.
-Reserve one further replica's worth of the queue pool for rolling restarts.
+Reserve one surge replica of every group in both session pools for rolling
+restarts: the groups roll independently but a single image or config change
+starts all of them at once.
 
 Do not assume that a zero current replica count makes future activation free.
 The real admission budget is the sum of the actual group maxima and the

@@ -169,11 +169,16 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	}
 
 	queueCoverage := buildQueueCoverage(registry)
-	// The most expensive single replica on the queue endpoint. A rolling
-	// restart briefly runs the old and new container together -- the stopping
-	// one's sessions linger until server_idle_timeout -- so the pool has to be
-	// able to absorb one of these on top of every declared maximum.
-	largestQueueReplicaFootprint := 0
+	// Rolling-restart reserve. Every process is rendered as its own
+	// independently rolled unit (a Compose service, a Helm Deployment with
+	// maxSurge 1 / maxUnavailable 0), so a single image or config change
+	// surges ALL of them at once: each group briefly runs one replica beyond
+	// its declared maximum while the outgoing replica's sessions linger until
+	// server_idle_timeout. Reserving only the largest single replica would
+	// hold for one serialized replacement and understate a fleet-wide rollout
+	// by the rest of the groups.
+	queueRollingSurgeReserve := 0
+	coordinatorRollingSurgeReserve := 0
 	seenNames := make(map[string]struct{}, len(manifest.Processes))
 	previousName := ""
 	summary := BudgetSummary{
@@ -199,9 +204,8 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		}
 
 		queueCostPerReplica := queueSessionCostPerReplica(process, manifest.PostgresBudget)
-		if queueCostPerReplica > largestQueueReplicaFootprint {
-			largestQueueReplicaFootprint = queueCostPerReplica
-		}
+		queueRollingSurgeReserve += queueCostPerReplica
+		coordinatorRollingSurgeReserve += process.CoordinatorMaxConnections
 		summary.QueueSessionClientConnections += process.MaxReplicas * queueCostPerReplica
 		summary.CoordinatorSessionClientConnections += process.MaxReplicas * process.CoordinatorMaxConnections
 		summary.DomainTransactionClientConnections += process.MaxReplicas * process.DomainMaxConnections
@@ -260,15 +264,19 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		summary.DomainTransactionClientConnections
 	summary.ServerConnectionHeadroom = manifest.PostgresBudget.ServerMaxConnections -
 		summary.ServerConnectionFootprint
-	if summary.QueueSessionHeadroom < largestQueueReplicaFootprint {
+	if summary.QueueSessionHeadroom < queueRollingSurgeReserve {
 		return BudgetSummary{}, fmt.Errorf(
-			"queue session PgBouncer headroom %d cannot absorb a rolling restart of the largest declared replica (%d)",
+			"queue session PgBouncer headroom %d cannot absorb a fleet-wide rolling restart (%d)",
 			summary.QueueSessionHeadroom,
-			largestQueueReplicaFootprint,
+			queueRollingSurgeReserve,
 		)
 	}
-	if summary.CoordinatorSessionHeadroom <= 0 {
-		return BudgetSummary{}, errors.New("coordinator session PgBouncer headroom must be positive")
+	if summary.CoordinatorSessionHeadroom < coordinatorRollingSurgeReserve {
+		return BudgetSummary{}, fmt.Errorf(
+			"coordinator session PgBouncer headroom %d cannot absorb a fleet-wide rolling restart (%d)",
+			summary.CoordinatorSessionHeadroom,
+			coordinatorRollingSurgeReserve,
+		)
 	}
 	if summary.DomainTransactionHeadroom <= 0 {
 		return BudgetSummary{}, errors.New("transaction PgBouncer headroom must be positive")

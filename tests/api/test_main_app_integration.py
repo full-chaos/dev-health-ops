@@ -135,6 +135,164 @@ def test_health_workers_returns_503_when_celery_down(monkeypatch):
     assert body["services"]["celery"] == "down"
 
 
+def test_health_workers_returns_503_when_no_celery_workers_exist(monkeypatch):
+    """CHAOS-3942: production ran with zero Celery workers for hours while this
+    endpoint reported green, because the handler folded ``no_workers`` into
+    ``ok``. Units published to the broker were lost with no signal at all
+    (CHAOS-3941) -- this is the one endpoint that could have observed it.
+
+    Without EXPECTED_WORKER_GROUPS set, this deployment has not declared a Go
+    worker fleet, so Celery inspect.ping is still the authoritative signal:
+    zero workers there must be a failure, not "ok".
+    """
+    monkeypatch.delenv("EXPECTED_WORKER_GROUPS", raising=False)
+
+    async def _celery_no_workers():
+        return "celery", "no_workers"
+
+    monkeypatch.setattr(main, "_check_celery_health", _celery_no_workers)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+    assert body["services"]["celery"] == "no_workers"
+
+
+def test_health_workers_go_mode_returns_ok_when_all_expected_groups_present(
+    monkeypatch,
+):
+    """CHAOS-3942: with EXPECTED_WORKER_GROUPS set (e.g. Full Chaos's own
+    Go-only production), Go worker-group presence is authoritative, and a
+    Celery "no_workers" reading is expected -- it must not fail the check.
+    """
+    monkeypatch.setenv("EXPECTED_WORKER_GROUPS", "heavy,ops")
+
+    async def _presence(expected_groups):
+        assert expected_groups == ["heavy", "ops"]
+        return {"heavy": "ok", "ops": "ok"}
+
+    async def _celery_no_workers():
+        return "celery", "no_workers"
+
+    monkeypatch.setattr(main, "_check_go_worker_presence", _presence)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_no_workers)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["services"]["go_worker:heavy"] == "ok"
+    assert body["services"]["go_worker:ops"] == "ok"
+    assert body["services"]["celery"] == "retired"
+
+
+def test_health_workers_go_mode_returns_503_when_a_group_is_absent(monkeypatch):
+    """CHAOS-3942: the honest fix for a Go-only deployment -- a declared
+    worker group with no live heartbeat row must fail loudly, the exact
+    condition the original Celery-only check was built to detect.
+    """
+    monkeypatch.setenv("EXPECTED_WORKER_GROUPS", "heavy,ops")
+
+    async def _presence(expected_groups):
+        return {"heavy": "ok", "ops": "absent"}
+
+    async def _celery_no_workers():
+        return "celery", "no_workers"
+
+    monkeypatch.setattr(main, "_check_go_worker_presence", _presence)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_no_workers)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+    assert body["services"]["go_worker:heavy"] == "ok"
+    assert body["services"]["go_worker:ops"] == "absent"
+
+
+def test_health_workers_go_mode_fails_closed_when_postgres_is_unreachable(
+    monkeypatch,
+):
+    """CHAOS-3942: an unreachable Postgres (where worker_instances lives)
+    must never be reported as a healthy worker fleet.
+    """
+    monkeypatch.setenv("EXPECTED_WORKER_GROUPS", "heavy")
+
+    async def _presence(expected_groups):
+        return {"heavy": "unknown"}
+
+    async def _celery_down():
+        return "celery", "down"
+
+    monkeypatch.setattr(main, "_check_go_worker_presence", _presence)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_down)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+    assert body["services"]["go_worker:heavy"] == "unknown"
+
+
+def test_health_workers_fails_closed_when_expected_worker_groups_is_malformed(
+    monkeypatch,
+):
+    """CHAOS-3942 (codex review): EXPECTED_WORKER_GROUPS set but unparseable
+    (e.g. a stray comma) must fail closed, not silently fall back to legacy
+    Celery mode -- otherwise a stray Celery worker could mask a Go
+    deployment that never declared a usable fleet.
+    """
+    monkeypatch.setenv("EXPECTED_WORKER_GROUPS", " , ")
+
+    async def _celery_ok():
+        return "celery", "ok"
+
+    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+    assert body["services"]["expected_worker_groups"] == "misconfigured"
+
+
+def test_health_workers_go_mode_fails_closed_when_presence_result_is_incomplete(
+    monkeypatch,
+):
+    """CHAOS-3942 (codex review): the aggregation must not vacuously pass
+    ``all()`` over a partial or empty presence result -- every declared
+    group must actually be accounted for.
+    """
+    monkeypatch.setenv("EXPECTED_WORKER_GROUPS", "heavy,ops")
+
+    async def _presence(expected_groups):
+        return {"heavy": "ok"}  # "ops" missing entirely
+
+    async def _celery_no_workers():
+        return "celery", "no_workers"
+
+    monkeypatch.setattr(main, "_check_go_worker_presence", _presence)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_no_workers)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+
+
 def test_readiness_route_reports_webhook_health_shape(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "gh-secret")
     monkeypatch.setenv("GITLAB_WEBHOOK_TOKEN", "gl-token")

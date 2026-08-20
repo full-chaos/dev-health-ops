@@ -41,7 +41,16 @@ spec:
                 name: {{ include "dev-health.configMapName" . }}
             - secretRef:
                 name: {{ include "dev-health.secretName" . }}
-          {{- with .Values.api.extraEnv }}
+          {{- $apiEnv := list }}
+          {{- if .Values.goWorkers.enabled }}
+          {{- $apiEnv = append $apiEnv (dict "name" "EXPECTED_WORKER_GROUPS" "value" (.Values.goWorkers.expectedWorkerGroups | join ",")) }}
+          {{- end }}
+          {{- range (.Values.api.extraEnv | default (list)) }}
+          {{- if ne .name "EXPECTED_WORKER_GROUPS" }}
+          {{- $apiEnv = append $apiEnv . }}
+          {{- end }}
+          {{- end }}
+          {{- with $apiEnv }}
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}

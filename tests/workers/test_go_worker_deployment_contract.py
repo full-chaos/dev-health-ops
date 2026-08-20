@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -85,6 +86,11 @@ _RIVER_WORKER_SERVICES = {
     # provider routes are default-off (CHAOS-3926).
     "sync-provider": "go-worker-sync-provider",
 }
+
+# CHAOS-3942: the /health/workers fleet contract. River/queue-consumer
+# groups only -- reconciler/scheduler/stream-* run a separate role with
+# their own /healthz and never register worker_instances presence.
+_EXPECTED_WORKER_GROUPS_VALUE = "heavy,ops,sync,sync-provider"
 
 
 def _river_processes() -> dict[str, dict]:
@@ -391,6 +397,11 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
         "go-river-provision",
         "go-river-migrate",
         "go-contractcheck",
+        # CHAOS-3942: merges EXPECTED_WORKER_GROUPS into the base `api`
+        # service so /health/workers flips authority when this overlay is
+        # applied; asserted in detail by
+        # test_go_worker_health_check_flips_authority_with_the_overlay.
+        "api",
     }
     for name in runtime_services:
         service = compose[name]
@@ -412,8 +423,10 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     )
 
     swarm = _load_yaml(_GO_SWARM)["services"]
-    assert set(swarm) == runtime_services
-    for service in swarm.values():
+    # CHAOS-3942: same `api` merge as Compose, see the comment above.
+    assert set(swarm) == runtime_services | {"api"}
+    for name in runtime_services:
+        service = swarm[name]
         assert service["read_only"] is True
         assert service["user"] == "65532:65532"
         assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
@@ -737,11 +750,15 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
     for name, service in services.items():
         if name in {"go-river-provision", "go-river-migrate", "go-contractcheck"}:
             continue
+        assert "MIGRATION_DATABASE_URI" not in service["environment"]
+        if name == "api":
+            # CHAOS-3942: the pre-existing base `api` service, not part of the
+            # Go bootstrap chain -- it must keep starting independently of it.
+            continue
         assert (
             service["depends_on"]["go-contractcheck"]["condition"]
             == "service_completed_successfully"
         ), f"{name} must wait for the complete local Go bootstrap chain"
-        assert "MIGRATION_DATABASE_URI" not in service["environment"]
 
     rendered = _GO_COMPOSE.read_text(encoding="utf-8")
     assert "workerctl route" not in rendered
@@ -1466,3 +1483,191 @@ def test_every_renderer_gives_go_workers_a_native_protocol_clickhouse_uri() -> N
     helpers = (_HELM_CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
     native_helper = helpers.split('define "dev-health.goWorkerClickhouseURI"')[1]
     assert "9000" in native_helper.split("{{- end }}")[0] or "9000" in native_helper
+
+
+def test_go_worker_health_check_flips_authority_with_the_overlay() -> None:
+    """CHAOS-3942: /health/workers is Celery-authoritative until told
+    otherwise. EXPECTED_WORKER_GROUPS must reach the API service through
+    every go-workers opt-in overlay -- and stay ABSENT from the Celery-owned
+    base, so a base-only deployment (no go-workers overlay applied) never
+    silently loses its Celery signal, and an operator applying the overlay
+    gets the authority flip in the same change that stages the fleet.
+    """
+    base_compose_api = _load_yaml(_PRODUCTION_COMPOSE)["services"]["api"]
+    assert "EXPECTED_WORKER_GROUPS" not in (base_compose_api.get("environment") or {})
+    overlay_compose_api = _load_yaml(_GO_COMPOSE)["services"]["api"]
+    assert (
+        _compose_variable_default(
+            overlay_compose_api["environment"]["EXPECTED_WORKER_GROUPS"],
+            "EXPECTED_WORKER_GROUPS",
+        )
+        == _EXPECTED_WORKER_GROUPS_VALUE
+    )
+
+    base_swarm_api = _load_yaml(_SWARM_STACK)["services"]["api"]
+    assert "EXPECTED_WORKER_GROUPS" not in (base_swarm_api.get("environment") or {})
+    overlay_swarm_api = _load_yaml(_GO_SWARM)["services"]["api"]
+    assert (
+        _compose_variable_default(
+            overlay_swarm_api["environment"]["EXPECTED_WORKER_GROUPS"],
+            "EXPECTED_WORKER_GROUPS",
+        )
+        == _EXPECTED_WORKER_GROUPS_VALUE
+    )
+
+    # Kubernetes: the base api.yaml container only ever resolves the var
+    # through an OPTIONAL configMapKeyRef -- so a base-only cluster (no
+    # go-workers.yaml applied) never even has the referenced ConfigMap, and
+    # the var is absent, not empty.
+    api = next(
+        document
+        for document in _load_yaml_documents(_KUBERNETES_API)
+        if document["kind"] == "Deployment"
+    )
+    container = api["spec"]["template"]["spec"]["containers"][0]
+    env_entry = next(
+        item for item in container["env"] if item["name"] == "EXPECTED_WORKER_GROUPS"
+    )
+    ref = env_entry["valueFrom"]["configMapKeyRef"]
+    assert ref["optional"] is True
+    assert ref["key"] == "EXPECTED_WORKER_GROUPS"
+
+    go_worker_config = next(
+        document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document["kind"] == "ConfigMap"
+        and document["metadata"]["name"] == ref["name"]
+    )
+    assert go_worker_config["data"]["EXPECTED_WORKER_GROUPS"] == (
+        _EXPECTED_WORKER_GROUPS_VALUE
+    )
+    # A ConfigMap can only be resolved from the SAME namespace as the pod
+    # that references it -- a namespace typo here would pass a name-only
+    # check yet never resolve at runtime.
+    assert go_worker_config["metadata"]["namespace"] == api["metadata"]["namespace"]
+    # The base ConfigMap must never declare the key itself -- only the
+    # go-workers-only fragment does, which is what makes it absent by
+    # default.
+    assert "EXPECTED_WORKER_GROUPS" not in _load_yaml(_KUBERNETES_CONFIGMAP)["data"]
+
+    # Helm: no separate overlay file, so the trigger is the goWorkers.enabled
+    # value flag itself, rendered directly into the api Deployment's env.
+    values = _load_yaml(_HELM_CHART / "values.yaml")
+    assert values["goWorkers"]["expectedWorkerGroups"] == [
+        "heavy",
+        "ops",
+        "sync",
+        "sync-provider",
+    ]
+    template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "EXPECTED_WORKER_GROUPS" in template
+    assert ".Values.goWorkers.enabled" in template
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_api_deployment_carries_expected_worker_groups_only_when_go_workers_enabled() -> (
+    None
+):
+    """CHAOS-3942: render both states through the real templating engine --
+    a string match on the template source cannot prove the conditional
+    actually gates the rendered manifest."""
+    disabled = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "--show-only",
+            "templates/api-deployment.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "EXPECTED_WORKER_GROUPS" not in disabled.stdout
+
+    enabled = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "--set",
+            "goWorkers.enabled=true",
+            "--set",
+            "goWorkers.pgbouncer.enabled=true",
+            "--set-string",
+            "goWorkers.pgbouncer.postgres.host=pg",
+            "--set-string",
+            "goWorkers.pgbouncer.postgres.database=db",
+            "--set-string",
+            "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD=x",
+            "--set-string",
+            "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD=x",
+            "--set-string",
+            "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD=x",
+            "--show-only",
+            "templates/api-deployment.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = next(
+        document
+        for document in yaml.safe_load_all(enabled.stdout)
+        if document and document.get("kind") == "Deployment"
+    )
+    container = rendered["spec"]["template"]["spec"]["containers"][0]
+    entry = next(
+        item for item in container["env"] if item["name"] == "EXPECTED_WORKER_GROUPS"
+    )
+    assert entry["value"] == _EXPECTED_WORKER_GROUPS_VALUE
+
+
+_COMPOSE_MERGE_REQUIRED_ENV = {
+    "POSTGRES_HOST": "pg",
+    "POSTGRES_USER": "u",
+    "POSTGRES_PASSWORD": "p",
+    "POSTGRES_DB": "db",
+    "RIVER_DOMAIN_DATABASE_PASSWORD": "x",
+    "RIVER_QUEUE_DATABASE_PASSWORD": "x",
+    "RIVER_COORDINATOR_DATABASE_PASSWORD": "x",
+    "SETTINGS_ENCRYPTION_KEY": "x",
+    "WORKER_DATABASE_URI": "postgresql://u:p@pg:5432/db",
+    "POSTGRES_URI": "postgresql://u:p@pg:5432/db",
+    "COORDINATOR_DATABASE_URI": "postgresql://u:p@pg:5432/db",
+}
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+@pytest.mark.parametrize(
+    ("base", "overlay"),
+    [(_PRODUCTION_COMPOSE, _GO_COMPOSE), (_SWARM_STACK, _GO_SWARM)],
+)
+def test_compose_merge_flips_api_authority_without_losing_base_fields(
+    base: Path, overlay: Path
+) -> None:
+    """CHAOS-3942: the string-level `environment:` merge assumption behind
+    compose.go-workers.yml/stack.go-workers.yml is exactly what Compose's
+    multi-file merge does -- proved here through the real `docker compose
+    config` engine, not just by parsing base and overlay independently
+    (codex review round 2: independent parsing can't prove the merge itself
+    keeps the base service's image/command/ports/other environment intact).
+    """
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(base), "-f", str(overlay), "config"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
+    )
+    merged = yaml.safe_load(result.stdout)
+    api = merged["services"]["api"]
+    assert api["image"]
+    assert api["environment"]["EXPECTED_WORKER_GROUPS"] == _EXPECTED_WORKER_GROUPS_VALUE
+    # The merge must ADD the key, not replace the whole service definition.
+    assert api["environment"]["CELERY_BROKER_URL"]
+    assert "POSTGRES_URI" in api["environment"]

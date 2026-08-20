@@ -177,6 +177,72 @@ async def _check_celery_health() -> tuple[str, str]:
         return "celery", "down"
 
 
+def _expected_worker_groups() -> list[str] | None:
+    """Return the worker groups this deployment expects to be running.
+
+    Sourced from ``EXPECTED_WORKER_GROUPS`` (comma-separated, e.g.
+    ``"heavy,ops,sync,sync-provider"`` -- the ``--worker-group`` values
+    ``cmd/dev-health-worker`` is deployed with). Full Chaos's own production
+    is Go-only and sets this; self-hosted/customer deployments that still run
+    Celery leave it unset, so ``/health/workers`` stays Celery-authoritative
+    for them (CHAOS-3942).
+
+    Returns ``None`` when the variable is unset (no Go fleet declared). Returns
+    a (possibly empty) list when it IS set -- an empty result there means the
+    value was present but malformed (e.g. ``","`` or whitespace), which the
+    caller must treat as a misconfiguration, not as "no groups declared".
+    """
+    raw = os.environ.get("EXPECTED_WORKER_GROUPS")
+    if raw is None:
+        return None
+    return [group.strip() for group in raw.split(",") if group.strip()]
+
+
+async def _check_go_worker_presence(expected_groups: list[str]) -> dict[str, str]:
+    """Check each expected Go worker group for a live heartbeat row.
+
+    Queries ``public.worker_instances`` directly -- the table
+    ``internal/jobruntime/worker_presence.go`` writes TTL heartbeats into.
+    Mirrors ``ReadWorkerPresence``'s Go semantics: a group counts as present
+    when it has a row with ``expires_at > now()``, regardless of whether that
+    row is ``accepting`` or ``draining`` (draining is a live worker finishing
+    in-flight work during a rolling deploy, not an absent one).
+
+    Returns ``{group: "ok" | "absent"}`` for every group in
+    ``expected_groups``. If Postgres itself is unreachable -- including a
+    raw ``postgresql://`` DSN that ``create_async_engine`` can't drive
+    without normalization -- every group is reported ``"unknown"`` -- never
+    ``"ok"`` -- so a database outage cannot masquerade as a healthy worker
+    fleet.
+    """
+    uri = get_postgres_uri()
+    if not uri:
+        return {group: "unknown" for group in expected_groups}
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    try:
+        engine = create_async_engine(uri, pool_pre_ping=True)
+        try:
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        "SELECT DISTINCT worker_group FROM public.worker_instances "
+                        "WHERE expires_at > statement_timestamp()"
+                    )
+                )
+                live_groups = {row[0] for row in result}
+        finally:
+            await engine.dispose()
+    except Exception:
+        return {group: "unknown" for group in expected_groups}
+
+    return {
+        group: "ok" if group in live_groups else "absent" for group in expected_groups
+    }
+
+
 async def _check_rate_limiter_backend() -> tuple[str, str]:
     """Report the configured rate-limiter storage backend (redis / memory / noop).
 
@@ -190,6 +256,7 @@ __all__ = [
     "_analytics_db_url",
     "_check_celery_health",
     "_check_clickhouse_health",
+    "_check_go_worker_presence",
     "_check_postgres_health",
     "_check_rate_limiter_backend",
     "_check_redis_health",
@@ -198,5 +265,6 @@ __all__ = [
     "_clickhouse_url",
     "_db_url",
     "_dsn_uses_async_driver",
+    "_expected_worker_groups",
     "_postgres_url",
 ]

@@ -46,6 +46,18 @@ x-go-worker-env-base: &go-worker-env-base
   AUTO_RUN_MIGRATIONS: "false"
 
 services:
+  # CHAOS-3942: /health/workers is Celery-authoritative until it is told
+  # otherwise. Merging this into the base compose.production.yml `api`
+  # service is what tells it the declared river worker groups above are the
+  # fleet to check instead -- so applying this overlay is what flips the
+  # endpoint's authority, in the same change that stages the fleet it now
+  # checks. Reconciler/scheduler/stream-* are excluded: they run a separate
+  # role with their own /healthz and never register worker_instances
+  # presence.
+  api:
+    environment:
+      EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
+
   # The canonical Python migrate service owns Alembic and ClickHouse. Re-run
   # role provisioning only after it completes so guarded grants see every
   # current semantic table, including an already-initialized local volume.

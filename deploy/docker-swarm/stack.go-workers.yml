@@ -52,6 +52,17 @@ x-go-worker: &go-worker
       reservations: {cpus: "0.25", memory: 256M}
 
 services:
+  # CHAOS-3942: /health/workers is Celery-authoritative until it is told
+  # otherwise. Merging this into the base stack.yml `api` service is what
+  # tells it the declared river worker groups below are the fleet to check
+  # instead -- so applying this overlay is what flips the endpoint's
+  # authority, in the same change that stages the fleet it now checks.
+  # Reconciler/scheduler/stream-* are excluded: they run a separate role
+  # with their own /healthz and never register worker_instances presence.
+  api:
+    environment:
+      EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
+
   go-worker-heavy:
     <<: *go-worker
     labels:

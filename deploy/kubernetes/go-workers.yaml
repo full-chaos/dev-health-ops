@@ -3,6 +3,22 @@
 # The checked-in route contract is still Celery-owned; these pods expose
 # /healthz, /readyz, and /metrics for a bounded coexistence canary.
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dev-health-go-worker-config
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker-config}
+data:
+  # CHAOS-3942: /health/workers is Celery-authoritative until it is told
+  # otherwise. api.yaml reads this key optionally, so it's absent -- not
+  # empty -- until this file is applied: applying it is what flips the
+  # endpoint's authority, in the same change that stages the fleet it now
+  # checks. Reconciler/scheduler/stream-* are excluded: they run a separate
+  # role with their own /healthz and never register worker_instances
+  # presence.
+  EXPECTED_WORKER_GROUPS: "heavy,ops,sync,sync-provider"
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: dev-health-go-workers

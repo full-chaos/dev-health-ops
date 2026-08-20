@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +46,13 @@ const workerPresenceTTLProof = 35 * time.Second
 // first failed presence heartbeat was fatal to the process.
 func TestMultiReplicaFleetSurvivesDatabaseOutage(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	// Wide enough that the outage-recovery backstop below, not this context, is
+	// always what reports a fleet that never recovers: a context expiry here
+	// would surface as an unrelated query error from the admin pool. The worst
+	// passing path is setup plus the 15s outage, the full 4m budget, the 35s
+	// presence proof and the drain, so this leaves several minutes of slack on
+	// top of it. `go test -timeout` remains the outer guard.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	t.Cleanup(cancel)
 
 	postgres, err := containers.StartPostgres(ctx)
@@ -208,60 +216,125 @@ func (cutover *databaseCutover) serve() {
 	}
 }
 
-// completerRetryCeiling bounds how long River's completer can take to land a
-// completion whose first attempt failed, which is exactly what a mid-flight
-// database outage produces. From river@v0.40.0
-// internal/jobcompleter/job_completer.go, above `const numRetries = 3`:
+// Recovering from a mid-flight database outage is a cascade of *scheduled*
+// steps, not one operation:
 //
-//	As configured, total time asleep from initial attempt is ~7 seconds
-//	(1 + 2 + 4) (not including jitter). However, if each attempt times out,
-//	that's up to ~37 seconds (7 seconds + 3 * 10 seconds).
+//   - River's BatchCompleter gives up on a batch after three failed attempts
+//     -- jittered 1 + 2 + 4s of backoff, and up to 10s per attempt, so ~38s
+//     at worst -- then requeues that batch and starts over
+//     (river@v0.40.0 internal/jobcompleter/job_completer.go, `numRetries`).
+//     Until one of those rounds lands, the job sits in `running` with no
+//     error recorded, which is the state CI reported.
+//   - Only once that transition lands is the job rescheduled. Our adapter
+//     supplies River's optional NextRetry, but jobruntime.NextRetryAt returns
+//     a zero time for any contract whose retry_policy is not
+//     "bounded_exponential_jitter" -- system.heartbeat's is "none" -- and
+//     River falls back to its own schedule for a zero: `attempt^4` seconds
+//     +/-10% jitter after the previous attempt (retry_policy.go
+//     `DefaultClientRetryPolicy`). These jobs are inserted with
+//     multiReplicaRetryAttempts, so only the ~1s and ~16s retries are
+//     reachable -- a third failure is discarded, which the assertions below
+//     already catch.
+//   - The rescheduled handler then waits on our own fleet concurrency lease
+//     (internal/jobruntime/budget_postgres.go), polling every 100ms inside
+//     the job's 30s contract deadline, until the parked handler releases it.
 //
-// The shared waitForCompleted uses 30s, which is fine for the non-outage
-// multi-replica test where no completion ever fails -- but it sits BELOW this
-// ceiling, so this test could fail while River was still correctly retrying.
-// That is what it did on CI: the sibling replica's job stayed `running` with
-// no error recorded, the signature of a completion still inside the retry
-// loop rather than a lost one.
+// None of those intervals is a product promise about outage recovery, and how
+// many of them are in play depends on exactly where inside the outage window
+// each transition fell -- which is a function of runner speed, not of
+// correctness. A wall-clock ceiling built out of them cannot tell "recovery
+// did not happen" from "recovery has not happened yet", which is why the
+// previous 90s ceiling reddened PRs whose diffs could not reach this package
+// (CHAOS-3959).
 //
-// Measuring locally does not bound this: both jobs completed 0.3s after
-// release there, because whether the outage window actually covers the sibling
-// job's completion is timing-dependent. When it does not, no retry happens at
-// all and the wait is irrelevant; when it does, the full ceiling is in play.
-//
-// The budget is deliberately above the ceiling rather than at it. If a job is
-// still incomplete after this, the completer has given up and the job is
-// stranded until the rescuer reclaims it -- a real finding this test should
-// fail on, not wait out.
-const completerRetryCeiling = 90 * time.Second
+// So this asserts convergence, and keeps exactly one deadline: a hang
+// detector, set above the whole cascade rather than near any step in it. Those
+// completer rounds only repeat for as long as the database is unreachable, and
+// databaseOutageWindow fixes that at 15s, so at most one round of them can sit
+// between two observable changes: the longest quiet gap a healthy cascade here
+// can contain is ~38s. Four minutes is roughly six times that, which is the
+// margin that makes this a hang detector rather than the old flake with a
+// larger constant. A job that is genuinely stranded is not waited out: River's
+// rescuer only reclaims after an hour, far outside this budget, so it fails
+// here as it should.
+const outageRecoveryBudget = 4 * time.Minute
 
+// outageRecovery is everything about the jobs that a working cascade changes.
+// Equality of the fingerprint is the "nothing moved" test; the snapshots are
+// what a failure has to report.
+type outageRecovery struct {
+	snapshots   map[int64]riverJobSnapshot
+	fingerprint string
+	completed   int
+}
+
+func observeOutageRecovery(
+	ctx context.Context, pool *pgxpool.Pool, jobIDs []int64,
+) (outageRecovery, error) {
+	observation := outageRecovery{snapshots: make(map[int64]riverJobSnapshot, len(jobIDs))}
+	fingerprint := &strings.Builder{}
+	for _, jobID := range jobIDs {
+		snapshot, err := readRiverJob(ctx, pool, jobID)
+		if err != nil {
+			return outageRecovery{}, fmt.Errorf("read river job %d: %w", jobID, err)
+		}
+		observation.snapshots[jobID] = snapshot
+		fmt.Fprintf(fingerprint, "%d=%#v;", jobID, snapshot)
+		if snapshot.State == "completed" {
+			observation.completed++
+		}
+	}
+	observation.fingerprint = fingerprint.String()
+	return observation, nil
+}
+
+// waitForCompletedAfterOutage waits for the released jobs to reach their
+// terminal shape. The one thing it must never do is report a slow cascade as a
+// broken one, so the deadline only bounds a hang -- and when it fires, the
+// message says which of the two failures it is: rows that never moved are a
+// lost transition, rows that kept moving without terminalizing are a cascade
+// that cannot finish. Both carry the snapshots that prove it.
 func waitForCompletedAfterOutage(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool, jobIDs ...int64,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(completerRetryCeiling)
-	for time.Now().Before(deadline) {
-		count, err := countRiverStates(ctx, pool, jobIDs, "completed")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if count == len(jobIDs) {
-			return
+	released := time.Now()
+	observation, err := observeOutageRecovery(ctx, pool, jobIDs)
+	if err != nil {
+		t.Fatalf("reading jobs %v at release: %v", jobIDs, err)
+	}
+	changed := released
+	for observation.completed < len(jobIDs) {
+		if elapsed := time.Since(released); elapsed >= outageRecoveryBudget {
+			if changed.Equal(released) {
+				t.Fatalf(
+					"outage recovery never started: no job changed state, attempt, or "+
+						"error in the %s since the first reading after release -- the "+
+						"transition was lost, not delayed: %#v",
+					elapsed.Round(time.Second), observation.snapshots,
+				)
+			}
+			t.Fatalf(
+				"outage recovery never converged in %s: jobs were still changing "+
+					"(last change %s ago) but %d of %d reached completed -- the cascade "+
+					"is progressing without terminating: %#v",
+				elapsed.Round(time.Second), time.Since(changed).Round(time.Second),
+				observation.completed, len(jobIDs), observation.snapshots,
+			)
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-	snapshots := make(map[int64]riverJobSnapshot, len(jobIDs))
-	for _, jobID := range jobIDs {
-		snapshot, err := readRiverJob(ctx, pool, jobID)
+		next, err := observeOutageRecovery(ctx, pool, jobIDs)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf(
+				"reading jobs %v %s after release: %v -- last seen %#v",
+				jobIDs, time.Since(released).Round(time.Second), err, observation.snapshots,
+			)
 		}
-		snapshots[jobID] = snapshot
+		if next.fingerprint != observation.fingerprint {
+			changed = time.Now()
+		}
+		observation = next
 	}
-	t.Fatalf(
-		"jobs still incomplete %s after release, past River's completer retry ceiling: %#v",
-		completerRetryCeiling, snapshots,
-	)
 }
 
 func (cutover *databaseCutover) cut() {

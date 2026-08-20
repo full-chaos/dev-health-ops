@@ -102,3 +102,4 @@ Use [Diagnose no or incomplete data](../troubleshooting/no-or-incomplete-data.md
 - [Read the Work Graph data model](../../reference/data-models/work-graph.md)
 - [Read Code Hotspots](code-hotspots.md)
 - [Follow investment evidence](../investment/follow-evidence.md)
+- [Read the team-attribution architecture (contributor reference)](../../contribute/architecture/team-attribution.md)

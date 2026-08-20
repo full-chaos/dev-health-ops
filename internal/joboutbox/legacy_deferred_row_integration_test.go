@@ -4,6 +4,7 @@ package joboutbox
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -170,5 +171,90 @@ func publishInTx(
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPublishStandaloneUsesTheExecutableRoute pins by EFFECT what
+// publish_route_agreement_test.go's table can only assume.
+//
+// That guard skips this package (the publish seams are defined here, so
+// PublishStandalone's internal delegation to Publish is an implementation, not
+// a consumer choosing a route) and hard-codes "PublishStandalone selects the
+// executable route". If the delegation were switched to PublishDeferred the
+// guard would stay green while daily.PostgresPublisher.PublishPartition -- its
+// only caller, at publisher.go:110 -- silently stopped publishing the
+// River-routed metrics.daily_partition. An assumption a guard depends on has to
+// be asserted somewhere, so it is asserted here.
+//
+// Both directions are pinned: a Celery-routed kind must be REFUSED (only the
+// executable route rejects it), and the checked-in River route must be
+// accepted. Asserting only the second half would pass a delegation that
+// published everything deferred.
+func TestPublishStandaloneUsesTheExecutableRoute(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool := openIntegrationPool(t, ctx, instance.URI)
+	defer pool.Close()
+	createOutboxSchema(t, ctx, pool)
+
+	production, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const partitionID = "9c4b1f7e-6a2d-4c58-b1e3-0f7a5d8c2b64"
+	organization := "7a1c9e42-5b3d-4f06-8c27-9d1b4e6a3f58"
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organization,
+		CorrelationID:   "daily:" + partitionID,
+		IdempotencyKey:  "metrics.daily_partition:" + partitionID,
+		Domain: jobcontract.DomainLink{
+			Type: "daily_metrics_partition",
+			ID:   partitionID,
+		},
+		Payload: jobcontract.DailyMetricsPartitionPayload{PartitionID: partitionID},
+	}
+
+	celeryRouted, err := NewProducer(pool, integrationRouteRegistry(production, map[string]string{
+		jobcontract.KindDailyMetricsPartition: "celery",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = celeryRouted.PublishStandalone(ctx, jobcontract.KindDailyMetricsPartition, envelope)
+	if !errors.Is(err, ErrPolicyRejected) {
+		t.Fatalf("PublishStandalone on a Celery-routed kind = %v, want ErrPolicyRejected: "+
+			"it must take the executable route, which a Celery route refuses", err)
+	}
+
+	riverRouted, err := NewProducer(pool, integrationRouteRegistry(production, map[string]string{
+		jobcontract.KindDailyMetricsPartition: "river",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := riverRouted.PublishStandalone(ctx, jobcontract.KindDailyMetricsPartition, envelope); err != nil {
+		t.Fatalf("PublishStandalone on the checked-in River route = %v, want it accepted", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.worker_job_outbox WHERE dedupe_key=$1`,
+		envelope.IdempotencyKey,
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("outbox rows = %d, want exactly 1", rows)
 	}
 }

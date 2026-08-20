@@ -73,6 +73,38 @@ type publishSite struct {
 // The rule is evaluated with the production predicate (descriptorAllowsPublish)
 // against the production contract (contracts/jobs/v1), so it cannot drift from
 // what the producer will actually accept at run time.
+//
+// KNOWN LIMIT -- this is a net, not a proof, and the per-kind EFFECT tests are
+// what actually close the class.
+//
+// The rule is about which routes a function CONTAINS, not about which branch
+// selects them, because the codebase's idiom defeats lexical guard analysis:
+// workgraph.RequestWriter.WriteTx returns from inside `if descriptor
+// .Executable()` and falls through to the deferred calls, so its deferred
+// publishes sit under no enclosing condition at all, while the daily and
+// remaining publishers nest theirs two ifs deep in an else branch. Deciding
+// reachability across those shapes needs dominator analysis, and a half-version
+// of it would reject correct code.
+//
+// The consequence, verified rather than assumed: this mutation of the very call
+// site CHAOS-3946 was filed against keeps this test GREEN --
+//
+//	if descriptor.Executable() && plan.TeamAutoimport {
+//	    return writer.producer.PublishDeferred(...)
+//	}
+//	return writer.producer.Publish(...)
+//
+// -- because both routes are still present for the kind. It is caught instead
+// by TestTeamAutoimportPostSyncWriterStagesItsHandoffOnBothCheckedInRoutes,
+// which drives the real producer against the real contract and asserts the
+// outbox row arrives. So: this guard catches a call site that names the wrong
+// route outright, which is the drift that actually happened; a call site that
+// names both and branches on the wrong condition is the effect tests' job.
+//
+// The joboutbox package itself is excluded (see producerPackagePath), which
+// makes PublishStandalone's route an ASSUMPTION of the table below rather than
+// a checked fact. That assumption is asserted separately by
+// TestPublishStandaloneUsesTheExecutableRoute.
 func TestEveryOutboxPublishSiteAgreesWithTheCheckedInRoute(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

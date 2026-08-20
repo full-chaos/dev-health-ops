@@ -84,17 +84,26 @@ type KindObservation struct {
 // make arbitrary UTF-8 kinds unambiguous. Metrics deliberately omit all string
 // parity fields.
 type Observation struct {
-	Kinds             []KindObservation
-	UnknownKindCount  int64
-	CeleryDuePending  int64
-	RiverDuePending   int64
-	SampledCandidates int64
-	Truncated         bool
-	ObservedAt        time.Time
-	Limit             int
-	PredicateVersion  string
-	DigestVersion     string
-	CandidateDigest   string
+	Kinds            []KindObservation
+	UnknownKindCount int64
+	// ExhaustedDeliveriesRecovered counts the coordinator deliveries this step
+	// reclaimed after River spent their whole attempt budget (CHAOS-3951). It
+	// describes an action the mutation pipeline took, not outbox state, so the
+	// read-only Observer always leaves it zero. It exists on Observation
+	// because Loop is the only component holding the metrics registration, and
+	// a repeat here is the sole evidence that a run is cycling rather than
+	// progressing -- the reclaimed row is otherwise indistinguishable from a
+	// healthy one.
+	ExhaustedDeliveriesRecovered int64
+	CeleryDuePending             int64
+	RiverDuePending              int64
+	SampledCandidates            int64
+	Truncated                    bool
+	ObservedAt                   time.Time
+	Limit                        int
+	PredicateVersion             string
+	DigestVersion                string
+	CandidateDigest              string
 }
 
 type candidateRow struct {

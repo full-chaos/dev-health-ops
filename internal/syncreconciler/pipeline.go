@@ -124,8 +124,16 @@ func (pipeline *MutationPipeline) Step(
 	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
 		return Observation{}, err
 	}
-	if _, err := pipeline.terminal.Step(ctx, now, limit); err != nil {
+	terminal, err := pipeline.terminal.Step(ctx, now, limit)
+	if err != nil {
 		return Observation{}, err
+	}
+	// A repair cannot recover more rows than its own bounded window. Treating
+	// an out-of-range count as a failed step keeps a miscounting repair from
+	// quietly inflating the recovery metric operators alert on.
+	if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
+		terminal.Recovered > limit {
+		return Observation{}, ErrUnavailable
 	}
 	if _, err := pipeline.materializer.Step(
 		ctx,
@@ -145,5 +153,10 @@ func (pipeline *MutationPipeline) Step(
 	); err != nil {
 		return Observation{}, err
 	}
-	return pipeline.observer.Step(ctx, now, limit)
+	observation, err := pipeline.observer.Step(ctx, now, limit)
+	if err != nil {
+		return observation, err
+	}
+	observation.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
+	return observation, nil
 }

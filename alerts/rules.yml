@@ -189,6 +189,39 @@ groups:
             More than 10% of attempts for {{ $labels.kind }} are retrying,
             discarded, or canceled.
 
+      # CHAOS-3951. River bounds the sync-dispatch coordinator kinds at five
+      # attempts and nothing below them carries a second retry budget, so an
+      # exhausted delivery is reclaimed by the reconciler rather than left to
+      # wedge its SyncRun forever. One reclaim is that recovery working: a
+      # web-API outage outlived the attempt span and the run resumes.
+      #
+      # A sustained repeat is not. It means the same delivery is failing
+      # deterministically -- a bad bridge credential, a payload-shape bug --
+      # and the reclaim is cycling instead of healing. That is the wedge's
+      # replacement failure mode, and it is silent by construction: the
+      # reclaimed row returns to 'pending' and is indistinguishable from a
+      # healthy one. GoWorkerAttemptFailureRateHigh does not cover it, because
+      # a single looping run is a rounding error against fleet attempt volume
+      # -- which is exactly why the original wedge went unnoticed.
+      #
+      # One looping run reclaims every few minutes, so it clears this
+      # threshold on its own; a handful of unrelated runs each recovering once
+      # from the same outage does not.
+      - alert: SyncDispatchExhaustedDeliveryRecoveryLoop
+        expr: |
+          sum(increase(sync_dispatch_exhausted_delivery_recoveries_total[2h])) > 3
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Sync-dispatch coordinator delivery is looping on exhaustion"
+          description: |
+            {{ $value | printf "%.0f" }} coordinator deliveries were reclaimed
+            after exhausting River's attempt budget in the last two hours. A
+            repeating reclaim means the compatibility bridge is failing
+            deterministically for a run, not recovering from an outage.
+
       - alert: GoWorkerDomainStateMismatch
         expr: |
           sum by (domain_type) (increase(worker_domain_state_mismatch_total[5m])) > 0

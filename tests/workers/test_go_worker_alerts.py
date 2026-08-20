@@ -24,6 +24,14 @@ def test_go_worker_alerts_cover_phase_one_runtime_signals() -> None:
         "GoWorkerOldestAvailableJobHigh": "worker_job_oldest_age_seconds",
         "GoWorkerExecutionSaturated": "worker_execution_saturation_ratio",
         "GoWorkerAttemptFailureRateHigh": "worker_job_attempts_total",
+        # CHAOS-3951. Deliberately a separate alert rather than a tighter
+        # threshold on GoWorkerAttemptFailureRateHigh: that rule is a fleet
+        # ratio, and one sync run looping on an exhausted coordinator delivery
+        # never moves it. Aggregate throughput cannot answer whether any single
+        # unit of work reached a terminal state.
+        "SyncDispatchExhaustedDeliveryRecoveryLoop": (
+            "sync_dispatch_exhausted_delivery_recoveries_total"
+        ),
         "GoWorkerDomainStateMismatch": "worker_domain_state_mismatch_total",
         "GoWorkerStreamLagHigh": "worker_stream_lag",
         "GoWorkerStreamPendingTooOld": "worker_stream_oldest_pending_seconds",

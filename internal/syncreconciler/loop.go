@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,11 +113,17 @@ type Loop struct {
 	done     chan struct{}
 	ticker   loopTicker
 
-	observation  Observation
-	lastOK       time.Time
-	up           bool
-	errors       chan error
-	recorderBusy chan struct{}
+	observation Observation
+	// exhaustedRecoveries accumulates across steps. Every other quantity here
+	// is a snapshot of current queued work, where a counter would misreport
+	// state after rows dispatch; a recovery is an event that already happened,
+	// so a snapshot is what would misreport it -- the next step's zero would
+	// erase the only evidence that a delivery had to be reclaimed at all.
+	exhaustedRecoveries uint64
+	lastOK              time.Time
+	up                  bool
+	errors              chan error
+	recorderBusy        chan struct{}
 }
 
 func NewLoop(stepper Stepper, config LoopConfig) (*Loop, error) {
@@ -278,12 +285,27 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		return err
 	}
 	loop.observation = copyObservation(observation)
+	loop.accumulateRecoveriesLocked(observation)
 	loop.lastOK = now
 	loop.up = true
 	loop.ready.Store(true)
 	loop.mu.Unlock()
 	loop.offerObservation(observation)
 	return nil
+}
+
+// accumulateRecoveriesLocked adds one step's exhausted-delivery recoveries to
+// the process total. A negative count cannot be represented in the metric and a
+// wrapped total would read as a drop, so both are refused rather than exported.
+func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
+	recovered := observation.ExhaustedDeliveriesRecovered
+	if recovered <= 0 {
+		return
+	}
+	if loop.exhaustedRecoveries > math.MaxUint64-uint64(recovered) {
+		return
+	}
+	loop.exhaustedRecoveries += uint64(recovered)
 }
 
 func (loop *Loop) offerObservation(observation Observation) {
@@ -389,6 +411,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	}
 	loop.mu.Lock()
 	observation := copyObservation(loop.observation)
+	exhaustedRecoveries := loop.exhaustedRecoveries
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -413,6 +436,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	} else {
 		text.WriteString("0\n")
 	}
+	fmt.Fprintf(&text, "# HELP sync_dispatch_exhausted_delivery_recoveries_total Coordinator deliveries reclaimed after River spent their whole attempt budget.\n# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter\nsync_dispatch_exhausted_delivery_recoveries_total %d\n", exhaustedRecoveries)
 	text.WriteString("# HELP sync_dispatch_observer_up Whether the observer loop is currently healthy.\n# TYPE sync_dispatch_observer_up gauge\nsync_dispatch_observer_up ")
 	if up {
 		text.WriteString("1\n")

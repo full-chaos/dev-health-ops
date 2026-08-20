@@ -475,7 +475,13 @@ def test_dispatch_refuses_to_publish_into_a_consumerless_broker(
         assert published == [], "unit was published to a broker with no consumer"
         assert unit.status == SyncRunUnitStatus.FAILED.value
         assert unit.error == "feature_disabled"
-        assert unit.result == {"error_category": "feature_disabled"}
+        # CHAOS-3990 widened this payload with an operator-facing reason and
+        # the refused pair. The machine-readable category every downstream
+        # reader keys on is unchanged, which is what this test pins.
+        assert unit.result["error_category"] == "feature_disabled"
+        assert unit.result["provider"] == "launchdarkly"
+        assert unit.result["dataset_key"] == "feature-flags"
+        assert unit.last_retry_reason
 
 
 def test_dispatch_still_uses_celery_when_consumers_are_present(

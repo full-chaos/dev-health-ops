@@ -76,6 +76,7 @@ integer pattern used in ``src/dev_health_ops/api/admin/routers/sync.py:224-239``
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import uuid
 from collections import defaultdict
@@ -88,6 +89,8 @@ from sqlalchemy import func, text
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -256,12 +259,86 @@ class DispatchGuard:
                 or 0
             )
 
+            # CHAOS-3990: the cap governs admitting NEW work. A stale
+            # DISPATCHING candidate is not new work -- it was admitted by an
+            # earlier pass and is still occupying the bucket. Re-deciding it
+            # is the ONLY way it can ever leave ``dispatching``, and
+            # ``_claim_units`` subtracts capped ids from its stale-reclaim
+            # WHERE clause, so capping one is what made it permanent: no
+            # lease to expire, no outbox row to reconcile, no attempt to
+            # retry, holding a slot forever.
+            #
+            # The cap governs admitting NEW work; a unit already occupying the
+            # bucket is always re-decided, because re-deciding it is the only
+            # thing that can free its slot. Reclaims are therefore ORDERED
+            # AHEAD of planned work rather than exempted from the cap --
+            # exempting them would admit more than ``concurrency_cap`` units
+            # whenever ``active_count`` already met the cap.
+            #
+            # Within the reclaim group the order is OLDEST-STALE-FIRST, and
+            # that is what actually kills the strand. A reclaim that still
+            # does not fit is left with its old ``updated_at``, while every
+            # reclaim that DID fit is re-stamped fresh by ``_claim_units`` and
+            # drops out of the reclaim set. So the units that missed out are
+            # strictly the oldest on the next pass: every stale unit reaches
+            # the head within ceil(n / slots) passes. Ordering by unit id --
+            # a stable UUID -- is what made the same unit lose every single
+            # pass, forever.
+            reclaims = sorted(
+                (
+                    unit
+                    for unit in bucket_candidates
+                    if unit.status == SyncRunUnitStatus.DISPATCHING.value
+                ),
+                key=lambda unit: (_as_aware_guard(unit.updated_at), str(unit.id)),
+            )
+            new_work = [
+                unit
+                for unit in bucket_candidates
+                if unit.status != SyncRunUnitStatus.DISPATCHING.value
+            ]
             allowed_slots = max(0, concurrency_cap - int(active_count))
-            if len(bucket_candidates) > allowed_slots:
+            # One cap over one prioritized list: total in-flight stays bounded
+            # by ``concurrency_cap`` exactly as before, and ``slot_headroom``
+            # keeps its old meaning for BudgetGuard's surplus retry.
+            prioritized = [*reclaims, *new_work]
+            if len(prioritized) > allowed_slots:
                 capped_unit_ids.extend(
-                    str(unit.id) for unit in bucket_candidates[allowed_slots:]
+                    str(unit.id) for unit in prioritized[allowed_slots:]
                 )
-            slot_headroom[bucket] = max(0, allowed_slots - len(bucket_candidates))
+            slot_headroom[bucket] = max(0, allowed_slots - len(prioritized))
+
+            # CHAOS-3990: the decision layer was invisible. The wedge was
+            # diagnosable only by reading raw rows, because nothing recorded
+            # WHY a pass admitted nothing. These three numbers are the whole
+            # story of a pass and are predictable in a test: the deadlock
+            # signature is reclaimed_stale == 0 while capped_new stays high,
+            # and a healthy drain steps reclaimed_stale down to 0 as the
+            # strands terminalize.
+            _emit_bucket_decision(
+                org_id=org_id,
+                provider=provider,
+                cost_class=cost_class,
+                active_count=int(active_count),
+                reclaimed_stale=min(len(reclaims), allowed_slots),
+                capped_new=sum(
+                    1
+                    for unit in prioritized[allowed_slots:]
+                    if unit.status != SyncRunUnitStatus.DISPATCHING.value
+                ),
+                # Capped RECLAIMS need their own counter. Without it a bucket
+                # saturated purely by stale work reports
+                # ``reclaimed_stale=0, capped_new=0`` -- indistinguishable
+                # from idle, which is precisely the wedge reading as healthy
+                # (hunt finding). This is the number that says "strands exist
+                # and this pass could not take them".
+                capped_stale=sum(
+                    1
+                    for unit in prioritized[allowed_slots:]
+                    if unit.status == SyncRunUnitStatus.DISPATCHING.value
+                ),
+                slot_headroom=slot_headroom[bucket],
+            )
 
         if capped_unit_ids:
             return GuardDecision(
@@ -273,6 +350,66 @@ class DispatchGuard:
             )
 
         return GuardDecision(True, slot_headroom=slot_headroom)
+
+
+def _emit_bucket_decision(
+    *,
+    org_id: str,
+    provider: str,
+    cost_class: str,
+    active_count: int,
+    reclaimed_stale: int,
+    capped_new: int,
+    capped_stale: int,
+    slot_headroom: int,
+) -> None:
+    """Record one bucket's admission decision as a log line AND span data.
+
+    ``dispatch_sync_run`` already executes inside a Celery task span
+    (``workers/celery_app.py`` calls ``init_tracing`` + ``instrument_celery``),
+    so attaching to the CURRENT span needs no span management here and is a
+    no-op when tracing is disabled. The structured log carries the same
+    numbers so tests and log-only environments can assert them without a
+    tracing backend.
+    """
+
+    bucket = f"{org_id}/{provider}/{cost_class}"
+    logger.info(
+        "dispatch_guard.bucket_decision",
+        extra={
+            "bucket": bucket,
+            "guard.active_count": active_count,
+            "guard.reclaimed_stale": reclaimed_stale,
+            "guard.capped_new": capped_new,
+            "guard.capped_stale": capped_stale,
+            "guard.slot_headroom": slot_headroom,
+        },
+    )
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span is None or not span.is_recording():
+            return
+        span.set_attribute("guard.bucket", bucket)
+        span.set_attribute("guard.active_count", active_count)
+        span.set_attribute("guard.reclaimed_stale", reclaimed_stale)
+        span.set_attribute("guard.capped_new", capped_new)
+        span.set_attribute("guard.capped_stale", capped_stale)
+        span.set_attribute("guard.slot_headroom", slot_headroom)
+        span.add_event(
+            "dispatch_guard.bucket_decision",
+            attributes={
+                "guard.bucket": bucket,
+                "guard.active_count": active_count,
+                "guard.reclaimed_stale": reclaimed_stale,
+                "guard.capped_new": capped_new,
+                "guard.capped_stale": capped_stale,
+                "guard.slot_headroom": slot_headroom,
+            },
+        )
+    except Exception:  # noqa: BLE001 - telemetry must never gate dispatch
+        return
 
 
 def _bucket_advisory_lock_key(org_id: str, provider: str, cost_class: str) -> int:

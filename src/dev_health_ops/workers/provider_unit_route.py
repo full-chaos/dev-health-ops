@@ -466,3 +466,17 @@ class ProviderUnitRouteSwitches:
             provider.strip().lower(),
             dataset.strip().lower(),
         ) in _route_ready_pairs()
+
+
+def route_switch_environment_name(provider: str, dataset: str) -> str:
+    """The ``WORKER_*_ENABLED`` variable that governs this pair's River route.
+
+    Public because operator-facing messages must name the switch an operator
+    would actually flip. Deriving it by string-munging the dataset is wrong for
+    the family aliases, whose matrix identity and switch differ (CHAOS-3990):
+    ``github``/``work-item-labels`` is governed by
+    ``WORKER_GITHUB_WORK_ITEMS_ENABLED``, not by a variable named after the
+    alias -- which does not exist.
+    """
+
+    return f"WORKER_{_switch_field_name(provider, dataset).upper()}_ENABLED"

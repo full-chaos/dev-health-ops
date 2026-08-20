@@ -22,12 +22,18 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.canonical_incident_gate import FEATURE_DISABLED_ERROR_CATEGORY
 from dev_health_ops.sync.guard import _acquire_bucket_advisory_locks
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
+
+# The shipped terminal-denial category, reused rather than reinvented so
+# downstream readers of ``result.error_category`` need no new vocabulary
+# (CHAOS-3990).
+_FEATURE_DISABLED_ERROR_CATEGORY = FEATURE_DISABLED_ERROR_CATEGORY
 
 _DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS = 14
 
@@ -305,6 +311,25 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                     expired_retry_exhausted_count += 1
                 expired_run_ids.add(unit.sync_run_id)
         session.flush()
+        # CHAOS-3990: the never-leased strand. Lease repair above can only
+        # reach RUNNING units whose lease expired; a unit stuck in
+        # ``dispatching`` with no lease has nothing to expire. Sweep those
+        # here, and fold their runs into ``expired_run_ids`` so the finalize
+        # wakeup below actually aggregates the run they were wedging.
+        unreclaimable_count, unreclaimable_run_ids = (
+            _terminalize_unreclaimable_dispatching_units(session, now, limit)
+        )
+        if unreclaimable_count:
+            expired_run_ids |= unreclaimable_run_ids
+            logger.warning(
+                "reconcile_sync_dispatch.unreclaimable_dispatching_terminalized",
+                extra={
+                    "unreclaimable_units": unreclaimable_count,
+                    "error_category": _FEATURE_DISABLED_ERROR_CATEGORY,
+                    "sync_run_ids": sorted(str(r) for r in unreclaimable_run_ids),
+                },
+            )
+        session.flush()
         session.commit()
         session.expire_all()
         repaired_observers = 0
@@ -467,6 +492,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         "expired_units": expired_count,
         "expired_retry_units": expired_retry_count,
         "expired_retry_exhausted_units": expired_retry_exhausted_count,
+        "unreclaimable_dispatching_units": unreclaimable_count,
         "materialized_dispatch": materialized_dispatch,
         "materialized_discovery": materialized_discovery,
         "materialized_finalize": materialized_finalize,
@@ -1082,3 +1108,271 @@ def _nonterminal_run_ids_select():
 
 
 __all__ = ["reconcile_sync_dispatch"]
+
+
+def _unreclaimable_dispatch_seconds() -> int:
+    """How long a never-leased ``dispatching`` unit may sit before it is dead.
+
+    Deliberately far longer than ``SYNC_UNIT_DISPATCH_STALE_SECONDS`` (900s):
+    the stale window means "re-decide this", while this one means "declare
+    this dead". A Celery-published unit legitimately sits in ``dispatching``
+    until a consumer claims it, so the bound has to be generous enough that a
+    merely slow consumer is never destroyed.
+    """
+
+    try:
+        return max(60, int(os.getenv("SYNC_UNIT_UNRECLAIMABLE_SECONDS", "3600")))
+    except ValueError:
+        return 3600
+
+
+def _select_unreclaimable_dispatching_units(
+    session: Any,
+    now: datetime,
+    limit: int,
+) -> list[SyncRunUnit]:
+    """Find units in ``dispatching`` that nothing is working (CHAOS-3990).
+
+    The safety net the lease reaper cannot provide. Lease repair matches
+    RUNNING units with a non-NULL, EXPIRED lease; a unit that was claimed to
+    ``dispatching`` and never published holds no lease at all, so there is
+    nothing to expire and no mechanism in the system can reach it. It keeps a
+    concurrency slot forever and the run can never finalize.
+
+    The predicate is the definition of "nobody is working this":
+
+      * ``dispatching`` past a generous bound, and
+      * no lease owner, no lease expiry, no heartbeat, and
+      * zero attempts -- no consumer ever started it, and
+      * no ``worker_job_outbox`` row -- it never entered the River relay.
+
+    Everything a live runtime touches breaks at least one of those, so this
+    cannot terminalize work in flight. Recovery is the shipped terminal
+    idiom -- ``feature_disabled`` plus a durable reason -- so the run
+    aggregates normally and the slot is released.
+    """
+
+    from dev_health_ops.models import WorkerJobOutbox
+    from dev_health_ops.workers.sync_units import _stale_dispatch_seconds
+
+    # TWO clocks, deliberately. ``created_at`` is how long this unit has
+    # existed without a single attempt; ``updated_at`` is how long since
+    # anything touched it. The age bound MUST hang off ``created_at``, because
+    # ``_claim_units`` re-stamps ``updated_at`` every time it reclaims a stale
+    # unit -- so a unit being reclaimed and re-published on a loop resets the
+    # ``updated_at`` clock forever and would never age into this sweep, which
+    # is exactly the case the sweep exists to catch.
+    #
+    # ``updated_at`` still gates on the ordinary stale window, so a unit the
+    # dispatcher only just published is never touched: the system has to have
+    # already given up on it once before this declares it dead.
+    age_cutoff = now - timedelta(seconds=_unreclaimable_dispatch_seconds())
+    idle_cutoff = now - timedelta(seconds=_stale_dispatch_seconds())
+    wanted = max(1, int(limit))
+
+    # PAGE, rather than limit-then-filter. A unit with an outbox row DID enter
+    # the relay -- River owns its fate and CHAOS-3951's reclaim covers it --
+    # so those rows are dropped here. Applying the limit BEFORE that filter
+    # would let a page full of published rows hide a genuine strand behind
+    # them on every single pass, which is the same "deterministic loser"
+    # failure this whole ticket is about (review round 2).
+    #
+    # The outbox membership test stays a plain IN over one page rather than a
+    # correlated EXISTS on a concatenated key, so the predicate is portable.
+    selected: list[SyncRunUnit] = []
+    seen = 0
+    page_size = wanted
+    while len(selected) < wanted:
+        page = (
+            session.query(SyncRunUnit)
+            .join(SyncRun, SyncRun.id == SyncRunUnit.sync_run_id)
+            .filter(
+                SyncRun.status.not_in(_TERMINAL_RUN_STATUSES),
+                SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                SyncRunUnit.lease_owner.is_(None),
+                SyncRunUnit.lease_expires_at.is_(None),
+                # NULL *or stale*. A budget deferral stamps ``last_heartbeat_at``
+                # even though no worker ever ran (``sync/budget_guard.py``), and
+                # the later RETRYING -> DISPATCHING claim does not clear it. A
+                # strict IS NULL therefore permanently exempts any unit that was
+                # ever budget-deferred -- a whole class of strand this sweep
+                # would silently never reach (hunt finding). What matters is that
+                # nothing is heartbeating NOW.
+                or_(
+                    SyncRunUnit.last_heartbeat_at.is_(None),
+                    SyncRunUnit.last_heartbeat_at <= idle_cutoff,
+                ),
+                SyncRunUnit.attempts == 0,
+                SyncRunUnit.created_at <= age_cutoff,
+                SyncRunUnit.updated_at <= idle_cutoff,
+            )
+            .order_by(SyncRunUnit.created_at.asc(), SyncRunUnit.id.asc())
+            .offset(seen)
+            .limit(page_size)
+            .all()
+        )
+        if not page:
+            break
+        seen += len(page)
+        dedupe_keys = [f"sync.provider_unit:{unit.id}" for unit in page]
+        published = {
+            key
+            for (key,) in session.query(WorkerJobOutbox.dedupe_key)
+            .filter(WorkerJobOutbox.dedupe_key.in_(dedupe_keys))
+            .all()
+        }
+        unpublished = [
+            unit for unit in page if f"sync.provider_unit:{unit.id}" not in published
+        ]
+        # Routability is applied PER PAGE, not to a fixed prefix. Filtering
+        # after the limit would let a page of CELERY/RIVER/DEFER rows mask a
+        # genuine strand behind them on every pass -- the same deterministic
+        # loser this ticket is about, one layer down (hunt finding).
+        selected.extend(_only_unroutable(session, unpublished))
+        if len(page) < page_size:
+            break
+    return selected[:wanted]
+
+
+def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit]:
+    """Keep only units NO runtime can execute (CHAOS-3990, rollback hazard).
+
+    Age plus "never leased, never attempted, no outbox row" is NOT sufficient
+    on its own. During a CUT-19 Celery rollback the fallback consumers are
+    live and a backlogged Celery unit looks identical to a strand: the Celery
+    path writes no outbox row by design, takes no lease until a consumer
+    starts it, and a deep backlog easily exceeds the age bound. Sweeping on
+    age alone would destroy valid work in precisely the scenario the Celery
+    fallthrough exists to protect.
+
+    So the disposition is re-resolved through the SAME shipped resolver the
+    dispatcher uses. Only ``UNROUTABLE`` -- River declines the pair AND the
+    broker confirms nothing consumes the queue it would land in -- is swept.
+    With consumers present the resolver returns CELERY and the unit is left
+    alone; if the probe cannot tell, it returns DEFER and the unit is also
+    left alone. This also makes ``feature_disabled`` the honest category:
+    the sweep only ever fires on units that genuinely have no runtime.
+    """
+
+    if not units:
+        return []
+
+    from dev_health_ops.workers.job_routes import resolve_worker_job_route
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+    from dev_health_ops.workers.provider_unit_transport import (
+        PROVIDER_UNIT_OUTBOX_ROUTES,
+        UnitTransport,
+        resolve_celery_presence,
+        resolve_unit_transport,
+    )
+
+    # This sweep is a safety net running inside reconcile_sync_dispatch,
+    # which also repairs leases and materializes wakeups. A paused/drifted
+    # route or an unreadable broker must degrade to "sweep nothing this
+    # pass", never abort the whole reconcile and take those repairs with it
+    # (hunt finding).
+    try:
+        route = resolve_worker_job_route(session, "sync.provider_unit")
+        switches = (
+            ProviderUnitRouteSwitches.from_environment()
+            if route in PROVIDER_UNIT_OUTBOX_ROUTES
+            else None
+        )
+        presence = resolve_celery_presence(units, switches=switches)
+    except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
+        logger.warning(
+            "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
+            exc_info=True,
+        )
+        return []
+    return [
+        unit
+        for unit in units
+        if resolve_unit_transport(
+            str(unit.provider),
+            str(unit.dataset_key),
+            switches=switches,
+            celery_presence=presence,
+        )
+        is UnitTransport.UNROUTABLE
+    ]
+
+
+def _terminalize_unreclaimable_dispatching_units(
+    session: Any,
+    now: datetime,
+    limit: int,
+) -> tuple[int, set[uuid.UUID]]:
+    """Select, then terminalize.
+
+    Split in two so the read/write interleaving this sweep must survive can be
+    exercised directly, without a test-only hook in the production path.
+    """
+
+    return _terminalize_selected_unreclaimable_units(
+        session, _select_unreclaimable_dispatching_units(session, now, limit), now
+    )
+
+
+def _terminalize_selected_unreclaimable_units(
+    session: Any,
+    unreclaimable: list[SyncRunUnit],
+    now: datetime,
+) -> tuple[int, set[uuid.UUID]]:
+    if not unreclaimable:
+        return 0, set()
+
+    terminalized = 0
+    touched_run_ids: set[uuid.UUID] = set()
+    for unit in unreclaimable:
+        reason = (
+            f"unreclaimable dispatch for {unit.provider}/{unit.dataset_key}: "
+            "held 'dispatching' with no lease, no heartbeat, no attempt and no "
+            "worker_job_outbox row, so no runtime was ever going to execute it"
+        )
+        # CAS on the full never-leased shape: a consumer that claimed this row
+        # to RUNNING between the read and this write takes a lease and an
+        # attempt, so it is excluded by construction.
+        result = session.execute(
+            update(SyncRunUnit)
+            .where(
+                SyncRunUnit.id == unit.id,
+                SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+                SyncRunUnit.lease_owner.is_(None),
+                # Match the selection predicate: NULL *or* stale. The unit's
+                # exact ``last_heartbeat_at`` is pinned by the updated_at CAS
+                # below anyway, so a live worker still cannot be overwritten.
+                or_(
+                    SyncRunUnit.last_heartbeat_at.is_(None),
+                    SyncRunUnit.last_heartbeat_at == unit.last_heartbeat_at,
+                ),
+                SyncRunUnit.attempts == 0,
+                # Pin the exact ``updated_at`` we read: the outbox check runs
+                # during selection, so a dispatcher that reclaims and
+                # publishes AFTER it would add a River job while the
+                # never-leased shape still matched. ``_claim_units``
+                # re-stamps ``updated_at`` in that transaction, so any
+                # concurrent touch invalidates this write instead.
+                SyncRunUnit.updated_at == unit.updated_at,
+            )
+            .values(
+                status=SyncRunUnitStatus.FAILED.value,
+                available_at=None,
+                error=_FEATURE_DISABLED_ERROR_CATEGORY,
+                last_retry_reason=reason,
+                result={
+                    "error_category": _FEATURE_DISABLED_ERROR_CATEGORY,
+                    "reason": reason,
+                    "provider": str(unit.provider),
+                    "dataset_key": str(unit.dataset_key),
+                },
+                lease_owner=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(result.rowcount or 0) > 0:
+            terminalized += 1
+            touched_run_ids.add(unit.sync_run_id)
+    return terminalized, touched_run_ids

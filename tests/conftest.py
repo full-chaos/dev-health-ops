@@ -75,6 +75,36 @@ def mock_analytics_db_url(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_celery_consumer_presence(monkeypatch):
+    """Keep the CHAOS-3941 Celery consumer probe off the network.
+
+    ``probe_celery_consumers`` opens a broker connection and broadcasts to the
+    pidbox. Left live, a unit test's transport decision would depend on whether
+    a developer happens to have a Valkey/Redis and a Celery worker running --
+    broker up with zero workers reports ABSENT and flips dispatch onto the
+    terminalize path, so the suite would pass in CI and fail locally (or the
+    reverse).
+
+    Pinned to PRESENT, not UNKNOWN (review finding): PRESENT is the world every
+    pre-existing dispatcher test was written in -- "the Celery fallback is
+    live" -- so those tests keep asserting the behaviour they were written to
+    assert, rather than silently exercising a different branch. Tests that
+    exercise the guard opt into ABSENT or UNKNOWN explicitly.
+    """
+
+    from dev_health_ops.workers import celery_consumers
+
+    celery_consumers.reset_celery_consumer_probe_cache()
+    monkeypatch.setattr(
+        celery_consumers,
+        "probe_celery_consumers",
+        lambda *_args, **_kwargs: celery_consumers.CeleryConsumerPresence.PRESENT,
+    )
+    yield
+    celery_consumers.reset_celery_consumer_probe_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_sync_db_engine():
     """Reset the cached global sync Postgres engine around every test.
 

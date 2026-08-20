@@ -755,3 +755,35 @@ func TestValidationErrorsDoNotEchoInvalidValues(t *testing.T) {
 		t.Fatalf("error leaked invalid secret: %v", err)
 	}
 }
+
+// CHAOS-4005 / CHAOS-4020: the flag is canonical and the environment is only a
+// fallback. A deployment that still carries the env var must not override an
+// operator who passed the flag explicitly.
+func TestUnreclaimableSweepFlagBeatsEnvironment(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		flag string
+		env  map[string]string
+		want string
+	}{
+		{"flag only", "active", nil, "active"},
+		{"env only", "", map[string]string{"SYNC_UNRECLAIMABLE_SWEEP": "active"}, "active"},
+		{"flag wins", "off", map[string]string{"SYNC_UNRECLAIMABLE_SWEEP": "active"}, "off"},
+		{"neither", "", nil, ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg, err := Load(Spec{
+				Service:            "dev-health-reconciler",
+				UnreclaimableSweep: testCase.flag,
+				LookupEnv:          lookup(testCase.env),
+			})
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if cfg.UnreclaimableSweepMode != testCase.want {
+				t.Fatalf("UnreclaimableSweepMode = %q, want %q",
+					cfg.UnreclaimableSweepMode, testCase.want)
+			}
+		})
+	}
+}

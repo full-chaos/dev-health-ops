@@ -106,7 +106,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry,
+		*syncdispatchcontract.Registry, config.Config,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -188,6 +188,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		*pgxpool.Pool,
 		string,
 		*syncdispatchcontract.Registry,
+		config.Config,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -407,7 +408,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry,
+		*syncdispatchcontract.Registry, config.Config,
 	) (syncreconciler.Stepper, error) {
 		return nil, errors.New("sync mutation construction failed")
 	}
@@ -604,7 +605,7 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry,
+		*syncdispatchcontract.Registry, config.Config,
 	) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"go/ast"
 	"go/build/constraint"
 	"go/parser"
@@ -138,7 +139,7 @@ func TestProductionReconcilerSelectsTheMutationStepper(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry,
+		*syncdispatchcontract.Registry, config.Config,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilt = true
 		return syncStepFunc(func(
@@ -223,7 +224,7 @@ func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry,
+		*syncdispatchcontract.Registry, config.Config,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilt = true
 		return syncStepFunc(func(

@@ -13,6 +13,8 @@ import (
 var reconcilerSpec = shell.Spec{
 	Service:                         "dev-health-reconciler",
 	ConfigureDependenciesWithLogger: configureReconcilerDependenciesWithLogger,
+	// CHAOS-4005: the reconciler owns the unreclaimable-dispatching sweep.
+	UnreclaimableSweep: true,
 }
 
 func main() {

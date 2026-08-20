@@ -135,6 +135,7 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 		}),
 		publish,
 		postSync,
+		nil,
 		config,
 	)
 	if err != nil {
@@ -178,6 +179,7 @@ func TestMutationPipelineStopsAtFirstFailedStage(t *testing.T) {
 		}),
 		nil,
 		nil,
+		nil,
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -213,6 +215,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		validObserver,
 		nil,
 		nil,
+		nil,
 		DefaultMutationPipelineConfig(),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing repair error = %v", err)
@@ -227,6 +230,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		validObserver,
 		nil,
 		nil,
+		nil,
 		invalid,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("invalid config error = %v", err)
@@ -237,6 +241,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		validMaterializer,
 		validKernel,
 		validObserver,
+		nil,
 		nil,
 		nil,
 		DefaultMutationPipelineConfig(),
@@ -314,6 +319,7 @@ func newRecoveryCountingPipeline(
 		}),
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
 		DefaultMutationPipelineConfig(),
 	)
 }
@@ -356,6 +362,7 @@ func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
 				}),
 				AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 				PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+				nil,
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {

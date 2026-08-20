@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"log/slog"
 	"time"
 
@@ -173,7 +174,7 @@ type reconcilerDependencySources struct {
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
-	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry, config.Config) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
@@ -226,8 +227,13 @@ func buildSyncMutationPipeline(
 	queuePool *pgxpool.Pool,
 	riverSchema string,
 	registry *syncdispatchcontract.Registry,
+	cfg config.Config,
 ) (syncreconciler.Stepper, error) {
 	repair, err := syncreconciler.NewLeaseRepair(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	sweep, err := buildUnreclaimableSweep(domainPool, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +291,7 @@ func buildSyncMutationPipeline(
 		observer,
 		publish,
 		nil,
+		sweep,
 		syncreconciler.DefaultMutationPipelineConfig(),
 	)
 }
@@ -575,6 +582,7 @@ func buildReconcilerDependencies(
 			dependencies.database.QueuePool(),
 			cfg.RiverDatabaseSchema,
 			dependencies.syncDispatchRegistry,
+			cfg,
 		)
 	} else {
 		syncStepper, err = sources.buildSyncShadow(
@@ -802,4 +810,45 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 		component.database.Close()
 	}
 	return nil
+}
+
+// buildUnreclaimableSweep wires the CHAOS-4005 safety net.
+//
+// Mode is the only knob, and it carries the whole decision:
+//
+//   - off     -- disabled outright;
+//   - shadow  -- DEFAULT. Selects and reports what it would terminalize, and
+//     writes nothing, so every deployment gets the observability
+//     with no write risk and no activation step;
+//   - active  -- permitted to terminalize. Setting it IS the operator's
+//     declaration that no Celery consumer serves provider units
+//     for this deployment.
+//
+// An earlier cut read EXPECTED_WORKER_GROUPS as that declaration. That was
+// wrong twice over: the variable's own contract explicitly excludes the
+// reconciler (deploy/kubernetes/go-workers.yaml, above its definition), and a
+// second variable asserting what the mode already asserts is the env sprawl
+// CHAOS-4020 exists to remove.
+//
+// Rollback safety does not rest on the mode at all: the sweep reads the
+// durable worker_job_routes row and declines unless River owns provider units,
+// so a CUT-19 rollback is covered by mechanism rather than by an operator
+// remembering to flip something back.
+func buildUnreclaimableSweep(
+	domainPool *pgxpool.Pool,
+	cfg config.Config,
+) (syncreconciler.UnreclaimableSweepStepper, error) {
+	mode, err := syncreconciler.ParseSweepMode(cfg.UnreclaimableSweepMode)
+	if err != nil {
+		return nil, err
+	}
+	if mode == syncreconciler.SweepModeOff {
+		return nil, nil
+	}
+	return syncreconciler.NewUnreclaimableSweep(domainPool, syncreconciler.UnreclaimableSweepConfig{
+		Age:      syncreconciler.DefaultUnreclaimableAge,
+		Idle:     syncreconciler.DefaultUnreclaimableIdle,
+		Mode:     mode,
+		Switches: providersync.RouteSwitchesFromConfig(cfg),
+	})
 }

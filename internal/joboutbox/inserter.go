@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivercontrib/otelriver"
 )
 
 var schemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -34,7 +35,14 @@ func NewRiverInserter(pool *pgxpool.Pool, schema string, registry PolicyRegistry
 	if pool == nil || registry == nil || !schemaPattern.MatchString(schema) {
 		return nil, ErrInvalidConfiguration
 	}
-	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: schema})
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+		Schema: schema,
+		// otelriver picks up the global tracer/meter provider tracing.Init
+		// installs at process start (or no-ops when tracing is disabled), so the
+		// outbox->River insert boundary gets a river.insert_many span without
+		// this client needing to know whether tracing is on.
+		Middleware: []rivertype.Middleware{otelriver.NewMiddleware(nil)},
+	})
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}
@@ -93,6 +101,7 @@ type relayArgs struct {
 	OrganizationID  *string                `json:"organization_id,omitempty"`
 	CorrelationID   string                 `json:"correlation_id"`
 	IdempotencyKey  string                 `json:"idempotency_key" river:"unique"`
+	TraceParent     string                 `json:"trace_parent,omitempty"`
 	Domain          jobcontract.DomainLink `json:"domain"`
 	Payload         json.RawMessage        `json:"payload"`
 	kind            string

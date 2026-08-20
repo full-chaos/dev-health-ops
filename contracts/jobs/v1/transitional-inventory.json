@@ -3045,12 +3045,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:716",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:717",
       "surface": "system.retention_cleanup",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 716
+        "line": 717
       },
       "queue_or_cadence": "retention / ops",
       "dispatches": "n/a (native Go, worker_job_outbox terminal-row deletes only)",
@@ -3069,12 +3069,12 @@
       "notes": "does NOT cover prune_rate_limit_observations/prune_external_ingest_batches (gap 2.6)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:758",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:759",
       "surface": "system.sync_coverage_refresh",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 758
+        "line": 759
       },
       "queue_or_cadence": "coverage / ops",
       "dispatches": "native bounded projection refresh",
@@ -3093,12 +3093,12 @@
       "notes": "Fixed scheduler emits one bounded five-minute occurrence; ops worker owns the coverage queue and native PostgreSQL projector."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:790",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:791",
       "surface": "workgraph.build",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 790
+        "line": 791
       },
       "queue_or_cadence": "workgraph / heavy",
       "dispatches": "run_work_graph_build",

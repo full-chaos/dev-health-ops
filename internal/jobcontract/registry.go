@@ -436,7 +436,7 @@ func validateEnvelopeSchema(data []byte) error {
 	}
 	expectedProperties := []string{
 		"contract_version", "organization_id", "correlation_id",
-		"idempotency_key", "domain", "payload",
+		"idempotency_key", "trace_parent", "domain", "payload",
 	}
 	expectedRequired := []string{
 		"contract_version", "correlation_id", "idempotency_key", "domain", "payload",

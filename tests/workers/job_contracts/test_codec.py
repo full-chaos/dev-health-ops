@@ -214,6 +214,81 @@ def test_transitional_producer_adapter_uses_same_validation() -> None:
     )
 
 
+def test_trace_parent_round_trips_and_is_positioned_before_domain() -> None:
+    trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    envelope = build_envelope(
+        HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        correlation_id="job-heartbeat-0001",
+        idempotency_key="heartbeat:2026-07-21T12:00:00Z",
+        domain_id="00000000-0000-4000-8000-000000000001",
+        trace_parent=trace_parent,
+    )
+    assert envelope.trace_parent == trace_parent
+
+    encoded = encode_envelope(envelope)
+    document = json.loads(encoded)
+    assert document["trace_parent"] == trace_parent
+    # Position matches Go's wireEnvelope field order exactly: the shared
+    # canonical bytes (and payload_hash) depend on it (CHAOS-3993).
+    assert (
+        list(document.keys()).index("trace_parent")
+        == list(document.keys()).index("domain") - 1
+    )
+
+    decoded = decode_envelope(KIND_HEARTBEAT, encoded)
+    assert decoded.trace_parent == trace_parent
+
+
+def test_trace_parent_omitted_when_absent_keeps_golden_fixtures_unchanged() -> None:
+    envelope = build_envelope(
+        HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        correlation_id="job-heartbeat-0001",
+        idempotency_key="heartbeat:2026-07-21T12:00:00Z",
+        domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    assert envelope.trace_parent is None
+    encoded = encode_envelope(envelope)
+    assert b"trace_parent" not in encoded
+    assert (
+        encoded
+        == (default_contract_root() / "examples/system.heartbeat.v1.json").read_bytes()
+    )
+
+
+def test_trace_parent_explicit_empty_string_is_omitted_like_none() -> None:
+    # Go's `omitempty` drops a zero-value (empty) string field when marshaling
+    # the canonical envelope; encode_envelope must match that for an explicit
+    # "" the same way it already matches it for None, or the two languages'
+    # canonical bytes -- and therefore payload_hash -- would disagree for
+    # this one input.
+    envelope = build_envelope(
+        HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        correlation_id="job-heartbeat-0001",
+        idempotency_key="heartbeat:2026-07-21T12:00:00Z",
+        domain_id="00000000-0000-4000-8000-000000000001",
+        trace_parent="",
+    )
+    encoded = encode_envelope(envelope)
+    assert b"trace_parent" not in encoded
+    assert (
+        encoded
+        == (default_contract_root() / "examples/system.heartbeat.v1.json").read_bytes()
+    )
+
+
+def test_trace_parent_rejects_malformed_nonempty_values() -> None:
+    fixture = default_contract_root() / "examples/system.heartbeat.v1.trace_parent.json"
+    document = json.loads(fixture.read_text())
+    for malformed in (
+        "not-a-traceparent",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",  # missing flags
+        "01-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01",  # uppercase
+    ):
+        document["trace_parent"] = malformed
+        with pytest.raises(ContractDecodeError):
+            decode_envelope(KIND_HEARTBEAT, json.dumps(document))
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

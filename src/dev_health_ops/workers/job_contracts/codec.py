@@ -72,6 +72,9 @@ _UUID = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
+# W3C Trace Context traceparent: version-traceid-spanid-flags, all lowercase
+# hex (https://www.w3.org/TR/trace-context/#traceparent-header-field-values).
+_TRACE_PARENT = re.compile(r"^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 _MAX_JSON_DEPTH = 16
 _REMAINING_PAYLOAD_TYPES = (
     RemainingCapacityPayload,
@@ -137,7 +140,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
             "domain",
             "payload",
         },
-        optional={"organization_id"},
+        optional={"organization_id", "trace_parent"},
         label="envelope",
     )
     version = _expect_int(envelope["contract_version"], "contract_version")
@@ -178,6 +181,14 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     idempotency_key = _expect_string(envelope["idempotency_key"], "idempotency_key")
     _validate_safe_id("correlation_id", correlation_id, 128)
     _validate_safe_id("idempotency_key", idempotency_key, 256)
+
+    trace_parent_value = envelope.get("trace_parent")
+    trace_parent: str | None
+    if trace_parent_value is None:
+        trace_parent = None
+    else:
+        trace_parent = _expect_string(trace_parent_value, "trace_parent")
+        _validate_trace_parent(trace_parent)
 
     domain_raw = _expect_object(
         envelope["domain"], required={"type", "id"}, optional=set(), label="domain"
@@ -282,6 +293,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         idempotency_key=idempotency_key,
         domain=DomainLink(type=domain_type, id=domain_id),
         payload=payload,
+        trace_parent=trace_parent,
     )
 
 
@@ -292,6 +304,7 @@ def build_envelope(
     idempotency_key: str,
     domain_id: str,
     organization_id: str | None = None,
+    trace_parent: str | None = None,
 ) -> Envelope:
     """Build and validate arguments for the transitional outbox producer."""
 
@@ -326,6 +339,7 @@ def build_envelope(
         idempotency_key=idempotency_key,
         domain=DomainLink(type=payload.DOMAIN_TYPE, id=domain_id),
         payload=payload,
+        trace_parent=trace_parent,
     )
     # A round trip keeps producer and consumer validation identical.
     return decode_envelope(payload.KIND, encode_envelope(envelope))
@@ -337,10 +351,20 @@ def encode_envelope(envelope: Envelope) -> bytes:
     document: dict[str, Any] = {"contract_version": envelope.contract_version}
     if envelope.organization_id is not None:
         document["organization_id"] = envelope.organization_id
+    document["correlation_id"] = envelope.correlation_id
+    document["idempotency_key"] = envelope.idempotency_key
+    # Position matches internal/jobcontract.wireEnvelope's field order exactly:
+    # canonical bytes must be identical between Python and Go for the shared
+    # payload_hash to match (CHAOS-3993). Checked truthy, not `is not None`:
+    # Go's `omitempty` drops an empty string, so an explicit "" here would
+    # otherwise emit a key Go's own canonical serializer never would, making
+    # the two languages' canonical bytes -- and payload_hash -- disagree for
+    # that one input.
+    if envelope.trace_parent:
+        _validate_trace_parent(envelope.trace_parent)
+        document["trace_parent"] = envelope.trace_parent
     document.update(
         {
-            "correlation_id": envelope.correlation_id,
-            "idempotency_key": envelope.idempotency_key,
             "domain": {"type": envelope.domain.type, "id": envelope.domain.id},
             "payload": _payload_document(envelope.payload),
         }
@@ -678,6 +702,11 @@ def _validate_safe_id(label: str, value: str, maximum: int) -> None:
 def _validate_uuid(label: str, value: str) -> None:
     if not _UUID.fullmatch(value):
         raise ContractDecodeError(f"{label} must be a lowercase UUID")
+
+
+def _validate_trace_parent(value: str) -> None:
+    if not _TRACE_PARENT.fullmatch(value):
+        raise ContractDecodeError("trace_parent must be a W3C traceparent value")
 
 
 def _validate_utc_timestamp(label: str, value: str) -> None:

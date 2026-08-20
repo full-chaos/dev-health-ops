@@ -32,6 +32,10 @@
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
     },
+    "trace_parent": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
     "domain": {
       "type": "object",
       "additionalProperties": false,

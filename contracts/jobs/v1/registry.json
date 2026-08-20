@@ -708,7 +708,8 @@
       },
       "fixtures": {
         "1": [
-          "examples/system.heartbeat.v1.json"
+          "examples/system.heartbeat.v1.json",
+          "examples/system.heartbeat.v1.trace_parent.json"
         ]
       }
     },

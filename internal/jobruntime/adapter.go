@@ -11,6 +11,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Handler receives a validated, scoped, deadline-bound job context. It never
@@ -280,6 +285,10 @@ func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error
 func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], labels JobLabels) (choice decision, envelope jobcontract.Envelope, returned error) {
 	choice = decision{result: ResultCancel, category: CategoryValidation, cancel: true}
 	var claim IdempotencyClaim
+	// span is created once the envelope decodes (startJobSpan below); a job
+	// that fails validation/decode before that point stays nil here and relies
+	// on otelriver's own river.work span for baseline visibility.
+	var span oteltrace.Span
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			attempt := 1
@@ -298,6 +307,9 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 				}
 			}
 		}
+		// Runs on every path -- panic, early return, or normal completion --
+		// because named returns are already final by the time this runs last.
+		finishJobSpan(span, choice, returned)
 	}()
 
 	if job == nil || job.JobRow == nil {
@@ -316,6 +328,7 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	}
 	envelope = decoded
 	adapter.logStart(parent, job, envelope)
+	parent, span = startJobSpan(parent, adapter.descriptor, job.ID, job.Attempt, envelope)
 
 	ctx, cancel := context.WithTimeout(parent, adapter.descriptor.Timeout)
 	defer cancel()
@@ -504,6 +517,70 @@ func (adapter *Adapter[T]) logFinish(ctx context.Context, job *river.Job[T], env
 		)
 	}
 	adapter.logger.InfoContext(ctx, "job finished", attributes...)
+}
+
+// jobTracerName scopes the span by the package that creates it, the
+// OpenTelemetry convention, rather than by any one job kind -- this single
+// scope covers every kind Adapter executes. otel.Tracer is looked up fresh on
+// every call rather than cached in a package var: otel's global delegation
+// only rebinds an already-vended Tracer handle to the first TracerProvider it
+// ever sees (go.opentelemetry.io/otel/internal/global's setDelegate runs
+// behind a sync.Once), so a package-level Tracer var would stay silently
+// bound to whichever provider tracing.Init installed first and ignore any
+// later one -- invisible in production (Init runs once and stays), but the
+// exact failure mode a naive test of this function hits.
+const jobTracerName = "github.com/full-chaos/dev-health-ops/internal/jobruntime"
+
+// startJobSpan opens the one span every Adapter-executed job kind gets,
+// parented from envelope.TraceParent when the Python producer captured one at
+// enqueue time (CHAOS-3993) so a sync run's outbox-relayed work lands in the
+// same trace it was dispatched from. otelriver's own river.work span (wired
+// in cmd/dev-health-worker/river_process.go and
+// internal/joboutbox/inserter.go) is the parent in context when this runs;
+// this span nests under it and carries the attributes otelriver's baseline
+// span does not: job id, correlation id, and domain identity.
+func startJobSpan(
+	ctx context.Context,
+	descriptor Descriptor,
+	jobID int64,
+	attempt int,
+	envelope jobcontract.Envelope,
+) (context.Context, oteltrace.Span) {
+	if envelope.TraceParent != "" {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": envelope.TraceParent})
+	}
+	attributes := []attribute.KeyValue{
+		attribute.String("dev_health.job.kind", descriptor.Kind),
+		attribute.String("dev_health.job.queue", descriptor.Queue),
+		attribute.Int64("dev_health.job.id", jobID),
+		attribute.Int("dev_health.job.attempt", attempt),
+		attribute.String("dev_health.correlation_id", envelope.CorrelationID),
+		attribute.String("dev_health.domain.type", envelope.Domain.Type),
+		attribute.String("dev_health.domain.id", envelope.Domain.ID),
+	}
+	if envelope.OrganizationID != nil {
+		attributes = append(attributes, attribute.String("dev_health.organization_id", *envelope.OrganizationID))
+	}
+	return otel.Tracer(jobTracerName).Start(ctx, "dev_health.job.execute", oteltrace.WithAttributes(attributes...))
+}
+
+// finishJobSpan is safe to call with a nil span: a job that fails validation
+// or decode before startJobSpan runs never gets one.
+func finishJobSpan(span oteltrace.Span, choice decision, err error) {
+	if span == nil {
+		return
+	}
+	span.SetAttributes(
+		attribute.String("dev_health.job.result", string(choice.result)),
+		attribute.String("dev_health.job.error_category", string(choice.category)),
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	span.End()
 }
 
 func waitResultForContext(ctx context.Context) string {

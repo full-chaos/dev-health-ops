@@ -96,6 +96,10 @@ var (
 	safeIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 	domainTypePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	uuidPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	// traceParentPattern is the W3C Trace Context traceparent value shape:
+	// version-traceid-spanid-flags, all lowercase hex.
+	// https://www.w3.org/TR/trace-context/#traceparent-header-field-values
+	traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`)
 )
 
 // DomainLink points to authoritative product or schedule state. Queue state is
@@ -108,12 +112,17 @@ type DomainLink struct {
 // Envelope is the common, bounded portion of all Dev Health job arguments.
 // Payload is a concrete type after Decode succeeds.
 type Envelope struct {
-	ContractVersion int        `json:"contract_version"`
-	OrganizationID  *string    `json:"organization_id,omitempty"`
-	CorrelationID   string     `json:"correlation_id"`
-	IdempotencyKey  string     `json:"idempotency_key"`
-	Domain          DomainLink `json:"domain"`
-	Payload         any        `json:"payload"`
+	ContractVersion int     `json:"contract_version"`
+	OrganizationID  *string `json:"organization_id,omitempty"`
+	CorrelationID   string  `json:"correlation_id"`
+	IdempotencyKey  string  `json:"idempotency_key"`
+	// TraceParent is the optional W3C traceparent header value captured by the
+	// Python producer at enqueue time. It links the outbox-relayed River job
+	// back into the trace that created it (CHAOS-3993); absent when tracing is
+	// disabled or the producer predates this field.
+	TraceParent string     `json:"trace_parent,omitempty"`
+	Domain      DomainLink `json:"domain"`
+	Payload     any        `json:"payload"`
 }
 
 // HeartbeatPayload is the v1 payload for the unique periodic heartbeat pilot.
@@ -230,6 +239,7 @@ type wireEnvelope struct {
 	OrganizationID  *string         `json:"organization_id,omitempty"`
 	CorrelationID   string          `json:"correlation_id"`
 	IdempotencyKey  string          `json:"idempotency_key"`
+	TraceParent     string          `json:"trace_parent,omitempty"`
 	Domain          DomainLink      `json:"domain"`
 	Payload         json.RawMessage `json:"payload"`
 }
@@ -552,6 +562,7 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		OrganizationID:  wire.OrganizationID,
 		CorrelationID:   wire.CorrelationID,
 		IdempotencyKey:  wire.IdempotencyKey,
+		TraceParent:     wire.TraceParent,
 		Domain:          wire.Domain,
 		Payload:         payload,
 	}, nil
@@ -609,6 +620,7 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		OrganizationID:  envelope.OrganizationID,
 		CorrelationID:   envelope.CorrelationID,
 		IdempotencyKey:  envelope.IdempotencyKey,
+		TraceParent:     envelope.TraceParent,
 		Domain:          envelope.Domain,
 		Payload:         payload,
 	}
@@ -648,6 +660,9 @@ func validateCommon(definition contractDefinition, wire wireEnvelope) error {
 	}
 	if err := validateSafeID("idempotency_key", wire.IdempotencyKey, 256); err != nil {
 		return err
+	}
+	if wire.TraceParent != "" && !traceParentPattern.MatchString(wire.TraceParent) {
+		return errors.New("trace_parent must be a W3C traceparent value")
 	}
 	if wire.Domain.Type != definition.DomainLink {
 		return fmt.Errorf("domain.type must be %q", definition.DomainLink)

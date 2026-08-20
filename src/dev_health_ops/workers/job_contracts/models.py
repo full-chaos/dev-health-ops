@@ -349,3 +349,6 @@ class Envelope:
     idempotency_key: str
     domain: DomainLink
     payload: JobPayload
+    # Optional W3C traceparent captured at enqueue time, absent when tracing
+    # is disabled or the row predates this field (CHAOS-3993).
+    trace_parent: str | None = None

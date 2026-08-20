@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivercontrib/otelriver"
 )
 
 type riverWorkerProcess struct {
@@ -117,5 +119,10 @@ func riverWorkerClientConfig(
 		ReindexerIndexNames: reindexDisabled(),
 		Schema:              cfg.RiverDatabaseSchema,
 		Workers:             workers,
+		// otelriver emits the baseline river.work span (kind, queue, status) for
+		// every claimed job, picking up the global tracer provider tracing.Init
+		// installs at process start (a no-op TracerProvider when tracing is
+		// disabled, so this is safe with or without OTEL_ENABLED). CHAOS-3993.
+		Middleware: []rivertype.Middleware{otelriver.NewMiddleware(nil)},
 	}
 }

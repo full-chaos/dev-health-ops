@@ -64,15 +64,6 @@ spec:
             {{- if not $group.queues }}
             - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: {{ printf "%ds" (int $group.terminationGracePeriodSeconds) | quote }}}
             {{- end }}
-            {{- if eq $group.name "reconciler" }}
-            # CHAOS-4005: the unreclaimable-dispatching sweep reads this as the
-            # deployment's declaration that no Celery consumer serves provider
-            # units. CHAOS-3942 excludes reconciler/scheduler/stream-* from
-            # /health/workers FLEET membership -- they register no
-            # worker_instances presence, still true -- so this is a second,
-            # read-only consumer of the same declaration. Absent means defer.
-            - {name: EXPECTED_WORKER_GROUPS, value: {{ $.Values.goWorkers.expectedWorkerGroups | join "," | quote }}}
-            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool plus
             # the River queue session pool. Only coordinator binaries receive

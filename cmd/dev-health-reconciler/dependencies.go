@@ -1,9 +1,6 @@
 package main
 
 import (
-	"os"
-	"strings"
-
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -805,35 +802,41 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 
 // buildUnreclaimableSweep wires the CHAOS-4005 safety net.
 //
-// It returns a nil stepper -- not an error -- when the deployment has not
-// declared its worker topology. EXPECTED_WORKER_GROUPS is set only by Go-only
-// deployments (see src/dev_health_ops/api/_health.py), so an unset value means
-// Celery may still be consuming and the sweep must not run at all. That is the
-// fail-safe, not a misconfiguration.
+// Mode is the only knob, and it carries the whole decision:
 //
-// Mode defaults to SHADOW. This is the safety net that was silently absent
-// from production for the whole of CHAOS-3990, so its selection is proven
-// against real rows before it is permitted to terminalize anything. Setting
-// SYNC_UNRECLAIMABLE_SWEEP_MODE=active flips it.
+//   - off     -- disabled outright;
+//   - shadow  -- DEFAULT. Selects and reports what it would terminalize, and
+//     writes nothing, so every deployment gets the observability
+//     with no write risk and no activation step;
+//   - active  -- permitted to terminalize. Setting it IS the operator's
+//     declaration that no Celery consumer serves provider units
+//     for this deployment.
+//
+// An earlier cut read EXPECTED_WORKER_GROUPS as that declaration. That was
+// wrong twice over: the variable's own contract explicitly excludes the
+// reconciler (deploy/kubernetes/go-workers.yaml, above its definition), and a
+// second variable asserting what the mode already asserts is the env sprawl
+// CHAOS-4020 exists to remove.
+//
+// Rollback safety does not rest on the mode at all: the sweep reads the
+// durable worker_job_routes row and declines unless River owns provider units,
+// so a CUT-19 rollback is covered by mechanism rather than by an operator
+// remembering to flip something back.
 func buildUnreclaimableSweep(
 	domainPool *pgxpool.Pool,
 	cfg config.Config,
 ) (syncreconciler.UnreclaimableSweepStepper, error) {
-	presence := syncreconciler.PresenceFromExpectedWorkerGroups(
-		os.Getenv("EXPECTED_WORKER_GROUPS"),
-	)
-	if presence != syncreconciler.CeleryAbsent {
-		return nil, nil
+	mode, err := syncreconciler.ParseSweepMode(cfg.UnreclaimableSweepMode)
+	if err != nil {
+		return nil, err
 	}
-	mode := syncreconciler.SweepModeShadow
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("SYNC_UNRECLAIMABLE_SWEEP_MODE")), "active") {
-		mode = syncreconciler.SweepModeActive
+	if mode == syncreconciler.SweepModeOff {
+		return nil, nil
 	}
 	return syncreconciler.NewUnreclaimableSweep(domainPool, syncreconciler.UnreclaimableSweepConfig{
 		Age:      syncreconciler.DefaultUnreclaimableAge,
 		Idle:     syncreconciler.DefaultUnreclaimableIdle,
 		Mode:     mode,
 		Switches: providersync.RouteSwitchesFromConfig(cfg),
-		Presence: presence,
 	})
 }

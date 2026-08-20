@@ -42,10 +42,14 @@ type ConfigureDependenciesWithLogger func(
 ) ([]lifecycle.Component, error)
 
 type Spec struct {
-	Service                         string
-	Profiles                        []string
-	DefaultProfile                  string
-	RequireQueues                   bool
+	Service        string
+	Profiles       []string
+	DefaultProfile string
+	RequireQueues  bool
+	// UnreclaimableSweep registers --unreclaimable-sweep for services that own
+	// the CHAOS-4005 safety net. Flag-first with an env fallback, per
+	// CHAOS-4020's direction away from per-knob environment variables.
+	UnreclaimableSweep              bool
 	ConfigureDependencies           ConfigureDependencies
 	ConfigureDependenciesWithLogger ConfigureDependenciesWithLogger
 }
@@ -137,7 +141,7 @@ func Execute(
 	var selectedProfile *string
 	var selectedQueues repeatedStringFlag
 	var queueConcurrency repeatedStringFlag
-	var workerGroup, shutdownTimeout string
+	var workerGroup, shutdownTimeout, unreclaimableSweep string
 	if len(spec.Profiles) > 0 {
 		selectedProfile = flags.String("profile", "", "runtime profile")
 	}
@@ -150,6 +154,16 @@ func Execute(
 		)
 		flags.StringVar(&workerGroup, "worker-group", "", "stable worker group label for logs and metrics")
 		flags.StringVar(&shutdownTimeout, "shutdown-timeout", "", "graceful shutdown timeout")
+	}
+	if spec.UnreclaimableSweep {
+		flags.StringVar(
+			&unreclaimableSweep,
+			"unreclaimable-sweep",
+			"",
+			"unreclaimable dispatch sweep: off|shadow|active (default shadow). "+
+				"Setting active asserts that no Celery consumer serves provider "+
+				"units for this deployment",
+		)
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -185,9 +199,10 @@ func Execute(
 		QueueConcurrency: append(
 			[]string(nil), queueConcurrency...,
 		),
-		WorkerGroup:     workerGroup,
-		ShutdownTimeout: shutdownTimeout,
-		LookupEnv:       lookup,
+		WorkerGroup:        workerGroup,
+		ShutdownTimeout:    shutdownTimeout,
+		UnreclaimableSweep: unreclaimableSweep,
+		LookupEnv:          lookup,
 	})
 	if err != nil {
 		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))

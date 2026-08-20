@@ -76,7 +76,10 @@ type Spec struct {
 	QueueConcurrency []string
 	WorkerGroup      string
 	ShutdownTimeout  string
-	LookupEnv        secrets.LookupEnv
+	// UnreclaimableSweep is the raw --unreclaimable-sweep value. Empty means
+	// the flag was not given, in which case the environment is consulted.
+	UnreclaimableSweep string
+	LookupEnv          secrets.LookupEnv
 }
 
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
@@ -96,8 +99,12 @@ type Config struct {
 	// changes handler construction.
 	WorkerGroup string
 
-	HTTPAddress     string
-	ShutdownTimeout time.Duration
+	HTTPAddress string
+	// UnreclaimableSweepMode is the resolved off|shadow|active choice for the
+	// reconciler's unreclaimable-dispatching sweep. Flag wins over env; empty
+	// means neither was supplied and the sweep uses its shadow default.
+	UnreclaimableSweepMode string
+	ShutdownTimeout        time.Duration
 	// ShutdownTimeoutExplicit records whether ShutdownTimeout came from the
 	// operator rather than the package default. The worker's drain budget is
 	// ShutdownTimeout minus a finalization buffer and must cover the longest
@@ -281,6 +288,14 @@ func Load(spec Spec) (Config, error) {
 	cfg.ShutdownTimeoutExplicit = durationArgumentOrEnvSet(
 		spec.ShutdownTimeout, lookup, "DEV_HEALTH_SHUTDOWN_TIMEOUT",
 	)
+	// Flag is canonical; the environment is only consulted when the flag was
+	// not given (CHAOS-4020).
+	cfg.UnreclaimableSweepMode = strings.TrimSpace(spec.UnreclaimableSweep)
+	if cfg.UnreclaimableSweepMode == "" {
+		if value, ok := lookup("SYNC_UNRECLAIMABLE_SWEEP"); ok {
+			cfg.UnreclaimableSweepMode = strings.TrimSpace(value)
+		}
+	}
 	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)

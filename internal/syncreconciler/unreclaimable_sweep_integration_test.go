@@ -165,7 +165,6 @@ func newSweepForTest(t *testing.T, pool *pgxpool.Pool, mode SweepMode) *Unreclai
 		Mode: mode,
 		// tests / pr-reviews / pr-comments left off: the production wedge.
 		Switches: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
-		Presence: CeleryAbsent,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -587,5 +586,27 @@ func TestUnreclaimableSweepReachesAStrandBehindALongIneligiblePrefix(t *testing.
 	}
 	if result.Terminalized != 1 || len(result.UnitIDs) != 1 || result.UnitIDs[0] != strand {
 		t.Fatalf("result = %+v, want the strand behind the prefix", result)
+	}
+}
+
+// mode=off must not touch a strand it would otherwise terminalize.
+func TestUnreclaimableSweepDoesNothingWhenModeIsOff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(90), "tests", "heavy", now))
+
+	result, err := newSweepForTest(t, pool, SweepModeOff).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want a disabled sweep to do nothing", result)
+	}
+	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(90))
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want untouched", status)
 	}
 }

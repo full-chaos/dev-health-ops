@@ -59,24 +59,39 @@ const (
 type SweepMode string
 
 const (
+	// SweepModeOff disables the sweep outright.
+	SweepModeOff SweepMode = "off"
+	// SweepModeShadow selects and reports without writing. The default, so
+	// every deployment gets would-terminalize observability at zero write risk
+	// and with no activation step.
 	SweepModeShadow SweepMode = "shadow"
+	// SweepModeActive permits terminalization.
+	//
+	// Setting it IS the operator's declaration that no Celery consumer serves
+	// provider units for this deployment. That assertion used to be a separate
+	// environment variable; collapsing it into the mode keeps one knob instead
+	// of two saying the same thing (CHAOS-4020).
 	SweepModeActive SweepMode = "active"
 )
 
-// CeleryPresence mirrors Python's CeleryConsumerPresence.
-//
-// Python answers this with a live pidbox broadcast. Go has no such probe, and
-// building one would reimplement the mechanism CHAOS-3992 documents as
-// unreliable. Instead the deployment declares it: EXPECTED_WORKER_GROUPS is
-// set only by Go-only deployments (see src/dev_health_ops/api/_health.py),
-// so an unset value means Celery may be alive and the sweep must defer.
-type CeleryPresence string
-
-const (
-	CeleryPresent CeleryPresence = "present"
-	CeleryAbsent  CeleryPresence = "absent"
-	CeleryUnknown CeleryPresence = "unknown"
-)
+// ParseSweepMode resolves the operator's choice. An unrecognised value is
+// rejected rather than silently defaulting: "active" is an assertion about the
+// deployment, so a typo must not quietly become one -- nor quietly disable the
+// safety net.
+func ParseSweepMode(raw string) (SweepMode, error) {
+	switch SweepMode(strings.ToLower(strings.TrimSpace(raw))) {
+	case "":
+		return SweepModeShadow, nil
+	case SweepModeOff:
+		return SweepModeOff, nil
+	case SweepModeShadow:
+		return SweepModeShadow, nil
+	case SweepModeActive:
+		return SweepModeActive, nil
+	default:
+		return "", ErrInvalidConfiguration
+	}
+}
 
 // UnreclaimableSweepConfig is the policy half of the sweep.
 type UnreclaimableSweepConfig struct {
@@ -90,29 +105,14 @@ type UnreclaimableSweepConfig struct {
 	Idle time.Duration
 	// Mode gates writing. Shadow selects and reports without mutating.
 	Mode SweepMode
-	// Switches and Route describe what any runtime could execute right now.
+	// Switches describe what a River runtime could execute right now.
 	Switches providersync.CompleteRouteSwitches
-	// Presence is the deployment's Celery declaration, resolved once at wiring.
-	Presence CeleryPresence
 }
 
 func (config UnreclaimableSweepConfig) valid() bool {
 	return config.Age > 0 && config.Idle > 0 &&
-		(config.Mode == SweepModeShadow || config.Mode == SweepModeActive) &&
-		(config.Presence == CeleryPresent || config.Presence == CeleryAbsent ||
-			config.Presence == CeleryUnknown)
-}
-
-// PresenceFromExpectedWorkerGroups maps the deployment declaration onto the
-// resolver's vocabulary. Empty or whitespace means "not declared", which is
-// UNKNOWN and therefore defers -- it never means "no Celery".
-func PresenceFromExpectedWorkerGroups(raw string) CeleryPresence {
-	for _, group := range strings.Split(raw, ",") {
-		if strings.TrimSpace(group) != "" {
-			return CeleryAbsent
-		}
-	}
-	return CeleryUnknown
+		(config.Mode == SweepModeOff || config.Mode == SweepModeShadow ||
+			config.Mode == SweepModeActive)
 }
 
 // UnreclaimableSweepResult reports what one pass saw and did. Candidates is
@@ -183,10 +183,7 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 	result := UnreclaimableSweepResult{Mode: sweep.config.Mode}
 
-	// Fail safe: the sweep shares its pass with lease repair and wakeup
-	// materialization. An undecidable route disposition must degrade to
-	// "sweep nothing", never abort the pass and take those repairs with it.
-	if sweep.config.Presence == CeleryUnknown {
+	if sweep.config.Mode == SweepModeOff {
 		return result, nil
 	}
 
@@ -351,10 +348,10 @@ func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bo
 	if !known {
 		return false
 	}
-	if descriptor.RouteReady && descriptor.RouteEnabled {
-		return false
-	}
-	return sweep.config.Presence == CeleryAbsent
+	// River declines the pair. The caller has already confirmed from the
+	// DURABLE route that River owns provider units at all, so nothing else is
+	// going to execute this one.
+	return !(descriptor.RouteReady && descriptor.RouteEnabled)
 }
 
 // TWO CLOCKS, deliberately.

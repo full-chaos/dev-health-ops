@@ -22,7 +22,7 @@ func absentSweep(t *testing.T, switches providersync.CompleteRouteSwitches) *Unr
 		func(ctx contextT) (txT, error) { return nil, nil },
 		UnreclaimableSweepConfig{
 			Age: time.Hour, Idle: 15 * time.Minute, Mode: SweepModeActive,
-			Switches: switches, Presence: CeleryAbsent,
+			Switches: switches,
 		},
 	)
 	if err != nil {
@@ -31,26 +31,39 @@ func absentSweep(t *testing.T, switches providersync.CompleteRouteSwitches) *Unr
 	return sweep
 }
 
-func TestPresenceFromExpectedWorkerGroups(t *testing.T) {
+func TestParseSweepMode(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
 		raw  string
-		want CeleryPresence
+		want SweepMode
 	}{
-		{"declared", "heavy,ops,sync,sync-provider", CeleryAbsent},
-		{"single group", "sync", CeleryAbsent},
-		{"unset", "", CeleryUnknown},
-		// A malformed value must never be read as "no Celery": that would turn
-		// a typo into permission to destroy queued work.
-		{"whitespace only", "   ", CeleryUnknown},
-		{"commas only", ",,,", CeleryUnknown},
-		{"padded", " , sync , ", CeleryAbsent},
+		{"unset defaults to shadow", "", SweepModeShadow},
+		{"whitespace defaults to shadow", "   ", SweepModeShadow},
+		{"off", "off", SweepModeOff},
+		{"shadow", "shadow", SweepModeShadow},
+		{"active", "active", SweepModeActive},
+		{"case insensitive", "ACTIVE", SweepModeActive},
+		{"padded", "  active  ", SweepModeActive},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := PresenceFromExpectedWorkerGroups(testCase.raw); got != testCase.want {
-				t.Fatalf("presence for %q = %q, want %q", testCase.raw, got, testCase.want)
+			got, err := ParseSweepMode(testCase.raw)
+			if err != nil {
+				t.Fatalf("ParseSweepMode(%q): %v", testCase.raw, err)
+			}
+			if got != testCase.want {
+				t.Fatalf("ParseSweepMode(%q) = %q, want %q", testCase.raw, got, testCase.want)
 			}
 		})
+	}
+}
+
+// A typo must not silently become an assertion about the deployment, nor
+// silently disable the safety net.
+func TestParseSweepModeRejectsUnknownValues(t *testing.T) {
+	for _, raw := range []string{"actve", "on", "true", "enabled", "yes"} {
+		if _, err := ParseSweepMode(raw); err != ErrInvalidConfiguration {
+			t.Fatalf("ParseSweepMode(%q) error = %v, want ErrInvalidConfiguration", raw, err)
+		}
 	}
 }
 
@@ -61,26 +74,20 @@ func TestUnroutableGate(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		switches providersync.CompleteRouteSwitches
-		presence CeleryPresence
 		provider string
 		dataset  string
 		want     bool
 	}{
-		// The production strand: River declines the pair and no Celery exists.
-		{"disabled pair, celery absent", disabled, CeleryAbsent, "github", "tests", true},
-		// The CUT-19 rollback: consumers are live, so this is queued work.
-		{"disabled pair, celery present", disabled, CeleryPresent, "github", "tests", false},
-		// An undecidable broker must never authorize destruction.
-		{"disabled pair, celery unknown", disabled, CeleryUnknown, "github", "tests", false},
-		// A pair a live runtime can execute is never swept, whatever its age.
-		{"enabled pair", enabled, CeleryAbsent, "github", "tests", false},
-		{"enabled repo-metadata", enabled, CeleryAbsent, "github", "repo-metadata", false},
+		// The production strand: River declines the pair.
+		{"disabled pair", disabled, "github", "tests", true},
+		// A pair a live River runtime can execute is never swept.
+		{"enabled pair", enabled, "github", "tests", false},
+		{"enabled repo-metadata", enabled, "github", "repo-metadata", false},
 		// An unknown pair is not proof of anything.
-		{"unknown pair", disabled, CeleryAbsent, "nosuch", "nosuch", false},
+		{"unknown pair", disabled, "nosuch", "nosuch", false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			sweep := absentSweep(t, testCase.switches)
-			sweep.config.Presence = testCase.presence
 			candidate := unreclaimableCandidate{
 				provider: testCase.provider, datasetKey: testCase.dataset,
 			}
@@ -110,7 +117,7 @@ func TestUnroutableAtomicFamilyAlias(t *testing.T) {
 
 func TestSweepConfigValidation(t *testing.T) {
 	valid := UnreclaimableSweepConfig{
-		Age: time.Hour, Idle: time.Minute, Mode: SweepModeShadow, Presence: CeleryAbsent,
+		Age: time.Hour, Idle: time.Minute, Mode: SweepModeShadow,
 	}
 	if !valid.valid() {
 		t.Fatal("well-formed config rejected")
@@ -124,7 +131,6 @@ func TestSweepConfigValidation(t *testing.T) {
 		{"zero idle", func(c *UnreclaimableSweepConfig) { c.Idle = 0 }},
 		{"empty mode", func(c *UnreclaimableSweepConfig) { c.Mode = "" }},
 		{"unknown mode", func(c *UnreclaimableSweepConfig) { c.Mode = "sometimes" }},
-		{"empty presence", func(c *UnreclaimableSweepConfig) { c.Presence = "" }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			config := valid
@@ -158,18 +164,17 @@ func TestUnreclaimableDedupeKeyMatchesTheProducer(t *testing.T) {
 	}
 }
 
-func TestStepDefersWhenPresenceIsUnknown(t *testing.T) {
-	// Fail-safe: an undeclared deployment must sweep nothing WITHOUT opening a
-	// transaction, so an unreadable disposition can never abort the reconcile
-	// pass it shares with lease repair.
+func TestStepDefersWhenModeIsOff(t *testing.T) {
+	// Fail-safe: a disabled sweep must do nothing WITHOUT opening a
+	// transaction, so it can never disturb the pass it shares with lease
+	// repair.
 	sweep, err := newUnreclaimableSweep(
 		func(ctx contextT) (txT, error) {
-			t.Fatal("unknown presence must not open a transaction")
+			t.Fatal("mode=off must not open a transaction")
 			return nil, nil
 		},
 		UnreclaimableSweepConfig{
-			Age: time.Hour, Idle: time.Minute, Mode: SweepModeActive,
-			Presence: CeleryUnknown,
+			Age: time.Hour, Idle: time.Minute, Mode: SweepModeOff,
 		},
 	)
 	if err != nil {
@@ -180,7 +185,7 @@ func TestStepDefersWhenPresenceIsUnknown(t *testing.T) {
 		t.Fatalf("Step returned %v, want nil", err)
 	}
 	if result.Candidates != 0 || result.Terminalized != 0 {
-		t.Fatalf("deferred pass reported %+v", result)
+		t.Fatalf("disabled pass reported %+v", result)
 	}
 }
 

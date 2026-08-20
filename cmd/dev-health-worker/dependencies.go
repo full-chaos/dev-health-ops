@@ -874,52 +874,7 @@ func selectedQueueBudgets(queues, targets []string, concurrency map[string]int) 
 // another — the drift that a hardcoded `LaunchDarklyFeatureFlags: true` in the
 // handler used to permit (CHAOS-3123).
 func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
-	return providersync.CompleteRouteSwitches{
-		LocalAllRoutes:              cfg.LocalAllProviderRoutes,
-		LinearWorkItems:             cfg.WorkerLinearWorkItemsEnabled,
-		JiraWorkItems:               cfg.WorkerJiraWorkItemsEnabled,
-		JiraIncidents:               cfg.WorkerJiraIncidentsEnabled,
-		LaunchDarklyFeatureFlags:    cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
-		GithubRepoMetadata:          cfg.WorkerGithubRepoMetadataEnabled,
-		GitlabRepoMetadata:          cfg.WorkerGitlabRepoMetadataEnabled,
-		GitlabCommits:               cfg.WorkerGitlabCommitsEnabled,
-		GitlabCommitStats:           cfg.WorkerGitlabCommitStatsEnabled,
-		GitlabCICD:                  cfg.WorkerGitlabCICDEnabled,
-		GitlabTests:                 cfg.WorkerGitlabTestsEnabled,
-		GitlabIncidents:             cfg.WorkerGitlabIncidentsEnabled,
-		GitlabDeployments:           cfg.WorkerGitlabDeploymentsEnabled,
-		GitlabFeatureFlags:          cfg.WorkerGitlabFeatureFlagsEnabled,
-		GitlabFiles:                 cfg.WorkerGitlabFilesEnabled,
-		GitlabBlame:                 cfg.WorkerGitlabBlameEnabled,
-		GitlabPRs:                   cfg.WorkerGitlabPRsEnabled,
-		GitlabPRReviews:             cfg.WorkerGitlabPRReviewsEnabled,
-		GitlabPRComments:            cfg.WorkerGitlabPRCommentsEnabled,
-		GitlabSecurity:              cfg.WorkerGitlabSecurityEnabled,
-		GitlabWorkItems:             cfg.WorkerGitlabWorkItemsEnabled,
-		PagerDutyServices:           cfg.WorkerPagerDutyServicesEnabled,
-		PagerDutyBusinessServices:   cfg.WorkerPagerDutyBusinessServicesEnabled,
-		PagerDutyEscalationPolicies: cfg.WorkerPagerDutyEscalationPoliciesEnabled,
-		PagerDutySchedules:          cfg.WorkerPagerDutySchedulesEnabled,
-		PagerDutyOnCalls:            cfg.WorkerPagerDutyOnCallsEnabled,
-		PagerDutyUsers:              cfg.WorkerPagerDutyUsersEnabled,
-		PagerDutyTeams:              cfg.WorkerPagerDutyTeamsEnabled,
-		PagerDutyIncidents:          cfg.WorkerPagerDutyIncidentsEnabled,
-		PagerDutyIncidentAlerts:     cfg.WorkerPagerDutyIncidentsEnabled,
-		PagerDutyIncidentLogEntries: cfg.WorkerPagerDutyIncidentsEnabled,
-		PagerDutyIncidentNotes:      cfg.WorkerPagerDutyIncidentsEnabled,
-		GithubPRs:                   cfg.WorkerGithubPRsEnabled,
-		GithubPRReviews:             cfg.WorkerGithubPRReviewsEnabled,
-		GithubPRComments:            cfg.WorkerGithubPRCommentsEnabled,
-		GithubCICD:                  cfg.WorkerGithubCICDEnabled,
-		GithubCommits:               cfg.WorkerGithubCommitsEnabled,
-		GithubDeployments:           cfg.WorkerGithubDeploymentsEnabled,
-		GithubSecurity:              cfg.WorkerGithubSecurityEnabled,
-		GithubFiles:                 cfg.WorkerGithubFilesEnabled,
-		GithubCommitStats:           cfg.WorkerGithubCommitStatsEnabled,
-		GithubBlame:                 cfg.WorkerGithubBlameEnabled,
-		GithubTests:                 cfg.WorkerGithubTestsEnabled,
-		GithubWorkItems:             cfg.WorkerGithubWorkItemsEnabled,
-	}
+	return providersync.RouteSwitchesFromConfig(cfg)
 }
 
 type providerRouteSwitch struct {

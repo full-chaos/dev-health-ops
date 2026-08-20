@@ -2,6 +2,7 @@ package syncreconciler
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -79,7 +80,19 @@ type MutationPipeline struct {
 	observer     Stepper
 	publish      AtLeastOncePublisher
 	postSync     PostSyncHandoff
+	sweep        UnreclaimableSweepStepper
 	config       MutationPipelineConfig
+}
+
+// UnreclaimableSweepStepper is the CHAOS-4005 safety net. It is a positional
+// constructor parameter rather than a config field or a setter ON PURPOSE:
+// this whole ticket exists because a component was present in the tree and
+// silently never wired, so "did you decide about the sweep?" is a compile-time
+// question at every construction site. Passing nil is a valid answer -- a
+// deployment that has not declared its worker topology runs without it -- but
+// it has to be an answer.
+type UnreclaimableSweepStepper interface {
+	Step(context.Context, time.Time, int) (UnreclaimableSweepResult, error)
 }
 
 func NewMutationPipeline(
@@ -90,6 +103,7 @@ func NewMutationPipeline(
 	observer Stepper,
 	publish AtLeastOncePublisher,
 	postSync PostSyncHandoff,
+	sweep UnreclaimableSweepStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil || observer == nil || !config.valid() {
@@ -103,6 +117,7 @@ func NewMutationPipeline(
 		observer:     observer,
 		publish:      publish,
 		postSync:     postSync,
+		sweep:        sweep,
 		config:       config,
 	}, nil
 }
@@ -123,6 +138,25 @@ func (pipeline *MutationPipeline) Step(
 	now = now.UTC()
 	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
 		return Observation{}, err
+	}
+	// CHAOS-4005: the never-leased strand. Lease repair above reaches only a
+	// RUNNING unit whose lease expired; a unit stuck in 'dispatching' holds no
+	// lease, so nothing else in this pass can free it. Runs BEFORE the
+	// materializer so a run this sweep just unblocked gets its finalize wakeup
+	// in the same pass rather than waiting a full cycle.
+	//
+	// A sweep failure is deliberately NOT fatal to the pass: it is a safety
+	// net, and taking lease repair down with it would trade a bounded strand
+	// for an unbounded one.
+	if pipeline.sweep != nil {
+		if _, sweepErr := pipeline.sweep.Step(ctx, now, limit); sweepErr != nil {
+			// Cancellation belongs to the caller and must propagate; anything
+			// else is the safety net failing, which must not fail the pass.
+			if errors.Is(sweepErr, context.Canceled) ||
+				errors.Is(sweepErr, context.DeadlineExceeded) {
+				return Observation{}, sweepErr
+			}
+		}
 	}
 	terminal, err := pipeline.terminal.Step(ctx, now, limit)
 	if err != nil {

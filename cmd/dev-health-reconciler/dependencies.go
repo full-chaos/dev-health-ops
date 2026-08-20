@@ -1,8 +1,12 @@
 package main
 
 import (
+	"os"
+	"strings"
+
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"log/slog"
 	"time"
 
@@ -173,7 +177,7 @@ type reconcilerDependencySources struct {
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
-	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry, config.Config) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
@@ -226,8 +230,13 @@ func buildSyncMutationPipeline(
 	queuePool *pgxpool.Pool,
 	riverSchema string,
 	registry *syncdispatchcontract.Registry,
+	cfg config.Config,
 ) (syncreconciler.Stepper, error) {
 	repair, err := syncreconciler.NewLeaseRepair(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	sweep, err := buildUnreclaimableSweep(domainPool, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +294,7 @@ func buildSyncMutationPipeline(
 		observer,
 		publish,
 		nil,
+		sweep,
 		syncreconciler.DefaultMutationPipelineConfig(),
 	)
 }
@@ -563,6 +573,7 @@ func buildReconcilerDependencies(
 			dependencies.database.QueuePool(),
 			cfg.RiverDatabaseSchema,
 			dependencies.syncDispatchRegistry,
+			cfg,
 		)
 	} else {
 		syncStepper, err = sources.buildSyncShadow(
@@ -790,4 +801,39 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 		component.database.Close()
 	}
 	return nil
+}
+
+// buildUnreclaimableSweep wires the CHAOS-4005 safety net.
+//
+// It returns a nil stepper -- not an error -- when the deployment has not
+// declared its worker topology. EXPECTED_WORKER_GROUPS is set only by Go-only
+// deployments (see src/dev_health_ops/api/_health.py), so an unset value means
+// Celery may still be consuming and the sweep must not run at all. That is the
+// fail-safe, not a misconfiguration.
+//
+// Mode defaults to SHADOW. This is the safety net that was silently absent
+// from production for the whole of CHAOS-3990, so its selection is proven
+// against real rows before it is permitted to terminalize anything. Setting
+// SYNC_UNRECLAIMABLE_SWEEP_MODE=active flips it.
+func buildUnreclaimableSweep(
+	domainPool *pgxpool.Pool,
+	cfg config.Config,
+) (syncreconciler.UnreclaimableSweepStepper, error) {
+	presence := syncreconciler.PresenceFromExpectedWorkerGroups(
+		os.Getenv("EXPECTED_WORKER_GROUPS"),
+	)
+	if presence != syncreconciler.CeleryAbsent {
+		return nil, nil
+	}
+	mode := syncreconciler.SweepModeShadow
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("SYNC_UNRECLAIMABLE_SWEEP_MODE")), "active") {
+		mode = syncreconciler.SweepModeActive
+	}
+	return syncreconciler.NewUnreclaimableSweep(domainPool, syncreconciler.UnreclaimableSweepConfig{
+		Age:      syncreconciler.DefaultUnreclaimableAge,
+		Idle:     syncreconciler.DefaultUnreclaimableIdle,
+		Mode:     mode,
+		Switches: providersync.RouteSwitchesFromConfig(cfg),
+		Presence: presence,
+	})
 }

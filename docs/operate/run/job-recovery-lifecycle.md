@@ -85,6 +85,33 @@ the job runtime at telling you a worker died.**
 This signal is durable and already in the database. It is not currently surfaced
 as a metric or alert — see CHAOS-4025.
 
+## Two lease layers, not one
+
+Recovery involves two independent leases, and they answer different questions.
+
+`worker_job_runs` is the semantic execution record for a logical job, separate
+from both River and `worker_job_outbox`: queue rows say whether work was
+*transported*, while a run row owns the durable idempotency claim, its bounded
+lease, the terminal result, and the safe error category. **A retry may reclaim
+only an expired lease; a completed or terminal key never invokes the handler
+again.**
+
+Beneath it sits the domain lease described above — the partition, finalization,
+or request lease that the running work renews.
+
+So a retry can be stopped at either layer, and the two failure modes look
+identical from outside:
+
+| Layer | Lease | If it is held when a retry arrives |
+| --- | --- | --- |
+| Idempotency | `worker_job_runs.lease_expires_at` | The retry is reported as a duplicate success and the handler never runs |
+| Domain | `daily_metrics_*`, `work_graph_execution_requests`, `remaining_metric_*` | The retry parks until the lease expires, then reclaims it |
+
+The domain-layer behaviour is current as of CHAOS-3991. The idempotency layer
+still reports a live lease as duplicate success without running the handler, so
+a worker killed hard enough to leave that lease behind can still lose its retry
+— tracked as CHAOS-3998.
+
 ## The four liveness states
 
 Work that has not completed is in one of four states. They look similar in a
@@ -197,9 +224,9 @@ WHERE status = 'pending' AND prerequisite_completion_key IS NOT NULL
 ORDER BY created_at;
 ```
 
-`attempt_count = 0` on a fenced row is **not** a staleness signal — a gated row
-has never been attempted by design, so a row blocked for hours is
-indistinguishable from one enqueued a second ago. Judge it by `created_at` and
+`attempt_count = 0` on a fenced row is **not** a staleness signal. Blocked
+successors consume no retry attempts by design, so a row blocked for fourteen
+hours is indistinguishable from one enqueued a second ago. Judge it by `created_at` and
 by the state of the head named in `prerequisite_completion_key`.
 
 ## What recovery does not cover

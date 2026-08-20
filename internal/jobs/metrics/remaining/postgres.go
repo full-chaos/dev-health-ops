@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,20 +87,37 @@ type Claim struct {
 }
 
 type PostgresStore struct {
-	pool  *pgxpool.Pool
-	lease time.Duration
-	now   func() time.Time
+	pool          *pgxpool.Pool
+	lease         time.Duration
+	now           func() time.Time
+	leaseObserver jobruntime.RemainingMetricsLeaseObserver
 }
 
 type PartitionPublisher interface {
 	PublishPartitionTx(context.Context, pgx.Tx, Run, Partition, string) error
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
+// observeReleaseLost records a durably resolved release-lost outcome. Metric
+// failures are dropped: telemetry must never decide whether a run can make
+// progress.
+func (store *PostgresStore) observeReleaseLost() {
+	if store.leaseObserver != nil {
+		_ = store.leaseObserver.ObserveRemainingMetricsLeaseReleaseLost()
+	}
+}
+
+func NewPostgresStore(
+	pool *pgxpool.Pool,
+	observers ...jobruntime.RemainingMetricsLeaseObserver,
+) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, ErrUnavailable
 	}
-	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now}, nil
+	var observer jobruntime.RemainingMetricsLeaseObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now, leaseObserver: observer}, nil
 }
 
 // StartRun atomically persists a deterministic generation and every partition
@@ -434,6 +452,10 @@ WHERE run.id = $2::uuid AND run.status = 'running'
 	return nil
 }
 
+// ReleasePartition stands a claimed partition back down. Release is fenced on
+// a live lease, so a claimant that has already outlived its lease cannot
+// release it; that outcome is recorded rather than left for the caller to
+// discard (CHAOS-4002).
 func (store *PostgresStore) ReleasePartition(ctx context.Context, claim Claim) error {
 	if !store.validClaim(claim) {
 		return ErrUnavailable
@@ -452,6 +474,7 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 		return ErrUnavailable
 	}
 	if command.RowsAffected() != 1 {
+		store.observeReleaseLost()
 		return ErrLeaseLost
 	}
 	return nil

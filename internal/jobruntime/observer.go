@@ -64,6 +64,22 @@ type ReportRunLeaseObserver interface {
 	ObserveReportRunLeaseExpired(ReportRunLeaseResult) error
 }
 
+// WorkGraphLeaseObserver is the narrow capability the work-graph store depends
+// on after a release is fenced out by a lease the claimant has already
+// outlived (CHAOS-4002, symmetric with DailyMetricsLeaseObserver's
+// release_lost result). Generic runtime middleware cannot infer this from a
+// job retry: only the store that ran the fenced UPDATE knows whether it
+// matched zero rows because the lease had already expired.
+type WorkGraphLeaseObserver interface {
+	ObserveWorkGraphLeaseReleaseLost() error
+}
+
+// RemainingMetricsLeaseObserver is the remaining-metrics store's equivalent of
+// WorkGraphLeaseObserver, for the same reason (CHAOS-4002).
+type RemainingMetricsLeaseObserver interface {
+	ObserveRemainingMetricsLeaseReleaseLost() error
+}
+
 // DailyMetricsLeaseObserver is the narrow capability the daily-metrics store
 // depends on after it resolves an existing lease durably. Generic runtime
 // middleware cannot infer this: a claim that parks for a live lease and a claim

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,16 +24,33 @@ func validUUID(value string) bool { return uuidPattern.MatchString(value) }
 // ledger has one row per request; an expired reclaim replaces its fencing token
 // atomically rather than leaving a stale token beside a new request owner.
 type PostgresStore struct {
-	pool  *pgxpool.Pool
-	lease time.Duration
-	now   func() time.Time
+	pool          *pgxpool.Pool
+	lease         time.Duration
+	now           func() time.Time
+	leaseObserver jobruntime.WorkGraphLeaseObserver
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
+func NewPostgresStore(
+	pool *pgxpool.Pool,
+	observers ...jobruntime.WorkGraphLeaseObserver,
+) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, ErrUnavailable
 	}
-	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now}, nil
+	var observer jobruntime.WorkGraphLeaseObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now, leaseObserver: observer}, nil
+}
+
+// observeReleaseLost records a durably resolved release-lost outcome. Metric
+// failures are dropped: telemetry must never decide whether a run can make
+// progress.
+func (store *PostgresStore) observeReleaseLost() {
+	if store.leaseObserver != nil {
+		_ = store.leaseObserver.ObserveWorkGraphLeaseReleaseLost()
+	}
 }
 
 func (store *PostgresStore) Claim(ctx context.Context, requestID string, kind Kind) (*Claim, error) {
@@ -139,8 +157,16 @@ func (store *PostgresStore) Fail(ctx context.Context, claim Claim, detail string
 	return store.transition(ctx, claim, "failed", nil, detail)
 }
 
+// Ambiguous stands a claimed request back down when its outcome could not be
+// determined. Release is fenced on a live lease, so a claimant that has
+// already outlived its lease cannot release it; that outcome is recorded
+// rather than left for the caller to discard (CHAOS-4002).
 func (store *PostgresStore) Ambiguous(ctx context.Context, claim Claim, detail string) error {
-	return store.transition(ctx, claim, "ambiguous", nil, detail)
+	err := store.transition(ctx, claim, "ambiguous", nil, detail)
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeReleaseLost()
+	}
+	return err
 }
 
 func (store *PostgresStore) transition(ctx context.Context, claim Claim, state string, evidence []byte, detail string) error {

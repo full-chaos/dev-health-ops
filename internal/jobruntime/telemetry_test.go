@@ -59,6 +59,11 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.ObserveReportRunLeaseExpired(ReportRunLeaseResultRetrying); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveWorkGraphLeaseReleaseLost(); err != nil {
+		t.Fatal(err)
+	}
+	// RemainingMetricsLeaseReleaseLost is deliberately left unobserved so its
+	// pre-seeded zero (asserted below) is proven, not merely assumed.
 
 	if err := collector.SetStreamLag(stream, 19); err != nil {
 		t.Fatal(err)
@@ -112,6 +117,8 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_daily_metrics_lease_total{stage="partition",result="reclaimed"} 0`,
 		`worker_daily_metrics_lease_total{stage="partition",result="release_lost"} 0`,
 		`worker_daily_metrics_lease_total{stage="partition",result="snoozed"} 0`,
+		`worker_workgraph_lease_release_lost_total 1`,
+		`worker_remaining_metrics_lease_release_lost_total 0`,
 		`worker_stream_lag{stream="external_ingest",consumer_group="sink_workers"} 19`,
 		`worker_stream_pending{stream="external_ingest",consumer_group="sink_workers"} 3`,
 		`worker_stream_oldest_pending_seconds{stream="external_ingest",consumer_group="sink_workers"} 8`,
@@ -133,6 +140,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		"worker_job_attempts_total", "worker_job_panics_total", "worker_job_cancellations_total",
 		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
 		"worker_daily_metrics_lease_total",
+		"worker_workgraph_lease_release_lost_total", "worker_remaining_metrics_lease_release_lost_total",
 		"worker_stream_lag", "worker_stream_pending",
 		"worker_stream_oldest_pending_seconds", "worker_budget_wait_seconds",
 		"worker_database_pool_saturation_ratio", "worker_database_pool_acquire_seconds",

@@ -64,6 +64,28 @@ func TestPartitionHandlerRenewsAndCompletesWithBoundedEvidence(t *testing.T) {
 	}
 }
 
+// CHAOS-4002: handler.go has a third releaseClaim discard site (LoadRun
+// failure) that TestPartitionHandlerRejectsCrossFamilyExecution (validation
+// mismatch) and TestPartitionHandlerLeaseLossCancelsCompatibility (lease loss
+// during work) do not exercise -- this was the one release site with no
+// existing coverage at all before this ticket.
+func TestPartitionHandlerReleasesClaimOnLoadRunFailure(t *testing.T) {
+	store := &handlerStore{
+		claim:      handlerClaim(),
+		loadRunErr: ErrUnavailable,
+	}
+	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
+		store, &handlerCompatibility{}, "capacity",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(t.Context(), capacityExecution())
+	if err == nil || store.releases != 1 || store.completions != 0 {
+		t.Fatalf("LoadRun failure error=%v releases=%d completions=%d", err, store.releases, store.completions)
+	}
+}
+
 func TestPartitionHandlerLeaseLossCancelsCompatibility(t *testing.T) {
 	store := &handlerStore{
 		run: Run{
@@ -126,12 +148,16 @@ type handlerStore struct {
 	claim       *Claim
 	renewals    int
 	failRenewal bool
+	loadRunErr  error
 	releases    int
 	completions int
 	evidence    string
 }
 
 func (store *handlerStore) LoadRun(context.Context, string) (Run, error) {
+	if store.loadRunErr != nil {
+		return Run{}, store.loadRunErr
+	}
 	return store.run, nil
 }
 func (store *handlerStore) ClaimPartition(context.Context, string) (*Claim, error) {

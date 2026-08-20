@@ -83,6 +83,15 @@ spec:
           env:
             - name: REDIS_URL
               value: "redis://valkey:6379/1"
+            # CHAOS-3942: optional -- absent (not empty) unless
+            # go-workers.yaml's dev-health-go-worker-config ConfigMap is
+            # applied, so a base-only deployment stays Celery-authoritative.
+            - name: EXPECTED_WORKER_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: dev-health-go-worker-config
+                  key: EXPECTED_WORKER_GROUPS
+                  optional: true
           resources:
             requests:
               memory: "256Mi"

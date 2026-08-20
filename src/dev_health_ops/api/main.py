@@ -61,9 +61,11 @@ from ._health import (
     _analytics_db_url,
     _check_celery_health,
     _check_clickhouse_health,
+    _check_go_worker_presence,
     _check_postgres_health,
     _check_rate_limiter_backend,
     _check_redis_health,
+    _expected_worker_groups,
 )
 from ._lifespan import lifespan
 from ._middleware import register_middleware
@@ -308,17 +310,67 @@ async def ready() -> JSONResponse:
 
 @app.api_route("/health/workers", methods=["GET", "HEAD"])
 async def health_workers() -> JSONResponse:
-    """Celery worker health check.
+    """Worker fleet health check.
 
     Separated from /health because Celery inspect.ping is slow (~2s).
     Use this for worker monitoring dashboards, not for SSR readiness.
+
+    Three states, selected by ``EXPECTED_WORKER_GROUPS``:
+
+    - Unset (legacy/Celery deployments): Celery ``inspect.ping`` is
+      authoritative. Zero responding workers ("no_workers") is a failure,
+      not "ok" -- CHAOS-3942: the endpoint used to fold that case into
+      "ok", hiding the one condition it was built to detect.
+    - Set but empty/malformed (e.g. ``","`` or whitespace): a declared-but-
+      unparseable fleet is a misconfiguration, not "no fleet declared" --
+      this fails closed rather than silently falling back to Celery mode,
+      where a stray Celery worker could mask a broken Go deployment.
+    - Set with at least one group (Go worker deployments -- e.g. Full
+      Chaos's own production, which runs no Celery workers at all): the
+      declared Go worker groups' heartbeat presence in
+      ``public.worker_instances`` is authoritative. Celery is still
+      reported, but its "no_workers" reading is relabeled "retired"
+      (informational) since that is expected on a Go-only deployment, not
+      a failure.
     """
-    key, status_val = await _check_celery_health()
-    overall = "ok" if status_val in ("ok", "no_workers") else "down"
+    expected_groups = _expected_worker_groups()
+
+    if expected_groups is None:
+        key, status_val = await _check_celery_health()
+        overall = "ok" if status_val == "ok" else "down"
+        status_code = 200 if overall == "ok" else 503
+        return JSONResponse(
+            status_code=status_code,
+            content={"status": overall, "services": {key: status_val}},
+        )
+
+    if not expected_groups:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "down",
+                "services": {"expected_worker_groups": "misconfigured"},
+            },
+        )
+
+    go_statuses = await _check_go_worker_presence(expected_groups)
+    _, celery_status = await _check_celery_health()
+    if celery_status == "no_workers":
+        celery_status = "retired"
+
+    services = {f"go_worker:{group}": status for group, status in go_statuses.items()}
+    services["celery"] = celery_status
+
+    complete = set(go_statuses) == set(expected_groups)
+    overall = (
+        "ok"
+        if complete and all(status == "ok" for status in go_statuses.values())
+        else "down"
+    )
     status_code = 200 if overall == "ok" else 503
     return JSONResponse(
         status_code=status_code,
-        content={"status": overall, "services": {key: status_val}},
+        content={"status": overall, "services": services},
     )
 
 

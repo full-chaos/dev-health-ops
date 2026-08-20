@@ -207,6 +207,13 @@ workerHeavy:
 # to zero but retains their definitions and Valkey DB 0.
 goWorkers:
   enabled: false
+  # -- River/queue-consumer worker groups the API's /health/workers checks
+  #    for live worker_instances heartbeats once goWorkers.enabled is true
+  #    (CHAOS-3942). Reconciler/scheduler/stream-* are deliberately excluded:
+  #    they run a separate role with their own /healthz and never register
+  #    worker_instances presence, so including them would make the check
+  #    wait on a heartbeat that will never appear.
+  expectedWorkerGroups: [heavy, ops, sync, sync-provider]
   # -- ClickHouse URI for the Go workers, which speak the NATIVE wire protocol
   #    (port 9000) rather than the HTTP interface (8123) that Python's
   #    clickhouse-connect uses. Leave empty with the bundled ClickHouse and it

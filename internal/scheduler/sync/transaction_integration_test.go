@@ -688,6 +688,93 @@ func TestHandoffDuePostgresRateLimitsCatchUpToTheScheduleMarker(t *testing.T) {
 	}
 }
 
+// The CHAOS-3936 signal -- occurrences_repeated_total, the idle-due-window
+// warning, and the WARN naming the config and instant -- all rest on the real
+// coordinator mapping PostgreSQL's ON CONFLICT DO NOTHING onto
+// OccurrenceRepeated. That mapping was covered only against a fake pgx row, so
+// if it were wrong the metric would simply never fire and an outage would be
+// invisible again: a measurement layer that fails toward "fine".
+//
+// It is driven directly here rather than through a scheduler window on
+// purpose. With the base derived from the occurrence ledger, a window can no
+// longer compute an instant that already exists -- the ledger it just read
+// contains it, so the next window computes the NEXT instant. That makes
+// OccurrenceRepeated a regression alarm rather than a routine counter: it
+// fires if the base ever stops advancing again. Testing it through a window
+// would therefore be testing a path the fix deliberately closed; testing the
+// coordinator directly tests the mapping the signal actually depends on.
+func TestOccurrenceCoordinatorPostgresReportsOnConflictAsRepeated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	occurrence := newOccurrence(
+		"00000000-0000-4000-8000-000000003038",
+		"org-integration",
+		"00000000-0000-4000-8000-000000003039",
+		at("2026-01-01T11:00:00Z"),
+		at("2026-01-01T12:00:00Z"),
+		at("2026-01-01T13:00:00Z"),
+	)
+	coordinator := NewOccurrenceCoordinator()
+	handoff := func() (HandoffOutcome, error) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return "", err
+		}
+		outcome, handoffErr := coordinator.Handoff(ctx, postgresSchedulerTransaction{Tx: tx}, occurrence)
+		if handoffErr != nil {
+			_ = tx.Rollback(ctx)
+			return outcome, handoffErr
+		}
+		return outcome, tx.Commit(ctx)
+	}
+
+	first, err := handoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != OccurrenceMinted {
+		t.Fatalf("first handoff outcome = %q, want %q", first, OccurrenceMinted)
+	}
+	// Identical envelope, real unique constraint, real ON CONFLICT DO NOTHING.
+	second, err := handoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != OccurrenceRepeated {
+		t.Fatalf("second handoff outcome = %q, want %q -- the repeat signal cannot fire", second, OccurrenceRepeated)
+	}
+	var rows int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("ledger holds %d rows after two identical handoffs, want 1", rows)
+	}
+}
+
 func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	for _, statement := range []string{
 		`CREATE TABLE public.sync_configurations (

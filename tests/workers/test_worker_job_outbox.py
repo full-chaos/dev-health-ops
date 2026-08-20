@@ -143,20 +143,27 @@ def test_stages_executable_migration_route_without_committing(engine, route: str
         assert verifier.scalar(select(WorkerJobOutbox)) is None
 
 
-def test_enqueue_omits_trace_parent_even_with_an_active_span(engine):
-    # CHAOS-3993 landed the codec's trace_parent support (build_envelope,
-    # encode_envelope, the schema, the fixtures) without wiring it here.
-    # Actually capturing and passing the active span's traceparent is a
-    # follow-up PR sequenced strictly after CHAOS-3993 is deployed
-    # everywhere: prod is a rolling multi-service restart, and emitting the
-    # field before every Go relay/worker can decode it would open a window
-    # where a live outbox row gets rejected outright. This guard makes that
-    # gap a visible, tested fact rather than an implicit one -- when the
-    # follow-up PR wires the injection, this assertion is expected to flip.
+def test_enqueue_captures_active_span_as_trace_parent(engine):
+    # A local (non-global) TracerProvider is enough: start_as_current_span
+    # makes the span current via opentelemetry.context, which is what
+    # inject() reads -- it does not require trace.set_tracer_provider().
     tracer = TracerProvider().get_tracer("test-worker-job-outbox")
     with Session(engine) as session, session.begin():
-        with tracer.start_as_current_span("enqueue-under-test"):
+        with tracer.start_as_current_span("enqueue-under-test") as span:
+            context = span.get_span_context()
+            trace_id = format(context.trace_id, "032x")
+            span_id = format(context.span_id, "016x")
+            flags = format(int(context.trace_flags), "02x")
             row = _enqueue(session, migration_route="shadow")
+        # Not just well-formed -- the exact trace/span id and sampled flag
+        # this specific span carried, so a stale or unrelated (but
+        # otherwise valid-shaped) traceparent would fail this.
+        assert row.args["trace_parent"] == f"00-{trace_id}-{span_id}-{flags}"
+
+
+def test_enqueue_without_active_span_omits_trace_parent(engine):
+    with Session(engine) as session, session.begin():
+        row = _enqueue(session, migration_route="shadow")
         assert "trace_parent" not in row.args
 
 
@@ -169,6 +176,32 @@ def test_commit_and_same_content_reuse_return_one_logical_dispatch(engine):
             migration_route="shadow",
         )
         assert second.id == first.id
+
+    with Session(engine) as verifier:
+        assert len(verifier.scalars(select(WorkerJobOutbox)).all()) == 1
+
+
+def test_retry_under_a_different_span_still_reuses_the_same_row(engine):
+    # A retry of the same idempotency key naturally captures a DIFFERENT
+    # trace_parent (a new request/task span each time). trace_parent is
+    # capture-time metadata, not part of a job's logical identity, so this
+    # must still be treated as the same logical dispatch, not a conflict.
+    # Both enqueue calls return the SAME persisted row on reuse, so comparing
+    # their .args after the fact would trivially be equal -- capture each
+    # span's own trace id up front instead, to prove the two attempts were
+    # genuinely under different spans and the second one's trace_parent was
+    # never even compared, let alone required to match.
+    tracer = TracerProvider().get_tracer("test-worker-job-outbox")
+    with Session(engine) as session, session.begin():
+        with tracer.start_as_current_span("first-attempt") as first_span:
+            first_trace_id = format(first_span.get_span_context().trace_id, "032x")
+            first = _enqueue(session, migration_route="shadow")
+        with tracer.start_as_current_span("retry-attempt") as retry_span:
+            retry_trace_id = format(retry_span.get_span_context().trace_id, "032x")
+            second = _enqueue(session, migration_route="shadow")
+        assert retry_trace_id != first_trace_id
+        assert second.id == first.id
+        assert first_trace_id in first.args["trace_parent"]
 
     with Session(engine) as verifier:
         assert len(verifier.scalars(select(WorkerJobOutbox)).all()) == 1

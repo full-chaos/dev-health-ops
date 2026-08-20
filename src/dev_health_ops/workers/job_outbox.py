@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransactionOrigin
 
 from dev_health_ops.models.worker_job_outbox import WorkerJobOutbox
+from dev_health_ops.tracing import current_trace_parent
 
 from .job_contracts import (
     ContractDecodeError,
@@ -63,20 +65,13 @@ def enqueue_worker_job(
             load_migration_jobs(),
             allow_deferred_route=allow_deferred_route,
         )
-        # trace_parent is NOT wired here yet: this producer's codec supports
-        # it (build_envelope/encode_envelope accept it, contracts/jobs/v1's
-        # schema and fixtures cover it), but actually capturing and passing
-        # it lands in a follow-up PR sequenced strictly after this one
-        # deploys everywhere. Prod is a rolling multi-service restart, so
-        # emitting the field before every Go relay/worker can decode it would
-        # open a window where a live outbox row gets rejected outright
-        # (CHAOS-3993 PR discussion, CHAOS-3990 lane).
         envelope = build_envelope(
             payload,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             domain_id=domain_id,
             organization_id=organization_id,
+            trace_parent=current_trace_parent(),
         )
         if envelope.contract_version not in contract.supported_versions:
             raise ContractDecodeError("unsupported producer contract version")
@@ -89,7 +84,7 @@ def enqueue_worker_job(
     existing = _find_existing(session, idempotency_key)
     if existing is not None:
         return _verify_existing(
-            existing, payload.KIND, envelope.contract_version, payload_hash
+            existing, payload.KIND, envelope.contract_version, payload_hash, args
         )
 
     row = WorkerJobOutbox(
@@ -122,7 +117,7 @@ def enqueue_worker_job(
         if existing is None:
             raise OutboxEnqueueError("worker job enqueue conflict") from None
         return _verify_existing(
-            existing, payload.KIND, envelope.contract_version, payload_hash
+            existing, payload.KIND, envelope.contract_version, payload_hash, args
         )
     return row
 
@@ -149,13 +144,25 @@ def _find_existing(session: Session, dedupe_key: str) -> WorkerJobOutbox | None:
 
 
 def _verify_existing(
-    row: WorkerJobOutbox, kind: str, version: int, payload_hash: str
+    row: WorkerJobOutbox,
+    kind: str,
+    version: int,
+    payload_hash: str,
+    args: dict[str, Any],
 ) -> WorkerJobOutbox:
-    if (
-        row.job_kind != kind
-        or row.contract_version != version
-        or row.payload_hash != payload_hash
-    ):
+    if row.job_kind != kind or row.contract_version != version:
+        raise OutboxEnqueueError("dedupe key conflicts with an existing dispatch")
+    if row.payload_hash == payload_hash:
+        return row
+    # payload_hash covers trace_parent (it must, to match what Go actually
+    # relays: internal/joboutbox's terminal-delivery repair matches on it).
+    # But trace_parent is capture-time metadata, not part of a job's logical
+    # identity -- a retry of the same idempotency key from a new
+    # request/task span still has a NEW active span, so a different
+    # trace_parent alone must not read as a conflicting dispatch.
+    if {k: v for k, v in row.args.items() if k != "trace_parent"} != {
+        k: v for k, v in args.items() if k != "trace_parent"
+    }:
         raise OutboxEnqueueError("dedupe key conflicts with an existing dispatch")
     return row
 

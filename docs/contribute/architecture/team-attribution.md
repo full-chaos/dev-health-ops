@@ -878,15 +878,29 @@ only the two doc references were fixed here; the rest are reported for a follow-
 - `src/dev_health_ops/api/queries/investment.py:267` (on `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`).
 - `src/dev_health_ops/external_ingest/sinks.py:514`.
 
-**Planning records, not broken links — but relevant to where this page should live:**
+**Planning records — now honoured, not just flagged:**
 - `docs-data/redirects.tsv:50`, `docs-data/inventory/disposition-matrix.tsv:118`, and
   `docs-data/inventory/ops-reference.tsv:25` record a ratified `documentation-remediation-audit`
   disposition for `docs/architecture/team-attribution.md`: `move-and-rewrite` into
   `/reference/data-models/work-graph/`, publishing only the durable supported contract while
   "implementation history stays internal." That disposition was never executed — the source file was
-  deleted instead — and this restoration placed the full content at a new standalone page rather than
-  folding a rewritten summary into `work-graph.md`. That is a placement question for a maintainer to
-  settle, not something resolved by this restoration; flagged here so it isn't lost.
+  deleted instead, and the redirect it produced pointed at a page that never received the content.
+  This restoration resolves that in two parts: the precedence model, source reference matrix, and
+  provider coverage contract (the durable supported contract) are now summarized on
+  [`reference/data-models/work-graph.md`](../../reference/data-models/work-graph.md), so the existing
+  redirect resolves to real content; the implementation detail this page's §0.3, §1-4, and §5 carry
+  (debugging matrices, job/component maps, the recovery runbook, the source map) is published here
+  instead of being dropped a second time, on the reading that `contribute/architecture/` — which
+  already publishes comparably deep detail in `platform.md`/`contracts.md`/`data-and-storage.md` — is
+  what "stays internal" meant relative to the customer-facing `use/`/`reference/` tier the disposition
+  was written against, not "does not get published at all."
+
+**A caveat for the code comments above:** they cite the raw repo path `docs/architecture/team-attribution.md`,
+which does not exist under any name after the original deletion — neither this page nor
+`work-graph.md` share that literal path, and the mkdocs redirect only rewrites published site URLs,
+not GitHub file links in source comments. Fixing those four comments needs a code change; whoever
+makes it should point at `docs/contribute/architecture/team-attribution.md` for the implementation
+detail the comments actually reference (the resolver internals), not at `work-graph.md`.
 
 ---
 

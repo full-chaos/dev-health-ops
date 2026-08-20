@@ -496,12 +496,14 @@ services:
   #   go-stream-pagerduty      stream   opens no queue pool   =  0
   #                                                            ---
   #                                              declared max   34
-  #   Rolling-restart reserve: every one of these is its own independently
-  #   rolled unit, so a single image or config change surges ALL of them at
-  #   once (Helm renders one Deployment each with maxSurge 1 /
-  #   maxUnavailable 0). Each briefly runs one replica beyond its declared
+  #   Rolling-restart reserve. Each replica-bearing process group above is its
+  #   own independently rolled unit, so a single image or config change surges
+  #   ALL of them at once (Helm renders one Deployment each with maxSurge 1 /
+  #   maxUnavailable 0). Each then briefly runs one replica beyond its declared
   #   maximum while the outgoing replica's sessions linger until
-  #   server_idle_timeout: 3+3+3+3 river, 2+2 control            +16
+  #   server_idle_timeout. The streams cost nothing here and go-workerctl is a
+  #   one-shot invocation, not a rolled replica, so neither is reserved for:
+  #   3+3+3+3 river, 2+2 control                                  +16
   #                                                            ---
   #                                            DEFAULT_POOL_SIZE 50
   #

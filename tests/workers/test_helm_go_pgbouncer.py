@@ -32,8 +32,9 @@ _PROFILE_NAMES = {
 _COORDINATOR_GROUPS = {"reconciler", "scheduler"}
 # Pool sizes and client caps come from the deployment manifest's postgres
 # budget rather than being restated here: the queue and coordinator session
-# defaults had drifted below it (22/10 against 23/11) precisely because this
-# oracle carried its own copy of the numbers (CHAOS-3872).
+# defaults had drifted below it precisely because this oracle carried its own
+# copy of the numbers (CHAOS-3872 -- 22/10 against 23/11 at the time; the
+# manifest's figures have moved since, which is the point).
 _POSTGRES_BUDGET = json.loads(_DEPLOYMENT.read_text(encoding="utf-8"))[
     "postgres_budget"
 ]

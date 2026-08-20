@@ -876,8 +876,9 @@ def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> No
 
     # The SESSION pools are bound to the manifest too. Only the transaction
     # pool used to be, so the queue and coordinator defaults had drifted below
-    # the budget (22/10 against the manifest's 23/11) with nothing to catch it
-    # (CHAOS-3872).
+    # the budget with nothing to catch it (CHAOS-3872 -- 22/10 against 23/11 at
+    # the time). The manifest's own figures have moved since, which is exactly
+    # why this asserts the binding rather than a literal.
     services = _load_yaml(_PRODUCTION_COMPOSE)["services"]
     session_pools = {
         "pgbouncer-river-queue": (

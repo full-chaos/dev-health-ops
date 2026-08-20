@@ -119,22 +119,45 @@ func postSyncRemainingScope(
 	}
 }
 
-type teamAutoimportPostSyncWriter struct{ producer *joboutbox.Producer }
+type teamAutoimportPostSyncWriter struct {
+	producer *joboutbox.Producer
+	registry joboutbox.PolicyRegistry
+}
 
+// PublishTx stages the team-autoimport handoff in the fanout's transaction.
+//
+// The route is chosen from the descriptor, exactly as the daily, remaining and
+// workgraph publishers do. The deferred producer path is legal ONLY while a
+// kind is pinned to Celery on both its route and its rollback route; publishing
+// deferred unconditionally meant every publish of this kind was rejected with
+// publish_not_permitted_for_route once it was cut over to route=river, and
+// because Fanout stages the whole generation in one transaction, that rejection
+// discarded every other post-sync handoff with it (CHAOS-3946).
 func (writer teamAutoimportPostSyncWriter) PublishTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	plan syncdispatchruntime.PostSyncPlan,
 ) error {
+	if writer.producer == nil || writer.registry == nil || tx == nil {
+		return syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	descriptor, ok := writer.registry.Descriptor(jobcontract.KindTeamAutoimport)
+	if !ok {
+		return syncdispatchruntime.ErrPostSyncUnavailable
+	}
 	organizationID := plan.OrganizationID
-	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, jobcontract.Envelope{
+	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,
 		OrganizationID:  &organizationID,
 		CorrelationID:   "post-sync:" + plan.SyncRunID,
 		IdempotencyKey:  "post-sync:" + plan.SyncRunID + ":" + jobcontract.KindTeamAutoimport,
 		Domain:          jobcontract.DomainLink{Type: "sync_run", ID: plan.SyncRunID},
 		Payload:         jobcontract.TeamAutoimportPayload{SyncRunID: plan.SyncRunID},
-	})
+	}
+	if descriptor.Executable() {
+		return writer.producer.Publish(ctx, tx, jobcontract.KindTeamAutoimport, envelope)
+	}
+	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, envelope)
 }
 
 var postSyncFanoutNamespace = uuid.MustParse("0713fbcf-ec5c-49dc-b7dc-18ae3de17536")
@@ -273,7 +296,7 @@ func buildSyncCoordinatorWorker(
 		dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher},
 		remainingPostSyncWriter{store: remainingStore, publisher: remainingPublisher},
 		workGraphPostSyncWriter{writer: workGraphWriter},
-		teamAutoimportPostSyncWriter{producer: producer},
+		teamAutoimportPostSyncWriter{producer: producer, registry: registry},
 	)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable

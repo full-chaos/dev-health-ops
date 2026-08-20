@@ -1,19 +1,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
 )
 
@@ -144,6 +149,144 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 			if len(family.queues) != 1 || family.queues[0].Queue != syncCoordinatorQueue ||
 				family.queues[0].MaxWorkers != 13 {
 				t.Fatalf("reported queues = %#v", family.queues)
+			}
+		})
+	}
+}
+
+// recordingTx is a pgx.Tx stub that records the statements a caller stages in
+// the transaction it owns. It exists so the post-sync writers can be asserted
+// on their EFFECT -- the outbox row that reaches the transaction -- rather than
+// on which producer method a mock observed being called. The route the writer
+// picks produces an identical row either way; the only observable difference
+// is whether the row is written at all or the producer rejects the publish, so
+// that is exactly what these tests measure.
+type recordingTx struct {
+	statements []string
+	arguments  [][]any
+}
+
+func (tx *recordingTx) Begin(context.Context) (pgx.Tx, error) {
+	return nil, errors.New("recordingTx: Begin not implemented")
+}
+func (tx *recordingTx) Commit(context.Context) error   { return nil }
+func (tx *recordingTx) Rollback(context.Context) error { return nil }
+func (tx *recordingTx) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return 0, errors.New("recordingTx: CopyFrom not implemented")
+}
+func (tx *recordingTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults { return nil }
+func (tx *recordingTx) LargeObjects() pgx.LargeObjects                         { return pgx.LargeObjects{} }
+func (tx *recordingTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
+	return nil, errors.New("recordingTx: Prepare not implemented")
+}
+
+func (tx *recordingTx) Exec(_ context.Context, statement string, arguments ...any) (pgconn.CommandTag, error) {
+	tx.statements = append(tx.statements, statement)
+	tx.arguments = append(tx.arguments, arguments)
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+func (tx *recordingTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("recordingTx: Query not implemented")
+}
+func (tx *recordingTx) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+func (tx *recordingTx) Conn() *pgx.Conn                                  { return nil }
+
+// outboxRowsFor returns the job kinds of every worker_job_outbox row staged in
+// the transaction, in the order they were written.
+func (tx *recordingTx) outboxRowsFor(t *testing.T) []string {
+	t.Helper()
+	kinds := []string{}
+	for index, statement := range tx.statements {
+		if !strings.Contains(statement, "INSERT INTO public.worker_job_outbox") {
+			continue
+		}
+		arguments := tx.arguments[index]
+		if len(arguments) < 3 {
+			t.Fatalf("outbox insert %d carried %d arguments", index, len(arguments))
+		}
+		kind, ok := arguments[2].(string)
+		if !ok {
+			t.Fatalf("outbox insert %d job_kind argument is %T", index, arguments[2])
+		}
+		kinds = append(kinds, kind)
+	}
+	return kinds
+}
+
+// TestTeamAutoimportPostSyncWriterStagesItsHandoffOnBothCheckedInRoutes is the
+// effect-level regression for CHAOS-3946.
+//
+// The writer called producer.PublishDeferred unconditionally. The deferred
+// route is only legal while a kind is still pinned to Celery on both its route
+// and its rollback route, and sync.team_autoimport has been go_default/river
+// since the cutover, so every publish was rejected with
+// publish_not_permitted_for_route -- and since Fanout stages the whole
+// generation in ONE transaction with this publish LAST, that rejection
+// discarded the complexity run, the daily dispatch, the workgraph build, the
+// investment materialize, the membership backfill and the DORA run staged
+// alongside it, for every organization with auto_import_teams enabled.
+//
+// Both halves are asserted. The checked-in tree must stage the row; a tree
+// rolled back to Celery must ALSO stage it, through the deferred route. A test
+// that only pinned the first half would pass against a writer that dropped the
+// branch entirely and always published executable, which would break the
+// rollback the branch exists to preserve.
+func TestTeamAutoimportPostSyncWriterStagesItsHandoffOnBothCheckedInRoutes(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	const (
+		organizationID = "6d1f2b0e-1f5c-4e5a-9d21-0c9f5c3b8a41"
+		syncRunID      = "b6b2f5d4-1f0e-4a1c-9f77-3f4a4d2b6c58"
+	)
+	for _, testCase := range []struct {
+		name     string
+		registry *jobruntime.Registry
+	}{
+		{
+			name: "checked-in contract routes the kind to River",
+			registry: func() *jobruntime.Registry {
+				registry, err := jobruntime.Load(defaultContractRoot)
+				if err != nil {
+					t.Fatalf("load checked-in contracts: %v", err)
+				}
+				return registry
+			}(),
+		},
+		{
+			name: "a rollback pins the kind back to Celery",
+			registry: func() *jobruntime.Registry {
+				registry, _ := demotedContractRoot(t, jobcontract.KindTeamAutoimport)
+				return registry
+			}(),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			producer, err := joboutbox.NewTransactionProducer(testCase.registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := teamAutoimportPostSyncWriter{producer: producer, registry: testCase.registry}
+			tx := &recordingTx{}
+			plan := syncdispatchruntime.PostSyncPlan{
+				OrganizationID: organizationID,
+				SyncRunID:      syncRunID,
+				TeamAutoimport: true,
+			}
+			if err := writer.PublishTx(context.Background(), tx, plan); err != nil {
+				t.Fatalf(
+					"PublishTx staged no handoff: %v\n"+
+						"The whole post-sync fanout commits in this one transaction, so this "+
+						"error discards every other handoff staged before it.", err,
+				)
+			}
+			staged := tx.outboxRowsFor(t)
+			if len(staged) != 1 || staged[0] != jobcontract.KindTeamAutoimport {
+				t.Fatalf("staged outbox rows = %v, want exactly [%s]",
+					staged, jobcontract.KindTeamAutoimport)
+			}
+			dedupeKey, ok := tx.arguments[0][1].(string)
+			if !ok || dedupeKey != "post-sync:"+syncRunID+":"+jobcontract.KindTeamAutoimport {
+				t.Fatalf("dedupe_key = %v, want the post-sync idempotency key", tx.arguments[0][1])
 			}
 		})
 	}

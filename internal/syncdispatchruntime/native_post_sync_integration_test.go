@@ -249,3 +249,99 @@ VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
 		}
 	}
 }
+
+// TestNativePostSyncFanoutDiscardsEveryHandoffWhenTeamAutoimportIsRejected
+// pins the blast radius CHAOS-3946 measured in production.
+//
+// team-autoimport is the LAST writer in the fanout, and Fanout stages every
+// handoff in one transaction whose rollback is deferred. So a rejection there
+// is not a team-autoimport outage: it discards the complexity run, the daily
+// dispatch, the workgraph build, the investment materialize, the membership
+// backfill and the DORA run that were already staged, on every sync, for every
+// organization with auto_import_teams enabled. That is why a mis-routed
+// publish in one leaf writer cost four of sixteen post_sync jobs their entire
+// output rather than one child job.
+//
+// The single transaction is INTENTIONAL and is left in place: the handoffs are
+// a prerequisite-ordered chain (each StartRunTx returns the completion key the
+// next one waits on), so partially committing it would publish children whose
+// durable predecessor never exists. The correct guards are that no call site
+// can be deterministically illegal (TestEveryOutboxPublishSiteAgreesWith...)
+// and that a deterministic rejection is terminal on the first attempt
+// (TestPostSyncWorkerTerminalizesDeterministicOutboxRejections), not a weaker
+// atomicity boundary. This test exists so the coupling stays a measured,
+// deliberate property rather than an assumption.
+func TestNativePostSyncFanoutDiscardsEveryHandoffWhenTeamAutoimportIsRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000001"
+		runID         = "00000000-0000-4000-8000-000000000002"
+		outboxID      = "00000000-0000-4000-8000-000000000003"
+		integrationID = "00000000-0000-4000-8000-000000000004"
+		repositoryID  = "00000000-0000-4000-8000-000000000005"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+
+	rejecting, err := NewNativePostSyncService(
+		pool,
+		markerDaily{},
+		markerRemaining{},
+		markerWorkGraph{},
+		markerTeam{markerWriter{failKind: "team_autoimport"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejecting.now = now
+	if err := rejecting.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
+		t.Fatalf("Fanout() error = %v, want the rejection to surface", err)
+	}
+	var staged int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID,
+	).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 0 {
+		t.Fatalf("rejected fanout left %d markers committed; the transaction is no longer atomic", staged)
+	}
+
+	// The same fanout with every writer accepting stages all seven handoffs,
+	// so the zero above is the rejection's doing and not an empty plan.
+	accepting, err := NewNativePostSyncService(
+		pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepting.now = now
+	if err := accepting.Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID,
+	).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 7 {
+		t.Fatalf("accepted fanout staged %d markers, want 7", staged)
+	}
+}

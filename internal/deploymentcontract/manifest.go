@@ -40,12 +40,21 @@ var (
 // exercise than this struct, and should be a deliberate size change with its
 // own evidence, not a silent one.
 type PostgresBudget struct {
-	ServerMaxConnections                            int `json:"server_max_connections"`
-	ServerReservedConnections                       int `json:"server_reserved_connections"`
-	PgBouncerTransactionPoolSize                    int `json:"pgbouncer_transaction_pool_size"`
-	PgBouncerTransactionServerPoolCount             int `json:"pgbouncer_transaction_server_pool_count"`
-	PgBouncerTransactionMaxClientConnections        int `json:"pgbouncer_transaction_max_client_connections"`
-	PgBouncerQueueSessionPoolSize                   int `json:"pgbouncer_queue_session_pool_size"`
+	ServerMaxConnections                     int `json:"server_max_connections"`
+	ServerReservedConnections                int `json:"server_reserved_connections"`
+	PgBouncerTransactionPoolSize             int `json:"pgbouncer_transaction_pool_size"`
+	PgBouncerTransactionServerPoolCount      int `json:"pgbouncer_transaction_server_pool_count"`
+	PgBouncerTransactionMaxClientConnections int `json:"pgbouncer_transaction_max_client_connections"`
+	PgBouncerQueueSessionPoolSize            int `json:"pgbouncer_queue_session_pool_size"`
+	// A started River client holds ONE long-lived LISTEN session for its
+	// notifier, outside the queue-control pgxpool that
+	// queue_control_max_connections declares. Only the "river" runtime starts
+	// one (cmd/dev-health-worker/river_process.go calls Client.Start); the
+	// "control" runtime builds a client but drives it through the *Tx APIs, so
+	// no notifier or elector attaches, and the "stream" runtime opens no queue
+	// pool at all. Declaring the term here is what lets the pool size be
+	// derived instead of hand-maintained (CHAOS-3945).
+	QueueSessionNotifierSessionsPerReplica          int `json:"queue_session_notifier_sessions_per_replica"`
 	PgBouncerQueueSessionMaxClientConnections       int `json:"pgbouncer_queue_session_max_client_connections"`
 	PgBouncerCoordinatorSessionPoolSize             int `json:"pgbouncer_coordinator_session_pool_size"`
 	PgBouncerCoordinatorSessionMaxClientConnections int `json:"pgbouncer_coordinator_session_max_client_connections"`
@@ -175,6 +184,15 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	}
 
 	queueCoverage := buildQueueCoverage(registry)
+	// Rolling-restart reserve. Each replica-bearing process is rendered as its
+	// own independently rolled unit (a Compose service; a Helm Deployment with
+	// maxSurge 1 / maxUnavailable 0), so one image or config change surges ALL
+	// of them at once: each briefly runs a replica beyond its declared maximum
+	// while the outgoing replica's sessions linger until server_idle_timeout.
+	// Reserving only the largest single replica would hold for one serialized
+	// replacement and understate a fleet-wide rollout by the rest.
+	queueRollingSurgeReserve := 0
+	coordinatorRollingSurgeReserve := 0
 	seenNames := make(map[string]struct{}, len(manifest.Processes))
 	previousName := ""
 	summary := BudgetSummary{
@@ -199,7 +217,10 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
 
-		summary.QueueSessionClientConnections += process.MaxReplicas * process.QueueControlMaxConnections
+		queueCostPerReplica := queueSessionCostPerReplica(process, manifest.PostgresBudget)
+		queueRollingSurgeReserve += queueCostPerReplica
+		coordinatorRollingSurgeReserve += process.CoordinatorMaxConnections
+		summary.QueueSessionClientConnections += process.MaxReplicas * queueCostPerReplica
 		summary.CoordinatorSessionClientConnections += process.MaxReplicas * process.CoordinatorMaxConnections
 		summary.DomainTransactionClientConnections += process.MaxReplicas * process.DomainMaxConnections
 
@@ -257,11 +278,19 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		summary.DomainTransactionClientConnections
 	summary.ServerConnectionHeadroom = manifest.PostgresBudget.ServerMaxConnections -
 		summary.ServerConnectionFootprint
-	if summary.QueueSessionHeadroom <= 0 {
-		return BudgetSummary{}, errors.New("queue session PgBouncer headroom must be positive")
+	if summary.QueueSessionHeadroom < queueRollingSurgeReserve {
+		return BudgetSummary{}, fmt.Errorf(
+			"queue session PgBouncer headroom %d cannot absorb a fleet-wide rolling restart (%d)",
+			summary.QueueSessionHeadroom,
+			queueRollingSurgeReserve,
+		)
 	}
-	if summary.CoordinatorSessionHeadroom <= 0 {
-		return BudgetSummary{}, errors.New("coordinator session PgBouncer headroom must be positive")
+	if summary.CoordinatorSessionHeadroom < coordinatorRollingSurgeReserve {
+		return BudgetSummary{}, fmt.Errorf(
+			"coordinator session PgBouncer headroom %d cannot absorb a fleet-wide rolling restart (%d)",
+			summary.CoordinatorSessionHeadroom,
+			coordinatorRollingSurgeReserve,
+		)
 	}
 	if summary.DomainTransactionHeadroom <= 0 {
 		return BudgetSummary{}, errors.New("transaction PgBouncer headroom must be positive")
@@ -270,6 +299,21 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		return BudgetSummary{}, errors.New("PostgreSQL server connection headroom must be positive")
 	}
 	return summary, nil
+}
+
+// queueSessionCostPerReplica is what one replica really costs the queue-session
+// endpoint: its queue-control pgxpool, plus River's notifier session when the
+// process actually starts a River client. The operator CLI is charged no
+// notifier for the same reason as the control runtime -- it builds its River
+// client for insert/cancel and never calls Start.
+func queueSessionCostPerReplica(process Process, budget PostgresBudget) int {
+	if process.QueueControlMaxConnections <= 0 {
+		return 0
+	}
+	if process.Runtime != "river" {
+		return process.QueueControlMaxConnections
+	}
+	return process.QueueControlMaxConnections + budget.QueueSessionNotifierSessionsPerReplica
 }
 
 func minInt(left, right int) int {
@@ -325,6 +369,7 @@ func validatePostgresBudget(budget PostgresBudget) error {
 		budget.PgBouncerTransactionServerPoolCount < 1 || budget.PgBouncerTransactionServerPoolCount > 128 ||
 		budget.PgBouncerTransactionMaxClientConnections < 1 ||
 		budget.PgBouncerQueueSessionPoolSize < 1 || budget.PgBouncerQueueSessionMaxClientConnections < 1 ||
+		budget.QueueSessionNotifierSessionsPerReplica < 1 || budget.QueueSessionNotifierSessionsPerReplica > 4 ||
 		budget.PgBouncerCoordinatorSessionPoolSize < 1 || budget.PgBouncerCoordinatorSessionMaxClientConnections < 1 {
 		return errors.New("deployment PostgreSQL budget has invalid bounds")
 	}

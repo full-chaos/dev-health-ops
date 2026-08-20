@@ -35,6 +35,7 @@
         "pgbouncer_transaction_server_pool_count",
         "pgbouncer_transaction_max_client_connections",
         "pgbouncer_queue_session_pool_size",
+        "queue_session_notifier_sessions_per_replica",
         "pgbouncer_queue_session_max_client_connections",
         "pgbouncer_coordinator_session_pool_size",
         "pgbouncer_coordinator_session_max_client_connections"
@@ -46,6 +47,7 @@
         "pgbouncer_transaction_server_pool_count": {"type": "integer", "minimum": 1},
         "pgbouncer_transaction_max_client_connections": {"type": "integer", "minimum": 1},
         "pgbouncer_queue_session_pool_size": {"type": "integer", "minimum": 1},
+        "queue_session_notifier_sessions_per_replica": {"type": "integer", "minimum": 1, "maximum": 4},
         "pgbouncer_queue_session_max_client_connections": {"type": "integer", "minimum": 1},
         "pgbouncer_coordinator_session_pool_size": {"type": "integer", "minimum": 1},
         "pgbouncer_coordinator_session_max_client_connections": {"type": "integer", "minimum": 1}

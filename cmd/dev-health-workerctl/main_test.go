@@ -355,9 +355,9 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 	// room under it: server footprint 93 -> 102. Both processes ship at zero
 	// replicas, so runtime usage is unchanged; this is the declared worst
 	// case the budget has to cover.
-	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 26, Limit: 36, Headroom: 10}) ||
-		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 11, Headroom: 1}) ||
-		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 102, Limit: 200, Headroom: 98}) {
+	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 34, Limit: 50, Headroom: 16}) ||
+		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 14, Headroom: 4}) ||
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 119, Limit: 200, Headroom: 81}) {
 		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }

@@ -37,16 +37,16 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 26 {
+	if summary.QueueSessionClientConnections != 34 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 10 {
+	if summary.QueueSessionHeadroom != 16 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 66 {
@@ -55,10 +55,10 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 102 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 98 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -124,16 +124,16 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 26 {
+	if summary.QueueSessionClientConnections != 34 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 10 {
+	if summary.QueueSessionHeadroom != 16 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 66 {
@@ -142,10 +142,10 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudget(t *testing.T) {
 	if summary.DomainTransactionHeadroom != 934 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 102 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 98 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -163,16 +163,16 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.QueueSessionClientConnections != 22 {
+	if summary.QueueSessionClientConnections != 28 {
 		t.Fatalf("queue session clients = %d", summary.QueueSessionClientConnections)
 	}
-	if summary.QueueSessionHeadroom != 14 {
+	if summary.QueueSessionHeadroom != 22 {
 		t.Fatalf("queue session headroom = %d", summary.QueueSessionHeadroom)
 	}
 	if summary.CoordinatorSessionClientConnections != 10 {
 		t.Fatalf("coordinator session clients = %d", summary.CoordinatorSessionClientConnections)
 	}
-	if summary.CoordinatorSessionHeadroom != 1 {
+	if summary.CoordinatorSessionHeadroom != 4 {
 		t.Fatalf("coordinator session headroom = %d", summary.CoordinatorSessionHeadroom)
 	}
 	if summary.DomainTransactionClientConnections != 58 {
@@ -181,10 +181,10 @@ func TestManifestAcceptsReviewedHeavyAndOpsReplicaBudgetAtOneReplica(t *testing.
 	if summary.DomainTransactionHeadroom != 942 {
 		t.Fatalf("domain transaction headroom = %d", summary.DomainTransactionHeadroom)
 	}
-	if summary.ServerConnectionFootprint != 102 {
+	if summary.ServerConnectionFootprint != 119 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
-	if summary.ServerConnectionHeadroom != 98 {
+	if summary.ServerConnectionHeadroom != 81 {
 		t.Fatalf("server connection headroom = %d", summary.ServerConnectionHeadroom)
 	}
 }
@@ -544,4 +544,100 @@ func unionRegistryKindsForQueues(registry jobcontract.Registry, queues []string)
 		}
 	}
 	return sortedKeys(kinds)
+}
+
+// CHAOS-3945: the queue-session budget counted only each replica's
+// queue-control pgxpool. A started River client also holds a long-lived
+// notifier LISTEN session outside that pool, so a "river" runtime replica
+// costs one more connection than it declares.
+func TestManifestChargesRiverReplicasForTheirNotifierSession(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+
+	withNotifier, err := manifest.Validate(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	riverReplicas := 0
+	for _, process := range manifest.Processes {
+		if process.Runtime == "river" && process.QueueControlMaxConnections > 0 {
+			riverReplicas += process.MaxReplicas
+		}
+	}
+	if riverReplicas == 0 {
+		t.Fatal("fixture declares no river runtime replicas, so this guard proves nothing")
+	}
+
+	// Independently recomputed pool-only total: what the budget was before the
+	// notifier term existed. The difference must be exactly one session per
+	// declared river replica -- and nothing for the control, stream, or
+	// operator clients.
+	expected := manifest.OperatorCLI.MaxConcurrentInvocations *
+		manifest.OperatorCLI.QueueControlMaxConnections
+	for _, process := range manifest.Processes {
+		expected += process.MaxReplicas * process.QueueControlMaxConnections
+	}
+	if withNotifier.QueueSessionClientConnections != expected+riverReplicas {
+		t.Fatalf(
+			"queue session clients = %d; pool-only total %d plus %d notifier sessions = %d",
+			withNotifier.QueueSessionClientConnections,
+			expected,
+			riverReplicas,
+			expected+riverReplicas,
+		)
+	}
+}
+
+// A notifier session is not optional: River always opens one per started
+// client. A manifest declaring zero must not validate, or the budget silently
+// reverts to the pool-only arithmetic that caused CHAOS-3945.
+func TestManifestRejectsAZeroNotifierSessionDeclaration(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+	manifest.PostgresBudget.QueueSessionNotifierSessionsPerReplica = 0
+	if _, err := manifest.Validate(registry); err == nil {
+		t.Fatal("expected a manifest declaring no River notifier session to fail validation")
+	}
+}
+
+// Headroom of one connection is not headroom. Every replica-bearing process is
+// its own independently rolled unit, so a single image or config change surges
+// all of them together, each briefly running a replica beyond its declared
+// maximum while the outgoing replica's sessions linger until
+// server_idle_timeout. Both session pools must absorb that, not just one.
+func TestManifestRejectsSessionPoolsThatCannotAbsorbAFleetRollingRestart(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		shave func(*Manifest, BudgetSummary)
+	}{
+		{
+			name: "queue",
+			shave: func(manifest *Manifest, summary BudgetSummary) {
+				manifest.PostgresBudget.PgBouncerQueueSessionPoolSize =
+					summary.QueueSessionClientConnections + 1
+			},
+		},
+		{
+			name: "coordinator",
+			shave: func(manifest *Manifest, summary BudgetSummary) {
+				manifest.PostgresBudget.PgBouncerCoordinatorSessionPoolSize =
+					summary.CoordinatorSessionClientConnections + 1
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manifest, registry := loadFixture(t)
+			summary, err := manifest.Validate(registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.shave(&manifest, summary)
+			if _, err := manifest.Validate(registry); err == nil {
+				t.Fatalf("expected a %s pool with one spare connection to fail validation", test.name)
+			}
+		})
+	}
 }

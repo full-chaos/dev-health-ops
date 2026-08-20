@@ -5,12 +5,14 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -255,25 +257,34 @@ VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
 	}
 }
 
-// poisoningTeamWriter is a team-autoimport writer whose failure has ALREADY
-// issued SQL. Swallowing its error is not enough on its own: Postgres leaves
-// the enclosing transaction in an aborted state, so the metric fanout's commit
-// would fail and the whole generation would still be lost -- silently, which is
-// worse than the loud failure CHAOS-3946 reported.
-type poisoningTeamWriter struct{}
+// rejectingTeamWriter refuses deterministically, the way the outbox refuses an
+// envelope whose kind is not permitted on the route it was published through.
+// poison makes it issue failing SQL FIRST, so the enclosing transaction is
+// already aborted when the rejection surfaces: swallowing without a savepoint
+// would then lose the metric fanout at Commit anyway, silently.
+type rejectingTeamWriter struct{ poison bool }
 
-func (poisoningTeamWriter) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
-	_, err := tx.Exec(ctx, `
+func (writer rejectingTeamWriter) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
+	if writer.poison {
+		if _, err := tx.Exec(ctx, `
 INSERT INTO post_sync_markers (sync_run_id, kind)
-VALUES ('this-is-not-a-uuid', 'team_autoimport')`)
-	if err == nil {
-		return errors.New("the poisoning statement was expected to fail")
+VALUES ('this-is-not-a-uuid', 'team_autoimport')`); err == nil {
+			return errors.New("the poisoning statement was expected to fail")
+		}
 	}
-	return err
+	return fmt.Errorf("%w: publish_not_permitted_for_route", joboutbox.ErrPolicyRejected)
 }
 
-// TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure pins the
-// guarantee the Go port dropped.
+// unavailableTeamWriter fails the way a transient Postgres or transport blip
+// does: a verdict a later attempt can clear.
+type unavailableTeamWriter struct{}
+
+func (unavailableTeamWriter) PublishTx(context.Context, pgx.Tx, PostSyncPlan) error {
+	return joboutbox.ErrUnavailable
+}
+
+// TestNativePostSyncFanoutTeamAutoimportFailurePolicy pins the guarantee the Go
+// port dropped, and its boundary.
 //
 // src/dev_health_ops/workers/post_sync_dispatch.py:285-302 states it outright:
 // "Best-effort: a dispatch failure must never break post-sync metric fan-out."
@@ -282,18 +293,22 @@ VALUES ('this-is-not-a-uuid', 'team_autoimport')`)
 // work-RELATIONSHIP refresh and work-UNIT metric work have different
 // lifecycles. Go published it inside the metric transaction as the last
 // statement before commit, so one rejected publish discarded the complexity
-// run, the daily dispatch, the workgraph build, the investment materialize,
-// the membership backfill and the DORA run with it.
+// run, the daily dispatch, the workgraph build, the investment materialize, the
+// membership backfill and the DORA run with it.
 //
 // That guarantee lived only in a try/except and a prose comment, in both
 // codebases; nothing asserted it, so nothing caught its removal. This is the
-// assertion.
+// assertion -- and it pins the BOUNDARY too, which the prose does not give us:
 //
-// Both failure shapes are covered. A writer that fails before touching SQL
-// proves the error is swallowed; a writer that has already poisoned the
-// transaction proves the savepoint, which is the half a bare swallow would get
-// wrong while still passing the first case.
-func TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure(t *testing.T) {
+//   - a deterministic rejection is swallowed, because re-running the fanout
+//     would only reach the same verdict again;
+//   - the same rejection AFTER the writer has aborted the transaction is also
+//     swallowed, which is the half a bare swallow gets wrong;
+//   - a TRANSIENT failure is propagated, because the fanout is duplicate-stable
+//     and a retry re-stages all six handoffs and gives this one another chance.
+//     Swallowing it would trade a recoverable blip for a permanently missing
+//     refresh whose only trace is a log line.
+func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -323,22 +338,40 @@ func TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure(t *testing
 	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
 	// Every handoff the metric fanout owns. Team autoimport is deliberately
 	// absent: it is the one that is allowed to be lost.
-	wantMetricHandoffs := []string{
+	metricHandoffs := []string{
 		"complexity", "daily", "dora", "investment.materialize",
 		"membership_backfill", "workgraph.build",
 	}
 
 	for _, testCase := range []struct {
-		name string
-		team TeamAutoimportPostSyncWriter
+		name      string
+		team      TeamAutoimportPostSyncWriter
+		wantErr   bool
+		wantKinds []string
+		wantLog   bool
 	}{
 		{
-			name: "the publish is rejected before it touches the transaction",
-			team: markerTeam{markerWriter{failKind: "team_autoimport"}},
+			name:      "a deterministic rejection never breaks the metric fanout",
+			team:      rejectingTeamWriter{},
+			wantKinds: metricHandoffs,
+			wantLog:   true,
 		},
 		{
-			name: "the publish has already aborted the transaction",
-			team: poisoningTeamWriter{},
+			name:      "a deterministic rejection that already aborted the transaction is recovered",
+			team:      rejectingTeamWriter{poison: true},
+			wantKinds: metricHandoffs,
+			wantLog:   true,
+		},
+		{
+			name:      "a transient failure is propagated so the whole fanout retries",
+			team:      unavailableTeamWriter{},
+			wantErr:   true,
+			wantKinds: []string{},
+		},
+		{
+			name:      "every handoff commits when the writer accepts",
+			team:      markerTeam{},
+			wantKinds: append(append([]string{}, metricHandoffs...), "team_autoimport"),
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -357,9 +390,14 @@ func TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure(t *testing
 			}
 			service.now = now
 
-			if err := service.Fanout(ctx, args); err != nil {
-				t.Fatalf("Fanout() = %v, want nil: a best-effort team-autoimport failure "+
-					"must never break the post-sync metric fanout", err)
+			err = service.Fanout(ctx, args)
+			if testCase.wantErr && err == nil {
+				t.Fatal("Fanout() = nil, want an error so River retries the whole fanout: " +
+					"a transient failure must not silently drop the handoff")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("Fanout() = %v, want nil: a deterministic team-autoimport "+
+					"rejection must never break the post-sync metric fanout", err)
 			}
 
 			rows, err := pool.Query(ctx,
@@ -379,13 +417,16 @@ func TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure(t *testing
 			if rows.Err() != nil {
 				t.Fatal(rows.Err())
 			}
-			if !slices.Equal(committed, wantMetricHandoffs) {
-				t.Fatalf("committed handoffs = %v, want %v", committed, wantMetricHandoffs)
+			slices.Sort(committed)
+			want := append([]string{}, testCase.wantKinds...)
+			slices.Sort(want)
+			if !slices.Equal(committed, want) {
+				t.Fatalf("committed handoffs = %v, want %v", committed, want)
 			}
-			if !strings.Contains(logged.String(), PostSyncTeamAutoimportFailedMessage) {
+			if testCase.wantLog && !strings.Contains(logged.String(), PostSyncTeamAutoimportFailedMessage) {
 				t.Fatalf("the dropped handoff was not recorded; logs = %q", logged.String())
 			}
-			if !strings.Contains(logged.String(), runID) {
+			if testCase.wantLog && !strings.Contains(logged.String(), runID) {
 				t.Fatalf("the drop record does not name the sync run; logs = %q", logged.String())
 			}
 		})

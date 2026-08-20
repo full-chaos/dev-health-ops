@@ -148,6 +148,9 @@ type Loop struct {
 	occurrencesCompleted   uint64
 	occurrencesRetried     uint64
 	occurrencesQuarantined uint64
+	occurrencesMinted      uint64
+	occurrencesRepeated    uint64
+	idleDueWindows         uint64
 }
 
 func NewLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig) (*Loop, error) {
@@ -286,13 +289,46 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	loop.occurrencesQuarantined += uint64(reconciled.Quarantined)
 	loop.cycles++
 	loop.handoffs += uint64(len(result.HandedOff))
+	loop.occurrencesMinted += uint64(result.Minted())
+	loop.occurrencesRepeated += uint64(len(result.Repeated))
+	if result.TimingEligible > 0 && result.Minted() == 0 {
+		loop.idleDueWindows++
+	}
 	loop.unsupportedCron += uint64(result.UnsupportedCron)
 	loop.invalidCron += uint64(result.InvalidCron)
 	loop.consecutive = 0
 	loop.lastOK, loop.up = now.UTC(), true
 	loop.ready.Store(true)
 	loop.mu.Unlock()
+	loop.reportProductivity(parent, result)
 	return nil
+}
+
+// reportProductivity names the windows that succeeded without producing work.
+// CHAOS-3936 ran for hours as a stream of successful empty windows: every
+// existing counter and log line measured whether the scheduler RAN, none
+// measured whether it PRODUCED, so a schedule frozen on one instant looked
+// exactly like a healthy one. These two lines are the difference between an
+// outage that is visible and an outage found by counting missing rows by hand.
+func (loop *Loop) reportProductivity(ctx context.Context, result HandoffResult) {
+	for _, repeated := range result.Repeated {
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler occurrence already existed; this schedule produced no new work",
+			"config_id", repeated.ConfigID,
+			"scheduled_for", repeated.ScheduledFor.UTC().Format(time.RFC3339),
+			"observed_at", repeated.ObservedAt.UTC().Format(time.RFC3339),
+		)
+	}
+	if result.TimingEligible > 0 && result.Minted() == 0 {
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler window found due candidates but minted no occurrence",
+			"candidates", result.Candidates,
+			"timing_eligible", result.TimingEligible,
+			"repeated", len(result.Repeated),
+		)
+	}
 }
 
 func (loop *Loop) backoff() time.Duration {
@@ -376,6 +412,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	lastOK, up, now := loop.lastOK, loop.up, loop.clock.Now()
 	completed, retried := loop.occurrencesCompleted, loop.occurrencesRetried
 	quarantined := loop.occurrencesQuarantined
+	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
 	loop.mu.Unlock()
 
 	age := 0.0
@@ -388,6 +425,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_unsupported_cron_fallback_total", "Unsupported cron candidates left for the existing scheduler owner.", unsupported)
 	writeLoopCounter(&text, "sync_scheduler_invalid_cron_total", "Invalid cron candidates left without marker mutation.", invalid)
 	writeLoopCounter(&text, "sync_scheduler_failures_total", "Failed bounded scheduler handoff windows.", failures)
+	writeLoopCounter(&text, "sync_scheduler_occurrences_minted_total", "Scheduled occurrences this scheduler actually created. A live scheduler whose handoffs_total climbs while this stays flat is repeating one frozen instant.", minted)
+	writeLoopCounter(&text, "sync_scheduler_occurrences_repeated_total", "Handed-off occurrences that already existed, so the window created nothing.", repeated)
+	writeLoopCounter(&text, "sync_scheduler_idle_due_windows_total", "Successful windows that found a due candidate and still minted no occurrence.", idle)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_completed_total", "Pending scheduled sync occurrences materialized.", completed)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_retried_total", "Pending scheduled sync occurrences deferred for retry.", retried)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_quarantined_total", "Pending scheduled sync occurrences terminally quarantined.", quarantined)

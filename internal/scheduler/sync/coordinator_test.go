@@ -74,12 +74,16 @@ func TestOccurrenceCoordinatorInsertsStableHandoff(t *testing.T) {
 	transaction := &coordinatorTransaction{
 		rows: []pgx.Row{coordinatorRow{values: []any{occurrence.ID}}},
 	}
-	if err := NewOccurrenceCoordinator().Handoff(
+	outcome, err := NewOccurrenceCoordinator().Handoff(
 		context.Background(),
 		transaction,
 		occurrence,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if outcome != OccurrenceMinted {
+		t.Fatalf("outcome = %q, want %q", outcome, OccurrenceMinted)
 	}
 	if len(transaction.statements) != 1 || len(transaction.args) != 1 {
 		t.Fatalf("queries=%d args=%d", len(transaction.statements), len(transaction.args))
@@ -107,12 +111,19 @@ func TestOccurrenceCoordinatorAcceptsMatchingExistingHandoff(t *testing.T) {
 			}},
 		},
 	}
-	if err := NewOccurrenceCoordinator().Handoff(
+	outcome, err := NewOccurrenceCoordinator().Handoff(
 		context.Background(),
 		transaction,
 		occurrence,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// An already-present row is still a success, but it must be reported as a
+	// repeat: an idle scheduler that re-confirms one frozen instant every tick
+	// is otherwise indistinguishable from a productive one (CHAOS-3936).
+	if outcome != OccurrenceRepeated {
+		t.Fatalf("outcome = %q, want %q", outcome, OccurrenceRepeated)
 	}
 	if len(transaction.statements) != 2 {
 		t.Fatalf("queries = %d, want 2", len(transaction.statements))
@@ -133,7 +144,7 @@ func TestOccurrenceCoordinatorRejectsConflictingExistingHandoff(t *testing.T) {
 			}},
 		},
 	}
-	err := NewOccurrenceCoordinator().Handoff(
+	_, err := NewOccurrenceCoordinator().Handoff(
 		context.Background(),
 		transaction,
 		occurrence,

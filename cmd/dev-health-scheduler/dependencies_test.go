@@ -180,8 +180,8 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 				context.Context,
 				schedulersync.HandoffTransaction,
 				schedulersync.Occurrence,
-			) error {
-				return nil
+			) (schedulersync.HandoffOutcome, error) {
+				return schedulersync.OccurrenceMinted, nil
 			})
 		},
 		newLoop: schedulersync.NewLoop,

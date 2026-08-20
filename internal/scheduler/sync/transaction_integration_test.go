@@ -82,21 +82,21 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 				handoffCtx context.Context,
 				transaction HandoffTransaction,
 				occurrence Occurrence,
-			) error {
+			) (HandoffOutcome, error) {
 				firstOccurrence = occurrence
 				if _, err := transaction.Exec(
 					handoffCtx,
 					"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 					occurrence.ID,
 				); err != nil {
-					return err
+					return "", err
 				}
 				close(firstEntered)
 				select {
 				case <-releaseFirst:
-					return nil
+					return OccurrenceMinted, nil
 				case <-handoffCtx.Done():
-					return handoffCtx.Err()
+					return "", handoffCtx.Err()
 				}
 			}),
 		)
@@ -115,8 +115,8 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 		ctx,
 		observedAt,
 		1,
-		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
-			return fmt.Errorf("second replica reached locked occurrence")
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+			return "", fmt.Errorf("second replica reached locked occurrence")
 		}),
 	)
 	if err != nil {
@@ -170,15 +170,15 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 			handoffCtx context.Context,
 			transaction HandoffTransaction,
 			occurrence Occurrence,
-		) error {
+		) (HandoffOutcome, error) {
 			if _, err := transaction.Exec(
 				handoffCtx,
 				"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 				occurrence.ID,
 			); err != nil {
-				return err
+				return "", err
 			}
-			return coordinatorErr
+			return "", coordinatorErr
 		}),
 	); !errors.Is(err, coordinatorErr) {
 		t.Fatalf("failed coordinator error = %v", err)
@@ -197,36 +197,76 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 		t.Fatalf("rollback left handoffs=%d nextRunAt=%v", handoffs, rolledBackNextRunAt)
 	}
 
+	// CHAOS-3936 changed what replaying the same observed instant means, so
+	// this block now asserts the property that actually needs protecting.
+	//
+	// Before: the base was last_sync_at, which this fixture never advances, so
+	// every replay recomputed the ONE instant already minted and wrote nothing.
+	// This block asserted that no-op by requiring the same occurrence ID back.
+	// That is the freeze itself: the same behaviour that made a failed run pin
+	// its schedule forever also made a replay look idempotent.
+	//
+	// Now the base is the occurrence ledger, so a replay mints the next instant
+	// that is due and absent -- which is how a schedule recovers from a run
+	// that never completed. The invariants that must survive, and that this
+	// block proves against real PostgreSQL, are that catch-up ADVANCES (never
+	// re-mints an instant) and that it TERMINATES (it stops at the first cron
+	// instant in the future rather than running away at a fixed now).
+	//
+	// The ledger is empty here: every handoff above used a coordinator that
+	// writes only public.scheduler_handoffs, and the last of them rolled back.
 	coordinator := NewOccurrenceCoordinator()
+	clearMarker := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+			UPDATE public.scheduled_jobs SET next_run_at = NULL
+			WHERE id = '00000000-0000-4000-8000-000000003039'
+		`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window 1: base is last_sync_at 10:00, so 11:00 is the first due instant.
 	occurrences, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(occurrences) != 1 {
-		t.Fatalf("occurrence handoffs = %d, want 1", len(occurrences))
+	if len(occurrences) != 1 || !occurrences[0].ScheduledFor.Equal(at("2026-01-01T11:00:00Z")) {
+		t.Fatalf("first window occurrences = %#v, want one at 11:00", occurrences)
 	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE public.scheduled_jobs SET next_run_at = NULL
-		WHERE id = '00000000-0000-4000-8000-000000003039'
-	`); err != nil {
-		t.Fatal(err)
-	}
+	clearMarker()
+	// Window 2, same observedAt: the ledger now holds 11:00, so 12:00 is due
+	// and absent. Before the fix this returned 11:00 again and wrote nothing.
 	retried, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(retried) != 1 || retried[0].ID != occurrences[0].ID {
-		t.Fatalf("retried occurrences = %#v, want id %s", retried, occurrences[0].ID)
+	if len(retried) != 1 || !retried[0].ScheduledFor.Equal(at("2026-01-01T12:00:00Z")) {
+		t.Fatalf("second window occurrences = %#v, want one at 12:00", retried)
 	}
-	var occurrenceRows int
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT count(*) FROM public.scheduled_sync_occurrences",
-	).Scan(&occurrenceRows); err != nil {
+	if retried[0].ID == occurrences[0].ID {
+		t.Fatal("catch-up re-minted the instant it had already minted")
+	}
+	clearMarker()
+	// Window 3, same observedAt: the next instant is 13:00, which is in the
+	// future, so catch-up stops. Without this the fix would mint forever at a
+	// fixed now, which is the opposite failure to the one it repairs.
+	settled, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if occurrenceRows != 1 {
-		t.Fatalf("scheduled occurrence rows = %d, want 1", occurrenceRows)
+	if len(settled) != 0 {
+		t.Fatalf("catch-up did not terminate: third window occurrences = %#v", settled)
+	}
+	var occurrenceRows, distinctInstants int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), count(DISTINCT scheduled_for)
+		FROM public.scheduled_sync_occurrences
+	`).Scan(&occurrenceRows, &distinctInstants); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 2 || distinctInstants != 2 {
+		t.Fatalf("scheduled occurrence rows = %d over %d distinct instants, want 2 over 2",
+			occurrenceRows, distinctInstants)
 	}
 }
 
@@ -435,13 +475,13 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 		handoffCtx context.Context,
 		transaction HandoffTransaction,
 		occurrence Occurrence,
-	) error {
+	) (HandoffOutcome, error) {
 		if _, execErr := transaction.Exec(
 			handoffCtx,
 			"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
 			occurrence.ID,
 		); execErr != nil {
-			return execErr
+			return "", execErr
 		}
 		postgresTransaction, ok := transaction.(postgresSchedulerTransaction)
 		if !ok {
@@ -456,7 +496,7 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 		if closeErr := postgresTransaction.Tx.Conn().Close(context.Background()); closeErr != nil {
 			t.Logf("closing simulated-crash connection: %v", closeErr)
 		}
-		return crashed
+		return "", crashed
 	}))
 	if err == nil {
 		t.Fatal("HandoffDue() succeeded despite a crashed connection")
@@ -494,6 +534,244 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 	}
 	if len(occurrences) != 1 {
 		t.Fatalf("post-crash HandoffDue() occurrences = %d, want 1", len(occurrences))
+	}
+}
+
+// CHAOS-3936: last_sync_at advances only when a sync COMPLETES. This fixture
+// never completes one, so before the fix every window recomputed the same
+// 11:00 instant, the ON CONFLICT DO NOTHING insert wrote nothing, and the
+// coordinator reported idempotent success -- forever, against real PostgreSQL.
+// Each window must instead durably add one new instant.
+func TestHandoffDuePostgresKeepsMintingWhileLastSyncStaysFrozen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"11:00", "12:00", "13:00"}
+	for index, observed := range []string{
+		"2026-01-01T12:00:00Z", "2026-01-01T13:00:00Z", "2026-01-01T14:00:00Z",
+	} {
+		result, err := repository.HandoffDueResult(ctx, at(observed), 4, NewOccurrenceCoordinator())
+		if err != nil {
+			t.Fatalf("window %d HandoffDueResult() err = %v", index, err)
+		}
+		if result.Minted() != 1 || len(result.Repeated) != 0 {
+			t.Fatalf("window %d minted=%d repeated=%d", index, result.Minted(), len(result.Repeated))
+		}
+		var frozen time.Time
+		if err := pool.QueryRow(ctx, `
+			SELECT last_sync_at FROM public.sync_configurations
+			WHERE id = '00000000-0000-4000-8000-000000003038'
+		`).Scan(&frozen); err != nil {
+			t.Fatal(err)
+		}
+		if !frozen.Equal(at("2026-01-01T10:00:00Z")) {
+			t.Fatalf("fixture no longer reproduces a run that never completes: last_sync_at = %s", frozen)
+		}
+		var minted []string
+		rows, err := pool.Query(ctx, `
+			SELECT to_char(scheduled_for AT TIME ZONE 'UTC', 'HH24:MI')
+			FROM public.scheduled_sync_occurrences
+			ORDER BY scheduled_for
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var instant string
+			if err := rows.Scan(&instant); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			minted = append(minted, instant)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(minted) != fmt.Sprint(want[:index+1]) {
+			t.Fatalf("after %d windows the occurrence ledger holds %v, want %v", index+1, minted, want[:index+1])
+		}
+	}
+}
+
+// CHAOS-3936 deploy safety: the ledger base reads occurrence rows written by
+// the OLD code, so on first deploy a config frozen for many hours has a ledger
+// far behind now. Catch-up must therefore be rate-limited by the persisted
+// marker, not by the loop's poll interval -- the scheduler loop ticks every
+// second by default, so if the marker did not gate re-entry a config that was
+// frozen for a day would mint a day of occurrences in seconds.
+//
+// This asserts the gate against real PostgreSQL: after a window mints, a
+// second window before the next cron instant produces nothing. The sibling
+// test deliberately clears next_run_at between windows to demonstrate the walk;
+// this one leaves the marker alone, which is what production does.
+func TestHandoffDuePostgresRateLimitsCatchUpToTheScheduleMarker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := NewOccurrenceCoordinator()
+
+	minted, err := repository.HandoffDue(ctx, at("2026-01-01T12:00:00Z"), 4, coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 1 {
+		t.Fatalf("first window minted %d occurrences, want 1", len(minted))
+	}
+	// The marker now sits at 13:00. Every window before that instant must
+	// produce nothing, however often the loop ticks.
+	for _, observed := range []string{
+		"2026-01-01T12:00:01Z", "2026-01-01T12:15:00Z", "2026-01-01T12:59:59Z",
+	} {
+		later, err := repository.HandoffDue(ctx, at(observed), 4, coordinator)
+		if err != nil {
+			t.Fatalf("window at %s: %v", observed, err)
+		}
+		if len(later) != 0 {
+			t.Fatalf("window at %s minted %#v; the schedule marker did not rate-limit catch-up", observed, later)
+		}
+	}
+	var occurrenceRows int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&occurrenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 1 {
+		t.Fatalf("ledger holds %d rows after four windows in one cron interval, want 1", occurrenceRows)
+	}
+}
+
+// The CHAOS-3936 signal -- occurrences_repeated_total, the idle-due-window
+// warning, and the WARN naming the config and instant -- all rest on the real
+// coordinator mapping PostgreSQL's ON CONFLICT DO NOTHING onto
+// OccurrenceRepeated. That mapping was covered only against a fake pgx row, so
+// if it were wrong the metric would simply never fire and an outage would be
+// invisible again: a measurement layer that fails toward "fine".
+//
+// It is driven directly here rather than through a scheduler window on
+// purpose. With the base derived from the occurrence ledger, a window can no
+// longer compute an instant that already exists -- the ledger it just read
+// contains it, so the next window computes the NEXT instant. That makes
+// OccurrenceRepeated a regression alarm rather than a routine counter: it
+// fires if the base ever stops advancing again. Testing it through a window
+// would therefore be testing a path the fix deliberately closed; testing the
+// coordinator directly tests the mapping the signal actually depends on.
+func TestOccurrenceCoordinatorPostgresReportsOnConflictAsRepeated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	occurrence := newOccurrence(
+		"00000000-0000-4000-8000-000000003038",
+		"org-integration",
+		"00000000-0000-4000-8000-000000003039",
+		at("2026-01-01T11:00:00Z"),
+		at("2026-01-01T12:00:00Z"),
+		at("2026-01-01T13:00:00Z"),
+	)
+	coordinator := NewOccurrenceCoordinator()
+	handoff := func() (HandoffOutcome, error) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return "", err
+		}
+		outcome, handoffErr := coordinator.Handoff(ctx, postgresSchedulerTransaction{Tx: tx}, occurrence)
+		if handoffErr != nil {
+			_ = tx.Rollback(ctx)
+			return outcome, handoffErr
+		}
+		return outcome, tx.Commit(ctx)
+	}
+
+	first, err := handoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != OccurrenceMinted {
+		t.Fatalf("first handoff outcome = %q, want %q", first, OccurrenceMinted)
+	}
+	// Identical envelope, real unique constraint, real ON CONFLICT DO NOTHING.
+	second, err := handoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != OccurrenceRepeated {
+		t.Fatalf("second handoff outcome = %q, want %q -- the repeat signal cannot fire", second, OccurrenceRepeated)
+	}
+	var rows int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("ledger holds %d rows after two identical handoffs, want 1", rows)
 	}
 }
 

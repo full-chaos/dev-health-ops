@@ -14,8 +14,13 @@ const (
 	// TimingDigestVersion identifies the fixed schedule/marker-only candidate
 	// framing for later cross-runtime comparison.
 	TimingDigestVersion = "sync_scheduler_timing_digest_v1"
-	// EvaluationVersion identifies the Python-compatible timing rules.
-	EvaluationVersion = "sync_scheduler_timing_evaluation_v1"
+	// EvaluationVersion identifies the timing rules. v2 adds the occurrence
+	// ledger to the cron base (CHAOS-3936) and is therefore deliberately NOT
+	// Python-compatible for a config whose run never completed: Python freezes
+	// on last_sync_at there and Go keeps advancing. The version is part of the
+	// candidate digest so a cross-runtime comparison cannot silently read a
+	// v2 digest as if both runtimes still applied the same rule.
+	EvaluationVersion = "sync_scheduler_timing_evaluation_v2"
 	// CronGrammarVersion identifies the deterministic five-field Croniter
 	// subset. Random R expressions and optional sixth/seventh fields are
 	// explicitly outside this grammar.
@@ -69,7 +74,13 @@ type Candidate struct {
 	ScheduleTZ   string
 	LastSyncAt   *time.Time
 	CreatedAt    time.Time
-	Job          *Job
+	// LastOccurrenceAt is the newest scheduled_for already present in this
+	// config's occurrence ledger, or nil when the config has never had one
+	// minted. It advances when an occurrence is HANDED OFF, so unlike
+	// LastSyncAt -- which advances only when a run COMPLETES -- a run that
+	// fails, hangs, or is never consumed cannot pin it (CHAOS-3936).
+	LastOccurrenceAt *time.Time
+	Job              *Job
 }
 
 type Job struct {

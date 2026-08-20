@@ -132,7 +132,7 @@ class TeamAttributionContext:
 # CHAOS-2600: deterministic staged precedence. linked_issue is a TRUE FALLBACK
 # (rank 5) below every native/imported fact — it never overrides ownership or
 # assignee membership; it only beats manual_fallback and unassigned. native_team
-# stays top. See docs/architecture/team-attribution.md §0.
+# stays top. See docs/contribute/architecture/team-attribution.md §0.
 _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "native_team": 0,
     "issue_project": 1,
@@ -151,7 +151,7 @@ _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
 # can never be laundered into rank-5 `linked_issue` provenance on a dependent
 # item. linked_issue itself is absent here because donor resolution runs with
 # `linked_issue_resolver=None` (no transitive inheritance). See
-# docs/architecture/team-attribution.md §0.
+# docs/contribute/architecture/team-attribution.md §0.
 _DONOR_SOURCES: frozenset[TeamAttributionSource] = frozenset(
     {
         "native_team",

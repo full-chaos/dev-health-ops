@@ -264,7 +264,7 @@ LATEST_WORK_UNIT_AUTHORS_CTE = """
 # false TEAM:unassigned Sankey node even though attribution already existed.
 # This is the single source every Investment Sankey/coverage team join must
 # read from: work_item_team_attributions FINAL, is_primary = 1, latest by
-# computed_at per work_item_id (docs/architecture/team-attribution.md §0).
+# computed_at per work_item_id (docs/contribute/architecture/team-attribution.md §0).
 # Filter to the latest snapshot before reading plain nullable team fields so a
 # newer primary row with NULL team fields clears an older assigned team.
 # Centralized so no caller drifts back onto work_item_cycle_times.

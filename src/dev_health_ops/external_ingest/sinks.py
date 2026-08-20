@@ -511,8 +511,9 @@ def _build_work_item_row(
         "status_raw": get("status_raw"),
         "project_key": project_key,
         "project_id": project_id,
-        # Team-attribution precedence (docs/architecture/team-attribution.md
-        # §0, AGENTS.md) treats any non-empty work_items.native_team_key as a
+        # Team-attribution precedence
+        # (docs/contribute/architecture/team-attribution.md §0, AGENTS.md)
+        # treats any non-empty work_items.native_team_key as a
         # top-precedence NATIVE fact -- native sync only ever populates it
         # for Linear (WorkItem.native_team_key docstring: "None for
         # GitHub/GitLab ... and Jira"). `system` is now always

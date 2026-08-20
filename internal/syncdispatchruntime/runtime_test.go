@@ -140,6 +140,50 @@ func TestPublisherUsesCallerTransactionAndVerifiesExactArgs(t *testing.T) {
 	}
 }
 
+// TestPublisherRoundTripsANonEmptyTraceParent proves the field the JOIN
+// resolves (CHAOS-3996) survives the exact same path a live publish takes:
+// Convert into typed args, Publish through the caller's transaction (which
+// marshals to JSON as River's insert would), and matchesReturnedArgs
+// decoding it back. TestConvertProducesExactVersionedTypedArgsWithoutClaimToken
+// above covers the omitted-when-empty case; this is the non-empty
+// counterpart neither existing test exercised.
+func TestPublisherRoundTripsANonEmptyTraceParent(t *testing.T) {
+	t.Parallel()
+	const traceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	client := &recordingInsertClient{}
+	publisher, err := NewPublisher(client, PublisherOptions{Queue: "sync", MaxAttempts: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := DomainReference{OrganizationID: testOrg, SyncRunID: testRun, TraceParent: traceParent}
+	jobID, err := publisher.Publish(context.Background(), &inertTx{}, Claim{
+		OutboxID: testOutbox, Kind: syncdispatchcontract.KindDispatchSyncRun, RouteGeneration: 3,
+	}, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jobID != "42" {
+		t.Fatalf("publisher call = job:%s", jobID)
+	}
+	encoded, err := json.Marshal(client.args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["trace_parent"] != traceParent {
+		t.Fatalf("encoded trace_parent = %#v, want %q", fields["trace_parent"], traceParent)
+	}
+	// matchesReturnedArgs is what verifyInsert calls on the real River
+	// result -- exercise it directly against the args this publish produced,
+	// proving the non-empty field survives that comparison too.
+	if !matchesReturnedArgs(encoded, client.args.(Args)) {
+		t.Fatal("matchesReturnedArgs rejected a non-empty trace_parent round trip")
+	}
+}
+
 func TestPublisherRejectsMismatchedRiverResultWithoutLeakingArguments(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

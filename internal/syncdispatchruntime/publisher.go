@@ -136,5 +136,6 @@ func matchesReturnedArgs(encoded []byte, expected Args) bool {
 	return returned.Version == expected.ContractVersion() && returned.OrgID == expected.OrganizationID() &&
 		returned.RunID == expected.SyncRunID() && returned.DispatchOutbox == expected.OutboxID() &&
 		returned.DeliveryAttempt == expected.Attempt() &&
-		returned.RouteGeneration == expected.RouteGeneration()
+		returned.RouteGeneration == expected.RouteGeneration() &&
+		returned.TraceParent == expected.traceParent()
 }

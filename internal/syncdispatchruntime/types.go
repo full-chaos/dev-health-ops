@@ -17,6 +17,11 @@ const ContractVersionV1 = 1
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+// traceParentPattern is the W3C Trace Context traceparent value shape:
+// version-traceid-spanid-flags, all lowercase hex.
+// https://www.w3.org/TR/trace-context/#traceparent-header-field-values
+var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`)
+
 var (
 	ErrInvalidClaim     = errors.New("invalid sync dispatch transport claim")
 	ErrInvalidReference = errors.New("invalid sync dispatch domain reference")
@@ -39,6 +44,11 @@ type Claim struct {
 type DomainReference struct {
 	OrganizationID string
 	SyncRunID      string
+	// TraceParent is the optional W3C traceparent the Python planner captured
+	// once into sync_runs when this run was planned, resolved by the same
+	// database lookup that resolves OrganizationID/SyncRunID (CHAOS-3996).
+	// Empty for a run planned before that column existed or with tracing off.
+	TraceParent string
 }
 
 // TeamAutoimportJobArgs is the generic worker-outbox envelope for the
@@ -81,6 +91,14 @@ type Args interface {
 	SyncRunID() string
 	RouteGeneration() int64
 	Attempt() int64
+	// traceParent is unexported: it is package-private accessor plumbing for
+	// matchesReturnedArgs' round-trip proof and the coordinator workers'
+	// span-parent extraction, not a public capability of Args. Named in
+	// lowerCamelCase (not TraceParent) specifically so it does not collide
+	// with the exported TraceParent field TransportArgs promotes by
+	// embedding -- Go permits a type to declare a field and a method as long
+	// as their identifiers differ by case.
+	traceParent() string
 	valid() error
 }
 
@@ -94,6 +112,14 @@ type TransportArgs struct {
 	DispatchOutbox  string `json:"outbox_id" river:"unique"`
 	DeliveryAttempt int64  `json:"delivery_attempt" river:"unique"`
 	RouteGeneration int64  `json:"route_generation"`
+	// TraceParent is the optional W3C traceparent from DomainReference,
+	// carried into the River job so a worker picking this job back up (after
+	// a process restart, a retry, or simply a different replica) still has it
+	// without a second database round trip. Deliberately untagged for River's
+	// ByArgs uniqueness (unlike DispatchOutbox/DeliveryAttempt above): two
+	// deliveries of the same claim must keep deduping regardless of this
+	// field's value (CHAOS-3996).
+	TraceParent string `json:"trace_parent,omitempty"`
 }
 
 func (args TransportArgs) ContractVersion() int   { return args.Version }
@@ -102,11 +128,15 @@ func (args TransportArgs) OrganizationID() string { return args.OrgID }
 func (args TransportArgs) SyncRunID() string      { return args.RunID }
 func (args TransportArgs) Generation() int64      { return args.RouteGeneration }
 func (args TransportArgs) Attempt() int64         { return args.DeliveryAttempt }
+func (args TransportArgs) traceParent() string    { return args.TraceParent }
 
 func (args TransportArgs) valid() error {
 	if args.Version != ContractVersionV1 || !uuidPattern.MatchString(args.OrgID) ||
 		!uuidPattern.MatchString(args.RunID) || !uuidPattern.MatchString(args.DispatchOutbox) ||
 		args.RouteGeneration < 1 {
+		return ErrInvalidReference
+	}
+	if args.TraceParent != "" && !traceParentPattern.MatchString(args.TraceParent) {
 		return ErrInvalidReference
 	}
 	return nil
@@ -164,6 +194,7 @@ func Convert(claim Claim, reference DomainReference) (Args, error) {
 		DispatchOutbox:  claim.OutboxID,
 		DeliveryAttempt: deliveryAttempt,
 		RouteGeneration: claim.RouteGeneration,
+		TraceParent:     reference.TraceParent,
 	}
 	if err := base.valid(); err != nil {
 		return nil, err

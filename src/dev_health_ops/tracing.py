@@ -238,3 +238,21 @@ def instrument_celery() -> None:
         logger.warning("Celery OTel instrumentation unavailable: %s", exc)
     except Exception as exc:
         logger.warning("Celery OTel instrumentation failed: %s", exc)
+
+
+def current_trace_parent() -> str | None:
+    """Capture the active span's W3C traceparent, if any, right now.
+
+    Shared by every durable capture point that needs a trace to survive an
+    async handoff -- the worker_job_outbox row (CHAOS-3993) and the sync_runs
+    row a planned run is stamped with once at plan time (CHAOS-3996). With no
+    active span -- tracing disabled, or no request/task span in progress --
+    the propagator writes nothing and this returns None, the same as a row
+    that predates this field.
+    """
+
+    from opentelemetry.propagate import inject
+
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    return carrier.get("traceparent")

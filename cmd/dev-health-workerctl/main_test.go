@@ -347,13 +347,18 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 		t.Fatalf("custom queue status = %#v", status.Groups[1])
 	}
 	// sync-provider is its own declared process (CHAOS-3926), so its
-	// max_replicas x per-process connections count separately from sync: queue
-	// session 22 -> 26 against a pool raised 23 -> 27, server 89 -> 93. Both
-	// processes ship at zero replicas, so runtime usage is unchanged; this is
-	// the declared worst case the budget has to cover.
-	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 26, Limit: 27, Headroom: 1}) ||
+	// max_replicas x per-process connections count separately from sync.
+	//
+	// CHAOS-3945 then raised the queue-session figure again, from 26 to 34:
+	// a started River client holds one notifier LISTEN session outside its
+	// queue-control pool, so each of the four "river" runtime processes costs
+	// 3 per replica, not 2. The pool went 27 -> 37, which is that declared 34
+	// plus one whole replica of rolling-restart overlap, and the server
+	// requirement 100 -> 200. Every process ships at zero replicas, so runtime
+	// usage is unchanged; this is the declared worst case the budget covers.
+	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 34, Limit: 37, Headroom: 3}) ||
 		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 11, Headroom: 1}) ||
-		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 93, Limit: 100, Headroom: 7}) {
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 103, Limit: 200, Headroom: 97}) {
 		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }

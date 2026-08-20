@@ -19,8 +19,32 @@ uv sync --all-extras --dev                       # once per worktree
 PYTHON="$PWD/.venv/bin/python" bash ci/check_go.sh all
 ```
 
-Expect `rc=0` and ~118 `ok` package lines. Verbs: `all` (full), `fast`
-(format + vet + unit).
+Expect `rc=0`. The `test`/`race` verbs alone report ~118 `ok` package lines;
+`all` additionally runs the FULL integration suite for real (every
+non-denylisted package, unsharded) plus `multi-replica-workers`, both against
+real containers, so expect several more minutes and **Docker running
+locally** — `all` has required Docker unconditionally since `multi-replica-workers`
+was added, `check_integration` is not a new prerequisite, only new time.
+
+Three verbs, in ascending cost:
+- `fast` — format + vet + unit + live-python-oracles + build + contract +
+  multi-replica-workers + an integration shard **plan** only (no execution,
+  no race detector). The quick local-iteration mode.
+- `ci` — `fast` plus the race detector. Byte-for-byte what `all` ran before
+  CHAOS-3948. This is what `go.yml`'s `go-quality` step runs — CI's real
+  integration signal comes from the separate, already-sharded
+  `go-storage-integration-plan`/`-shard` jobs, not from this step, so
+  duplicating a slow unsharded run here would only blow that job's 20-minute
+  budget for no new coverage.
+- `all` (default) — `ci` plus the FULL integration suite executed for real
+  (measured ~24m alone). The honest full local pre-push signal; use this
+  before pushing a Go change, not `ci`.
+
+For fast local iteration on one package without paying for the whole suite:
+
+```bash
+GOWORK=off go test -mod=readonly -tags=integration -count=1 ./internal/<pkg>/...
+```
 
 ## Why both the venv and `PYTHON` are required
 
@@ -65,9 +89,22 @@ CHAOS-3913 (lefthook resolving a global `mypy`/`ruff`), in a third place.
   ```
   A suite that skipped everything is not evidence.
 - **Integration tests are behind a build tag** and are opt-out, not optional:
+  `ci/check_go.sh all` runs them for real (CHAOS-3948 — it used to only PLAN
+  the shards and never execute them, which is exactly the "ok doesn't mean
+  ran" trap above one level up: `rc=0` read as complete while the shards
+  never ran). `fast` and `ci` both still only plan — run `all` or
+  `ci/check_go.sh integration` when you need the real signal.
   ```bash
   go test -tags=integration ./internal/<pkg>/... -count=1
   ```
+- `TestFenceAgainstMigratedPostgres` moved to
+  `internal/syncroute/fence_integration_test.go` (CHAOS-3948, part of the
+  CHAOS-3448 never-run-live-Postgres family). It used to skip unconditionally
+  — nothing in `check_go.sh` or `go.yml` ever set the env var it was gated
+  on, so it had never run in the automated pipeline. Now integration-tagged
+  and wired to `containers.StartPostgres`, the same pattern this package's
+  `control_integration_test.go` already used; it runs for real under `all`
+  or `integration` now.
 - **A red check means no merge.** No diagnosed exclusions.
 
 ## Cross-language parity oracles

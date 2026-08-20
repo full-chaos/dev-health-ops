@@ -19,7 +19,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -36,9 +36,9 @@ usage() {
          cache key -- `test`'\''s bare `go test ./...` can return a stale
          cached PASS for a real change to one of those files. NOT an
          optimization opt-out: a run that skips this verb has not tested
-         the oracles at all, so it MUST stay in `all` (and `fast`, since
-         it is cheap) rather than being treated as an extra, skippable
-         step.
+         the oracles at all, so it MUST stay in `all`, `ci`, and `fast`
+         (since it is cheap) rather than being treated as an extra,
+         skippable step.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -46,7 +46,7 @@ usage() {
   multi-replica-workers
          Run the production ops-profile multi-replica claim, drain, and restart
          gate against real PostgreSQL with `-count=1`. Requires a non-zero
-         measured-job proof artifact. Included in `fast` and `all`.
+         measured-job proof artifact. Included in `fast`, `ci`, and `all`.
   integration-vet
          Compile-check every package under the integration build tag, across
          the WHOLE tree. No Docker required. This is what would have caught a
@@ -78,9 +78,24 @@ usage() {
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
   fast   Run fmt, vet, test, live-python-oracles, build, contract,
-         integration-vet, and the integration shard-plan checks.
+         integration-vet, and the integration shard-plan checks (PLAN only --
+         does not execute the integration suite; see `ci`, `all`, and
+         `integration`). No race detector -- the quick local-iteration mode.
+  ci     Exactly `fast` plus the race detector (CHAOS-3948): fmt, vet, test,
+         race, live-python-oracles, build, contract, integration-vet, and the
+         integration shard-plan checks (PLAN only, same as `fast`), plus
+         multi-replica-workers. This is byte-for-byte what `all` ran before
+         CHAOS-3948 -- go.yml'\''s go-quality step uses this so its coverage
+         stays unchanged. CI gets its real (sharded, parallel) integration
+         signal from the separate go-storage-integration-plan/-shard jobs,
+         not from this step.
   all    Run fmt, vet, test, race, live-python-oracles, build, contract,
-         integration-vet, and the integration shard-plan checks (default).'
+         integration-vet, the FULL integration suite (every non-denylisted
+         package, unsharded -- Docker required), and multi-replica-workers
+         (default). This is slower than `ci`: expect several more minutes on
+         top of the unit/race suites (measured ~24m for the integration
+         suite alone), and Docker running locally. The honest local pre-push
+         signal `ci` cannot be, since `ci` stays PLAN-only by design.'
 }
 
 die() {
@@ -1246,7 +1261,16 @@ case "${1:-all}" in
     plan_providersync_test_shards
     check_multi_replica_workers
     ;;
-  all)
+  ci)
+    # Exactly the pre-CHAOS-3948 `all` behaviour: everything `all` runs
+    # except the full unsharded integration suite, which stays PLAN-only
+    # here on purpose. CI's go-storage-integration-plan/-shard jobs already
+    # run that suite for real, sharded and parallel, with their own timeout
+    # budget per shard -- running it again here, unsharded, would duplicate
+    # that work and blow this job's timeout (measured ~24m for `all`'s
+    # check_integration alone vs this job's 20m budget). `ci` exists so
+    # go.yml's go-quality step keeps byte-for-byte the coverage it always
+    # had, while `all` becomes the honest full-signal verb for local use.
     check_format
     check_vet
     check_test
@@ -1257,6 +1281,18 @@ case "${1:-all}" in
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
+    check_multi_replica_workers
+    ;;
+  all)
+    check_format
+    check_vet
+    check_test
+    check_race
+    check_live_python_oracles
+    check_build
+    check_contract
+    check_integration_vet
+    check_integration
     check_multi_replica_workers
     ;;
   -h|--help|help)

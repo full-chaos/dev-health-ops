@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
+from opentelemetry.propagate import inject
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransactionOrigin
@@ -63,20 +64,13 @@ def enqueue_worker_job(
             load_migration_jobs(),
             allow_deferred_route=allow_deferred_route,
         )
-        # trace_parent is NOT wired here yet: this producer's codec supports
-        # it (build_envelope/encode_envelope accept it, contracts/jobs/v1's
-        # schema and fixtures cover it), but actually capturing and passing
-        # it lands in a follow-up PR sequenced strictly after this one
-        # deploys everywhere. Prod is a rolling multi-service restart, so
-        # emitting the field before every Go relay/worker can decode it would
-        # open a window where a live outbox row gets rejected outright
-        # (CHAOS-3993 PR discussion, CHAOS-3990 lane).
         envelope = build_envelope(
             payload,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             domain_id=domain_id,
             organization_id=organization_id,
+            trace_parent=_current_trace_parent(),
         )
         if envelope.contract_version not in contract.supported_versions:
             raise ContractDecodeError("unsupported producer contract version")
@@ -125,6 +119,21 @@ def enqueue_worker_job(
             existing, payload.KIND, envelope.contract_version, payload_hash
         )
     return row
+
+
+def _current_trace_parent() -> str | None:
+    """Capture the active span's W3C traceparent, if any, at enqueue time.
+
+    This is how a sync run's Go-side River jobs land in the same trace the
+    Python side started (CHAOS-3993). With no active span -- tracing
+    disabled, or no request/task span in progress -- the propagator writes
+    nothing and this returns None, the same as a producer that predates this
+    field.
+    """
+
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    return carrier.get("traceparent")
 
 
 def _require_migration_route(

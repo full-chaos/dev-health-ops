@@ -143,20 +143,22 @@ def test_stages_executable_migration_route_without_committing(engine, route: str
         assert verifier.scalar(select(WorkerJobOutbox)) is None
 
 
-def test_enqueue_omits_trace_parent_even_with_an_active_span(engine):
-    # CHAOS-3993 landed the codec's trace_parent support (build_envelope,
-    # encode_envelope, the schema, the fixtures) without wiring it here.
-    # Actually capturing and passing the active span's traceparent is a
-    # follow-up PR sequenced strictly after CHAOS-3993 is deployed
-    # everywhere: prod is a rolling multi-service restart, and emitting the
-    # field before every Go relay/worker can decode it would open a window
-    # where a live outbox row gets rejected outright. This guard makes that
-    # gap a visible, tested fact rather than an implicit one -- when the
-    # follow-up PR wires the injection, this assertion is expected to flip.
+def test_enqueue_captures_active_span_as_trace_parent(engine):
+    # A local (non-global) TracerProvider is enough: start_as_current_span
+    # makes the span current via opentelemetry.context, which is what
+    # inject() reads -- it does not require trace.set_tracer_provider().
     tracer = TracerProvider().get_tracer("test-worker-job-outbox")
     with Session(engine) as session, session.begin():
         with tracer.start_as_current_span("enqueue-under-test"):
             row = _enqueue(session, migration_route="shadow")
+        trace_parent = row.args["trace_parent"]
+        assert trace_parent.startswith("00-")
+        assert trace_parent.count("-") == 3
+
+
+def test_enqueue_without_active_span_omits_trace_parent(engine):
+    with Session(engine) as session, session.begin():
+        row = _enqueue(session, migration_route="shadow")
         assert "trace_parent" not in row.args
 
 

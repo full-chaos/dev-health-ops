@@ -6,12 +6,12 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from opentelemetry.propagate import inject
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransactionOrigin
 
 from dev_health_ops.models.worker_job_outbox import WorkerJobOutbox
+from dev_health_ops.tracing import current_trace_parent
 
 from .job_contracts import (
     ContractDecodeError,
@@ -70,7 +70,7 @@ def enqueue_worker_job(
             idempotency_key=idempotency_key,
             domain_id=domain_id,
             organization_id=organization_id,
-            trace_parent=_current_trace_parent(),
+            trace_parent=current_trace_parent(),
         )
         if envelope.contract_version not in contract.supported_versions:
             raise ContractDecodeError("unsupported producer contract version")
@@ -119,21 +119,6 @@ def enqueue_worker_job(
             existing, payload.KIND, envelope.contract_version, payload_hash
         )
     return row
-
-
-def _current_trace_parent() -> str | None:
-    """Capture the active span's W3C traceparent, if any, at enqueue time.
-
-    This is how a sync run's Go-side River jobs land in the same trace the
-    Python side started (CHAOS-3993). With no active span -- tracing
-    disabled, or no request/task span in progress -- the propagator writes
-    nothing and this returns None, the same as a producer that predates this
-    field.
-    """
-
-    carrier: dict[str, str] = {}
-    inject(carrier)
-    return carrier.get("traceparent")
 
 
 def _require_migration_route(

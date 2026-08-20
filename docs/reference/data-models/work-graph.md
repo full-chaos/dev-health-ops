@@ -23,3 +23,5 @@ Concepts include:
 - evidence and coverage states for missing or unresolved relationships.
 
 Graph proximity is not causation or ownership. A missing edge can represent unavailable source data, unsupported mapping, or incomplete processing.
+
+For the full team-attribution precedence model, provider coverage contract, and recovery runbook behind "primary team attribution selected by the current precedence model," see [Work-item team attribution](../../contribute/architecture/team-attribution.md).

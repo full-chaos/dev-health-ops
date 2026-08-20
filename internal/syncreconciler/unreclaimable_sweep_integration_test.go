@@ -42,7 +42,65 @@ func startSweepPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	createSweepFixture(t, ctx, pool)
 	return pool
+}
+
+// createSweepFixture mirrors the columns this sweep reads and writes.
+//
+// Hand-rolled DDL matching the sibling integration fixtures in this package,
+// rather than running the real migrations. The columns that matter here are
+// the ones the predicate turns on -- created_at, updated_at,
+// last_heartbeat_at, attempts, lease_owner, lease_expires_at -- plus the
+// terminal-write targets and the outbox dedupe key.
+func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE public.sync_runs (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			status text NOT NULL
+		)`,
+		`CREATE TABLE public.sync_run_units (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			cost_class text NOT NULL,
+			mode text NOT NULL,
+			status text NOT NULL,
+			attempts integer NOT NULL DEFAULT 0,
+			available_at timestamptz,
+			last_retry_reason text,
+			error text,
+			result jsonb,
+			lease_owner text,
+			lease_expires_at timestamptz,
+			last_heartbeat_at timestamptz,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL
+		)`,
+		`CREATE TABLE public.worker_job_outbox (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			dedupe_key text NOT NULL UNIQUE,
+			job_kind text NOT NULL,
+			contract_version integer NOT NULL,
+			args jsonb NOT NULL,
+			payload_hash text NOT NULL,
+			queue text NOT NULL,
+			priority smallint NOT NULL,
+			max_attempts smallint NOT NULL,
+			scheduled_at timestamptz NOT NULL,
+			status text NOT NULL,
+			next_attempt_at timestamptz NOT NULL,
+			attempt_count integer NOT NULL DEFAULT 0
+		)`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func seedSweepRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, status string) {
@@ -330,7 +388,15 @@ func TestUnreclaimableSweepYieldsToAConcurrentDispatcherTouch(t *testing.T) {
 	pool := startSweepPostgres(t, ctx)
 	now := time.Now().UTC()
 	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
-	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(70), "tests", "heavy", now))
+	// TWO strands. One gets touched by a dispatcher between the select and the
+	// write; the other does not. Both go through the identical write path, so
+	// the pair together proves the CAS discriminates rather than simply never
+	// matching -- a CAS broken by, say, a lost timestamptz round trip would
+	// report zero rows for BOTH, and a single-row test would call that a pass.
+	touched := sweepUnitID(70)
+	untouched := sweepUnitID(71)
+	seedSweepUnit(t, ctx, pool, strandedSpec(touched, "tests", "heavy", now))
+	seedSweepUnit(t, ctx, pool, strandedSpec(untouched, "tests", "heavy", now))
 
 	sweep := newSweepForTest(t, pool, SweepModeActive)
 	tx, err := pool.Begin(ctx)
@@ -342,21 +408,33 @@ func TestUnreclaimableSweepYieldsToAConcurrentDispatcherTouch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("selected %d candidates, want 1", len(candidates))
+	if len(candidates) != 2 {
+		t.Fatalf("selected %d candidates, want 2", len(candidates))
 	}
-	// The dispatcher reclaims and republishes, re-stamping updated_at.
+
+	// The dispatcher reclaims and republishes exactly one of them.
 	if _, err := pool.Exec(ctx,
 		`UPDATE public.sync_run_units SET updated_at = now() WHERE id = $1`,
-		sweepUnitID(70)); err != nil {
+		touched); err != nil {
 		t.Fatal(err)
 	}
-	affected, err := sweep.terminalize(ctx, tx, candidates[0], now)
-	if err != nil {
-		t.Fatalf("terminalize: %v", err)
-	}
-	if affected != 0 {
-		t.Fatalf("terminalize affected %d rows, want 0 -- the CAS must yield", affected)
+
+	for _, candidate := range candidates {
+		affected, err := sweep.terminalize(ctx, tx, candidate, now)
+		if err != nil {
+			t.Fatalf("terminalize %s: %v", candidate.id, err)
+		}
+		switch candidate.id {
+		case touched:
+			if affected != 0 {
+				t.Fatalf("touched row affected %d, want 0 -- the CAS must yield", affected)
+			}
+		case untouched:
+			if affected != 1 {
+				t.Fatalf("untouched row affected %d, want 1 -- otherwise the "+
+					"yield above proves nothing", affected)
+			}
+		}
 	}
 }
 

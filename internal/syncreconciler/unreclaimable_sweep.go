@@ -30,11 +30,17 @@ import (
 // SYNC_UNIT_UNRECLAIMABLE_SECONDS (3600) and SYNC_UNIT_DISPATCH_STALE_SECONDS
 // (900) defaults.
 const (
-	DefaultUnreclaimableAge     = time.Hour
-	DefaultUnreclaimableIdle    = 15 * time.Minute
-	unreclaimableDefaultAge     = time.Hour
-	unreclaimableMinimumLimit   = 1
-	unreclaimableMaximumLimit   = 100
+	DefaultUnreclaimableAge   = time.Hour
+	DefaultUnreclaimableIdle  = 15 * time.Minute
+	unreclaimableDefaultAge   = time.Hour
+	unreclaimableMinimumLimit = 1
+	unreclaimableMaximumLimit = 100
+	// The paging loop filters AFTER the SQL window, so a degraded state -- say
+	// a large backlog of old dispatching rows that all belong to River -- could
+	// otherwise walk the whole table on every 60s pass looking for a strand
+	// that is not there. The reconciler's contract is bounded work per pass, so
+	// the scan is capped: an unfound strand is simply found on a later pass.
+	unreclaimableMaximumPages   = 10
 	unreclaimableErrorCategory  = "feature_disabled"
 	unreclaimableProviderUnitID = "sync.provider_unit"
 )
@@ -241,7 +247,7 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	idleCutoff := now.Add(-sweep.config.Idle)
 	selected := make([]unreclaimableCandidate, 0, limit)
 	offset := 0
-	for len(selected) < limit {
+	for pages := 0; len(selected) < limit && pages < unreclaimableMaximumPages; pages++ {
 		page, err := scanUnreclaimablePage(
 			ctx, tx, ageCutoff, idleCutoff, limit, offset,
 		)

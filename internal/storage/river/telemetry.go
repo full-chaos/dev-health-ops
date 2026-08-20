@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,10 +26,55 @@ const (
 var (
 	ErrQueueTelemetryConfiguration = errors.New("invalid River queue telemetry configuration")
 	ErrQueueTelemetryUnavailable   = errors.New("River queue telemetry is unavailable")
-	// ErrUnsupportedAvailableContractVersion is deliberately stable and does
-	// not disclose a River row, kind, version, or encoded argument.
+	// ErrUnsupportedAvailableContractVersion is the stable sentinel every
+	// caller matches on. It never discloses a River row or an encoded
+	// argument. UnsupportedContractVersionError wraps it and adds the
+	// offending queue/kind/version labels; see that type for why those three
+	// are safe to name when the arguments are not.
 	ErrUnsupportedAvailableContractVersion = errors.New("an available River job has an unsupported contract version")
 )
+
+// maximumUnsupportedOffenders bounds how many distinct queue/kind/version
+// labels the refusal names. The point is to identify the offending contract,
+// not to enumerate a backlog.
+const maximumUnsupportedOffenders = 8
+
+// maximumOffenderVersionLength bounds the contract-version text in an offender
+// label. Versions are small integers; this only stops an absurd JSON number
+// from widening the label.
+const maximumOffenderVersionLength = 16
+
+// UnsupportedContractVersionError names the bounded labels of the available
+// rows the check refused.
+//
+// Only queue, kind, and contract version are disclosed. All three are
+// low-cardinality bounded vocabulary that this process already publishes:
+// queue and kind are pre-registered Prometheus label values, and the version
+// is a small integer from the registered window. Every label is re-validated
+// in Go against the same character class and length limit the configuration
+// side enforces before it reaches an error string, and a version that is not
+// a JSON number is reported as "none" rather than echoed. Encoded arguments,
+// row identifiers, and payloads are never read.
+//
+// Naming them is the point: production saw only
+// "failed_checks=queued_contract_versions" and could not tell which kind,
+// which queue, or which version had refused startup, which is the same
+// bounded-code diagnosis gap as CHAOS-3928.
+type UnsupportedContractVersionError struct {
+	// Offenders are "queue/kind@version" labels, sorted and deduplicated.
+	Offenders []string
+}
+
+func (failure *UnsupportedContractVersionError) Error() string {
+	if failure == nil || len(failure.Offenders) == 0 {
+		return ErrUnsupportedAvailableContractVersion.Error()
+	}
+	return ErrUnsupportedAvailableContractVersion.Error() + ": " + strings.Join(failure.Offenders, ",")
+}
+
+func (*UnsupportedContractVersionError) Unwrap() error {
+	return ErrUnsupportedAvailableContractVersion
+}
 
 // QueueTelemetryQueue is one queue consumed by a River client. MaxWorkers
 // must be the same value supplied to river.QueueConfig for this process.
@@ -44,6 +91,29 @@ type QueueTelemetryJob struct {
 	SupportedVersions []int
 }
 
+// QueueTelemetryOccupant is one queue/kind pair that may legitimately hold
+// available rows in a configured queue although this process reports no
+// backlog metric for it.
+//
+// Jobs and Occupants are separate on purpose. Jobs is the metrics dimension:
+// every entry becomes a pre-registered jobs_available label, so it must stay
+// exactly the set of kinds the metrics collector was built with. Occupants is
+// the RESOLVABILITY set: kinds that share a River queue from another route
+// plane, which a reader of river_job must be able to resolve but must not
+// invent metric labels for. Folding the second into the first would make the
+// metrics write fail on an unregistered dimension instead.
+//
+// A River queue can be shared by more than one plane -- queue "sync" carries
+// the bounded registry's sync.team_autoimport AND the sync-dispatch plane's
+// dispatch_sync_run -- and a contract-version check that knows only one plane
+// reads the other plane's perfectly valid rows as unsupported, which refused
+// worker startup for as long as any were pending (CHAOS-3938).
+type QueueTelemetryOccupant struct {
+	Queue             string
+	Kind              string
+	SupportedVersions []int
+}
+
 // QueueTelemetryConfig binds database observations to one concrete River
 // client. ClientID must be client.ID(), after River has applied defaults.
 // Queue selection is the only scope label; profile names are intentionally not
@@ -54,6 +124,9 @@ type QueueTelemetryConfig struct {
 	QueryTimeout time.Duration
 	Queues       []QueueTelemetryQueue
 	Jobs         []QueueTelemetryJob
+	// Occupants are non-metric kinds that may legitimately occupy the
+	// configured queues. See QueueTelemetryOccupant.
+	Occupants []QueueTelemetryOccupant
 }
 
 // QueueJobTelemetry contains only pre-registered, low-cardinality labels.
@@ -120,7 +193,7 @@ type queueTelemetryRow struct {
 	oldestAgeSeconds     float64
 	localRunning         int64
 	queueRunning         int64
-	unsupportedAvailable bool
+	unsupportedOccupants []string
 }
 
 type queueTelemetryReadFunc func(context.Context) ([]queueTelemetryRow, error)
@@ -162,66 +235,73 @@ func (sampler *QueueTelemetrySampler) Snapshot(ctx context.Context) (QueueTeleme
 // CheckAvailableContractVersions fails closed if any state=available row in a
 // configured queue has an unknown queue/kind pairing, a missing or
 // non-integer contract_version, or a version outside the registered window.
-// It returns stable errors only and never loads or returns encoded arguments.
+// It never loads or returns encoded arguments. A refusal is an
+// *UnsupportedContractVersionError wrapping
+// ErrUnsupportedAvailableContractVersion, carrying the offending
+// queue/kind/version labels so the caller can say WHICH contract refused.
 func (sampler *QueueTelemetrySampler) CheckAvailableContractVersions(ctx context.Context) error {
-	_, unsupported, err := sampler.sample(ctx)
+	_, offenders, err := sampler.sample(ctx)
 	if err != nil {
 		return err
 	}
-	if unsupported {
-		return ErrUnsupportedAvailableContractVersion
+	if len(offenders) > 0 {
+		return &UnsupportedContractVersionError{Offenders: offenders}
 	}
 	return nil
 }
 
-func (sampler *QueueTelemetrySampler) sample(ctx context.Context) (QueueTelemetrySnapshot, bool, error) {
+func (sampler *QueueTelemetrySampler) sample(ctx context.Context) (QueueTelemetrySnapshot, []string, error) {
 	if sampler == nil || sampler.read == nil || ctx == nil {
-		return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+		return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 	}
 	queryContext, cancel := context.WithTimeout(ctx, sampler.config.queryTimeout)
 	defer cancel()
 	rows, err := sampler.read(queryContext)
 	if err != nil {
-		return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+		return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 	}
 	return sampler.snapshot(rows)
 }
 
-func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueTelemetrySnapshot, bool, error) {
+func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueTelemetrySnapshot, []string, error) {
 	if len(rows) != len(sampler.config.jobs) || len(rows) == 0 {
-		return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+		return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 	}
 	available := make(map[queueJobKey]int64, len(rows))
 	ages := make(map[string]time.Duration, len(sampler.config.queues))
 	seenAges := make(map[string]float64, len(sampler.config.queues))
 	running := make(map[string]int64, len(sampler.config.queues))
 	var localRunning int64
-	var unsupported bool
+	var offenders []string
 	for index, row := range rows {
 		key := queueJobKey{queue: row.queue, kind: row.kind}
 		if row.available < 0 || row.localRunning < 0 || row.queueRunning < 0 ||
 			math.IsNaN(row.oldestAgeSeconds) || math.IsInf(row.oldestAgeSeconds, 0) ||
 			row.oldestAgeSeconds < 0 {
-			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		if _, duplicate := available[key]; duplicate || !sampler.hasJob(key) {
-			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		available[key] = row.available
 		if previous, ok := seenAges[row.queue]; ok && previous != row.oldestAgeSeconds {
-			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		seenAges[row.queue] = row.oldestAgeSeconds
 		ages[row.queue] = durationFromSeconds(row.oldestAgeSeconds)
 		if previous, ok := running[row.queue]; ok && previous != row.queueRunning {
-			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		running[row.queue] = row.queueRunning
+		// Both are whole-selection aggregates: every row of one read must
+		// carry the identical value, so a disagreement means the result set is
+		// not the single consistent observation this sampler contracts for.
 		if index == 0 {
 			localRunning = row.localRunning
-			unsupported = row.unsupportedAvailable
-		} else if localRunning != row.localRunning || unsupported != row.unsupportedAvailable {
-			return QueueTelemetrySnapshot{}, false, ErrQueueTelemetryUnavailable
+			offenders = sanitizeOffenderLabels(row.unsupportedOccupants)
+		} else if localRunning != row.localRunning ||
+			!slices.Equal(offenders, sanitizeOffenderLabels(row.unsupportedOccupants)) {
+			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 	}
 
@@ -250,7 +330,71 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 			Saturation: executionSaturation(queueRunning, int64(queue.MaxWorkers)),
 		})
 	}
-	return result, unsupported, nil
+	return result, offenders, nil
+}
+
+// unprintableOffender replaces a label that is not in the bounded vocabulary.
+// It is deliberately a whole label, not a marker spliced into a real one: the
+// point is that nothing derived from row content reaches a log line unchecked.
+const unprintableOffender = "unprintable/unprintable@none"
+
+// sanitizeOffenderLabels re-checks the bounded labels the database aggregated
+// and REPLACES anything outside the vocabulary, so a value that somehow
+// escaped the SQL sanitisation -- or a row written outside this application's
+// insert paths -- can never reach an error string or a log line.
+//
+// It replaces rather than rejects on purpose. Rejecting made the whole read
+// unreadable, and this sampler's Snapshot contract is that an unsupported
+// contract never hides backlog metrics: an odd kind must cost the DIAGNOSTIC
+// its precision, never the metrics their availability. The refusal still
+// happens, because the row is still unsupported.
+//
+// The label is "queue/kind@version"; queue and kind must satisfy the same
+// character class and length limit the configuration side enforces, and the
+// version must be digits, "none", or "invalid".
+func sanitizeOffenderLabels(labels []string) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	sanitized := make([]string, 0, min(len(labels), maximumUnsupportedOffenders))
+	for _, label := range labels {
+		if len(sanitized) == maximumUnsupportedOffenders {
+			break
+		}
+		sanitized = append(sanitized, sanitizeOffenderLabel(label))
+	}
+	return sanitized
+}
+
+func sanitizeOffenderLabel(label string) string {
+	queueAndRest, version, found := strings.Cut(label, "@")
+	if !found || !validOffenderVersion(version) {
+		return unprintableOffender
+	}
+	queue, kind, found := strings.Cut(queueAndRest, "/")
+	if !found || !telemetryLabel(queue, maximumQueueTelemetryLabelLength) ||
+		!telemetryLabel(kind, maximumQueueTelemetryLabelLength) {
+		return unprintableOffender
+	}
+	return label
+}
+
+func validOffenderVersion(version string) bool {
+	// "none" is a missing or non-numeric contract_version; "invalid" is a JSON
+	// number that is not a canonical unsigned integer. Both are emitted by the
+	// query instead of the offending text itself.
+	if version == "none" || version == "invalid" {
+		return true
+	}
+	if len(version) == 0 || len(version) > maximumOffenderVersionLength {
+		return false
+	}
+	for _, character := range version {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (sampler *QueueTelemetrySampler) hasJob(key queueJobKey) bool {
@@ -267,6 +411,7 @@ func normalizeQueueTelemetryConfig(config QueueTelemetryConfig) (normalizedQueue
 		len(config.ClientID) == 0 || len(config.ClientID) > 100 || strings.ContainsRune(config.ClientID, '\x00') ||
 		len(config.Queues) == 0 || len(config.Queues) > maximumQueueTelemetryQueues ||
 		len(config.Jobs) == 0 || len(config.Jobs) > maximumQueueTelemetryJobs ||
+		len(config.Occupants) > maximumQueueTelemetryJobs ||
 		config.QueryTimeout < 0 || config.QueryTimeout > maximumQueueTelemetryTimeout {
 		return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
 	}
@@ -327,6 +472,47 @@ func normalizeQueueTelemetryConfig(config QueueTelemetryConfig) (normalizedQueue
 			previous = version
 		}
 	}
+	occupants := make([]QueueTelemetryOccupant, len(config.Occupants))
+	for index, occupant := range config.Occupants {
+		occupants[index] = QueueTelemetryOccupant{
+			Queue:             occupant.Queue,
+			Kind:              occupant.Kind,
+			SupportedVersions: append([]int(nil), occupant.SupportedVersions...),
+		}
+	}
+	sort.Slice(occupants, func(left, right int) bool {
+		if occupants[left].Queue != occupants[right].Queue {
+			return occupants[left].Queue < occupants[right].Queue
+		}
+		return occupants[left].Kind < occupants[right].Kind
+	})
+	for _, occupant := range occupants {
+		if !telemetryLabel(occupant.Queue, maximumQueueTelemetryLabelLength) ||
+			!telemetryLabel(occupant.Kind, maximumQueueTelemetryLabelLength) ||
+			len(occupant.SupportedVersions) == 0 ||
+			len(occupant.SupportedVersions) > maximumSupportedVersionsPerJob {
+			return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
+		}
+		if _, ok := queueSet[occupant.Queue]; !ok {
+			return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
+		}
+		// One (queue, kind) may be declared once, by exactly one plane. A
+		// duplicate would silently union two version windows and let a version
+		// neither plane accepts pass the check.
+		key := queueJobKey{queue: occupant.Queue, kind: occupant.Kind}
+		if _, duplicate := jobSet[key]; duplicate {
+			return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
+		}
+		jobSet[key] = struct{}{}
+		usedQueues[occupant.Queue] = struct{}{}
+		previous := 0
+		for _, version := range occupant.SupportedVersions {
+			if version < 1 || version <= previous || version > math.MaxInt32 {
+				return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
+			}
+			previous = version
+		}
+	}
 	if len(usedQueues) != len(queueSet) {
 		return normalizedQueueTelemetryConfig{}, ErrQueueTelemetryConfiguration
 	}
@@ -347,6 +533,16 @@ func normalizeQueueTelemetryConfig(config QueueTelemetryConfig) (normalizedQueue
 		for _, version := range job.SupportedVersions {
 			normalized.supportedQueues = append(normalized.supportedQueues, job.Queue)
 			normalized.supportedKinds = append(normalized.supportedKinds, job.Kind)
+			normalized.supportedVersions = append(normalized.supportedVersions, int32(version))
+		}
+	}
+	// Occupants widen only the supported-version set. They deliberately do NOT
+	// enter jobQueues/jobKinds: those drive expected_jobs, which becomes one
+	// pre-registered jobs_available metric label per entry.
+	for _, occupant := range occupants {
+		for _, version := range occupant.SupportedVersions {
+			normalized.supportedQueues = append(normalized.supportedQueues, occupant.Queue)
+			normalized.supportedKinds = append(normalized.supportedKinds, occupant.Kind)
 			normalized.supportedVersions = append(normalized.supportedVersions, int32(version))
 		}
 	}
@@ -392,6 +588,17 @@ func readQueueTelemetry(
 	config normalizedQueueTelemetryConfig,
 ) ([]queueTelemetryRow, error) {
 	statement := strings.ReplaceAll(queueTelemetrySQL, "{{river_job}}", table)
+	// The SQL truncation limits and the Go re-validation limits are the SAME
+	// constants, substituted here rather than restated as literals: a
+	// duplicated bound that drifts would make legitimate labels fail
+	// validation and read as an unreadable snapshot.
+	for placeholder, value := range map[string]int{
+		"{{offender_limit}}": maximumUnsupportedOffenders,
+		"{{label_length}}":   maximumQueueTelemetryLabelLength,
+		"{{version_length}}": maximumOffenderVersionLength,
+	} {
+		statement = strings.ReplaceAll(statement, placeholder, strconv.Itoa(value))
+	}
 	rows, err := pool.Query(
 		ctx,
 		statement,
@@ -417,7 +624,7 @@ func readQueueTelemetry(
 			&row.oldestAgeSeconds,
 			&row.localRunning,
 			&row.queueRunning,
-			&row.unsupportedAvailable,
+			&row.unsupportedOccupants,
 		); err != nil {
 			return nil, err
 		}
@@ -486,21 +693,75 @@ queue_running AS (
         AND river_job.attempted_by[array_upper(river_job.attempted_by, 1)] = $7::text
     GROUP BY river_job.queue
 ),
+-- The refusal names the offending contract instead of only asserting that one
+-- exists: an EXISTS boolean told an operator a version was unsupported but not
+-- which kind, queue, or version, so the only way to find out was to query the
+-- table by hand while the worker crash-looped (CHAOS-3938). Labels are
+-- truncated here and re-validated in Go; the version is emitted only when it
+-- is a JSON number, so nothing unbounded from args can reach a log line.
 unsupported_available AS (
-    SELECT EXISTS (
-        SELECT 1
-        FROM {{river_job}} AS river_job
-        WHERE river_job.queue = ANY($3::text[])
-            AND river_job.state = 'available'
-            AND NOT EXISTS (
-                SELECT 1
-                FROM supported_versions
-                WHERE supported_versions.queue = river_job.queue
-                    AND supported_versions.kind = river_job.kind
-                    AND jsonb_typeof(river_job.args -> 'contract_version') = 'number'
-                    AND river_job.args ->> 'contract_version' = supported_versions.version::text
-            )
-    ) AS present
+    SELECT coalesce(
+        (
+            SELECT array_agg(offender ORDER BY offender)
+            FROM (
+                SELECT DISTINCT
+                    -- Sanitised in SQL, not merely truncated. left() counts
+                    -- CHARACTERS while the Go re-validation counts BYTES, and
+                    -- the Go class is ASCII-only, so a multi-byte or
+                    -- out-of-class kind would produce a label the Go side
+                    -- rejects. That used to invalidate the whole read -- which
+                    -- would take the BACKLOG METRICS down with it, breaking
+                    -- this sampler's stated invariant that an unsupported
+                    -- contract never hides them. Emitting a placeholder keeps
+                    -- the refusal (the row really is unsupported) without
+                    -- costing the metrics.
+                    CASE
+                        WHEN river_job.queue ~ '^[A-Za-z0-9._:-]{1,{{label_length}}}$'
+                        THEN river_job.queue
+                        ELSE 'unprintable'
+                    END || '/' ||
+                    CASE
+                        WHEN river_job.kind ~ '^[A-Za-z0-9._:-]{1,{{label_length}}}$'
+                        THEN river_job.kind
+                        ELSE 'unprintable'
+                    END || '@' ||
+                    CASE
+                        -- Three outcomes, not two. A JSON number that is not a
+                        -- canonical unsigned integer -- -1, 1.5, 1e3 -- is a
+                        -- real unsupported version, so it must reach the
+                        -- refusal as 'invalid' rather than be emitted verbatim:
+                        -- the Go re-validation would reject the verbatim text
+                        -- and turn the whole read into an unreadable snapshot,
+                        -- losing both the diagnostic and the queue metrics for
+                        -- exactly the malformed rows this check exists to name.
+                        -- IS DISTINCT FROM, not <>: an ABSENT key makes the
+                        -- args lookup SQL NULL, so jsonb_typeof returns NULL
+                        -- and a plain <> is unknown rather than true -- which
+                        -- would fall through and report a missing version as a
+                        -- malformed one.
+                        WHEN jsonb_typeof(river_job.args -> 'contract_version') IS DISTINCT FROM 'number'
+                        THEN 'none'
+                        WHEN river_job.args ->> 'contract_version' ~ '^[0-9]{1,{{version_length}}}$'
+                        THEN river_job.args ->> 'contract_version'
+                        ELSE 'invalid'
+                    END AS offender
+                FROM {{river_job}} AS river_job
+                WHERE river_job.queue = ANY($3::text[])
+                    AND river_job.state = 'available'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM supported_versions
+                        WHERE supported_versions.queue = river_job.queue
+                            AND supported_versions.kind = river_job.kind
+                            AND jsonb_typeof(river_job.args -> 'contract_version') = 'number'
+                            AND river_job.args ->> 'contract_version' = supported_versions.version::text
+                    )
+                ORDER BY offender
+                LIMIT {{offender_limit}}
+            ) AS unsupported_rows
+        ),
+        ARRAY[]::text[]
+    ) AS offenders
 )
 SELECT
     available_counts.queue,
@@ -509,7 +770,7 @@ SELECT
     queue_ages.oldest_age_seconds,
     local_running.count,
     coalesce(queue_running.running, 0),
-    unsupported_available.present
+    unsupported_available.offenders
 FROM available_counts
 JOIN queue_ages USING (queue)
 LEFT JOIN queue_running USING (queue)

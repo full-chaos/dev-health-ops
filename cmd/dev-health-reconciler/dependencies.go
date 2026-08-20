@@ -242,7 +242,7 @@ func buildSyncMutationPipeline(
 		return nil, err
 	}
 	publisher, err := syncdispatchruntime.NewPublisher(riverClient, syncdispatchruntime.PublisherOptions{
-		Queue: "sync", MaxAttempts: 5,
+		Queue: syncdispatchcontract.RiverQueue, MaxAttempts: 5,
 	})
 	if err != nil {
 		return nil, err

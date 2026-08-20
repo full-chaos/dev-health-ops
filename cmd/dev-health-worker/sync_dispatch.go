@@ -218,7 +218,11 @@ func postSyncWorkGraphScope(
 	return json.Marshal(scope)
 }
 
-const syncCoordinatorQueue = "sync"
+// syncCoordinatorQueue is the queue the sync-dispatch plane declares, not an
+// independent choice: the reconciler publishes dispatch_sync_run and its three
+// siblings into exactly this queue, and the startup contract-version check
+// resolves them from the same declaration (CHAOS-3938).
+const syncCoordinatorQueue = syncdispatchcontract.RiverQueue
 
 // buildSyncCoordinatorWorker hosts a mixed River client: four sync-dispatch
 // coordinator kinds that are outside the bounded job registry (CUT-10 brings

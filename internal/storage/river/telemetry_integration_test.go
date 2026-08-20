@@ -5,6 +5,8 @@ package riverstore_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,23 +124,98 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	if _, err := adminPool.Exec(ctx, `UPDATE river.river_job SET args='{"contract_version":2}'::jsonb WHERE id=$1`, futureID); err != nil {
 		t.Fatal(err)
 	}
-	if err := sampler.CheckAvailableContractVersions(ctx); err != riverstore.ErrUnsupportedAvailableContractVersion {
-		t.Fatalf("unsupported future contract readiness error = %v", err)
-	}
+	// Each refusal must also NAME the offending queue/kind/version, so an
+	// operator reading the crash-loop log can tell which contract refused
+	// instead of querying river_job by hand (CHAOS-3938).
+	assertRefusalNames(t, ctx, sampler, "heartbeat/system.heartbeat@2")
 
 	// A JSON string is not an integer contract version even when its text is 1.
 	if _, err := adminPool.Exec(ctx, `UPDATE river.river_job SET args='{"contract_version":"1"}'::jsonb WHERE id=$1`, futureID); err != nil {
 		t.Fatal(err)
 	}
-	if err := sampler.CheckAvailableContractVersions(ctx); !errors.Is(err, riverstore.ErrUnsupportedAvailableContractVersion) {
-		t.Fatalf("non-integer contract readiness error = %v", err)
+	assertRefusalNames(t, ctx, sampler, "heartbeat/system.heartbeat@none")
+
+	// A JSON number that is not a canonical unsigned integer is still an
+	// unsupported version, and must be NAMED. Emitting the raw text instead
+	// would fail the Go re-validation and collapse the whole read into an
+	// unreadable snapshot, taking the queue metrics down with it.
+	// jsonb normalises numbers to numeric, so an exponent form like 1e3 is
+	// stored as the canonical 1000; the forms that actually survive as
+	// non-canonical are negatives and fractions.
+	for _, malformed := range []string{"-1", "1.5"} {
+		if _, err := adminPool.Exec(
+			ctx,
+			`UPDATE river.river_job SET args=jsonb_build_object('contract_version', $2::numeric) WHERE id=$1`,
+			futureID, malformed,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sampler.Snapshot(ctx); err != nil {
+			t.Fatalf("contract_version %s made the whole snapshot unreadable: %v", malformed, err)
+		}
+		assertRefusalNames(t, ctx, sampler, "heartbeat/system.heartbeat@invalid")
 	}
+	// An ABSENT contract_version is missing, not malformed. The two must stay
+	// distinguishable: one means a producer that never stamped a version, the
+	// other a producer that stamped a wrong one.
+	if _, err := adminPool.Exec(ctx, `UPDATE river.river_job SET args='{}'::jsonb WHERE id=$1`, futureID); err != nil {
+		t.Fatal(err)
+	}
+	assertRefusalNames(t, ctx, sampler, "heartbeat/system.heartbeat@none")
 
 	if _, err := adminPool.Exec(ctx, `UPDATE river.river_job SET args='{"contract_version":1}'::jsonb, kind='unknown.kind' WHERE id=$1`, futureID); err != nil {
 		t.Fatal(err)
 	}
-	if err := sampler.CheckAvailableContractVersions(ctx); !errors.Is(err, riverstore.ErrUnsupportedAvailableContractVersion) {
-		t.Fatalf("unknown kind readiness error = %v", err)
+	assertRefusalNames(t, ctx, sampler, "heartbeat/unknown.kind@1")
+
+	// A kind outside the telemetry label character class is a real row an
+	// older producer could have written. It must still refuse, must not reach
+	// the message verbatim, and must NOT cost the backlog metrics: SQL left()
+	// counts characters while the Go re-validation counts bytes, so a
+	// multi-byte kind is exactly the case where truncation alone diverges.
+	if _, err := adminPool.Exec(
+		ctx,
+		`UPDATE river.river_job SET args='{"contract_version":1}'::jsonb, kind=$2 WHERE id=$1`,
+		// A slash is the sharpest trigger: it is the label's own separator,
+		// so an unsanitised kind containing one silently re-splits the label
+		// into the wrong queue/kind pair before validation even runs.
+		futureID, "legacy/cleanup kïnd",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sampler.Snapshot(ctx); err != nil {
+		t.Fatalf("an out-of-class kind made the backlog metrics unavailable: %v", err)
+	}
+	// Per-COMPONENT replacement, not whole-label: the queue and the version are
+	// in-vocabulary and survive, so the operator still learns where the row is
+	// and what version it claims, and only the unusable kind is redacted. The
+	// whole-label placeholder is the last resort for a label the query could
+	// not produce at all, covered by the unit test.
+	assertRefusalNames(t, ctx, sampler, "heartbeat/unprintable@1")
+}
+
+// assertRefusalNames requires the refusal to wrap the stable sentinel AND to
+// carry exactly the offending queue/kind/version label.
+func assertRefusalNames(
+	t *testing.T,
+	ctx context.Context,
+	sampler *riverstore.QueueTelemetrySampler,
+	want string,
+) {
+	t.Helper()
+	err := sampler.CheckAvailableContractVersions(ctx)
+	if !errors.Is(err, riverstore.ErrUnsupportedAvailableContractVersion) {
+		t.Fatalf("readiness error = %v, want it to wrap the unsupported-contract sentinel", err)
+	}
+	var unsupported *riverstore.UnsupportedContractVersionError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("readiness error = %v, want an *UnsupportedContractVersionError", err)
+	}
+	if !reflect.DeepEqual(unsupported.Offenders, []string{want}) {
+		t.Fatalf("refusal named %v, want [%s]", unsupported.Offenders, want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("refusal message %q does not name %q", err.Error(), want)
 	}
 }
 

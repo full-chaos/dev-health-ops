@@ -174,3 +174,24 @@ const outOfOrderArtifact = `{
     {"kind": "reference_discovery", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"}
   ]
 }`
+
+// TestRiverQueueIsPinnedToItsWireValue pins the queue NAME, not just its use.
+//
+// RiverQueue is a wire value: it is written into river_job.queue by the
+// reconciler and read back by every worker's startup contract-version check.
+// Renaming the constant would keep this repository internally consistent and
+// still be a production incident -- rows already sitting in the old queue
+// would be invisible to the new readers, and during a rolling deploy the two
+// binaries would disagree about which queue the sync-dispatch plane occupies.
+//
+// Changing this string therefore requires a queue migration, not an edit. The
+// literal is repeated here deliberately: a test that read the constant would
+// agree with any rename and prove nothing.
+func TestRiverQueueIsPinnedToItsWireValue(t *testing.T) {
+	t.Parallel()
+	if RiverQueue != "sync" {
+		t.Fatalf("RiverQueue = %q, want \"sync\": this is a persisted wire value; "+
+			"changing it strands in-flight river_job rows and splits old and new "+
+			"binaries during a rolling deploy", RiverQueue)
+	}
+}

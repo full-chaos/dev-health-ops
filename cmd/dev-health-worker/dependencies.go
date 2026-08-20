@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -288,9 +289,21 @@ type workerDependencies struct {
 	queueTelemetryErr      error
 	queueTelemetryRequired bool
 	instanceID             string
-	shutdownGrace          time.Duration
-	workerDrainBudget      time.Duration
-	workerGroup            string
+	// logger is set by configureWorkerDependenciesWithSources. It exists so a
+	// readiness check that HAS bounded detail can emit it: the health registry
+	// reports check names only, so a refusal with no other outlet reaches an
+	// operator as "failed_checks=queued_contract_versions" and nothing more.
+	logger *slog.Logger
+	// unsupportedContractsMu guards the last reported offender set. Readiness
+	// is re-evaluated on EVERY /readyz probe and /metrics scrape, and a
+	// failing check does not stop an already-running process, so logging on
+	// each evaluation would turn one persistent incompatible row into
+	// probe-rate ERROR on every replica. Report a transition, not a state.
+	unsupportedContractsMu       sync.Mutex
+	reportedUnsupportedContracts string
+	shutdownGrace                time.Duration
+	workerDrainBudget            time.Duration
+	workerGroup                  string
 }
 
 type preclaimReadinessComponent struct {
@@ -450,6 +463,7 @@ func configureWorkerDependenciesWithSources(
 		logger = loggers[0]
 	}
 	dependencies := buildWorkerDependencies(ctx, cfg, sources)
+	dependencies.logger = logger
 	cfg.WorkerInstanceID = dependencies.instanceID
 	if registry == nil {
 		dependencies.close()
@@ -1186,12 +1200,52 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 	}
 	dependencies.queueTelemetry, dependencies.queueTelemetryErr = dependencies.database.NewQueueTelemetrySampler(
 		riverstore.QueueTelemetryConfig{
-			Schema:   cfg.RiverDatabaseSchema,
-			ClientID: dependencies.instanceID,
-			Queues:   queues,
-			Jobs:     jobs,
+			Schema:    cfg.RiverDatabaseSchema,
+			ClientID:  dependencies.instanceID,
+			Queues:    queues,
+			Jobs:      jobs,
+			Occupants: nonRegistryQueueOccupants(queueBudgets),
 		},
 	)
+}
+
+// nonRegistryQueueOccupants is the second half of "who may legitimately have
+// rows in the selected River queues". The first half is the bounded jobs
+// registry, already projected into Jobs above from
+// jobruntime.Registry.SelectedQueues.
+//
+// river.river_job is shared by two route planes that are deliberately distinct:
+// worker_job_routes governs the bounded registry kinds, and
+// sync_dispatch_transport_routes governs the coordinator kinds, which carry no
+// registry descriptor at all (see syncdispatchruntime.RegisterWorkers). Nothing
+// merges them, and nothing should -- the sync-dispatch kinds are outside the
+// registry until CUT-10 brings them in, and giving dispatch_sync_run a
+// registry entry today would additionally subject it to registry startup
+// validation, which is precisely the coverage this binary does NOT report for
+// it. So the reader unions the planes instead of the planes being merged.
+//
+// The union is derived, not enumerated: the occupancy comes from
+// syncdispatchruntime.RiverQueueOccupancy(), which is itself derived from the
+// frozen contract kinds. Adding one registry line for dispatch_sync_run would
+// have fixed exactly one kind and left the next one to trip the same wire
+// (CHAOS-3938).
+func nonRegistryQueueOccupants(queueBudgets []jobruntime.QueueBudget) []riverstore.QueueTelemetryOccupant {
+	selected := make(map[string]struct{}, len(queueBudgets))
+	for _, budget := range queueBudgets {
+		selected[budget.Queue] = struct{}{}
+	}
+	occupants := make([]riverstore.QueueTelemetryOccupant, 0, len(queueBudgets))
+	for _, occupancy := range syncdispatchruntime.RiverQueueOccupancy() {
+		if _, ok := selected[occupancy.Queue]; !ok {
+			continue
+		}
+		occupants = append(occupants, riverstore.QueueTelemetryOccupant{
+			Queue:             occupancy.Queue,
+			Kind:              occupancy.Kind,
+			SupportedVersions: append([]int(nil), occupancy.SupportedVersions...),
+		})
+	}
+	return occupants
 }
 
 func buildWorkerMetrics(
@@ -1386,9 +1440,42 @@ func (dependencies *workerDependencies) queuedContractVersionsReady(ctx context.
 		return errWorkerDependencyUnavailable
 	}
 	if err := dependencies.queueTelemetry.CheckAvailableContractVersions(ctx); err != nil {
+		// Name the offending contract. The health registry surface reports
+		// check names only, so without this an operator sees
+		// "failed_checks=queued_contract_versions" and has no way to tell
+		// which kind, which queue, or which version refused the start -- which
+		// is what turned CHAOS-3938 into a 20-minute outage instead of a
+		// one-line diagnosis. Only bounded, re-validated queue/kind/version
+		// labels are logged; see riverstore.UnsupportedContractVersionError.
+		var unsupported *riverstore.UnsupportedContractVersionError
+		if errors.As(err, &unsupported) {
+			dependencies.reportUnsupportedContracts(ctx, strings.Join(unsupported.Offenders, ","))
+		}
 		return errWorkerDependencyUnavailable
 	}
+	dependencies.reportUnsupportedContracts(ctx, "")
 	return nil
+}
+
+// reportUnsupportedContracts logs the offender set only when it CHANGES,
+// including the change back to empty. A repeat of the same set is the same
+// fact restated at probe rate; a different set, or a recurrence after
+// recovery, is new information and is logged again.
+func (dependencies *workerDependencies) reportUnsupportedContracts(ctx context.Context, offenders string) {
+	dependencies.unsupportedContractsMu.Lock()
+	changed := dependencies.reportedUnsupportedContracts != offenders
+	dependencies.reportedUnsupportedContracts = offenders
+	dependencies.unsupportedContractsMu.Unlock()
+	if !changed || offenders == "" || dependencies.logger == nil {
+		return
+	}
+	dependencies.logger.ErrorContext(
+		ctx,
+		"queued contract version is not supported by this worker",
+		"error_category", "dependency_unavailable",
+		"check", "queued_contract_versions",
+		"unsupported_contracts", offenders,
+	)
 }
 
 func (dependencies *workerDependencies) close() {

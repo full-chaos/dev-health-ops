@@ -2031,3 +2031,75 @@ func TestUnsetShutdownTimeoutIsDerivedFromTheSelectedQueues(t *testing.T) {
 		t.Fatalf("explicit 30s timeout = %v, want shutdown contract refusal", refused.startupErr)
 	}
 }
+
+// TestUnsupportedContractRefusalNamesTheContractOncePerChange covers both
+// halves of the diagnostic added for CHAOS-3938: the refusal must NAME the
+// offending queue/kind/version, and it must say so once per change rather than
+// once per readiness evaluation. Readiness is re-run on every /readyz probe
+// and /metrics scrape and a failing check does not stop a running process, so
+// logging per evaluation would turn one incompatible row into probe-rate ERROR
+// on every replica.
+func TestUnsupportedContractRefusalNamesTheContractOncePerChange(t *testing.T) {
+	logs := &bytes.Buffer{}
+	telemetry := &fakeQueueTelemetry{
+		checkErr: &riverstore.UnsupportedContractVersionError{
+			Offenders: []string{"sync/dispatch_sync_run@7"},
+		},
+	}
+	dependencies := &workerDependencies{
+		queueTelemetry:         telemetry,
+		queueTelemetryRequired: true,
+		logger:                 slog.New(slog.NewTextHandler(logs, nil)),
+	}
+
+	for range 3 {
+		if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+			t.Fatal("unsupported contract version was accepted")
+		}
+	}
+	if lines := countLogLines(logs.String()); lines != 1 {
+		t.Fatalf("logged %d times for one unchanged offender set, want 1: %s", lines, logs.String())
+	}
+	if !strings.Contains(logs.String(), "sync/dispatch_sync_run@7") {
+		t.Fatalf("refusal did not name the offending contract: %s", logs.String())
+	}
+
+	// A different offender set is new information.
+	telemetry.checkErr = &riverstore.UnsupportedContractVersionError{
+		Offenders: []string{"sync/post_sync@9"},
+	}
+	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+		t.Fatal("unsupported contract version was accepted")
+	}
+	if lines := countLogLines(logs.String()); lines != 2 {
+		t.Fatalf("a changed offender set logged %d times in total, want 2: %s", lines, logs.String())
+	}
+
+	// So is a recurrence after the queue drained clean.
+	telemetry.checkErr = nil
+	if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
+		t.Fatalf("clean queue refused readiness: %v", err)
+	}
+	if lines := countLogLines(logs.String()); lines != 2 {
+		t.Fatalf("recovery logged: %s", logs.String())
+	}
+	telemetry.checkErr = &riverstore.UnsupportedContractVersionError{
+		Offenders: []string{"sync/post_sync@9"},
+	}
+	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+		t.Fatal("unsupported contract version was accepted")
+	}
+	if lines := countLogLines(logs.String()); lines != 3 {
+		t.Fatalf("a recurrence after recovery logged %d times in total, want 3: %s", lines, logs.String())
+	}
+}
+
+func countLogLines(output string) int {
+	lines := 0
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	return lines
+}

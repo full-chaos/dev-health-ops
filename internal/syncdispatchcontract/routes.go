@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -26,6 +27,20 @@ const (
 	KindFinalizeSyncRun    = "finalize_sync_run"
 	KindPostSync           = "post_sync"
 	KindReferenceDiscovery = "reference_discovery"
+
+	// RiverQueue is the ONE River queue every river-routed sync-dispatch kind
+	// is published into. It is declared here, beside the frozen kinds, because
+	// the queue name is the join between this route plane and the bounded jobs
+	// registry plane: both put rows in river.river_job, and a reader of that
+	// table (the startup contract-version check, for one) can only resolve a
+	// kind if it knows which planes may occupy the queue it is reading.
+	//
+	// It used to be a bare "sync" literal in the reconciler and a private
+	// const in the worker, with nothing tying either to this package. Nothing
+	// then made it visible that queue "sync" carries dispatch_sync_run as well
+	// as the registry's sync.team_autoimport, and the worker refused to start
+	// whenever those rows were pending (CHAOS-3938).
+	RiverQueue = "sync"
 
 	DeliveryAtLeastOnce = "at_least_once"
 
@@ -119,6 +134,20 @@ func (parsed artifact) validate() error {
 		}
 	}
 	return nil
+}
+
+// Kinds returns every frozen sync-dispatch kind, sorted. It is DERIVED from
+// the frozen delivery table rather than restated, so a fifth kind added there
+// is automatically visible to every consumer that has to enumerate this
+// plane -- including the readiness check that must resolve each kind's rows in
+// RiverQueue.
+func Kinds() []string {
+	kinds := make([]string, 0, len(frozenDeliveries))
+	for kind := range frozenDeliveries {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
 }
 
 var frozenDeliveries = map[string]string{

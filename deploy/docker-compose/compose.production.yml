@@ -453,6 +453,45 @@ services:
   # River listener/cancellation uses a session pool, never the transaction
   # endpoint above. DB_USER and DB_NAME are fixed, so DEFAULT_POOL_SIZE caps
   # the one relevant PgBouncer (database,user) backend pool.
+  #
+  # ---------------------------------------------------------------------------
+  # QUEUE-SESSION BUDGET (CHAOS-3945). This is a contract, not a tuning knob.
+  # Session mode pins one server connection per client session for the life of
+  # that session, so DEFAULT_POOL_SIZE is a hard ceiling: clients past it wait
+  # for a backend that never frees, and River leader election fails with
+  # "error beginning transaction: timeout: context deadline exceeded".
+  #
+  # Every declared client of this endpoint, at its manifest max_replicas
+  # (deploy/go-workers/deployment.json). A "river" runtime replica costs
+  # WORKER_DATABASE_MAX_CONNS (2) PLUS one long-lived River notifier LISTEN
+  # session that sits outside that pool. A "control" runtime replica costs only
+  # its pool: it builds a River client but drives it through the *Tx APIs and
+  # never calls Start, so no notifier attaches.
+  #
+  #   go-worker-sync           river    2 replicas x (2 + 1)  =  6
+  #   go-worker-heavy          river    2 replicas x (2 + 1)  =  6
+  #   go-worker-ops            river    2 replicas x (2 + 1)  =  6
+  #   go-worker-sync-provider  river    2 replicas x (2 + 1)  =  6
+  #   go-reconciler            control  2 replicas x  2       =  4
+  #   go-scheduler             control  2 replicas x  2       =  4
+  #   go-workerctl             CLI      1 invocation x 2      =  2
+  #   go-stream-external       stream   opens no queue pool   =  0
+  #   go-stream-ingest         stream   opens no queue pool   =  0
+  #   go-stream-pagerduty      stream   opens no queue pool   =  0
+  #                                                            ---
+  #                                              declared max   34
+  #   rolling-restart overlap: one replacement replica starts before the
+  #   stopping one's sessions expire at server_idle_timeout      +3
+  #                                                            ---
+  #                                            DEFAULT_POOL_SIZE 37
+  #
+  # This table is NOT the enforcement -- internal/deploymentcontract validates
+  # the same arithmetic from deployment.json on every build, and rejects a pool
+  # that cannot absorb one rolling restart. Adding a service that opens
+  # WORKER_DATABASE_URI means adding it to deployment.json, which moves this
+  # number; the previous version of this comment went stale silently when
+  # go-worker-sync-provider and the three stream runners were added.
+  # ---------------------------------------------------------------------------
   pgbouncer-river-queue:
     profiles: ["pooler"]
     image: edoburu/pgbouncer:latest
@@ -467,7 +506,7 @@ services:
       POOL_MODE: session
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-27}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-37}
       # CHAOS-3944: PgBouncer defaults log_connections=1 and
       # log_disconnections=1. The Go worker fleet cycles connections
       # continuously, so those defaults are a permanent firehose carrying no

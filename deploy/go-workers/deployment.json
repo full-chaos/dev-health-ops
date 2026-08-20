@@ -8,12 +8,13 @@
     "RIVER_QUEUE_DATABASE_ROLE"
   ],
   "postgres_budget": {
-    "server_max_connections": 100,
+    "server_max_connections": 200,
     "server_reserved_connections": 15,
     "pgbouncer_transaction_pool_size": 20,
     "pgbouncer_transaction_server_pool_count": 2,
     "pgbouncer_transaction_max_client_connections": 1000,
-    "pgbouncer_queue_session_pool_size": 27,
+    "pgbouncer_queue_session_pool_size": 37,
+    "queue_session_notifier_sessions_per_replica": 1,
     "pgbouncer_queue_session_max_client_connections": 128,
     "pgbouncer_coordinator_session_pool_size": 11,
     "pgbouncer_coordinator_session_max_client_connections": 32

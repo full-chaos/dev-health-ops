@@ -241,7 +241,7 @@ goWorkers:
       maxClientConnections: 1000
     queueSession:
       port: 6433
-      poolSize: 27
+      poolSize: 37
       maxClientConnections: 128
     coordinatorSession:
       port: 6434

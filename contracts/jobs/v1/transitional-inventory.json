@@ -382,7 +382,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 775
+        "line": 777
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -406,7 +406,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1261
+        "line": 1265
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -430,7 +430,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2116
+        "line": 2120
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -454,7 +454,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 78
+        "line": 84
       },
       "queue_or_cadence": "sync",
       "dispatches": "self (Beat)",
@@ -478,7 +478,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 125
+        "line": 131
       },
       "queue_or_cadence": "sync",
       "dispatches": "self (Beat)",
@@ -2230,7 +2230,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1155
+        "line": 1159
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -2254,7 +2254,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1747
+        "line": 1751
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2278,7 +2278,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2655
+        "line": 2722
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",
@@ -2302,7 +2302,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 865
+        "line": 891
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_sync_reference_discovery",
@@ -2326,7 +2326,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 883
+        "line": 909
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_sync_run",
@@ -2350,7 +2350,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_reconciler.py",
-        "line": 891
+        "line": 917
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",

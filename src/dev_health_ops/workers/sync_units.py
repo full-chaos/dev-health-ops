@@ -119,7 +119,9 @@ from dev_health_ops.workers.provider_family_contract import (
 )
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteSwitches,
+    is_atomic_provider_family_direct_alias,
     provider_family_strict_admission_enabled,
+    route_switch_environment_name,
 )
 from dev_health_ops.workers.provider_unit_transport import (
     PROVIDER_UNIT_OUTBOX_ROUTES,
@@ -1112,7 +1114,9 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             )
 
         if unroutable_units:
-            terminalized = _terminalize_unroutable_units(session, unroutable_units)
+            terminalized = _terminalize_unroutable_units(
+                session, unroutable_units, switches=provider_unit_routes
+            )
             logger.warning(
                 "dispatch_sync_run.unroutable_units_terminalized",
                 extra={
@@ -2615,6 +2619,8 @@ def _release_undecidable_units(
 def _terminalize_unroutable_units(
     session,
     units: Sequence[SyncRunUnit],
+    *,
+    switches: ProviderUnitRouteSwitches | None = None,
 ) -> int:
     """Fail claimed units that no runtime can execute (CHAOS-3941).
 
@@ -2626,28 +2632,89 @@ def _terminalize_unroutable_units(
     budget is released instead of being held forever.
     """
 
-    unit_ids = [unit.id for unit in units]
-    if not unit_ids:
+    if not units:
         return 0
     now = datetime.now(timezone.utc)
-    result = session.execute(
-        update(SyncRunUnit)
-        .where(
-            SyncRunUnit.id.in_(unit_ids),
-            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+
+    # CHAOS-3990: group by pair so the durable reason NAMES the pair and the
+    # switch that refused it. The previous single-string bulk update stamped
+    # only the bare category, which is why an operator querying these rows saw
+    # a retry loop with thousands of attempts and no reason attached.
+    units_by_pair: dict[tuple[str, str], list[uuid.UUID]] = defaultdict(list)
+    for unit in units:
+        units_by_pair[(str(unit.provider), str(unit.dataset_key))].append(unit.id)
+
+    terminalized = 0
+    for (provider, dataset_key), unit_ids in sorted(units_by_pair.items()):
+        reason = _unroutable_reason(provider, dataset_key, switches=switches)
+        result = session.execute(
+            update(SyncRunUnit)
+            .where(
+                SyncRunUnit.id.in_(unit_ids),
+                SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
+            )
+            .values(
+                status=SyncRunUnitStatus.FAILED.value,
+                available_at=None,
+                error=UNROUTABLE_ERROR_CATEGORY,
+                # The durable record an operator actually reads. ``error``
+                # stays the stable machine category every downstream reader
+                # already keys on; the prose reason goes here beside it.
+                last_retry_reason=reason,
+                result={
+                    "error_category": UNROUTABLE_ERROR_CATEGORY,
+                    "reason": reason,
+                    "provider": provider,
+                    "dataset_key": dataset_key,
+                },
+                lease_owner=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
         )
-        .values(
-            status=SyncRunUnitStatus.FAILED.value,
-            available_at=None,
-            error=UNROUTABLE_ERROR_CATEGORY,
-            result={"error_category": UNROUTABLE_ERROR_CATEGORY},
-            lease_owner=None,
-            lease_expires_at=None,
-            updated_at=now,
+        terminalized += int(result.rowcount or 0)
+    return terminalized
+
+
+def _unroutable_reason(
+    provider: str,
+    dataset_key: str,
+    *,
+    switches: ProviderUnitRouteSwitches | None = None,
+) -> str:
+    """The operator-facing sentence for a pair no runtime will execute.
+
+    ``UNROUTABLE`` has three distinct causes and they need three different
+    actions, so the reason must not assert the wrong one (review finding):
+
+      * the durable ``sync.provider_unit`` route is not a River route at all,
+        so ``switches`` is ``None`` and NO River switch is consulted -- naming
+        one would send an operator to flip a variable that changes nothing;
+      * the pair is a non-canonical atomic-family alias, which is refused
+        regardless of its canonical switch; or
+      * the pair's own River switch is off.
+
+    Every branch also implies the Celery fallback had no consumer, since that
+    is what turns "not River" into UNROUTABLE rather than a Celery publish.
+    """
+
+    prefix = f"no enabled worker can execute {provider}/{dataset_key}"
+    suffix = "and the Celery fallback queue has no consumer"
+    if switches is None:
+        return (
+            f"{prefix}: the durable sync.provider_unit route is not a River "
+            f"route, so no per-pair River switch applies, {suffix}"
         )
-        .execution_options(synchronize_session=False)
-    )
-    return int(result.rowcount or 0)
+    if is_atomic_provider_family_direct_alias(provider, dataset_key):
+        canonical = route_switch_environment_name(provider, dataset_key)
+        return (
+            f"{prefix}: it is a non-canonical member of an atomic provider "
+            f"family, which is never routed on its own (the family is "
+            f"governed by {canonical}), {suffix}"
+        )
+    switch = route_switch_environment_name(provider, dataset_key)
+    return f"{prefix}: the River route switch ({switch}) is disabled, {suffix}"
 
 
 def _enqueue_denied_active_finalize(sync_run_id: str) -> None:

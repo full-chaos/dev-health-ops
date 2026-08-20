@@ -63,9 +63,21 @@ func applyGitHubWorkItemsIncompletePolicy(
 	}
 
 	normalized := cloneCompletionResult(result)
-	normalized[githubWorkItemsIncompleteResultKey] = append(
-		[]GitHubWorkItemsIncomplete(nil), incomplete...,
-	)
+	// The normalized entry MUST be a non-nil slice. This policy is applied
+	// twice on every healthy GitHub work-items unit -- once by
+	// CompleteRouteExecutor.Execute (complete_route.go) on the collected batch,
+	// and again by PostgresRepository.Complete (repository_postgres.go) on the
+	// payload that batch produced -- and the prepared snapshot re-reads it a
+	// third time through JSON on recovery. json.Marshal renders a nil slice as
+	// `null`, which is exactly the "the route emitted no durable evidence"
+	// shape the reader above fails closed on. Writing `append(nil)` therefore
+	// made the empty-evidence case (no optional enrichment failed: the healthy
+	// path) accepted on the first application and refused on the second, so
+	// github/work-items committed its effects and then failed completion on
+	// every attempt, forever (CHAOS-3940). Normalization must be a fixed point.
+	entries := make([]GitHubWorkItemsIncomplete, 0, len(incomplete))
+	entries = append(entries, incomplete...)
+	normalized[githubWorkItemsIncompleteResultKey] = entries
 	if len(incomplete) != 0 {
 		return normalized, nil, nil
 	}

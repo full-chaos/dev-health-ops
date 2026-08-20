@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -156,6 +157,14 @@ func (pipeline *MutationPipeline) Step(
 				errors.Is(sweepErr, context.DeadlineExceeded) {
 				return Observation{}, sweepErr
 			}
+			// But it must never fail SILENTLY. Swallowing this without a word
+			// reports a healthy pass while the strand the sweep exists to
+			// clear is still there -- the same invisibility that let
+			// CHAOS-3990 sit unnoticed for sixteen hours (review finding).
+			slog.Warn(
+				"syncreconciler.unreclaimable_sweep_failed",
+				"error", sweepErr.Error(),
+			)
 		}
 	}
 	terminal, err := pipeline.terminal.Step(ctx, now, limit)

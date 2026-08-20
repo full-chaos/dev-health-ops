@@ -81,6 +81,12 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL
 		)`,
+		`CREATE TABLE public.worker_job_routes (
+			job_kind text PRIMARY KEY,
+			transport text NOT NULL
+		)`,
+		`INSERT INTO public.worker_job_routes (job_kind, transport)
+			VALUES ('sync.provider_unit', 'river_canary')`,
 		`CREATE TABLE public.worker_job_outbox (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			dedupe_key text NOT NULL UNIQUE,
@@ -500,5 +506,86 @@ func TestUnreclaimableSweepDrainsTheProductionWedgeInOnePass(t *testing.T) {
 	}
 	if missingReason != 0 {
 		t.Fatalf("%d drained units carry no last_retry_reason", missingReason)
+	}
+}
+
+// Capability configuration is not route ownership. When the durable route
+// still says Celery -- the rollback and coexistence state -- Celery owns every
+// provider unit and the sweep must not touch one, whatever the Go switches or
+// the worker-group declaration say.
+func TestUnreclaimableSweepDefersWhenTheDurableRouteIsCelery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(80), "tests", "heavy", now))
+	if _, err := pool.Exec(ctx,
+		`UPDATE public.worker_job_routes SET transport = 'celery'
+		 WHERE job_kind = 'sync.provider_unit'`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want nothing touched under a Celery route", result)
+	}
+	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(80))
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want the unit left alone", status)
+	}
+}
+
+// A missing or duplicated route row is a control-plane fault, not permission.
+func TestUnreclaimableSweepDefersWhenTheRouteRowIsUnusable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(81), "tests", "heavy", now))
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM public.worker_job_routes WHERE job_kind = 'sync.provider_unit'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want no write with the route row missing", result)
+	}
+}
+
+// The keyset cursor must resume past a persistent prefix of ineligible rows
+// WITHIN the pass. An offset-based scan cap restarts at zero every pass, so
+// such a prefix would hide this strand forever (review finding).
+func TestUnreclaimableSweepReachesAStrandBehindALongIneligiblePrefix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	// 250 older enabled-pair rows: eligible by the SQL predicate, dropped by
+	// routability, and they sort ahead of the strand.
+	for index := 0; index < 250; index++ {
+		spec := strandedSpec(sweepUnitID(200+index), "repo-metadata", "light", now)
+		spec.createdAt = now.Add(-20 * time.Hour).Add(time.Duration(index) * time.Second)
+		seedSweepUnit(t, ctx, pool, spec)
+	}
+	strand := sweepUnitID(900)
+	seedSweepUnit(t, ctx, pool, strandedSpec(strand, "tests", "heavy", now))
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Terminalized != 1 || len(result.UnitIDs) != 1 || result.UnitIDs[0] != strand {
+		t.Fatalf("result = %+v, want the strand behind the prefix", result)
 	}
 }

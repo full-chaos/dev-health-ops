@@ -35,12 +35,18 @@ const (
 	unreclaimableDefaultAge   = time.Hour
 	unreclaimableMinimumLimit = 1
 	unreclaimableMaximumLimit = 100
-	// The paging loop filters AFTER the SQL window, so a degraded state -- say
-	// a large backlog of old dispatching rows that all belong to River -- could
-	// otherwise walk the whole table on every 60s pass looking for a strand
-	// that is not there. The reconciler's contract is bounded work per pass, so
-	// the scan is capped: an unfound strand is simply found on a later pass.
-	unreclaimableMaximumPages   = 10
+	// Bounded work per pass, expressed as rows SCANNED rather than returned.
+	// The filters run after the SQL window, so a degraded state -- a large
+	// backlog of old dispatching rows that all belong to River -- must not walk
+	// the whole table every 60s.
+	//
+	// Paging is KEYSET, not OFFSET, which is what makes this bound safe. An
+	// offset-based cap restarts at zero every pass, so a persistent prefix of
+	// ineligible rows would hide a strand behind it forever (review finding).
+	// A keyset cursor resumes past that prefix within the pass, and because it
+	// is ordered by the same (created_at, id) the query is, it also cannot skip
+	// or double-count rows when the result set shifts between snapshots.
+	unreclaimableMaximumScan    = 1000
 	unreclaimableErrorCategory  = "feature_disabled"
 	unreclaimableProviderUnitID = "sync.provider_unit"
 )
@@ -154,6 +160,7 @@ type unreclaimableCandidate struct {
 	provider   string
 	datasetKey string
 	costClass  string
+	createdAt  time.Time
 	updatedAt  time.Time
 }
 
@@ -189,6 +196,16 @@ func (sweep *UnreclaimableSweep) Step(
 		return UnreclaimableSweepResult{}, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Durable route first, exactly as Python orders it. If River does not own
+	// provider units, Celery does, and nothing here may terminalize its work.
+	riverOwns, err := riverOwnsProviderUnits(ctx, tx)
+	if err != nil {
+		return UnreclaimableSweepResult{}, err
+	}
+	if !riverOwns {
+		return result, nil
+	}
 
 	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
 	if err != nil {
@@ -246,10 +263,13 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	ageCutoff := now.Add(-sweep.config.Age)
 	idleCutoff := now.Add(-sweep.config.Idle)
 	selected := make([]unreclaimableCandidate, 0, limit)
-	offset := 0
-	for pages := 0; len(selected) < limit && pages < unreclaimableMaximumPages; pages++ {
+	// The zero cursor: every real row sorts after it.
+	cursorCreatedAt := time.Time{}
+	cursorID := "00000000-0000-0000-0000-000000000000"
+	scanned := 0
+	for len(selected) < limit && scanned < unreclaimableMaximumScan {
 		page, err := scanUnreclaimablePage(
-			ctx, tx, ageCutoff, idleCutoff, limit, offset,
+			ctx, tx, ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 		)
 		if err != nil {
 			return nil, err
@@ -257,7 +277,9 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 		if len(page) == 0 {
 			break
 		}
-		offset += len(page)
+		scanned += len(page)
+		last := page[len(page)-1]
+		cursorCreatedAt, cursorID = last.createdAt, last.id
 		unpublished, err := dropPublishedUnits(ctx, tx, page)
 		if err != nil {
 			return nil, err
@@ -276,6 +298,47 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 		}
 	}
 	return selected, nil
+}
+
+// riverOwnsProviderUnits reads the DURABLE transport route.
+//
+// Capability configuration is not route ownership (review finding). Python
+// resolves `worker_job_routes` FIRST and only then applies switches and
+// presence: when the durable route is still Celery -- the rollback and
+// coexistence state -- Celery owns every provider unit regardless of what the
+// Go capability flags say. Reading the row here keeps that ordering, and keeps
+// the answer durable rather than an env-var inference.
+//
+// A missing, paused, duplicated or unreadable row is NOT read as "River owns
+// it": the sweep declines to act, matching Python's refusal to fall back to a
+// transport during a control-plane fault.
+const selectProviderUnitRouteSQL = `
+SELECT transport
+FROM public.worker_job_routes
+WHERE job_kind = $1
+`
+
+func riverOwnsProviderUnits(ctx context.Context, tx pgx.Tx) (bool, error) {
+	rows, err := tx.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	defer rows.Close()
+	transports := make([]string, 0, 1)
+	for rows.Next() {
+		var transport string
+		if err := rows.Scan(&transport); err != nil {
+			return false, ErrUnavailable
+		}
+		transports = append(transports, strings.TrimSpace(strings.ToLower(transport)))
+	}
+	if rows.Err() != nil {
+		return false, ErrUnavailable
+	}
+	if len(transports) != 1 {
+		return false, nil
+	}
+	return transports[0] == "river" || transports[0] == "river_canary", nil
 }
 
 // unroutable mirrors Python's resolve_unit_transport: a pair is sweepable only
@@ -310,7 +373,8 @@ func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bo
 // status = 'dispatching' only. A RUNNING unit is never selected.
 const selectUnreclaimableCandidatesSQL = `
 SELECT unit.id::text, unit.sync_run_id::text, unit.org_id,
-	unit.provider, unit.dataset_key, unit.cost_class, unit.updated_at
+	unit.provider, unit.dataset_key, unit.cost_class,
+	unit.created_at, unit.updated_at
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.status = 'dispatching'
@@ -322,8 +386,9 @@ WHERE unit.status = 'dispatching'
 	AND unit.updated_at <= $2
 	AND run.status NOT IN ('success', 'partial_failed', 'failed')
 	AND run.org_id = unit.org_id
+	AND (unit.created_at, unit.id) > ($3, $4)
 ORDER BY unit.created_at, unit.id
-LIMIT $3 OFFSET $4
+LIMIT $5
 `
 
 func scanUnreclaimablePage(
@@ -331,11 +396,13 @@ func scanUnreclaimablePage(
 	tx pgx.Tx,
 	ageCutoff time.Time,
 	idleCutoff time.Time,
+	cursorCreatedAt time.Time,
+	cursorID string,
 	limit int,
-	offset int,
 ) ([]unreclaimableCandidate, error) {
 	rows, err := tx.Query(
-		ctx, selectUnreclaimableCandidatesSQL, ageCutoff, idleCutoff, limit, offset,
+		ctx, selectUnreclaimableCandidatesSQL,
+		ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 	)
 	if err != nil {
 		return nil, ErrUnavailable
@@ -347,7 +414,7 @@ func scanUnreclaimablePage(
 		if err := rows.Scan(
 			&candidate.id, &candidate.syncRunID, &candidate.orgID,
 			&candidate.provider, &candidate.datasetKey, &candidate.costClass,
-			&candidate.updatedAt,
+			&candidate.createdAt, &candidate.updatedAt,
 		); err != nil {
 			return nil, ErrUnavailable
 		}

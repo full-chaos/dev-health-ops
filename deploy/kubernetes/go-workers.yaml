@@ -154,7 +154,23 @@ spec:
       containers:
         - name: reconciler
           image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
-          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}, {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}]
+          # CHAOS-4005: the unreclaimable-dispatching sweep reads
+          # EXPECTED_WORKER_GROUPS as the deployment's declaration that no
+          # Celery consumer serves provider units. The exclusion noted above is
+          # about /health/workers FLEET membership -- the reconciler registers
+          # no worker_instances presence and still does not -- so this is a
+          # second, read-only consumer of the same declaration. The ref is
+          # OPTIONAL: without the ConfigMap the var is absent and the sweep
+          # defers, which is the fail-safe.
+          env:
+            - {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}
+            - {name: DEV_HEALTH_SHUTDOWN_TIMEOUT, value: 60s}
+            - name: EXPECTED_WORKER_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: dev-health-go-worker-config
+                  key: EXPECTED_WORKER_GROUPS
+                  optional: true
           envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

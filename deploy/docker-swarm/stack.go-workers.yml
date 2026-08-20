@@ -98,6 +98,13 @@ services:
       <<: *go-worker-env-base
       DEV_HEALTH_SHUTDOWN_TIMEOUT: 60s
       COORDINATOR_DATABASE_URI: "${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}"
+      # CHAOS-4005: read by the reconciler's unreclaimable-dispatching sweep as
+      # the deployment's declaration that no Celery consumer serves provider
+      # units. CHAOS-3942 excludes reconciler/scheduler/stream-* from the
+      # /health/workers FLEET semantics -- they register no worker_instances
+      # presence -- and that stays true; this is a second, read-only consumer
+      # of the same declaration. Unset means the sweep defers.
+      EXPECTED_WORKER_GROUPS: "${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}"
     stop_grace_period: 60s
   go-scheduler:
     <<: *go-worker

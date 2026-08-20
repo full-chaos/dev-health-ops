@@ -1671,3 +1671,68 @@ def test_compose_merge_flips_api_authority_without_losing_base_fields(
     # The merge must ADD the key, not replace the whole service definition.
     assert api["environment"]["CELERY_BROKER_URL"]
     assert "POSTGRES_URI" in api["environment"]
+
+
+def test_unreclaimable_sweep_declaration_reaches_the_reconciler() -> None:
+    """CHAOS-4005: the sweep's Celery-absence declaration must reach the
+    RECONCILER, not just the API.
+
+    The CHAOS-3990 port shipped a safety net that returns a nil stepper when
+    ``EXPECTED_WORKER_GROUPS`` is unset. Production had the variable on the API
+    container and not on ``go-reconciler``, so the sweep was inert in the very
+    deployment it exists to protect -- the same "present in the tree, never
+    executed" failure the port was written to end, reintroduced one layer down.
+
+    CHAOS-3942's own test asserts the API side. This asserts the reconciler
+    side in every overlay, so the pair cannot drift apart again.
+
+    Note the deliberate asymmetry with the fleet semantics: the reconciler is
+    excluded from ``/health/workers`` membership because it registers no
+    ``worker_instances`` presence, and that remains true. This is a second,
+    read-only consumer of the same declaration.
+    """
+    reconciler_compose = _load_yaml(_GO_COMPOSE)["services"]["go-reconciler"]
+    assert (
+        _compose_variable_default(
+            reconciler_compose["environment"]["EXPECTED_WORKER_GROUPS"],
+            "EXPECTED_WORKER_GROUPS",
+        )
+        == _EXPECTED_WORKER_GROUPS_VALUE
+    )
+
+    reconciler_swarm = _load_yaml(_GO_SWARM)["services"]["go-reconciler"]
+    assert (
+        _compose_variable_default(
+            reconciler_swarm["environment"]["EXPECTED_WORKER_GROUPS"],
+            "EXPECTED_WORKER_GROUPS",
+        )
+        == _EXPECTED_WORKER_GROUPS_VALUE
+    )
+
+    # Kubernetes: same OPTIONAL configMapKeyRef shape the API uses, so a
+    # cluster without the go-workers ConfigMap leaves the var absent and the
+    # sweep defers rather than reading an empty string as "no Celery".
+    reconciler = next(
+        document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document["kind"] == "Deployment"
+        and document["metadata"]["name"] == "dev-health-go-reconciler"
+    )
+    container = next(
+        item
+        for item in reconciler["spec"]["template"]["spec"]["containers"]
+        if item["name"] == "reconciler"
+    )
+    env_entry = next(
+        item for item in container["env"] if item["name"] == "EXPECTED_WORKER_GROUPS"
+    )
+    ref = env_entry["valueFrom"]["configMapKeyRef"]
+    assert ref["optional"] is True
+    assert ref["key"] == "EXPECTED_WORKER_GROUPS"
+    assert ref["name"] == "dev-health-go-worker-config"
+
+    # Helm renders it into the reconciler group only, from the same value the
+    # API template reads, so the two can never disagree.
+    go_workers_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text()
+    assert 'eq $group.name "reconciler"' in go_workers_template
+    assert "EXPECTED_WORKER_GROUPS" in go_workers_template

@@ -113,18 +113,22 @@ services:
       LOG_CONNECTIONS: "0"
       LOG_DISCONNECTIONS: "0"
       LOG_POOLER_ERRORS: "1"
+      # Healthcheck-only credential: PGPASSWORD is a libpq env var psql reads
+      # automatically, so it never appears in argv. Dev-only literal,
+      # matching DB_PASSWORD above.
+      PGPASSWORD: postgres
     ports:
       - "6432:6432"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      # CHAOS-3944: pg_isready with no -U/-d probes as OS user "postgres",
-      # which happens to match DB_USER here, but the port would still be
-      # relying on the default (rejection = healthy) semantics otherwise.
-      # Pin the user/db explicitly so a healthy result means the pooler can
-      # actually serve, not just that the port answers.
-      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "postgres", "-d", "postgres"]
+      # CHAOS-3944: pg_isready cannot prove the pooler can authenticate and
+      # serve a query — it reports healthy even on an auth rejection
+      # regardless of username, so pinning -U/-d alone doesn't fix that (see
+      # deploy/docker-compose/compose.production.yml). Run a real query
+      # through the pooler instead.
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6432", "-U", "postgres", "-d", "postgres", "-c", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 3

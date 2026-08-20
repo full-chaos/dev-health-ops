@@ -12,6 +12,7 @@
 # non-dominant shards balanced while isolating that indivisible dominant
 # package under the unchanged 25-minute job budget.
 shards	3
+cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
 internal/externalrecompute	15

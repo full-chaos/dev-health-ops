@@ -75,7 +75,7 @@ func NewTerminalDeliveryRepair(
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
 	return &TerminalDeliveryRepair{
 		begin: queueControlPool.Begin,
-		query: fmt.Sprintf(repairUnhandledRiverDeliverySQL, jobTable),
+		query: fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
 	}, nil
 }
 
@@ -157,7 +157,7 @@ func (repair *TerminalDeliveryRepair) Step(
 // requires the rescue sentinel. Republishing does not collide with the retired
 // job's unique key: the publisher includes the outbox attempt counter in its
 // args and the claim increments it, so each redelivery has distinct args.
-const repairUnhandledRiverDeliverySQL = `
+const repairTerminalRiverDeliverySQL = `
 WITH candidates AS (
 	SELECT outbox.id,
 		CASE

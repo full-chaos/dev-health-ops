@@ -197,36 +197,76 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 		t.Fatalf("rollback left handoffs=%d nextRunAt=%v", handoffs, rolledBackNextRunAt)
 	}
 
+	// CHAOS-3936 changed what replaying the same observed instant means, so
+	// this block now asserts the property that actually needs protecting.
+	//
+	// Before: the base was last_sync_at, which this fixture never advances, so
+	// every replay recomputed the ONE instant already minted and wrote nothing.
+	// This block asserted that no-op by requiring the same occurrence ID back.
+	// That is the freeze itself: the same behaviour that made a failed run pin
+	// its schedule forever also made a replay look idempotent.
+	//
+	// Now the base is the occurrence ledger, so a replay mints the next instant
+	// that is due and absent -- which is how a schedule recovers from a run
+	// that never completed. The invariants that must survive, and that this
+	// block proves against real PostgreSQL, are that catch-up ADVANCES (never
+	// re-mints an instant) and that it TERMINATES (it stops at the first cron
+	// instant in the future rather than running away at a fixed now).
+	//
+	// The ledger is empty here: every handoff above used a coordinator that
+	// writes only public.scheduler_handoffs, and the last of them rolled back.
 	coordinator := NewOccurrenceCoordinator()
+	clearMarker := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+			UPDATE public.scheduled_jobs SET next_run_at = NULL
+			WHERE id = '00000000-0000-4000-8000-000000003039'
+		`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window 1: base is last_sync_at 10:00, so 11:00 is the first due instant.
 	occurrences, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(occurrences) != 1 {
-		t.Fatalf("occurrence handoffs = %d, want 1", len(occurrences))
+	if len(occurrences) != 1 || !occurrences[0].ScheduledFor.Equal(at("2026-01-01T11:00:00Z")) {
+		t.Fatalf("first window occurrences = %#v, want one at 11:00", occurrences)
 	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE public.scheduled_jobs SET next_run_at = NULL
-		WHERE id = '00000000-0000-4000-8000-000000003039'
-	`); err != nil {
-		t.Fatal(err)
-	}
+	clearMarker()
+	// Window 2, same observedAt: the ledger now holds 11:00, so 12:00 is due
+	// and absent. Before the fix this returned 11:00 again and wrote nothing.
 	retried, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(retried) != 1 || retried[0].ID != occurrences[0].ID {
-		t.Fatalf("retried occurrences = %#v, want id %s", retried, occurrences[0].ID)
+	if len(retried) != 1 || !retried[0].ScheduledFor.Equal(at("2026-01-01T12:00:00Z")) {
+		t.Fatalf("second window occurrences = %#v, want one at 12:00", retried)
 	}
-	var occurrenceRows int
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT count(*) FROM public.scheduled_sync_occurrences",
-	).Scan(&occurrenceRows); err != nil {
+	if retried[0].ID == occurrences[0].ID {
+		t.Fatal("catch-up re-minted the instant it had already minted")
+	}
+	clearMarker()
+	// Window 3, same observedAt: the next instant is 13:00, which is in the
+	// future, so catch-up stops. Without this the fix would mint forever at a
+	// fixed now, which is the opposite failure to the one it repairs.
+	settled, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if occurrenceRows != 1 {
-		t.Fatalf("scheduled occurrence rows = %d, want 1", occurrenceRows)
+	if len(settled) != 0 {
+		t.Fatalf("catch-up did not terminate: third window occurrences = %#v", settled)
+	}
+	var occurrenceRows, distinctInstants int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), count(DISTINCT scheduled_for)
+		FROM public.scheduled_sync_occurrences
+	`).Scan(&occurrenceRows, &distinctInstants); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 2 || distinctInstants != 2 {
+		t.Fatalf("scheduled occurrence rows = %d over %d distinct instants, want 2 over 2",
+			occurrenceRows, distinctInstants)
 	}
 }
 

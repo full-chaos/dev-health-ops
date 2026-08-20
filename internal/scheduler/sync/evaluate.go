@@ -80,8 +80,18 @@ func evaluateContext(ctx context.Context, candidate Candidate, observedAt time.T
 	if candidate.LastSyncAt != nil {
 		base = *candidate.LastSyncAt
 	}
-	if candidate.LastOccurrenceAt != nil && candidate.LastOccurrenceAt.After(base) {
-		base = *candidate.LastOccurrenceAt
+	if ledger := candidate.LastOccurrenceAt; ledger != nil {
+		// Clamped to observedAt deliberately. A ledger row dated in the FUTURE
+		// must not advance the base: it would push the next occurrence past now
+		// and make the config silently not-due until real time caught up --
+		// the same invisible freeze this change exists to remove, wearing a
+		// different hat. The scheduler only ever mints instants at or before
+		// observedAt, so the clamp is a no-op in normal operation; it is a
+		// guard against clock skew between replicas and against a hand-edited
+		// or restored row.
+		if instant := ledger.UTC(); instant.After(base) && !instant.After(observedAt) {
+			base = instant
+		}
 	}
 	result.Base = base.UTC()
 	next, fallback, err := nextOccurrenceContext(ctx, cronExpr, result.Base, result.Timezone)

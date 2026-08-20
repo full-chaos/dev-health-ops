@@ -246,3 +246,33 @@ func TestLoopNamesAndCountsWindowsThatProduceNoNewOccurrence(t *testing.T) {
 		}
 	}
 }
+
+// A ledger row dated after observedAt must not advance the base. The scheduler
+// never mints a future instant itself, so such a row means clock skew between
+// replicas or a hand-edited/restored row -- and letting it through would push
+// the next occurrence past now and make the config silently not-due until real
+// time caught up. That is the CHAOS-3936 freeze again in a different hat, so
+// the fix must not introduce it while removing the original.
+func TestFutureDatedLedgerRowCannotSuppressADueOccurrence(t *testing.T) {
+	observedAt := at("2026-08-19T12:00:00Z")
+	lastSync := at("2026-08-19T10:00:00Z")
+	future := at("2026-08-19T20:00:00Z")
+	evaluation := Evaluate(Candidate{
+		ConfigID:         "config-skewed",
+		Active:           true,
+		ScheduleCron:     "0 * * * *",
+		CreatedAt:        at("2026-08-01T00:00:00Z"),
+		LastSyncAt:       &lastSync,
+		LastOccurrenceAt: &future,
+	}, observedAt)
+	if !evaluation.Due || evaluation.Decision != DecisionScheduleDue {
+		t.Fatalf("a future-dated ledger row froze the schedule: due=%v decision=%s base=%s",
+			evaluation.Due, evaluation.Decision, evaluation.Base)
+	}
+	if !evaluation.Base.Equal(lastSync) {
+		t.Fatalf("base = %s, want the last completed sync %s", evaluation.Base, lastSync)
+	}
+	if evaluation.NextOccurrence == nil || !evaluation.NextOccurrence.Equal(at("2026-08-19T11:00:00Z")) {
+		t.Fatalf("next occurrence = %v, want 11:00", evaluation.NextOccurrence)
+	}
+}

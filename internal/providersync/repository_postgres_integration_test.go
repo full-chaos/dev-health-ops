@@ -693,3 +693,154 @@ const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
 		REFERENCES public.sync_run_units(org_id, id)
 		ON DELETE CASCADE
 )`
+
+// workItemsFamilyUnitID is the CHAOS-3940 fixture unit: a healthy GitHub
+// work-items claim carrying the complete five-dataset family flag set.
+const workItemsFamilyUnitID = "66666666-6666-4666-8666-666666666666"
+
+// TestPostgresCompleteLandsGitHubWorkItemsFamilyWatermarks pins CHAOS-3940 at
+// the effect boundary.
+//
+// github/work-items produced zero successful units after the Go cutover. Every
+// one committed all sixteen ClickHouse destinations and then failed, so the
+// ledger reported "committed" while the unit never terminalized and not one of
+// the five family watermarks ever advanced past the cutover instant. A test
+// that only asserted Complete was CALLED would have passed throughout.
+//
+// This drives the two real applications of applyGitHubWorkItemsIncompletePolicy
+// in their production order -- CompleteRouteExecutor.Execute, then
+// PostgresRepository.Complete -- against the real completion SQL, and asserts
+// the observable effect: the unit is terminal and all five alias watermarks
+// carry the window's close.
+func TestPostgresCompleteLandsGitHubWorkItemsFamilyWatermarks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
+VALUES ($1, 'org-acme', $2, 'work-items', '{}'::jsonb)`,
+		uuid.NewString(), firstIntegrationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+    id, org_id, sync_run_id, integration_id, source_id, provider,
+    dataset_key, cost_class, mode, since_at, before_at, status,
+    processor_flags, updated_at
+) VALUES (
+    $1, 'org-acme', $2, $3, $4, 'github', 'work-items', 'medium',
+    'incremental', '2026-08-19T20:00:00Z', '2026-08-20T01:00:00Z',
+    'dispatching',
+    '{"sync_prs":true,
+      "family_dataset_work_items":true,
+      "family_dataset_work_item_labels":true,
+      "family_dataset_work_item_history":true,
+      "family_dataset_work_item_comments":true,
+      "family_dataset_work_item_projects":true}'::jsonb,
+    NOW()
+)`, workItemsFamilyUnitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, time.August, 20, 1, 1, 40, 0, time.UTC)
+	claim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: workItemsFamilyUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: startedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly what GitHubWorkItemsRouteHandler.Collect emits when every optional
+	// enrichment phase succeeded, then normalized once by the executor.
+	windowClose := time.Date(2026, time.August, 20, 1, 0, 0, 0, time.UTC)
+	routeResult, routeWatermark, err := applyGitHubWorkItemsIncompletePolicy(
+		claim.Provider, claim.Dataset,
+		map[string]any{
+			"records":                          48,
+			githubWorkItemsIncompleteResultKey: []GitHubWorkItemsIncomplete{},
+		},
+		&windowClose,
+	)
+	if err != nil {
+		t.Fatalf("executor-side policy rejected a healthy batch: %v", err)
+	}
+
+	if err := repository.Complete(
+		ctx, claim, routeResult, routeWatermark, startedAt,
+		startedAt.Add(2*time.Second),
+	); err != nil {
+		t.Fatalf("Complete refused a healthy GitHub work-items unit: %v", err)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM public.sync_run_units WHERE id = $1`,
+		workItemsFamilyUnitID,
+	).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "success" {
+		t.Fatalf("unit status=%q want success", status)
+	}
+
+	// The effect that matters: every alias watermark advanced to the window
+	// close. While the bug stood these five rows did not exist at all, so the
+	// planner re-fetched the same window forever and coverage saw no gap.
+	rows, err := pool.Query(ctx, `
+SELECT dataset_key, last_synced_at FROM public.sync_watermarks
+WHERE org_id = 'org-acme' AND source_id = $1 ORDER BY dataset_key`,
+		claim.SourceExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	landed := map[string]time.Time{}
+	for rows.Next() {
+		var datasetKey string
+		var syncedAt time.Time
+		if err := rows.Scan(&datasetKey, &syncedAt); err != nil {
+			t.Fatal(err)
+		}
+		landed[datasetKey] = syncedAt.UTC()
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, datasetKey := range []string{
+		"work-items", "work-item-labels", "work-item-history",
+		"work-item-comments", "work-item-projects",
+	} {
+		got, present := landed[datasetKey]
+		if !present {
+			t.Fatalf("watermark for %q never landed; landed=%v", datasetKey, landed)
+		}
+		if !got.Equal(windowClose) {
+			t.Fatalf("watermark %q=%v want %v", datasetKey, got, windowClose)
+		}
+	}
+	if len(landed) != 5 {
+		t.Fatalf("unexpected watermark set: %v", landed)
+	}
+}

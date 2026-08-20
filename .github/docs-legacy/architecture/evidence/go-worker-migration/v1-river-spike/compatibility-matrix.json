@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "evidence_version": "v1-river-spike",
+  "recorded_on": "2026-07-21",
+  "evidence_scope": "local_compatibility_harness",
+  "production_evidence": false,
+  "harness_results": "local-harness-results.json",
+  "candidate_pins": {
+    "go": "1.25.9",
+    "river": "0.40.0",
+    "riverpgxv5": "0.40.0",
+    "river_n_minus_1": "0.39.0",
+    "riverpgxv5_n_minus_1": "0.39.0",
+    "pgx": "5.10.0",
+    "pgx_n_minus_1": "5.9.2",
+    "clickhouse_go": "2.47.0",
+    "valkey_go": "1.0.76",
+    "otel_go": "1.44.0",
+    "testcontainers_go": "0.43.0",
+    "python": "3.13.14",
+    "riverqueue_python": "0.7.0",
+    "sqlalchemy": "2.0.49",
+    "asyncpg": "0.31.0"
+  },
+  "container_pins": {
+    "postgres": {
+      "image": "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+      "digest": "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    },
+    "pgbouncer": {
+      "version": "1.25.2",
+      "image": "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+      "digest": "sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
+    }
+  },
+  "python_connection_contract": {
+    "direct_postgresql": {
+      "sqlalchemy_pool": "default_async_engine"
+    },
+    "pgbouncer_transaction_mode": {
+      "sqlalchemy_pool": "NullPool",
+      "statement_caches": "disabled",
+      "prepared_statement_names": "unique_per_statement"
+    }
+  },
+  "checks": [
+    {
+      "id": "python_standard_commit_direct",
+      "result": "pass",
+      "assertion": "A committed domain transaction creates exactly one River job through direct PostgreSQL."
+    },
+    {
+      "id": "python_standard_rollback_direct",
+      "result": "pass",
+      "assertion": "A rolled-back domain transaction creates no River job through direct PostgreSQL."
+    },
+    {
+      "id": "python_options_direct",
+      "result": "pass",
+      "assertion": "Queue, priority, max attempts, and scheduled state/availability are preserved through direct PostgreSQL."
+    },
+    {
+      "id": "python_standard_commit_pgbouncer_transaction",
+      "result": "pass",
+      "assertion": "A committed domain transaction creates exactly one River job through PgBouncer transaction mode."
+    },
+    {
+      "id": "python_standard_rollback_pgbouncer_transaction",
+      "result": "pass",
+      "assertion": "A rolled-back domain transaction creates no River job through PgBouncer transaction mode."
+    },
+    {
+      "id": "python_options_pgbouncer_transaction",
+      "result": "pass",
+      "assertion": "Queue, priority, max attempts, and scheduled state/availability are preserved through PgBouncer transaction mode."
+    },
+    {
+      "id": "python_unique_insert_river_0_40_schema",
+      "result": "fail",
+      "reason_code": "river_0_40_unique_index_contract_missing",
+      "sqlstate": "42P10",
+      "assertion": "riverqueue 0.7.0 unique insertion is incompatible with the River 0.40.0 migration-006 index shape.",
+      "cause": "The client targets ON CONFLICT(kind, unique_key), while migration 006 removes the qualifying index and introduces the unique_states design."
+    },
+    {
+      "id": "go_worker_direct_postgresql",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "A Go River 0.40.0 worker inserts, claims, executes, retries, cancels, schedules, and finalizes through direct PostgreSQL."
+    },
+    {
+      "id": "go_worker_pgbouncer_poll_only_execution",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "A Go River 0.40.0 worker inserts, claims, executes, retries, schedules, and finalizes through transaction-mode PgBouncer with PollOnly."
+    },
+    {
+      "id": "go_worker_pgbouncer_poll_only_running_cancel",
+      "gate": "phase_0_architecture",
+      "result": "fail",
+      "assertion": "Neither cross-client nor same-client JobCancel propagated to an already-running worker context with riverpgxv5 0.40.0 and PollOnly.",
+      "cause": "PollOnly suppresses the listener, while the local no-listener control helper returns early for the listener-capable riverpgxv5 driver.",
+      "required_resolution": "Provision direct PostgreSQL queue control, separately validate a session-mode endpoint, add and verify a separate cancellation control plane, or reopen the broker decision."
+    },
+    {
+      "id": "river_0_40_0_39_rolling_compatibility",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "River 0.39 migrates and works on schema 6; after River 0.40 upgrades to schema 7, each version inserts the v1 contract and the other version consumes it."
+    },
+    {
+      "id": "python_payload_consumed_by_go",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "River 0.40 Go workers consume committed Python fixtures through direct and transaction-mode PollOnly profiles."
+    },
+    {
+      "id": "go_payload_validated_by_python_and_n_minus_1",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "Python and River 0.39 strict decoders validate the deterministic Go v1 fixture."
+    },
+    {
+      "id": "worker_sigkill_recovery_direct",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "A direct-mode worker killed by SIGKILL is rescued and completes as attempt 2 with one recorded first-attempt error."
+    },
+    {
+      "id": "worker_sigkill_recovery_poll_only",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "A PollOnly worker killed by SIGKILL is rescued and completes as attempt 2 with one recorded first-attempt error."
+    },
+    {
+      "id": "outbox_crash_reconciliation",
+      "gate": "phase_1_foundation",
+      "result": "pending",
+      "assertion": "Every claim/insert/mark crash window converges to one River job and one delivered outbox row."
+    },
+    {
+      "id": "poll_only_latency_and_postgres_load",
+      "gate": "phase_0_compatibility",
+      "result": "pass",
+      "assertion": "At a 250 ms fetch interval, the 20-sample PollOnly queue-start p95 stays within the 600 ms compatibility limit; backend and pool connection deltas remain within six with zero cancelled acquires. Exact measurements are in the generated harness result."
+    }
+  ],
+  "decisions": {
+    "go_river_0_40_direct_postgresql": "go",
+    "go_river_0_40_session_mode": "pending_equivalent_compatibility_matrix",
+    "go_river_0_40_poll_only_as_sole_queue_control": "no_go_running_cancel_not_propagated",
+    "riverqueue_python_production_dependency": "no_go",
+    "python_to_go_enqueue_bridge": "generic_worker_job_outbox",
+    "phase_1_foundation": "conditional_go_requires_direct_postgresql_or_separately_verified_session_or_cancel_plane",
+    "production_canary": "blocked_until_v0_production_baseline_is_recorded"
+  },
+  "redaction": {
+    "contains_raw_logs": false,
+    "contains_credentials_or_dsns": false,
+    "contains_job_payloads": false,
+    "contains_tenant_identifiers": false
+  }
+}

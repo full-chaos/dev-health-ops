@@ -1,0 +1,155 @@
+"""
+Integration example showing how to use connectors with existing storage system.
+
+This example demonstrates how to retrieve data from GitHub and
+store it in the existing database using the storage system.
+"""
+
+import asyncio
+import os
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dev_health_ops.connectors import GitHubConnector  # noqa: E402
+from dev_health_ops.models.git import GitCommit, GitCommitStat, Repo  # noqa: E402
+from dev_health_ops.storage import SQLAlchemyStore  # noqa: E402
+
+
+async def github_to_storage_example():
+    """Example: Retrieve GitHub data and store in database."""
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        print("GITHUB_TOKEN not set, skipping GitHub example")
+        return
+
+    # Database connection
+    db_conn = os.getenv("DATABASE_URI", "sqlite+aiosqlite:///./test_integration.db")
+
+    print("=== GitHub to Storage Integration ===\n")
+
+    # Initialize connector
+    with GitHubConnector(token=token) as connector:
+        try:
+            print("Fetching repositories...")
+            repos = list(connector.github.get_user().get_repos()[:1])
+
+            if not repos:
+                print("No repositories found")
+                return
+
+            repo: Any = repos[0]
+            print(f"Using repository: {repo.full_name}\n")
+
+            # Store repository in database
+            async with SQLAlchemyStore(db_conn) as store:
+                # Create Repo object for database
+                db_repo = Repo(
+                    repo_path=None,  # Not a local repo
+                    repo=repo.full_name,
+                    settings={"source": "github", "repo_id": repo.id},
+                    tags=["github", repo.language] if repo.language else ["github"],
+                )
+
+                print(f"Storing repository: {db_repo.repo}")
+                await store.insert_repo(db_repo)
+                print(f"Repository stored with ID: {db_repo.id}\n")
+
+                # Get and store commits
+                print("Fetching commits...")
+                _, repo_name = repo.full_name.split("/")
+
+                # For demo purposes, we'll use PyGithub to get commits
+                gh_repo = connector.github.get_repo(repo.full_name)
+                commits: list[Any] = list(
+                    gh_repo.get_commits()[:5]
+                )  # Get first 5 commits
+
+                commit_objects = []
+                for commit in commits:
+                    git_commit = GitCommit(
+                        repo_id=db_repo.id,
+                        hash=commit.sha,
+                        message=commit.commit.message,
+                        author_name=(
+                            commit.commit.author.name
+                            if commit.commit.author
+                            else "Unknown"
+                        ),
+                        author_email=(
+                            commit.commit.author.email if commit.commit.author else ""
+                        ),
+                        author_when=(
+                            commit.commit.author.date
+                            if commit.commit.author
+                            else datetime.now(timezone.utc)
+                        ),
+                        committer_name=(
+                            commit.commit.committer.name
+                            if commit.commit.committer
+                            else "Unknown"
+                        ),
+                        committer_email=(
+                            commit.commit.committer.email
+                            if commit.commit.committer
+                            else ""
+                        ),
+                        committer_when=(
+                            commit.commit.committer.date
+                            if commit.commit.committer
+                            else datetime.now(timezone.utc)
+                        ),
+                        parents=len(commit.parents),
+                    )
+                    commit_objects.append(git_commit)
+                    # Extract first line of commit message
+                    first_line = commit.commit.message.split("\n")[0][:50]
+                    print(f"  - {commit.sha[:8]}: {first_line}")
+
+                await store.insert_git_commit_data(commit_objects)
+                print(f"\nStored {len(commit_objects)} commits")
+
+                # Get and store commit stats
+                print("\nFetching commit stats...")
+                stats_objects = []
+                for commit in commits[:3]:  # Just first 3 for demo
+                    for file in commit.files:
+                        stat = GitCommitStat(
+                            repo_id=db_repo.id,
+                            commit_hash=commit.sha,
+                            file_path=file.filename,
+                            additions=file.additions,
+                            deletions=file.deletions,
+                            old_file_mode="unknown",
+                            new_file_mode="unknown",
+                        )
+                        stats_objects.append(stat)
+
+                await store.insert_git_commit_stats(stats_objects)
+                print(f"Stored {len(stats_objects)} commit stats")
+
+        except Exception as e:
+            print(f"Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+
+async def main():
+    """Main function."""
+    print("Integration Examples: Connectors + Storage\n")
+    print("=" * 60)
+
+    # Run GitHub example
+    await github_to_storage_example()
+
+    print("\n" + "=" * 60)
+    print("Integration examples completed!")
+    print("\nNote: Set GITHUB_TOKEN environment variable to run examples.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

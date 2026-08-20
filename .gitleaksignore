@@ -34,3 +34,23 @@ f3b6feeba:tests/test_ingest_api.py:generic-api-key:71
 # forms are required for gitleaks matcher compatibility.
 e586dede374a01e80414f7960ab72fdd5ee93f41:tests/api/dev/test_production_runtime.py:generic-api-key:113
 e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
+
+# Byte-identical restore of the deleted docs-legacy corpus (recovered to
+# .github/docs-legacy/, not docs/, so nothing enters the published site).
+# Same placeholders already vetted above under the old docs/ path and the
+# now-squashed a2c0fc1ce commit: brief-2691's curl examples use the literal
+# placeholder "Bearer dev-token", and brief-2695's live-verification
+# snippet uses idempotency_key="k1" fixtures. Both full-SHA and short-id
+# fingerprint forms are listed per the matcher-compatibility note above.
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:978
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1004
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1013
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1018
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1025
+50d55194a5c2f7818f2231b35896472d2cac1518:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1032
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:978
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1004
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2691-contract.md:curl-auth-header:1013
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1018
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1025
+50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1032

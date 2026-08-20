@@ -6,6 +6,7 @@ import (
 
 	"github.com/riverqueue/river"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -48,4 +49,52 @@ func TestCoordinatorSpanEndsEvenWhenTheBridgePanics(t *testing.T) {
 	if len(spans) != 1 {
 		t.Fatalf("expected the span to be ended and exported despite the panic, got %d spans", len(spans))
 	}
+}
+
+// TestSpanForCoordinatorJobExtractsTraceParent does not call t.Parallel() for
+// the same global-state reason as TestCoordinatorSpanEndsEvenWhenTheBridgePanics.
+func TestSpanForCoordinatorJobExtractsTraceParent(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	t.Run("with trace_parent, the span gets a remote parent from it", func(t *testing.T) {
+		exporter.Reset()
+		_, span := spanForCoordinatorJob(context.Background(), "dispatch_sync_run", testRun,
+			"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+		span.End()
+
+		spans := exporter.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected 1 exported span, got %d", len(spans))
+		}
+		got := spans[0]
+		if traceID := got.SpanContext.TraceID().String(); traceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+			t.Fatalf("trace id = %s, want the trace id carried by traceParent", traceID)
+		}
+		if !got.Parent.IsRemote() {
+			t.Fatal("expected the span's parent to be remote, extracted from traceParent")
+		}
+	})
+
+	t.Run("without trace_parent, the span is a root span", func(t *testing.T) {
+		exporter.Reset()
+		_, span := spanForCoordinatorJob(context.Background(), "dispatch_sync_run", testRun, "")
+		span.End()
+
+		spans := exporter.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected 1 exported span, got %d", len(spans))
+		}
+		if spans[0].Parent.IsValid() {
+			t.Fatal("expected a root span (no parent) when traceParent is empty")
+		}
+	})
 }

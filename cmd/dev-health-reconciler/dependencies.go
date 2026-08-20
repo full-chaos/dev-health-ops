@@ -309,12 +309,24 @@ func syncDispatchReference(
 		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
 	}
 	var reference syncdispatchruntime.DomainReference
+	var traceParent *string
+	// The join reads sync_runs.trace_parent (CHAOS-3996): the W3C traceparent
+	// the Python planner captured once when this run was planned, so every
+	// dispatch across the run's lifecycle -- however many
+	// dispatch/finalize/post_sync/reference_discovery cycles it takes --
+	// parents its span from the same trace instead of each claim resolving
+	// its own. NULL for a run planned before that column existed or with
+	// tracing disabled; traceParent stays nil and the caller gets a root span.
 	err := pool.QueryRow(ctx, `
-SELECT org_id::text, sync_run_id::text
-FROM public.sync_dispatch_outbox
-WHERE id = $1::uuid AND kind = $2`, outboxID, kind).Scan(&reference.OrganizationID, &reference.SyncRunID)
+SELECT sdo.org_id::text, sdo.sync_run_id::text, sr.trace_parent
+FROM public.sync_dispatch_outbox sdo
+JOIN public.sync_runs sr ON sr.id = sdo.sync_run_id
+WHERE sdo.id = $1::uuid AND sdo.kind = $2`, outboxID, kind).Scan(&reference.OrganizationID, &reference.SyncRunID, &traceParent)
 	if err != nil {
 		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	if traceParent != nil {
+		reference.TraceParent = *traceParent
 	}
 	if _, orgErr := uuid.Parse(reference.OrganizationID); orgErr != nil {
 		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable

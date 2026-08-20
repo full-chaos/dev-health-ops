@@ -134,6 +134,7 @@ from dev_health_ops.sync.watermarks import (
     _watermark_overlap_seconds,
     get_watermark_with_overlap,
 )
+from dev_health_ops.tracing import current_trace_parent
 from dev_health_ops.workers.provider_family_contract import (
     atomic_provider_family_route_enabled,
 )
@@ -328,6 +329,11 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         credential_id=credential_id,
         credential_fingerprint=credential_fp,
         auth_source=auth_source,
+        # CHAOS-3996: captured once, here, so every coordinator dispatch this
+        # run produces can join back to the same trace regardless of how long
+        # the run takes or how many dispatch/finalize/post_sync/
+        # reference_discovery cycles it goes through.
+        trace_parent=current_trace_parent(),
     )
     session.add(sync_run)
     session.flush()

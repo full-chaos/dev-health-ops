@@ -183,6 +183,58 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert discovery.org_id == ORG_ID
 
 
+def test_plan_sync_run_stamps_the_active_span_as_trace_parent(db_session):
+    """CHAOS-3996: plan_sync_run captures the active span's W3C traceparent
+    onto the SyncRun row exactly once, at plan time, so every dispatch across
+    the run's lifecycle -- however many coordinator hops it takes -- parents
+    its span from the same trace as the Python provider-unit work. Uses a
+    bare TracerProvider directly (no global registration) the same way
+    tests/workers/test_worker_job_outbox.py's sibling test does: the context
+    API tracks the current span regardless of which provider produced it, so
+    current_trace_parent()'s propagate.inject() sees it either way."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    tracer = TracerProvider().get_tracer("test-sync-planner")
+    with tracer.start_as_current_span("plan-sync-run-under-test") as span:
+        expected_trace_id = format(span.get_span_context().trace_id, "032x")
+        plan = plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+            ),
+        )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert sync_run.trace_parent is not None
+    assert expected_trace_id in sync_run.trace_parent
+
+
+def test_plan_sync_run_leaves_trace_parent_null_without_an_active_span(db_session):
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert sync_run.trace_parent is None
+
+
 def test_plan_sync_run_rejects_plan_over_unit_cap(db_session, monkeypatch):
     """An oversized plan is rejected BEFORE anything is persisted.
 

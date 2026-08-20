@@ -10,26 +10,31 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed")
 
-// coordinatorTracerName scopes this package's spans. Unlike
-// internal/jobruntime.Adapter's job.execute spans, these carry no
-// trace-context propagation yet -- these four kinds have no JSON payload
-// field to carry a traceparent in (TransportArgs is entirely typed fields
-// resolved from a DB lookup, not decoded arguments), so there is nothing to
-// extract a parent from. CHAOS-3996 tracks adding that. Until then, kind and
-// sync_run_id alone give Tempo visibility into the coordinator loop that was
-// completely dark during the CHAOS-3990 guard deadlock (CHAOS-3993).
+// coordinatorTracerName scopes this package's spans.
 //
 // otel.Tracer is looked up fresh on every call rather than cached in a
 // package var: see internal/jobruntime.jobTracerName for why a cached handle
 // silently stays bound to the first TracerProvider it ever saw.
 const coordinatorTracerName = "github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 
-func spanForCoordinatorJob(ctx context.Context, kind, syncRunID string) (context.Context, oteltrace.Span) {
+// spanForCoordinatorJob opens the span for one coordinator dispatch, parented
+// from traceParent when the run planner captured one (CHAOS-3996) -- resolved
+// from sync_runs by the same database lookup that resolves the domain
+// reference itself, since TransportArgs carries only typed fields and has no
+// arbitrary JSON payload to decode a parent out of the way
+// internal/jobruntime.startJobSpan does for the outbox path. An empty
+// traceParent (a run planned before CHAOS-3996, or with tracing disabled)
+// produces a root span, same as before this ticket.
+func spanForCoordinatorJob(ctx context.Context, kind, syncRunID, traceParent string) (context.Context, oteltrace.Span) {
+	if traceParent != "" {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": traceParent})
+	}
 	return otel.Tracer(coordinatorTracerName).Start(ctx, "dev_health.sync_dispatch."+kind, oteltrace.WithAttributes(
 		attribute.String("dev_health.job.kind", kind),
 		attribute.String("dev_health.sync_run_id", syncRunID),
@@ -108,7 +113,7 @@ func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchS
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	// A deferred finish (not a direct call after Dispatch returns) so a panic
 	// from worker.bridge still ends and exports the span before the panic
 	// continues propagating to River's own panic-to-failure handling; this
@@ -127,7 +132,7 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	defer func() { finishCoordinatorSpan(span, err) }()
 	err = worker.bridge.Finalize(ctx, job.Args)
 	return err
@@ -142,7 +147,7 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	defer func() { finishCoordinatorSpan(span, err) }()
 	err = worker.service.Fanout(ctx, job.Args)
 	return err
@@ -165,7 +170,10 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 	if err := job.Args.valid(); err != nil {
 		return err
 	}
-	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID)
+	// TeamAutoimportJobArgs does not embed TransportArgs (it is the generic
+	// worker-outbox envelope, not a coordinator TransportArgs kind), so there
+	// is no TraceParent field to propagate here -- out of this ticket's scope.
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	defer func() { finishCoordinatorSpan(span, err) }()
 	err = worker.bridge.TeamAutoImport(ctx, DomainReference{
 		OrganizationID: job.Args.OrgID,
@@ -178,7 +186,7 @@ func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	defer func() { finishCoordinatorSpan(span, err) }()
 	err = worker.bridge.Discover(ctx, job.Args)
 	return err

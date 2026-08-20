@@ -204,6 +204,14 @@ class SyncRun(Base):
     credential_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
     credential_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     auth_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Root W3C traceparent captured once at plan time (CHAOS-3996), so every
+    # coordinator dispatch across this run's lifecycle -- resolved from a
+    # database lookup, not decoded River arguments -- can join through
+    # sync_dispatch_outbox.sync_run_id and parent its span from the same
+    # trace the Go outbox-relayed provider-unit work already joins via
+    # jobcontract.Envelope.trace_parent (CHAOS-3993). NULL for a run planned
+    # before this column existed, or while tracing was disabled.
+    trace_parent: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

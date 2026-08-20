@@ -317,3 +317,60 @@ func newRecoveryCountingPipeline(
 		DefaultMutationPipelineConfig(),
 	)
 }
+
+// TestMutationPipelineReportsRecoveriesWhenALaterStageFails closes the gap an
+// adversarial review found in the first attempt at this guard. Counting was
+// moved ahead of the observer's error path but NOT ahead of the materializer's
+// or the kernel's, both of which still returned a zero Observation -- so a
+// transient database error in either one silently discarded reclaims that the
+// repair had already committed, which is exactly the under-report that would
+// hold a cycling delivery below its alert threshold.
+func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
+	sentinel := errors.New("stage unavailable")
+	for name, stages := range map[string]struct{ failMaterializer, failKernel bool }{
+		"materializer fails": {failMaterializer: true},
+		"kernel fails":       {failKernel: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pipeline, err := NewMutationPipeline(
+				pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+					return LeaseRepairResult{}, nil
+				}),
+				pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+					return TerminalDeliveryRepairResult{Recovered: 4, ExhaustedRecovered: 4}, nil
+				}),
+				pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+					if stages.failMaterializer {
+						return MaterializerResult{}, sentinel
+					}
+					return MaterializerResult{}, nil
+				}),
+				pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+					if stages.failKernel {
+						return KernelResult{}, sentinel
+					}
+					return KernelResult{}, nil
+				}),
+				pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+					return Observation{CandidateDigest: "sha256:result"}, nil
+				}),
+				AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+				PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+				DefaultMutationPipelineConfig(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("err = %v, want the failing stage's error", err)
+			}
+			if observation.ExhaustedDeliveriesRecovered != 4 {
+				t.Fatalf(
+					"ExhaustedDeliveriesRecovered = %d, want 4: the repair already committed these reclaims",
+					observation.ExhaustedDeliveriesRecovered,
+				)
+			}
+		})
+	}
+}

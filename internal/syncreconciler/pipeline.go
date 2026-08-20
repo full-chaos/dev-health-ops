@@ -133,7 +133,17 @@ func (pipeline *MutationPipeline) Step(
 	// quietly inflating the recovery metric operators alert on.
 	if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
 		terminal.Recovered > limit {
+		// The count itself is untrustworthy here, so it is the one case that
+		// deliberately reports nothing rather than a number it cannot stand behind.
 		return Observation{}, ErrUnavailable
+	}
+	// The repair commits its own transaction before anything below runs, so its
+	// recoveries are already durable no matter how this step ends. Every return
+	// from here on carries the count: an observation reporting zero recoveries
+	// after rows were in fact reclaimed would let a cycling delivery stay under
+	// its own alert threshold, which is the failure the counter exists to catch.
+	recovered := Observation{
+		ExhaustedDeliveriesRecovered: int64(terminal.ExhaustedRecovered),
 	}
 	if _, err := pipeline.materializer.Step(
 		ctx,
@@ -141,7 +151,7 @@ func (pipeline *MutationPipeline) Step(
 		now.Add(-pipeline.config.StaleDispatchAge),
 		limit,
 	); err != nil {
-		return Observation{}, err
+		return recovered, err
 	}
 	if _, err := pipeline.kernel.Step(
 		ctx,
@@ -151,13 +161,9 @@ func (pipeline *MutationPipeline) Step(
 		pipeline.publish,
 		pipeline.postSync,
 	); err != nil {
-		return Observation{}, err
+		return recovered, err
 	}
-	// The repair commits its own transaction, so its recoveries are durable
-	// even when a later stage fails. Stamp the count before returning either
-	// way: an observation that reports zero recoveries after rows were in fact
-	// reclaimed would let a cycling run stay under the alert threshold.
 	observation, err := pipeline.observer.Step(ctx, now, limit)
-	observation.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
+	observation.ExhaustedDeliveriesRecovered = recovered.ExhaustedDeliveriesRecovered
 	return observation, err
 }

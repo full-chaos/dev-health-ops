@@ -249,10 +249,20 @@ def current_trace_parent() -> str | None:
     active span -- tracing disabled, or no request/task span in progress --
     the propagator writes nothing and this returns None, the same as a row
     that predates this field.
+
+    Exactly like Init()'s broad except clause, any failure here -- a bad
+    OTEL_PROPAGATORS value, or anything else the propagator machinery can
+    raise -- is caught and logged as a warning rather than propagated: every
+    caller of this function is on a path (job enqueue, sync-run planning)
+    that must keep working even when tracing itself is broken.
     """
 
-    from opentelemetry.propagate import inject
+    try:
+        from opentelemetry.propagate import inject
 
-    carrier: dict[str, str] = {}
-    inject(carrier)
-    return carrier.get("traceparent")
+        carrier: dict[str, str] = {}
+        inject(carrier)
+        return carrier.get("traceparent")
+    except Exception as exc:
+        logger.warning("failed to capture the active trace parent: %s", exc)
+        return None

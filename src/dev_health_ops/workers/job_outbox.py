@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -83,7 +84,7 @@ def enqueue_worker_job(
     existing = _find_existing(session, idempotency_key)
     if existing is not None:
         return _verify_existing(
-            existing, payload.KIND, envelope.contract_version, payload_hash
+            existing, payload.KIND, envelope.contract_version, payload_hash, args
         )
 
     row = WorkerJobOutbox(
@@ -116,7 +117,7 @@ def enqueue_worker_job(
         if existing is None:
             raise OutboxEnqueueError("worker job enqueue conflict") from None
         return _verify_existing(
-            existing, payload.KIND, envelope.contract_version, payload_hash
+            existing, payload.KIND, envelope.contract_version, payload_hash, args
         )
     return row
 
@@ -143,13 +144,25 @@ def _find_existing(session: Session, dedupe_key: str) -> WorkerJobOutbox | None:
 
 
 def _verify_existing(
-    row: WorkerJobOutbox, kind: str, version: int, payload_hash: str
+    row: WorkerJobOutbox,
+    kind: str,
+    version: int,
+    payload_hash: str,
+    args: dict[str, Any],
 ) -> WorkerJobOutbox:
-    if (
-        row.job_kind != kind
-        or row.contract_version != version
-        or row.payload_hash != payload_hash
-    ):
+    if row.job_kind != kind or row.contract_version != version:
+        raise OutboxEnqueueError("dedupe key conflicts with an existing dispatch")
+    if row.payload_hash == payload_hash:
+        return row
+    # payload_hash covers trace_parent (it must, to match what Go actually
+    # relays: internal/joboutbox's terminal-delivery repair matches on it).
+    # But trace_parent is capture-time metadata, not part of a job's logical
+    # identity -- a retry of the same idempotency key from a new
+    # request/task span still has a NEW active span, so a different
+    # trace_parent alone must not read as a conflicting dispatch.
+    if {k: v for k, v in row.args.items() if k != "trace_parent"} != {
+        k: v for k, v in args.items() if k != "trace_parent"
+    }:
         raise OutboxEnqueueError("dedupe key conflicts with an existing dispatch")
     return row
 

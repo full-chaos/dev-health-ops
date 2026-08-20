@@ -297,6 +297,7 @@ func buildSyncCoordinatorWorker(
 		remainingPostSyncWriter{store: remainingStore, publisher: remainingPublisher},
 		workGraphPostSyncWriter{writer: workGraphWriter},
 		teamAutoimportPostSyncWriter{producer: producer, registry: registry},
+		logger,
 	)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable

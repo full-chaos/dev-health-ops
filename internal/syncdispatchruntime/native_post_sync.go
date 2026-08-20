@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -51,22 +52,30 @@ type NativePostSyncService struct {
 	remaining  RemainingPostSyncWriter
 	workGraph  WorkGraphInvestmentPostSyncWriter
 	teamImport TeamAutoimportPostSyncWriter
+	logger     *slog.Logger
 	now        func() time.Time
 }
 
+// NewNativePostSyncService constructs the fanout. logger receives the
+// best-effort team-autoimport failures Fanout deliberately does not propagate;
+// a nil logger falls back to slog.Default() so the swallow is never silent.
 func NewNativePostSyncService(
 	pool *pgxpool.Pool,
 	daily DailyPostSyncWriter,
 	remaining RemainingPostSyncWriter,
 	workGraph WorkGraphInvestmentPostSyncWriter,
 	teamImport TeamAutoimportPostSyncWriter,
+	logger *slog.Logger,
 ) (*NativePostSyncService, error) {
 	if pool == nil || daily == nil || remaining == nil || workGraph == nil || teamImport == nil {
 		return nil, ErrPostSyncUnavailable
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &NativePostSyncService{
 		pool: pool, daily: daily, remaining: remaining, workGraph: workGraph,
-		teamImport: teamImport, now: time.Now,
+		teamImport: teamImport, logger: logger, now: time.Now,
 	}, nil
 }
 
@@ -140,15 +149,83 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 			return err
 		}
 	}
-	if plan.TeamAutoimport {
-		if err := service.teamImport.PublishTx(ctx, tx, *plan); err != nil {
-			return err
-		}
-	}
+	service.publishTeamAutoimport(ctx, tx, *plan)
 	if err := tx.Commit(ctx); err != nil {
 		return ErrPostSyncUnavailable
 	}
 	return nil
+}
+
+// publishTeamAutoimport stages the team-autoimport handoff as BEST EFFORT: a
+// failure is recorded and swallowed, never propagated.
+//
+// This is the property the Python implementation states in writing at
+// src/dev_health_ops/workers/post_sync_dispatch.py:285-302 -- "Best-effort: a
+// dispatch failure must never break post-sync metric fan-out" -- and which the
+// Go port inverted. Team autoimport is a work-RELATIONSHIP refresh (teams,
+// projects, members); the rest of the fanout is work-UNIT metric work. They
+// have different lifecycles and Python dispatches the refresh as a separate
+// credential-resolving task for exactly that reason. Coupling the two meant a
+// single rejected publish discarded the complexity run, the daily dispatch, the
+// workgraph build, the investment materialize, the membership backfill and the
+// DORA run staged in the same transaction, on every sync, for every
+// organization with auto_import_teams enabled (CHAOS-3946).
+//
+// The publish runs inside its own SAVEPOINT. Swallowing the error alone would
+// not be enough: a failure that had already issued SQL leaves the enclosing
+// transaction aborted, so the following Commit would fail and the metric fanout
+// would still be lost -- silently, which is worse. Rolling back to the
+// savepoint returns the enclosing transaction to a committable state whatever
+// the writer did.
+//
+// Team autoimport takes no prerequisite completion key and produces none, so
+// nothing else in the fanout depends on it. The ordered chain
+// (complexity -> daily -> workgraph -> investment -> membership) keeps its
+// all-or-nothing transaction: those handoffs DO depend on each other's durable
+// completion fences.
+func (service *NativePostSyncService) publishTeamAutoimport(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan PostSyncPlan,
+) {
+	if !plan.TeamAutoimport {
+		return
+	}
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		service.observeTeamAutoimportFailure(ctx, plan, err)
+		return
+	}
+	if err := service.teamImport.PublishTx(ctx, nested, plan); err != nil {
+		_ = nested.Rollback(ctx)
+		service.observeTeamAutoimportFailure(ctx, plan, err)
+		return
+	}
+	if err := nested.Commit(ctx); err != nil {
+		_ = nested.Rollback(ctx)
+		service.observeTeamAutoimportFailure(ctx, plan, err)
+	}
+}
+
+// PostSyncTeamAutoimportFailedMessage is the log message emitted when the
+// best-effort team-autoimport handoff is dropped. It is a stable identifier so
+// operators (and tests) can find the drops the fanout deliberately survives.
+const PostSyncTeamAutoimportFailedMessage = "post_sync_team_autoimport_handoff_dropped"
+
+func (service *NativePostSyncService) observeTeamAutoimportFailure(
+	ctx context.Context,
+	plan PostSyncPlan,
+	err error,
+) {
+	logger := service.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.ErrorContext(ctx, PostSyncTeamAutoimportFailedMessage,
+		slog.String("org_id", plan.OrganizationID),
+		slog.String("sync_run_id", plan.SyncRunID),
+		slog.String("error", err.Error()),
+	)
 }
 
 func currentPostSyncReference(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {

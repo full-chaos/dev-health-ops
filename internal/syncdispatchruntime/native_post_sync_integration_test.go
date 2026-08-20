@@ -5,6 +5,9 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +87,7 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 		markerRemaining{},
 		markerWorkGraph{},
 		markerTeam{},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +158,7 @@ WHERE sync_run_id=$1`, runID)
 		markerRemaining{},
 		markerWorkGraph{markerWriter{failKind: "investment.materialize"}},
 		markerTeam{},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -250,28 +255,45 @@ VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
 	}
 }
 
-// TestNativePostSyncFanoutDiscardsEveryHandoffWhenTeamAutoimportIsRejected
-// pins the blast radius CHAOS-3946 measured in production.
+// poisoningTeamWriter is a team-autoimport writer whose failure has ALREADY
+// issued SQL. Swallowing its error is not enough on its own: Postgres leaves
+// the enclosing transaction in an aborted state, so the metric fanout's commit
+// would fail and the whole generation would still be lost -- silently, which is
+// worse than the loud failure CHAOS-3946 reported.
+type poisoningTeamWriter struct{}
+
+func (poisoningTeamWriter) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
+	_, err := tx.Exec(ctx, `
+INSERT INTO post_sync_markers (sync_run_id, kind)
+VALUES ('this-is-not-a-uuid', 'team_autoimport')`)
+	if err == nil {
+		return errors.New("the poisoning statement was expected to fail")
+	}
+	return err
+}
+
+// TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure pins the
+// guarantee the Go port dropped.
 //
-// team-autoimport is the LAST writer in the fanout, and Fanout stages every
-// handoff in one transaction whose rollback is deferred. So a rejection there
-// is not a team-autoimport outage: it discards the complexity run, the daily
-// dispatch, the workgraph build, the investment materialize, the membership
-// backfill and the DORA run that were already staged, on every sync, for every
-// organization with auto_import_teams enabled. That is why a mis-routed
-// publish in one leaf writer cost four of sixteen post_sync jobs their entire
-// output rather than one child job.
+// src/dev_health_ops/workers/post_sync_dispatch.py:285-302 states it outright:
+// "Best-effort: a dispatch failure must never break post-sync metric fan-out."
+// Python dispatches team autoimport as a separate credential-resolving task
+// wrapped in try/except, deliberately outside the metric fanout, because a
+// work-RELATIONSHIP refresh and work-UNIT metric work have different
+// lifecycles. Go published it inside the metric transaction as the last
+// statement before commit, so one rejected publish discarded the complexity
+// run, the daily dispatch, the workgraph build, the investment materialize,
+// the membership backfill and the DORA run with it.
 //
-// The single transaction is INTENTIONAL and is left in place: the handoffs are
-// a prerequisite-ordered chain (each StartRunTx returns the completion key the
-// next one waits on), so partially committing it would publish children whose
-// durable predecessor never exists. The correct guards are that no call site
-// can be deterministically illegal (TestEveryOutboxPublishSiteAgreesWith...)
-// and that a deterministic rejection is terminal on the first attempt
-// (TestPostSyncWorkerTerminalizesDeterministicOutboxRejections), not a weaker
-// atomicity boundary. This test exists so the coupling stays a measured,
-// deliberate property rather than an assumption.
-func TestNativePostSyncFanoutDiscardsEveryHandoffWhenTeamAutoimportIsRejected(t *testing.T) {
+// That guarantee lived only in a try/except and a prose comment, in both
+// codebases; nothing asserted it, so nothing caught its removal. This is the
+// assertion.
+//
+// Both failure shapes are covered. A writer that fails before touching SQL
+// proves the error is swallowed; a writer that has already poisoned the
+// transaction proves the savepoint, which is the half a bare swallow would get
+// wrong while still passing the first case.
+func TestNativePostSyncFanoutSurvivesABestEffortTeamAutoimportFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -299,49 +321,73 @@ func TestNativePostSyncFanoutDiscardsEveryHandoffWhenTeamAutoimportIsRejected(t 
 		DispatchOutbox: outboxID, RouteGeneration: 1,
 	}}
 	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
-
-	rejecting, err := NewNativePostSyncService(
-		pool,
-		markerDaily{},
-		markerRemaining{},
-		markerWorkGraph{},
-		markerTeam{markerWriter{failKind: "team_autoimport"}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rejecting.now = now
-	if err := rejecting.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
-		t.Fatalf("Fanout() error = %v, want the rejection to surface", err)
-	}
-	var staged int
-	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID,
-	).Scan(&staged); err != nil {
-		t.Fatal(err)
-	}
-	if staged != 0 {
-		t.Fatalf("rejected fanout left %d markers committed; the transaction is no longer atomic", staged)
+	// Every handoff the metric fanout owns. Team autoimport is deliberately
+	// absent: it is the one that is allowed to be lost.
+	wantMetricHandoffs := []string{
+		"complexity", "daily", "dora", "investment.materialize",
+		"membership_backfill", "workgraph.build",
 	}
 
-	// The same fanout with every writer accepting stages all seven handoffs,
-	// so the zero above is the rejection's doing and not an empty plan.
-	accepting, err := NewNativePostSyncService(
-		pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	accepting.now = now
-	if err := accepting.Fanout(ctx, args); err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID,
-	).Scan(&staged); err != nil {
-		t.Fatal(err)
-	}
-	if staged != 7 {
-		t.Fatalf("accepted fanout staged %d markers, want 7", staged)
+	for _, testCase := range []struct {
+		name string
+		team TeamAutoimportPostSyncWriter
+	}{
+		{
+			name: "the publish is rejected before it touches the transaction",
+			team: markerTeam{markerWriter{failKind: "team_autoimport"}},
+		},
+		{
+			name: "the publish has already aborted the transaction",
+			team: poisoningTeamWriter{},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`DELETE FROM post_sync_markers WHERE sync_run_id=$1`, runID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			var logged strings.Builder
+			logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
+			service, err := NewNativePostSyncService(
+				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, testCase.team, logger,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.now = now
+
+			if err := service.Fanout(ctx, args); err != nil {
+				t.Fatalf("Fanout() = %v, want nil: a best-effort team-autoimport failure "+
+					"must never break the post-sync metric fanout", err)
+			}
+
+			rows, err := pool.Query(ctx,
+				`SELECT kind FROM post_sync_markers WHERE sync_run_id=$1 ORDER BY kind`, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			committed := []string{}
+			for rows.Next() {
+				var kind string
+				if err := rows.Scan(&kind); err != nil {
+					t.Fatal(err)
+				}
+				committed = append(committed, kind)
+			}
+			if rows.Err() != nil {
+				t.Fatal(rows.Err())
+			}
+			if !slices.Equal(committed, wantMetricHandoffs) {
+				t.Fatalf("committed handoffs = %v, want %v", committed, wantMetricHandoffs)
+			}
+			if !strings.Contains(logged.String(), PostSyncTeamAutoimportFailedMessage) {
+				t.Fatalf("the dropped handoff was not recorded; logs = %q", logged.String())
+			}
+			if !strings.Contains(logged.String(), runID) {
+				t.Fatalf("the drop record does not name the sync run; logs = %q", logged.String())
+			}
+		})
 	}
 }

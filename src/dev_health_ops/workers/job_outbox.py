@@ -63,6 +63,14 @@ def enqueue_worker_job(
             load_migration_jobs(),
             allow_deferred_route=allow_deferred_route,
         )
+        # trace_parent is NOT wired here yet: this producer's codec supports
+        # it (build_envelope/encode_envelope accept it, contracts/jobs/v1's
+        # schema and fixtures cover it), but actually capturing and passing
+        # it lands in a follow-up PR sequenced strictly after this one
+        # deploys everywhere. Prod is a rolling multi-service restart, so
+        # emitting the field before every Go relay/worker can decode it would
+        # open a window where a live outbox row gets rejected outright
+        # (CHAOS-3993 PR discussion, CHAOS-3990 lane).
         envelope = build_envelope(
             payload,
             correlation_id=correlation_id,

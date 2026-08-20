@@ -7,6 +7,7 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 from sqlalchemy import Table, create_engine, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -140,6 +141,23 @@ def test_stages_executable_migration_route_without_committing(engine, route: str
 
     with Session(engine) as verifier:
         assert verifier.scalar(select(WorkerJobOutbox)) is None
+
+
+def test_enqueue_omits_trace_parent_even_with_an_active_span(engine):
+    # CHAOS-3993 landed the codec's trace_parent support (build_envelope,
+    # encode_envelope, the schema, the fixtures) without wiring it here.
+    # Actually capturing and passing the active span's traceparent is a
+    # follow-up PR sequenced strictly after CHAOS-3993 is deployed
+    # everywhere: prod is a rolling multi-service restart, and emitting the
+    # field before every Go relay/worker can decode it would open a window
+    # where a live outbox row gets rejected outright. This guard makes that
+    # gap a visible, tested fact rather than an implicit one -- when the
+    # follow-up PR wires the injection, this assertion is expected to flip.
+    tracer = TracerProvider().get_tracer("test-worker-job-outbox")
+    with Session(engine) as session, session.begin():
+        with tracer.start_as_current_span("enqueue-under-test"):
+            row = _enqueue(session, migration_route="shadow")
+        assert "trace_parent" not in row.args
 
 
 def test_commit_and_same_content_reuse_return_one_logical_dispatch(engine):

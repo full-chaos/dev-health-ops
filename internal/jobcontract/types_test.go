@@ -77,6 +77,57 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 	}
 }
 
+func TestTraceParentRoundTripsThroughCanonicalEnvelope(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.heartbeat.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := Decode(KindHeartbeat, data)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	envelope.TraceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+	canonical, err := MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatalf("MarshalCanonical() error = %v", err)
+	}
+	if !strings.Contains(string(canonical), `"trace_parent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`) {
+		t.Fatalf("canonical envelope missing trace_parent:\n%s", canonical)
+	}
+
+	roundTripped, err := Decode(KindHeartbeat, canonical)
+	if err != nil {
+		t.Fatalf("Decode() round trip error = %v", err)
+	}
+	if roundTripped.TraceParent != envelope.TraceParent {
+		t.Fatalf("trace_parent = %q, want %q", roundTripped.TraceParent, envelope.TraceParent)
+	}
+}
+
+func TestTraceParentOmittedWhenEmptyKeepsExistingFixturesUnchanged(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.heartbeat.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := Decode(KindHeartbeat, data)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if envelope.TraceParent != "" {
+		t.Fatalf("fixture without trace_parent must decode to an empty TraceParent, got %q", envelope.TraceParent)
+	}
+	canonical, err := MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatalf("MarshalCanonical() error = %v", err)
+	}
+	if strings.Contains(string(canonical), "trace_parent") {
+		t.Fatalf("empty TraceParent must be omitted from canonical output:\n%s", canonical)
+	}
+}
+
 func TestSyncCoverageRefreshPayloadBounds(t *testing.T) {
 	t.Parallel()
 	fixture, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.sync_coverage_refresh.v1.json"))

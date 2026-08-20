@@ -7,9 +7,44 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/riverqueue/river"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed")
+
+// coordinatorTracerName scopes this package's spans. Unlike
+// internal/jobruntime.Adapter's job.execute spans, these carry no
+// trace-context propagation yet -- these four kinds have no JSON payload
+// field to carry a traceparent in (TransportArgs is entirely typed fields
+// resolved from a DB lookup, not decoded arguments), so there is nothing to
+// extract a parent from. CHAOS-3996 tracks adding that. Until then, kind and
+// sync_run_id alone give Tempo visibility into the coordinator loop that was
+// completely dark during the CHAOS-3990 guard deadlock (CHAOS-3993).
+//
+// otel.Tracer is looked up fresh on every call rather than cached in a
+// package var: see internal/jobruntime.jobTracerName for why a cached handle
+// silently stays bound to the first TracerProvider it ever saw.
+const coordinatorTracerName = "github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+
+func spanForCoordinatorJob(ctx context.Context, kind, syncRunID string) (context.Context, oteltrace.Span) {
+	return otel.Tracer(coordinatorTracerName).Start(ctx, "dev_health.sync_dispatch."+kind, oteltrace.WithAttributes(
+		attribute.String("dev_health.job.kind", kind),
+		attribute.String("dev_health.sync_run_id", syncRunID),
+	))
+}
+
+func finishCoordinatorSpan(span oteltrace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	span.End()
+}
 
 // RegisterWorkers adds all four guarded at-least-once coordinator consumers.
 // Each worker carries only a durable domain reference and delegates execution
@@ -73,7 +108,10 @@ func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchS
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.bridge.Dispatch(ctx, job.Args)
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	err := worker.bridge.Dispatch(ctx, job.Args)
+	finishCoordinatorSpan(span, err)
+	return err
 }
 
 type finalizeWorker struct {
@@ -85,7 +123,10 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.bridge.Finalize(ctx, job.Args)
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	err := worker.bridge.Finalize(ctx, job.Args)
+	finishCoordinatorSpan(span, err)
+	return err
 }
 
 type postSyncWorker struct {
@@ -97,7 +138,10 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.service.Fanout(ctx, job.Args)
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	err := worker.service.Fanout(ctx, job.Args)
+	finishCoordinatorSpan(span, err)
+	return err
 }
 
 type referenceDiscoveryWorker struct {
@@ -117,15 +161,21 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 	if err := job.Args.valid(); err != nil {
 		return err
 	}
-	return worker.bridge.TeamAutoImport(ctx, DomainReference{
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID)
+	err := worker.bridge.TeamAutoImport(ctx, DomainReference{
 		OrganizationID: job.Args.OrgID,
 		SyncRunID:      job.Args.Payload.SyncRunID,
 	})
+	finishCoordinatorSpan(span, err)
+	return err
 }
 
 func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job[ReferenceDiscoveryArgs]) error {
 	if worker == nil || worker.bridge == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.bridge.Discover(ctx, job.Args)
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID())
+	err := worker.bridge.Discover(ctx, job.Args)
+	finishCoordinatorSpan(span, err)
+	return err
 }

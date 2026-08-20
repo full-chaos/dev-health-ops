@@ -137,7 +137,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
             "domain",
             "payload",
         },
-        optional={"organization_id"},
+        optional={"organization_id", "trace_parent"},
         label="envelope",
     )
     version = _expect_int(envelope["contract_version"], "contract_version")
@@ -178,6 +178,13 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     idempotency_key = _expect_string(envelope["idempotency_key"], "idempotency_key")
     _validate_safe_id("correlation_id", correlation_id, 128)
     _validate_safe_id("idempotency_key", idempotency_key, 256)
+
+    trace_parent_value = envelope.get("trace_parent")
+    trace_parent: str | None
+    if trace_parent_value is None:
+        trace_parent = None
+    else:
+        trace_parent = _expect_string(trace_parent_value, "trace_parent")
 
     domain_raw = _expect_object(
         envelope["domain"], required={"type", "id"}, optional=set(), label="domain"
@@ -282,6 +289,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         idempotency_key=idempotency_key,
         domain=DomainLink(type=domain_type, id=domain_id),
         payload=payload,
+        trace_parent=trace_parent,
     )
 
 
@@ -292,6 +300,7 @@ def build_envelope(
     idempotency_key: str,
     domain_id: str,
     organization_id: str | None = None,
+    trace_parent: str | None = None,
 ) -> Envelope:
     """Build and validate arguments for the transitional outbox producer."""
 
@@ -326,6 +335,7 @@ def build_envelope(
         idempotency_key=idempotency_key,
         domain=DomainLink(type=payload.DOMAIN_TYPE, id=domain_id),
         payload=payload,
+        trace_parent=trace_parent,
     )
     # A round trip keeps producer and consumer validation identical.
     return decode_envelope(payload.KIND, encode_envelope(envelope))
@@ -337,10 +347,15 @@ def encode_envelope(envelope: Envelope) -> bytes:
     document: dict[str, Any] = {"contract_version": envelope.contract_version}
     if envelope.organization_id is not None:
         document["organization_id"] = envelope.organization_id
+    document["correlation_id"] = envelope.correlation_id
+    document["idempotency_key"] = envelope.idempotency_key
+    # Position matches internal/jobcontract.wireEnvelope's field order exactly:
+    # canonical bytes must be identical between Python and Go for the shared
+    # payload_hash to match (CHAOS-3993).
+    if envelope.trace_parent is not None:
+        document["trace_parent"] = envelope.trace_parent
     document.update(
         {
-            "correlation_id": envelope.correlation_id,
-            "idempotency_key": envelope.idempotency_key,
             "domain": {"type": envelope.domain.type, "id": envelope.domain.id},
             "payload": _payload_document(envelope.payload),
         }

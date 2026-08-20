@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
@@ -194,6 +195,7 @@ func Execute(
 	}
 
 	logger := logging.NewJSON(streams.Stdout, cfg.LogLevel)
+	tracingComponent := tracing.Init(logger)
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.HTTPAddress,
@@ -208,7 +210,10 @@ func Execute(
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()
-	components := []lifecycle.Component{operatorHTTP}
+	// tracingComponent starts first and, by lifecycle.Runtime's reverse
+	// shutdown order, stops last -- so buffered spans from every other
+	// component's work flush before the exporter shuts down.
+	components := []lifecycle.Component{tracingComponent, operatorHTTP}
 	if spec.ConfigureDependencies != nil && spec.ConfigureDependenciesWithLogger != nil {
 		logger.ErrorContext(
 			ctx,

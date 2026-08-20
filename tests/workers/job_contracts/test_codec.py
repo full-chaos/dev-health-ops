@@ -214,6 +214,47 @@ def test_transitional_producer_adapter_uses_same_validation() -> None:
     )
 
 
+def test_trace_parent_round_trips_and_is_positioned_before_domain() -> None:
+    trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    envelope = build_envelope(
+        HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        correlation_id="job-heartbeat-0001",
+        idempotency_key="heartbeat:2026-07-21T12:00:00Z",
+        domain_id="00000000-0000-4000-8000-000000000001",
+        trace_parent=trace_parent,
+    )
+    assert envelope.trace_parent == trace_parent
+
+    encoded = encode_envelope(envelope)
+    document = json.loads(encoded)
+    assert document["trace_parent"] == trace_parent
+    # Position matches Go's wireEnvelope field order exactly: the shared
+    # canonical bytes (and payload_hash) depend on it (CHAOS-3993).
+    assert (
+        list(document.keys()).index("trace_parent")
+        == list(document.keys()).index("domain") - 1
+    )
+
+    decoded = decode_envelope(KIND_HEARTBEAT, encoded)
+    assert decoded.trace_parent == trace_parent
+
+
+def test_trace_parent_omitted_when_absent_keeps_golden_fixtures_unchanged() -> None:
+    envelope = build_envelope(
+        HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        correlation_id="job-heartbeat-0001",
+        idempotency_key="heartbeat:2026-07-21T12:00:00Z",
+        domain_id="00000000-0000-4000-8000-000000000001",
+    )
+    assert envelope.trace_parent is None
+    encoded = encode_envelope(envelope)
+    assert b"trace_parent" not in encoded
+    assert (
+        encoded
+        == (default_contract_root() / "examples/system.heartbeat.v1.json").read_bytes()
+    )
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

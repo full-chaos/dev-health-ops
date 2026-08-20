@@ -23,6 +23,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/riverqueue/rivercontrib/otelriver"
 )
 
 const (
@@ -237,7 +239,13 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	riverClient, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{Schema: riverSchema})
+	riverClient, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{
+		Schema: riverSchema,
+		// This client only inserts sync-dispatch coordinator jobs; otelriver
+		// still gives the insert side of that boundary a river.insert_many
+		// span, matching the other River client constructions (CHAOS-3993).
+		Middleware: []rivertype.Middleware{otelriver.NewMiddleware(nil)},
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -113,20 +113,48 @@ func TestQueueTelemetrySamplerBuildsStableBoundedSnapshot(t *testing.T) {
 
 func TestQueueTelemetrySamplerCompatibilityAndQueryErrorsAreStable(t *testing.T) {
 	t.Parallel()
+	// The refusal now NAMES the offending queue/kind/version. Those three are
+	// bounded, pre-registered labels this process already publishes as metric
+	// dimensions; the arguments behind them stay unread. Withholding them cost
+	// a production incident its diagnosis (CHAOS-3938).
 	t.Run("unsupported", func(t *testing.T) {
 		t.Parallel()
+		offenders := []string{"sync/dispatch_sync_run@7"}
 		sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
 			return []queueTelemetryRow{
-				{queue: "heartbeat", kind: "system.heartbeat", unsupportedAvailable: true},
-				{queue: "retention", kind: "system.retention_cleanup", unsupportedAvailable: true},
+				{queue: "heartbeat", kind: "system.heartbeat", unsupportedOccupants: offenders},
+				{queue: "retention", kind: "system.retention_cleanup", unsupportedOccupants: offenders},
 			}, nil
 		})
 		err := sampler.CheckAvailableContractVersions(context.Background())
-		if err != ErrUnsupportedAvailableContractVersion {
+		if !errors.Is(err, ErrUnsupportedAvailableContractVersion) {
 			t.Fatalf("compatibility error = %v", err)
 		}
-		if strings.Contains(err.Error(), "heartbeat") || strings.Contains(err.Error(), "payload") {
+		if !strings.Contains(err.Error(), "sync/dispatch_sync_run@7") {
+			t.Fatalf("compatibility error did not name the offending contract: %v", err)
+		}
+		var named *UnsupportedContractVersionError
+		if !errors.As(err, &named) || !reflect.DeepEqual(named.Offenders, offenders) {
+			t.Fatalf("compatibility error carried no offender labels: %v", err)
+		}
+		if strings.Contains(err.Error(), "payload") || strings.Contains(err.Error(), "encoded_args") {
 			t.Fatalf("compatibility error leaked row detail: %v", err)
+		}
+	})
+	// A label the database somehow returned outside the bounded vocabulary is
+	// refused as an unreadable snapshot rather than echoed into a log line.
+	t.Run("offender label out of vocabulary", func(t *testing.T) {
+		t.Parallel()
+		sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
+			leaked := []string{"sync/dispatch_sync_run@{\"token\":\"secret\"}"}
+			return []queueTelemetryRow{
+				{queue: "heartbeat", kind: "system.heartbeat", unsupportedOccupants: leaked},
+				{queue: "retention", kind: "system.retention_cleanup", unsupportedOccupants: leaked},
+			}, nil
+		})
+		err := sampler.CheckAvailableContractVersions(context.Background())
+		if err != ErrQueueTelemetryUnavailable || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("out-of-vocabulary offender label was not refused: %v", err)
 		}
 	})
 	t.Run("query error", func(t *testing.T) {

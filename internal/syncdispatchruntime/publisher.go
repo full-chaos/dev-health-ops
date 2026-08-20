@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -30,16 +31,25 @@ type InsertClient interface {
 	InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
 
-// PublisherOptions are explicit because this package does not own dispatch
-// queue policy. Callers must choose a bounded queue and retry limit during a
-// separately approved composition step.
+// PublisherOptions carries the retry limit, which is composition policy, and
+// the queue, which is NOT: it must be syncdispatchcontract.RiverQueue.
+//
+// The queue was previously a free choice made at the composition site, and the
+// reconciler passed a bare "sync" literal that nothing tied back to this
+// plane. Readiness reads river_job by queue, so a queue this plane can publish
+// into but the reader cannot enumerate is unresolvable by construction --
+// which is how every pending dispatch_sync_run row came to read as an
+// unsupported contract version and refuse worker startup (CHAOS-3938). Pinning
+// the queue here closes that: what can be published is exactly what
+// RiverQueueOccupancy declares, so the reader can always resolve it.
 type PublisherOptions struct {
 	Queue       string
 	MaxAttempts int
 }
 
 func (options PublisherOptions) valid() bool {
-	return queuePattern.MatchString(options.Queue) && options.MaxAttempts >= 1 && options.MaxAttempts <= 100
+	return queuePattern.MatchString(options.Queue) && options.Queue == syncdispatchcontract.RiverQueue &&
+		options.MaxAttempts >= 1 && options.MaxAttempts <= 100
 }
 
 // Publisher performs exactly one supported River InsertTx call. It has no

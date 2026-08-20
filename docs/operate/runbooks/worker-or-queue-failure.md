@@ -69,6 +69,7 @@ For readiness failure, distinguish:
 - role-name mismatch or excessive privileges;
 - job registry/profile drift;
 - missing compiled handler for an admitted contract version;
+- a queued contract version this build does not support. The `queued_contract_versions` refusal names the offending queue, kind, and version, so read that log line before inspecting the queue by hand. It counts only jobs in the `available` state;
 - incompatible River schema;
 - dependency sampling failure.
 

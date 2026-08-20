@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/riverqueue/river"
@@ -88,16 +89,44 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 	return worker.bridge.Finalize(ctx, job.Args)
 }
 
+// PostSyncFanout is the seam postSyncWorker consumes. NativePostSyncService is
+// the only production implementation; the interface exists so the worker's
+// error classification is observable without a database.
+type PostSyncFanout interface {
+	Fanout(context.Context, PostSyncArgs) error
+}
+
 type postSyncWorker struct {
 	river.WorkerDefaults[PostSyncArgs]
-	service *NativePostSyncService
+	service PostSyncFanout
 }
 
 func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) error {
 	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.service.Fanout(ctx, job.Args)
+	err := worker.service.Fanout(ctx, job.Args)
+	if err != nil && deterministicFanoutRejection(err) {
+		return river.JobCancel(err)
+	}
+	return err
+}
+
+// deterministicFanoutRejection reports whether the fanout failed on a verdict
+// the checked-in job contract already fixes. Both outbox sentinels are decided
+// from contracts/jobs/v1, which jobruntime.Load reads once at process start:
+// the descriptor's route, its contract version and the envelope shape are
+// identical on every attempt of the same job, so a later attempt reaches the
+// same rejection.
+//
+// This is the coordinator-side equivalent of
+// providerunit.deterministicTerminalCategory. Without it a single mis-routed
+// publish burned all five attempts, each one rolling back the entire post-sync
+// generation, before River discarded the job (CHAOS-3946). Availability and
+// transport failures are deliberately NOT listed: those a retry can clear.
+func deterministicFanoutRejection(err error) bool {
+	return errors.Is(err, joboutbox.ErrPolicyRejected) ||
+		errors.Is(err, joboutbox.ErrContractRejected)
 }
 
 type referenceDiscoveryWorker struct {

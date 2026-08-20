@@ -92,6 +92,48 @@ func encodeGitHubTestsChunkCursor(cursor githubTestsChunkCursor) (string, error)
 // CollectChunks streams GitHub TestOps pages. It mirrors Collect's fetch and
 // normalization rules, but emits one bounded run/report unit at a time and
 // persists an opaque page URL plus item index after every emission.
+// githubTestsFinalMetadataBatch builds the terminal completion batch for one
+// chunked github tests/cicd unit from its cursor.
+//
+// The cursor's Incomplete slice is typed nil on every healthy unit: a clean
+// first pass never appends to it, and a resumed cursor decodes it from JSON
+// with omitempty. A typed-nil slice marshals to JSON null, which the
+// production comparator — like every durable optional-evidence reader since
+// CHAOS-3940 — refuses. Normalize to a non-nil empty slice here, at the one
+// writer, so the durable form is always [] and readers stay strict.
+func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (CompleteRouteBatch, error) {
+	effects, err := testOpsEffects(nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	incomplete := append(
+		make([]GitHubTestsIncomplete, 0, len(cursor.Incomplete)), cursor.Incomplete...,
+	)
+	return CompleteRouteBatch{
+		Effects: effects,
+		Result: map[string]any{
+			"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
+			"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
+			"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
+			"repo": cursor.Repo, "reports_complete": len(incomplete) == 0,
+			"reports_skipped": githubTestsIncompleteCount(incomplete),
+			"incomplete":      incomplete,
+		},
+		Watermark: func() *time.Time {
+			if len(incomplete) > 0 {
+				return nil
+			}
+			return claim.BeforeAt
+		}(),
+		Evidence: FetchEvidence{
+			Provider: claim.Provider, Dataset: claim.Dataset,
+			Requests: cursor.Requests, Pages: cursor.Pages,
+			Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance +
+				cursor.Suites + cursor.Cases + cursor.Coverage,
+		},
+	}, nil
+}
+
 func (handler GitHubTestsRouteHandler) CollectChunks(
 	ctx context.Context,
 	claim Claim,
@@ -123,33 +165,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
-		effects, effectErr := testOpsEffects(nil, nil, nil, nil, nil, nil)
-		if effectErr != nil {
-			return effectErr
+		batch, batchErr := githubTestsFinalMetadataBatch(claim, cursor)
+		if batchErr != nil {
+			return batchErr
 		}
-		return emitCursorPair(cursor, CompleteRouteBatch{
-			Effects: effects,
-			Result: map[string]any{
-				"pipeline_runs_synced": cursor.Pipelines, "job_runs_synced": cursor.Jobs,
-				"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
-				"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
-				"repo": cursor.Repo, "reports_complete": len(cursor.Incomplete) == 0,
-				"reports_skipped": githubTestsIncompleteCount(cursor.Incomplete),
-				"incomplete":      cursor.Incomplete,
-			},
-			Watermark: func() *time.Time {
-				if len(cursor.Incomplete) > 0 {
-					return nil
-				}
-				return claim.BeforeAt
-			}(),
-			Evidence: FetchEvidence{
-				Provider: claim.Provider, Dataset: claim.Dataset,
-				Requests: cursor.Requests, Pages: cursor.Pages,
-				Records: cursor.Pipelines + cursor.Jobs + cursor.Acceptance +
-					cursor.Suites + cursor.Cases + cursor.Coverage,
-			},
-		}, emit)
+		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
 		return emitFinalMetadata(cursor)

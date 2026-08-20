@@ -133,3 +133,72 @@ func TestProductionContractComparatorDecodedShapeStillFailsClosed(t *testing.T) 
 		}
 	}
 }
+
+// A typed-nil slice marshals to JSON null, so the comparator refuses it the
+// same way every durable optional-evidence reader has since CHAOS-3940. The
+// contract is writer-side: every producer must emit a non-nil (possibly
+// empty) slice, and the chunked-route test below holds the one producer that
+// used to emit typed nil to that contract.
+func TestProductionContractComparatorRejectsTypedNilIncomplete(t *testing.T) {
+	claim := nativeTestClaim("github", "tests")
+	batch := decodedGitHubTestsBatch(claim, make([]GitHubTestsIncomplete, 0))
+	batch.Result["incomplete"] = []GitHubTestsIncomplete(nil)
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, batch,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("typed-nil incomplete accepted: error=%v", err)
+	}
+}
+
+// A clean chunked run never appends to the cursor's Incomplete slice, and a
+// resumed cursor decodes it from JSON with omitempty, so the field reaches
+// final metadata as typed nil on every healthy unit. The terminal batch must
+// still pass the production comparator, and its durable form must be [] —
+// never null.
+func TestGitHubTestsChunkedFinalMetadataSurvivesComparator(t *testing.T) {
+	claim := nativeTestClaim("github", "tests")
+	batch, err := githubTestsFinalMetadataBatch(claim, githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, batch,
+	)
+	if err != nil || !comparison.Match {
+		t.Fatalf("clean chunked completion refused: comparison=%+v error=%v", comparison, err)
+	}
+	encoded, err := json.Marshal(batch.Result["incomplete"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("durable incomplete form=%s, want []", encoded)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("clean chunked completion watermark=%v", batch.Watermark)
+	}
+}
+
+func TestGitHubTestsChunkedFinalMetadataIncompleteRunSurvivesComparator(t *testing.T) {
+	claim := nativeTestClaim("github", "tests")
+	batch, err := githubTestsFinalMetadataBatch(claim, githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{{
+			Component: "report_member", Cause: "unreadable", Count: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, batch,
+	)
+	if err != nil || !comparison.Match {
+		t.Fatalf("incomplete chunked completion refused: comparison=%+v error=%v", comparison, err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("incomplete chunked completion advanced watermark=%v", batch.Watermark)
+	}
+}

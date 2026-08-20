@@ -4,8 +4,7 @@ summary: Build actionable dashboards and alerts from service objectives and reco
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/alerting.md
-  - docs/slos.md
+  - alerts/rules.yml
 applicability: current
 lifecycle: active
 ---

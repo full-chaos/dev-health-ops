@@ -897,3 +897,78 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 func sortStrings(values []string) {
 	sort.Strings(values)
 }
+
+// TestCompleteRouteExecutorRecoversASnapshotItPreparedItself closes the proof
+// gap CHAOS-3940 exposed.
+//
+// Every other recovery test here hands a batch straight to
+// ledger.PrepareRouteSnapshot. That skips the executor's OWN application of
+// applyGitHubWorkItemsIncompletePolicy, which is the step that rewrites
+// batch.Result before the snapshot is persisted -- so those tests persisted a
+// snapshot production never writes. Pre-fix the executor normalized an empty
+// evidence set to a nil slice, the snapshot stored `"incomplete": null`, and
+// recovery refused it as ErrEffectLedgerConflict (complete_route.go:253).
+// Production wedged; the suite stayed green.
+//
+// This drives Execute twice against one ledger: the first call collects,
+// normalizes, prepares and commits exactly as production does, and the second
+// recovers from the artifact the first one left behind. A route that cannot
+// resume its own durable snapshot is the failure this asserts against.
+func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 20, 1, 1, 40, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "work-items")
+	// The healthy shape: every optional enrichment phase succeeded, so the
+	// route reports an empty -- not absent -- evidence set.
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	if entries, ok := batch.Result[githubWorkItemsIncompleteResultKey].([]GitHubWorkItemsIncomplete); !ok ||
+		len(entries) != 0 {
+		t.Fatalf("fixture must carry an empty evidence set: %#v",
+			batch.Result[githubWorkItemsIncompleteResultKey])
+	}
+
+	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	if !ok || !descriptor.PreparedManifestRecovery {
+		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
+	}
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+
+	ledger := &memoryEffectLedger{}
+	collecting := &staticCompleteRouteHandler{batch: batch}
+	collectingExecutor := completeRouteExecutor(now, collecting, ledger, &memoryEffectSink{})
+	// The shared fixture pair issues a launchdarkly credential; this route's
+	// claim is github, and Execute requires the two to agree.
+	collectingExecutor.Credentials.Repository = executorCredentialRepository{}
+	collectingExecutor.Credentials.Decryptor = executorCredentialDecryptor{}
+	first, err := collectingExecutor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatalf("live collect and prepare failed: %v", err)
+	}
+	if first.Effects.Written != len(workItemRouteDestinations()) ||
+		ledger.preparedPrepares != 1 {
+		t.Fatalf("first pass result=%+v prepares=%d", first, ledger.preparedPrepares)
+	}
+
+	// The durable artifact must be resumable. Recovery re-reads it through
+	// JSON, so a nil slice persisted as `null` fails here and nowhere earlier.
+	recovering := &staticCompleteRouteHandler{
+		batch: CompleteRouteBatch{Result: map[string]any{"live_provider": "must not be used"}},
+	}
+	recoverySink := &memoryEffectSink{}
+	second, err := completeRouteExecutor(
+		now.Add(10*time.Minute), recovering, ledger, recoverySink,
+	).Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatalf("recovery refused the snapshot this route prepared: %v", err)
+	}
+	if second.Effects.Skipped != len(workItemRouteDestinations()) ||
+		second.Effects.Written != 0 || len(recoverySink.destinations) != 0 {
+		t.Fatalf("recovery result=%+v writes=%v", second, recoverySink.destinations)
+	}
+	// Recovery replays the snapshot; it must not re-collect or re-prepare.
+	if !recovering.normalizedAt.IsZero() || ledger.preparedPrepares != 1 {
+		t.Fatalf("recovery recollected at=%s prepares=%d",
+			recovering.normalizedAt, ledger.preparedPrepares)
+	}
+}

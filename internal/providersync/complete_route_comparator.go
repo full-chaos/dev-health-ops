@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -42,12 +43,44 @@ func (ProductionContractComparator) CompareCompleteRoute(
 	}, nil
 }
 
+// decodeCompletionValue accepts both the live typed value a route handler
+// emits and the generic bool/float64/[]any shape produced when a durable
+// result is decoded from JSON, mirroring the retrofit
+// applyGitHubWorkItemsIncompletePolicy received for the same reason. An
+// absent key and a JSON null both fail closed: neither is a value the github
+// tests route ever writes, so accepting them would convert missing durable
+// evidence into a successful completion. The strict decoder still rejects
+// unknown fields and non-integral counts.
+func decodeCompletionValue(result map[string]any, key string, target any) error {
+	value, present := result[key]
+	if !present {
+		return ErrInvalidConfiguration
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	if bytes.Equal(encoded, []byte("null")) {
+		return ErrInvalidConfiguration
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return ErrInvalidConfiguration
+	}
+	return nil
+}
+
 func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error {
-	complete, completeOK := batch.Result["reports_complete"].(bool)
-	skipped, skippedOK := batch.Result["reports_skipped"].(int)
-	incomplete, incompleteOK := batch.Result["incomplete"].([]GitHubTestsIncomplete)
-	if !completeOK || !skippedOK || !incompleteOK || skipped < 0 ||
-		githubTestsIncompleteCount(incomplete) != skipped {
+	var complete bool
+	var skipped int
+	var incomplete []GitHubTestsIncomplete
+	if decodeCompletionValue(batch.Result, "reports_complete", &complete) != nil ||
+		decodeCompletionValue(batch.Result, "reports_skipped", &skipped) != nil ||
+		decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil {
+		return ErrInvalidConfiguration
+	}
+	if skipped < 0 || githubTestsIncompleteCount(incomplete) != skipped {
 		return ErrInvalidConfiguration
 	}
 	seen := map[string]bool{}

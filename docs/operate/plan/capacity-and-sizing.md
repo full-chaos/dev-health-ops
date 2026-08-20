@@ -54,6 +54,18 @@ contract checker after changing group replicas, queue concurrency, or pool
 limits. Include every group, even groups that are currently scaled to zero,
 when checking the declared upper bound.
 
+Count one River notifier session per replica that actually starts a River
+client, on top of that replica's queue-control pool. It is a separate
+long-lived `LISTEN` session, not a pool member, and omitting it under-counts
+such a replica by a third. Processes that build a River client but drive it
+transactionally hold no notifier, and processes with no queue pool hold nothing
+on that endpoint at all — do not charge them for one.
+
+Reserve one surge replica of every replica-bearing group in both session pools.
+The groups roll independently, but a single image or config change starts all
+of them at once, and each outgoing replica's sessions linger until
+`server_idle_timeout`.
+
 Do not assume that a zero current replica count makes future activation free.
 The real admission budget is the sum of the actual group maxima and the
 operator and migration processes, with PostgreSQL and PgBouncer headroom.

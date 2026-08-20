@@ -241,11 +241,11 @@ goWorkers:
       maxClientConnections: 1000
     queueSession:
       port: 6433
-      poolSize: 36
+      poolSize: 50
       maxClientConnections: 128
     coordinatorSession:
       port: 6434
-      poolSize: 11
+      poolSize: 14
       maxClientConnections: 32
     resources:
       requests: {cpu: 50m, memory: 64Mi}

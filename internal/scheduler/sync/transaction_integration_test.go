@@ -617,6 +617,77 @@ func TestHandoffDuePostgresKeepsMintingWhileLastSyncStaysFrozen(t *testing.T) {
 	}
 }
 
+// CHAOS-3936 deploy safety: the ledger base reads occurrence rows written by
+// the OLD code, so on first deploy a config frozen for many hours has a ledger
+// far behind now. Catch-up must therefore be rate-limited by the persisted
+// marker, not by the loop's poll interval -- the scheduler loop ticks every
+// second by default, so if the marker did not gate re-entry a config that was
+// frozen for a day would mint a day of occurrences in seconds.
+//
+// This asserts the gate against real PostgreSQL: after a window mints, a
+// second window before the next cron instant produces nothing. The sibling
+// test deliberately clears next_run_at between windows to demonstrate the walk;
+// this one leaves the marker alone, which is what production does.
+func TestHandoffDuePostgresRateLimitsCatchUpToTheScheduleMarker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := NewOccurrenceCoordinator()
+
+	minted, err := repository.HandoffDue(ctx, at("2026-01-01T12:00:00Z"), 4, coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 1 {
+		t.Fatalf("first window minted %d occurrences, want 1", len(minted))
+	}
+	// The marker now sits at 13:00. Every window before that instant must
+	// produce nothing, however often the loop ticks.
+	for _, observed := range []string{
+		"2026-01-01T12:00:01Z", "2026-01-01T12:15:00Z", "2026-01-01T12:59:59Z",
+	} {
+		later, err := repository.HandoffDue(ctx, at(observed), 4, coordinator)
+		if err != nil {
+			t.Fatalf("window at %s: %v", observed, err)
+		}
+		if len(later) != 0 {
+			t.Fatalf("window at %s minted %#v; the schedule marker did not rate-limit catch-up", observed, later)
+		}
+	}
+	var occurrenceRows int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&occurrenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 1 {
+		t.Fatalf("ledger holds %d rows after four windows in one cron interval, want 1", occurrenceRows)
+	}
+}
+
 func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	for _, statement := range []string{
 		`CREATE TABLE public.sync_configurations (

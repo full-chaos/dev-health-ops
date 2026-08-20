@@ -57,6 +57,9 @@ The contract gate validates that:
   and queue telemetry uses that same denominator;
 - disjoint and overlapping queue groups both validate;
 - each worker process has exactly one River client;
+- every started River client is charged one notifier session on the queue
+  endpoint in addition to its queue-control pool, and the queue pool retains
+  one whole replica of headroom for rolling restarts (CHAOS-3945);
 - every started River client registers type-only rescue workers for every
   bounded job kind it does not execute. River elects one maintenance leader
   per schema, not per queue, so a partial registry can otherwise discard

@@ -54,6 +54,8 @@ The Go foundation uses three distinct responsibilities:
 
 Do not give long-running workers the migration DSN. Do not reuse the migration role for domain or queue-control access.
 
+Size the queue session endpoint from the deployment manifest, not from `WORKER_DATABASE_MAX_CONNS`. A worker process that starts a River client also holds one long-lived notifier `LISTEN` session, and that session sits outside the queue-control pool, so such a replica costs three session backends where the environment variable declares two. Reconciler and scheduler drive River transactionally and hold only their pool; the stream runners open no queue pool at all. The pool must additionally have room for one whole replica beyond every declared maximum, because a rolling restart runs the stopping and starting containers together and the stopping one's sessions linger until `server_idle_timeout`. The deployment-contract check enforces this arithmetic on every build and rejects a pool that cannot absorb a restart; a saturated session pool does not degrade gracefully — clients past the cap wait for a backend that never frees and River leader election fails with `error beginning transaction: timeout`.
+
 ### Helm Go-worker poolers
 
 The component chart keeps this topology disabled until `goWorkers.enabled` and

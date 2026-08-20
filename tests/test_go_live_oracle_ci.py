@@ -69,7 +69,15 @@ def test_go_quality_bootstraps_locked_live_oracle_dependencies() -> None:
     install = (
         "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt"
     )
-    quality_gate = "bash ci/check_go.sh all"
+    # CHAOS-3948: go-quality runs `ci`, not `all` -- `all` now genuinely
+    # executes the full integration suite (Docker-backed, ~24m measured),
+    # which would blow this job's timeout and duplicate the separate,
+    # already-sharded go-storage-integration-plan/-shard jobs. `ci` is
+    # byte-for-byte the pre-CHAOS-3948 `all` (see
+    # tests/tooling/test_check_go_public_verbs.py's VERB_STEPS), so it still
+    # runs check_live_python_oracles and this bootstrap assertion still
+    # holds.
+    quality_gate = "bash ci/check_go.sh ci"
     assert install in commands
     assert commands.index(install) < commands.index(quality_gate)
 

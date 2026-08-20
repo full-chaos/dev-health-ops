@@ -20,8 +20,26 @@ import (
 var (
 	ErrInvalidState = errors.New("remaining metrics durable state is invalid")
 	ErrLeaseLost    = errors.New("remaining metrics execution lease was lost")
+	ErrLeaseActive  = errors.New("remaining metrics execution lease is still active")
 	ErrUnavailable  = errors.New("remaining metrics durable state is unavailable")
 )
+
+// LeaseActiveError reports that the partition is held by a lease that has not
+// expired yet, and carries how long is left on it.
+//
+// The claim reaches "held by a live lease" and "nothing left to do" by the same
+// route -- a conditional UPDATE matching no row -- but they are not the same
+// answer. Reporting a live lease as nothing-to-do retires the job, and that job
+// is the only thing that would have returned to reclaim the lease once it
+// expired; the retry budget is spent in tens of seconds against a ten-minute
+// lease. Since this run's completion is the fence key for the handoffs gated on
+// it, a partition abandoned that way strands them all (CHAOS-3991).
+type LeaseActiveError struct {
+	RetryAfter time.Duration
+}
+
+func (err *LeaseActiveError) Error() string { return ErrLeaseActive.Error() }
+func (err *LeaseActiveError) Unwrap() error { return ErrLeaseActive }
 
 const defaultLease = 10 * time.Minute
 
@@ -294,13 +312,41 @@ SELECT id, run_id, ordinal, claim_token FROM claimed`,
 		now, token, now.Add(store.lease), partitionID,
 	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Partition.Ordinal, &claim.Token)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, store.unclaimableReason(ctx, partitionID, now)
 	}
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	claim.LeaseDuration = store.lease
 	return &claim, nil
+}
+
+// unclaimableReason explains why the conditional claim matched no row. Only a
+// live lease is reported; everything else is a genuine no-op and stays nil.
+// The read is deliberately advisory rather than locked: the claim above has
+// already failed, so the worst case of a stale answer is one extra wake-up,
+// never a lost reclaim.
+func (store *PostgresStore) unclaimableReason(ctx context.Context, partitionID string, now time.Time) error {
+	var status string
+	var leaseExpiresAt *time.Time
+	err := store.pool.QueryRow(ctx, `
+SELECT partition.status, partition.lease_expires_at
+FROM public.remaining_metric_partitions AS partition
+JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
+WHERE partition.id = $1::uuid AND run.status IN ('pending', 'running')`,
+		partitionID).Scan(&status, &leaseExpiresAt)
+	if err != nil {
+		// A missing row, or a run that is no longer live, means there is nothing
+		// for this job to come back for.
+		return nil
+	}
+	if status != "running" || leaseExpiresAt == nil {
+		return nil
+	}
+	if remaining := leaseExpiresAt.Sub(now); remaining > 0 {
+		return &LeaseActiveError{RetryAfter: remaining}
+	}
+	return nil
 }
 
 func (store *PostgresStore) RenewPartition(ctx context.Context, claim Claim) error {

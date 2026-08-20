@@ -57,6 +57,13 @@ func (handler *PartitionHandler[T]) Work(
 	}
 	claim, err := handler.store.ClaimPartition(ctx, payload.PartitionID)
 	if err != nil {
+		// Park until the lease expires rather than burning an attempt on it: a
+		// snooze does not consume one, so the reclaim stays reachable however
+		// long the current holder takes to die.
+		var active *LeaseActiveError
+		if errors.As(err, &active) {
+			return jobruntime.RetryableAfter(err, active.RetryAfter)
+		}
 		return jobruntime.Retryable(err)
 	}
 	if claim == nil {

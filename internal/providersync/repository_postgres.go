@@ -73,20 +73,41 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	if decodeErr := decodeClaimJSON(processorFlags, &claim.ProcessorFlags); decodeErr != nil {
 		return Claim{}, decodeErr
 	}
-	for raw, target := range map[string]*map[string]any{
-		string(datasetOptions):    &claim.DatasetOptions,
-		string(unitResult):        &claim.Result,
-		string(sourceMetadata):    &claim.SourceMetadata,
-		string(integrationConfig): &claim.IntegrationConfig,
-	} {
-		if err := json.Unmarshal([]byte(raw), target); err != nil {
-			return Claim{}, ErrInvalidConfiguration
-		}
+	if decodeErr := decodeClaimDocuments(
+		&claim, datasetOptions, unitResult, sourceMetadata, integrationConfig,
+	); decodeErr != nil {
+		return Claim{}, decodeErr
 	}
 	if err := claim.Validate(); err != nil {
 		return Claim{}, err
 	}
 	return claim, nil
+}
+
+// decodeClaimDocuments decodes the four JSON documents that ride along with a
+// claimed unit into their claim fields. Every document must decode into its
+// own target: the claim SQL coalesces each column to '{}', so distinct
+// columns routinely carry byte-identical JSON, and pairing raw text with
+// targets through a map literal would collapse those duplicates and leave all
+// but one target untouched.
+func decodeClaimDocuments(
+	claim *Claim,
+	datasetOptions, unitResult, sourceMetadata, integrationConfig []byte,
+) error {
+	for _, document := range []struct {
+		raw    []byte
+		target *map[string]any
+	}{
+		{datasetOptions, &claim.DatasetOptions},
+		{unitResult, &claim.Result},
+		{sourceMetadata, &claim.SourceMetadata},
+		{integrationConfig, &claim.IntegrationConfig},
+	} {
+		if err := json.Unmarshal(document.raw, document.target); err != nil {
+			return ErrInvalidConfiguration
+		}
+	}
+	return nil
 }
 
 // Complete atomically terminalizes the authoritative unit, advances its

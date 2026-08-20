@@ -33,6 +33,12 @@ Do not record task payloads, encoded arguments, DSNs, tokens, or customer-sensit
 
 ## Determine what failed
 
+Before treating stalled work as failed, confirm it is not simply waiting for a
+rescue that has not come due. [Job recovery
+lifecycle](../run/job-recovery-lifecycle.md) gives the four liveness states and
+the order to check them; re-enqueuing work that River will still rescue
+double-drives it.
+
 | Symptom | Likely boundary |
 | --- | --- |
 | No job or sync unit exists | API, scheduler, entitlement, planning, or producer path |

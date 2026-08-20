@@ -222,6 +222,11 @@ downstream persistence.
 - If a route or deployment group disagrees with the checked-in contract, stop
   the incompatible process and restore the reviewed Celery configuration.
 
+If a job looks stuck but reports no error, read
+[Job recovery lifecycle](job-recovery-lifecycle.md) first: recovery after a
+worker dies is gated by both the rescue horizon and the job's own timeout, so
+the correct action is often to wait rather than to intervene.
+
 Use [Worker or queue failure](../runbooks/worker-or-queue-failure.md) for the
 recovery sequence. Escalate before destructive broker or database operations,
 and preserve logs, run identifiers, queue names, and timestamps as evidence.

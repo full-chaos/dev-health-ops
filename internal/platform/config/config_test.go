@@ -197,44 +197,97 @@ func TestWorkerQueueSelectionRejectsInvalidOrAmbiguousInput(t *testing.T) {
 	}
 }
 
-func TestWorkerProcessArgumentsRejectEnvironmentConflicts(t *testing.T) {
+// TestFlagOverridesTakePrecedenceOverEnvironment pins the resolution order
+// CHAOS-4020 introduced. These three settings previously made a Load that named
+// both surfaces a hard error. That could not survive the migration this ticket
+// performs: deployed configuration moves into `command:` while host .env files
+// still carry the same variables, so a conflict rule would have failed every
+// worker at the moment the flags were added. The environment is a fallback
+// beneath the flag, and the shadowed setting is reported rather than fatal.
+func TestFlagOverridesTakePrecedenceOverEnvironment(t *testing.T) {
 	t.Parallel()
 
-	for name, spec := range map[string]Spec{
-		"queue concurrency": {
-			Service:          "dev-health-worker",
-			RequireQueues:    true,
-			Queues:           []string{"heartbeat"},
-			QueueConcurrency: []string{"heartbeat=1"},
-			LookupEnv: lookup(map[string]string{
-				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=2",
-			}),
+	cfg, err := Load(Spec{
+		Service:       "dev-health-worker",
+		RequireQueues: true,
+		Queues:        []string{"heartbeat"},
+		Overrides: map[string]string{
+			"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1",
+			"DEV_HEALTH_WORKER_GROUP":      "command-group",
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT":  "30s",
 		},
-		"worker group": {
-			Service:          "dev-health-worker",
-			RequireQueues:    true,
-			Queues:           []string{"heartbeat"},
-			QueueConcurrency: []string{"heartbeat=1"},
-			WorkerGroup:      "command-group",
-			LookupEnv: lookup(map[string]string{
-				"DEV_HEALTH_WORKER_GROUP": "environment-group",
-			}),
-		},
-		"shutdown timeout": {
-			Service:          "dev-health-worker",
-			RequireQueues:    true,
-			Queues:           []string{"heartbeat"},
-			QueueConcurrency: []string{"heartbeat=1"},
-			ShutdownTimeout:  "30s",
-			LookupEnv: lookup(map[string]string{
-				"DEV_HEALTH_SHUTDOWN_TIMEOUT": "60s",
-			}),
-		},
+		LookupEnv: lookup(map[string]string{
+			"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=2",
+			"DEV_HEALTH_WORKER_GROUP":      "environment-group",
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT":  "60s",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.WorkerGroup != "command-group" {
+		t.Fatalf("worker group = %q, want the flag value", cfg.WorkerGroup)
+	}
+	if cfg.WorkerQueueConcurrency["heartbeat"] != 1 {
+		t.Fatalf("heartbeat concurrency = %d, want the flag value 1", cfg.WorkerQueueConcurrency["heartbeat"])
+	}
+	if cfg.ShutdownTimeout != 30*time.Second {
+		t.Fatalf("shutdown timeout = %s, want the flag value 30s", cfg.ShutdownTimeout)
+	}
+	// Every setting came from a flag, so none is reported as environment-only.
+	if len(cfg.EnvOnlySettings) != 0 {
+		t.Fatalf("EnvOnlySettings = %v, want empty when every setting was a flag", cfg.EnvOnlySettings)
+	}
+}
+
+// TestEnvironmentFallbackIsReportedNotSilent proves the other half: a setting
+// that has a flag but was supplied through the environment still works and is
+// named, so a deployment configured the old way is visible at startup instead
+// of merely functioning.
+func TestEnvironmentFallbackIsReportedNotSilent(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(Spec{
+		Service:       "dev-health-worker",
+		RequireQueues: true,
+		Queues:        []string{"heartbeat"},
+		Overrides:     map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1"},
+		LookupEnv: lookup(map[string]string{
+			"DEV_HEALTH_WORKER_GROUP": "environment-group",
+			"DEV_HEALTH_LOG_LEVEL":    "debug",
+			// A provider route switch is environment-only by design and has no
+			// flag, so it is never reported as an env-only *setting*.
+			"WORKER_LINEAR_WORK_ITEMS_ENABLED": "true",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.WorkerGroup != "environment-group" {
+		t.Fatalf("worker group = %q, want the environment fallback", cfg.WorkerGroup)
+	}
+	want := []string{"log-level", "worker-group"}
+	if !slices.Equal(cfg.EnvOnlySettings, want) {
+		t.Fatalf("EnvOnlySettings = %v, want %v", cfg.EnvOnlySettings, want)
+	}
+}
+
+// TestOverridesRejectCredentials pins the rule that keeps DSNs and tokens off
+// the command line, where `ps`, `docker inspect`, and `docker compose config`
+// would all expose them.
+func TestOverridesRejectCredentials(t *testing.T) {
+	t.Parallel()
+
+	for name, override := range map[string]map[string]string{
+		"credential": {"POSTGRES_URI": "postgres://user:pw@host/db"},
+		"undeclared": {"NOT_A_SETTING": "value"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			spec := workerSpec(nil)
+			spec.Overrides = override
 			if _, err := Load(spec); err == nil {
-				t.Fatal("expected command argument and environment conflict to fail")
+				t.Fatal("expected the override to be rejected")
 			}
 		})
 	}
@@ -772,11 +825,18 @@ func TestUnreclaimableSweepFlagBeatsEnvironment(t *testing.T) {
 		{"neither", "", nil, ""},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			cfg, err := Load(Spec{
-				Service:            "dev-health-reconciler",
-				UnreclaimableSweep: testCase.flag,
-				LookupEnv:          lookup(testCase.env),
-			})
+			spec := Spec{
+				Service:   "dev-health-reconciler",
+				LookupEnv: lookup(testCase.env),
+			}
+			// The flag reaches Load as an override keyed by the variable it
+			// shadows, exactly as the shell layer supplies it.
+			if testCase.flag != "" {
+				spec.Overrides = map[string]string{
+					"SYNC_UNRECLAIMABLE_SWEEP": testCase.flag,
+				}
+			}
+			cfg, err := Load(spec)
 			if err != nil {
 				t.Fatalf("load config: %v", err)
 			}
@@ -785,5 +845,143 @@ func TestUnreclaimableSweepFlagBeatsEnvironment(t *testing.T) {
 					cfg.UnreclaimableSweepMode, testCase.want)
 			}
 		})
+	}
+}
+
+// TestBlankValuesAreTreatedAsUnsetOnBothSurfaces pins the edge the removed
+// conflict branches used to arbitrate.
+//
+// ShutdownTimeoutExplicit feeds cmd/dev-health-worker's drain-budget decision:
+// when it is false and the grace is at the package default, the worker derives
+// its budget from the queue selection instead of trusting 30s. A blank value
+// that read as "explicitly set" would silently hand a real worker a 30s drain
+// budget that no real queue selection can satisfy, so blank must mean unset on
+// BOTH surfaces, exactly as it did before.
+func TestBlankValuesAreTreatedAsUnsetOnBothSurfaces(t *testing.T) {
+	t.Parallel()
+
+	for name, spec := range map[string]Spec{
+		"blank environment": {
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			Queues:        []string{"heartbeat"},
+			Overrides:     map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1"},
+			LookupEnv: lookup(map[string]string{
+				"DEV_HEALTH_SHUTDOWN_TIMEOUT": "   ",
+			}),
+		},
+		"blank flag": {
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			Queues:        []string{"heartbeat"},
+			Overrides: map[string]string{
+				"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1",
+				"DEV_HEALTH_SHUTDOWN_TIMEOUT":  "",
+			},
+			LookupEnv: lookup(nil),
+		},
+		"absent entirely": {
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			Queues:        []string{"heartbeat"},
+			Overrides:     map[string]string{"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1"},
+			LookupEnv:     lookup(nil),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(spec)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.ShutdownTimeoutExplicit {
+				t.Error("a blank or absent value must not read as an operator choice")
+			}
+			if cfg.ShutdownTimeout != DefaultShutdownTimeout {
+				t.Fatalf("shutdown timeout = %s, want the package default", cfg.ShutdownTimeout)
+			}
+		})
+	}
+}
+
+// TestBlankWorkerGroupFallsBackToTheDefaultName keeps the other blank-value
+// path honest: an empty group on either surface is the default identity, not a
+// validation failure and not an empty label.
+func TestBlankWorkerGroupFallsBackToTheDefaultName(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(Spec{
+		Service:       "dev-health-worker",
+		RequireQueues: true,
+		Queues:        []string{"heartbeat"},
+		Overrides: map[string]string{
+			"DEV_HEALTH_QUEUE_CONCURRENCY": "heartbeat=1",
+			"DEV_HEALTH_WORKER_GROUP":      "   ",
+		},
+		LookupEnv: lookup(map[string]string{"DEV_HEALTH_WORKER_GROUP": "  "}),
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.WorkerGroup != "worker" {
+		t.Fatalf("worker group = %q, want the default identity", cfg.WorkerGroup)
+	}
+}
+
+// TestNonQueueServicesStillRejectQueueRuntimeSettings keeps the guard the
+// layered lookup could have quietly weakened: a reconciler or scheduler that
+// inherits a worker's environment must still refuse queue runtime settings
+// rather than silently ignoring them.
+func TestNonQueueServicesStillRejectQueueRuntimeSettings(t *testing.T) {
+	t.Parallel()
+
+	for name, values := range map[string]map[string]string{
+		"worker group":      {"DEV_HEALTH_WORKER_GROUP": "inherited"},
+		"queue concurrency": {"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(workerSpec(values)); err == nil {
+				t.Fatal("a non-queue service must reject queue runtime settings")
+			}
+		})
+	}
+}
+
+// TestQueueSelectionAcceptsDottedSubpathNames is a forward-compatibility guard
+// for CHAOS-4027.
+//
+// That ticket introduces finer-grained River queues following a dotted
+// convention, so an operator can shard by hand: -Q sync.github for a provider,
+// -Q sync.github.heavy for one cost class. The CLI needs no change to support
+// it, because -Q takes an arbitrary queue list and validation is a charset
+// check plus the runtime's selected-equals-constructed rule -- NOT a
+// restriction on queue-name shape.
+//
+// This test exists so that stays true. Tightening queue validation into a
+// pattern that assumes flat names would break CHAOS-4027 silently, at the
+// moment those queues first appear rather than in the change that caused it.
+func TestQueueSelectionAcceptsDottedSubpathNames(t *testing.T) {
+	t.Parallel()
+
+	queues := []string{"sync.github", "sync.github.heavy", "sync_provider"}
+	cfg, err := Load(Spec{
+		Service:       "dev-health-worker",
+		RequireQueues: true,
+		Queues:        []string{strings.Join(queues, ",")},
+		Overrides: map[string]string{
+			"DEV_HEALTH_QUEUE_CONCURRENCY": "sync.github=1,sync.github.heavy=2,sync_provider=1",
+		},
+		LookupEnv: lookup(nil),
+	})
+	if err != nil {
+		t.Fatalf("dotted subpath queue names must be accepted: %v", err)
+	}
+	want := []string{"sync.github", "sync.github.heavy", "sync_provider"}
+	if !slices.Equal(cfg.Queues, want) {
+		t.Fatalf("queues = %v, want %v", cfg.Queues, want)
+	}
+	if cfg.WorkerQueueConcurrency["sync.github.heavy"] != 2 {
+		t.Fatalf("per-queue concurrency must key on the dotted name: %v", cfg.WorkerQueueConcurrency)
 	}
 }

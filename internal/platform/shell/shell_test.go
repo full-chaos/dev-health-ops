@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -516,5 +517,316 @@ func TestShellStartsEndpointsAndTerminatesCleanly(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "postgres://") {
 		t.Fatalf("startup logs exposed a DSN: %s", stdout.String())
+	}
+}
+
+// TestUnknownFlagIsRejectedAtStartup is the acceptance test for "a typo'd
+// option fails loudly at startup" (CHAOS-4020). The environment surface this
+// replaces has no equivalent: a misspelled variable name is indistinguishable
+// from an unset one, which is how a typo'd OTEL_SERVICE_NAMEi sat inert in
+// production. The exit status must be the argument-error status, not a
+// configuration or runtime failure, and the process must never reach dependency
+// construction.
+func TestUnknownFlagIsRejectedAtStartup(t *testing.T) {
+	for _, args := range [][]string{
+		{"--queeues=metrics"},
+		{"--otel-service-namei=worker"},
+		{"--concurrency=metrics=1", "--not-a-flag"},
+		{"--worker-group"}, // present but missing its value
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			constructed := false
+			var stdout, stderr bytes.Buffer
+			code := Execute(
+				t.Context(),
+				Spec{
+					Service:       "dev-health-worker",
+					RequireQueues: true,
+					ConfigureDependencies: func(
+						context.Context, config.Config, *health.Registry,
+					) ([]lifecycle.Component, error) {
+						constructed = true
+						return nil, nil
+					},
+				},
+				args,
+				testLookup(nil),
+				IO{Stdout: &stdout, Stderr: &stderr},
+			)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2 for an argument error", code)
+			}
+			if constructed {
+				t.Fatal("dependency construction must never run for an unparseable command line")
+			}
+			if !strings.Contains(stderr.String(), "--help") {
+				t.Errorf("the failure must point at --help, got %q", stderr.String())
+			}
+		})
+	}
+}
+
+// TestHelpListsEveryOptionAndExitsCleanly keeps --help the single discovery
+// surface: an operator configuring a worker for the first time must be able to
+// read the whole option set, including the environment fallback of each option
+// and the route vocabulary, without exit status noise.
+func TestHelpListsEveryOptionAndExitsCleanly(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Execute(
+				t.Context(),
+				Spec{Service: "dev-health-worker", RequireQueues: true},
+				[]string{flag},
+				testLookup(nil),
+				IO{Stdout: &stdout, Stderr: &stderr},
+			)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 for --help", code)
+			}
+			help := stdout.String()
+			for _, fragment := range []string{
+				"-Q, --queues",
+				"-c, --concurrency",
+				"DEV_HEALTH_QUEUE_CONCURRENCY",
+				"PROVIDER ROUTE SWITCHES",
+				"POSTGRES_URI",
+				"environment only",
+			} {
+				if !strings.Contains(help, fragment) {
+					t.Errorf("--help is missing %q", fragment)
+				}
+			}
+		})
+	}
+}
+
+// TestShortAndLongQueueFlagsAreOneSetting proves -q and --queues are aliases of
+// a single value rather than two settings that could disagree, and that the
+// deprecated --queue-concurrency spelling still reaches the same place.
+func TestShortAndLongQueueFlagsAreOneSetting(t *testing.T) {
+	for name, args := range map[string][]string{
+		// -Q is Celery's spelling and the canonical short form here.
+		"celery short":     {"-Q", "metrics,reports", "-c", "metrics=2,reports=1"},
+		"short":            {"-q", "metrics,reports", "-c", "metrics=2,reports=1"},
+		"long":             {"--queues=metrics,reports", "--concurrency=metrics=2,reports=1"},
+		"repeated":         {"-q", "metrics", "-q", "reports", "-c", "metrics=2", "-c", "reports=1"},
+		"deprecated alias": {"--queues=metrics,reports", "--queue-concurrency=metrics=2,reports=1"},
+		"mixed celery":     {"-Q", "metrics", "-q", "reports", "-c", "metrics=2,reports=1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var observed config.Config
+			var stdout, stderr bytes.Buffer
+			code := Execute(
+				t.Context(),
+				Spec{
+					Service:       "dev-health-worker",
+					RequireQueues: true,
+					ConfigureDependencies: func(
+						_ context.Context, cfg config.Config, _ *health.Registry,
+					) ([]lifecycle.Component, error) {
+						observed = cfg
+						return nil, errors.New("stop before running")
+					},
+				},
+				args,
+				testLookup(nil),
+				IO{Stdout: &stdout, Stderr: &stderr},
+			)
+			if code != 1 {
+				t.Fatalf("exit code = %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if !slices.Equal(observed.Queues, []string{"metrics", "reports"}) {
+				t.Fatalf("queues = %v", observed.Queues)
+			}
+			if observed.WorkerQueueConcurrency["metrics"] != 2 ||
+				observed.WorkerQueueConcurrency["reports"] != 1 {
+				t.Fatalf("concurrency = %v", observed.WorkerQueueConcurrency)
+			}
+		})
+	}
+}
+
+// TestFlagsBeatEnvironmentThroughTheShell exercises the whole precedence chain
+// end to end, and proves the shadowed environment value is reported rather than
+// fatal -- the property that lets configuration move into `command:` one
+// surface at a time while host .env files still carry the old variables.
+func TestFlagsBeatEnvironmentThroughTheShell(t *testing.T) {
+	var observed config.Config
+	var stdout, stderr bytes.Buffer
+	code := Execute(
+		t.Context(),
+		Spec{
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			ConfigureDependencies: func(
+				_ context.Context, cfg config.Config, _ *health.Registry,
+			) ([]lifecycle.Component, error) {
+				observed = cfg
+				return nil, errors.New("stop before running")
+			},
+		},
+		[]string{
+			"-q", "metrics",
+			"-c", "metrics=2",
+			"--worker-group=from-flag",
+			"--log-level=warn",
+		},
+		testLookup(map[string]string{
+			"DEV_HEALTH_WORKER_GROUP": "from-environment",
+			"DEV_HEALTH_LOG_LEVEL":    "debug",
+			"DEV_HEALTH_HTTP_ADDR":    "127.0.0.1:9099",
+		}),
+		IO{Stdout: &stdout, Stderr: &stderr},
+	)
+	if code != 1 {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if observed.WorkerGroup != "from-flag" {
+		t.Fatalf("worker group = %q, want the flag value", observed.WorkerGroup)
+	}
+	if observed.LogLevel != slog.LevelWarn {
+		t.Fatalf("log level = %s, want the flag value", observed.LogLevel)
+	}
+	// The setting with no flag still resolves from the environment.
+	if observed.HTTPAddress != "127.0.0.1:9099" {
+		t.Fatalf("http address = %q, want the environment fallback", observed.HTTPAddress)
+	}
+	// ...and is named in a startup warning so it is not silently invisible.
+	if !slices.Equal(observed.EnvOnlySettings, []string{"http-addr"}) {
+		t.Fatalf("EnvOnlySettings = %v, want only http-addr", observed.EnvOnlySettings)
+	}
+	if !strings.Contains(stdout.String(), "configuration supplied through environment variables") {
+		t.Error("an environment-configured setting must produce a startup warning")
+	}
+}
+
+// TestCredentialsAreNotAcceptedAsFlags keeps DSNs off the command line at the
+// parse layer, not merely by convention: a --postgres-uri flag would place a
+// credential in `ps` output and in `docker compose config`.
+func TestCredentialsAreNotAcceptedAsFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Execute(
+		t.Context(),
+		Spec{Service: "dev-health-worker", RequireQueues: true},
+		[]string{"--postgres-uri=postgres://operator:hunter2-pw@db.internal/devhealth"},
+		testLookup(nil),
+		IO{Stdout: &stdout, Stderr: &stderr},
+	)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want a rejected argument", code)
+	}
+	// The refusal names the flag, never the value behind it: a rejected
+	// credential must not be copied into the process log by the rejection.
+	if strings.Contains(stderr.String()+stdout.String(), "hunter2-pw") {
+		t.Error("the rejection must not echo the credential it refused")
+	}
+	if !strings.Contains(stderr.String(), "postgres-uri") {
+		t.Errorf("the rejection must name the offending flag, got %q", stderr.String())
+	}
+}
+
+// TestCeleryLogLevelAliasIsAcceptedAndWins pins the other spelling the Python
+// Celery worker CLI uses. The Go worker mirrors that CLI, so an operator moving
+// between the two fleets should not have to remember which one hyphenates.
+func TestCeleryLogLevelAliasIsAcceptedAndWins(t *testing.T) {
+	var observed config.Config
+	var stdout, stderr bytes.Buffer
+	code := Execute(
+		t.Context(),
+		Spec{
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			ConfigureDependencies: func(
+				_ context.Context, cfg config.Config, _ *health.Registry,
+			) ([]lifecycle.Component, error) {
+				observed = cfg
+				return nil, errors.New("stop before running")
+			},
+		},
+		[]string{"-Q", "metrics", "-c", "metrics=1", "--loglevel=warn"},
+		testLookup(map[string]string{"DEV_HEALTH_LOG_LEVEL": "debug"}),
+		IO{Stdout: &stdout, Stderr: &stderr},
+	)
+	if code != 1 {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if observed.LogLevel != slog.LevelWarn {
+		t.Fatalf("log level = %s, want the --loglevel flag value", observed.LogLevel)
+	}
+}
+
+// TestRoutesFlagIsGone is a deliberate negative: provider route enablement is
+// not a CLI surface. A worker executes the queues it subscribes to, and the
+// forty WORKER_*_ENABLED switches survive only as the producer/executor
+// agreement. Re-adding a --routes flag should fail here.
+func TestRoutesFlagIsGone(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Execute(
+		t.Context(),
+		Spec{Service: "dev-health-worker", RequireQueues: true},
+		[]string{"-Q", "metrics", "-c", "metrics=1", "--routes=github/prs"},
+		testLookup(nil),
+		IO{Stdout: &stdout, Stderr: &stderr},
+	)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 for an undefined flag", code)
+	}
+}
+
+// TestBlankFlagDoesNotShadowTheEnvironment is the regression guard for a defect
+// an adversarial review found that my own blank-value test could not: that test
+// asserted a blank flag resolves to the DEFAULT, with no environment value
+// present. Both "blank is ignored" and "blank overrides with nothing" satisfy
+// that, so it passed while the second was true.
+//
+// The distinguishing case needs a NON-BLANK environment value to shadow. On
+// main a blank argument was trimmed and fell through to the environment; an
+// empty override that won instead would silently drop a deployment's shutdown
+// budget to the 30s package default and flip ShutdownTimeoutExplicit, which
+// feeds the drain-budget branch in cmd/dev-health-worker.
+func TestBlankFlagDoesNotShadowTheEnvironment(t *testing.T) {
+	var observed config.Config
+	var stdout, stderr bytes.Buffer
+	code := Execute(
+		t.Context(),
+		Spec{
+			Service:       "dev-health-worker",
+			RequireQueues: true,
+			ConfigureDependencies: func(
+				_ context.Context, cfg config.Config, _ *health.Registry,
+			) ([]lifecycle.Component, error) {
+				observed = cfg
+				return nil, errors.New("stop before running")
+			},
+		},
+		[]string{
+			"-Q", "heartbeat",
+			"-c", "heartbeat=1",
+			"--shutdown-timeout=",
+			"--worker-group=",
+			"--log-level=",
+		},
+		testLookup(map[string]string{
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "7260s",
+			"DEV_HEALTH_WORKER_GROUP":     "ops",
+			"DEV_HEALTH_LOG_LEVEL":        "warn",
+		}),
+		IO{Stdout: &stdout, Stderr: &stderr},
+	)
+	if code != 1 {
+		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
+	}
+	if observed.ShutdownTimeout != 7260*time.Second {
+		t.Fatalf("shutdown timeout = %s, want the environment's 7260s", observed.ShutdownTimeout)
+	}
+	if !observed.ShutdownTimeoutExplicit {
+		t.Error("an environment-supplied timeout must still count as an operator choice")
+	}
+	if observed.WorkerGroup != "ops" {
+		t.Fatalf("worker group = %q, want the environment's ops", observed.WorkerGroup)
+	}
+	if observed.LogLevel != slog.LevelWarn {
+		t.Fatalf("log level = %s, want the environment's warn", observed.LogLevel)
 	}
 }

@@ -42,24 +42,81 @@ dev-hops workers start-worker \
 ### Start a Go worker group
 
 `dev-health-worker` requires an explicit, static set of registered queues. The
-deployment passes process topology as command arguments. Queue and concurrency
-arguments may be comma-separated or repeated. The process sorts and validates
-the set before readiness and constructs one River client for all selected
-queues.
+deployment passes its whole configuration as command arguments. Queue and
+concurrency arguments may be comma-separated or repeated. The process sorts and
+validates the set before readiness and constructs one River client for all
+selected queues.
 
 ```bash
 dev-health-worker \
-  --queues sync,sync_provider \
-  --queue-concurrency sync=4,sync_provider=2 \
+  -Q sync,sync_provider \
+  -c sync=4,sync_provider=2 \
   --worker-group sync \
   --shutdown-timeout 960s
 ```
 
-`--queues` is the only way to select queues; there is no environment fallback
-for it. `DEV_HEALTH_QUEUE_CONCURRENCY`, `DEV_HEALTH_WORKER_GROUP`, and
-`DEV_HEALTH_SHUTDOWN_TIMEOUT` remain supported as fallbacks for existing
-supervisors. Do not set one of those together with its command argument;
-ambiguous input fails before readiness.
+The flag surface mirrors the Python Celery worker CLI: `-Q/--queues` names the
+queues to consume and `-c/--concurrency` sets the worker budget, exactly as
+`celery -A dev_health_ops.workers.celery_app worker -Q … --concurrency=…` does
+for the Celery fleet. `-q` and `--loglevel` are accepted as aliases.
+
+**The two fleets do not serve the same queues.** `-Q` names queues from the Go
+River topology (`coverage`, `heartbeat`, `investment`, `metrics`, `reports`,
+`retention`, `sync`, `sync_provider`, `webhooks`, `workgraph`). Four of those
+names — `metrics`, `reports`, `sync`, `webhooks` — are shared with the Celery
+app and mean the same thing; the rest exist in only one runtime. Selecting a
+queue this fleet does not serve fails before readiness, because startup
+validation requires the selected queue set to equal the constructed handler
+set.
+
+**`--help` is the discovery surface.** Run `dev-health-worker --help` for the
+complete option list: every flag, the environment variable it falls back to,
+and its default, grouped by purpose. The reconciler, scheduler, and stream
+runner print the options *they* accept, so a binary never advertises a setting
+it ignores.
+
+Resolution order is **flag > environment > default**. Every option except the
+credentials below may be given either way; the flag wins when both are present,
+and the process logs one warning at startup naming any setting that arrived
+through the environment. `--queues` has no environment fallback: every deploy artifact passes it.
+
+An **unknown flag is rejected before the process starts** (exit status 2). This
+is the property an environment variable cannot offer: a misspelled variable
+name is indistinguishable from an unset one and stays silently inert, which is
+how a typo'd `OTEL_SERVICE_NAMEi` survived unnoticed in production.
+
+`-c` is the canonical short form of `--concurrency`, matching Celery;
+`--queue-concurrency` remains accepted as a deprecated alias so supervisors
+outside this repository keep working.
+
+#### Provider route switches stay in the environment
+
+The forty `WORKER_<PROVIDER>_<DATASET>_ENABLED` switches are **not** on the CLI
+and deliberately have no flag. What a worker executes follows from the queues it
+subscribes to; a parallel forty-switch enablement surface does not scale, and it
+is the thing being designed away.
+
+They remain as environment variables because the Python planner reads the
+identical names through `ProviderUnitRouteSwitches` to decide what to *plan*.
+Producer and executor must agree: a planner that emits units for a route no
+executor serves is the wedge shape CHAOS-3990 exists to prevent. `GO_PROVIDER_ROUTES=all`
+(local only, requires `DEV_HEALTH_ENV=local`) is unchanged.
+
+#### What stays in the environment
+
+Credentials only, and deliberately. A DSN or token passed as a process argument
+is readable through `ps`, `docker inspect`, and `docker compose config`, so
+these ten have no flag and `--help` documents them as environment-only:
+
+`POSTGRES_URI`, `WORKER_DATABASE_URI`, `COORDINATOR_DATABASE_URI`,
+`CLICKHOUSE_URI`, `VALKEY_URI`, `SETTINGS_ENCRYPTION_KEY`,
+`SETTINGS_ENCRYPTION_SALT`, `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`,
+`WORKER_OPERATIONAL_BRIDGE_TOKEN`.
+
+Everything else a Go worker reads is a flag, and the shipped Compose, Swarm,
+Kubernetes, and Helm surfaces pass it in `command:`/`args:` — so
+`docker compose config` and `kubectl describe pod` show the deployed
+configuration in one place instead of a merged environment map.
 
 The deployment owns the worker group name, replicas, resources, autoscaling,
 shutdown budget, and per-queue concurrency. The binary owns neither a named

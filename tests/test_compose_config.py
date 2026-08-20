@@ -188,7 +188,7 @@ _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.y
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.yml"
-_GO_CONFIG = _REPO_ROOT / "internal" / "platform" / "config" / "config.go"
+_GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
@@ -1362,9 +1362,18 @@ def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
 
 def test_provider_route_switch_inventory_matches_go_config() -> None:
     """The packaging census must move with the typed Go configuration surface."""
+    # Scan the whole platform config package rather than one file in it.
+    # CHAOS-4020 moved the route switches out of config.go into their own
+    # registry, and a census pinned to a single filename would have gone quietly
+    # empty instead of failing -- the same shape of silent drift this census
+    # exists to catch.
     configured = frozenset(
-        re.findall(r'"(WORKER_[A-Z0-9_]+_ENABLED)"', _GO_CONFIG.read_text())
+        name
+        for source in sorted(_GO_CONFIG_PACKAGE.glob("*.go"))
+        if not source.name.endswith("_test.go")
+        for name in re.findall(r'"(WORKER_[A-Z0-9_]+_ENABLED)"', source.read_text())
     )
+    assert configured, "the route-switch census scanned no Go source at all"
     assert configured == _PROVIDER_ROUTE_SWITCH_NAMES
 
 

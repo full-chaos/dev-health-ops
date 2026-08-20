@@ -58,6 +58,7 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	orgID := uuid.New()
 	tracedRun := uuid.New()
 	untracedRun := uuid.New()
 	tracedOutbox := uuid.New()
@@ -88,8 +89,8 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 	}
 	for _, row := range outboxRows {
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO public.sync_dispatch_outbox (id, org_id, sync_run_id, kind) VALUES ($1, 'org-1', $2, 'dispatch_sync_run')`,
-			row.id, row.runID,
+			`INSERT INTO public.sync_dispatch_outbox (id, org_id, sync_run_id, kind) VALUES ($1, $2, $3, 'dispatch_sync_run')`,
+			row.id, orgID.String(), row.runID,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +102,7 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := syncdispatchruntime.DomainReference{
-			OrganizationID: "org-1", SyncRunID: tracedRun.String(), TraceParent: wantTraceParent,
+			OrganizationID: orgID.String(), SyncRunID: tracedRun.String(), TraceParent: wantTraceParent,
 		}
 		if got != want {
 			t.Fatalf("got %+v, want %+v", got, want)
@@ -114,7 +115,7 @@ func TestSyncDispatchReferenceJoinsTraceParentFromSyncRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := syncdispatchruntime.DomainReference{
-			OrganizationID: "org-1", SyncRunID: untracedRun.String(), TraceParent: "",
+			OrganizationID: orgID.String(), SyncRunID: untracedRun.String(), TraceParent: "",
 		}
 		if got != want {
 			t.Fatalf("got %+v, want %+v", got, want)

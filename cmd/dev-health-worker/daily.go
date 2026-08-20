@@ -165,7 +165,14 @@ func buildDailyWorker(
 	}
 
 	if len(remainingSpecs) > 0 {
-		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain)
+		// The remaining-metrics store reports a release-lost lease directly, the
+		// same way the daily store does above (CHAOS-4002): generic middleware
+		// cannot tell that outcome apart from an ordinary release.
+		var remainingLeaseObservers []jobruntime.RemainingMetricsLeaseObserver
+		if leaseObserver, ok := observer.(jobruntime.RemainingMetricsLeaseObserver); ok {
+			remainingLeaseObservers = append(remainingLeaseObservers, leaseObserver)
+		}
+		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain, remainingLeaseObservers...)
 		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
 			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			remaining.HTTPCompatibilityConfig{

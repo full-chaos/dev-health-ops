@@ -217,6 +217,8 @@ type MetricsCollector struct {
 	syncLeaseExpired      map[syncLeaseResultLabels]uint64
 	reportRunLeaseExpired map[ReportRunLeaseResult]uint64
 	dailyMetricsLease     map[dailyMetricsLeaseLabels]uint64
+	workGraphReleaseLost  uint64
+	remainingReleaseLost  uint64
 
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
@@ -234,6 +236,8 @@ var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
 var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
+var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
+var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -581,6 +585,26 @@ func (collector *MetricsCollector) ObserveDailyMetricsLease(
 	return nil
 }
 
+// ObserveWorkGraphLeaseReleaseLost records a work-graph claimant that could not
+// stand its own row down because its lease had already expired (CHAOS-4002).
+// Unlike the daily-metrics lease, work-graph has one lease-fenced release path
+// shared by all five kinds, so there is no stage dimension to record.
+func (collector *MetricsCollector) ObserveWorkGraphLeaseReleaseLost() error {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.workGraphReleaseLost++
+	return nil
+}
+
+// ObserveRemainingMetricsLeaseReleaseLost is ObserveWorkGraphLeaseReleaseLost's
+// remaining-metrics equivalent (CHAOS-4002).
+func (collector *MetricsCollector) ObserveRemainingMetricsLeaseReleaseLost() error {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.remainingReleaseLost++
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -740,6 +764,8 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeSyncLeases(&output)
 	collector.writeReportRunLeases(&output)
 	collector.writeDailyMetricsLeases(&output)
+	collector.writeWorkGraphLease(&output)
+	collector.writeRemainingMetricsLease(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
 	collector.writeConcurrencyBudgets(&output)
@@ -901,6 +927,16 @@ func (collector *MetricsCollector) writeDailyMetricsLeases(output *strings.Build
 			{"stage", string(labels.Stage)}, {"result", string(labels.Result)},
 		}, collector.dailyMetricsLease[labels])
 	}
+}
+
+func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) {
+	writeMetadata(output, "worker_workgraph_lease_release_lost_total", "Work-graph releases that found their own lease already expired.", "counter")
+	writeUintSample(output, "worker_workgraph_lease_release_lost_total", nil, collector.workGraphReleaseLost)
+}
+
+func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Builder) {
+	writeMetadata(output, "worker_remaining_metrics_lease_release_lost_total", "Remaining-metrics releases that found their own lease already expired.", "counter")
+	writeUintSample(output, "worker_remaining_metrics_lease_release_lost_total", nil, collector.remainingReleaseLost)
 }
 
 func (collector *MetricsCollector) writeBudgets(output *strings.Builder) {

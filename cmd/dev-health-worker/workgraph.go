@@ -38,7 +38,15 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	store, err := workgraph.NewPostgresStore(postgresDatabase.pools.Domain)
+	// The work-graph store reports a release-lost lease directly: generic
+	// middleware cannot tell that outcome apart from an ordinary release, and
+	// only the store that ran the fenced UPDATE knows it matched zero rows
+	// because the lease had already expired (CHAOS-4002).
+	var leaseObservers []jobruntime.WorkGraphLeaseObserver
+	if leaseObserver, ok := observer.(jobruntime.WorkGraphLeaseObserver); ok {
+		leaseObservers = append(leaseObservers, leaseObserver)
+	}
+	store, err := workgraph.NewPostgresStore(postgresDatabase.pools.Domain, leaseObservers...)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}

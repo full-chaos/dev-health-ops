@@ -107,6 +107,15 @@ _module(
     upsert_outbox_wakeup=lambda *_args, **_kwargs: None,
 )
 _module("dev_health_ops.sync.guard", _resolve_total_unit_cap=lambda *_args: 1000)
+# CHAOS-3996 gave planner.py a new module-level dependency on this name
+# (``from dev_health_ops.tracing import current_trace_parent``, used to stamp
+# sync_runs.trace_parent at plan time). The stub must expose it or the oracle
+# fails to IMPORT, same failure mode as the watermarks stub below (CHAOS-3412).
+# There is no active span in this oracle process, so returning None matches
+# what current_trace_parent() itself returns with no span in progress --
+# this oracle tests planning parity, not tracing, so a real OTel dependency
+# here would be scope creep.
+_module("dev_health_ops.tracing", current_trace_parent=lambda: None)
 _module(
     "dev_health_ops.sync.pagerduty_repair",
     repair_pagerduty_operational_integration=lambda *_args: None,

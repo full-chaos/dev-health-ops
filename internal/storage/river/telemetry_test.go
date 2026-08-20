@@ -141,20 +141,35 @@ func TestQueueTelemetrySamplerCompatibilityAndQueryErrorsAreStable(t *testing.T)
 			t.Fatalf("compatibility error leaked row detail: %v", err)
 		}
 	})
-	// A label the database somehow returned outside the bounded vocabulary is
-	// refused as an unreadable snapshot rather than echoed into a log line.
+	// A label outside the bounded vocabulary is REPLACED, not echoed -- and
+	// crucially it does not take the backlog metrics down with it. Refusing
+	// the whole read would have broken this sampler's contract that an
+	// unsupported contract never hides metrics, and it is reachable from a
+	// pre-existing river_job row whose kind is not in the label character
+	// class: an odd kind must cost the diagnostic its precision, never the
+	// metrics their availability.
 	t.Run("offender label out of vocabulary", func(t *testing.T) {
 		t.Parallel()
+		leaked := []string{"sync/dispatch_sync_run@{\"token\":\"secret\"}"}
 		sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
-			leaked := []string{"sync/dispatch_sync_run@{\"token\":\"secret\"}"}
 			return []queueTelemetryRow{
 				{queue: "heartbeat", kind: "system.heartbeat", unsupportedOccupants: leaked},
 				{queue: "retention", kind: "system.retention_cleanup", unsupportedOccupants: leaked},
 			}, nil
 		})
+		if _, err := sampler.Snapshot(context.Background()); err != nil {
+			t.Fatalf("an odd offender label made the backlog metrics unavailable: %v", err)
+		}
 		err := sampler.CheckAvailableContractVersions(context.Background())
-		if err != ErrQueueTelemetryUnavailable || strings.Contains(err.Error(), "secret") {
+		if !errors.Is(err, ErrUnsupportedAvailableContractVersion) {
 			t.Fatalf("out-of-vocabulary offender label was not refused: %v", err)
+		}
+		if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "token") {
+			t.Fatalf("out-of-vocabulary offender label leaked row detail: %v", err)
+		}
+		var named *UnsupportedContractVersionError
+		if !errors.As(err, &named) || !reflect.DeepEqual(named.Offenders, []string{unprintableOffender}) {
+			t.Fatalf("offenders = %v, want [%s]", named, unprintableOffender)
 		}
 	})
 	t.Run("query error", func(t *testing.T) {

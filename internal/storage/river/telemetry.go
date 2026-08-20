@@ -277,7 +277,7 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 		key := queueJobKey{queue: row.queue, kind: row.kind}
 		if row.available < 0 || row.localRunning < 0 || row.queueRunning < 0 ||
 			math.IsNaN(row.oldestAgeSeconds) || math.IsInf(row.oldestAgeSeconds, 0) ||
-			row.oldestAgeSeconds < 0 || !validOffenderLabels(row.unsupportedOccupants) {
+			row.oldestAgeSeconds < 0 {
 			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 		if _, duplicate := available[key]; duplicate || !sampler.hasJob(key) {
@@ -298,9 +298,9 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 		// not the single consistent observation this sampler contracts for.
 		if index == 0 {
 			localRunning = row.localRunning
-			offenders = append([]string(nil), row.unsupportedOccupants...)
+			offenders = sanitizeOffenderLabels(row.unsupportedOccupants)
 		} else if localRunning != row.localRunning ||
-			!slices.Equal(offenders, row.unsupportedOccupants) {
+			!slices.Equal(offenders, sanitizeOffenderLabels(row.unsupportedOccupants)) {
 			return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
 		}
 	}
@@ -333,28 +333,50 @@ func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueT
 	return result, offenders, nil
 }
 
-// validOffenderLabels re-checks the bounded labels the database aggregated, so
-// a value that somehow escaped the SQL truncation -- or a row written outside
-// this application's insert paths -- can never reach an error string or a log
-// line. The label is "queue/kind@version"; queue and kind must satisfy the
-// same character class and length limit the configuration side enforces, and
-// the version must be digits or the literal "none".
-func validOffenderLabels(labels []string) bool {
-	if len(labels) > maximumUnsupportedOffenders {
-		return false
+// unprintableOffender replaces a label that is not in the bounded vocabulary.
+// It is deliberately a whole label, not a marker spliced into a real one: the
+// point is that nothing derived from row content reaches a log line unchecked.
+const unprintableOffender = "unprintable/unprintable@none"
+
+// sanitizeOffenderLabels re-checks the bounded labels the database aggregated
+// and REPLACES anything outside the vocabulary, so a value that somehow
+// escaped the SQL sanitisation -- or a row written outside this application's
+// insert paths -- can never reach an error string or a log line.
+//
+// It replaces rather than rejects on purpose. Rejecting made the whole read
+// unreadable, and this sampler's Snapshot contract is that an unsupported
+// contract never hides backlog metrics: an odd kind must cost the DIAGNOSTIC
+// its precision, never the metrics their availability. The refusal still
+// happens, because the row is still unsupported.
+//
+// The label is "queue/kind@version"; queue and kind must satisfy the same
+// character class and length limit the configuration side enforces, and the
+// version must be digits, "none", or "invalid".
+func sanitizeOffenderLabels(labels []string) []string {
+	if len(labels) == 0 {
+		return nil
 	}
+	sanitized := make([]string, 0, min(len(labels), maximumUnsupportedOffenders))
 	for _, label := range labels {
-		queueAndRest, version, found := strings.Cut(label, "@")
-		if !found || !validOffenderVersion(version) {
-			return false
+		if len(sanitized) == maximumUnsupportedOffenders {
+			break
 		}
-		queue, kind, found := strings.Cut(queueAndRest, "/")
-		if !found || !telemetryLabel(queue, maximumQueueTelemetryLabelLength) ||
-			!telemetryLabel(kind, maximumQueueTelemetryLabelLength) {
-			return false
-		}
+		sanitized = append(sanitized, sanitizeOffenderLabel(label))
 	}
-	return true
+	return sanitized
+}
+
+func sanitizeOffenderLabel(label string) string {
+	queueAndRest, version, found := strings.Cut(label, "@")
+	if !found || !validOffenderVersion(version) {
+		return unprintableOffender
+	}
+	queue, kind, found := strings.Cut(queueAndRest, "/")
+	if !found || !telemetryLabel(queue, maximumQueueTelemetryLabelLength) ||
+		!telemetryLabel(kind, maximumQueueTelemetryLabelLength) {
+		return unprintableOffender
+	}
+	return label
 }
 
 func validOffenderVersion(version string) bool {
@@ -683,8 +705,26 @@ unsupported_available AS (
             SELECT array_agg(offender ORDER BY offender)
             FROM (
                 SELECT DISTINCT
-                    left(river_job.queue, {{label_length}}) || '/' ||
-                    left(river_job.kind, {{label_length}}) || '@' ||
+                    -- Sanitised in SQL, not merely truncated. left() counts
+                    -- CHARACTERS while the Go re-validation counts BYTES, and
+                    -- the Go class is ASCII-only, so a multi-byte or
+                    -- out-of-class kind would produce a label the Go side
+                    -- rejects. That used to invalidate the whole read -- which
+                    -- would take the BACKLOG METRICS down with it, breaking
+                    -- this sampler's stated invariant that an unsupported
+                    -- contract never hides them. Emitting a placeholder keeps
+                    -- the refusal (the row really is unsupported) without
+                    -- costing the metrics.
+                    CASE
+                        WHEN river_job.queue ~ '^[A-Za-z0-9._:-]{1,{{label_length}}}$'
+                        THEN river_job.queue
+                        ELSE 'unprintable'
+                    END || '/' ||
+                    CASE
+                        WHEN river_job.kind ~ '^[A-Za-z0-9._:-]{1,{{label_length}}}$'
+                        THEN river_job.kind
+                        ELSE 'unprintable'
+                    END || '@' ||
                     CASE
                         -- Three outcomes, not two. A JSON number that is not a
                         -- canonical unsigned integer -- -1, 1.5, 1e3 -- is a

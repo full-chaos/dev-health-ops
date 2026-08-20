@@ -153,10 +153,11 @@ func (pipeline *MutationPipeline) Step(
 	); err != nil {
 		return Observation{}, err
 	}
+	// The repair commits its own transaction, so its recoveries are durable
+	// even when a later stage fails. Stamp the count before returning either
+	// way: an observation that reports zero recoveries after rows were in fact
+	// reclaimed would let a cycling run stay under the alert threshold.
 	observation, err := pipeline.observer.Step(ctx, now, limit)
-	if err != nil {
-		return observation, err
-	}
 	observation.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
-	return observation, nil
+	return observation, err
 }

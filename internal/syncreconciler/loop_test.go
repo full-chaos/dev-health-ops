@@ -741,3 +741,51 @@ func assertRecoveryTotal(t *testing.T, loop *Loop, want int) {
 		t.Fatalf("metrics missing %q:\n%s", strings.TrimSuffix(line, "\n"), metrics.String())
 	}
 }
+
+// TestLoopCountsExhaustedDeliveryRecoveriesFromAFailedStep pins the count
+// against the step's own outcome. The repair commits before any later stage
+// runs, so its reclaims are durable even when the step as a whole fails.
+// Counting only successful steps would drop reclaims that happened while the
+// pipeline was degraded -- which is precisely when a delivery cycling on
+// exhaustion is a plausible cause of the degradation.
+func TestLoopCountsExhaustedDeliveryRecoveriesFromAFailedStep(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
+	calls := make(chan struct{}, 2)
+	var steps atomic.Int64
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		observation := testObservation()
+		defer func() { calls <- struct{}{} }()
+		// The loop refuses to start on a failed initial observation, so the
+		// failure under test has to be the second step.
+		if steps.Add(1) == 1 {
+			return observation, nil
+		}
+		observation.ExhaustedDeliveriesRecovered = 4
+		return observation, ErrUnknownKind
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := loop.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	<-calls
+	assertRecoveryTotal(t, loop, 0)
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+	select {
+	case err := <-loop.Errors():
+		if !errors.Is(err, ErrUnknownKind) {
+			t.Fatalf("loop error = %v, want ErrUnknownKind", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop never reported the failed step")
+	}
+	assertRecoveryTotal(t, loop, 4)
+}

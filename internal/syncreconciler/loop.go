@@ -251,6 +251,14 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 	stepCtx, cancel := context.WithTimeout(ctx, loop.config.ObservationTimeout)
 	defer cancel()
 	observation, err := loop.stepper.Step(stepCtx, now, loop.config.Limit)
+	// Recoveries are committed by the repair stage before anything downstream
+	// can fail, so they are counted here -- ahead of every error, timeout, and
+	// shutdown branch below. Counting them only on the success path would drop
+	// exactly the reclaims that happened during a degraded step, which is when
+	// a cycling delivery is most likely to be what is degrading it.
+	loop.mu.Lock()
+	loop.accumulateRecoveriesLocked(observation)
+	loop.mu.Unlock()
 	if contextErr := stepCtx.Err(); contextErr != nil {
 		return contextErr
 	}
@@ -285,7 +293,6 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		return err
 	}
 	loop.observation = copyObservation(observation)
-	loop.accumulateRecoveriesLocked(observation)
 	loop.lastOK = now
 	loop.up = true
 	loop.ready.Store(true)

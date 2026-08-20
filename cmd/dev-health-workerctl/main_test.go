@@ -348,12 +348,16 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 	}
 	// sync-provider is its own declared process (CHAOS-3926), so its
 	// max_replicas x per-process connections count separately from sync: queue
-	// session 22 -> 26 against a pool raised 23 -> 27, server 89 -> 93. Both
-	// processes ship at zero replicas, so runtime usage is unchanged; this is
-	// the declared worst case the budget has to cover.
-	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 26, Limit: 27, Headroom: 1}) ||
+	// session 22 -> 26. CHAOS-3945 then raised the queue pool 27 -> 36 (the
+	// declared footprint was pinned at headroom 1 in production; a Go worker
+	// fleet's steady replica churn plus go-workerctl needs real slack, not a
+	// wafer-thin margin) and raised server_max_connections 100 -> 200 to keep
+	// room under it: server footprint 93 -> 102. Both processes ship at zero
+	// replicas, so runtime usage is unchanged; this is the declared worst
+	// case the budget has to cover.
+	if status.ConnectionBudget.QueueSession != (connectionBudgetStatus{Used: 26, Limit: 36, Headroom: 10}) ||
 		status.ConnectionBudget.CoordinatorSession != (connectionBudgetStatus{Used: 10, Limit: 11, Headroom: 1}) ||
-		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 93, Limit: 100, Headroom: 7}) {
+		status.ConnectionBudget.Server != (connectionBudgetStatus{Used: 102, Limit: 200, Headroom: 98}) {
 		t.Fatalf("connection budget = %#v", status.ConnectionBudget)
 	}
 }

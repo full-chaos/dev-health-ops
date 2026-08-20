@@ -75,6 +75,24 @@ spec:
             - {name: AUTH_TYPE, value: scram-sha-256}
             - {name: DEFAULT_POOL_SIZE, value: {{ $pooler.poolSize | quote }}}
             - {name: MAX_CLIENT_CONN, value: {{ $pooler.maxClientConnections | quote }}}
+            # CHAOS-3944: log_connections/log_disconnections default on and
+            # turn steady Go worker replica churn into a continuous,
+            # diagnostically worthless log firehose, identically to the
+            # compose poolers (see deploy/docker-compose/compose.production.yml).
+            # log_pooler_errors and the default log_stats stay on: the
+            # once-a-minute stats line is the only real pooler telemetry.
+            - {name: LOG_CONNECTIONS, value: "0"}
+            - {name: LOG_DISCONNECTIONS, value: "0"}
+            - {name: LOG_POOLER_ERRORS, value: "1"}
+          # CHAOS-3944: tcpSocket only proves the port accepts a TCP connection,
+          # not that PgBouncer can actually authenticate and serve a query —
+          # the compose poolers now run an authenticated `psql -c "SELECT 1"`
+          # exec probe for the same reason (a pg_isready probe, even pinned to
+          # the real user/db, still reports healthy on an auth rejection).
+          # Left as tcpSocket here deliberately: an exec probe change for a
+          # k8s liveness/readiness gate has a different blast radius (pod
+          # restarts, rollout gating) than a compose healthcheck, so it is
+          # out of scope for this PR.
           readinessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 2, periodSeconds: 5}
           livenessProbe: {tcpSocket: {port: pgbouncer}, initialDelaySeconds: 10, periodSeconds: 10}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

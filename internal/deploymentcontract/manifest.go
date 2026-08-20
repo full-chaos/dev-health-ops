@@ -24,6 +24,21 @@ var (
 	envPattern   = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
 )
 
+// PostgresBudget is the checked-in connection-budget contract for the
+// PostgreSQL server the Go deployment's three PgBouncer endpoints share
+// (CHAOS-3945). ServerMaxConnections must equal that server's real,
+// configured `max_connections` value, not a Go-stack-only figure: the
+// transaction pool counted here is the SAME endpoint the Python/Celery
+// stack's domain traffic uses (see docs/operate/configure/databases-and-storage.md),
+// so this budget already covers the one pooler shared across both runtimes.
+// ServerReservedConnections is a deliberate flat buffer for everything this
+// model does not enumerate by name — direct/non-pooled sessions (migrations
+// are tracked separately via MigrationJob), operator psql sessions, and
+// managed-Postgres incidentals (a live host has shown a ~10-connection
+// unmodeled role alongside this budget's four). It is NOT a per-consumer
+// reconciliation; widening what it needs to cover is a bigger cross-plane
+// exercise than this struct, and should be a deliberate size change with its
+// own evidence, not a silent one.
 type PostgresBudget struct {
 	ServerMaxConnections                            int `json:"server_max_connections"`
 	ServerReservedConnections                       int `json:"server_reserved_connections"`

@@ -71,6 +71,16 @@ The contract gate validates that:
   and
 - maximum domain client connections stay below the PgBouncer client budget.
 
+`postgres_budget.server_max_connections` in `deployment.json` must equal the
+real, configured `max_connections` of the shared PostgreSQL server — it is not
+a Go-stack-only figure, because the transaction pool it counts is the same
+endpoint Python/Celery domain traffic uses too (CHAOS-3945). It was raised
+100 -> 200 to match a measured production value; the prior 100 predates that
+measurement and was already stale, independent of any pooler resize.
+`server_reserved_connections` is a flat, deliberately approximate buffer for
+everything this budget does not enumerate by name (operator psql sessions,
+managed-Postgres incidentals); it is not a per-consumer reconciliation.
+
 The budget is calculated from each group's `max_replicas`, including groups
 disabled by default, and one client per process. Enabling the complete declared
 topology cannot silently exceed the checked-in ceiling. Groups may remain at

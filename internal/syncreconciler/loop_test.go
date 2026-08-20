@@ -160,6 +160,14 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
 		}
 	}
+	// This replaced a blanket `!strings.Contains(metrics, " counter\n")`, whose
+	// intent is preserved verbatim from WritePrometheus: "It never accumulates
+	// snapshots: counters would misrepresent current queued work after rows are
+	// dispatched or claims expire." That rationale is about queued work, and it
+	// still holds for every metric it covered. This form is strictly tighter --
+	// the old substring check would have accepted a *gauge* named `_total`,
+	// which is the instrument that actually lies about a recovery event.
+	//
 	// Everything derived from an Observation snapshot must stay a gauge: a
 	// counter would keep reporting queued work that has since dispatched or
 	// expired. The exhausted-delivery total is the one deliberate exception --

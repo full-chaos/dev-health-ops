@@ -10,6 +10,8 @@ import (
 
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,8 +118,13 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 			t.Fatalf("repair step: %v", err)
 		}
 		if result != (TerminalDeliveryRepairResult{}) {
-			t.Fatalf("result = %#v, want no recovery", result)
+			t.Fatalf(
+				"result = %#v: a permanent discard was reclaimed, relitigating a terminal decision the worker already made",
+				result,
+			)
 		}
+		// last_error must remain unset: any stamped code proves a recovery
+		// branch ran, which is the failure here regardless of which one.
 		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
 	})
 
@@ -174,6 +181,112 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 			t.Fatalf("result = %#v, want no recovery", result)
 		}
 		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
+	})
+
+	// The safety argument for including exhaustion is that the pre-existing
+	// predicates already prove the delivery is the live one. These two controls
+	// hold that argument to a test instead of leaving it as prose in a comment:
+	// both seed an exhausted job whose work the domain has ALREADY moved past,
+	// and the repair must decline both. Without them, a refactor that loosened
+	// the outbox-to-job linkage would produce a double delivery while every
+	// other subtest here still passed -- verified by mutation: dropping
+	// `job.id::text = outbox.transport_job_id` from the join fails only the
+	// superseded case.
+	//
+	// Both controls are killed by the LINKAGE predicate, not by the
+	// `status = 'dispatched'` fence: a real re-arm nulls transport_job_id too
+	// (Python's upsert and this repair both do), so no reachable state has a
+	// pending row still pointing at a job. Mutating the status fence alone
+	// therefore changes nothing observable here. That is redundancy in the SQL,
+	// not a gap in these tests, and it is recorded so the next reader does not
+	// mistake one for the other.
+	t.Run("delivery whose body already re-armed the row is never reclaimed", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		discardRiverJob(t, ctx, adminPool, jobID, now, 5, 5, exhaustionBridgeError)
+		// The compatibility body ran and stamped its own wakeup, returning the
+		// row to 'pending'. The run is already progressing; a reclaim here
+		// would publish a second delivery of work that is under way.
+		if _, err := adminPool.Exec(
+			ctx,
+			`UPDATE public.sync_dispatch_outbox
+			 SET status = 'pending', available_at = $2, dispatched_at = NULL,
+				 dispatched_transport = NULL, dispatched_route_generation = NULL,
+				 transport_job_id = NULL, updated_at = $2
+			 WHERE id = $1`,
+			exhaustionRunID,
+			now,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("result = %#v, want no recovery", result)
+		}
+		var status string
+		var lastError *string
+		if err := adminPool.QueryRow(
+			ctx,
+			`SELECT status, last_error FROM public.sync_dispatch_outbox WHERE id = $1`,
+			exhaustionRunID,
+		).Scan(&status, &lastError); err != nil {
+			t.Fatal(err)
+		}
+		if status != "pending" || lastError != nil {
+			t.Fatalf("re-armed row was mutated: status=%q last_error=%v", status, lastError)
+		}
+	})
+
+	t.Run("superseded delivery is never reclaimed under a newer one", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		retired := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		discardRiverJob(t, ctx, adminPool, retired, now, 5, 5, exhaustionBridgeError)
+		// A newer delivery already replaced the exhausted one and is in flight.
+		// The exhausted job still sits in river_job, and only the
+		// transport_job_id linkage distinguishes it from the live delivery.
+		replacement, err := riverClient.Insert(ctx, kernelRiverArgs{OutboxID: exhaustionRunID}, &river.InsertOpts{
+			Queue: "sync",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(
+			ctx,
+			`UPDATE public.sync_dispatch_outbox
+			 SET transport_job_id = $2, dispatched_at = $3, updated_at = $3
+			 WHERE id = $1`,
+			exhaustionRunID,
+			strconv.FormatInt(replacement.Job.ID, 10),
+			now,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("result = %#v, want no recovery of a superseded delivery", result)
+		}
+		var status, transportID string
+		if err := adminPool.QueryRow(
+			ctx,
+			`SELECT status, transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`,
+			exhaustionRunID,
+		).Scan(&status, &transportID); err != nil {
+			t.Fatal(err)
+		}
+		if status != "dispatched" || transportID != strconv.FormatInt(replacement.Job.ID, 10) {
+			t.Fatalf(
+				"live delivery was disturbed: status=%q transport_job_id=%s want dispatched/%d",
+				status, transportID, replacement.Job.ID,
+			)
+		}
 	})
 
 	t.Run("exhausted delivery on a paused route is never reclaimed", func(t *testing.T) {
@@ -332,4 +445,150 @@ func assertOutboxDelivery(
 			dispatchAt,
 		)
 	}
+}
+
+// TestReclaimedCoordinatorDeliveryRepublishesAsANewRiverJob pins the fact the
+// whole reclaim silently depends on.
+//
+// The coordinator publisher inserts with UniqueOpts{ByArgs, ByState:
+// JobStates()}, and JobStates() includes 'discarded'. A byte-identical
+// re-publish after a reclaim would therefore be swallowed as a duplicate of the
+// job River just retired, and verifyInsert does not inspect
+// UniqueSkippedAsDuplicate -- so Publish would return the RETIRED job's id and
+// report success. The outbox would cycle pending -> dispatched -> pending
+// forever while no worker ever ran, which is a worse failure than the wedge
+// this repair exists to fix.
+//
+// It works only because TransportArgs carries DeliveryAttempt and the Kernel's
+// claim increments outbox.attempts, giving every redelivery distinct args and
+// so a distinct unique key. Nothing else enforces that. This test fails if
+// DeliveryAttempt is dropped from the args shape, or if the claim stops
+// advancing the attempt counter.
+func TestReclaimedCoordinatorDeliveryRepublishesAsANewRiverJob(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	adminPool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminPool.Close()
+	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema:     "river",
+		DomainRole: kernelDomainRole,
+		QueueRole:  kernelQueueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	riverClient, err := river.NewClient(riverpgxv5.New(adminPool), &river.Config{Schema: "river"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := syncdispatchruntime.NewPublisher(riverClient, syncdispatchruntime.PublisherOptions{
+		Queue:       syncdispatchcontract.RiverQueue,
+		MaxAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := syncdispatchruntime.DomainReference{
+		OrganizationID: "00000000-0000-4000-8000-0000000044f0",
+		SyncRunID:      exhaustionRunID,
+	}
+	publish := func(attempt int64) (string, error) {
+		tx, txErr := adminPool.Begin(ctx)
+		if txErr != nil {
+			return "", txErr
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		id, publishErr := publisher.Publish(ctx, tx, syncdispatchruntime.Claim{
+			OutboxID:        exhaustionRunID,
+			Kind:            syncdispatchcontract.KindDispatchSyncRun,
+			RouteGeneration: 7,
+			DeliveryAttempt: attempt,
+		}, reference)
+		if publishErr != nil {
+			return "", publishErr
+		}
+		return id, tx.Commit(ctx)
+	}
+
+	resetKernelIntegrationTables(t, ctx, adminPool)
+	first, err := publish(1)
+	if err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+
+	// Re-publishing the SAME delivery attempt must NOT mint a second job: that
+	// is the deduplication the unique key is there to provide, and it is what
+	// makes the assertion below meaningful rather than accidental.
+	same, err := publish(1)
+	if err != nil {
+		t.Fatalf("republish at the same attempt: %v", err)
+	}
+	if same != first {
+		t.Fatalf("republish at attempt 1 minted job %s, want the existing %s", same, first)
+	}
+
+	// Retire the delivery exactly as exhaustion does, then reclaim it.
+	firstID, err := strconv.ParseInt(first, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adminPool.Exec(
+		ctx,
+		`INSERT INTO public.sync_runs (id, status) VALUES ($1, 'running')
+		 ON CONFLICT (id) DO UPDATE SET status = 'running'`,
+		exhaustionRunID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	discardRiverJob(t, ctx, adminPool, firstID, time.Now().UTC(), 5, 5, exhaustionBridgeError)
+
+	// The next claim advances outbox.attempts, so the redelivery carries a
+	// different attempt -- and must therefore reach River as a NEW job rather
+	// than resolving to the discarded one.
+	second, err := publish(2)
+	if err != nil {
+		t.Fatalf("republish after reclaim: %v", err)
+	}
+	if second == first {
+		t.Fatalf(
+			"redelivery was deduplicated into the retired job %s: the reclaim would loop forever without ever running a worker",
+			first,
+		)
+	}
+	var state string
+	if err := adminPool.QueryRow(
+		ctx,
+		`SELECT state::text FROM river.river_job WHERE id = $1`,
+		mustParseJobID(t, second),
+	).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "available" {
+		t.Fatalf("redelivered job state = %q, want an executable job", state)
+	}
+}
+
+func mustParseJobID(t *testing.T, id string) int64 {
+	t.Helper()
+	parsed, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

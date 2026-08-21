@@ -515,19 +515,28 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		runID := integrationUUID(30)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		ordered := make([]string, 0, 5)
-		for index := range 5 {
+		// codex review round 3: the previous version of this test staggered
+		// delivered_at in the SAME order the outbox ids are generated
+		// (integrationUUID counts upward), so ORDER BY outbox.id alone would
+		// have produced the identical result and passed. The timestamps are now
+		// assigned in REVERSE of id order, so id-ordering and delivery-ordering
+		// disagree and only the correct one satisfies the assertions.
+		const seeded = 5
+		byDeliveredAt := make([]string, seeded)
+		for index := range seeded {
 			partitionID := integrationUUID(31 + index)
 			seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 			outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 			makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
-			// Stagger delivered_at so oldest-first is observable at all.
+			age := seeded - 1 - index
 			if _, err := admin.Exec(ctx,
 				"UPDATE public.worker_job_outbox SET delivered_at=$2 WHERE id=$1",
-				outboxID, now.Add(time.Duration(index)*time.Minute)); err != nil {
+				outboxID, now.Add(time.Duration(age)*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
-			ordered = append(ordered, outboxID)
+			// Position in delivered_at order, oldest first: the LAST row
+			// created carries the OLDEST delivered_at.
+			byDeliveredAt[age] = outboxID
 		}
 		result, err := repair.Step(ctx, now, 2)
 		if err != nil {
@@ -536,22 +545,22 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		if result.Rearmed != 2 {
 			t.Fatalf("Step(limit=2) = %+v, want exactly 2 rearmed", result)
 		}
-		// codex review 2026-08-20: asserting only the COUNT was tautological --
-		// reversing ORDER BY and rearming the two NEWEST would have passed.
-		// Assert WHICH rows moved.
-		for index, outboxID := range ordered {
+		// Assert WHICH rows moved, in delivered_at order. Because id order is the
+		// reverse of delivery order here, a pass that ordered by id would move
+		// the wrong two and fail.
+		for position, outboxID := range byDeliveredAt {
 			var status string
 			if err := admin.QueryRow(ctx,
 				"SELECT status FROM public.worker_job_outbox WHERE id=$1", outboxID).Scan(&status); err != nil {
 				t.Fatal(err)
 			}
 			want := "delivered"
-			if index < 2 {
+			if position < 2 {
 				want = "pending"
 			}
 			if status != want {
-				t.Fatalf("outbox row %d (delivered_at +%dm) is %q, want %q: the pass did not take "+
-					"the oldest deliveries first", index, index, status, want)
+				t.Fatalf("the row at delivered_at position %d (id %s) is %q, want %q: the pass did "+
+					"not take the oldest deliveries first", position, outboxID, status, want)
 			}
 		}
 	})

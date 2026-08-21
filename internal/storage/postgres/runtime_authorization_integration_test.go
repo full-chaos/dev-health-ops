@@ -129,6 +129,9 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_runs TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_run_units TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.daily_metrics_runs TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
@@ -169,6 +172,22 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if _, err := queue.Exec(ctx, "SELECT id FROM public.sync_run_units LIMIT 1"); err != nil {
 		t.Fatalf("queue cannot read sync-run-unit recovery state: %v", err)
+	}
+	// CHAOS-3997: the strand sweep reads these on the queue pool and must never
+	// be able to write them. The tables already existed in this fixture; what
+	// was missing were the queue-role GRANTs, which is why the posture check
+	// failed closed here. Asserted behaviourally, not just by posture.
+	if _, err := queue.Exec(ctx, "SELECT id FROM public.daily_metrics_partitions LIMIT 1"); err != nil {
+		t.Fatalf("queue role cannot read daily_metrics_partitions: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "SELECT id FROM public.work_graph_execution_requests LIMIT 1"); err != nil {
+		t.Fatalf("queue role cannot read work_graph_execution_requests: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.work_graph_execution_requests SET id = id"); err == nil {
+		t.Fatal("queue role unexpectedly writes work-graph execution state")
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.daily_metrics_partitions SET id = id"); err == nil {
+		t.Fatal("queue role unexpectedly writes daily-metrics partition state")
 	}
 	if _, err := queue.Exec(ctx, "UPDATE public.sync_run_units SET state = state"); err == nil {
 		t.Fatal("queue unexpectedly mutates sync-run-unit recovery state")

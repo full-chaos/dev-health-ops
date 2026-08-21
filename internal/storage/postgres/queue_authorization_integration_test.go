@@ -40,6 +40,12 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY)",
+		// CHAOS-3997 read-only additions. The posture query REQUIRES these to
+		// exist and to carry SELECT, so a fixture without them fails closed --
+		// which is how this test caught the addition in the first place.
+		"CREATE TABLE public.daily_metrics_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_partitions (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id uuid PRIMARY KEY)",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigserial PRIMARY KEY)",
 		"CREATE FUNCTION river.queue_authorization_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
@@ -53,6 +59,9 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT ON TABLE public.sync_runs TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT ON TABLE public.sync_run_units TO " + queueAuthorizationFenceRole,
+		"GRANT SELECT ON TABLE public.daily_metrics_runs TO " + queueAuthorizationFenceRole,
+		"GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + queueAuthorizationFenceRole,
+		"GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + queueAuthorizationFenceRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + queueAuthorizationFenceRole,
 		"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA river TO " + queueAuthorizationFenceRole,
@@ -77,6 +86,16 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		{name: "abandonment update", grant: "GRANT UPDATE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
 		{name: "abandonment delete", grant: "GRANT DELETE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE DELETE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
 		{name: "abandonment truncate", grant: "GRANT TRUNCATE ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole, revoke: "REVOKE TRUNCATE ON TABLE public.worker_job_delivery_abandonments FROM " + queueAuthorizationFenceRole},
+		// CHAOS-3997: the strand sweep's read-only domain access. SELECT is
+		// required on each, and anything beyond SELECT is refused -- the repair
+		// mutates the outbox and River schema, never a domain row.
+		{name: "missing daily runs select", revoke: "REVOKE SELECT ON TABLE public.daily_metrics_runs FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.daily_metrics_runs TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "missing daily partitions select", revoke: "REVOKE SELECT ON TABLE public.daily_metrics_partitions FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "missing work graph requests select", revoke: "REVOKE SELECT ON TABLE public.work_graph_execution_requests FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "daily runs update", grant: "GRANT UPDATE ON TABLE public.daily_metrics_runs TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.daily_metrics_runs FROM " + queueAuthorizationFenceRole},
+		{name: "daily partitions update", grant: "GRANT UPDATE ON TABLE public.daily_metrics_partitions TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.daily_metrics_partitions FROM " + queueAuthorizationFenceRole},
+		{name: "daily partitions delete", grant: "GRANT DELETE ON TABLE public.daily_metrics_partitions TO " + queueAuthorizationFenceRole, revoke: "REVOKE DELETE ON TABLE public.daily_metrics_partitions FROM " + queueAuthorizationFenceRole},
+		{name: "work graph requests update", grant: "GRANT UPDATE ON TABLE public.work_graph_execution_requests TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.work_graph_execution_requests FROM " + queueAuthorizationFenceRole},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			statement := test.grant

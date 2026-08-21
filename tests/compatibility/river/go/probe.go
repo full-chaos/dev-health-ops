@@ -646,17 +646,13 @@ func runInternalWorkload(
 			cancellation.ProbeReleaseUsed = true
 		}
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancellation flow complete, waiting for JobCancelled event\n", opts.Mode)
-	cancelEvent, err := waitForEvent(ctx, events, cancelInsert.Job.ID, river.EventKindJobCancelled)
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancellation flow complete, waiting for the persisted cancelled state\n", opts.Mode)
+	cancelRow, cancelEvent, err := waitForCancelledRow(ctx, client, events, cancelInsert.Job.ID, opts.FetchPollInterval)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_event FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_event", err)
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s JobCancelled event observed\n", opts.Mode)
-	cancelRow, err := client.JobGet(ctx, cancelInsert.Job.ID)
-	if err != nil {
-		return WorkloadResult{}, phaseError("read_cancel_job", err)
-	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s persisted cancelled state observed (via_event=%t)\n", opts.Mode, cancelEvent != nil)
 	cancelLatency := milliseconds(cancelStart.Time.Sub(cancelQueuedAt))
 	cancelResult, err := jobResultFromRow(cancelRow, cancelEvent, &cancelLatency, nil)
 	if err != nil {
@@ -886,6 +882,49 @@ func waitForEvent(ctx context.Context, events <-chan *river.Event, jobID int64, 
 		case event := <-events:
 			if event != nil && event.Job != nil && event.Job.ID == jobID && event.Kind == kind {
 				return event, nil
+			}
+		}
+	}
+}
+
+// waitForCancelledRow rekeys cancellation confirmation onto the job's
+// persisted row instead of a specific emitted event kind (CHAOS-4011).
+// River v0.40 has a documented event-routing gap (upstream PR #1350):
+// a remotely-cancelled job whose worker races the cancellation can persist
+// state=cancelled but emit job_failed rather than job_cancelled — so a
+// strict wait on EventKindJobCancelled can hang even though the job
+// already reached its correct terminal state. The committed row is the
+// source of truth here; the event stream stays a fast path (used
+// immediately when it does arrive with the expected kind) with the row
+// poll as the deterministic fallback, on the same interval
+// (opts.FetchPollInterval) River's own poll-only fetch fallback already
+// uses elsewhere in this file for the identical class of purpose — not a
+// new timing knob, and not a wait-longer masking of the underlying gap:
+// convergence happens on whichever check (event or row) sees the true
+// state first, not after some elapsed duration.
+func waitForCancelledRow(ctx context.Context, client *river.Client[pgx.Tx], events <-chan *river.Event, jobID int64, pollInterval time.Duration) (*rivertype.JobRow, *river.Event, error) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil, context.Cause(ctx)
+		case event := <-events:
+			if event != nil && event.Job != nil && event.Job.ID == jobID && event.Kind == river.EventKindJobCancelled {
+				row, err := client.JobGet(ctx, jobID)
+				if err != nil {
+					return nil, nil, err
+				}
+				return row, event, nil
+			}
+		case <-ticker.C:
+			row, err := client.JobGet(ctx, jobID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if row.State == rivertype.JobStateCancelled {
+				return row, nil, nil
 			}
 		}
 	}

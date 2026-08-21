@@ -199,9 +199,16 @@ type RetentionProducer struct {
 }
 
 // NewRetentionProducer constructs the retention producer with the checked-in
-// policy bindings at the currently active v2 route. Ask Dev v3 stays dark
-// unless the composition root supplies both lifecycle admission and a route
-// whose producer version has completed consumer rollout.
+// policy bindings at a fixed v2 route. This is a convenience default for
+// tests exercising the rate-limit and external-ingest policies (both pinned
+// to v2 regardless of Ask Dev's rollout state); it does NOT track
+// migration-state.json's active producer_version, which as of CHAOS-3481
+// (2026-08-21) routes at v3. Production always calls
+// NewRetentionProducerForRoute with the registry-supplied version instead --
+// see cmd/dev-health-scheduler/fixed.go. Ask Dev v3 stays dark here (this
+// constructor pairs it with a disabled admission reader) unless a caller
+// supplies both lifecycle admission and a route whose producer version has
+// completed consumer rollout.
 func NewRetentionProducer() Producer {
 	producer, err := NewRetentionProducerForRoute(
 		disabledAskDevRetentionAdmission{}, jobcontract.ContractVersionV2,

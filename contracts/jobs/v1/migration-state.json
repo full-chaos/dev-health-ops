@@ -438,7 +438,7 @@
     {
       "kind": "system.retention_cleanup",
       "state": "go_default",
-      "producer_version": 2,
+      "producer_version": 3,
       "consumer_versions": [
         1,
         2,

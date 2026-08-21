@@ -120,6 +120,15 @@ non-blank environment value behind the blank flag. Then remove the fix and
 confirm the test fails. A test that has never been observed failing has not been
 shown to bind.
 
+## A hand-written test schema proves the code against a database that does not exist
+
+Integration-test DDL must be **derived from the alembic migrations**, never
+hand-authored: a suite that invents a column proves the query against a schema
+production does not have, and stays green while the shipped SQL fails to parse
+in production (CHAOS-4041 — the strand repair's test DDL invented
+`daily_metrics_partitions.org_id` and the merged query crash-looped the prod
+reconciler on `column partition.org_id does not exist`).
+
 ## Related
 
 - [Testing layers and local validation](testing.md)

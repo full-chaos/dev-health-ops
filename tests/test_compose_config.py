@@ -957,25 +957,12 @@ def test_celery_worker_prefetch_is_disabled_for_redis() -> None:
     assert worker_disable_prefetch is True
 
 
-def test_stream_consumer_beat_ticks_do_not_outlive_cadence() -> None:
-    from dev_health_ops.api.ingest.consumer import BLOCK_MS as INGEST_BLOCK_MS
-    from dev_health_ops.api.product_telemetry.consumer import (
-        BLOCK_MS as PRODUCT_TELEMETRY_BLOCK_MS,
-    )
-    from dev_health_ops.workers.config import beat_schedule
-
-    cases = {
-        "process-ingest-streams": INGEST_BLOCK_MS,
-        "process-product-telemetry-streams": PRODUCT_TELEMETRY_BLOCK_MS,
-    }
-
-    for entry_name, block_ms in cases.items():
-        entry = beat_schedule[entry_name]
-        schedule_seconds = float(entry["schedule"])
-        max_iterations = int(entry["kwargs"]["max_iterations"])
-
-        assert (max_iterations * block_ms) / 1000 < schedule_seconds
-        assert entry["options"] == {"queue": "ingest", "expires": 30}
+# CHAOS-4026 (2026-08-21): test_stream_consumer_beat_ticks_do_not_outlive_cadence
+# tested the process-ingest-streams/process-product-telemetry-streams beat
+# entries and run_ingest_consumer/run_product_telemetry_consumer, deleted
+# with this cleanup (Go's stream-ingest process now natively consumes both
+# streams; there is no Python beat-tick cadence left to bound). See
+# tests/workers/test_celery_dead_code_contract.py.
 
 
 def test_worker_commands_disable_prefetch_for_redis() -> None:

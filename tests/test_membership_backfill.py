@@ -896,93 +896,13 @@ def test_backfill_projects_full_current_coverage_no_time_window() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher and beat schedule tests
+# CHAOS-4026 (2026-08-21): test_dispatch_membership_backfill_chains_build_then_backfill,
+# test_dispatch_membership_backfill_strict_org_discovery_raises_on_failure, and
+# test_beat_schedule_has_membership_backfill_entry tested
+# work_graph_tasks.dispatch_membership_backfill and the run-membership-
+# backfill-daily beat entry, deleted with this cleanup (Go's
+# membership_backfill_daily_fanout fixed schedule now owns the periodic
+# cadence). run_membership_backfill itself stays live
+# (api/internal/worker_workgraph.py's dormant-Go bridge) and its tests
+# above are unaffected. See tests/workers/test_celery_dead_code_contract.py.
 # ---------------------------------------------------------------------------
-
-
-def test_dispatch_membership_backfill_chains_build_then_backfill(monkeypatch) -> None:
-    """dispatch_membership_backfill fans out build -> backfill chains per org,
-    with db_url forwarded to both children (CHAOS-2439/2433)."""
-
-    from dev_health_ops.workers.work_graph_tasks import dispatch_membership_backfill
-
-    dispatched_chains: list[tuple[Any, Any]] = []
-
-    class _FakeChain:
-        def __init__(self, build_sig, backfill_sig):
-            self._sigs = (build_sig, backfill_sig)
-
-        def apply_async(self):
-            dispatched_chains.append(self._sigs)
-
-    def _fake_chain(*sigs):
-        assert len(sigs) == 2
-        return _FakeChain(sigs[0], sigs[1])
-
-    mock_db_url = "clickhouse://override:8123/db"
-
-    with (
-        patch(
-            "dev_health_ops.workers.recommendations_tasks._discover_active_org_ids",
-            return_value=["org-a", "org-b"],
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks.chain",
-            side_effect=_fake_chain,
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks._get_db_url",
-            return_value=mock_db_url,
-        ),
-    ):
-        result = getattr(dispatch_membership_backfill, "run")(db_url=mock_db_url)
-
-    assert result["dispatched"] == ["org-a", "org-b"]
-    assert len(dispatched_chains) == 2
-
-    # Each chain: [build_sig, backfill_sig(immutable)].
-    for build_sig, backfill_sig in dispatched_chains:
-        # Build task name.
-        assert build_sig.task == "dev_health_ops.workers.tasks.run_work_graph_build"
-        # Backfill task name.
-        assert (
-            backfill_sig.task == "dev_health_ops.workers.tasks.run_membership_backfill"
-        )
-        # db_url forwarded to BOTH children.
-        assert build_sig.kwargs.get("db_url") == mock_db_url
-        assert backfill_sig.kwargs.get("db_url") == mock_db_url
-        # Backfill is immutable (does not receive build's return value).
-        assert backfill_sig.immutable is True
-
-
-def test_dispatch_membership_backfill_strict_org_discovery_raises_on_failure(
-    monkeypatch,
-) -> None:
-    """strict=True: a Postgres enumeration failure raises (triggers retry) rather
-    than silently dispatching zero orgs as a clean success."""
-
-    from dev_health_ops.workers.work_graph_tasks import dispatch_membership_backfill
-
-    with patch(
-        "dev_health_ops.workers.recommendations_tasks._discover_active_org_ids",
-        side_effect=RuntimeError("DB outage"),
-    ):
-        # The task should retry on org discovery failure — in unit tests the
-        # retry raises the original exception rather than scheduling a new attempt.
-        import pytest
-
-        with pytest.raises(Exception):
-            getattr(dispatch_membership_backfill, "run")()
-
-
-def test_beat_schedule_has_membership_backfill_entry() -> None:
-    """The Celery beat schedule includes the daily membership backfill entry."""
-    from dev_health_ops.workers import config as worker_config
-
-    assert "run-membership-backfill-daily" in worker_config.beat_schedule
-    entry = worker_config.beat_schedule["run-membership-backfill-daily"]
-    assert entry["task"] == "dev_health_ops.workers.tasks.dispatch_membership_backfill"
-    # Runs daily (crontab or once-per-day interval).
-    from celery.schedules import crontab as _crontab
-
-    assert isinstance(entry["schedule"], _crontab)

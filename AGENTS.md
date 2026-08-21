@@ -49,7 +49,7 @@ CLICKHOUSE_URI=… dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30
 CLICKHOUSE_URI=… dev-hops metrics daily
 ```
 
-**Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent Celery job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. Worker: `dev-hops workers start-worker --queues default metrics sync reports`. See [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md).
+**Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. **Celery is retired (CHAOS-4026, 2026-08-21):** `dev-hops workers start-worker`/`start-scheduler` no longer exist; see [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) for running the Go worker/scheduler processes.
 
 ## Tests & hooks
 

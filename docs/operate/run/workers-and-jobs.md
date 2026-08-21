@@ -13,10 +13,16 @@ lifecycle: active
 
 # Run workers and jobs
 
-Celery remains the production owner of background jobs until a checked-in route
-and release decision move a job family to River. The Go worker deployment
-contract selects queues; it does not change the canonical job-kind-to-queue
-mapping.
+**Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
+in prod since the 2026-08-19 stop.** Go owns every periodic maintenance
+cadence this doc used to describe running via `dev-hops workers start-worker`/
+`start-scheduler` -- those two CLI subcommands were deleted (they were the
+last CLI-level way to falsify CUT-18's "no Celery process is running"
+criterion). The Go worker deployment contract selects queues; it does not
+change the canonical job-kind-to-queue mapping. This page still needs a full
+rewrite around the Go-only runtime (tracked separately); until then, treat
+the sections below that still show `dev-hops workers start-*` commands as
+historical, not runnable.
 {: .fc-page-lede }
 
 The Go worker, scheduler, reconciler, and stream-runner binaries are separate
@@ -25,19 +31,13 @@ or production job ownership.
 
 ## Start the active runtime
 
-Start a worker with the default queues:
-
-```bash
-dev-hops workers start-worker
-```
-
-Specify queues and concurrency when the deployment uses an explicit topology:
-
-```bash
-dev-hops workers start-worker \
-  --queues default metrics sync webhooks ingest \
-  --concurrency 4
-```
+`dev-hops workers start-worker`/`start-scheduler` no longer exist (CHAOS-4026)
+-- there is no Python Celery worker/beat process to start in production. The
+one exception is the non-prod `tests/acceptance/compose.ask-dev.yml`
+acceptance fleet, which still boots a real `celery worker`/`celery beat`
+process directly via the `celery` CLI (not through `dev-hops`) to exercise a
+handful of general scheduled jobs whose Go executed-proof gate is still in
+flight.
 
 ### Start a Go worker group
 
@@ -123,12 +123,6 @@ shutdown budget, and per-queue concurrency. The binary owns neither a named
 topology nor a queue remapping. An empty, unknown, duplicate, or malformed
 queue selection fails before readiness. Queue selection cannot change while a
 process is running.
-
-Run one active scheduler for the production environment:
-
-```bash
-dev-hops workers start-scheduler
-```
 
 Use the deployment's process manager, container orchestrator, or service
 supervisor for long-running processes. The commands above show the application

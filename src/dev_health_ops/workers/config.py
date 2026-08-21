@@ -5,8 +5,6 @@ from typing import Any
 
 from celery.schedules import crontab
 
-from dev_health_ops.providers.utils import env_flag
-
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -36,20 +34,16 @@ task_acks_late = False
 task_reject_on_worker_lost = False
 
 late_ack_excluded_tasks = (
+    # CHAOS-4026: the daily-metrics partitioned dispatch chain,
+    # dispatch_capacity_forecast, dispatch_complexity_job,
+    # dispatch_release_impact, dispatch_membership_backfill, and
+    # dispatch_scheduled_reports were deleted -- Go now owns these cadences
+    # and Celery Beat has not scheduled them since the 2026-08-19 stop.
+    # dispatch_scheduled_syncs stays (see beat_schedule's header comment).
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-    "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
-    "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
-    "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
-    "dev_health_ops.workers.tasks.dispatch_complexity_job",
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
-    "dev_health_ops.workers.tasks.dispatch_release_impact",
-    "dev_health_ops.workers.tasks.dispatch_membership_backfill",
-    "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
     "dev_health_ops.workers.tasks.phone_home_heartbeat",
     "dev_health_ops.workers.system_ops.send_billing_notification",
-    "dev_health_ops.workers.tasks.run_ingest_consumer",
-    "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
-    "dev_health_ops.workers.tasks.run_external_ingest_consumer",
     # CHAOS-2699's debounced recompute flush task. Valkey's SETNX debounce
     # guard is the durability/dedup layer here, not Celery's acks-late
     # redelivery -- reuses the existing `default` queue, no task_queues/compose
@@ -139,91 +133,47 @@ task_queues: dict[str, dict[str, Any]] = {
 }
 
 # Beat schedule (periodic tasks)
+#
+# CHAOS-4026 (2026-08-21): Celery is retired -- zero Python celery services
+# run in prod since the 2026-08-19 stop. Go now owns the periodic cadences
+# formerly dispatched from here (run-daily-metrics, run-complexity-daily,
+# run-recommendations, run-release-impact-daily, run-capacity-forecast,
+# process-*-streams, external-ingest-stream-health, phone-home-heartbeat,
+# dispatch-scheduled-reports, run-membership-backfill-daily, ask-dev-
+# retention-sweep, and the never-live consume-pending-scheduled-sync-
+# occurrences seam); their Python task implementations were deleted with
+# this cleanup and are pinned absent by
+# tests/workers/test_celery_dead_code_contract.py. See CHAOS-4056's beat
+# inventory comment for the full per-entry Go-successor mapping.
+#
+# The entries below survive deliberately -- flagged to team-lead rather
+# than deleted, per-entry reasons:
+#   * dispatch-scheduled-syncs, reconcile-sync-dispatch -- each has a very
+#     large test surface (canonical-incident-feature gating, outbox relay,
+#     backfill-orphan cleanup, unreclaimable-dispatching sweep) beyond what
+#     CHAOS-4056's inventory sweep verified 1:1 Go parity for, and
+#     reconcile-sync-dispatch additionally calls into the still-live
+#     Celery-transport fallback (provider_unit_transport.py, explicitly
+#     CHAOS-4054 step 4's territory, sequenced after this ticket). Removing
+#     either needs its own reviewed pass, not a drive-by deletion here.
+#   * dispatch-go-external-ingest-recompute-bridge -- CHAOS-4057: the Go
+#     inventory's "OwnerRemoved" claim for this entry is false (no Go
+#     consumer of bridge_pending rows exists); retire only when CHAOS-4057
+#     resolves port-vs-retire.
+#   * monitor-queue-depths, prune-rate-limit-observations, prune-external-
+#     ingest-batches -- still exercised by a REAL Celery worker+beat fleet in
+#     tests/acceptance/compose.ask-dev.yml's release-blocking gate (see the
+#     comment above its `worker`/`beat` services), independent of prod.
 beat_schedule = {
     "dispatch-scheduled-syncs": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
         "schedule": 300.0,
         "options": {"queue": "scheduler"},
     },
-    # Fans out per active organization (CHAOS-2849): discover_repos (job_daily.py)
-    # scopes the repos query by org_id, so a single blank-org run would never
-    # match a real (UUID-scoped) tenant's rows and repo_metrics_daily would never
-    # be populated. dispatch_daily_metrics_for_all_orgs enumerates active orgs and
-    # enqueues one dispatch_daily_metrics_partitioned per org_id.
-    "run-daily-metrics": {
-        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
-        "schedule": crontab(hour=1, minute=0),
-        "options": {"queue": "default"},
-    },
-    # Complexity daily floor cadence (CHAOS-2850): run_complexity_job previously
-    # only ran chained after a git sync, so an org with infrequent syncs left
-    # repo_complexity_daily stale, and complexity_delta's trailing 30-day window
-    # (compounding_risk.py) read a flat trend. This dispatcher fans out one
-    # run_complexity_job per active org daily, independent of sync activity.
-    # Scheduled before run-daily-metrics (01:00) so the daily hotspot/risk compute
-    # reads a freshly-refreshed complexity snapshot for the day.
-    "run-complexity-daily": {
-        "task": "dev_health_ops.workers.tasks.dispatch_complexity_job",
-        "schedule": crontab(hour=0, minute=45),
-        "options": {"queue": "default"},
-    },
-    # Daily safety net for recommendations_daily (CHAOS-2373). The primary
-    # trigger is completion-gated: run_daily_metrics_finalize_task chains
-    # run_recommendations_job once each (org, day) finalize completes. This beat
-    # entry is a backstop in case a finalize callback was lost; the task itself
-    # skips any org whose daily_finalize checkpoint is still in flight, so it
-    # never reads partial metric tables. Scheduled at 02:00, after the 01:00
-    # run-daily-metrics dispatch.
-    "run-recommendations": {
-        "task": "dev_health_ops.workers.tasks.run_recommendations_job",
-        "schedule": crontab(hour=2, minute=0),
-        "options": {"queue": "metrics"},
-    },
-    # Release-impact daily compute (CHAOS-2381): materializes
-    # release_impact_daily from telemetry_signal_bucket + deployments, read by
-    # the /feature-flags release-reliability cards. The dispatcher fans out one
-    # per-org compute — the compute is org-scoped, so a single blank-org run
-    # would match zero rows for real (UUID-scoped) tenants. Runs after
-    # run-daily-metrics so the deployments it joins against are materialized.
-    "run-release-impact-daily": {
-        "task": "dev_health_ops.workers.tasks.dispatch_release_impact",
-        "schedule": crontab(hour=1, minute=30),
-        "options": {"queue": "default"},
-    },
-    # The Postgres team-drift / identity-reconcile beat entries were removed in
-    # CHAOS-2600 CS5; their tasks + services were deleted in CS6. ClickHouse is
-    # the sole team/identity system of record, so no periodic Postgres-mapping
-    # writer remains.
     "reconcile-sync-dispatch": {
         "task": "dev_health_ops.workers.tasks.reconcile_sync_dispatch",
         "schedule": 60.0,
         "options": {"queue": "sync"},
-    },
-    "run-capacity-forecast": {
-        "task": "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
-        "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
-        "options": {"queue": "default"},
-    },
-    "process-ingest-streams": {
-        "task": "dev_health_ops.workers.tasks.run_ingest_consumer",
-        "schedule": stream_consumer_schedule_seconds,
-        "kwargs": {"max_iterations": stream_consumer_max_iterations},
-        "options": {"queue": "ingest", "expires": stream_consumer_expires_seconds},
-    },
-    "process-product-telemetry-streams": {
-        "task": "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
-        "schedule": stream_consumer_schedule_seconds,
-        "kwargs": {"max_iterations": stream_consumer_max_iterations},
-        "options": {"queue": "ingest", "expires": stream_consumer_expires_seconds},
-    },
-    "process-external-ingest-streams": {
-        "task": "dev_health_ops.workers.tasks.run_external_ingest_consumer",
-        "schedule": stream_consumer_schedule_seconds,
-        "kwargs": {"max_iterations": stream_consumer_max_iterations},
-        "options": {
-            "queue": "external-ingest",
-            "expires": stream_consumer_expires_seconds,
-        },
     },
     # Dormant unless the disabled Go external-stream profile writes a typed
     # compatibility bridge row. Downstream metric execution remains on the
@@ -234,43 +184,12 @@ beat_schedule = {
         "kwargs": {"limit": 50},
         "options": {"queue": "default", "expires": 30},
     },
-    "external-ingest-stream-health": {
-        "task": "dev_health_ops.workers.tasks.external_ingest_stream_health",
-        "schedule": 60.0,
-        # Dedicated `monitoring` queue (matches monitor-queue-depths):
-        # telemetry must keep flowing even when `external-ingest` itself
-        # backs up -- that is exactly when it is needed.
-        "options": {"queue": "monitoring"},
-    },
-    "phone-home-heartbeat": {
-        "task": "dev_health_ops.workers.tasks.phone_home_heartbeat",
-        "schedule": crontab(hour=0, minute=0),
-        "options": {"queue": "default"},
-    },
-    "dispatch-scheduled-reports": {
-        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
-        "schedule": 300.0,
-        "options": {"queue": "default"},
-    },
     "monitor-queue-depths": {
         "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
         "schedule": 60.0,
         # Dedicated `monitoring` queue: telemetry must keep flowing even when
         # `default` floods (that is precisely when it is needed).
         "options": {"queue": "monitoring"},
-    },
-    # Daily safety net for work_unit_membership (CHAOS-2439/2433). The primary
-    # trigger is event-driven: post-sync build -> LLM materialize chain. This
-    # beat entry fans out a cheap no-LLM backfill (build -> project membership)
-    # per active org once per day so idle orgs and the post-deploy window are
-    # always covered. The backfill uses the run_id / completion-marker protocol
-    # (CHAOS-2433), so it coexists safely with the event-driven materializer.
-    # Scheduled at 03:30 UTC, after daily metrics (01:00) and recommendations
-    # (02:00), to avoid competing with the heaviest nightly jobs.
-    "run-membership-backfill-daily": {
-        "task": "dev_health_ops.workers.tasks.dispatch_membership_backfill",
-        "schedule": crontab(hour=3, minute=30),
-        "options": {"queue": "default"},
     },
     # Retention for the durable rate-limit observation store (CHAOS-2758).
     # Env-tunable via SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS (default 14,
@@ -291,31 +210,7 @@ beat_schedule = {
         "schedule": crontab(hour=5, minute=15),
         "options": {"queue": "sync"},
     },
-    # Ask Dev retention sweep (CHAOS-3404): the only production caller of
-    # DevPersistenceService.cleanup_expired, which purges conversations past
-    # their persisted `expires_at` (the 30-day retention window; 0-day
-    # ephemeral conversations are purged synchronously on run completion --
-    # see workers/ask_dev_retention.py's module docstring). Previously had no
-    # beat entry, CLI, or caller at all, so retention never executed
-    # regardless of the org's configured ask_dev_retention_days. Scheduled
-    # immediately after prune-external-ingest-batches (5:15), clear of the
-    # other nightly jobs.
-    "ask-dev-retention-sweep": {
-        "task": "dev_health_ops.workers.tasks.run_ask_dev_retention_cleanup",
-        "schedule": crontab(hour=5, minute=30),
-        "options": {"queue": "default"},
-    },
 }
-
-# The occurrence consumer is a default-off rollout seam for materializing
-# Go-authored schedule identities. It shares the existing scheduler queue;
-# activating it does not require a queue, compose, or worker-topology change.
-if env_flag("SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED", default=False):
-    beat_schedule["consume-pending-scheduled-sync-occurrences"] = {
-        "task": "dev_health_ops.workers.tasks.consume_pending_scheduled_sync_occurrences",
-        "schedule": 300.0,
-        "options": {"queue": "scheduler"},
-    }
 
 # Result settings
 result_expires = 86400  # Results expire after 24 hours

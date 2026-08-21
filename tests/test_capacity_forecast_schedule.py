@@ -7,10 +7,8 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
 import pytest
-from celery.schedules import crontab
 
 from dev_health_ops.metrics.compute_capacity import (
     ForecastResult,
@@ -68,96 +66,15 @@ class FakeCapacitySink:
         self.closed = True
 
 
-class TestCapacityForecastTaskRegistered:
-    def test_tasks_exported_from_tasks_module(self) -> None:
-        """Given the worker task module, When imported, Then both capacity tasks exist."""
-        from dev_health_ops.workers import tasks
-
-        assert "run_capacity_forecast_job" in tasks.__all__
-        assert hasattr(tasks, "run_capacity_forecast_job")
-        assert "dispatch_capacity_forecast" in tasks.__all__
-        assert hasattr(tasks, "dispatch_capacity_forecast")
-
-    def test_dispatcher_is_celery_task(self) -> None:
-        """Given the dispatcher, When inspected, Then it is registered on default."""
-        from dev_health_ops.workers.celery_app import celery_app
-
-        dispatch_capacity_forecast = celery_app.tasks[
-            "dev_health_ops.workers.tasks.dispatch_capacity_forecast"
-        ]
-        assert (
-            getattr(dispatch_capacity_forecast, "name")
-            == "dev_health_ops.workers.tasks.dispatch_capacity_forecast"
-        )
-        assert getattr(dispatch_capacity_forecast, "queue") == "default"
-
-
-class TestCapacityForecastBeatSchedule:
-    def test_beat_schedule_dispatches_per_org(self) -> None:
-        """Given beat config, When due, Then it targets the per-org dispatcher."""
-        from dev_health_ops.workers.config import beat_schedule
-
-        entry = beat_schedule["run-capacity-forecast"]
-        assert (
-            entry["task"] == "dev_health_ops.workers.tasks.dispatch_capacity_forecast"
-        )
-        assert entry["options"]["queue"] == "default"
-        assert "kwargs" not in entry
-
-    def test_beat_schedule_uses_weekly_crontab(self) -> None:
-        """Given beat config, When inspected, Then cadence remains weekly."""
-        from dev_health_ops.workers.config import beat_schedule
-
-        schedule = beat_schedule["run-capacity-forecast"]["schedule"]
-        assert isinstance(schedule, crontab)
-
-    def test_beat_schedule_call_shape_is_signature_valid(self) -> None:
-        """Given beat config, When Celery validates args, Then no org_id is missing."""
-        from dev_health_ops.workers.celery_app import celery_app
-        from dev_health_ops.workers.config import beat_schedule
-
-        entry = beat_schedule["run-capacity-forecast"]
-        dispatch_capacity_forecast = celery_app.tasks[entry["task"]]
-        kwargs = entry.get("kwargs", {})
-        getattr(dispatch_capacity_forecast, "__header__")(**kwargs)
-
-
-class TestCapacityForecastDispatcherFansOutPerOrg:
-    def test_dispatcher_enqueues_one_task_per_active_org(self) -> None:
-        """Given active orgs, When dispatcher runs, Then each task has org_id."""
-        from dev_health_ops.workers import product_tasks
-
-        org_a = str(uuid4())
-        org_b = str(uuid4())
-
-        with (
-            patch(
-                "dev_health_ops.workers.recommendations_tasks._discover_active_org_ids",
-                return_value=[org_a, org_b],
-            ),
-            patch.object(product_tasks.celery_app, "send_task") as mock_send_task,
-        ):
-            result = getattr(product_tasks.dispatch_capacity_forecast, "run")(
-                db_url="clickhouse://fake"
-            )
-
-        assert mock_send_task.call_count == 2
-        dispatched_orgs = {
-            call.kwargs["kwargs"]["org_id"] for call in mock_send_task.call_args_list
-        }
-        assert dispatched_orgs == {org_a, org_b}
-        worker_task = product_tasks.celery_app.tasks[
-            "dev_health_ops.workers.tasks.run_capacity_forecast_job"
-        ]
-        for call in mock_send_task.call_args_list:
-            assert (
-                call.args[0] == "dev_health_ops.workers.tasks.run_capacity_forecast_job"
-            )
-            assert call.kwargs["queue"] == "metrics"
-            assert call.kwargs["kwargs"]["db_url"] == "clickhouse://fake"
-            assert call.kwargs["kwargs"]["all_teams"] is True
-            getattr(worker_task, "__header__")(**call.kwargs["kwargs"])
-        assert set(result["dispatched"]) == {org_a, org_b}
+# CHAOS-4026 (2026-08-21): TestCapacityForecastTaskRegistered,
+# TestCapacityForecastBeatSchedule, and TestCapacityForecastDispatcherFansOutPerOrg
+# tested product_tasks.dispatch_capacity_forecast/run_capacity_forecast_job
+# and the run-capacity-forecast beat entry, all deleted with this cleanup
+# (Go's capacity_forecast_weekly_fanout fixed schedule now owns the
+# periodic cadence). job_capacity.run_capacity_forecast itself stays live
+# (api/internal/worker_metrics.py's dormant-Go bridge, `dev-hops metrics
+# capacity` CLI) and its tests below are unaffected. See
+# tests/workers/test_celery_dead_code_contract.py.
 
 
 @pytest.mark.asyncio

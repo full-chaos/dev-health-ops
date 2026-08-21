@@ -75,40 +75,17 @@ class TestActiveReposUnion:
 
 
 class TestBeatScheduleMetrics:
-    """Daily metrics stays explicitly scheduled after the obsolete sweep retires."""
+    """Daily metrics stays explicitly scheduled after the obsolete sweep retires.
 
-    def test_beat_schedule_contains_daily_metrics(self):
-        from dev_health_ops.workers.config import beat_schedule
-
-        assert "run-daily-metrics" in beat_schedule
-        entry = beat_schedule["run-daily-metrics"]
-        # CHAOS-2849: the beat entry now points at the per-org fan-out
-        # dispatcher, not the blank-org-defaulting partitioned task directly
-        # (gh-422 only wired the partitioned task, not org scoping).
-        assert (
-            entry["task"]
-            == "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs"
-        )
-        assert entry["options"]["queue"] == "default"
-
-    def test_obsolete_metrics_dispatcher_is_retired(self):
-        from dev_health_ops.workers import metrics_daily, metrics_tasks, tasks
-        from dev_health_ops.workers.config import beat_schedule
-
-        assert "dispatch-scheduled-metrics" not in beat_schedule
-        assert not hasattr(metrics_daily, "dispatch_scheduled_metrics")
-        assert "dispatch_scheduled_metrics" not in metrics_tasks.__all__
-        assert "dispatch_scheduled_metrics" not in tasks.__all__
+    CHAOS-4026 (2026-08-21): test_beat_schedule_contains_daily_metrics,
+    test_obsolete_metrics_dispatcher_is_retired, and
+    test_daily_metrics_uses_crontab tested the run-daily-metrics beat entry
+    and dispatch_daily_metrics_for_all_orgs/metrics_tasks, all deleted with
+    this cleanup (Go's daily_metrics_fanout fixed schedule now owns the
+    periodic cadence). See tests/workers/test_celery_dead_code_contract.py.
+    """
 
     def test_beat_schedule_retains_sync_dispatcher(self):
         from dev_health_ops.workers.config import beat_schedule
 
         assert "dispatch-scheduled-syncs" in beat_schedule
-
-    def test_daily_metrics_uses_crontab(self):
-        from celery.schedules import crontab
-
-        from dev_health_ops.workers.config import beat_schedule
-
-        schedule = beat_schedule["run-daily-metrics"]["schedule"]
-        assert isinstance(schedule, crontab)

@@ -46,10 +46,13 @@ def test_production_scheduled_job_writers_cannot_reintroduce_metrics_sweeps():
 
 
 def test_retired_dispatcher_has_no_runtime_exports_or_beat_entry():
-    from dev_health_ops.workers import metrics_daily, metrics_tasks, tasks
+    # CHAOS-4026 (2026-08-21): workers.metrics_tasks was itself deleted (a
+    # pure re-export shim over the now-deleted metrics_partitioned.py
+    # dispatch chain), so it is no longer scanned here -- there is nothing
+    # left to import.
+    from dev_health_ops.workers import metrics_daily, tasks
     from dev_health_ops.workers.config import beat_schedule
 
     assert not hasattr(metrics_daily, "dispatch_scheduled_metrics")
-    assert "dispatch_scheduled_metrics" not in metrics_tasks.__all__
     assert "dispatch_scheduled_metrics" not in tasks.__all__
     assert "dispatch-scheduled-metrics" not in beat_schedule

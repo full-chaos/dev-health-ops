@@ -2,14 +2,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
-
-from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import (
-    _get_db_url,
-    _validate_worker_clickhouse_uri,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +27,25 @@ class RecommendationsTeamFailure(Exception):
         )
 
 
-# Checkpoint metric_type written by run_daily_metrics_finalize_task once all
-# daily-metrics batches for an (org, day) have completed. Recommendations gate
-# on this so a premature beat run never evaluates against partial metric tables.
+# Checkpoint metric_type formerly written by the now-deleted
+# run_daily_metrics_finalize_task (CHAOS-4026, 2026-08-21) once all
+# daily-metrics batches for an (org, day) completed. Recommendations gate on
+# this so a premature evaluation never reads partial metric tables.
+#
+# KNOWN GAP (found by Codex adversarial review during CHAOS-4026, filed as
+# CHAOS-4066, not fixed here -- pre-existing, not introduced by this
+# deletion): run_daily_metrics_finalize_task's beat trigger
+# (run-daily-metrics) has been unreachable since Celery Beat stopped on
+# 2026-08-19, so this checkpoint has had ZERO writers since then regardless
+# of this deletion -- _daily_metrics_ready has been permanently vacuous
+# ("no checkpoint -> proceed") for two days already. Go's real daily-metrics
+# completion state lives in `daily_metrics_runs.finalization_status`
+# (src/dev_health_ops/alembic/versions/0057_add_daily_metrics_river_state.py,
+# written by internal/jobs/metrics/daily/postgres.go), a different table
+# this function does not read. This deletion does not create the gap, but it
+# does remove the last thing that could ever have refreshed the old
+# checkpoint (reviving Celery Beat is exactly what CHAOS-4026 exists to
+# prevent) -- CHAOS-4066 tracks pointing this gate at the real table.
 _FINALIZE_METRIC_TYPE = "daily_finalize"
 
 
@@ -58,6 +68,11 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
       partial data, and the daily run self-corrects via tombstones.)
     * The ``"default"`` sentinel and any read error → **proceed** (fail open;
       a checkpoint glitch must never permanently wedge the pipeline).
+
+    See the ``_FINALIZE_METRIC_TYPE`` comment above: this checkpoint has had
+    no writer since 2026-08-19 (CHAOS-4066) and this function currently
+    always returns ``True`` for a real org/day. It is not a functioning gate
+    today.
     """
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.checkpoints import get_checkpoint
@@ -83,38 +98,6 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
             day,
         )
         return True
-
-
-def _discover_active_org_ids(strict: bool = False) -> list[str]:
-    """Return the IDs of all active organisations (Postgres source of truth).
-
-    Uses the same active-organization source as the remaining scheduled
-    fan-out tasks. Falls back to ``["default"]`` (single-tenant / community installs) when the
-    organizations table is empty or unavailable.
-
-    When ``strict=True``, a Postgres enumeration failure RAISES instead of
-    collapsing to the ``["default"]`` fallback, so a once-daily job retries on
-    a DB outage rather than silently dispatching zero orgs as a clean success
-    (CHAOS-2439).
-    """
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.users import Organization
-
-    try:
-        with get_postgres_session_sync() as session:
-            rows = (
-                session.query(Organization.id)
-                .filter(Organization.is_active.is_(True))
-                .all()
-            )
-        org_ids = [str(row[0]) for row in rows]
-    except Exception:
-        if strict:
-            raise
-        logger.exception("Failed to enumerate active organizations")
-        org_ids = []
-
-    return org_ids or ["default"]
 
 
 def _discover_team_ids(client: Any, org_id: str) -> list[str]:
@@ -249,88 +232,11 @@ def _compute_recommendations_for_org(
         sink.close()
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=3,
-    queue="metrics",
-    name="dev_health_ops.workers.tasks.run_recommendations_job",
-)
-def run_recommendations_job(
-    self,
-    org_id: str | None = None,
-    db_url: str | None = None,
-    window: int = 14,
-    team_id: str | None = None,
-    as_of: str | None = None,
-) -> dict:
-    """Compute rule-based recommendations for every active org + team.
-
-    This is the scheduled live path for ``recommendations_daily`` — without it
-    the table is only ever written by the manual ``dev-hops recommendations
-    compute`` CLI, leaving real orgs' home RankedSignals, the
-    ``recommendations(team, window)`` GraphQL query, and the Operating Review
-    empty (CHAOS-2373).
-
-    Args:
-        org_id: Restrict to a single org. When ``None``, enumerate all active
-            organisations from Postgres.
-        db_url: ClickHouse connection string (defaults to CLICKHOUSE_URI env).
-        window: Evaluation window in days (default 14).
-        team_id: Restrict to a single team. When ``None``, discover all teams
-            with recent activity for each org from ClickHouse.
-        as_of: ISO date (``YYYY-MM-DD``) of the finalized metrics partition the
-            run should evaluate against. The finalize callback passes the exact
-            ``day`` it finalized so the readiness gate keys on that partition's
-            checkpoint and the engine's exclusive ``window_end`` is set to
-            ``as_of + 1`` — which *includes* the finalized ``as_of`` partition
-            (the loader filters ``day < window_end``). Correct across
-            UTC-midnight finalizes and backfills. When ``None`` (beat backstop),
-            today (UTC) is used and today's not-yet-finalized partition is
-            naturally excluded.
-
-    Returns:
-        dict with job status and per-org fired counts.
-    """
-    db_url = _validate_worker_clickhouse_uri(db_url or _get_db_url())
-    if as_of:
-        # The finalized partition is ``as_of_day``; the readiness gate keys on
-        # it. The engine derives its exclusive ``window_end`` from ``now.date()``
-        # and the loader filters ``day < window_end``, so to *include* the
-        # just-finalized ``as_of_day`` partition we anchor ``now`` to the day
-        # AFTER it (CHAOS-2373 round-2). Anchoring to ``as_of_day`` itself made
-        # ``window_end == as_of_day`` and silently excluded the partition the
-        # finalize had just written.
-        as_of_day = date.fromisoformat(as_of)
-        now = datetime.combine(
-            as_of_day + timedelta(days=1), time.min, tzinfo=timezone.utc
-        )
-    else:
-        now = datetime.now(timezone.utc)
-        as_of_day = now.date()
-
-    org_ids = [org_id] if org_id else _discover_active_org_ids()
-
-    results: dict[str, int] = {}
-    total_fired = 0
-    try:
-        for oid in org_ids:
-            fired = _compute_recommendations_for_org(
-                org_id=oid,
-                db_url=db_url,
-                window=window,
-                now=now,
-                as_of_day=as_of_day,
-                team_id=team_id,
-            )
-            results[oid] = fired
-            total_fired += fired
-    except Exception as exc:
-        logger.exception("Recommendations job failed: %s", exc)
-        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
-
-    return {
-        "status": "success",
-        "orgs": len(org_ids),
-        "fired": total_fired,
-        "per_org": results,
-    }
+# CHAOS-4026 (2026-08-21): the beat-scheduled ``run_recommendations_job``
+# Celery task (and its ``_discover_active_org_ids`` all-org fan-out) were
+# deleted -- Go's `recommendations_daily` fixed schedule now owns the
+# periodic cadence and Celery Beat has not scheduled this since the
+# 2026-08-19 stop. ``_compute_recommendations_for_org`` above stays: it is
+# still the live, per-org compute invoked synchronously by the dormant-Go
+# operational bridge (api/internal/worker_metrics.py::_run_recommendations),
+# and by nothing beat-shaped any more.

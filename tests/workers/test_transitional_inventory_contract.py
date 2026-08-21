@@ -62,8 +62,17 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # round-4 hardening (a separately deployed second FastAPI app,
     # billing_edge.py, forwarding to that same handler cross-file), + 2
     # added for CHAOS-3404 (the new ask_dev_retention celery task and its
-    # ask-dev-retention-sweep Beat entry).
-    assert inventory["row_count"] == 146
+    # ask-dev-retention-sweep Beat entry) = 146, - 43 removed under
+    # CHAOS-4026 (2026-08-21): the celery_task/beat_entry/beat_entry_conditional/
+    # call_site_literal/celery_canvas_import rows for every Go-owned cadence
+    # (and its now-deleted module) whose Python twin CHAOS-4026 made
+    # provably dead -- see tests/workers/test_celery_dead_code_contract.py
+    # for the per-surface list. 2 surviving rows (phone_home_heartbeat's
+    # celery_task, and work_graph_tasks.py's celery_canvas_import) were
+    # re-anchored to their still-live target (system.heartbeat's registry_kind
+    # primary row, and the surviving chord-only call site) rather than
+    # deleted, since their underlying task/import still exists.
+    assert inventory["row_count"] == 103
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

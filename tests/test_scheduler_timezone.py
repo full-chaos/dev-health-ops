@@ -26,7 +26,6 @@ from dev_health_ops.models.git import Base
 
 # Importing these at module load registers their tables on the shared ``Base``
 # metadata so ``create_all`` builds them for the in-memory SQLite fixture.
-from dev_health_ops.models.reports import SavedReport
 from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
@@ -190,50 +189,10 @@ class TestDispatchersForwardSelectedTimezone:
         assert result["dispatched"] == []
         assert seen["tz"] == LA
 
-    def test_report_dispatch_forwards_timezone(self, monkeypatch, db_session):
-        from dev_health_ops.workers import report_scheduler
-
-        now = datetime.now(timezone.utc)
-        job = ScheduledJob(
-            name="report-1",
-            job_type="report",
-            schedule_cron="0 0 * * *",
-            org_id="default",
-            tz=LA,
-        )
-        db_session.add(job)
-        db_session.flush()
-        report = SavedReport(
-            org_id="default",
-            name="weekly",
-            report_plan={},
-            schedule_id=job.id,
-            is_active=True,
-        )
-        db_session.add(report)
-        db_session.flush()
-        # The report dispatcher owns its transaction so the occurrence,
-        # ReportRun, and outbox handoff can commit or roll back atomically.
-        db_session.commit()
-
-        seen: dict[str, str | None] = {}
-
-        def spy(cron_expr, base, tz_name=None):
-            seen["tz"] = tz_name
-            return now + timedelta(hours=99)
-
-        monkeypatch.setattr(report_scheduler, "cron_next_run", spy)
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _session_ctx(db_session),
-        )
-        monkeypatch.setattr(
-            report_scheduler, "organization_exists_sync", lambda _s, _o: True
-        )
-
-        result = self._call(report_scheduler.dispatch_scheduled_reports)
-        assert result["dispatched"] == []
-        assert seen["tz"] == LA
+    # CHAOS-4026 (2026-08-21): test_report_dispatch_forwards_timezone tested
+    # report_scheduler.dispatch_scheduled_reports, deleted with this cleanup
+    # (Go's report.execute_scheduled fixed schedule now owns the periodic
+    # scan). See tests/workers/test_celery_dead_code_contract.py.
 
 
 class TestTimezoneValidation:

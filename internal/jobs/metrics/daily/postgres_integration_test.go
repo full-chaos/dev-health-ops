@@ -418,6 +418,111 @@ WHERE completion_key = $1`, "daily_metrics_run:"+runID).Scan(&completionFences);
 	}
 }
 
+// TestPostgresStoreReleaseFailurePathsReachLiveSchema is the CHAOS-4043
+// regression control. transitionFinalize (and its transitionPartition
+// sibling) assigned an untyped parameter to a varchar(16) column while also
+// comparing that same parameter against a text literal inside a CASE
+// expression; Postgres rejects that at PARSE time against the real
+// alembic-derived schema ("inconsistent types deduced for parameter $1:
+// text versus character varying"), so ReleaseFinalize/ReleasePartition's
+// failure paths could never reach a live database in production -- every
+// failed release fell through to lease expiry instead. Prior coverage never
+// caught this because createDailyTables hand-wrote those columns as `text`,
+// which is not what production has, so the mismatched types never collided.
+// Checked out against the pre-fix source with the hand-authored `text` DDL
+// restored, this test fails with that exact parse error; it is green here
+// because both the statements and the DDL were corrected.
+func TestPostgresStoreReleaseFailurePathsReachLiveSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000101"
+		partitionID = "00000000-0000-4000-8000-000000000102"
+		orgID       = "00000000-0000-4000-8000-000000000109"
+	)
+	now := time.Date(2026, 8, 21, 3, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-08-20','daily-v1','running','pending',$3,$3)`, runID, orgID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,$3,$3)`, partitionID, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+
+	// --- ReleasePartition's failure path (identical-class sibling bug) ---
+	partitionClaim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || partitionClaim == nil {
+		t.Fatalf("claim partition = %#v, %v", partitionClaim, err)
+	}
+	if err := store.ReleasePartition(ctx, *partitionClaim); err != nil {
+		t.Fatalf("ReleasePartition against live schema: %v", err)
+	}
+	var partitionStatus string
+	var partitionClaimToken *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, claim_token::text FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
+	).Scan(&partitionStatus, &partitionClaimToken); err != nil {
+		t.Fatal(err)
+	}
+	if partitionStatus != "failed" || partitionClaimToken != nil {
+		t.Fatalf("released partition state = status=%s claim_token=%v, want failed/nil",
+			partitionStatus, partitionClaimToken)
+	}
+
+	// Move the partition to a state finalize can proceed from.
+	if _, err := pool.Exec(ctx,
+		`UPDATE daily_metrics_partitions SET status = 'succeeded' WHERE id = $1::uuid`, partitionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// --- ReleaseFinalize's failure path (the ticket's defect) ---
+	finalizeClaim, err := store.ClaimFinalize(ctx, runID)
+	if err != nil || finalizeClaim == nil {
+		t.Fatalf("claim finalize = %#v, %v", finalizeClaim, err)
+	}
+	if err := store.ReleaseFinalize(ctx, *finalizeClaim); err != nil {
+		t.Fatalf("ReleaseFinalize against live schema: %v", err)
+	}
+	var runStatus, finalizationStatus string
+	var finalizeClaimToken *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, finalization_status, finalization_claim_token::text FROM daily_metrics_runs WHERE id = $1::uuid`,
+		runID,
+	).Scan(&runStatus, &finalizationStatus, &finalizeClaimToken); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "running" || finalizationStatus != "failed" || finalizeClaimToken != nil {
+		t.Fatalf("released finalize state = status=%s finalization_status=%s claim_token=%v, want running/failed/nil",
+			runStatus, finalizationStatus, finalizeClaimToken)
+	}
+
+	// A failed finalization is re-claimable, exactly like a failed partition --
+	// this is the recovery path CHAOS-3997's strand repair no longer needs to
+	// cover for once ReleaseFinalize can actually run.
+	reclaimed, err := store.ClaimFinalize(ctx, runID)
+	if err != nil || reclaimed == nil || reclaimed.Token == finalizeClaim.Token {
+		t.Fatalf("reclaim after release = %#v, %v", reclaimed, err)
+	}
+}
+
 // assertLeaseHeld requires a claim to have reported a live lease and to have
 // carried the exact remaining time on it. Each call site states the remainder
 // it predicts, so a claim that reports the wrong deadline cannot pass.
@@ -435,12 +540,20 @@ func assertLeaseHeld[T any](t *testing.T, what string, claim *T, err error, want
 	}
 }
 
+// The status/finalization_status columns below are typed varchar(16), not
+// text, to match alembic 0057 (widened by 0095 for 'no_repositories')
+// column for column. A prior hand-authored text-only version of this DDL let
+// the gate stay green against transitionFinalize/transitionPartition
+// statements that Postgres rejects at PARSE time against the real
+// varchar(16) columns ("inconsistent types deduced for parameter $1: text
+// versus character varying", CHAOS-4043) -- the suite never actually
+// executed those statements.
 func createDailyTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
 CREATE TABLE daily_metrics_runs (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation text NOT NULL,
- status text NOT NULL, finalization_status text NOT NULL, finalization_claim_token uuid NULL,
+ id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation varchar(64) NOT NULL,
+ status varchar(16) NOT NULL, finalization_status varchar(16) NOT NULL, finalization_claim_token uuid NULL,
  finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
  CONSTRAINT ck_daily_metrics_run_status CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')),
@@ -448,7 +561,7 @@ CREATE TABLE daily_metrics_runs (
 );
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
- repo_ids jsonb NOT NULL, status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
+ repo_ids jsonb NOT NULL, status varchar(16) NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
  attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 );
 CREATE TABLE worker_job_outbox (

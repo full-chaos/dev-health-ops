@@ -39,7 +39,7 @@ func TestProductionMutationPipelineConstructsTerminalDeliveryRepair(t *testing.T
 	}
 }
 
-func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *testing.T) {
+func TestProductionGenericRelayConstructsBothRecoverySeams(t *testing.T) {
 	source, err := os.ReadFile("dependencies.go")
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +48,41 @@ func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *t
 	if strings.Count(text, "joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
 		t.Fatal("production generic relay does not construct provider-unit terminal delivery repair")
 	}
-	if strings.Count(text, "joboutbox.NewRelayWithRoutesAndRecovery(") != 1 {
+	// CHAOS-3997 added a second recovery seam. It is asserted separately from
+	// the first because the two repair different things -- a delivery River
+	// threw away, versus a domain row that says the work never finished -- and
+	// a relay wired with only one of them would still satisfy the original
+	// single-seam assertion while leaving every stranded run unhealed.
+	//
+	// The argument ORDER is load-bearing, not cosmetic: the queue pool selects
+	// and rearms, the domain pool reads execution state. Swapping them would
+	// compile and then fail at runtime as a 42501 -- the queue role is not
+	// granted worker_job_runs, and must never be. Pinning the exact call is how
+	// a wrong-pool wiring is caught here rather than in production.
+	if strings.Count(text, "joboutbox.NewStrandRepair(queuePool, domainPool, riverSchema)") != 1 {
+		t.Fatal("production generic relay does not construct the strand repair with the " +
+			"queue pool for mutation and the domain pool for execution state")
+	}
+	// The domain pool must actually be threaded in rather than discarded. It
+	// was previously dropped here with a blank assignment, and re-adding that
+	// would silently make the pool split a fiction.
+	if strings.Contains(text, "_ = domainPool") {
+		t.Fatal("buildReconcilerRelay discards domainPool; the strand repair's execution-state " +
+			"read has no pool to run on")
+	}
+	if strings.Count(text, "joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(") != 1 {
 		t.Fatal("production generic relay does not run recovery before ordinary relay")
+	}
+	// The narrower constructors would drop a seam silently: both compile, and
+	// both produce a working relay that simply never repairs.
+	for _, superseded := range []string{
+		"joboutbox.NewRelayWithRoutesAndRecovery(",
+		"joboutbox.NewRelayWithRoutes(",
+		"joboutbox.NewRelay(",
+	} {
+		if strings.Contains(text, superseded) {
+			t.Fatalf("production generic relay still uses %s, which omits a recovery seam", superseded)
+		}
 	}
 }
 

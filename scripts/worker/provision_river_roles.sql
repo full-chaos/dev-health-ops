@@ -208,3 +208,33 @@ SELECT format(
        )
  WHERE to_regclass('public.sync_run_units') IS NOT NULL
 \gexec
+
+-- CHAOS-3997 SECURITY POSTURE CHANGE. Read-only daily-metrics and work-graph
+-- access, for bounding the stranded-delivery repair to work the domain row
+-- proves never finished. Identical in purpose and in shape to the
+-- sync_runs/sync_run_units grants above, which exist for exactly the same
+-- reason on the sync side.
+--
+-- SELECT only, and deliberately so: the repair mutates the outbox and the
+-- River schema, never the domain row. It cannot even lock these rows --
+-- PostgreSQL requires UPDATE privilege for FOR UPDATE -- which is why the
+-- repair's predicate is written to need no domain-row lock.
+--
+-- These grants and the matching entries in
+-- internal/storage/postgres/queue_authorization.go are two halves of one
+-- change and MUST deploy together. The posture assertion proves the queue role
+-- holds exactly its declared privileges and no more, so either half alone
+-- fails queue-control readiness for every queue path, not just this repair.
+SELECT format(
+         'GRANT SELECT ON TABLE public.%I TO %I',
+         required.table_name,
+         :'queue_role'
+       )
+  FROM (
+         VALUES
+           ('daily_metrics_runs'),
+           ('daily_metrics_partitions'),
+           ('work_graph_execution_requests')
+       ) AS required(table_name)
+ WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
+\gexec

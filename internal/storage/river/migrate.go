@@ -471,6 +471,14 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO " + queueRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_run_units TO " + queueRole + "; END IF; END $$",
+		// CHAOS-3997: read-only domain access bounding the stranded-delivery
+		// repair. This list is the AUTHORITY -- the REVOKE ALL above wipes the
+		// queue role every run, so a grant that exists only in
+		// scripts/worker/provision_river_roles.sql is erased by this migration
+		// before the reconciler ever starts.
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.daily_metrics_runs TO " + queueRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partitions') IS NOT NULL THEN GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + queueRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.work_graph_execution_requests') IS NOT NULL THEN GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + queueRole + "; END IF; END $$",
 		"REVOKE ALL PRIVILEGES ON SCHEMA " + schema + " FROM PUBLIC",
 		"REVOKE ALL PRIVILEGES ON SCHEMA " + schema + " FROM " + domainRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA " + schema + " FROM PUBLIC, " + domainRole,

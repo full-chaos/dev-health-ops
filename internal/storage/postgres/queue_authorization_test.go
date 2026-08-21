@@ -63,6 +63,13 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"SYNC_DISPATCH_OUTBOX",
 		"SYNC_DISPATCH_TRANSPORT_ROUTES",
 		"SYNC_RUNS",
+		// CHAOS-3997: the read-only daily-metrics and work-graph access that
+		// bounds the stranded-delivery repair. Named individually so a table
+		// dropped from the allow-list without its EXISTS block, or the
+		// reverse, fails here rather than at a deployment's readiness check.
+		"DAILY_METRICS_RUNS",
+		"DAILY_METRICS_PARTITIONS",
+		"WORK_GRAPH_EXECUTION_REQUESTS",
 		"PUBLIC_FUNCTIONS",
 		"PUBLIC_SEQUENCES",
 		"RIVER_TABLES",

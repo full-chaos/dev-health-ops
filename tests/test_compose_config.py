@@ -533,6 +533,31 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     assert "GRANT SELECT, INSERT ON TABLE public.sync_runs" not in queue_section
     assert "GRANT SELECT, UPDATE ON TABLE public.sync_run_units" not in queue_section
     assert "GRANT SELECT, INSERT ON TABLE public.sync_run_units" not in queue_section
+    # CHAOS-3997 security posture change. The stranded-delivery repair reads
+    # these three domain tables through the queue role, exactly as terminal
+    # delivery repair reads sync_runs/sync_run_units above. Assert the exact
+    # set rather than membership: a table added to the VALUES block without a
+    # matching entry in queueAuthorizationQuery fails queue-control readiness
+    # for every queue path, so the two must not be able to drift apart here.
+    assert _tables_for_formatted_grant(
+        queue_section, "GRANT SELECT ON TABLE public.%I TO %I"
+    ) == {
+        "daily_metrics_runs",
+        "daily_metrics_partitions",
+        "work_graph_execution_requests",
+    }, "queue-role read-only grant block covers the wrong tables"
+    # SELECT and nothing more. The repair mutates the outbox and the River
+    # schema; it never writes a domain row, and cannot even lock one.
+    for _table in (
+        "daily_metrics_runs",
+        "daily_metrics_partitions",
+        "work_graph_execution_requests",
+    ):
+        for _forbidden in ("UPDATE", "INSERT", "DELETE"):
+            assert (
+                f"GRANT SELECT, {_forbidden} ON TABLE public.{_table}"
+                not in queue_section
+            )
     _assert_least_privilege_domain_grants(
         upgrade_script.split("-- The queue role", maxsplit=1)[0]
     )

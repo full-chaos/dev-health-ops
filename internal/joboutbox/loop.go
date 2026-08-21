@@ -109,6 +109,11 @@ type ReconcilerLoop struct {
 
 	recovered                    uint64
 	postRepairContractRejections uint64
+	strandsRearmed               uint64
+	strandJobsSkippedLive        uint64
+	strandClaimsLive             uint64
+	strandClaimsSettled          uint64
+	strandRaceLost               uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -228,6 +233,11 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.mu.Lock()
 	loop.recovered += nonNegativeUint(result.Recovered)
 	loop.postRepairContractRejections += nonNegativeUint(result.PostRepairContractRejectionsRecovered)
+	loop.strandsRearmed += nonNegativeUint(result.StrandsRearmed)
+	loop.strandJobsSkippedLive += nonNegativeUint(result.StrandJobsSkippedLive)
+	loop.strandClaimsLive += nonNegativeUint(result.StrandClaimsLive)
+	loop.strandClaimsSettled += nonNegativeUint(result.StrandClaimsSettled)
+	loop.strandRaceLost += nonNegativeUint(result.StrandRaceLost)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -322,6 +332,11 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	loop.mu.Lock()
 	recovered := loop.recovered
 	postRepairContractRejections := loop.postRepairContractRejections
+	strandsRearmed := loop.strandsRearmed
+	strandJobsSkippedLive := loop.strandJobsSkippedLive
+	strandClaimsLive := loop.strandClaimsLive
+	strandClaimsSettled := loop.strandClaimsSettled
+	strandRaceLost := loop.strandRaceLost
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -339,6 +354,23 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	var text strings.Builder
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_terminal_deliveries_recovered_total", "Terminal River deliveries rearmed by the reconciler.", recovered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_post_repair_contract_rejections_recovered_total", "Post-repair provider contract rejections recovered by the reconciler.", postRepairContractRejections)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strands_rearmed_total", "Stranded daily-metrics and work-graph deliveries rearmed by the reconciler.", strandsRearmed)
+	// Exported even though it is a refusal rather than an action: a skip count
+	// that climbs while nothing is ever rearmed is the signature of a River
+	// rescuer that has stopped running, which would otherwise be
+	// indistinguishable from "no strands exist".
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_jobs_skipped_live_total", "Strand candidates left alone because their River delivery was not terminal.", strandJobsSkippedLive)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_claims_live_total", "Strand candidates left alone because their idempotency claim was still live.", strandClaimsLive)
+	// Settled claims are a DIFFERENT problem from live ones: the work will
+	// never be re-driven by rearming, because a fresh delivery is ACKed as a
+	// duplicate. A non-zero value here means rows need a remedy this sweep
+	// does not provide, which is worth seeing rather than folding into the
+	// live-claim count.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_claims_settled_total", "Strand candidates left alone because their idempotency claim had already settled.", strandClaimsSettled)
+	// A race loss is a refusal like any other. Without it the loser of a
+	// two-replica contest reports a successful zero pass and the contention
+	// is invisible.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_race_lost_total", "Strand candidates that no longer matched under the phase-3 lock.", strandRaceLost)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

@@ -289,7 +289,19 @@ var definitions = map[string]contractDefinition{
 		// required field is a breaking change for a v1 consumer, so it cannot
 		// be edited in place under the registry's additive_optional_only
 		// policy.
-		CurrentVersion:    ContractVersionV2,
+		//
+		// CurrentVersion is the single dial the joboutbox producer enforces
+		// exact equality against (internal/joboutbox/producer.go): every
+		// currently-active retention policy for this kind -- rate-limit
+		// observations, external-ingest batches, and (as of CHAOS-3481,
+		// 2026-08-21) Ask Dev conversations -- publishes at exactly this
+		// version, never at an older still-SupportedVersions one, because a
+		// kind has one canonical wire format in flight at a time; older
+		// versions stay supported only for decode compatibility during a
+		// rolling deploy. Raised from v2 to v3 alongside migration-state.json's
+		// producer_version once live-fleet capability reports proved the v3
+		// schema digest (see contracts/jobs/v1/README.md).
+		CurrentVersion:    ContractVersionV3,
 		SupportedVersions: []int{ContractVersionV1, ContractVersionV2, ContractVersionV3},
 		DomainLink:        "maintenance_run",
 		OrganizationScope: "global",

@@ -5,6 +5,7 @@ package system
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -24,6 +25,23 @@ type RetentionStore interface {
 // owns completion fences alongside the rows themselves.
 type TerminalOutboxStore interface {
 	DeleteTerminalBefore(context.Context, time.Time, int) (int64, error)
+}
+
+// DrainConfirmer is an optional capability a RetentionStore may additionally
+// implement when its DeleteBefore query uses FOR UPDATE SKIP LOCKED. Under
+// SKIP LOCKED, a chunk shorter than the requested batch size is ambiguous: it
+// means either "the backlog is exhausted" or "a concurrent invocation holds
+// the remaining due rows' locks", and deleteInChunks cannot tell the two
+// apart from inside the loop.
+//
+// RemainingBefore resolves that ambiguity with a plain, non-locking count of
+// rows still due as of the same cutoff. Row locks block writers, not readers,
+// so it sees every still-due row regardless of who currently holds a lock on
+// it -- mirroring the Celery Ask Dev purger's post-loop count_expired()
+// recheck (ask_dev_retention.py, CHAOS-3404 round 2, HIGH, confirmed): only a
+// confirmed-zero count may be read as "drained".
+type DrainConfirmer interface {
+	RemainingBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 type terminalOutboxRetention struct {
@@ -127,6 +145,27 @@ func (handler *RetentionHandler) Work(ctx context.Context, execution *jobruntime
 	}
 	if _, err := store.DeleteBefore(ctx, deleteBefore, payload.BatchSize); err != nil {
 		return jobruntime.Retryable(err)
+	}
+	// deleteInChunks (retention_postgres.go) stops as soon as one chunk comes
+	// back short of the batch size, which it must, but a short chunk is not
+	// proof the backlog is gone: the delete queries select FOR UPDATE SKIP
+	// LOCKED, so a genuinely concurrent invocation holding the remaining due
+	// rows' locks makes a chunk look short for the same reason an exhausted
+	// backlog would. A store that surfaces this ambiguity via DrainConfirmer
+	// gets a non-locking recheck before the occurrence is allowed to succeed;
+	// a store that never has the ambiguity (nothing else here chunks a query
+	// that also holds row locks across a whole backlog) is unaffected.
+	if confirmer, ok := store.(DrainConfirmer); ok {
+		remaining, err := confirmer.RemainingBefore(ctx, deleteBefore)
+		if err != nil {
+			return jobruntime.Retryable(err)
+		}
+		if remaining > 0 {
+			return jobruntime.Retryable(fmt.Errorf(
+				"retention policy %s: %d row(s) remain past the cutoff after a contended pass",
+				payload.RetentionPolicy, remaining,
+			))
+		}
 	}
 	return nil
 }

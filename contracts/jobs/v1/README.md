@@ -50,10 +50,24 @@ published policy enums; accepting v3 must never make an older-version decoder
 accept the new deletion capability.
 
 The registry and Go consumer accept v3 before production emission is enabled.
-`migration-state.json` therefore keeps `producer_version` at 2 until capability
-reports from every live worker group prove the v3 schema digest. The fixed
+`migration-state.json` therefore held `producer_version` at 2 until capability
+reports from every live worker group proved the v3 schema digest. The fixed
 scheduler treats that producer version as an admission boundary and cannot
-construct a v3 envelope while the route remains at v2.
+construct a v3 envelope while the route remains below v3.
+
+**Rollout proof (CHAOS-3481, 2026-08-21):** collected against live fleet
+revision `4a39bcf0efc4a948dca9b335e6b1184fa6113a25` -- every production
+go-worker-{ops,heavy,sync,sync-provider}, go-scheduler, and go-reconciler
+container reported that exact `org.opencontainers.image.revision` (the
+`retention` queue is consumed only by go-worker-ops). A capability report
+collected from that revision's image
+(`ghcr.io/full-chaos/dev-health-go-contractcheck:latest`, same revision label)
+declared `system.retention_cleanup` versions `[1, 2, 3]` with v3 digest
+`sha256:7a50e5aca532c7e3fbdce68bdd8d5441a4f22393f7cbbf7619dc550f664c21c6`,
+matching this tree's compiled digest exactly. `worker-contractcheck rollout
+--queues retention --report <that report>` against a candidate tree with
+`producer_version=3` returned `all live capability reports support producer
+versions` (rc=0). `producer_version` is now 3.
 
 ## Validation
 

@@ -135,6 +135,29 @@ func (store *AskDevConversationStore) DeleteBefore(
 			)`, before, batchSize)
 }
 
+// RemainingBefore implements DrainConfirmer. It is a plain, non-locking count
+// of conversations still due as of the cutoff, mirroring the Celery purger's
+// count_expired(): row locks taken by DeleteBefore's FOR UPDATE SKIP LOCKED
+// selection block writers, not this read, so a contended pass never hides a
+// still-due row from it.
+func (store *AskDevConversationStore) RemainingBefore(
+	ctx context.Context,
+	before time.Time,
+) (int64, error) {
+	if store == nil || store.pool == nil {
+		return 0, ErrRetentionUnavailable
+	}
+	var remaining int64
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM public.dev_conversations
+		WHERE expires_at IS NOT NULL AND expires_at <= $1`, before,
+	).Scan(&remaining); err != nil {
+		return 0, ErrRetentionUnavailable
+	}
+	return remaining, nil
+}
+
 func NewExternalIngestBatchStore(pool *pgxpool.Pool) (*ExternalIngestBatchStore, error) {
 	if pool == nil {
 		return nil, ErrRetentionUnavailable

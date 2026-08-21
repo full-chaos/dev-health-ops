@@ -196,6 +196,117 @@ func TestRetentionHandlerRefusesAFutureCutoff(t *testing.T) {
 	}
 }
 
+// contendedRetentionStore simulates a FOR UPDATE SKIP LOCKED store whose
+// chunked delete loop exits on a short (here, zero-row) final chunk while a
+// concurrent invocation still holds the remaining due rows' locks: exactly
+// the ambiguity DrainConfirmer exists to resolve. deleted is what
+// DeleteBefore reports; remaining is what a separate, non-locking recount
+// would see.
+type contendedRetentionStore struct {
+	deleted   int64
+	remaining int64
+	remErr    error
+	remCalled bool
+}
+
+func (store *contendedRetentionStore) DeleteBefore(context.Context, time.Time, int) (int64, error) {
+	return store.deleted, nil
+}
+
+func (store *contendedRetentionStore) RemainingBefore(_ context.Context, _ time.Time) (int64, error) {
+	store.remCalled = true
+	return store.remaining, store.remErr
+}
+
+// TestRetentionHandlerRefusesToReportSuccessOnAContendedShortChunk is the red
+// control for CHAOS-3481's C2 gap: inventory.go documented that
+// deleteInChunks treats a short final chunk as proof of drain and the
+// handler discards DeleteBefore's count entirely, so a contended pass (a
+// concurrent invocation holding the remaining expired rows' SKIP LOCKED
+// locks) silently reports success though rows past the cutoff remain. A
+// store that surfaces the ambiguity via DrainConfirmer must make the handler
+// refuse to treat the occurrence as done.
+func TestRetentionHandlerRefusesToReportSuccessOnAContendedShortChunk(t *testing.T) {
+	t.Parallel()
+	store := &contendedRetentionStore{deleted: 0, remaining: 3}
+	handler, err := NewRetentionHandler(allRetentionStores(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), retentionExecution(jobcontract.RetentionCleanupPayload{
+		BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: jobcontract.RetentionAskDevConversations,
+	}))
+	if err == nil {
+		t.Fatal("a contended pass with rows still past the cutoff was reported as success")
+	}
+	if !store.remCalled {
+		t.Fatal("the handler never asked for a non-locking recount")
+	}
+	if got := err.Error(); got != "job error category: retryable" {
+		t.Fatalf("error = %q, want a bounded retry so a later, uncontended attempt can confirm drain", got)
+	}
+}
+
+// TestRetentionHandlerReportsSuccessOnlyOnceDrainIsConfirmedEmpty is the
+// green counterpart: once the non-locking recount confirms zero rows remain
+// past the cutoff, the occurrence is genuinely done and Work must succeed.
+func TestRetentionHandlerReportsSuccessOnlyOnceDrainIsConfirmedEmpty(t *testing.T) {
+	t.Parallel()
+	store := &contendedRetentionStore{deleted: 0, remaining: 0}
+	handler, err := NewRetentionHandler(allRetentionStores(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), retentionExecution(jobcontract.RetentionCleanupPayload{
+		BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: jobcontract.RetentionAskDevConversations,
+	})); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if !store.remCalled {
+		t.Fatal("the handler never confirmed drain before reporting success")
+	}
+}
+
+// TestRetentionHandlerPropagatesARecountFailure ensures a broken confirmation
+// read is loud (retryable) rather than defaulting to either "drained" or a
+// permanent failure that a transient read blip could never recover from.
+func TestRetentionHandlerPropagatesARecountFailure(t *testing.T) {
+	t.Parallel()
+	store := &contendedRetentionStore{deleted: 0, remaining: 0, remErr: errors.New("recount unavailable")}
+	handler, err := NewRetentionHandler(allRetentionStores(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), retentionExecution(jobcontract.RetentionCleanupPayload{
+		BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: jobcontract.RetentionAskDevConversations,
+	}))
+	if err == nil {
+		t.Fatal("a failed recount was reported as success")
+	}
+	if got := err.Error(); got != "job error category: retryable" {
+		t.Fatalf("error = %q, want retryable", got)
+	}
+}
+
+// TestRetentionHandlerNeverRecountsAPolicyWithoutTheAmbiguity confirms the
+// recheck is opt-in: a store that does not implement DrainConfirmer (the
+// rate-limit and external-ingest policies, whose Celery originals never
+// chunked at all) keeps its existing short-chunk-means-done behavior
+// unchanged.
+func TestRetentionHandlerNeverRecountsAPolicyWithoutTheAmbiguity(t *testing.T) {
+	t.Parallel()
+	store := &retentionStore{}
+	handler, err := NewRetentionHandler(allRetentionStores(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), retentionExecution(jobcontract.RetentionCleanupPayload{
+		BatchSize: 500, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: jobcontract.RetentionRateLimitObservations,
+	})); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+}
+
 // TestRetentionSkewToleranceStaysFarBelowEveryRealHorizon pins the sizing
 // argument rather than the number: the guard may be loosened for clock skew
 // only while it still refuses an inversion of the shortest retention window

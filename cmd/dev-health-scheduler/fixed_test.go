@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -73,11 +76,21 @@ func TestFixedScheduleProducersAreConstructedForEveryDeclaredSchedule(t *testing
 	}
 }
 
-// The v3 consumer and schema land before the producer version is activated.
-// Until capability reports prove every live ops consumer accepts v3, the
-// production composition must skip the native Ask Dev schedule without ever
-// constructing a v3 envelope.
-func TestAskDevRetentionWaitsForTheActiveProducerVersion(t *testing.T) {
+// CHAOS-3481: the rollout proof this contract's README requires was
+// collected on 2026-08-21 against live fleet revision 4a39bcf0e (every
+// go-worker-* / go-scheduler / go-reconciler container on prod, docker
+// inspect) -- report-ops.json's v3 schema digest for system.retention_cleanup
+// matches this tree's compiled digest exactly, and
+// `worker-contractcheck rollout` against that live report passes with
+// producer_version=3. migration-state.json now routes at v3.
+//
+// This test proves the composition root actually reached that route: the
+// registered producer version is v3, and the schedule no longer refuses on
+// version at all -- it now reaches past the version gate into Ask Dev
+// admission (which needs a real transaction; a nil one here fails there
+// instead, an entirely different, later failure mode than the version skip
+// this test replaces).
+func TestAskDevRetentionEmitsV3NowThatTheRouteIsActivated(t *testing.T) {
 	registry, err := jobruntime.Load(testContractRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -86,11 +99,11 @@ func TestAskDevRetentionWaitsForTheActiveProducerVersion(t *testing.T) {
 	if !ok {
 		t.Fatal("retention contract is not registered")
 	}
-	if descriptor.CurrentVersion != jobcontract.ContractVersionV2 ||
-		descriptor.ProducerVersion != jobcontract.ContractVersionV2 ||
+	if descriptor.CurrentVersion != jobcontract.ContractVersionV3 ||
+		descriptor.ProducerVersion != jobcontract.ContractVersionV3 ||
 		!slices.Contains(descriptor.SupportedVersions, jobcontract.ContractVersionV3) {
 		t.Fatalf(
-			"retention versions = current %d producer %d supported %v, want v3 supported with current and producer held at v2",
+			"retention versions = current %d producer %d supported %v, want v3 supported and both current and producer routed to v3",
 			descriptor.CurrentVersion,
 			descriptor.ProducerVersion,
 			descriptor.SupportedVersions,
@@ -113,11 +126,134 @@ func TestAskDevRetentionWaitsForTheActiveProducerVersion(t *testing.T) {
 		t.Context(), nil, schedule,
 		schedulerfixed.NewOccurrence(schedule, time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC), time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC)),
 	)
+	// A nil tx makes production's real Postgres admission reader fail (it
+	// requires the engine's coordinator transaction); that is expected and is
+	// exactly the proof this test needs -- the failure is no longer the
+	// version skip, so Produce() got past the version gate to reach
+	// admission at all.
+	if err == nil {
+		t.Fatalf("outcome = %+v, err = nil; want the nil-tx admission failure once the version gate is open", outcome)
+	}
+	if !errors.Is(err, schedulerfixed.ErrProducerUnavailable) {
+		t.Fatalf("error = %v, want the admission read's nil-tx failure, not a version-gate skip", err)
+	}
+	if outcome.SkipReason == "consumer_version_incompatible" {
+		t.Fatal("the schedule still refuses on version even though the route is now v3")
+	}
+}
+
+// TestAskDevRetentionWiringHonorsWhateverProducerVersionTheRouteDeclares is
+// the retargeted admission-boundary control from before the rollout: the
+// composition root must still read producer_version from the registry
+// rather than assuming it is always activated. It proves this with a
+// synthetic lower pin -- a private copy of the contract tree with
+// system.retention_cleanup pinned back to v2 -- and confirms the schedule
+// goes back to refusing v3 without ever constructing an envelope, exactly as
+// production did before 2026-08-21's rollout proof.
+func TestAskDevRetentionWiringHonorsWhateverProducerVersionTheRouteDeclares(t *testing.T) {
+	root := t.TempDir()
+	copyContractTree(t, testContractRoot, root)
+	pinRetentionProducerVersion(t, root, jobcontract.ContractVersionV2)
+
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, ok := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	if !ok {
+		t.Fatal("retention contract is not registered")
+	}
+	if descriptor.ProducerVersion != jobcontract.ContractVersionV2 {
+		t.Fatalf("synthetic pin did not take: producer version = %d, want 2", descriptor.ProducerVersion)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := scheduleWithID(t, schedules, "prune_ask_dev_conversations")
+	producer, ok := producers.Producer(schedule.ProducerID)
+	if !ok {
+		t.Fatal("Ask Dev retention producer is not constructed")
+	}
+	outcome, err := producer.Produce(
+		t.Context(), nil, schedule,
+		schedulerfixed.NewOccurrence(schedule, time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC), time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(outcome.Requests) != 0 || outcome.SkipReason != "consumer_version_incompatible" {
-		t.Fatalf("outcome = %+v, v3 emitted before producer activation", outcome)
+		t.Fatalf("outcome = %+v, want the same version-gate skip production had before the route was activated", outcome)
+	}
+}
+
+// copyContractTree copies the contract v1 directory so a test can mutate its
+// own private copy without touching the checked-in tree other tests read
+// concurrently.
+func copyContractTree(t *testing.T, source, destination string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pinRetentionProducerVersion overwrites system.retention_cleanup's
+// producer_version in a private copy of migration-state.json.
+func pinRetentionProducerVersion(t *testing.T, root string, version int) {
+	t.Helper()
+	path := filepath.Join(root, "migration-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		SchemaVersion int              `json:"schema_version"`
+		Jobs          []map[string]any `json:"jobs"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, job := range state.Jobs {
+		if job["kind"] == jobcontract.KindRetentionCleanup {
+			job["producer_version"] = version
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("migration-state.json has no %s entry to pin", jobcontract.KindRetentionCleanup)
+	}
+	encoded, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -9,9 +9,19 @@ import (
 // queueAuthorizationQuery proves the queue-control login has only the River
 // plus completion-fence capabilities it requires. Its only semantic-table
 // privileges are read-only sync_runs/sync_run_units access for bounding
-// terminal delivery repair to active work. In particular, it cannot create database objects, touch
+// terminal delivery repair to active work, and read-only
+// daily_metrics_runs/daily_metrics_partitions/work_graph_execution_requests
+// access for bounding the CHAOS-3997 stranded-delivery repair the same way.
+// In particular, it cannot create database objects, touch
 // arbitrary semantic tables, or insert producer-owned outbox rows. Every
 // predicate operates on effective privileges.
+//
+// This declaration and the grants in scripts/worker/provision_river_roles.sql
+// are two halves of one change. This query proves the role holds EXACTLY the
+// declared posture and no more, so a table added here without the grant, or
+// granted without being added here, fails queue-control readiness for every
+// queue path -- the relay and the sync dispatch transition, not only the
+// repair that motivated the widening.
 const queueAuthorizationQuery = `
 WITH river_tables AS (
 	SELECT class.oid
@@ -43,7 +53,10 @@ WITH river_tables AS (
 			'sync_dispatch_outbox',
 			'sync_dispatch_transport_routes',
 			'sync_runs',
-			'sync_run_units'
+			'sync_run_units',
+			'daily_metrics_runs',
+			'daily_metrics_partitions',
+			'work_graph_execution_requests'
 		)
 ), public_sequences AS (
 	SELECT class.oid
@@ -103,6 +116,75 @@ SELECT
 		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 		WHERE namespace.nspname = 'public'
 			AND class.relname = 'sync_runs'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'daily_metrics_runs'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'daily_metrics_partitions'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'work_graph_execution_requests'
 			AND class.relkind IN ('r', 'p')
 			AND has_table_privilege(current_user, class.oid, 'SELECT')
 			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')

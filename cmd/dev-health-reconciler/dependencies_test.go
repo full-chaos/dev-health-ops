@@ -39,7 +39,7 @@ func TestProductionMutationPipelineConstructsTerminalDeliveryRepair(t *testing.T
 	}
 }
 
-func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *testing.T) {
+func TestProductionGenericRelayConstructsBothRecoverySeams(t *testing.T) {
 	source, err := os.ReadFile("dependencies.go")
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +48,27 @@ func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *t
 	if strings.Count(text, "joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
 		t.Fatal("production generic relay does not construct provider-unit terminal delivery repair")
 	}
-	if strings.Count(text, "joboutbox.NewRelayWithRoutesAndRecovery(") != 1 {
+	// CHAOS-3997 added a second recovery seam. It is asserted separately from
+	// the first because the two repair different things -- a delivery River
+	// threw away, versus a domain row that says the work never finished -- and
+	// a relay wired with only one of them would still satisfy the original
+	// single-seam assertion while leaving every stranded run unhealed.
+	if strings.Count(text, "joboutbox.NewStrandRepair(queuePool, riverSchema)") != 1 {
+		t.Fatal("production generic relay does not construct the daily/work-graph strand repair")
+	}
+	if strings.Count(text, "joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(") != 1 {
 		t.Fatal("production generic relay does not run recovery before ordinary relay")
+	}
+	// The narrower constructors would drop a seam silently: both compile, and
+	// both produce a working relay that simply never repairs.
+	for _, superseded := range []string{
+		"joboutbox.NewRelayWithRoutesAndRecovery(",
+		"joboutbox.NewRelayWithRoutes(",
+		"joboutbox.NewRelay(",
+	} {
+		if strings.Contains(text, superseded) {
+			t.Fatalf("production generic relay still uses %s, which omits a recovery seam", superseded)
+		}
 	}
 }
 

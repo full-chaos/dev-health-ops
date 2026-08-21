@@ -306,7 +306,7 @@ run_go_checked() {
   if ! RIVER_COMPAT_DATABASE_URL="${database_url}" "${GO_BINARY}" "$@" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
     progress "${label} failed; sanitized diagnostic follows"
-    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 100 >&2 || true
     die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
@@ -412,7 +412,7 @@ run_python_case() {
   if ! "${PYTHON_BIN}" "${PYTHON_CLI}" "${args[@]}" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
     progress "${label} failed; sanitized diagnostic follows"
-    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 100 >&2 || true
     die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"

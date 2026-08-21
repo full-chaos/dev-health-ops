@@ -398,6 +398,7 @@ func runInternalWorkload(
 	executeLatencies := make([]float64, 0, opts.Samples)
 	var execute JobResult
 	for sample := range opts.Samples {
+		sampleStarted := time.Now()
 		executeMarker := newMarker(fmt.Sprintf("execute-%d", sample), opts.Mode)
 		worker.Register(executeMarker, ScenarioExecute)
 		executeQueuedAt := time.Now().UTC()
@@ -407,15 +408,28 @@ func runInternalWorkload(
 			Source:          "go",
 		}, insertOptions(opts, time.Time{}))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d insert FAILED err=%v\n", opts.Mode, sample, err)
 			return WorkloadResult{}, phaseError("insert_execute_job", err)
 		}
 		executeStart, err := waitForStart(ctx, worker.Starts(), executeMarker, 1)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d wait_start FAILED after %s err=%v\n", opts.Mode, sample, time.Since(sampleStarted), err)
 			return WorkloadResult{}, phaseError("wait_execute_start", err)
+		}
+		// CHAOS-4011: these two waits are unbounded (no timeout of their own,
+		// only the outer --timeout). Flagging any sample slow enough to be a
+		// candidate for the intermittent session-profile hang, without
+		// spamming stderr on the normal fast path.
+		if elapsed := time.Since(sampleStarted); elapsed > time.Second {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d slow wait_start elapsed=%s\n", opts.Mode, sample, elapsed)
 		}
 		executeEvent, err := waitForEvent(ctx, events, executeInsert.Job.ID, river.EventKindJobCompleted)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d wait_complete FAILED after %s err=%v\n", opts.Mode, sample, time.Since(sampleStarted), err)
 			return WorkloadResult{}, phaseError("wait_execute_complete", err)
+		}
+		if elapsed := time.Since(sampleStarted); elapsed > time.Second {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d slow wait_complete elapsed=%s\n", opts.Mode, sample, elapsed)
 		}
 		observed, err := observeJob(ctx, client, executeInsert.Job.ID, executeEvent, executeStart, executeQueuedAt, nil)
 		if err != nil {

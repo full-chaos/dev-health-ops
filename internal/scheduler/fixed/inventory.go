@@ -33,10 +33,16 @@ const inventoryTimezone = "UTC"
 func checkedInSchedules() []Schedule {
 	return []Schedule{
 		{
-			ID:              "daily_metrics_fanout",
-			LegacyBeatEntry: "run-daily-metrics",
-			Cadence:         DailyAt(1, 0),
-			Timezone:        inventoryTimezone,
+			ID: "daily_metrics_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-daily-metrics"
+			// (and its dispatch_daily_metrics_for_all_orgs Celery task) was
+			// deleted -- Celery is retired, zero Python celery services have run
+			// in prod since 2026-08-19. This schedule has no live predecessor to
+			// mirror any more, so it is Native. Its retirement is recorded in
+			// RetiredBeatInventory rather than silently dropped.
+			Native:   true,
+			Cadence:  DailyAt(1, 0),
+			Timezone: inventoryTimezone,
 			// A nightly organization fan-out that is skipped leaves
 			// repo_metrics_daily unpopulated for a whole day, so an outage that
 			// spans 01:00 must still produce the run.
@@ -50,8 +56,11 @@ func checkedInSchedules() []Schedule {
 				"rows, so the producer must enumerate active organizations.",
 		},
 		{
-			ID:               "complexity_daily_fanout",
-			LegacyBeatEntry:  "run-complexity-daily",
+			ID: "complexity_daily_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-complexity-daily"
+			// (and its dispatch_complexity_job Celery task) was deleted -- Celery
+			// is retired. Native now; see RetiredBeatInventory.
+			Native:           true,
 			Cadence:          DailyAt(0, 45),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpBounded,
@@ -64,8 +73,12 @@ func checkedInSchedules() []Schedule {
 				"01:00 daily metrics run so complexity_delta reads a fresh snapshot.",
 		},
 		{
-			ID:               "release_impact_daily_fanout",
-			LegacyBeatEntry:  "run-release-impact-daily",
+			ID: "release_impact_daily_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry
+			// "run-release-impact-daily" (and its dispatch_release_impact /
+			// run_release_impact_job Celery tasks) was deleted -- Celery is
+			// retired. Native now; see RetiredBeatInventory.
+			Native:           true,
 			Cadence:          DailyAt(1, 30),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpBounded,
@@ -78,8 +91,14 @@ func checkedInSchedules() []Schedule {
 				"01:00 daily metrics dispatch so joined deployments exist.",
 		},
 		{
-			ID:               "recommendations_daily_fanout",
-			LegacyBeatEntry:  "run-recommendations",
+			ID: "recommendations_daily_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-recommendations"
+			// (and its run_recommendations_job Celery task) was deleted -- Celery
+			// is retired. Native now; see RetiredBeatInventory.
+			// _compute_recommendations_for_org itself is not dead -- it still
+			// runs via api/internal/worker_metrics.py's dormant-Go bridge, which
+			// this schedule's producer calls.
+			Native:           true,
 			Cadence:          DailyAt(2, 0),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpBounded,
@@ -92,8 +111,14 @@ func checkedInSchedules() []Schedule {
 				"producer must preserve the in-flight daily_finalize skip.",
 		},
 		{
-			ID:               "membership_backfill_daily_fanout",
-			LegacyBeatEntry:  "run-membership-backfill-daily",
+			ID: "membership_backfill_daily_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry
+			// "run-membership-backfill-daily" (and its dispatch_membership_backfill
+			// Celery task) was deleted -- Celery is retired. Native now; see
+			// RetiredBeatInventory. run_membership_backfill itself is not dead --
+			// it still runs via api/internal/worker_workgraph.py's dormant-Go
+			// bridge.
+			Native:           true,
 			Cadence:          DailyAt(3, 30),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpBounded,
@@ -106,8 +131,12 @@ func checkedInSchedules() []Schedule {
 				"materializer. Cheap enough that catching up a missed night is correct.",
 		},
 		{
-			ID:               "capacity_forecast_weekly_fanout",
-			LegacyBeatEntry:  "run-capacity-forecast",
+			ID: "capacity_forecast_weekly_fanout",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-capacity-forecast"
+			// (and its dispatch_capacity_forecast/run_capacity_forecast_job Celery
+			// tasks, and the product_tasks.py module that held them) was deleted --
+			// Celery is retired. Native now; see RetiredBeatInventory.
+			Native:           true,
 			Cadence:          WeeklyAt(time.Monday, 4, 0),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpBounded,
@@ -120,10 +149,15 @@ func checkedInSchedules() []Schedule {
 				"forecasts, so a bounded catch-up is the documented policy.",
 		},
 		{
-			ID:              "scheduled_reports_dispatch",
-			LegacyBeatEntry: "dispatch-scheduled-reports",
-			Cadence:         EveryInterval(300 * time.Second),
-			Timezone:        inventoryTimezone,
+			ID: "scheduled_reports_dispatch",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry
+			// "dispatch-scheduled-reports" (and its dispatch_scheduled_reports
+			// Celery task) was deleted -- Celery is retired. Native now; see
+			// RetiredBeatInventory. execute_saved_report itself is not dead --
+			// it is still dispatched by the GraphQL triggerReport resolver.
+			Native:   true,
+			Cadence:  EveryInterval(300 * time.Second),
+			Timezone: inventoryTimezone,
 			// Report due-ness lives in the durable ScheduledJob row; the next
 			// sweep re-reads it, so replaying an older bucket adds nothing.
 			CatchUp:          CatchUpSkip,
@@ -151,10 +185,15 @@ func checkedInSchedules() []Schedule {
 				"next tick, so replaying an older bucket adds no recovery value.",
 		},
 		{
-			ID:              "phone_home_heartbeat",
-			LegacyBeatEntry: "phone-home-heartbeat",
-			Cadence:         DailyAt(0, 0),
-			Timezone:        inventoryTimezone,
+			ID: "phone_home_heartbeat",
+			// CHAOS-4026 (2026-08-21): the legacy Beat entry "phone-home-heartbeat"
+			// was deleted -- Celery is retired. Native now; see
+			// RetiredBeatInventory. phone_home_heartbeat itself is not dead -- it
+			// is still invoked by api/internal/worker_operational.py's dormant-Go
+			// HTTP bridge (.run(), bypassing Celery entirely).
+			Native:   true,
+			Cadence:  DailyAt(0, 0),
+			Timezone: inventoryTimezone,
 			// Telemetry, not product state. A missed midnight heartbeat is
 			// reported, never replayed a day late as if it were current.
 			CatchUp:          CatchUpSkip,
@@ -201,56 +240,34 @@ func checkedInSchedules() []Schedule {
 		},
 		{
 			ID: "prune_ask_dev_conversations",
-			// Declared Native by CHAOS-3209, which built this schedule before
-			// any Python one existed. CHAOS-3404 then added the Celery beat
-			// entry `ask-dev-retention-sweep` for the SAME work at the SAME
+			// History: declared Native by CHAOS-3209, which built this schedule
+			// before any Python one existed. CHAOS-3404 then added the Celery
+			// beat entry `ask-dev-retention-sweep` for the SAME work at the SAME
 			// 05:30 cadence, so the schedule stopped being native the moment
-			// that landed: it now has a legacy predecessor, and leaving Native
-			// set would have kept it out of the bidirectional inventory check
-			// -- the exact bypass the Native field's own comment warns about.
+			// that landed (it briefly had a legacy predecessor, tracked in the
+			// bidirectional inventory check below rather than left as a bypass).
 			//
-			// WHAT THIS OWNERSHIP CLAIM DOES *NOT* SAY, because both halves
-			// were overstated once and are load-bearing for whoever decides
-			// the Celery cutover (CHAOS-3481):
+			// RESOLVED (CHAOS-3481, 2026-08-21, PR #1841): the two gaps a prior
+			// version of this comment tracked in detail are both closed.
+			// producer_version for system.retention_cleanup is now 3, matching
+			// prune_ask_dev_conversations's pinned ContractVersionV3 -- Produce()
+			// no longer skips on consumer_version_incompatible, and Go genuinely
+			// emits and drains this cadence. The drain-completion gap (Python's
+			// non-locking count_expired() vs Go's short-chunk-reports-done
+			// behavior) is also closed: retention_postgres.go now wires a
+			// DrainConfirmer check, red-controlled by
+			// TestRetentionHandlerRefusesToReportSuccessOnAContendedShortChunk.
 			//
-			// 1. THIS SCHEDULE EMITS NOTHING TODAY. producers.go pins
-			//    prune_ask_dev_conversations to ContractVersionV3, while
-			//    contracts/jobs/v1/migration-state.json declares
-			//    system.retention_cleanup at producer_version 2. Produce()
-			//    therefore returns SkipReason "consumer_version_incompatible"
-			//    on every occurrence, and engine.go records that as a normal
-			//    skipped occurrence -- deliberately NOT promoted to a failure.
-			//    So a nightly run that publishes no job reads as healthy. The
-			//    Beat entry is the ONLY thing purging expired conversations
-			//    until producer_version reaches 3, and must not be deleted on
-			//    cadence evidence alone. The machine-checkable bar in
-			//    contracts/jobs/v1/transitional-inventory.json's
-			//    deletion_evidence_requirement for `ask-dev-retention-sweep`
-			//    names that precondition so this cannot be missed by reading
-			//    cadences alone.
-			//
-			// 2. THE GO DRAIN-COMPLETION CONTRACT IS STRICTLY WEAKER than
-			//    Python's. The two agree on the selection predicate, the
-			//    ordering, the FOR UPDATE SKIP LOCKED selection, the tombstone
-			//    reason mapping and the chunked commits -- see
-			//    AskDevConversationStore in
-			//    internal/jobs/system/retention_postgres.go against
-			//    DevPersistenceService.cleanup_expired/_purge_conversation.
-			//    They do NOT agree on how a drain ENDS. Python runs a
-			//    non-locking count_expired() after its batch loop and reports
-			//    "partial" unless the backlog is confirmed empty, precisely
-			//    because SKIP LOCKED makes a short read indistinguishable from
-			//    a contended one (ask_dev_retention.py's module docstring
-			//    records this as a confirmed HIGH review finding). Go has no
-			//    equivalent: deleteInChunks treats a short chunk as done, and
-			//    the handler discards DeleteBefore's count entirely, so a
-			//    contended pass reports success. Porting that is CHAOS-3481's,
-			//    not this PR's -- but the earlier version of this comment
-			//    listed the five matching properties and omitted this one,
-			//    which reads as full parity. It is not full parity.
-			LegacyBeatEntry: "ask-dev-retention-sweep",
-			Cadence:         DailyAt(5, 30),
-			Timezone:        inventoryTimezone,
+			// RETIRED (CHAOS-4026, 2026-08-21): with Go now the genuine sole
+			// purger, the Celery `ask-dev-retention-sweep` Beat entry and its
+			// run_ask_dev_retention_cleanup task
+			// (src/dev_health_ops/workers/ask_dev_retention.py) were deleted --
+			// Celery is retired, zero Python celery services have run in prod
+			// since 2026-08-19. This schedule is Native again; the retirement is
+			// recorded in RetiredBeatInventory rather than silently dropped.
+			Native:   true,
+			Cadence:  DailyAt(5, 30),
+			Timezone: inventoryTimezone,
 			// Product reads enforce expires_at immediately. The scheduled pass
 			// durably removes expired content and is cumulative, so a missed run
 			// is repaired by the next occurrence without replaying stale buckets.
@@ -362,6 +379,141 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 			Evidence: "CHAOS-3128 retirement decision: source audit found zero production " +
 				"writers; the local feature-stack PostgreSQL read-only audit found zero rows.",
 		},
+		// CHAOS-4026 (2026-08-21): Celery is retired -- zero Python celery
+		// services have run in prod since the 2026-08-19 stop (owner
+		// ratification). The following 14 Beat entries and their Celery task
+		// implementations were deleted from src/dev_health_ops/workers/. Every
+		// one already had a verified Go successor per CHAOS-4056's beat-schedule
+		// inventory sweep; see that ticket's inventory comment for the full
+		// per-entry mapping this ledger summarizes.
+		{
+			Name:    "run-daily-metrics",
+			Cadence: DailyAt(1, 0),
+			Reason: "Go's daily_metrics_fanout fixed schedule owns this cadence; the Python " +
+				"dispatch_daily_metrics_for_all_orgs Celery task and its metrics_partitioned.py " +
+				"chain (dispatch_daily_metrics_partitioned/run_daily_metrics_batch/" +
+				"run_daily_metrics_finalize_task) were only ever reachable via this Beat entry.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED, checked-in and " +
+				"active per cmd/dev-health-scheduler/fixed.go).",
+		},
+		{
+			Name:    "run-complexity-daily",
+			Cadence: DailyAt(0, 45),
+			Reason: "Go's complexity_daily_fanout fixed schedule owns this cadence; the Python " +
+				"dispatch_complexity_job Celery task was only ever reachable via this Beat entry " +
+				"(run_complexity_job, the per-org worker it fanned out to, is not dead -- it stays " +
+				"live via post_sync_dispatch.py's event-driven chain).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "run-release-impact-daily",
+			Cadence: DailyAt(1, 30),
+			Reason: "Go's release_impact_daily_fanout fixed schedule owns this cadence; the " +
+				"Python dispatch_release_impact and run_release_impact_job Celery tasks were only " +
+				"ever reachable via this Beat entry (the underlying job_release_impact.py compute " +
+				"function is not dead -- it stays live via the CLI and worker_metrics.py's bridge).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "run-recommendations",
+			Cadence: DailyAt(2, 0),
+			Reason: "Go's recommendations_daily_fanout fixed schedule owns this cadence; the " +
+				"Python run_recommendations_job Celery task was only ever reachable via this Beat " +
+				"entry and the (also-deleted) run_daily_metrics_finalize_task completion chain. " +
+				"_compute_recommendations_for_org, the per-org compute it wrapped, is not dead -- " +
+				"it stays live via worker_metrics.py's dormant-Go bridge.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED). See CHAOS-4066 " +
+				"for a pre-existing, unrelated gap this sweep found in the readiness gate.",
+		},
+		{
+			Name:    "run-capacity-forecast",
+			Cadence: WeeklyAt(time.Monday, 4, 0),
+			Reason: "Go's capacity_forecast_weekly_fanout fixed schedule owns this cadence; the " +
+				"Python dispatch_capacity_forecast and run_capacity_forecast_job Celery tasks (and " +
+				"the product_tasks.py module that held them) were only ever reachable via this " +
+				"Beat entry (job_capacity.py's compute function is not dead -- it stays live via " +
+				"the CLI and worker_metrics.py's bridge).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "process-ingest-streams",
+			Cadence: EveryInterval(30 * time.Second),
+			Reason: "Go's stream-ingest process natively consumes this stream; the Python " +
+				"run_ingest_consumer Celery task (a polling launcher for a short-lived consumer) " +
+				"was only ever reachable via this Beat entry.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:     "process-product-telemetry-streams",
+			Cadence:  EveryInterval(30 * time.Second),
+			Reason:   "Same continuous-consumption replacement as process-ingest-streams (stream-ingest).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "process-external-ingest-streams",
+			Cadence: EveryInterval(30 * time.Second),
+			Reason: "Go's stream-external process (a singleton continuous consumer) natively " +
+				"consumes this stream; the Python run_external_ingest_consumer Celery task was " +
+				"only ever reachable via this Beat entry.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "external-ingest-stream-health",
+			Cadence: EveryInterval(60 * time.Second),
+			Reason: "Native runtime telemetry (worker_stream_lag/worker_stream_pending gauges) " +
+				"replaces the Python external_ingest_stream_health Celery task, which was only " +
+				"ever reachable via this Beat entry.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "phone-home-heartbeat",
+			Cadence: DailyAt(0, 0),
+			Reason: "The phone_home_heartbeat Celery task is not dead -- it stays live via " +
+				"api/internal/worker_operational.py's dormant-Go HTTP bridge (.run(), bypassing " +
+				"Celery entirely) -- but this Beat entry, its only Celery Beat trigger, is deleted.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "dispatch-scheduled-reports",
+			Cadence: EveryInterval(300 * time.Second),
+			Reason: "Go's scheduled_reports_dispatch fixed schedule owns this cadence; the Python " +
+				"dispatch_scheduled_reports Celery task was only ever reachable via this Beat entry " +
+				"(execute_saved_report, the per-report work it fanned out to, is not dead -- it " +
+				"stays live via the GraphQL triggerReport resolver).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "run-membership-backfill-daily",
+			Cadence: DailyAt(3, 30),
+			Reason: "Go's membership_backfill_daily_fanout fixed schedule owns this cadence; the " +
+				"Python dispatch_membership_backfill Celery task was only ever reachable via this " +
+				"Beat entry (run_membership_backfill, the per-org worker it fanned out to, is not " +
+				"dead -- it stays live via api/internal/worker_workgraph.py's dormant-Go bridge).",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+		},
+		{
+			Name:    "ask-dev-retention-sweep",
+			Cadence: DailyAt(5, 30),
+			Reason: "Go's prune_ask_dev_conversations fixed schedule now genuinely owns this " +
+				"cadence: producer_version for system.retention_cleanup reached 3 and the SKIP " +
+				"LOCKED drain-completion gap closed (CHAOS-3481), so the Python " +
+				"run_ask_dev_retention_cleanup Celery task -- the only thing purging expired " +
+				"conversations while the version gate was closed -- is now redundant and deleted.",
+			Evidence: "CHAOS-3481 (PR #1841, promoted producer_version to 3, wired a " +
+				"DrainConfirmer check) landed before CHAOS-4026's deletion; see " +
+				"prune_ask_dev_conversations's schedule-declaration comment for the full history.",
+		},
+		{
+			Name:    "consume-pending-scheduled-sync-occurrences",
+			Cadence: EveryInterval(300 * time.Second),
+			Reason: "Gated by SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED, defaulted False, and " +
+				"per CHAOS-4056's beat-schedule inventory was never registered in Python production " +
+				"at all -- functionally folded into the Go product scheduler's own " +
+				"claim/materialize/retry/quarantine transaction (internal/scheduler/fixed/" +
+				"inventory.go's own dispatch-scheduled-syncs entry below) by design, not by this " +
+				"deletion.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (N/A -- never live).",
+		},
 	}
 }
 
@@ -379,30 +531,6 @@ func LegacyBeatInventory() []LegacyEntry {
 				"the sync scheduler loop and its materializing coordinator, not by a fixed cadence.",
 		},
 		{
-			Name:     "run-daily-metrics",
-			Cadence:  DailyAt(1, 0),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "daily_metrics_fanout",
-		},
-		{
-			Name:     "run-complexity-daily",
-			Cadence:  DailyAt(0, 45),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "complexity_daily_fanout",
-		},
-		{
-			Name:     "run-recommendations",
-			Cadence:  DailyAt(2, 0),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "recommendations_daily_fanout",
-		},
-		{
-			Name:     "run-release-impact-daily",
-			Cadence:  DailyAt(1, 30),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "release_impact_daily_fanout",
-		},
-		{
 			Name:     "reconcile-sync-dispatch",
 			Cadence:  EveryInterval(60 * time.Second),
 			Owner:    OwnerReconciler,
@@ -411,61 +539,24 @@ func LegacyBeatInventory() []LegacyEntry {
 				"job would put lease repair behind the queue it repairs.",
 		},
 		{
-			Name:     "run-capacity-forecast",
-			Cadence:  WeeklyAt(time.Monday, 4, 0),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "capacity_forecast_weekly_fanout",
-		},
-		{
-			Name:     "process-ingest-streams",
-			Cadence:  EveryInterval(30 * time.Second),
-			Owner:    OwnerStreamRunner,
-			OwnerRef: "stream-ingest",
-			Note: "Continuous guarded at-least-once consumption replaces a Beat launcher " +
-				"whose only purpose was restarting a short-lived Celery consumer.",
-		},
-		{
-			Name:     "process-product-telemetry-streams",
-			Cadence:  EveryInterval(30 * time.Second),
-			Owner:    OwnerStreamRunner,
-			OwnerRef: "stream-ingest",
-			Note:     "Same continuous-consumption replacement as process-ingest-streams.",
-		},
-		{
-			Name:     "process-external-ingest-streams",
-			Cadence:  EveryInterval(30 * time.Second),
-			Owner:    OwnerStreamRunner,
-			OwnerRef: "stream-external",
-			Note:     "Singleton continuous consumer; the external runner is not horizontally scaled.",
-		},
-		{
 			Name:     "dispatch-go-external-ingest-recompute-bridge",
 			Cadence:  EveryInterval(10 * time.Second),
 			Owner:    OwnerRemoved,
 			OwnerRef: "internal/externalrecompute",
+			// CHAOS-4057 (2026-08-21): this Note's "Native external recompute
+			// consumes the durable debounce state directly, so the entry is
+			// deleted rather than replaced" is FALSE -- no such native consumer
+			// exists (confirmed: the Go domain role has only SELECT/INSERT on
+			// external_ingest_recompute_jobs, so it cannot self-serve). This
+			// Beat entry and its Python task remain the sole reader of
+			// bridge_pending rows and were deliberately NOT deleted by
+			// CHAOS-4026 pending CHAOS-4057's port-vs-retire decision. Left
+			// verbatim (not corrected) here because CHAOS-4026 did not touch
+			// this row's content, only its position in this list -- correcting
+			// the claim belongs to whoever resolves CHAOS-4057.
 			Note: "Exists only to drain Go-authored compatibility bridge rows into the Python " +
 				"planner. Native external recompute consumes the durable debounce state directly, " +
 				"so the entry is deleted rather than replaced.",
-		},
-		{
-			Name:     "external-ingest-stream-health",
-			Cadence:  EveryInterval(60 * time.Second),
-			Owner:    OwnerRuntimeTelemetry,
-			OwnerRef: "stream runtime telemetry",
-			Note: "Lag, pending, reclaim, error, and readiness are emitted continuously by the " +
-				"stream runtime. Making telemetry a queued job would hide exactly the backlog it measures.",
-		},
-		{
-			Name:     "phone-home-heartbeat",
-			Cadence:  DailyAt(0, 0),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "phone_home_heartbeat",
-		},
-		{
-			Name:     "dispatch-scheduled-reports",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "scheduled_reports_dispatch",
 		},
 		{
 			Name:     "monitor-queue-depths",
@@ -475,12 +566,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			Note: "The legacy task probes kombu/Valkey list depth, which has no River analogue. " +
 				"River job age, depth, and saturation are exported natively by the runtime, so this " +
 				"is a replacement rather than a port.",
-		},
-		{
-			Name:     "run-membership-backfill-daily",
-			Cadence:  DailyAt(3, 30),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "membership_backfill_daily_fanout",
 		},
 		{
 			Name:     "prune-rate-limit-observations",
@@ -493,21 +578,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			Cadence:  DailyAt(5, 15),
 			Owner:    OwnerFixedSchedule,
 			OwnerRef: "prune_external_ingest_batches",
-		},
-		{
-			Name:     "ask-dev-retention-sweep",
-			Cadence:  DailyAt(5, 30),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "prune_ask_dev_conversations",
-		},
-		{
-			Name:     "consume-pending-scheduled-sync-occurrences",
-			Cadence:  EveryInterval(300 * time.Second),
-			Optional: true,
-			Owner:    OwnerProductScheduler,
-			OwnerRef: "internal/scheduler/sync",
-			Note: "Folded into the Go materializing coordinator: claim, materialize, retry, and " +
-				"quarantine all happen in the scheduler transaction, so the separate consumer is removed.",
 		},
 	}
 }

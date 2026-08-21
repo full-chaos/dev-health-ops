@@ -46,7 +46,7 @@
     },
     {
       "name": "capacity",
-      "python_sources": ["src/dev_health_ops/workers/product_tasks.py", "src/dev_health_ops/metrics/job_capacity.py", "src/dev_health_ops/metrics/compute_capacity.py"],
+      "python_sources": ["src/dev_health_ops/metrics/job_capacity.py", "src/dev_health_ops/metrics/compute_capacity.py"],
       "writes": ["capacity_forecasts"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 1,

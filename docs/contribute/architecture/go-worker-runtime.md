@@ -139,6 +139,109 @@ trade — Python resolves `worker_job_routes` separately and has the same
 property — but it is a deliberate exception and belongs in a comment at the
 split.
 
+### Which pool every component is constructed on
+
+Check this table before wiring anything new. It is grouped by binary, and each
+row names the construction site so the claim can be re-derived rather than
+trusted.
+
+**`dev-health-worker`** — a domain process that reaches the queue only through
+River and the outbox.
+
+| Component | Constructed at | Pool |
+| --- | --- | --- |
+| River client | `river_process.go:63` | queue-control |
+| Queue telemetry sampler | `dependencies.go:181` | queue-control |
+| Queue authorization check | `dependencies.go:157` | queue-control |
+| River schema check | `dependencies.go:164` | queue-control |
+| Outbox repository | `operational.go:78` | queue-control |
+| Domain authorization check | `dependencies.go:126` | domain |
+| Worker presence | `dependencies.go:92` | domain |
+| Idempotency store | `daily.go:80`, `operational.go:109`, `reports.go:75`, `workgraph.go:64` | domain |
+| Concurrency budget | `daily.go:86`, `operational.go:115`, `reports.go:86`, `workgraph.go:68` (helper at `operational.go:214`) | domain |
+| Daily store + publisher | `daily.go:98-99`, `sync_dispatch.go:284-285` | domain |
+| Remaining store + publisher | `daily.go:175`, `sync_dispatch.go:286-287` | domain |
+| Work-graph store | `workgraph.go:49` | domain |
+| Sync-coverage projector | `operational.go:169` | domain |
+| Outbox **producer** | `sync_dispatch.go:288` | domain |
+| Provider sync routes | `provider_sync.go:730,765,777-778` | domain |
+
+The producer and the repository are the pair worth reading twice: producing an
+outbox row is a **domain** write in the same transaction as the domain change,
+while consuming one is a **queue-control** operation. The queue role holds no
+INSERT on `worker_job_outbox` at all.
+
+**`dev-health-reconciler`** — `cmd/dev-health-reconciler/dependencies.go`. All
+three pools, which is why its composition comment at `:217-223` exists.
+
+| Component | Constructed at | Pool |
+| --- | --- | --- |
+| Lease repair | `:232` | domain |
+| Observer | `:273` | domain |
+| Unreclaimable sweep | `:848` | domain — **see below** |
+| Materializer | `:244` | coordinator |
+| Route controller | `:382` | coordinator |
+| River client (sync-dispatch inserts) | `:248` | queue-control |
+| Terminal delivery repair (sync) | `:240` | queue-control |
+| Terminal delivery repair (outbox) | `:386` | queue-control |
+| Outbox repository | `:370` | queue-control |
+| River inserter | `:374` | queue-control |
+| River quiescer | `:378` | queue-control |
+
+The sweep is the row that has already gone wrong: it is built on the domain
+pool while its first statement reads coordinator-exclusive
+`worker_job_routes` (CHAOS-4035). Until that is fixed, this row is a known
+defect rather than a pattern to copy.
+
+**`dev-health-scheduler`** — the contrast with the worker is the point.
+
+| Component | Constructed at | Pool |
+| --- | --- | --- |
+| Domain readiness | `dependencies.go:73` | domain |
+| Native materializer | `dependencies.go:278` | domain |
+| Queue readiness | `dependencies.go:85` | queue-control |
+| Coordinator readiness | `dependencies.go:101` | coordinator |
+| Occurrence reconciler | `dependencies.go:282` | coordinator |
+| Fixed-schedule daily store + publisher | `fixed.go:61-65` | coordinator |
+| Fixed-schedule remaining store + publisher | `fixed.go:53-57` | coordinator |
+
+`daily.NewPostgresStore` and `remaining.NewPostgresStore` appear in **both**
+this table and the worker's, on **different pools** — coordinator here, domain
+there. The constructor does not decide the pool; the caller's role does. A
+constructor being "already used somewhere" is therefore no evidence at all
+about which pool it belongs on in a new caller.
+
+**`dev-health-workerctl`** — `cmd/dev-health-workerctl/main.go`.
+
+| Component | Constructed at | Pool |
+| --- | --- | --- |
+| Operator authenticator | `:354` | coordinator |
+| Route controller | `:415` | coordinator |
+| Operator auditor | `:444` | coordinator |
+| Direct Postgres backend | `:438` | queue-control |
+| River quiescer | `:513` | queue-control |
+| Domain guard | `:450` | domain |
+| Celery quiescer | `:517` | domain |
+| Worker presence read | `:472` | domain |
+
+Three readiness checks, not one: each role's posture can only be proven by a
+connection authenticated **as that role**, so a binary using all three pools
+runs all three checks (`dev-health-scheduler/dependencies.go:91-94` explains
+why cross-role attribution makes this non-optional).
+
+#### Components that hold more than one pool
+
+| Component | Coordinator | Domain | Queue-control |
+| --- | --- | --- | --- |
+| Route controller (`workerctl/main.go:496-506`) | drives the controller: reads and updates the route rows | Celery quiescer: reads `sync_run_units` | River quiescer: River schema only |
+| Reconciler mutation pipeline (`dependencies.go:217-223`) | Materializer | lease repair, kernel observe, observer | terminal delivery repair, River client |
+
+**The rule this table enforces: a component's first statement determines the
+pool it must be constructed on. Check this table before wiring any new
+stepper.** If the component's statements span two jurisdictions, it takes two
+pools and the foreign read moves out of the other pool's transaction — it does
+not get a widened role.
+
 ## Two lease layers
 
 A claim is held under two independent leases that answer different questions.

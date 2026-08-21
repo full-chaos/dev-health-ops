@@ -138,9 +138,11 @@ _module(
     _watermark_overlap_seconds=lambda: 0,
 )
 planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
-# Loaded AFTER planner: provider_unit_route imports family-dataset names from
-# dev_health_ops.sync.planner, so loading it earlier would hit a partially
-# initialized module (planner.py itself has no dependency the other way).
+# Order no longer matters for correctness (CHAOS-4047's structural fix moved
+# the shared family-dataset vocabulary to sync.family_flags, so
+# provider_unit_route no longer imports sync.planner at all -- neither module
+# depends on the other). Loaded here, after planner, only because that is
+# where route_switches construction below needs it in scope.
 provider_unit_route = _load(
     "dev_health_ops.workers.provider_unit_route",
     SOURCE / "workers/provider_unit_route.py",

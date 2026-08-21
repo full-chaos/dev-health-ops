@@ -136,18 +136,14 @@ from dev_health_ops.sync.watermarks import (
     get_watermark_with_overlap,
 )
 from dev_health_ops.tracing import current_trace_parent
-from dev_health_ops.workers.job_routes import (
-    WorkerJobRouteError,
-    resolve_worker_job_route,
-)
 from dev_health_ops.workers.provider_family_contract import (
     atomic_provider_family_route_enabled,
 )
-from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
-from dev_health_ops.workers.provider_unit_transport import PROVIDER_UNIT_OUTBOX_ROUTES
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
 logger = logging.getLogger(__name__)
 
@@ -712,7 +708,29 @@ def _resolve_plan_time_route_switches(
     best-effort plan-time check needs (the dispatcher takes its own lock at
     dispatch time regardless -- see the module docstring above).
 
+    Imported lazily: NOT for a cycle (CHAOS-4047's structural fix moved the
+    shared vocabulary to sync.family_flags, so workers.provider_unit_route
+    no longer imports this module at all). The live-Python planner oracle
+    (internal/scheduler/sync/testdata/python_planner_oracle.py) loads this
+    file into a deliberately minimal stub environment that has not yet
+    populated dev_health_ops.workers.job_routes or .provider_unit_transport
+    at the point it loads this module -- a module-level import here breaks
+    that harness outright (ModuleNotFoundError at import time), even though
+    the oracle DOES load a real workers.provider_unit_route afterward and
+    production has every one of these modules available throughout. Keeping
+    the import inside the function body, where only a real call site
+    reaches it, is the actual fix; a module-level import doesn't need a
+    cycle to be wrong here.
     """
+    from dev_health_ops.workers.job_routes import (
+        WorkerJobRouteError,
+        resolve_worker_job_route,
+    )
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+    from dev_health_ops.workers.provider_unit_transport import (
+        PROVIDER_UNIT_OUTBOX_ROUTES,
+    )
+
     nested = session.begin_nested()
     try:
         with session.no_autoflush:

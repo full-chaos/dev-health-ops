@@ -45,6 +45,47 @@ docker compose \
   --project-name rivercompat-static-check \
   --file "${COMPOSE_FILE}" \
   config --quiet
+
+# CHAOS-4011: pgbouncer-session's backend budget (DEFAULT_POOL_SIZE +
+# RESERVE_POOL_SIZE) must cover every pgxpool the Go probe opens against it
+# (probe.go's poolConfig.MaxConns). Session-mode PgBouncer pins one backend
+# per client connection for that connection's whole life and never
+# multiplexes between statements, so a probe pool that can reach MaxConns
+# concurrently-held connections needs at least that many backends provisioned
+# up front; falling short queues the overflow connection until the harness's
+# bounded waits (20s crash-candidate start, 90s matrix timeout) expire. This
+# is the second time a PgBouncer pool-budget mismatch has shipped a defect
+# (prod river pool 37 was the first) — enforce the invariant instead of only
+# fixing the instance.
+probe_max_conns="$(
+  grep -oE 'poolConfig\.MaxConns = [0-9]+' "${ROOT}/tests/compatibility/river/go/probe.go" \
+    | grep -oE '[0-9]+$'
+)"
+[ -n "${probe_max_conns}" ] || {
+  printf 'ERROR: cannot find poolConfig.MaxConns in tests/compatibility/river/go/probe.go\n' >&2
+  exit 1
+}
+session_pool_budget="$(
+  docker compose \
+    --project-name rivercompat-static-check \
+    --file "${COMPOSE_FILE}" \
+    config --format json \
+    | jq '
+        .services["pgbouncer-session"].environment as $env
+        | (($env.DEFAULT_POOL_SIZE // "0") | tonumber)
+          + (($env.RESERVE_POOL_SIZE // "0") | tonumber)
+      '
+)"
+if [ "${session_pool_budget}" -lt "${probe_max_conns}" ]; then
+  printf 'ERROR: pgbouncer-session DEFAULT_POOL_SIZE+RESERVE_POOL_SIZE (%s) in %s is below probe.go poolConfig.MaxConns (%s) in %s; session-mode PgBouncer cannot service that many concurrently-held connections (CHAOS-4011)\n' \
+    "${session_pool_budget}" \
+    "tests/compatibility/river/compose.compatibility.yml" \
+    "${probe_max_conns}" \
+    "tests/compatibility/river/go/probe.go" \
+    >&2
+  exit 1
+fi
+
 jq empty \
   "${ROOT}/ci/evidence/go-worker-migration/v0-celery-baseline/capture.json" \
   "${ROOT}/ci/evidence/go-worker-migration/v0-celery-baseline/local-resource-snapshot.json" \

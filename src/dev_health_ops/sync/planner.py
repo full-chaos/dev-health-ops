@@ -685,13 +685,27 @@ def _resolve_plan_time_route_switches(
     ``None`` means either the durable ``sync.provider_unit`` route is not a
     River outbox route (Celery owns every unit regardless of switch state,
     unchanged from pre-CHAOS-4047 behaviour), or the route could not be
-    resolved at all (missing/paused/drifted row). The latter mirrors
-    ``provider_unit_transport``'s own documented residual case -- "planned
-    while the plan-time gate was unavailable" -- deliberately falling back to
-    unfiltered planning rather than raising: ``dispatch_sync_run`` calls this
-    same resolver and fails closed on the identical condition, so nothing
-    dispatches wrongly either way, and the exclusion is a plan-time
-    optimization on top of that dispatch-time gate, not a substitute for it.
+    resolved at all (missing/paused/drifted row, or the ``WorkerJobRoute``
+    lookup itself erroring). The latter mirrors ``provider_unit_transport``'s
+    own documented residual case -- "planned while the plan-time gate was
+    unavailable" -- deliberately falling back to unfiltered planning rather
+    than raising: ``dispatch_sync_run`` calls this same resolver and fails
+    closed on the identical condition, so nothing dispatches wrongly either
+    way, and the exclusion is a plan-time optimization on top of that
+    dispatch-time gate, not a substitute for it.
+
+    CHAOS-2580's savepoint discipline applies here too (mirrors
+    ``_get_tier_backfill_days_cap`` and ``guard.py``'s
+    ``_resolve_total_unit_cap`` immediately below it): a SQL-level failure
+    resolving the route (e.g. a pre-migration schema where ``WorkerJobRoute``
+    itself doesn't exist yet) marks the WHOLE PostgreSQL transaction failed,
+    and catching the resulting ``WorkerJobRouteError`` in Python does not
+    un-abort it -- every later flush in this planning transaction would die
+    with ``InFailedSqlTransaction``. Confine the probe to its own savepoint
+    and roll it back unconditionally; it is read-only, so keeping it open on
+    success buys nothing and only holds the row lock longer than this
+    best-effort plan-time check needs (the dispatcher takes its own lock at
+    dispatch time regardless -- see the module docstring above).
 
     Imported lazily: ``workers.provider_unit_route`` imports names from this
     module, so a module-level import here would be circular.
@@ -705,11 +719,18 @@ def _resolve_plan_time_route_switches(
         PROVIDER_UNIT_OUTBOX_ROUTES,
     )
 
+    nested = session.begin_nested()
     try:
-        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+        with session.no_autoflush:
+            provider_unit_route = resolve_worker_job_route(
+                session, "sync.provider_unit"
+            )
     except WorkerJobRouteError:
+        nested.rollback()
         logger.warning("sync.planner.route_switch_gate_unavailable", exc_info=True)
         return None
+    else:
+        nested.rollback()
     if provider_unit_route not in PROVIDER_UNIT_OUTBOX_ROUTES:
         return None
     return ProviderUnitRouteSwitches.from_environment()

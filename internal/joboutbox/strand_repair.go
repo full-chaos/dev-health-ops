@@ -20,51 +20,45 @@ const (
 
 	dispositionRearm       = "rearm"
 	dispositionSkipJobLive = "skip_job_live"
-	dispositionSkipGrace   = "skip_idempotency_grace"
 
 	// insufficientPrivilege is PostgreSQL's SQLSTATE for a denied statement.
 	// This repair is the first queue-role path to read the daily-metrics and
 	// work-graph tables, so a missing grant is a live deployment risk rather
 	// than a theoretical one: the grants ship in the ops runtime image
-	// (scripts/worker/provision_river_roles.sql) while the posture assertion
-	// ships in the Go binaries, and a split rollout leaves one without the
-	// other. Returning ErrNotAuthorized rather than ErrUnavailable keeps that
-	// failure legible; the sibling sync package's single opaque error made a
-	// 42501 read as "database unavailable" for a component that was not even
-	// involved.
+	// (scripts/worker/provision_river_roles.sql and, authoritatively,
+	// internal/storage/river/migrate.go) while the posture assertion ships in
+	// the Go binaries. Returning ErrNotAuthorized rather than ErrUnavailable
+	// keeps that failure legible; the sibling sync package's single opaque
+	// error made a 42501 read as "database unavailable" for a component that
+	// was not even involved.
 	insufficientPrivilege = "42501"
-
-	// strandIdempotencyLease mirrors defaultIdempotencyLease at
-	// internal/jobruntime/idempotency_postgres.go:28. It cannot be imported:
-	// that constant is unexported, and this package must not depend on the
-	// execution-state package it deliberately cannot read. The duplication is
-	// pinned by TestStrandRepairLeaseProxyPremise, which parses both files and
-	// fails if they diverge.
-	strandIdempotencyLease = 10 * time.Minute
 )
 
-// ErrNotAuthorized reports a statement the queue-control role is not granted.
-// It is separate from ErrUnavailable because the two demand different
-// operator actions: one is a database outage, the other is a missing grant
-// that no amount of retrying will fix.
+// ErrNotAuthorized reports a statement a runtime role is not granted. It is
+// separate from ErrUnavailable because the two demand different operator
+// actions: one is a database outage, the other is a missing grant that no
+// amount of retrying will fix.
 var ErrNotAuthorized = errors.New("worker outbox role is not authorized")
 
-// StrandRepairResult counts one pass. Skips are counted, not merely omitted:
-// this repair deliberately refuses to touch a job River may still rescue, and
-// that refusal is only safe if it is visible. A SkippedJobLive count that climbs
-// while nothing is ever rearmed is the signature of a rescuer that has stopped
-// running, which would otherwise look identical to "no strands exist".
+// StrandRepairResult counts one pass. Every refusal is counted rather than
+// merely omitted: each one sits between a stranded run and a manufactured
+// duplicate success, and a guard whose refusals are invisible cannot be told
+// apart from one that never fires.
+//
+//   - SkippedJobLive climbing while nothing is rearmed is the signature of a
+//     River rescuer that has stopped running, which would otherwise look
+//     identical to "no strands exist".
+//   - SkippedClaimLive is the execution-state refusal. This design could not
+//     implement it at all until the domain-pool read replaced the lease proxy.
+//   - SkippedClaimSettled is a case a lease-based proxy could never have seen:
+//     an idempotency row already marked succeeded or terminal, where a rearmed
+//     job is ACKed as a duplicate without running. Those rows need a different
+//     remedy, and counting them is how anyone finds out they exist.
 type StrandRepairResult struct {
-	Rearmed        int
-	SkippedJobLive int
-	// SkippedIdempotencyGrace counts deliveries that are terminal but have not
-	// been terminal for a full idempotency lease yet. They are reported rather
-	// than filtered for the same reason as SkippedJobLive: this guard sits
-	// between a strand and a duplicate success, and a guard whose refusals are
-	// invisible cannot be distinguished from one that never fires. A count
-	// that stays pinned at zero while strands persist means the grace is
-	// mis-derived, not that the window never opens.
-	SkippedIdempotencyGrace int
+	Rearmed             int
+	SkippedJobLive      int
+	SkippedClaimLive    int
+	SkippedClaimSettled int
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -78,18 +72,57 @@ type StrandRepairResult struct {
 // (CHAOS-4030), and republishing is a no-op because the outbox row still holds
 // its dedupe key. Rearming the row and deleting the dead delivery in one
 // transaction is the only path that produces a fresh, executable job.
+//
+// # Two pools, on purpose
+//
+// Selection and rearm run on the QUEUE-CONTROL pool, which owns the outbox and
+// the River schema. The execution-state check runs on the DOMAIN pool, before
+// the queue transaction opens. That split is not incidental: the queue-control
+// role must never be granted access to execution state or external-effect
+// evidence (internal/jobruntime/idempotency_postgres.go), and the domain role
+// already holds SELECT on worker_job_runs
+// (internal/storage/river/migrate.go), so the read needs no new privilege
+// anywhere.
+//
+// An earlier design inferred the execution state from the domain lease instead,
+// to avoid reading worker_job_runs at all. That inference was unsound on the
+// exact path this repair exists for -- see the note above the queries.
 type StrandRepair struct {
-	begin  func(context.Context) (pgx.Tx, error)
-	client interface {
+	beginQueue  func(context.Context) (pgx.Tx, error)
+	queryQueue  func(context.Context, string, ...any) (pgx.Rows, error)
+	queryDomain func(context.Context, string, ...any) (pgx.Rows, error)
+	client      interface {
 		JobDeleteTx(context.Context, pgx.Tx, int64) (*rivertype.JobRow, error)
 	}
-	partitionQuery string
-	finalizeQuery  string
-	workGraphQuery string
+	shapes []strandShape
 }
 
-func NewStrandRepair(queueControlPool *pgxpool.Pool, riverSchema string) (*StrandRepair, error) {
-	if queueControlPool == nil || !riverSchemaPattern.MatchString(riverSchema) {
+// strandShape is one domain's predicate in both the forms a pass needs: an
+// unlocked survey that gathers candidates for the execution-state check, and a
+// locked re-read that re-proves the same predicate before anything is mutated.
+// Both are generated from ONE template so the two can never drift into
+// disagreeing about what is eligible.
+type strandShape struct {
+	name   string
+	survey string
+	lock   string
+}
+
+func newStrandShape(name, template, jobTable string) strandShape {
+	return strandShape{
+		name:   name,
+		survey: fmt.Sprintf(template, jobTable, "", ""),
+		lock: fmt.Sprintf(template, jobTable,
+			"AND outbox.id = ANY($3::uuid[])", "FOR UPDATE OF outbox, job SKIP LOCKED"),
+	}
+}
+
+func NewStrandRepair(
+	queueControlPool *pgxpool.Pool,
+	domainPool *pgxpool.Pool,
+	riverSchema string,
+) (*StrandRepair, error) {
+	if queueControlPool == nil || domainPool == nil || !riverSchemaPattern.MatchString(riverSchema) {
 		return nil, ErrInvalidConfiguration
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
@@ -98,12 +131,28 @@ func NewStrandRepair(queueControlPool *pgxpool.Pool, riverSchema string) (*Stran
 		return nil, ErrInvalidConfiguration
 	}
 	return &StrandRepair{
-		begin:          queueControlPool.Begin,
-		client:         riverDeleteAdapter{client: client},
-		partitionQuery: fmt.Sprintf(repairStrandedPartitionSQL, jobTable),
-		finalizeQuery:  fmt.Sprintf(repairStrandedFinalizeSQL, jobTable),
-		workGraphQuery: fmt.Sprintf(repairStrandedWorkGraphSQL, jobTable),
+		beginQueue:  queueControlPool.Begin,
+		queryQueue:  queueControlPool.Query,
+		queryDomain: domainPool.Query,
+		client:      riverDeleteAdapter{client: client},
+		shapes: []strandShape{
+			newStrandShape("partition", repairStrandedPartitionSQL, jobTable),
+			newStrandShape("finalize", repairStrandedFinalizeSQL, jobTable),
+			newStrandShape("workgraph", repairStrandedWorkGraphSQL, jobTable),
+		},
 	}, nil
+}
+
+// strandCandidate is one outbox row under consideration, carrying the identity
+// the execution-state check needs. jobKind and dedupeKey are exactly the pair
+// worker_job_runs is unique on (job_kind, idempotency_key), because the outbox
+// dedupe_key IS the envelope's idempotency key.
+type strandCandidate struct {
+	outboxID    string
+	riverJobID  int64
+	jobKind     string
+	dedupeKey   string
+	disposition string
 }
 
 // Step runs one bounded pass over every shape.
@@ -112,7 +161,8 @@ func (repair *StrandRepair) Step(
 	now time.Time,
 	limit int,
 ) (StrandRepairResult, error) {
-	if repair == nil || repair.begin == nil || repair.client == nil || ctx == nil || now.IsZero() ||
+	if repair == nil || repair.beginQueue == nil || repair.queryQueue == nil ||
+		repair.queryDomain == nil || repair.client == nil || ctx == nil || now.IsZero() ||
 		limit < minReconcilerLimit || limit > maxReconcilerLimit {
 		return StrandRepairResult{}, ErrInvalidConfiguration
 	}
@@ -120,77 +170,201 @@ func (repair *StrandRepair) Step(
 		return StrandRepairResult{}, err
 	}
 	result := StrandRepairResult{}
-	for _, query := range []string{repair.partitionQuery, repair.finalizeQuery, repair.workGraphQuery} {
-		shape, err := repair.stepShape(ctx, query, now, limit)
+	for _, shape := range repair.shapes {
+		shapeResult, err := repair.stepShape(ctx, shape, now, limit)
 		if err != nil {
 			return StrandRepairResult{}, err
 		}
-		result.Rearmed += shape.Rearmed
-		result.SkippedJobLive += shape.SkippedJobLive
-		result.SkippedIdempotencyGrace += shape.SkippedIdempotencyGrace
+		result.Rearmed += shapeResult.Rearmed
+		result.SkippedJobLive += shapeResult.SkippedJobLive
+		result.SkippedClaimLive += shapeResult.SkippedClaimLive
+		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 	}
 	return result, nil
 }
 
 func (repair *StrandRepair) stepShape(
 	ctx context.Context,
-	query string,
+	shape strandShape,
 	now time.Time,
 	limit int,
 ) (StrandRepairResult, error) {
-	tx, err := repair.begin(ctx)
-	if err != nil || tx == nil {
-		return StrandRepairResult{}, classifyStrandError(err)
+	result := StrandRepairResult{}
+
+	// Phase 1 -- survey on the queue pool, WITHOUT locking. Locking here would
+	// hold outbox rows across the domain round-trip for no benefit: nothing is
+	// mutated until phase 3 re-proves the predicate under a lock anyway.
+	candidates, err := repair.survey(ctx, shape.survey, now, limit)
+	if err != nil {
+		return StrandRepairResult{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	// finalizedBefore is the instant a terminal River job stops being able to
-	// carry a live idempotency claim. See the premise note above the queries.
-	finalizedBefore := now.UTC().Add(-strandIdempotencyLease)
-	rows, err := tx.Query(ctx, query, now.UTC(), limit, finalizedBefore)
+	eligible := make([]strandCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		switch candidate.disposition {
+		case dispositionSkipJobLive:
+			result.SkippedJobLive++
+		case dispositionRearm:
+			eligible = append(eligible, candidate)
+		default:
+			return StrandRepairResult{}, ErrUnavailable
+		}
+	}
+	if len(eligible) == 0 {
+		return result, nil
+	}
+
+	// Phase 2 -- execution state, on the DOMAIN pool, before any queue
+	// transaction is open.
+	approved, live, settled, err := repair.filterByClaim(ctx, eligible, now)
+	if err != nil {
+		return StrandRepairResult{}, err
+	}
+	result.SkippedClaimLive += live
+	result.SkippedClaimSettled += settled
+	if len(approved) == 0 {
+		return result, nil
+	}
+
+	// Phase 3 -- lock, re-prove, and rearm on the queue pool.
+	rearmed, err := repair.rearm(ctx, shape.lock, now, limit, approved)
+	if err != nil {
+		return StrandRepairResult{}, err
+	}
+	result.Rearmed += rearmed
+	return result, nil
+}
+
+func (repair *StrandRepair) survey(
+	ctx context.Context,
+	query string,
+	now time.Time,
+	limit int,
+) ([]strandCandidate, error) {
+	rows, err := repair.queryQueue(ctx, query, now.UTC(), limit)
 	if err != nil || rows == nil {
-		return StrandRepairResult{}, classifyStrandError(err)
+		return nil, classifyStrandError(err)
 	}
 	defer rows.Close()
-	type candidate struct {
-		outboxID    string
-		riverJobID  int64
-		disposition string
-	}
-	candidates := make([]candidate, 0, limit)
+	candidates := make([]strandCandidate, 0, limit)
 	for rows.Next() {
-		var found candidate
-		if err := rows.Scan(&found.outboxID, &found.riverJobID, &found.disposition); err != nil ||
-			!uuidPattern.MatchString(found.outboxID) || found.riverJobID <= 0 {
-			return StrandRepairResult{}, ErrUnavailable
+		var found strandCandidate
+		if err := rows.Scan(&found.outboxID, &found.riverJobID, &found.jobKind,
+			&found.dedupeKey, &found.disposition); err != nil ||
+			!uuidPattern.MatchString(found.outboxID) || found.riverJobID <= 0 ||
+			found.jobKind == "" || found.dedupeKey == "" {
+			return nil, ErrUnavailable
 		}
 		candidates = append(candidates, found)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil || len(candidates) > limit {
-		return StrandRepairResult{}, classifyStrandError(rows.Err())
+		return nil, classifyStrandError(rows.Err())
 	}
-	result := StrandRepairResult{}
-	for _, found := range candidates {
-		switch found.disposition {
-		case dispositionSkipJobLive:
-			result.SkippedJobLive++
-			continue
-		case dispositionSkipGrace:
-			result.SkippedIdempotencyGrace++
-			continue
-		case dispositionRearm:
-		default:
-			return StrandRepairResult{}, ErrUnavailable
+	return candidates, nil
+}
+
+// filterByClaim is the execution-state check the lease proxy used to stand in
+// for. It reads worker_job_runs on the DOMAIN pool and refuses any candidate
+// whose logical job either still holds a live claim or has already settled.
+func (repair *StrandRepair) filterByClaim(
+	ctx context.Context,
+	candidates []strandCandidate,
+	now time.Time,
+) ([]strandCandidate, int, int, error) {
+	kinds := make([]string, 0, len(candidates))
+	keys := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		kinds = append(kinds, candidate.jobKind)
+		keys = append(keys, candidate.dedupeKey)
+	}
+	rows, err := repair.queryDomain(ctx, claimStateSQL, now.UTC(), kinds, keys)
+	if err != nil || rows == nil {
+		return nil, 0, 0, classifyStrandError(err)
+	}
+	defer rows.Close()
+	type claimKey struct{ kind, key string }
+	claims := make(map[claimKey]string, len(candidates))
+	for rows.Next() {
+		var kind, key, disposition string
+		if err := rows.Scan(&kind, &key, &disposition); err != nil {
+			return nil, 0, 0, ErrUnavailable
 		}
+		claims[claimKey{kind, key}] = disposition
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, classifyStrandError(rows.Err())
+	}
+	approved := make([]strandCandidate, 0, len(candidates))
+	liveCount, settledCount := 0, 0
+	for _, candidate := range candidates {
+		switch claims[claimKey{candidate.jobKind, candidate.dedupeKey}] {
+		case claimLive:
+			liveCount++
+		case claimSettled:
+			settledCount++
+		case "", claimReclaimable:
+			// No row at all, or a row whose claim is reclaimable. Both mean a
+			// fresh delivery reaches the handler rather than being ACKed as a
+			// duplicate.
+			approved = append(approved, candidate)
+		default:
+			return nil, 0, 0, ErrUnavailable
+		}
+	}
+	return approved, liveCount, settledCount, nil
+}
+
+func (repair *StrandRepair) rearm(
+	ctx context.Context,
+	query string,
+	now time.Time,
+	limit int,
+	approved []strandCandidate,
+) (int, error) {
+	ids := make([]string, 0, len(approved))
+	for _, candidate := range approved {
+		ids = append(ids, candidate.outboxID)
+	}
+	tx, err := repair.beginQueue(ctx)
+	if err != nil || tx == nil {
+		return 0, classifyStrandError(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, query, now.UTC(), limit, ids)
+	if err != nil || rows == nil {
+		return 0, classifyStrandError(err)
+	}
+	defer rows.Close()
+	locked := make([]strandCandidate, 0, len(approved))
+	for rows.Next() {
+		var found strandCandidate
+		if err := rows.Scan(&found.outboxID, &found.riverJobID, &found.jobKind,
+			&found.dedupeKey, &found.disposition); err != nil ||
+			!uuidPattern.MatchString(found.outboxID) || found.riverJobID <= 0 {
+			return 0, ErrUnavailable
+		}
+		// The locked re-read must still agree the delivery is terminal. A row
+		// that turned live between the survey and the lock is dropped.
+		if found.disposition == dispositionRearm {
+			locked = append(locked, found)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, classifyStrandError(rows.Err())
+	}
+	rearmed := 0
+	for _, found := range locked {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, found.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != found.riverJobID {
-			return StrandRepairResult{}, classifyStrandError(err)
+			return 0, classifyStrandError(err)
 		}
 		// The delete must have removed a terminal row. Re-checking the returned
 		// state closes the window between the predicate and the delete: a job
 		// that became runnable in between must not be removed.
 		if !terminalRiverState(deleted.State) {
-			return StrandRepairResult{}, ErrUnavailable
+			return 0, ErrUnavailable
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -201,14 +375,14 @@ func (repair *StrandRepair) stepShape(
 			WHERE id = $1 AND status = 'delivered'`,
 			found.outboxID, now.UTC(), strandRecoveryCode, strandRecoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return StrandRepairResult{}, classifyStrandError(err)
+			return 0, classifyStrandError(err)
 		}
-		result.Rearmed++
+		rearmed++
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return StrandRepairResult{}, classifyStrandError(err)
+		return 0, classifyStrandError(err)
 	}
-	return result, nil
+	return rearmed, nil
 }
 
 func terminalRiverState(state rivertype.JobState) bool {
@@ -228,6 +402,49 @@ func classifyStrandError(err error) error {
 	return ErrUnavailable
 }
 
+const (
+	claimLive        = "claim_live"
+	claimSettled     = "claim_settled"
+	claimReclaimable = "claim_reclaimable"
+)
+
+// claimStateSQL answers, for each candidate, whether a fresh delivery would
+// actually reach its handler. It runs on the DOMAIN pool.
+//
+// worker_job_runs is unique on (job_kind, idempotency_key), and the outbox
+// dedupe_key IS the envelope's idempotency key, so the pair identifies the
+// logical job exactly. This is a direct read, not an inference.
+//
+// The three outcomes mirror PostgresIdempotency.Begin:
+//
+//   - claim_live: status 'running' with an unexpired lease. Begin returns
+//     ClaimAlreadyComplete, so the rearmed job would be ACKed WITHOUT running
+//     and the domain row would stay unfinished -- a strand manufactured by the
+//     repair (CHAOS-3998). Refuse.
+//   - claim_settled: status 'succeeded' or 'terminal'. Begin returns
+//     ClaimAlreadyComplete or ClaimTerminal for these too, so a rearm is
+//     equally futile. A lease-based proxy could never see this case at all,
+//     because a settled row has no lease to reason about.
+//   - claim_reclaimable: anything else -- 'retryable', or 'running' with an
+//     expired lease. Begin takes the row over and the handler runs. Safe.
+//
+// A candidate with NO row is also safe: the first delivery creates it.
+const claimStateSQL = `
+	SELECT runs.job_kind, runs.idempotency_key,
+		CASE
+			WHEN runs.status = 'running'
+				AND runs.lease_expires_at IS NOT NULL
+				AND runs.lease_expires_at > $1
+				THEN 'claim_live'
+			WHEN runs.status IN ('succeeded', 'terminal') THEN 'claim_settled'
+			ELSE 'claim_reclaimable'
+		END AS disposition
+	FROM public.worker_job_runs AS runs
+	JOIN unnest($2::text[], $3::text[]) AS pair(job_kind, idempotency_key)
+		ON pair.job_kind = runs.job_kind
+		AND pair.idempotency_key = runs.idempotency_key
+`
+
 // Every query selects on DOMAIN state and reports a disposition rather than
 // filtering, so a refusal is counted instead of vanishing.
 //
@@ -244,104 +461,86 @@ func classifyStrandError(err error) error {
 // which would couple this SQL to RescueStuckJobsAfter and to each kind's
 // timeout, and would silently re-break when either moved.
 //
-// # The live-idempotency-lease refusal, and why it reads no worker_job_runs
+// # Why the idempotency claim is READ rather than inferred
 //
-// A live idempotency lease must never be rearmed past: that job would be ACKed
+// A live idempotency claim must never be rearmed past: that job would be ACKed
 // as a duplicate success without reaching its handler, manufacturing a fresh
-// strand instead of clearing one (CHAOS-3998). This is enforced WITHOUT reading
-// worker_job_runs, because the queue-control role must never be granted access
-// to execution state or external-effect evidence
-// (internal/jobruntime/idempotency_postgres.go:32).
+// strand instead of clearing one (CHAOS-3998).
 //
-// Two independent arguments carry that refusal, and BOTH are needed, because
-// the first one says nothing at all about a row that was never claimed.
+// This was originally enforced WITHOUT reading worker_job_runs, by treating the
+// domain lease as a proxy: same duration, same renewal divisor, same process,
+// and the claim taken before the domain lease, so an expired domain lease was
+// argued to imply an expired claim. Adversarial review broke that argument on
+// the very path this repair exists for:
 //
-//  1. For a row with a lease: the domain lease is a sound proxy. The
-//     idempotency lease and each domain lease are all ten minutes
-//     (internal/jobruntime/idempotency_postgres.go:28,
-//     internal/jobs/metrics/daily/postgres.go:19,
-//     internal/jobs/workgraph/postgres.go:17); all renew every lease/3
-//     (idempotency_postgres.go:187, internal/jobs/metrics/daily/daily.go:348,
-//     internal/jobs/workgraph/handler.go:85); all are renewed by the same
-//     worker process; and the idempotency claim is taken at
-//     internal/jobruntime/adapter.go:386, strictly BEFORE the handler that
-//     acquires the domain lease at adapter.go:432. So the idempotency lease
-//     expires no later than the domain lease, and an expired domain lease
-//     implies an expired idempotency lease. The converse is covered too: a
-//     replacement claimant holding a live idempotency lease has necessarily
-//     taken the domain lease, which the `lease_expires_at <= $1` predicates
-//     below already exclude.
+//   - the claim renewer runs on context.Background()
+//     (internal/jobruntime/idempotency_postgres.go), so it keeps renewing for
+//     as long as its row is 'running', while the DOMAIN renewer cancels the
+//     work context and returns when a renewal fails
+//     (internal/jobs/metrics/daily/daily.go). A domain lease can therefore
+//     lapse while the claim is still being renewed.
+//   - River's RESCUER stamps finalized_at on a job whose worker is still
+//     alive. Any argument of the form "terminal for long enough implies the
+//     claim is gone" assumed River finalizes only after the adapter returns,
+//     which is exactly false on the rescuer path.
 //
-//     None of those constants is importable from here -- they are unexported,
-//     in three separate packages -- so this argument is anchored by file:line
-//     and pinned by TestStrandRepairLeaseProxyPremise, which parses all three
-//     files and fails if the durations, the renewal divisors, or the claim
-//     ordering diverge. If that test is ever deleted, this repair loses its
-//     only guard against re-arming into a guaranteed duplicate-success no-op.
+// The claim is now read directly on the domain pool (claimStateSQL above),
+// which needs no new privilege and keeps execution state away from the
+// queue-control role.
 //
-//  2. For a row that was NEVER claimed there is no lease to test, and argument
-//     1 is vacuous. Both the finalize shape (a run whose finalize lease is
-//     NULL) and the work-graph shape (a request in state 'pending', which the
-//     table's CHECK constraint forces to hold a NULL claim_token and lease)
-//     admit such rows. Because the claim at adapter.go:386 precedes the
-//     handler, a live claim beside an unclaimed domain row is a real state.
-//     The guard for those rows is `job.finalized_at <= $3`, i.e. the delivery
-//     has been terminal for at least one idempotency lease. A River job is
-//     finalized only after the adapter returns, and the adapter finishes its
-//     claim on that path (adapter.go:442); the surviving case is a process
-//     that died mid-handler, whose claim then stops renewing and expires
-//     within one lease. Either way, one lease after finalization no claim tied
-//     to that job can still be live. This derives from the idempotency lease
-//     itself, not from River's rescue horizon, so it does not reintroduce the
-//     coupling that the terminal-only rule exists to avoid.
+// # The residual window, and why it is strictly smaller
+//
+// The claim is read before the queue transaction opens, so a claim created
+// between that read and the commit is not seen. That window is bounded three
+// ways:
+//
+//  1. Only a running job can create a claim, and the only job that can exist
+//     for this (kind, domain id) is the terminal delivery about to be deleted
+//     -- there is nothing runnable in the window to create one.
+//  2. Phase 3 re-reads the same predicate under FOR UPDATE ... SKIP LOCKED and
+//     drops any row that stopped being terminal, so the mutation is a CAS on
+//     the state the survey saw.
+//  3. If a claim nevertheless became live, the rearmed job is ACKed as a
+//     duplicate and the row simply remains stranded -- the same state as
+//     before the pass, not a worse one.
+//
+// The proxy's hole, by contrast, was unbounded in time: any worker stalled with
+// a live renewer qualified, for as long as it stalled.
 //
 // # Why the domain row is read but not locked
 //
-// The domain tables are joined without FOR UPDATE. That is not an oversight
-// and cannot be changed: PostgreSQL requires UPDATE privilege to lock a row,
-// and the queue-control role holds SELECT only -- locking it would demand
-// exactly the write authority this split exists to withhold.
+// The domain tables are joined without FOR UPDATE, and that cannot change:
+// PostgreSQL requires UPDATE privilege to lock a row, and the queue-control
+// role holds SELECT only.
 //
 // It is also unnecessary, though for a narrower reason than "the schema
-// guarantees it". The database enforces uniqueness on dedupe_key alone
-// (worker_job_outbox.dedupe_key), NOT on (kind, domain id). What makes the
-// bound delivery the only job for that pair is how the keys are built, and
-// that differs by domain:
+// guarantees it". The database enforces uniqueness on dedupe_key alone, NOT on
+// (kind, domain id). What makes the bound delivery the only job for that pair
+// is how the keys are built, and that differs by domain:
 //
 //   - daily: the key is DERIVED from the domain id --
 //     "metrics.daily_partition:"+partition.ID and
 //     "metrics.daily_finalize:"+run.ID (internal/jobs/metrics/daily/publisher.go).
-//     Uniqueness on the key is therefore uniqueness on the pair.
 //   - work graph: the key is caller-supplied
 //     (internal/jobs/workgraph/publisher.go passes request.IdempotencyKey
-//     straight through), and holds only because
+//     through), and holds only because
 //     work_graph_execution_requests.idempotency_key is itself UNIQUE and one
 //     per request row.
 //
-// So the property is real but rests on the publishers, not on a constraint. A
-// future publisher that minted two keys for one request would break it
-// silently, which is why the org and kind predicates below are written to bind
-// the row tightly rather than trusting the key alone.
-//
-// Concurrent repair replicas are serialized by `FOR UPDATE OF outbox, job SKIP
-// LOCKED`, which takes the outbox row first, matching lockCurrentDelivery's
-// order. What remains is a claimant appearing between the snapshot and the
-// commit, which requires a runnable job that the terminal-only predicate has
-// already excluded.
+// So the property is real but rests on the publishers, not on a constraint,
+// which is why the org and kind predicates below bind the row tightly rather
+// than trusting the key alone.
 //
 // # Why rearming is safe for every kind covered
 //
-// A rearmed row produces a job that is indistinguishable from a River retry of
-// the same job: same kind, same args, same dedupe key, same domain row. Every
-// kind here already runs with max_attempts > 1, so each handler is required to
-// be re-enterable, and each domain layer fences re-entry with its own claim
-// CAS. This repair adds no re-execution shape the system does not already
-// support.
+// A rearmed row produces a job indistinguishable from a River retry of the same
+// job: same kind, same args, same dedupe key, same domain row. Every kind here
+// already runs with max_attempts > 1, so each handler is required to be
+// re-enterable, and each domain layer fences re-entry with its own claim CAS.
 const repairStrandedPartitionSQL = `
-	SELECT outbox.id::text, job.id,
+	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
-			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -361,20 +560,25 @@ const repairStrandedPartitionSQL = `
 		AND partition.lease_expires_at IS NOT NULL
 		AND partition.lease_expires_at <= $1
 		AND run.status = 'running'
+		%s
 	ORDER BY outbox.delivered_at, outbox.id
-	FOR UPDATE OF outbox, job SKIP LOCKED
+	%s
 	LIMIT $2::int
 `
 
 // The finalize shape additionally preserves ClaimFinalize's own eligibility
-// guard: a run whose partitions are not all succeeded is still owned by the
-// partition layer, and rearming its finalizer would produce a job that can only
-// no-op.
+// rule, mirrored exactly rather than approximated. classifyLease reaches its
+// reclaimable branch only when the finalize lease is non-NULL; with a NULL
+// lease a 'running' finalization falls through to claimable, which excludes
+// 'running', and settles -- so rearming that row would mint a finalizer
+// ClaimFinalize then refuses. The pending/failed branch stays deliberately
+// stricter than ClaimFinalize, which would claim those even under a live
+// lease: being MORE permissive than the claimer is the dangerous direction,
+// while being less permissive costs one pass of latency.
 const repairStrandedFinalizeSQL = `
-	SELECT outbox.id::text, job.id,
+	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
-			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -389,23 +593,11 @@ const repairStrandedFinalizeSQL = `
 		AND outbox.args #>> '{domain,type}' = 'daily_metrics_run'
 		AND run.status = 'running'
 		AND (
-			-- Mirrors classifyLease exactly. A 'running' finalization is
-			-- reclaimable ONLY through the expired-lease branch, which
-			-- classifyLease reaches only when the lease is non-NULL; with a
-			-- NULL lease it falls through to claimable, which excludes
-			-- 'running', and settles. Admitting that row here would rearm a
-			-- finalizer ClaimFinalize then refuses -- a job that can only
-			-- no-op.
 			(
 				run.finalization_status = 'running'
 				AND run.finalization_lease_expires_at IS NOT NULL
 				AND run.finalization_lease_expires_at <= $1
 			)
-			-- 'pending' and 'failed' are claimable outright. This stays
-			-- deliberately stricter than ClaimFinalize, which would claim them
-			-- even under a live lease: being MORE permissive than the claimer
-			-- is the dangerous direction, while being less permissive only
-			-- means a row waits for a later pass.
 			OR (
 				run.finalization_status IN ('pending', 'failed')
 				AND (
@@ -420,25 +612,25 @@ const repairStrandedFinalizeSQL = `
 				AND sibling.org_id = run.org_id
 				AND sibling.status <> 'succeeded'
 		)
+		%s
 	ORDER BY outbox.delivered_at, outbox.id
-	FOR UPDATE OF outbox, job SKIP LOCKED
+	%s
 	LIMIT $2::int
 `
 
 // The work-graph shape carries one table for five kinds, so the request is
-// bound by `kind` as well as by id -- the same pair PostgresStore.Claim keys
-// on. The accepted states are exactly the two Claim will reclaim: 'pending',
-// and 'running' with an expired lease
-// (internal/jobs/workgraph/postgres.go:69-73). Every other state is excluded
-// structurally: 'succeeded', 'failed' and 'canceled' are terminal and
-// immutable by trigger, and 'ambiguous' is refused by Claim, so rearming any
-// of them could only mint a job that no-ops. 'ambiguous' is also the state
-// CHAOS-3999's abandonment contract owns, and this sweep must not pre-empt it.
+// bound by kind as well as by id -- the same pair PostgresStore.Claim keys on.
+// The accepted states are exactly the two Claim will reclaim: 'pending', and
+// 'running' with an expired lease. Every other state is excluded by
+// CONSTRUCTION rather than by an exclusion list: listing only the reclaimable
+// states means a state added to the table later is refused by default instead
+// of silently inheriting eligibility. That also keeps 'ambiguous' -- which
+// Claim refuses, and which CHAOS-3999's abandonment contract owns -- out of
+// this sweep without naming it.
 const repairStrandedWorkGraphSQL = `
-	SELECT outbox.id::text, job.id,
+	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
-			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -466,7 +658,8 @@ const repairStrandedWorkGraphSQL = `
 				AND request.lease_expires_at IS NULL
 			)
 		)
+		%s
 	ORDER BY outbox.delivered_at, outbox.id
-	FOR UPDATE OF outbox, job SKIP LOCKED
+	%s
 	LIMIT $2::int
 `

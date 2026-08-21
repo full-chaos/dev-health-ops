@@ -26,11 +26,11 @@ func (repair *fakeStrandRepair) Step(context.Context, time.Time, int) (StrandRep
 }
 
 func TestNewStrandRepairRejectsUnusableConfiguration(t *testing.T) {
-	if _, err := NewStrandRepair(nil, "river"); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("nil pool error = %v, want ErrInvalidConfiguration", err)
+	if _, err := NewStrandRepair(nil, nil, "river"); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil pools error = %v, want ErrInvalidConfiguration", err)
 	}
 	for _, schema := range []string{"", "Public", "river-schema", "river;drop", strings.Repeat("a", 64)} {
-		if _, err := NewStrandRepair(nil, schema); !errors.Is(err, ErrInvalidConfiguration) {
+		if _, err := NewStrandRepair(nil, nil, schema); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("schema %q error = %v, want ErrInvalidConfiguration", schema, err)
 		}
 	}
@@ -50,8 +50,10 @@ func TestStrandRepairStepRejectsUnusableRequests(t *testing.T) {
 	// Bounds are part of the contract: an unbounded pass would hold locks over
 	// an arbitrary number of outbox rows.
 	configured := &StrandRepair{
-		begin:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
-		client: riverDeleteAdapter{},
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
 	}
 	for _, limit := range []int{0, -1, maxReconcilerLimit + 1} {
 		if _, err := configured.Step(context.Background(), time.Now(), limit); !errors.Is(err, ErrInvalidConfiguration) {
@@ -152,29 +154,25 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 		if !strings.Contains(query, "'completed', 'discarded', 'cancelled'") {
 			t.Fatalf("the %s query lost its terminal-state predicate", name)
 		}
-		// The finalized_at grace: without it, a never-claimed row can be
-		// rearmed while an idempotency claim is still live. It must live in the
-		// disposition CASE, not the WHERE clause: filtering on it in WHERE
-		// silently drops every non-terminal candidate too, which makes the
-		// mandatory skip counters unreachable and a rescuer that has stopped
-		// running indistinguishable from an empty queue.
-		if !strings.Contains(query, "job.finalized_at IS NULL OR job.finalized_at > $3") {
-			t.Fatalf("the %s query lost its finalized_at grace guard", name)
-		}
-		if strings.Contains(query, "AND job.finalized_at") {
-			t.Fatalf("the %s query filters on finalized_at in its WHERE clause; that makes the "+
-				"skip counters unreachable", name)
-		}
-		for _, disposition := range []string{"'skip_job_live'", "'skip_idempotency_grace'", "'rearm'"} {
+		// The disposition must be REPORTED, not filtered. Filtering a refusal
+		// out of the result set makes the skip counters unreachable, and a
+		// rescuer that has stopped running then looks exactly like an empty
+		// queue.
+		for _, disposition := range []string{"'skip_job_live'", "'rearm'"} {
 			if !strings.Contains(query, disposition) {
 				t.Fatalf("the %s query lost the %s disposition", name, disposition)
 			}
 		}
-		// Bounded, oldest-first, and serialized against sibling replicas.
-		if !strings.Contains(query, "FOR UPDATE OF outbox, job SKIP LOCKED") ||
-			!strings.Contains(query, "LIMIT $2::int") ||
+		// The candidate identity the execution-state read needs. Without
+		// job_kind and dedupe_key the claim lookup cannot be keyed at all.
+		if !strings.Contains(query, "outbox.job_kind, outbox.dedupe_key") {
+			t.Fatalf("the %s query no longer projects the claim-lookup identity", name)
+		}
+		// Bounded and oldest-first in both forms; the locked form additionally
+		// serializes against sibling replicas.
+		if !strings.Contains(query, "LIMIT $2::int") ||
 			!strings.Contains(query, "ORDER BY outbox.delivered_at, outbox.id") {
-			t.Fatalf("the %s query lost its bounding or locking clause", name)
+			t.Fatalf("the %s query lost its bounding clause", name)
 		}
 		// Only a delivered row is a strand; a pending row is already armed.
 		if !strings.Contains(query, "outbox.status = 'delivered'") {
@@ -282,7 +280,7 @@ func TestRelayStepFailsClosedOnStrandRepairError(t *testing.T) {
 // distinct all the way to StepResult.
 func TestRelayStepCarriesStrandCountsIntoTheResult(t *testing.T) {
 	strand := &fakeStrandRepair{result: StrandRepairResult{
-		Rearmed: 4, SkippedJobLive: 2, SkippedIdempotencyGrace: 1,
+		Rearmed: 4, SkippedJobLive: 2, SkippedClaimLive: 1, SkippedClaimSettled: 3,
 	}}
 	relay := &Relay{repair: fakeTerminalRepair{}, strandRepair: strand}
 	// The step is expected to fail once it reaches the nil repository; the
@@ -290,8 +288,8 @@ func TestRelayStepCarriesStrandCountsIntoTheResult(t *testing.T) {
 	// which Step returns alongside the error.
 	result, _ := relay.stepRecovery(context.Background(), time.Now(), 1)
 	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
-		result.StrandIdempotencyGraceSkipped != 1 {
-		t.Fatalf("result = %+v, want 4 rearmed, 2 live skips and 1 grace skip", result)
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 {
+		t.Fatalf("result = %+v, want 4 rearmed, 2 job-live, 1 claim-live and 3 claim-settled", result)
 	}
 	if result.Recovered != 0 {
 		t.Fatalf("strand rearms leaked into the terminal-delivery counter: %+v", result)
@@ -306,8 +304,8 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 	// other route.
 	clock := &testReconcilerClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
 	results := []StepResult{
-		{Recovered: 1, StrandsRearmed: 4, StrandJobsSkippedLive: 2, StrandIdempotencyGraceSkipped: 1},
-		{StrandsRearmed: 1, StrandJobsSkippedLive: 1, StrandIdempotencyGraceSkipped: 2},
+		{Recovered: 1, StrandsRearmed: 4, StrandJobsSkippedLive: 2, StrandClaimsLive: 1, StrandClaimsSettled: 5},
+		{StrandsRearmed: 1, StrandJobsSkippedLive: 1, StrandClaimsLive: 2, StrandClaimsSettled: 1},
 	}
 	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		result := results[0]
@@ -327,7 +325,8 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 	for _, want := range []string{
 		"worker_outbox_reconciler_strands_rearmed_total 5",
 		"worker_outbox_reconciler_strand_jobs_skipped_live_total 3",
-		"worker_outbox_reconciler_strand_idempotency_grace_skipped_total 3",
+		"worker_outbox_reconciler_strand_claims_live_total 3",
+		"worker_outbox_reconciler_strand_claims_settled_total 6",
 		"worker_outbox_reconciler_terminal_deliveries_recovered_total 1",
 	} {
 		if !strings.Contains(metrics.String(), want+"\n") {

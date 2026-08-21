@@ -13,88 +13,52 @@ import (
 	"time"
 )
 
-// TestStrandRepairLeaseProxyPremise pins the argument that lets StrandRepair
-// refuse a live idempotency lease without ever reading worker_job_runs.
+// TestStrandRepairClaimLivenessPremise pins the ONE cross-package fact this
+// repair still depends on now that the execution-state read has replaced the
+// lease proxy.
 //
-// The repair asserts that an expired domain lease implies an expired
-// idempotency lease. That holds only while three things stay true: the lease
-// durations are equal, every lease renews on the same divisor, and the
-// idempotency claim is taken before the domain lease. If any of them drifts,
-// the repair starts re-arming rows whose idempotency claim is still live; each
-// such job is ACKed as a duplicate success without reaching its handler
-// (CHAOS-3998), which manufactures a fresh strand instead of clearing one.
-// Nothing else in the tree would catch that, because the drift would be in a
-// package this one cannot import.
+// RETIRED WITH THE PROXY, deliberately: the assertions that the idempotency and
+// domain leases were equal, and that the claim was taken before the domain
+// lease. StrandRepair reads worker_job_runs directly, so it depends on neither.
+// A test pinning a premise nothing depends on is future confusion rather than
+// safety -- it would tell the next reader this repair rests on a relationship
+// it does not.
 //
-// The constants are unexported and live in three separate packages, so this
-// test reads them from source rather than importing them. Every failure to
-// find or interpret a value is a test FAILURE, never a skip: a premise that
-// cannot be checked is not a premise that has been met. The checks themselves
-// are proved to fire by TestStrandRepairPremiseChecksDetectDrift.
-func TestStrandRepairLeaseProxyPremise(t *testing.T) {
+// What survives is narrower and real. claimStateSQL treats an EXPIRED claim
+// lease as proof the claimant is gone. That is sound only while a live claimant
+// keeps its lease fresh, which is the renewer's job. If the renewal interval
+// ever crept up to or past the lease, a healthy worker would intermittently
+// show an expired lease and this repair would rearm underneath it, into exactly
+// the duplicate-success no-op the design exists to avoid (CHAOS-3998).
+//
+// The constant and the renewal loop are unexported and in another package, so
+// they are read from source. Anything unreadable is a FAILURE, never a skip.
+// The checks are proved to fire by TestStrandRepairPremiseChecksDetectDrift.
+func TestStrandRepairClaimLivenessPremise(t *testing.T) {
 	root := moduleRoot(t)
+	const idempotencySource = "internal/jobruntime/idempotency_postgres.go"
 
-	idempotencyLease := mustConstDuration(t, filepath.Join(root,
-		"internal/jobruntime/idempotency_postgres.go"), "defaultIdempotencyLease")
-	dailyLease := mustConstDuration(t, filepath.Join(root,
-		"internal/jobs/metrics/daily/postgres.go"), "defaultLease")
-	workGraphLease := mustConstDuration(t, filepath.Join(root,
-		"internal/jobs/workgraph/postgres.go"), "defaultLease")
-
-	// The safety condition is idempotency <= every domain lease this repair
-	// covers. Equality is the current state and is pinned as well, so that a
-	// change in either direction is loud rather than silently absorbed.
-	for _, domain := range []struct {
-		name  string
-		lease time.Duration
-	}{{"daily", dailyLease}, {"workgraph", workGraphLease}} {
-		if idempotencyLease > domain.lease {
-			t.Fatalf("PREMISE BROKEN: idempotency lease %s exceeds the %s domain lease %s; "+
-				"an expired domain lease no longer implies an expired idempotency lease, "+
-				"and StrandRepair would re-arm into a guaranteed duplicate success",
-				idempotencyLease, domain.name, domain.lease)
-		}
-		if idempotencyLease != domain.lease {
-			t.Fatalf("PREMISE DRIFT: idempotency lease %s and %s domain lease %s are no longer equal; "+
-				"re-derive the argument in strand_repair.go before changing this test",
-				idempotencyLease, domain.name, domain.lease)
-		}
+	lease := mustConstDuration(t, filepath.Join(root, idempotencySource), "defaultIdempotencyLease")
+	divisor, err := tickerDivisor(filepath.Join(root, idempotencySource))
+	if err != nil {
+		t.Fatalf("cannot check the claim renewal cadence: %v", err)
 	}
 
-	// The repair's own copy of the idempotency lease bounds how long a
-	// terminal delivery must have been finalized before an unclaimed domain
-	// row may be re-armed. A copy that drifts below the real lease reopens
-	// exactly the window it exists to close.
-	if strandIdempotencyLease != idempotencyLease {
-		t.Fatalf("PREMISE BROKEN: strandIdempotencyLease is %s but defaultIdempotencyLease is %s; "+
-			"the finalized_at grace no longer covers one idempotency lease",
-			strandIdempotencyLease, idempotencyLease)
+	// The renewal must fire strictly more often than the lease expires, with
+	// margin for a missed tick. A divisor of 1 renews exactly as the lease
+	// lapses; below 2 there is no room for a single failed attempt.
+	if divisor < 2 {
+		t.Fatalf("PREMISE BROKEN: the idempotency claim renews on lease/%d, leaving no margin "+
+			"before expiry; an expired lease would no longer prove the claimant is gone, and "+
+			"StrandRepair would rearm underneath a live worker", divisor)
 	}
-
-	// All three leases renew on the same divisor. A renewal that fired less
-	// often than the others would let its lease lapse while a live process
-	// still held the work.
-	for _, renewal := range []struct{ name, path string }{
-		{"idempotency", "internal/jobruntime/idempotency_postgres.go"},
-		{"daily", "internal/jobs/metrics/daily/daily.go"},
-		{"workgraph", "internal/jobs/workgraph/handler.go"},
-	} {
-		divisor, err := tickerDivisor(filepath.Join(root, renewal.path))
-		if err != nil {
-			t.Fatalf("cannot check the %s renewal cadence: %v", renewal.name, err)
-		}
-		if divisor != 3 {
-			t.Fatalf("PREMISE BROKEN: the %s lease renews on lease/%d, not lease/3; "+
-				"the renewal cadences no longer agree", renewal.name, divisor)
-		}
+	if divisor != 3 {
+		t.Fatalf("PREMISE DRIFT: the idempotency claim renewal divisor changed from 3 to %d; "+
+			"re-derive the expired-lease-implies-dead-claimant argument in strand_repair.go "+
+			"before changing this test", divisor)
 	}
-
-	// The idempotency claim must be taken before the handler that acquires the
-	// domain lease. Reversing them would make the idempotency lease expire
-	// LATER than the domain lease, inverting the implication the repair rests
-	// on.
-	if err := checkClaimPrecedesHandler(filepath.Join(root, "internal/jobruntime/adapter.go")); err != nil {
-		t.Fatalf("PREMISE BROKEN: %v", err)
+	if interval := lease / time.Duration(divisor); interval >= lease {
+		t.Fatalf("PREMISE BROKEN: renewal interval %s is not shorter than the lease %s", interval, lease)
 	}
 }
 
@@ -218,43 +182,6 @@ func TestStrandRepairPremiseChecksDetectDrift(t *testing.T) {
 		}
 	})
 
-	t.Run("claim ordering", func(t *testing.T) {
-		claimFirst := "package p\nfunc f() {\n" +
-			"claim, _ := adapter.idempotency.Begin(ctx, request)\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n"
-		handlerFirst := "package p\nfunc f() {\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n" +
-			"claim, _ := adapter.idempotency.Begin(ctx, request)\n_ = claim\n}\n"
-		neither := "package p\nfunc f() {}\n"
-
-		if err := checkClaimPrecedesHandler(writeFixture(t, claimFirst)); err != nil {
-			t.Fatalf("positive control rejected a correctly ordered file: %v", err)
-		}
-		assertOutcome(t, "no longer precedes", checkClaimPrecedesHandler(writeFixture(t, handlerFirst)))
-		assertOutcome(t, "cannot find", checkClaimPrecedesHandler(writeFixture(t, neither)))
-
-		// codex review 2026-08-20: comparing the first claim and the first
-		// handler call anywhere in the FILE let a correctly-ordered decoy
-		// vouch for a reversed production function. The check is now
-		// per-function, so this must fail.
-		decoyThenReversed := "package p\n" +
-			"func decoy() {\n" +
-			"claim, _ := adapter.idempotency.Begin(ctx, request)\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n" +
-			"func real() {\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n" +
-			"claim, _ := adapter.idempotency.Begin(ctx, request)\n_ = claim\n}\n"
-		assertOutcome(t, "no longer precedes", checkClaimPrecedesHandler(writeFixture(t, decoyThenReversed)))
-
-		// Two functions that BOTH order it correctly is still ambiguous about
-		// which one runs jobs, so it is refused rather than guessed at.
-		twoCorrect := "package p\n" +
-			"func a() {\nclaim, _ := adapter.idempotency.Begin(ctx, request)\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n" +
-			"func b() {\nclaim, _ := adapter.idempotency.Begin(ctx, request)\n" +
-			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n"
-		assertOutcome(t, "exactly one function", checkClaimPrecedesHandler(writeFixture(t, twoCorrect)))
-	})
 }
 
 func writeFixture(t *testing.T, source string) string {
@@ -511,68 +438,4 @@ func renderExpr(expression ast.Expr) string {
 		return renderExpr(typed.X) + "." + typed.Sel.Name
 	}
 	return ""
-}
-
-// checkClaimPrecedesHandler proves the idempotency claim is taken before the
-// handler runs. The handler is what acquires the domain lease, so this
-// ordering is what makes the idempotency lease expire no later than the domain
-// lease.
-func checkClaimPrecedesHandler(path string) error {
-	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, path, nil, 0)
-	if err != nil {
-		return fmt.Errorf("cannot parse %s: %w", path, err)
-	}
-	// Both calls must be found in the SAME function. Comparing the first claim
-	// and the first handler call anywhere in the file lets a decoy function --
-	// or simply an unrelated helper declared earlier -- satisfy the ordering
-	// while the function that actually runs jobs has them reversed.
-	found := 0
-	var orderingErr error
-	for _, declaration := range file.Decls {
-		function, isFunction := declaration.(*ast.FuncDecl)
-		if !isFunction || function.Body == nil {
-			continue
-		}
-		claimAt, handlerAt := token.NoPos, token.NoPos
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			call, isCall := node.(*ast.CallExpr)
-			if !isCall {
-				return true
-			}
-			outer, isSelector := call.Fun.(*ast.SelectorExpr)
-			if !isSelector {
-				return true
-			}
-			inner, isInner := outer.X.(*ast.SelectorExpr)
-			if !isInner {
-				return true
-			}
-			switch {
-			case inner.Sel.Name == "idempotency" && outer.Sel.Name == "Begin" && !claimAt.IsValid():
-				claimAt = call.Pos()
-			case inner.Sel.Name == "handler" && outer.Sel.Name == "Work" && !handlerAt.IsValid():
-				handlerAt = call.Pos()
-			}
-			return true
-		})
-		if !claimAt.IsValid() || !handlerAt.IsValid() {
-			continue
-		}
-		found++
-		if claimAt >= handlerAt {
-			orderingErr = fmt.Errorf("the idempotency claim at %s no longer precedes the handler at %s "+
-				"in %s; the idempotency lease may now outlive the domain lease",
-				fileSet.Position(claimAt), fileSet.Position(handlerAt), function.Name.Name)
-		}
-	}
-	if orderingErr != nil {
-		return orderingErr
-	}
-	if found != 1 {
-		return fmt.Errorf("cannot find exactly one function in %s containing both the idempotency "+
-			"claim and the handler call (found %d); the claim-ordering premise can no longer be checked",
-			path, found)
-	}
-	return nil
 }

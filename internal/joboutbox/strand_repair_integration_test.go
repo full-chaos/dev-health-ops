@@ -76,6 +76,19 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	queue := openIntegrationPool(t, ctx,
 		integrationRoleURI(t, instance.URI, strandQueueRole, strandQueuePassword))
 	defer queue.Close()
+	domain := openIntegrationPool(t, ctx,
+		integrationRoleURI(t, instance.URI, strandDomainRole, strandDomainPassword))
+	defer domain.Close()
+
+	// The pool split is a security boundary, not an implementation detail, so
+	// it is asserted rather than assumed: the queue role must be unable to read
+	// execution state even though the repair it powers depends on that state.
+	if _, err := queue.Exec(ctx, "SELECT id FROM public.worker_job_runs"); err == nil {
+		t.Fatal("the queue-control role can read worker_job_runs; the pool split is not real")
+	}
+	if _, err := domain.Exec(ctx, "SELECT id FROM public.worker_job_runs"); err != nil {
+		t.Fatalf("the domain role cannot read worker_job_runs: %v", err)
+	}
 
 	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
@@ -93,7 +106,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repair, err := NewStrandRepair(queue, "river")
+	repair, err := NewStrandRepair(queue, domain, "river")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +199,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 					t.Fatal(err)
 				}
 				if result.Rearmed != 0 || result.SkippedJobLive != 1 ||
-					result.SkippedIdempotencyGrace != 0 {
+					result.SkippedClaimLive != 0 {
 					t.Fatalf("Step() = %+v, want 0 rearmed and exactly 1 live-job skip", result)
 				}
 				assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
@@ -219,36 +232,98 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
-	// The grace guard that closes the never-claimed hole. A delivery that only
-	// just became terminal may still carry a live idempotency claim, which the
-	// domain lease cannot rule out when there is no domain lease to read.
-	t.Run("a delivery terminal for less than one idempotency lease is refused", func(t *testing.T) {
+	// The execution-state check, which replaced the lease proxy. These three
+	// cases are the whole reason the repair reads worker_job_runs on a second
+	// pool: the proxy could not distinguish them, and two of the three end in a
+	// manufactured strand if rearmed.
+	t.Run("idempotency claim state decides eligibility", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name        string
+			status      string
+			leaseOffset time.Duration
+			hasLease    bool
+			wantRearmed int
+			wantLive    int
+			wantSettled int
+		}{
+			{
+				// A live claim is the dangerous one. Begin returns
+				// ClaimAlreadyComplete, so a rearmed job is ACKed without ever
+				// running and the domain row stays unfinished (CHAOS-3998).
+				name: "a live claim is refused", status: "running",
+				leaseOffset: 5 * time.Minute, hasLease: true, wantLive: 1,
+			},
+			{
+				// A settled claim is equally futile to rearm, and the lease
+				// proxy could not see this case at all -- a settled row has no
+				// lease to reason about.
+				name: "a succeeded claim is refused", status: "succeeded", wantSettled: 1,
+			},
+			{
+				name: "a terminal claim is refused", status: "terminal", wantSettled: 1,
+			},
+			{
+				// An expired claim lease is what the stranded production rows
+				// actually look like: Begin takes the row over and the handler
+				// runs.
+				name: "an expired claim is reclaimed", status: "running",
+				leaseOffset: -time.Hour, hasLease: true, wantRearmed: 1,
+			},
+			{
+				name: "a retryable claim is reclaimed", status: "retryable", wantRearmed: 1,
+			},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				resetStrandTables(t, ctx, admin)
+				now := time.Now().UTC().Truncate(time.Microsecond)
+				partitionID := integrationUUID(70)
+				runID := integrationUUID(71)
+				seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
+				seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+				outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
+				makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
+
+				var lease *time.Time
+				if testCase.hasLease {
+					lease = ptr(now.Add(testCase.leaseOffset))
+				}
+				seedJobRun(t, ctx, admin, "metrics.daily_partition",
+					"metrics.daily_partition:"+partitionID, fixture.orgID, partitionID,
+					testCase.status, lease)
+
+				result, err := repair.Step(ctx, now, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.Rearmed != testCase.wantRearmed ||
+					result.SkippedClaimLive != testCase.wantLive ||
+					result.SkippedClaimSettled != testCase.wantSettled {
+					t.Fatalf("Step() = %+v, want %d rearmed / %d live / %d settled", result,
+						testCase.wantRearmed, testCase.wantLive, testCase.wantSettled)
+				}
+			})
+		}
+	})
+
+	// A candidate with NO claim row at all is safe: the first delivery creates
+	// it. This is the control proving the cases above turn on the claim row and
+	// not on some other difference in the fixture.
+	t.Run("a candidate with no claim row is rearmed", func(t *testing.T) {
 		resetStrandTables(t, ctx, admin)
 		now := time.Now().UTC().Truncate(time.Microsecond)
-		runID := integrationUUID(9)
+		partitionID := integrationUUID(72)
+		runID := integrationUUID(73)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		outboxID := deliverDailyFinalize(t, ctx, fixture, runID, now)
-		jobID := riverJobFor(t, ctx, admin, outboxID)
+		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
+		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
-		// One minute of terminality: inside the lease, so refused.
-		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-time.Minute))
 		result, err := repair.Step(ctx, now, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Rearmed != 0 || result.SkippedIdempotencyGrace != 1 {
-			t.Fatalf("Step() = %+v, want the row left alone inside the idempotency lease AND "+
-				"the refusal counted", result)
-		}
-
-		// One second past the lease: now provably safe.
-		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-strandIdempotencyLease-time.Second))
-		result, err = repair.Step(ctx, now, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.Rearmed != 1 || result.SkippedIdempotencyGrace != 0 {
-			t.Fatalf("Step() = %+v, want 1 rearmed once the idempotency lease has elapsed", result)
+		if result.Rearmed != 1 || result.SkippedClaimLive != 0 || result.SkippedClaimSettled != 0 {
+			t.Fatalf("Step() = %+v, want 1 rearmed with no claim refusals", result)
 		}
 	})
 
@@ -463,7 +538,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		jobID := riverJobFor(t, ctx, admin, outboxID)
 		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
 
-		racing, err := NewStrandRepair(queue, "river")
+		racing, err := NewStrandRepair(queue, domain, "river")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -479,7 +554,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		// Control: the same repair with the real delete does rearm the row, so
 		// the refusal above is the re-check firing and not the fixture simply
 		// failing to match the predicate.
-		control, err := NewStrandRepair(queue, "river")
+		control, err := NewStrandRepair(queue, domain, "river")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -517,6 +592,30 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 
 func ptr(value time.Time) *time.Time { return &value }
 
+// seedJobRun writes the execution-state row the repair reads on the domain
+// pool. Keyed on (job_kind, idempotency_key) exactly as PostgresIdempotency
+// keys it, where idempotency_key is the outbox dedupe_key.
+func seedJobRun(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool,
+	jobKind, idempotencyKey, orgID, domainID, status string, leaseExpires *time.Time,
+) {
+	t.Helper()
+	var claimToken *string
+	if leaseExpires != nil {
+		token := integrationUUID(9500)
+		claimToken = &token
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.worker_job_runs (
+			id, job_kind, idempotency_key, org_id, domain_type, domain_id,
+			status, claim_token, lease_expires_at
+		) VALUES ($1, $2, $3, $4, 'daily_metrics_partition', $5, $6, $7, $8)`,
+		integrationUUID(9600), jobKind, idempotencyKey, orgID, domainID,
+		status, claimToken, leaseExpires); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // resurrectingDelete reports a successful delete of a job that is no longer
 // terminal, which is what River would report if the job had been made runnable
 // again between the predicate and the delete.
@@ -550,6 +649,12 @@ func grantStrandQueuePrivileges(t *testing.T, ctx context.Context, pool *pgxpool
 		"GRANT SELECT ON TABLE public.daily_metrics_runs TO " + strandQueueRole,
 		"GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + strandQueueRole,
 		"GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + strandQueueRole,
+		// The DOMAIN role owns execution state. The queue role is deliberately
+		// NOT granted worker_job_runs -- that separation is the whole reason
+		// the claim check runs on a second pool, so the test asserts it below
+		// rather than assuming it.
+		"GRANT USAGE ON SCHEMA public TO " + strandDomainRole,
+		"GRANT SELECT ON TABLE public.worker_job_runs TO " + strandDomainRole,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -638,6 +743,19 @@ func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE public.worker_job_completion_fences (
 			completion_key text PRIMARY KEY,
 			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
+		);
+		CREATE TABLE public.worker_job_runs (
+			id uuid PRIMARY KEY,
+			job_kind text NOT NULL,
+			idempotency_key text NOT NULL,
+			org_id uuid NULL,
+			domain_type text NOT NULL,
+			domain_id uuid NOT NULL,
+			status text NOT NULL,
+			claim_token uuid NULL,
+			lease_expires_at timestamptz NULL,
+			attempt_count integer NOT NULL DEFAULT 1,
+			UNIQUE (job_kind, idempotency_key)
 		)`)
 	if err != nil {
 		t.Fatal(err)
@@ -649,7 +767,8 @@ func resetStrandTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, `TRUNCATE
 		public.worker_job_outbox, public.worker_job_completion_fences,
 		public.daily_metrics_partitions, public.daily_metrics_runs,
-		public.work_graph_execution_requests, river.river_job RESTART IDENTITY`); err != nil {
+		public.work_graph_execution_requests, public.worker_job_runs,
+		river.river_job RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 }

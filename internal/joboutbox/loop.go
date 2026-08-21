@@ -111,7 +111,8 @@ type ReconcilerLoop struct {
 	postRepairContractRejections uint64
 	strandsRearmed               uint64
 	strandJobsSkippedLive        uint64
-	strandGraceSkipped           uint64
+	strandClaimsLive             uint64
+	strandClaimsSettled          uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -233,7 +234,8 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.postRepairContractRejections += nonNegativeUint(result.PostRepairContractRejectionsRecovered)
 	loop.strandsRearmed += nonNegativeUint(result.StrandsRearmed)
 	loop.strandJobsSkippedLive += nonNegativeUint(result.StrandJobsSkippedLive)
-	loop.strandGraceSkipped += nonNegativeUint(result.StrandIdempotencyGraceSkipped)
+	loop.strandClaimsLive += nonNegativeUint(result.StrandClaimsLive)
+	loop.strandClaimsSettled += nonNegativeUint(result.StrandClaimsSettled)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -330,7 +332,8 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	postRepairContractRejections := loop.postRepairContractRejections
 	strandsRearmed := loop.strandsRearmed
 	strandJobsSkippedLive := loop.strandJobsSkippedLive
-	strandGraceSkipped := loop.strandGraceSkipped
+	strandClaimsLive := loop.strandClaimsLive
+	strandClaimsSettled := loop.strandClaimsSettled
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -354,7 +357,13 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	// rescuer that has stopped running, which would otherwise be
 	// indistinguishable from "no strands exist".
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_jobs_skipped_live_total", "Strand candidates left alone because their River delivery was not terminal.", strandJobsSkippedLive)
-	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_idempotency_grace_skipped_total", "Strand candidates left alone because their delivery had not been terminal for a full idempotency lease.", strandGraceSkipped)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_claims_live_total", "Strand candidates left alone because their idempotency claim was still live.", strandClaimsLive)
+	// Settled claims are a DIFFERENT problem from live ones: the work will
+	// never be re-driven by rearming, because a fresh delivery is ACKed as a
+	// duplicate. A non-zero value here means rows need a remedy this sweep
+	// does not provide, which is worth seeing rather than folding into the
+	// live-claim count.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_claims_settled_total", "Strand candidates left alone because their idempotency claim had already settled.", strandClaimsSettled)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

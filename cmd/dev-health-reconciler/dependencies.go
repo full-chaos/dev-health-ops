@@ -366,7 +366,6 @@ func buildReconcilerRelay(
 	riverSchema string,
 	registry *jobruntime.Registry,
 ) (joboutbox.RelayStepper, error) {
-	_ = domainPool // provider-unit recovery reads domain state through the queue role
 	repository, err := joboutbox.NewRepository(queuePool)
 	if err != nil {
 		return nil, err
@@ -387,15 +386,18 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	// The strand sweep shares the queue pool with the provider-unit repair
-	// because it does the same class of work: it rearms an outbox row and
-	// deletes the dead River delivery in one transaction. It reads the
-	// daily-metrics and work-graph domain rows through the queue role, which
-	// requires the SELECT grants and allow-list entries added alongside this
-	// (scripts/worker/provision_river_roles.sql,
-	// internal/storage/postgres/queue_authorization.go). Without them every
-	// pass returns joboutbox.ErrNotAuthorized rather than a silent zero.
-	strandRepair, err := joboutbox.NewStrandRepair(queuePool, riverSchema)
+	// The strand sweep spans TWO pools by design. Selection and rearm run on
+	// the queue pool, which owns the outbox and the River schema and which
+	// needs the daily-metrics and work-graph SELECT grants added alongside this
+	// (internal/storage/river/migrate.go is the authority;
+	// internal/storage/postgres/queue_authorization.go asserts the matching
+	// posture). The execution-state read runs on the DOMAIN pool, because the
+	// queue-control role must never see worker_job_runs -- the domain role
+	// already holds SELECT on it, so the read adds no privilege anywhere. The
+	// domain pool is reused from the reconciler's existing dependencies rather
+	// than opened again. Without the queue grants every pass returns
+	// joboutbox.ErrNotAuthorized rather than a silent zero.
+	strandRepair, err := joboutbox.NewStrandRepair(queuePool, domainPool, riverSchema)
 	if err != nil {
 		return nil, err
 	}

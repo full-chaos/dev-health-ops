@@ -32,6 +32,7 @@ N_MINUS_ONE_BINARY=""
 COMPOSE_ATTEMPTED=0
 CRASH_PID=""
 CURRENT_PHASE="bootstrap"
+POOL_POLLER_PID=""
 
 usage() {
   cat <<'EOF'
@@ -100,6 +101,10 @@ cleanup() {
   local status=$?
 
   trap - EXIT HUP INT TERM
+  # Stop the live poller unconditionally (including on success) so it never
+  # outlives the script as an orphaned background loop once this process
+  # exits and TEMP_DIR is removed out from under it.
+  stop_session_pool_poller
   if [ "${status}" -ne 0 ]; then
     progress "exited during ${CURRENT_PHASE} with status ${status}"
     dump_session_pool_diagnostics
@@ -178,47 +183,113 @@ dump_bootstrap_diagnostics() {
   printf 'river compatibility harness: ---- end bootstrap diagnostics ----------\n' >&2
 }
 
-# CHAOS-4011: called from cleanup() on ANY non-zero exit once
-# pgbouncer-session has come up. Session-mode PgBouncer pins one backend to a
-# client for that connection's whole life, and every river.Client in this
-# harness discards its logger, so a session-profile hang has historically
-# left zero trace beyond a bounded "did not start"/"failed" message — the
-# live supply-vs-demand state, and (joined directly against Postgres,
-# bypassing the pooler) exactly which backend is stuck and on what, used to
-# only be recoverable by catching the failure live with a poller attached.
-# This makes that state part of the failure artifact itself. Best-effort
-# only: never calls die(), never blocks or fails teardown, and does nothing
-# once the harness fails before the session pooler's port is known (that
-# path is already covered by dump_bootstrap_diagnostics).
-dump_session_pool_diagnostics() {
+# Portable wall-clock bound for a diagnostic subprocess. Prefers GNU
+# coreutils `timeout` (always present on the Ubuntu CI runners this harness
+# targets), falls back to `gtimeout` (Homebrew coreutils, common on macOS
+# dev machines), and finally to a manual background-and-kill loop. Without
+# this, a PgBouncer/Postgres that accepts a TCP connection but never answers
+# a query would wedge cleanup() itself — turning a best-effort diagnostic
+# into a second, worse hang (codex review, CHAOS-4011).
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}s" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "${seconds}s" "$@"
+    return $?
+  fi
+  "$@" &
+  local pid=$! waited=0
+  while kill -0 "${pid}" >/dev/null 2>&1; do
+    if [ "${waited}" -ge "${seconds}" ]; then
+      kill -KILL "${pid}" >/dev/null 2>&1 || true
+      wait "${pid}" >/dev/null 2>&1 || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "${pid}"
+}
+
+# One bounded, redacted snapshot of pgbouncer-session's admin console plus
+# pg_stat_activity (bypassing the pooler), appended with a timestamp.
+# statement_timeout bounds query execution server-side; run_with_timeout
+# bounds the whole client-side call in case the server never answers at all.
+session_pool_snapshot() {
+  local ts
+  ts="$(date -u +%H:%M:%S 2>/dev/null || date -u)"
+  printf -- '[%s] -- pgbouncer-session SHOW POOLS/CLIENTS/SERVERS (port %s) --\n' "${ts}" "${pgbouncer_session_port}"
+  PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 run_with_timeout 5 psql \
+    -h 127.0.0.1 -p "${pgbouncer_session_port}" -U river_compat -d pgbouncer \
+    -X -A -t -c 'SHOW POOLS;' -c 'SHOW CLIENTS;' -c 'SHOW SERVERS;' 2>&1
+  if [ -n "${postgres_port:-}" ]; then
+    printf -- '[%s] -- pg_stat_activity for application_name=chaos3034-river-compat (port %s) --\n' "${ts}" "${postgres_port}"
+    PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 run_with_timeout 5 psql \
+      -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d river_compat \
+      -X -A -t -c "SET statement_timeout = '3000';" -c "
+        SELECT pid, state, wait_event_type, wait_event, backend_start,
+               xact_start, query_start, state_change, left(query, 200)
+        FROM pg_stat_activity
+        WHERE application_name = 'chaos3034-river-compat'
+        ORDER BY pid;
+      " 2>&1
+  fi
+}
+
+# CHAOS-4011: started right after pgbouncer-session comes up, running for the
+# rest of the harness's life. A snapshot taken only in cleanup() — after
+# run_go_checked's `if ! "${GO_BINARY}" ...` has already returned — is too
+# late: Go's own deferred pool.Close() has already torn everything down by
+# the time a failed probe invocation exits, so a post-mortem query mostly
+# shows an idle pool, not the contention that caused the failure (codex
+# review, CHAOS-4011; confirmed directly — two live catches during this
+# investigation showed nothing but idle connections precisely because the
+# probe had already exited and released them by the time they were
+# queried). Polling continuously and dumping the tail on failure instead
+# captures state from moments before/during the hang, not after it.
+start_session_pool_poller() {
   [ -n "${pgbouncer_session_port:-}" ] || return 0
   if ! command -v psql >/dev/null 2>&1; then
-    progress "psql unavailable; skipping session PgBouncer/Postgres diagnostics"
+    progress "psql unavailable; skipping the live session pool poller"
     return 0
   fi
 
-  local diag_file="${TEMP_DIR}/session-pool-diagnostics.log"
-  {
-    printf -- '-- pgbouncer-session SHOW POOLS/CLIENTS/SERVERS (port %s) --\n' "${pgbouncer_session_port}"
-    PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 psql \
-      -h 127.0.0.1 -p "${pgbouncer_session_port}" -U river_compat -d pgbouncer \
-      -X -A -t -c 'SHOW POOLS;' -c 'SHOW CLIENTS;' -c 'SHOW SERVERS;' 2>&1
-    if [ -n "${postgres_port:-}" ]; then
-      printf -- '\n-- pg_stat_activity for application_name=chaos3034-river-compat (port %s) --\n' "${postgres_port}"
-      PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 psql \
-        -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d river_compat \
-        -X -A -t -c "
-          SELECT pid, state, wait_event_type, wait_event, backend_start,
-                 xact_start, query_start, state_change, left(query, 200)
-          FROM pg_stat_activity
-          WHERE application_name = 'chaos3034-river-compat'
-          ORDER BY pid;
-        " 2>&1
-    fi
-  } 2>&1 | redact_diagnostic_stream >"${diag_file}" || true
+  local poll_file="${TEMP_DIR}/session-pool-live.log"
+  (
+    while true; do
+      session_pool_snapshot 2>&1 | redact_diagnostic_stream >>"${poll_file}" || true
+      sleep 2
+    done
+  ) &
+  POOL_POLLER_PID=$!
+}
 
-  printf 'river compatibility harness: session pool diagnostics (sanitized) ----------\n' >&2
-  cat -- "${diag_file}" >&2 || true
+# Called unconditionally from cleanup() (success and failure alike) so the
+# poller never outlives the script as an orphaned background loop.
+stop_session_pool_poller() {
+  [ -n "${POOL_POLLER_PID}" ] || return 0
+  kill -TERM "${POOL_POLLER_PID}" >/dev/null 2>&1 || true
+  wait "${POOL_POLLER_PID}" >/dev/null 2>&1 || true
+  POOL_POLLER_PID=""
+}
+
+# Called from cleanup() on ANY non-zero exit, after stop_session_pool_poller
+# has already stopped the poller. Surfaces the tail of its rolling,
+# continuously-captured log — the live supply-vs-demand state, and (joined
+# directly against Postgres) exactly which backend was busy on what, right
+# up to the failure, instead of a fresh best-effort query fired after
+# everything has already unwound. Best-effort only: never calls die(),
+# never blocks or fails teardown.
+dump_session_pool_diagnostics() {
+  local poll_file="${TEMP_DIR}/session-pool-live.log"
+  [ -s "${poll_file}" ] || return 0
+
+  printf 'river compatibility harness: session pool diagnostics (sanitized, live-polled) ----------\n' >&2
+  tail -n 100 -- "${poll_file}" >&2 || true
   printf 'river compatibility harness: ---- end session pool diagnostics ----------\n' >&2
 }
 
@@ -1133,6 +1204,8 @@ pgbouncer_session_port="$(resolve_local_port pgbouncer-session 6433)"
 direct_database_url="postgresql://river_compat:river_compat@127.0.0.1:${postgres_port}/river_compat"
 poll_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_port}/river_compat"
 session_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_session_port}/river_compat"
+
+start_session_pool_poller
 
 direct_profile="${TEMP_DIR}/direct-profile.json"
 poll_profile="${TEMP_DIR}/poll-only-profile.json"

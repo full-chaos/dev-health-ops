@@ -99,11 +99,11 @@ func TestAskDevRetentionEmitsV3NowThatTheRouteIsActivated(t *testing.T) {
 	if !ok {
 		t.Fatal("retention contract is not registered")
 	}
-	if descriptor.CurrentVersion != jobcontract.ContractVersionV2 ||
+	if descriptor.CurrentVersion != jobcontract.ContractVersionV3 ||
 		descriptor.ProducerVersion != jobcontract.ContractVersionV3 ||
 		!slices.Contains(descriptor.SupportedVersions, jobcontract.ContractVersionV3) {
 		t.Fatalf(
-			"retention versions = current %d producer %d supported %v, want v3 supported and producer routed to v3",
+			"retention versions = current %d producer %d supported %v, want v3 supported and both current and producer routed to v3",
 			descriptor.CurrentVersion,
 			descriptor.ProducerVersion,
 			descriptor.SupportedVersions,

@@ -715,7 +715,7 @@
     },
     {
       "kind": "system.retention_cleanup",
-      "current_version": 2,
+      "current_version": 3,
       "supported_versions": [
         1,
         2,

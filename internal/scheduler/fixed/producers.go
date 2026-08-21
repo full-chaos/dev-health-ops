@@ -199,19 +199,23 @@ type RetentionProducer struct {
 }
 
 // NewRetentionProducer constructs the retention producer with the checked-in
-// policy bindings at a fixed v2 route. This is a convenience default for
-// tests exercising the rate-limit and external-ingest policies (both pinned
-// to v2 regardless of Ask Dev's rollout state); it does NOT track
-// migration-state.json's active producer_version, which as of CHAOS-3481
-// (2026-08-21) routes at v3. Production always calls
-// NewRetentionProducerForRoute with the registry-supplied version instead --
-// see cmd/dev-health-scheduler/fixed.go. Ask Dev v3 stays dark here (this
-// constructor pairs it with a disabled admission reader) unless a caller
-// supplies both lifecycle admission and a route whose producer version has
-// completed consumer rollout.
+// policy bindings at a fixed v3 route. This is a convenience default for
+// tests; it does NOT read migration-state.json's active producer_version.
+// Production always calls NewRetentionProducerForRoute with the
+// registry-supplied version instead -- see cmd/dev-health-scheduler/fixed.go.
+// The literal here must track whatever contracts/jobs/v1/registry.json's
+// current_version for system.retention_cleanup actually is: every policy's
+// RetentionSpec.ContractVersion below is pinned to that same single version
+// (see the comment on prune_rate_limit_observations), so a stale literal here
+// would make every schedule -- not just Ask Dev -- skip with
+// consumer_version_incompatible against this constructor. Ask Dev still stays
+// dark through this constructor specifically (it pairs the route with a
+// disabled admission reader) unless a caller supplies both lifecycle
+// admission and a route whose producer version has completed consumer
+// rollout.
 func NewRetentionProducer() Producer {
 	producer, err := NewRetentionProducerForRoute(
-		disabledAskDevRetentionAdmission{}, jobcontract.ContractVersionV2,
+		disabledAskDevRetentionAdmission{}, jobcontract.ContractVersionV3,
 	)
 	if err != nil {
 		panic(err)
@@ -238,8 +242,16 @@ func NewRetentionProducerForRoute(
 		activeProducerVersion: activeProducerVersion,
 		byScheduleID: map[string]RetentionSpec{
 			"prune_rate_limit_observations": {
-				Policy:          jobcontract.RetentionRateLimitObservations,
-				ContractVersion: jobcontract.ContractVersionV2,
+				Policy: jobcontract.RetentionRateLimitObservations,
+				// A kind has one canonical wire format in flight at a time
+				// (internal/joboutbox/producer.go rejects any envelope whose
+				// ContractVersion isn't exactly the registry's current_version);
+				// every policy below rides that same version, currently v3
+				// (raised alongside Ask Dev's activation, CHAOS-3481). v3's
+				// retention_policy enum is a pure superset of v2's, so this is
+				// additive: the wire payload for this policy is byte-identical
+				// to what shipped at v2, only the version tag changes.
+				ContractVersion: jobcontract.ContractVersionV3,
 				DefaultDays:     14, // CHAOS-2758
 				// The handler drains one occurrence chunk-by-chunk until the work is
 				// gone, so this bounds a single pass rather than the total deletion.
@@ -249,8 +261,8 @@ func NewRetentionProducerForRoute(
 			},
 			"prune_external_ingest_batches": {
 				Policy:           jobcontract.RetentionExternalIngestBatches,
-				ContractVersion:  jobcontract.ContractVersionV2,
-				DefaultDays:      90, // CHAOS-2694
+				ContractVersion:  jobcontract.ContractVersionV3, // see prune_rate_limit_observations above
+				DefaultDays:      90,                            // CHAOS-2694
 				BatchSize:        500,
 				RetentionDaysEnv: externalIngestEnv,
 			},

@@ -415,6 +415,62 @@ func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 		}
 	}
 
+	// THE FENCE'S MECHANISM, executed rather than assumed.
+	//
+	// The closing fence's whole value rests on FOR SHARE genuinely conflicting
+	// with the route UPDATE, and on the coordinator role being allowed to take
+	// that lock at all -- PostgreSQL charges row locks against the UPDATE
+	// privilege even though no row is written. Both are asserted here because
+	// a fence that silently fails to block is worse than no fence: it reads as
+	// closed in review and races in production.
+	fenceTx, err := coordinator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the fence transaction as the coordinator role: %v", err)
+	}
+	if _, err := fenceTx.Exec(ctx, fenceProviderUnitRouteSQL, unreclaimableProviderUnitID); err != nil {
+		t.Fatalf("the coordinator role cannot take FOR SHARE on the route row, "+
+			"so the fence does not lock anything: %v", err)
+	}
+	// A second connection attempting the real route mutation must BLOCK, which
+	// a short lock_timeout turns into an observable 55P03 instead of a hang.
+	blockedTx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blockedTx.Exec(ctx, "SET LOCAL lock_timeout = '250ms'"); err != nil {
+		t.Fatal(err)
+	}
+	_, blockedErr := blockedTx.Exec(ctx, `
+		UPDATE public.worker_job_routes
+		SET transport = 'celery', generation = generation + 1, updated_at = now()
+		WHERE job_kind = $1`, unreclaimableProviderUnitID)
+	var lockErr *pgconn.PgError
+	if !errors.As(blockedErr, &lockErr) || lockErr.Code != "55P03" {
+		t.Errorf("the route UPDATE was not blocked by the fence's FOR SHARE lock "+
+			"(got %v); the fence cannot serialize a rollback against the "+
+			"terminalize commit", blockedErr)
+	}
+	_ = blockedTx.Rollback(ctx)
+	_ = fenceTx.Rollback(ctx)
+	// Once released, the same mutation must succeed -- otherwise the assertion
+	// above could be passing for an unrelated reason.
+	if _, err := admin.Exec(ctx, `
+		UPDATE public.worker_job_routes SET updated_at = now() WHERE job_kind = $1`,
+		unreclaimableProviderUnitID); err != nil {
+		t.Errorf("the route row stayed locked after the fence released: %v", err)
+	}
+	// The domain role must NOT be able to take this lock, for the same reason
+	// it cannot read the row at all.
+	domainFenceTx, err := domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, domainFenceErr := domainFenceTx.Exec(ctx, fenceProviderUnitRouteSQL, unreclaimableProviderUnitID)
+	_ = domainFenceTx.Rollback(ctx)
+	if !isDeniedByPrivilege(domainFenceErr) {
+		t.Errorf("the domain role was not denied the route fence lock (got %v)", domainFenceErr)
+	}
+
 	// The ticket's production proof matrix, restated as catalog facts so a
 	// failure names the privilege rather than only the statement.
 	for _, probe := range []struct {
@@ -541,7 +597,15 @@ func (routes *flipOnSecondRead) Query(
 	ctx context.Context, sql string, args ...any,
 ) (pgx.Rows, error) {
 	routes.reads++
-	if routes.reads == 2 && !routes.flipped {
+	return routes.coordinator.Query(ctx, sql, args...)
+}
+
+// Begin is the fence transaction. The rollback is committed immediately before
+// it opens, which is the tightest ordering an out-of-process operator can
+// achieve: the flip is durable, the lock is not yet held, and only the
+// generation comparison under the lock can catch it.
+func (routes *flipOnSecondRead) Begin(ctx context.Context) (pgx.Tx, error) {
+	if !routes.flipped {
 		routes.flipped = true
 		// The real mutation shape from internal/jobroute/control.go Rollback:
 		// the transport moves and the generation is bumped in the same write.
@@ -552,7 +616,7 @@ func (routes *flipOnSecondRead) Query(
 			routes.t.Fatalf("rollback the route mid-pass: %v", err)
 		}
 	}
-	return routes.coordinator.Query(ctx, sql, args...)
+	return routes.coordinator.Begin(ctx)
 }
 
 // TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass is the negative
@@ -580,7 +644,7 @@ func TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass(t *testing.T) {
 	}
 	if !routes.flipped {
 		t.Fatal("the route was never rolled back, so this test proved nothing; " +
-			"the sweep is no longer re-reading the route before it commits")
+			"the sweep is no longer opening the fence transaction before it commits")
 	}
 	if result.Candidates != 1 {
 		t.Fatalf("result = %+v, want the strand still selected", result)

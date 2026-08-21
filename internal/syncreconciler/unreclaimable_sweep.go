@@ -78,6 +78,8 @@ const (
 	sweepStepBegin              = "begin domain transaction"
 	sweepStepRouteQuery         = "durable route read of public.worker_job_routes on the coordinator pool"
 	sweepStepRouteFence         = "durable route re-read fencing the terminalize commit"
+	sweepStepRouteFenceBegin    = "begin coordinator transaction for the route fence"
+	sweepStepRouteFenceTimeout  = "arm the route fence lock timeout"
 	sweepStepRouteScan          = "durable route read scan"
 	sweepStepRouteRows          = "durable route read iteration"
 	sweepStepCandidateQuery     = "candidate page read of public.sync_run_units"
@@ -235,7 +237,11 @@ func (fence routeFence) riverOwns() bool {
 // does pgx.Tx, which is what lets the unit tests drive it with the same fake
 // they already use for the domain transaction.
 type unreclaimableRouteReader interface {
+	// Query runs the unlocked opening read.
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	// Begin opens the short coordinator transaction that holds the closing
+	// fence's row lock across the domain commit.
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // UnreclaimableSweep terminalizes units nothing is working.
@@ -394,39 +400,48 @@ func (sweep *UnreclaimableSweep) Step(
 		result.Terminalized += int(affected)
 	}
 
-	// ROUTE FENCE, re-read on the coordinator pool with the writes staged but
-	// NOT yet committed (adversarial review finding).
+	// ROUTE FENCE (adversarial review finding). The writes above are staged
+	// and NOT yet committed.
 	//
-	// The route decision and the write live on different pools, so they cannot
-	// share a transaction and no lock taken on one connection can hold the
-	// other. What can be done is to make an ownership flip detectable and to
-	// give it the narrowest possible window: every route mutation bumps
-	// generation, so re-reading here and demanding the exact opening fence
-	// turns "acted on a stale route" into "noticed and declined". A rollback
-	// to Celery that commits any time between the opening read and this point
-	// -- which is after ALL the slow work, the candidate paging included --
-	// discards the whole pass instead of terminalizing units Celery is about
-	// to own.
+	// The failure this closes: the sweep reads river_canary, an operator rolls
+	// provider units back to Celery, and the sweep then commits 'failed' onto
+	// dispatching units Celery is about to claim. Neither existing guard can
+	// see it -- the updated_at CAS only catches a runtime that already touched
+	// the row, and the outbox filter only catches a unit already in the River
+	// relay. Nothing had touched these rows, which is the entire definition of
+	// the strand this sweep selects.
 	//
-	// This does NOT make the sweep atomic with route mutation, and claiming it
-	// did would be worse than the gap. The residual window is one coordinator
-	// round-trip plus the commit below. Note also that the pre-CHAOS-4035
-	// shape had NO such fence and a WIDER window: pool.Begin is READ COMMITTED
-	// here as everywhere in this repo, so reading the route inside the domain
-	// transaction never gave the candidate statements a shared snapshot with
-	// it either. Shadow mode skips the re-read: it writes nothing, so there is
-	// nothing to fence.
-	closing, usable, err := readProviderUnitRoute(ctx, sweep.routes, sweepStepRouteFence)
+	// A comparison alone is not enough, and shipping one while calling the
+	// race closed would be worse than the race. The route decision and the
+	// write live on different pools, so they cannot share a transaction -- but
+	// they CAN be serialized: holdRouteFence takes FOR SHARE on the route row
+	// in a short coordinator transaction and HOLDS it across the domain commit
+	// below, so a concurrent route UPDATE blocks until this pass has finished
+	// deciding. The generation is compared under that lock as well, which
+	// catches a flip that committed earlier in the pass, including a
+	// celery -> river -> celery round trip the transport alone would miss.
+	//
+	// It is taken here rather than at the opening read on purpose: holding it
+	// for the whole pass would block operator route mutations across all the
+	// candidate paging, and this is a safety net, not a control plane.
+	//
+	// Shadow mode never reaches this: it writes nothing, so there is nothing
+	// to fence, and it must not block a rollback either.
+	held, err := sweep.holdRouteFence(ctx, opening)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
-	if !usable || closing != opening {
+	if !held.ok {
 		result.Terminalized = 0
 		result.DeclinedRouteChange = true
 		return result, nil
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, err)
+	// The lock is still held here, so no route mutation can interleave with
+	// this commit.
+	commitErr := tx.Commit(ctx)
+	held.release()
+	if commitErr != nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, commitErr)
 	}
 	return result, nil
 }
@@ -501,10 +516,91 @@ FROM public.worker_job_routes
 WHERE job_kind = $1
 `
 
+// heldRouteFence is a lock held open. release MUST be called once the domain
+// commit has been attempted, and never before.
+type heldRouteFence struct {
+	ok      bool
+	release func()
+}
+
+func (sweep *UnreclaimableSweep) holdRouteFence(
+	ctx context.Context, opening routeFence,
+) (heldRouteFence, error) {
+	tx, err := sweep.routes.Begin(ctx)
+	if err != nil || tx == nil {
+		return heldRouteFence{}, sweepUnavailable(sweepStepRouteFenceBegin, err)
+	}
+	release := func() { _ = tx.Rollback(ctx) }
+	// SET LOCAL, so the bound dies with this transaction rather than leaking
+	// onto a pooled connection every other coordinator statement then inherits.
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+unreclaimableFenceLockTimeout+"'"); err != nil {
+		release()
+		return heldRouteFence{}, sweepUnavailable(sweepStepRouteFenceTimeout, err)
+	}
+	closing, usable, err := readProviderUnitRoute(ctx, tx, sweepStepRouteFence)
+	if err != nil {
+		release()
+		// A contended row means a route mutation is in flight, so the answer
+		// is already "decline". Only that specific SQLSTATE is swallowed; a
+		// permission or connection fault still surfaces as a step error.
+		if isLockNotAvailable(err) {
+			return heldRouteFence{}, nil
+		}
+		return heldRouteFence{}, err
+	}
+	if !usable || closing != opening {
+		release()
+		return heldRouteFence{}, nil
+	}
+	return heldRouteFence{ok: true, release: release}, nil
+}
+
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+}
+
+// The closing fence takes a ROW LOCK, and FOR SHARE specifically.
+//
+// FOR SHARE conflicts with FOR NO KEY UPDATE, which is what a plain UPDATE
+// takes, so it genuinely blocks internal/jobroute/control.go's Rollback and
+// ApplyCheckedIn rather than merely racing them. FOR KEY SHARE would NOT: it
+// only conflicts with key updates, and the route mutation changes transport
+// and generation, neither of which is the key.
+//
+// PostgreSQL requires the UPDATE privilege to take this lock even though no
+// row is written. coordinatorPosture already declares worker_job_routes with
+// AllowUpdate (internal/storage/postgres/domain_authorization.go), for the
+// route mutation itself, so this needs no widening -- and the role-split
+// integration suite executes this exact statement as the real coordinator
+// login rather than assuming it.
+const fenceProviderUnitRouteSQL = `
+SELECT transport, generation
+FROM public.worker_job_routes
+WHERE job_kind = $1
+FOR SHARE
+`
+
+// The fence must never become the thing that stalls the 1s reconcile pass. If
+// a route mutation is in flight and holds the row, waiting it out is pointless
+// -- the answer is already going to be "declined" -- so the lock wait is
+// bounded and a timeout IS a decline rather than an error.
+const unreclaimableFenceLockTimeout = "250ms"
+
+// routeQuerier is the subset both the pool (unlocked opening read) and the
+// fence transaction (locked closing read) satisfy.
+type routeQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 func readProviderUnitRoute(
-	ctx context.Context, routes unreclaimableRouteReader, step string,
+	ctx context.Context, routes routeQuerier, step string,
 ) (routeFence, bool, error) {
-	rows, err := routes.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
+	statement := selectProviderUnitRouteSQL
+	if step == sweepStepRouteFence {
+		statement = fenceProviderUnitRouteSQL
+	}
+	rows, err := routes.Query(ctx, statement, unreclaimableProviderUnitID)
 	if err != nil {
 		return routeFence{}, false, sweepUnavailable(step, err)
 	}

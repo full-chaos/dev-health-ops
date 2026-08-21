@@ -1,8 +1,10 @@
 package syncreconciler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,12 @@ func (routes unreadableRoutes) Query(
 	return nil, nil
 }
 
+func (routes unreadableRoutes) Begin(ctx contextT) (txT, error) {
+	routes.t.Helper()
+	routes.t.Fatal(routes.reason + " (and must not open a fence transaction)")
+	return nil, nil
+}
+
 // failingRoutes reproduces the CHAOS-4035 production fault: the coordinator
 // read answering 42501.
 type failingRoutes struct{ err error }
@@ -41,6 +49,12 @@ type failingRoutes struct{ err error }
 func (routes failingRoutes) Query(
 	ctx contextT, sql string, args ...any,
 ) (pgx.Rows, error) {
+	return nil, routes.err
+}
+
+// The opening read fails, so the fence is never reached. Saying so out loud
+// beats returning a nil transaction that would panic somewhere less obvious.
+func (routes failingRoutes) Begin(ctx contextT) (txT, error) {
 	return nil, routes.err
 }
 
@@ -373,9 +387,9 @@ func TestSweepStepErrorsCarryNoConnectionMaterial(t *testing.T) {
 // would quietly re-create the exact ambiguity this ticket removed.
 func TestSweepStepIdentitiesAreDistinct(t *testing.T) {
 	steps := sweepStepIdentities()
-	if len(steps) != 15 {
-		t.Fatalf("declared %d steps, want the 15 failure paths this file has "+
-			"(the original 14, plus the closing route fence)", len(steps))
+	if len(steps) != 17 {
+		t.Fatalf("declared %d steps, want the 17 failure paths this file has "+
+			"(the original 14, plus the three the closing route fence adds)", len(steps))
 	}
 	seen := make(map[string]struct{}, len(steps))
 	for _, step := range steps {
@@ -400,10 +414,66 @@ func sweepStepIdentities() []string {
 	return []string{
 		sweepStepBegin,
 		sweepStepRouteQuery, sweepStepRouteFence,
+		sweepStepRouteFenceBegin, sweepStepRouteFenceTimeout,
 		sweepStepRouteScan, sweepStepRouteRows,
 		sweepStepCandidateQuery, sweepStepCandidateScan, sweepStepCandidateRows,
 		sweepStepOutboxQuery, sweepStepOutboxScan, sweepStepOutboxRows,
 		sweepStepTerminalizePayload, sweepStepTerminalizeExec,
 		sweepStepTerminalizeRows, sweepStepCommit,
+	}
+}
+
+type decliningSweep struct{ candidates int }
+
+func (sweep decliningSweep) Step(
+	ctx contextT, now time.Time, limit int,
+) (UnreclaimableSweepResult, error) {
+	return UnreclaimableSweepResult{
+		Mode:                SweepModeActive,
+		Candidates:          sweep.candidates,
+		DeclinedRouteChange: true,
+	}, nil
+}
+
+// A fenced decline returns a nil error, so the pipeline's existing failure
+// branch never sees it. Without its own log line an operator watching a
+// route-churning deployment sees healthy passes while every selected strand is
+// abandoned -- a quieter version of the invisibility that let CHAOS-3990 sit
+// unnoticed and CHAOS-4035 ship.
+func TestPipelineReportsAFencedSweepDecline(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&captured, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	pipeline := pipelineWithSweep(t, decliningSweep{candidates: 3})
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("a fenced decline must not fail the pass: %v", err)
+	}
+	logged := captured.String()
+	if !strings.Contains(logged, "unreclaimable_sweep_declined_route_change") {
+		t.Fatalf("the pass logged %q, which never mentions the decline", logged)
+	}
+	// The count is what tells an operator whether anything was actually
+	// abandoned, so a line without it is only marginally better than silence.
+	if !strings.Contains(logged, "candidates=3") {
+		t.Errorf("the decline line %q does not report how many strands it abandoned", logged)
+	}
+}
+
+// The other direction: an ordinary pass must not emit the decline line, or the
+// signal is worthless.
+func TestPipelineDoesNotReportADeclineOnAnOrdinaryPass(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&captured, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	pipeline := pipelineWithSweep(t, &recordingSweep{})
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("pipeline step: %v", err)
+	}
+	if strings.Contains(captured.String(), "unreclaimable_sweep_declined_route_change") {
+		t.Fatalf("a clean pass reported a route-change decline: %q", captured.String())
 	}
 }

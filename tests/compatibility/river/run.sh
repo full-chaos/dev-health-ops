@@ -33,6 +33,7 @@ COMPOSE_ATTEMPTED=0
 CRASH_PID=""
 CURRENT_PHASE="bootstrap"
 POOL_POLLER_PID=""
+GO_TRACE_FILES=()
 
 usage() {
   cat <<'EOF'
@@ -107,6 +108,7 @@ cleanup() {
   stop_session_pool_poller
   if [ "${status}" -ne 0 ]; then
     progress "exited during ${CURRENT_PHASE} with status ${status}"
+    dump_go_traces
     dump_session_pool_diagnostics
   fi
   if [ -n "${CRASH_PID}" ] && kill -0 "${CRASH_PID}" >/dev/null 2>&1; then
@@ -228,8 +230,16 @@ session_pool_snapshot() {
     -X -A -t -c 'SHOW POOLS;' -c 'SHOW CLIENTS;' -c 'SHOW SERVERS;' 2>&1
   if [ -n "${postgres_port:-}" ]; then
     printf -- '[%s] -- pg_stat_activity for application_name=chaos3034-river-compat (port %s) --\n' "${ts}" "${postgres_port}"
+    # Connects to the "postgres" administrative database, not "river_compat"
+    # (codex review, CHAOS-4011): pg_stat_activity is a cluster-wide catalog
+    # view, readable from any database, but the CONNECTION itself would
+    # otherwise register as one more backend against river_compat's own
+    # pg_stat_database counters — exactly the numbers readDatabaseCounters
+    # samples for the harness's own Postgres.Delta measurements. Polling
+    # every 2s from that database would contaminate the load deltas under
+    # test; polling from "postgres" instead observes without participating.
     PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 run_with_timeout 5 psql \
-      -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d river_compat \
+      -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d postgres \
       -X -A -t -c "SET statement_timeout = '3000';" -c "
         SELECT pid, state, wait_event_type, wait_event, backend_start,
                xact_start, query_start, state_change, left(query, 200)
@@ -291,6 +301,30 @@ dump_session_pool_diagnostics() {
   printf 'river compatibility harness: session pool diagnostics (sanitized, live-polled) ----------\n' >&2
   tail -n 100 -- "${poll_file}" >&2 || true
   printf 'river compatibility harness: ---- end session pool diagnostics ----------\n' >&2
+}
+
+# Called from cleanup() on ANY non-zero exit. Surfaces every tracked Go
+# invocation's stderr that has content (codex review, CHAOS-4011): a probe
+# invocation can exit 0 and still fail a downstream contract assertion
+# (assert_matrix, assert_all_emitted_gates) called after run_go_checked
+# returns — that invocation's own die() branch never runs, so its
+# cancellation/sample breadcrumbs would otherwise be captured to disk and
+# then silently discarded with TEMP_DIR. Steady-state stays quiet: a
+# passing invocation with no slow samples and immediate cross-client
+# cancellation produces an empty stderr file, so nothing prints for it.
+dump_go_traces() {
+  local file label printed=0
+  for file in "${GO_TRACE_FILES[@]:-}"; do
+    [ -n "${file}" ] && [ -s "${file}" ] || continue
+    if [ "${printed}" -eq 0 ]; then
+      printf 'river compatibility harness: probe traces (sanitized) ----------\n' >&2
+      printed=1
+    fi
+    label="$(basename -- "${file}" .stderr)"
+    printf -- '-- %s --\n' "${label}" >&2
+    redact_diagnostic_stream <"${file}" | tail -n 100 >&2 || true
+  done
+  [ "${printed}" -eq 1 ] && printf 'river compatibility harness: ---- end probe traces ----------\n' >&2 || true
 }
 
 resolve_local_port() {
@@ -374,11 +408,22 @@ run_go_checked() {
   local output_file="$3"
   shift 3
 
+  # CHAOS-4011: tracked regardless of outcome. A Go invocation can exit 0
+  # (a valid result the probe is satisfied with, e.g. the same-client or
+  # release fallback completing successfully) and still fail a downstream
+  # contract assertion below or in the caller (assert_matrix requires
+  # session mode's cross-client cancellation to succeed on the first try —
+  # same_client_attempted must be false — so a fallback that "worked" is
+  # itself a gate failure). Without this, that invocation's cancellation
+  # breadcrumbs would be captured to disk and then silently deleted with
+  # TEMP_DIR, even though they're exactly the trace this class of flake
+  # needs. dump_go_traces (called from cleanup() on any failure, not just
+  # this function's own die() calls) surfaces every non-empty one.
+  GO_TRACE_FILES+=("${TEMP_DIR}/${label}.stderr")
+
   if ! RIVER_COMPAT_DATABASE_URL="${database_url}" "${GO_BINARY}" "$@" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    progress "${label} failed; sanitized diagnostic follows"
-    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 100 >&2 || true
-    die "${label} failed"
+    die "${label} failed; see the probe traces below"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
   if ! assert_all_emitted_gates "${output_file}"; then

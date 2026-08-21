@@ -157,6 +157,81 @@ WHERE to_jsonb(dev_conversation_tombstones)::text LIKE '%secret question%'`,
 	}
 }
 
+// TestAskDevRetentionRemainingBeforeSeesARowDeleteBeforeSkippedUnderContention
+// is the real-Postgres control for CHAOS-3481's C2 gap. It reproduces the
+// exact ambiguity inventory.go named: DeleteBefore's query selects FOR
+// UPDATE SKIP LOCKED, so a row a concurrent transaction is holding never
+// appears in the chunk and the chunk comes back short -- indistinguishable,
+// from inside deleteInChunks, from a genuinely exhausted backlog. A
+// non-locking RemainingBefore must still see that row, because row locks
+// block writers, not reads.
+func TestAskDevRetentionRemainingBeforeSeesARowDeleteBeforeSkippedUnderContention(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startRetentionPostgres(t, ctx)
+	createRetentionTables(t, ctx, pool)
+
+	cutoff := time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC)
+	// contended is the row a concurrent invocation holds a lock on;
+	// uncontended is a second, unlocked row also past the cutoff, so a
+	// batch size of 2 makes DeleteBefore's chunk come back with exactly one
+	// row (short of the batch size) purely because of the lock, not because
+	// the backlog is otherwise exhausted.
+	contendedID := retentionUUID(t, "0000001a", 1)
+	insertAskDevConversation(t, ctx, pool, 1, 30, cutoff.Add(-time.Minute), "contended")
+	insertAskDevConversation(t, ctx, pool, 2, 30, cutoff.Add(-time.Minute), "uncontended")
+
+	store, err := NewAskDevConversationStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockTx.Exec(ctx, `SELECT 1 FROM dev_conversations WHERE id = $1 FOR UPDATE`, contendedID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.DeleteBefore(ctx, cutoff, 2)
+	if err != nil {
+		t.Fatalf("DeleteBefore: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want exactly the uncontended row (a short chunk purely from the held lock)", deleted)
+	}
+
+	remaining, err := store.RemainingBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("RemainingBefore: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining = %d, want the non-locking recount to still see the contended row", remaining)
+	}
+
+	if err := lockTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// With the lock released, the same cutoff now drains the rest and the
+	// recount confirms a genuinely empty backlog.
+	deleted, err = store.DeleteBefore(ctx, cutoff, 2)
+	if err != nil {
+		t.Fatalf("DeleteBefore after lock release: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted after lock release = %d, want the previously-contended row", deleted)
+	}
+	remaining, err = store.RemainingBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("RemainingBefore after drain: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining after drain = %d, want a confirmed-empty backlog", remaining)
+	}
+}
+
 func TestRetentionStoresRejectUnboundedRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -263,29 +338,69 @@ CREATE TABLE external_ingest_rejections (
 	message text NOT NULL,
 	created_at timestamptz NOT NULL
 );
+-- dev_conversations, dev_messages and dev_conversation_tombstones mirror
+-- alembic 0068_add_ask_dev_persistence.py column for column and constraint
+-- for constraint, except the org_id/user_id foreign keys to organizations
+-- and users: those tables carry no retention-relevant state, so pulling
+-- their full shape in here would only test referential integrity this
+-- package's queries do not depend on. Every column and check constraint the
+-- retention path itself can observe (used in a WHERE/SELECT/INSERT the Go
+-- stores issue, or asserted against by these tests) is reproduced exactly.
 CREATE TABLE dev_conversations (
 	id uuid PRIMARY KEY,
 	org_id uuid NOT NULL,
 	user_id uuid NOT NULL,
+	title varchar(200),
+	current_scope jsonb NOT NULL,
 	retention_days smallint NOT NULL,
-	created_at timestamptz NOT NULL,
-	expires_at timestamptz
+	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	expires_at timestamptz,
+	deleted_at timestamptz,
+	CONSTRAINT ck_dev_conversations_retention_days CHECK (retention_days IN (0, 30)),
+	CONSTRAINT ck_dev_conversations_title_length CHECK (title IS NULL OR length(title) <= 200),
+	CONSTRAINT uq_dev_conversations_owner_identity UNIQUE (id, org_id, user_id)
 );
 CREATE TABLE dev_messages (
 	id uuid PRIMARY KEY,
-	conversation_id uuid NOT NULL REFERENCES dev_conversations(id) ON DELETE CASCADE,
-	content text NOT NULL
+	conversation_id uuid NOT NULL,
+	org_id uuid NOT NULL,
+	user_id uuid NOT NULL,
+	client_message_id uuid,
+	role varchar(16) NOT NULL,
+	content text,
+	answer_id uuid,
+	answer_payload jsonb,
+	scope_snapshot jsonb NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT ck_dev_messages_role CHECK (role IN ('user', 'assistant')),
+	CONSTRAINT ck_dev_messages_role_payload CHECK (
+		(role = 'user' AND client_message_id IS NOT NULL
+			AND content IS NOT NULL AND answer_id IS NULL AND answer_payload IS NULL)
+		OR (role = 'assistant' AND client_message_id IS NULL
+			AND answer_id IS NOT NULL AND answer_payload IS NOT NULL)
+	),
+	CONSTRAINT uq_dev_messages_conversation_client_message UNIQUE (conversation_id, client_message_id),
+	CONSTRAINT uq_dev_messages_answer_id UNIQUE (answer_id),
+	CONSTRAINT fk_dev_messages_conversation_owner
+		FOREIGN KEY (conversation_id, org_id, user_id)
+		REFERENCES dev_conversations (id, org_id, user_id) ON DELETE CASCADE
 );
 CREATE TABLE dev_conversation_tombstones (
 	id uuid PRIMARY KEY,
-	conversation_id uuid NOT NULL UNIQUE,
+	conversation_id uuid NOT NULL,
 	org_id uuid NOT NULL,
 	user_id uuid NOT NULL,
 	actor_user_id uuid,
-	reason text NOT NULL,
+	reason varchar(32) NOT NULL,
 	retention_days smallint NOT NULL,
 	conversation_created_at timestamptz NOT NULL,
-	deleted_at timestamptz NOT NULL
+	deleted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT ck_dev_conversation_tombstones_reason CHECK (
+		reason IN ('user_deleted', 'admin_purged', 'retention_expired', 'ephemeral_completed')
+	),
+	CONSTRAINT ck_dev_conversation_tombstones_retention_days CHECK (retention_days IN (0, 30)),
+	CONSTRAINT uq_dev_conversation_tombstones_conversation UNIQUE (conversation_id)
 )`); err != nil {
 		t.Fatal(err)
 	}
@@ -306,14 +421,16 @@ func insertAskDevConversation(
 	userID := retentionUUID(t, "0000001c", 1)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO dev_conversations (
-	id, org_id, user_id, retention_days, created_at, expires_at
-) VALUES ($1, $2, $3, $4, $5, $6)`, conversationID, orgID, userID,
+	id, org_id, user_id, current_scope, retention_days, created_at, expires_at
+) VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, $6)`, conversationID, orgID, userID,
 		retentionDays, expiresAt.Add(-24*time.Hour), expiresAt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO dev_messages (id, conversation_id, content)
-VALUES ($1, $2, $3)`, retentionUUID(t, "0000001d", index), conversationID, content); err != nil {
+INSERT INTO dev_messages (id, conversation_id, org_id, user_id, client_message_id, role, content, scope_snapshot)
+VALUES ($1, $2, $3, $4, $5, 'user', $6, '{}'::jsonb)`,
+		retentionUUID(t, "0000001d", index), conversationID, orgID, userID,
+		retentionUUID(t, "0000001e", index), content); err != nil {
 		t.Fatal(err)
 	}
 }

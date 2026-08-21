@@ -32,21 +32,18 @@ The repair finds those rows and stamps an expiry on them. The ordinary retention
 
 ### The repair usually runs itself
 
-The scheduled sweep performs this repair before every purge pass, so an ordinary deployment needs no operator action at all:
+The scheduled sweep performs this repair before every purge pass, so an ordinary deployment needs no operator action at all. Go owns this cadence
+(CHAOS-3481, superseding the Celery `ask-dev-retention-sweep` beat entry and
+`dev_health_ops.workers.tasks.run_ask_dev_retention_cleanup` task, both
+deleted under CHAOS-4026 on 2026-08-21 -- see
+[Workers, jobs, retries, and schedules](workers-and-jobs.md)):
 
 | Fact | Value |
 | --- | --- |
-| Scheduled entry | `ask-dev-retention-sweep` |
-| Task | `dev_health_ops.workers.tasks.run_ask_dev_retention_cleanup` |
-| Schedule | Daily at 05:30 |
-| Queue | `default` |
 | Batch size | 500 rows |
 | Batch cap per run | 20 batches for the repair, then 20 for the purge |
 
-Run the command below only when you need the repair to happen sooner than the next scheduled pass — for example immediately after deploying to an environment that accumulated stranded rows, or while the beat schedule is stopped.
-
-!!! note "Prerequisite"
-    A deployment with no running Celery beat has no scheduled sweep, so the repair *and* the purge are both operator-driven until beat is restored. Confirm the worker and beat state first: [Workers, jobs, retries, and schedules](workers-and-jobs.md).
+Run the command below only when you need the repair to happen sooner than the next scheduled pass — for example immediately after deploying to an environment that accumulated stranded rows, or while the Go scheduler is stopped.
 
 ### Run the repair manually
 

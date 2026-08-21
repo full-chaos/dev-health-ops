@@ -420,7 +420,7 @@ dev-hops metrics dora --backfill 30 --metrics deployment_frequency,lead_time
 
 Compute file complexity and hotspot metrics from persisted `git_files`/`git_blame` data. Uses `CLICKHOUSE_URI`.
 
-> **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let the scheduled `dispatch_complexity_job` cadence run) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
+> **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let Go's daily complexity fixed schedule run -- the Celery `dispatch_complexity_job` beat cadence it replaced was deleted under CHAOS-4026 on 2026-08-21) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
 
 ```bash
 dev-hops metrics complexity --backfill 30
@@ -1018,32 +1018,25 @@ OpenAPI docs are served at `/docs` and GraphQL at the API's GraphQL endpoint whe
 
 ## Workers
 
-Background jobs run on Celery with a Valkey/Redis broker. Configure with `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`.
+**Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
+in prod since the 2026-08-19 stop.** `workers start-worker`/`workers
+start-scheduler` (which booted a real `celery worker`/`celery beat` process)
+were deleted along with it — they were the last CLI-level way to falsify
+CUT-18's "no Celery process is running" criterion. Go owns every periodic
+maintenance cadence; see [Run workers and jobs](../../operate/run/workers-and-jobs.md)
+for the Go worker/scheduler/reconciler/stream-runner processes.
 
-### `workers start-worker`
+### `workers inspect`
 
-Start a Celery worker consuming one or more queues.
-
-```bash
-dev-hops workers start-worker --queues default metrics sync reports --concurrency 4
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--queues` | Queues to consume (default: `default metrics sync`) |
-| `--concurrency` | Number of concurrent worker processes |
-
-### `workers start-scheduler`
-
-Start the Celery beat scheduler (dispatches periodic/beat tasks such as scheduled reports).
+Read-only: shows sanitized active/reserved/scheduled task state from
+Celery's control-plane RPC. Survives deliberately -- useful against the
+non-prod `tests/acceptance/compose.ask-dev.yml` acceptance fleet, which
+still boots a real Celery worker/beat directly via the `celery` CLI (not
+through `dev-hops`) -- and cannot itself start a process.
 
 ```bash
-dev-hops workers start-scheduler
+dev-hops workers inspect --state active
 ```
-
-For queue cleanup, stale reserved jobs, and failed-result cleanup, see
-[Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ### Worker operator CLI
 
@@ -1335,15 +1328,11 @@ Each report requires a `ReportPlan` that defines scope, time range, sections, an
 
 ### Scheduling
 
-Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
+Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The periodic scan for due reports was `dispatch_scheduled_reports` (a Celery beat task, run every 5 minutes) until CHAOS-4026 (2026-08-21) deleted it -- Go's `report.execute_scheduled` fixed schedule now owns that scan. `execute_saved_report` (the per-report execution work, dispatched via `execute_saved_report.apply_async(...)`) was not part of that cleanup and still runs on the `reports` Celery queue.
 
 ### Worker Configuration
 
-Reports require the `reports` queue to be active:
-
-```bash
-dev-hops workers start-worker --queues default metrics sync reports
-```
+Reports execution still runs on Celery's `reports` queue; see [Run workers and jobs](../../operate/run/workers-and-jobs.md) for how the Go-only runtime is started now that `workers start-worker` is gone.
 
 ### GraphQL Mutations
 

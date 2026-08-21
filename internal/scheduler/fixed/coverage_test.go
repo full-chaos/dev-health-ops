@@ -205,15 +205,24 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// 19 -> 20 when CHAOS-3404's `ask-dev-retention-sweep` merged from main.
 	// The reviewed decision: it is owned by the already-ported Go schedule
 	// `prune_ask_dev_conversations` (CHAOS-3209), which stopped being Native
-	// in the same change because it now has a Python predecessor. The native
-	// sync coverage refresh and the obsolete scheduled-metrics dispatcher are
-	// both recorded in RetiredBeatInventory, so the live table has nineteen
-	// unconditional rows.
-	if unconditional != 19 {
-		t.Fatalf("parsed %d unconditional beat entries, want 19", unconditional)
+	// in the same change because it now has a Python predecessor.
+	//
+	// 20 -> 6 under CHAOS-4026 (2026-08-21): Celery is retired -- zero Python
+	// celery services have run in prod since the 2026-08-19 stop. 14
+	// unconditional entries and the 1 optional entry
+	// (consume-pending-scheduled-sync-occurrences) were deleted from
+	// src/dev_health_ops/workers/config.py once their Go successor was
+	// verified (CHAOS-4056's beat-schedule inventory sweep) and are recorded
+	// in RetiredBeatInventory rather than silently dropped.
+	// prune_ask_dev_conversations went back to Native in the same change
+	// (CHAOS-3481 made Go the genuine sole purger first, so its Python
+	// predecessor is gone again). The live table now has six unconditional
+	// rows and zero optional rows.
+	if unconditional != 6 {
+		t.Fatalf("parsed %d unconditional beat entries, want 6", unconditional)
 	}
-	if optional != 1 {
-		t.Fatalf("parsed %d optional beat entries, want 1", optional)
+	if optional != 0 {
+		t.Fatalf("parsed %d optional beat entries, want 0", optional)
 	}
 }
 

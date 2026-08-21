@@ -169,24 +169,11 @@ running. GraphQL is served by the API for the web app.
 
 ### Run workers
 
-All production background jobs currently use Celery with Valkey/Redis:
-
-```bash
-POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-CELERY_BROKER_URL="redis://localhost:6379/0" \
-CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
-  dev-hops workers start-worker --queues default metrics sync reports
-```
-
-Phase 1 of the Go worker migration plan
-adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
-operator foundations for future worker, scheduler, reconciler, and
-stream-runner processes. Every Go deployment group remains disabled and all
-registered jobs still route to Celery. A binary building—or even reporting its
-storage dependencies healthy—does not make a job migrated or canary-ready.
-Keep the required Celery workers and Beat schedules running until the issue for
-that job explicitly changes its route and passes the documented parity gates.
+**Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
+in prod since the 2026-08-19 stop.** Go owns every periodic maintenance
+cadence. `dev-hops workers start-worker`/`start-scheduler` were deleted
+along with it — see [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md)
+for how to run the Go worker/scheduler/reconciler/stream-runner processes.
 
 Go River processes use `POSTGRES_URI` for domain state and the separate,
 least-privilege `WORKER_DATABASE_URI` for direct queue control. The latter is a

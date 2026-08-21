@@ -6,8 +6,6 @@ import io
 import json
 import logging
 import os
-import subprocess
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -88,45 +86,6 @@ def _print_inspect_text(tasks_by_worker: dict[str, list[dict[str, object]]]) -> 
             print(f"  - {task_name} id={task_id}{queue}")
 
 
-def _cmd_start_worker(ns: argparse.Namespace) -> int:
-    """Start a Celery worker."""
-    queues = ns.queues or ["default", "metrics", "sync"]
-    concurrency = ns.concurrency
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "celery",
-        "-A",
-        "dev_health_ops.workers.celery_app",
-        "worker",
-        "--loglevel=INFO",
-        f"--queues={','.join(queues)}",
-    ]
-
-    if concurrency:
-        cmd.extend(["--concurrency", str(concurrency)])
-
-    logger.info(f"Starting Celery worker: {' '.join(cmd)}")
-    return subprocess.run(cmd).returncode
-
-
-def _cmd_start_scheduler(ns: argparse.Namespace) -> int:
-    """Start the Celery beat scheduler."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "celery",
-        "-A",
-        "dev_health_ops.workers.celery_app",
-        "beat",
-        "--loglevel=INFO",
-    ]
-
-    logger.info(f"Starting Celery beat: {' '.join(cmd)}")
-    return subprocess.run(cmd).returncode
-
-
 def _cmd_inspect(ns: argparse.Namespace) -> int:
     if ns.output == "json":
         previous_disable = logging.root.manager.disable
@@ -150,23 +109,16 @@ def _cmd_inspect(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Register worker commands."""
-    worker_parser = subparsers.add_parser("start-worker", help="Start a Celery worker.")
-    worker_parser.add_argument(
-        "--queues",
-        nargs="+",
-        help="Queues to consume from (default: default metrics sync)",
-    )
-    worker_parser.add_argument(
-        "--concurrency", type=int, help="Number of concurrent worker processes"
-    )
-    worker_parser.set_defaults(func=_cmd_start_worker)
+    """Register worker commands.
 
-    beat_parser = subparsers.add_parser(
-        "start-scheduler", help="Start the Celery beat scheduler."
-    )
-    beat_parser.set_defaults(func=_cmd_start_scheduler)
-
+    CHAOS-4026 (2026-08-21): ``start-worker``/``start-scheduler`` (booted a
+    real Celery worker/beat process) were removed -- Celery is retired and
+    these two subcommands were the last CLI-level way to falsify CUT-18's
+    "no Celery process is running" criterion (CHAOS-3931). ``inspect``
+    survives: it only reads Celery's control-plane RPC (useful for the
+    still-live ask-dev-acceptance Celery fleet in
+    tests/acceptance/compose.ask-dev.yml) and cannot itself start a process.
+    """
     inspect_parser = subparsers.add_parser(
         "inspect",
         help="Show sanitized active/reserved/scheduled Celery task state.",

@@ -234,9 +234,16 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //     role can run the whole sweep. See internal/syncreconciler/
 //     unreclaimable_sweep.go for the same-snapshot trade-off this costs.
 //   - TerminalDeliveryRepair: QUEUE pool -- it works the River job tables.
-//   - LeaseRepair, the Kernel's observe side, and the Observer: DOMAIN pool.
-//     Every table they touch is domain-granted, and widening them would
-//     defeat the split.
+//   - Kernel: DOMAIN pool for the observe/claim side, QUEUE pool for the River
+//     delivery side. The second of the two components here that spans pools.
+//   - The River client backing the publisher: QUEUE pool.
+//   - LeaseRepair, the Observer, and the sync-dispatch reference read inside
+//     the publish closure: DOMAIN pool. Every table they touch is
+//     domain-granted, and widening them would defeat the split.
+//
+// pool_composition_test.go enforces this list against the source rather than
+// trusting it: a component added on a pool this comment does not name fails
+// there, which is the check CHAOS-4035 did not have.
 func buildSyncMutationPipeline(
 	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,

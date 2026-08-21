@@ -16,6 +16,11 @@ WORK_ITEM_DATASETS: tuple[str, ...] = (
     "work-item-comments",
 )
 
+# The one family member the alias-collapse machinery emits as a persisted
+# unit; every other member of WORK_ITEM_DATASETS is a planner-collapsed
+# alias, never a direct claim.
+FAMILY_CANONICAL_DATASET_KEY = WORK_ITEM_DATASETS[0]
+
 FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
 
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -47,8 +48,8 @@ func TestSyncSchedulerLoopReceivesTheComposedLoggerFromSchedulerCompositionRoot(
 			})
 		},
 		newLoop: schedulersync.NewLoop,
-		newOccurrences: func(pool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
-			return stubOccurrenceSource(pool, domainPool)
+		newOccurrences: func(pool, domainPool *pgxpool.Pool, routeSwitches providersync.CompleteRouteSwitches) (schedulersync.OccurrenceStepper, error) {
+			return stubOccurrenceSource(pool, domainPool, routeSwitches)
 		},
 		newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
 			return fixedLoop, nil

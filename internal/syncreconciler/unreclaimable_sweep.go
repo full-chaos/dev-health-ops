@@ -3,12 +3,14 @@ package syncreconciler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -50,6 +52,85 @@ const (
 	unreclaimableErrorCategory  = "feature_disabled"
 	unreclaimableProviderUnitID = "sync.provider_unit"
 )
+
+// PER-STEP ERROR IDENTITY (CHAOS-4035 AC4, the CHAOS-4036 masking class).
+//
+// This file used to return the bare package-wide ErrUnavailable from fourteen
+// distinct failure paths. When the sweep's route read started returning 42501
+// once a second in production, the only log line an operator had said "sync
+// dispatch observer database unavailable" -- naming a component that was
+// healthy and uninvolved, and saying nothing about permissions, about
+// worker_job_routes, or about which statement failed. Root-causing it needed
+// the postgres server log and a hand-run has_table_privilege matrix.
+//
+// So each path now names its own step, and carries the SQLSTATE when the
+// driver supplied one. errors.Is(err, ErrUnavailable) still holds, because
+// the pipeline and the lifecycle both branch on that classification and a
+// narrowed error that silently stopped matching would be a worse defect than
+// the one this fixes.
+//
+// Only the five-character SQLSTATE is copied out of the driver error, never
+// its Message, Detail or Hint: those can carry row values, and the
+// "no connection material in an error string" property this package already
+// had must survive being made more informative. internal/storage/postgres/
+// posture_diagnostics.go is the precedent.
+const (
+	sweepStepBegin              = "begin domain transaction"
+	sweepStepRouteQuery         = "durable route read of public.worker_job_routes on the coordinator pool"
+	sweepStepRouteScan          = "durable route read scan"
+	sweepStepRouteRows          = "durable route read iteration"
+	sweepStepCandidateQuery     = "candidate page read of public.sync_run_units"
+	sweepStepCandidateScan      = "candidate page scan"
+	sweepStepCandidateRows      = "candidate page iteration"
+	sweepStepOutboxQuery        = "published-outbox filter on public.worker_job_outbox"
+	sweepStepOutboxScan         = "published-outbox scan"
+	sweepStepOutboxRows         = "published-outbox iteration"
+	sweepStepTerminalizePayload = "terminalize payload encode"
+	sweepStepTerminalizeExec    = "terminalize write to public.sync_run_units"
+	sweepStepTerminalizeRows    = "terminalize affected-row count"
+	sweepStepCommit             = "commit domain transaction"
+)
+
+// unreclaimableStepError names the sweep step that failed while keeping the
+// package-stable ErrUnavailable classification callers branch on.
+type unreclaimableStepError struct {
+	step     string
+	sqlState string
+}
+
+func (stepErr unreclaimableStepError) Error() string {
+	if stepErr.sqlState != "" {
+		return "unreclaimable sweep " + stepErr.step + " failed (sqlstate " +
+			stepErr.sqlState + "): " + ErrUnavailable.Error()
+	}
+	return "unreclaimable sweep " + stepErr.step + " failed: " + ErrUnavailable.Error()
+}
+
+// Unwrap is what keeps errors.Is(err, ErrUnavailable) true for every step.
+func (stepErr unreclaimableStepError) Unwrap() error { return ErrUnavailable }
+
+// sweepUnavailable builds the step-identified error. cause is used ONLY to
+// recover a SQLSTATE; it is never wrapped, so no driver string can reach a log
+// line through this path.
+func sweepUnavailable(step string, cause error) error {
+	stepErr := unreclaimableStepError{step: step}
+	var pgErr *pgconn.PgError
+	if errors.As(cause, &pgErr) {
+		stepErr.sqlState = pgErr.Code
+	}
+	return stepErr
+}
+
+// SweepStepIdentity returns the step name carried by a sweep failure, or "" if
+// the error did not come from the sweep. Exported so a caller can key a metric
+// or an alert on the step rather than on a substring of a message.
+func SweepStepIdentity(err error) string {
+	var stepErr unreclaimableStepError
+	if errors.As(err, &stepErr) {
+		return stepErr.step
+	}
+	return ""
+}
 
 // SweepMode decides whether the sweep may write.
 //
@@ -127,30 +208,62 @@ type UnreclaimableSweepResult struct {
 	UnitIDs      []string
 }
 
+// unreclaimableRouteReader is the coordinator-side seam. It is deliberately
+// the smallest thing that can run one read: *pgxpool.Pool satisfies it, and so
+// does pgx.Tx, which is what lets the unit tests drive it with the same fake
+// they already use for the domain transaction.
+type unreclaimableRouteReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // UnreclaimableSweep terminalizes units nothing is working.
+//
+// It spans TWO roles, and therefore two pools (CHAOS-4035):
+//
+//   - routes reads public.worker_job_routes, which the role manifest
+//     attributes exclusively to the COORDINATOR role
+//     (internal/storage/postgres/domain_authorization.go coordinatorPosture);
+//   - begin opens the transaction that selects candidates and terminalizes
+//     them, all on DOMAIN-granted tables, and coordinatorPosture declares
+//     sync_run_units SELECT-only, so the write cannot move to the coordinator
+//     role either.
+//
+// Neither pool alone can run the whole sweep. This is the same two-pool split
+// the Materializer already uses; cmd/dev-health-reconciler/dependencies.go
+// documents the composition.
 type UnreclaimableSweep struct {
 	begin  leaseRepairBeginFunc
+	routes unreclaimableRouteReader
 	config UnreclaimableSweepConfig
 }
 
+// NewUnreclaimableSweep takes both pools because the sweep genuinely needs
+// both. The coordinator pool is a separate positional parameter rather than an
+// optional field for the reason CHAOS-4035 exists: the first version took one
+// pool, the caller passed the domain pool, and the mistake was invisible until
+// production answered 42501 once a second.
 func NewUnreclaimableSweep(
-	pool *pgxpool.Pool,
+	coordinatorPool *pgxpool.Pool,
+	domainPool *pgxpool.Pool,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if pool == nil || !config.valid() {
+	if coordinatorPool == nil || domainPool == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{begin: pool.Begin, config: config}, nil
+	return &UnreclaimableSweep{
+		begin: domainPool.Begin, routes: coordinatorPool, config: config,
+	}, nil
 }
 
 func newUnreclaimableSweep(
+	routes unreclaimableRouteReader,
 	begin leaseRepairBeginFunc,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if begin == nil || !config.valid() {
+	if routes == nil || begin == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{begin: begin, config: config}, nil
+	return &UnreclaimableSweep{begin: begin, routes: routes, config: config}, nil
 }
 
 type unreclaimableCandidate struct {
@@ -174,7 +287,8 @@ func (sweep *UnreclaimableSweep) Step(
 	now time.Time,
 	limit int,
 ) (UnreclaimableSweepResult, error) {
-	if sweep == nil || sweep.begin == nil || ctx == nil || now.IsZero() ||
+	if sweep == nil || sweep.begin == nil || sweep.routes == nil || ctx == nil ||
+		now.IsZero() ||
 		limit < unreclaimableMinimumLimit || limit > unreclaimableMaximumLimit {
 		return UnreclaimableSweepResult{}, ErrInvalidConfiguration
 	}
@@ -188,21 +302,39 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 
 	now = now.UTC()
-	tx, err := sweep.begin(ctx)
-	if err != nil || tx == nil {
-		return UnreclaimableSweepResult{}, ErrUnavailable
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Durable route first, exactly as Python orders it. If River does not own
 	// provider units, Celery does, and nothing here may terminalize its work.
-	riverOwns, err := riverOwnsProviderUnits(ctx, tx)
+	//
+	// TWO POOLS, and the read runs OUTSIDE the transaction below (CHAOS-4035).
+	// worker_job_routes belongs exclusively to the coordinator role, while the
+	// candidate selection and the terminalize write belong exclusively to the
+	// domain role, so no single transaction can hold both: the first cut ran
+	// this read on the domain pool inside the domain transaction and returned
+	// 42501 on every tick from its first production deploy.
+	//
+	// THE TRADE-OFF, stated here rather than left to be rediscovered: this
+	// gives up reading the route row and the candidate rows in one snapshot.
+	// A route flip that lands between these two statements is therefore acted
+	// on one pass late. That is acceptable and deliberate -- Python resolves
+	// worker_job_routes in its own separate statement and has exactly the same
+	// property, so this is parity with the specification rather than a
+	// regression against it -- and the window is one 1s tick against a route
+	// flip that is an operator action. Do NOT "fix" this by moving the read
+	// back inside the transaction; that is the defect, not a tidier form of it.
+	riverOwns, err := riverOwnsProviderUnits(ctx, sweep.routes)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
 	if !riverOwns {
 		return result, nil
 	}
+
+	tx, err := sweep.begin(ctx)
+	if err != nil || tx == nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepBegin, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
 	if err != nil {
@@ -235,12 +367,12 @@ func (sweep *UnreclaimableSweep) Step(
 			return UnreclaimableSweepResult{}, err
 		}
 		if affected < 0 || affected > 1 {
-			return UnreclaimableSweepResult{}, ErrUnavailable
+			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepTerminalizeRows, nil)
 		}
 		result.Terminalized += int(affected)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return UnreclaimableSweepResult{}, ErrUnavailable
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, err)
 	}
 	return result, nil
 }
@@ -315,22 +447,22 @@ FROM public.worker_job_routes
 WHERE job_kind = $1
 `
 
-func riverOwnsProviderUnits(ctx context.Context, tx pgx.Tx) (bool, error) {
-	rows, err := tx.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
+func riverOwnsProviderUnits(ctx context.Context, routes unreclaimableRouteReader) (bool, error) {
+	rows, err := routes.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
 	if err != nil {
-		return false, ErrUnavailable
+		return false, sweepUnavailable(sweepStepRouteQuery, err)
 	}
 	defer rows.Close()
 	transports := make([]string, 0, 1)
 	for rows.Next() {
 		var transport string
 		if err := rows.Scan(&transport); err != nil {
-			return false, ErrUnavailable
+			return false, sweepUnavailable(sweepStepRouteScan, err)
 		}
 		transports = append(transports, strings.TrimSpace(strings.ToLower(transport)))
 	}
-	if rows.Err() != nil {
-		return false, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return false, sweepUnavailable(sweepStepRouteRows, err)
 	}
 	if len(transports) != 1 {
 		return false, nil
@@ -402,7 +534,7 @@ func scanUnreclaimablePage(
 		ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 	)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, sweepUnavailable(sweepStepCandidateQuery, err)
 	}
 	defer rows.Close()
 	page := make([]unreclaimableCandidate, 0, limit)
@@ -413,12 +545,12 @@ func scanUnreclaimablePage(
 			&candidate.provider, &candidate.datasetKey, &candidate.costClass,
 			&candidate.createdAt, &candidate.updatedAt,
 		); err != nil {
-			return nil, ErrUnavailable
+			return nil, sweepUnavailable(sweepStepCandidateScan, err)
 		}
 		page = append(page, candidate)
 	}
-	if rows.Err() != nil {
-		return nil, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return nil, sweepUnavailable(sweepStepCandidateRows, err)
 	}
 	return page, nil
 }
@@ -443,19 +575,19 @@ func dropPublishedUnits(
 	}
 	rows, err := tx.Query(ctx, selectPublishedDedupeKeysSQL, keys)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, sweepUnavailable(sweepStepOutboxQuery, err)
 	}
 	defer rows.Close()
 	published := make(map[string]struct{}, len(keys))
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
-			return nil, ErrUnavailable
+			return nil, sweepUnavailable(sweepStepOutboxScan, err)
 		}
 		published[key] = struct{}{}
 	}
-	if rows.Err() != nil {
-		return nil, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return nil, sweepUnavailable(sweepStepOutboxRows, err)
 	}
 	unpublished := make([]unreclaimableCandidate, 0, len(page))
 	for _, candidate := range page {
@@ -509,7 +641,7 @@ func (sweep *UnreclaimableSweep) terminalize(
 		"dataset_key":    candidate.datasetKey,
 	})
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, sweepUnavailable(sweepStepTerminalizePayload, err)
 	}
 	command, err := tx.Exec(
 		ctx, terminalizeUnreclaimableSQL,
@@ -517,7 +649,7 @@ func (sweep *UnreclaimableSweep) terminalize(
 		now, candidate.updatedAt,
 	)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, sweepUnavailable(sweepStepTerminalizeExec, err)
 	}
 	return command.RowsAffected(), nil
 }

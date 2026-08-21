@@ -159,7 +159,11 @@ func strandedSpec(id, dataset, costClass string, now time.Time) sweepUnitSpec {
 
 func newSweepForTest(t *testing.T, pool *pgxpool.Pool, mode SweepMode) *UnreclaimableSweep {
 	t.Helper()
-	sweep, err := NewUnreclaimableSweep(pool, UnreclaimableSweepConfig{
+	// One superuser pool in both positions. That is exactly what makes this
+	// harness blind to the CHAOS-4035 wiring defect, and why the real role
+	// split is proven separately in
+	// unreclaimable_sweep_role_split_integration_test.go rather than here.
+	sweep, err := NewUnreclaimableSweep(pool, pool, UnreclaimableSweepConfig{
 		Age:  DefaultUnreclaimableAge,
 		Idle: DefaultUnreclaimableIdle,
 		Mode: mode,

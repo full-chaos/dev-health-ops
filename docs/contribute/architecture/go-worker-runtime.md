@@ -337,17 +337,12 @@ The same reasoning applies to the domain side. Healthy work renews every
 status, claim token, and expired lease. A read-then-act pass can otherwise
 re-arm a row whose owner successfully renewed a moment earlier.
 
-!!! note "Changes when CHAOS-3997 merges"
-    `internal/joboutbox/strand_repair.go` on branch `chaos-3997-reclaim-sweep`
-    implements this re-arm for the daily-metrics and work-graph shapes, with the
-    pair-matched CAS described above and a `SkippedClaim*` counter family for
-    each refusal. It also widens the queue role's posture to read the daily and
-    work-graph tables, through the migration authority. Until it merges, no loop
-    re-drives a daily-metrics run whose claim job is gone.
+`internal/joboutbox/strand_repair.go` implements this re-arm — see the strand
+repair row under [Rescue and repair seams](#rescue-and-repair-seams).
 
 ## Rescue and repair seams
 
-Four independent mechanisms recover work, and each covers a different failure.
+Five independent mechanisms recover work, and each covers a different failure.
 None covers another's ground.
 
 | Seam | Where | Recovers |
@@ -356,6 +351,18 @@ None covers another's ground.
 | Lease repair | `internal/syncreconciler/lease_repair.go` | A sync unit `running` with an expired lease |
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
 | Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat, no attempts, and no outbox row |
+| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997) |
+
+The strand repair performs the pair-matched CAS described above, reads
+`worker_job_runs` on the domain pool rather than inferring the claim from a
+lease, and counts every refusal in a `SkippedClaim*` counter family. It is why
+the queue role's posture includes read-only access to the daily-metrics and
+work-graph tables, granted through the migration authority. One schema fact its
+predicates rest on: `daily_metrics_partitions` carries **no** `org_id` column —
+a partition's organization is reachable only through its `run_id` foreign key,
+so the partition shape binds the envelope's organization against `run.org_id`
+on the run join. The first cut invented that column in its test DDL and shipped
+a query production could not parse (CHAOS-4041).
 
 The horizon and the liveness taxonomy live in
 [Job recovery lifecycle](../../operate/run/job-recovery-lifecycle.md#recovery-is-gated-twice-not-once).
@@ -590,3 +597,5 @@ a new contract version; adding an optional field does not.
 - CHAOS-4030 — `workerctl` advertises verbs that are unconditionally refused
 - CHAOS-4035 — the sweep read a coordinator-exclusive table on the domain pool
 - CHAOS-4036 — one package-wide error string hiding the actual SQLSTATE
+- CHAOS-4041 / PR #1836 — the strand repair queried a partitions column that
+  exists only in its hand-written test schema, not in production

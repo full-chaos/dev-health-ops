@@ -53,8 +53,22 @@ func TestProductionGenericRelayConstructsBothRecoverySeams(t *testing.T) {
 	// threw away, versus a domain row that says the work never finished -- and
 	// a relay wired with only one of them would still satisfy the original
 	// single-seam assertion while leaving every stranded run unhealed.
-	if strings.Count(text, "joboutbox.NewStrandRepair(queuePool, riverSchema)") != 1 {
-		t.Fatal("production generic relay does not construct the daily/work-graph strand repair")
+	//
+	// The argument ORDER is load-bearing, not cosmetic: the queue pool selects
+	// and rearms, the domain pool reads execution state. Swapping them would
+	// compile and then fail at runtime as a 42501 -- the queue role is not
+	// granted worker_job_runs, and must never be. Pinning the exact call is how
+	// a wrong-pool wiring is caught here rather than in production.
+	if strings.Count(text, "joboutbox.NewStrandRepair(queuePool, domainPool, riverSchema)") != 1 {
+		t.Fatal("production generic relay does not construct the strand repair with the " +
+			"queue pool for mutation and the domain pool for execution state")
+	}
+	// The domain pool must actually be threaded in rather than discarded. It
+	// was previously dropped here with a blank assignment, and re-adding that
+	// would silently make the pool split a fiction.
+	if strings.Contains(text, "_ = domainPool") {
+		t.Fatal("buildReconcilerRelay discards domainPool; the strand repair's execution-state " +
+			"read has no pool to run on")
 	}
 	if strings.Count(text, "joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(") != 1 {
 		t.Fatal("production generic relay does not run recovery before ordinary relay")

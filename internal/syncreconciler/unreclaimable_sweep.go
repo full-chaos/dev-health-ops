@@ -225,10 +225,32 @@ type UnreclaimableSweepResult struct {
 // pass; the counter cannot be walked back.
 type routeFence struct {
 	transport  string
+	paused     bool
 	generation int64
 }
 
+// riverOwns is the whole authorization to destroy work, so it is fail-closed
+// on both axes.
+//
+// PAUSED is load-bearing and was missing (review finding). The comment above
+// riverOwnsProviderUnits has always said a "missing, paused, duplicated or
+// unreadable row is NOT read as River owns it", but the statement selected
+// only `transport`, so the paused half was never implemented. Every other
+// reader of this table honours it -- jobroute.Controller.Resolve returns
+// ErrPaused -- which means an operator pausing the route during an incident
+// stopped producers and relays while leaving the one component that DELETES
+// work still running. Pause is the control-plane stop; it must stop this too.
+//
+// Both `river` and `river_canary` count as River ownership. A canary that has
+// been promoted to full River ownership owns provider units MORE completely,
+// not less, and refusing to sweep then would disable the safety net exactly
+// when it is most correct. Whether the row matches the checked-in policy
+// artifact is a different question, and it belongs to the route fence in
+// internal/syncroute, not here.
 func (fence routeFence) riverOwns() bool {
+	if fence.paused {
+		return false
+	}
 	return fence.transport == "river" || fence.transport == "river_canary"
 }
 
@@ -421,6 +443,10 @@ func (sweep *UnreclaimableSweep) Step(
 	// catches a flip that committed earlier in the pass, including a
 	// celery -> river -> celery round trip the transport alone would miss.
 	//
+	// The comparison is over the WHOLE fence -- transport, paused and
+	// generation -- so a mid-pass pause is caught even if a future pause
+	// statement forgets to bump the generation.
+	//
 	// It is taken here rather than at the opening read on purpose: holding it
 	// for the whole pass would block operator route mutations across all the
 	// candidate paging, and this is a safety net, not a control plane.
@@ -509,9 +535,12 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 //
 // A missing, paused, duplicated or unreadable row is NOT read as "River owns
 // it": the sweep declines to act, matching Python's refusal to fall back to a
-// transport during a control-plane fault.
+// transport during a control-plane fault. The paused half of that sentence
+// was an unimplemented claim until CHAOS-4035 -- the statement selected only
+// `transport` -- which is why routeFence.riverOwns now carries the check and
+// says so.
 const selectProviderUnitRouteSQL = `
-SELECT transport, generation
+SELECT transport, paused, generation
 FROM public.worker_job_routes
 WHERE job_kind = $1
 `
@@ -592,7 +621,7 @@ const lockNotAvailableSQLState = "55P03"
 // integration suite executes this exact statement as the real coordinator
 // login rather than assuming it.
 const fenceProviderUnitRouteSQL = `
-SELECT transport, generation
+SELECT transport, paused, generation
 FROM public.worker_job_routes
 WHERE job_kind = $1
 FOR SHARE
@@ -625,7 +654,7 @@ func readProviderUnitRoute(
 	fences := make([]routeFence, 0, 1)
 	for rows.Next() {
 		var fence routeFence
-		if err := rows.Scan(&fence.transport, &fence.generation); err != nil {
+		if err := rows.Scan(&fence.transport, &fence.paused, &fence.generation); err != nil {
 			return routeFence{}, false, sweepUnavailable(sweepStepRouteScan, err)
 		}
 		fence.transport = strings.TrimSpace(strings.ToLower(fence.transport))

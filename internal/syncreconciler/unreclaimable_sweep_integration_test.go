@@ -625,3 +625,37 @@ func TestUnreclaimableSweepDoesNothingWhenModeIsOff(t *testing.T) {
 		t.Fatalf("status = %q, want untouched", status)
 	}
 }
+
+// A paused route is the control plane's STOP. Every other reader of
+// worker_job_routes honours it -- jobroute.Controller.Resolve returns
+// ErrPaused -- and an operator pausing provider units during an incident would
+// otherwise halt producers and relays while leaving the one component that
+// destroys work still running.
+func TestUnreclaimableSweepDefersWhenTheDurableRouteIsPaused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(85), "tests", "heavy", now))
+	// Transport stays river_canary. Only the pause flag moves, so a sweep that
+	// reads transport alone still sees River ownership -- which is exactly the
+	// shape that shipped.
+	if _, err := pool.Exec(ctx,
+		`UPDATE public.worker_job_routes SET paused = TRUE
+		 WHERE job_kind = 'sync.provider_unit'`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want nothing touched under a paused route", result)
+	}
+	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(85))
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want the unit left alone while the route is paused", status)
+	}
+}

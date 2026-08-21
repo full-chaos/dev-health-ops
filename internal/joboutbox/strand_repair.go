@@ -302,14 +302,32 @@ func classifyStrandError(err error) error {
 // and the queue-control role holds SELECT only -- locking it would demand
 // exactly the write authority this split exists to withhold.
 //
-// It is also unnecessary. The outbox row's dedupe key is unique per (kind,
-// domain id), so the delivery bound to it is the only River job that can exist
-// for that pair; there is no second live job to race. Concurrent repair
-// replicas are serialized by `FOR UPDATE OF outbox, job SKIP LOCKED`, which
-// takes the outbox row first, matching lockCurrentDelivery's order. What
-// remains is a claimant appearing between the snapshot and the commit, which
-// requires a runnable job that the terminal-only predicate has already
-// excluded.
+// It is also unnecessary, though for a narrower reason than "the schema
+// guarantees it". The database enforces uniqueness on dedupe_key alone
+// (worker_job_outbox.dedupe_key), NOT on (kind, domain id). What makes the
+// bound delivery the only job for that pair is how the keys are built, and
+// that differs by domain:
+//
+//   - daily: the key is DERIVED from the domain id --
+//     "metrics.daily_partition:"+partition.ID and
+//     "metrics.daily_finalize:"+run.ID (internal/jobs/metrics/daily/publisher.go).
+//     Uniqueness on the key is therefore uniqueness on the pair.
+//   - work graph: the key is caller-supplied
+//     (internal/jobs/workgraph/publisher.go passes request.IdempotencyKey
+//     straight through), and holds only because
+//     work_graph_execution_requests.idempotency_key is itself UNIQUE and one
+//     per request row.
+//
+// So the property is real but rests on the publishers, not on a constraint. A
+// future publisher that minted two keys for one request would break it
+// silently, which is why the org and kind predicates below are written to bind
+// the row tightly rather than trusting the key alone.
+//
+// Concurrent repair replicas are serialized by `FOR UPDATE OF outbox, job SKIP
+// LOCKED`, which takes the outbox row first, matching lockCurrentDelivery's
+// order. What remains is a claimant appearing between the snapshot and the
+// commit, which requires a runnable job that the terminal-only predicate has
+// already excluded.
 //
 // # Why rearming is safe for every kind covered
 //
@@ -329,8 +347,10 @@ const repairStrandedPartitionSQL = `
 	FROM public.worker_job_outbox AS outbox
 	JOIN public.daily_metrics_partitions AS partition
 		ON partition.id::text = outbox.args #>> '{domain,id}'
+		AND partition.org_id::text = outbox.args ->> 'organization_id'
 	JOIN public.daily_metrics_runs AS run
 		ON run.id = partition.run_id
+		AND run.org_id = partition.org_id
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind = 'metrics.daily_partition'
@@ -360,6 +380,7 @@ const repairStrandedFinalizeSQL = `
 	FROM public.worker_job_outbox AS outbox
 	JOIN public.daily_metrics_runs AS run
 		ON run.id::text = outbox.args #>> '{domain,id}'
+		AND run.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind = 'metrics.daily_finalize'
@@ -367,14 +388,37 @@ const repairStrandedFinalizeSQL = `
 		AND outbox.river_job_id IS NOT NULL
 		AND outbox.args #>> '{domain,type}' = 'daily_metrics_run'
 		AND run.status = 'running'
-		AND run.finalization_status IN ('pending', 'running', 'failed')
 		AND (
-			run.finalization_lease_expires_at IS NULL
-			OR run.finalization_lease_expires_at <= $1
+			-- Mirrors classifyLease exactly. A 'running' finalization is
+			-- reclaimable ONLY through the expired-lease branch, which
+			-- classifyLease reaches only when the lease is non-NULL; with a
+			-- NULL lease it falls through to claimable, which excludes
+			-- 'running', and settles. Admitting that row here would rearm a
+			-- finalizer ClaimFinalize then refuses -- a job that can only
+			-- no-op.
+			(
+				run.finalization_status = 'running'
+				AND run.finalization_lease_expires_at IS NOT NULL
+				AND run.finalization_lease_expires_at <= $1
+			)
+			-- 'pending' and 'failed' are claimable outright. This stays
+			-- deliberately stricter than ClaimFinalize, which would claim them
+			-- even under a live lease: being MORE permissive than the claimer
+			-- is the dangerous direction, while being less permissive only
+			-- means a row waits for a later pass.
+			OR (
+				run.finalization_status IN ('pending', 'failed')
+				AND (
+					run.finalization_lease_expires_at IS NULL
+					OR run.finalization_lease_expires_at <= $1
+				)
+			)
 		)
 		AND NOT EXISTS (
 			SELECT 1 FROM public.daily_metrics_partitions AS sibling
-			WHERE sibling.run_id = run.id AND sibling.status <> 'succeeded'
+			WHERE sibling.run_id = run.id
+				AND sibling.org_id = run.org_id
+				AND sibling.status <> 'succeeded'
 		)
 	ORDER BY outbox.delivered_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
@@ -401,6 +445,7 @@ const repairStrandedWorkGraphSQL = `
 	JOIN public.work_graph_execution_requests AS request
 		ON request.id::text = outbox.args #>> '{domain,id}'
 		AND request.kind = outbox.job_kind
+		AND request.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind IN (

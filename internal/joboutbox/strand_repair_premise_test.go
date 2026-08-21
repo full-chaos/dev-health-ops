@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,19 @@ func TestStrandRepairPremiseChecksDetectDrift(t *testing.T) {
 				wantErr: "no longer built as",
 			},
 			{
+				// codex review 2026-08-20: the divisor alone is not the
+				// cadence. Dividing something that is not a lease reports a
+				// correct-looking 3 for an unrelated interval.
+				name:    "a divisor on a non-lease numerator is refused",
+				source:  "package p\nimport \"time\"\nfunc f(pollInterval time.Duration) { _ = time.NewTicker(pollInterval / 3) }\n",
+				wantErr: "does not name a lease",
+			},
+			{
+				name:     "a lease-named selector numerator is accepted",
+				source:   "package p\nimport \"time\"\nfunc f(s struct{ leaseDuration time.Duration }) { _ = time.NewTicker(s.leaseDuration / 3) }\n",
+				expected: 3,
+			},
+			{
 				name:    "a removed ticker is refused rather than passed",
 				source:  "package p\nfunc f() {}\n",
 				wantErr: "found 0",
@@ -218,6 +232,28 @@ func TestStrandRepairPremiseChecksDetectDrift(t *testing.T) {
 		}
 		assertOutcome(t, "no longer precedes", checkClaimPrecedesHandler(writeFixture(t, handlerFirst)))
 		assertOutcome(t, "cannot find", checkClaimPrecedesHandler(writeFixture(t, neither)))
+
+		// codex review 2026-08-20: comparing the first claim and the first
+		// handler call anywhere in the FILE let a correctly-ordered decoy
+		// vouch for a reversed production function. The check is now
+		// per-function, so this must fail.
+		decoyThenReversed := "package p\n" +
+			"func decoy() {\n" +
+			"claim, _ := adapter.idempotency.Begin(ctx, request)\n" +
+			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n" +
+			"func real() {\n" +
+			"_ = adapter.handler.Work(ctx, execution)\n" +
+			"claim, _ := adapter.idempotency.Begin(ctx, request)\n_ = claim\n}\n"
+		assertOutcome(t, "no longer precedes", checkClaimPrecedesHandler(writeFixture(t, decoyThenReversed)))
+
+		// Two functions that BOTH order it correctly is still ambiguous about
+		// which one runs jobs, so it is refused rather than guessed at.
+		twoCorrect := "package p\n" +
+			"func a() {\nclaim, _ := adapter.idempotency.Begin(ctx, request)\n" +
+			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n" +
+			"func b() {\nclaim, _ := adapter.idempotency.Begin(ctx, request)\n" +
+			"_ = adapter.handler.Work(ctx, execution)\n_ = claim\n}\n"
+		assertOutcome(t, "exactly one function", checkClaimPrecedesHandler(writeFixture(t, twoCorrect)))
 	})
 }
 
@@ -375,6 +411,12 @@ func durationUnit(expression ast.Expr) (time.Duration, bool) {
 // time.NewTicker(<lease> / <divisor>) or as an interval variable assigned from
 // that same quotient and then passed to the ticker, so one level of local
 // indirection is resolved. Anything else is an error.
+// leaseNumeratorPattern matches the identifiers the renewal loops legitimately
+// divide: a lease duration, by any of its spellings in the three packages.
+// Requiring the numerator to name a lease is what stops `somethingElse / 3`
+// from satisfying the cadence check.
+var leaseNumeratorPattern = regexp.MustCompile(`(?i)lease|ttl`)
+
 func tickerDivisor(path string) (int64, error) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, path, nil, 0)
@@ -442,12 +484,33 @@ func quotientDivisor(path string, file *ast.File, expression ast.Expr) (int64, e
 		return 0, fmt.Errorf("the renewal ticker in %s is no longer built as <lease>/<divisor>; "+
 			"the renewal-cadence premise can no longer be checked", path)
 	}
+	// The numerator must actually be a lease. Checking only the divisor would
+	// accept `unrelatedInterval / 3` and report a cadence that has nothing to
+	// do with the lease this repair reasons about.
+	numerator := renderExpr(binary.X)
+	if !leaseNumeratorPattern.MatchString(numerator) {
+		return 0, fmt.Errorf("the renewal ticker in %s divides %q, which does not name a lease; "+
+			"the renewal-cadence premise can no longer be checked", path, numerator)
+	}
 	divisor, ok := literalInt(binary.Y)
 	if !ok {
 		return 0, fmt.Errorf("the renewal ticker divisor in %s is not an integer literal; "+
 			"the renewal-cadence premise can no longer be checked", path)
 	}
 	return divisor, nil
+}
+
+// renderExpr flattens an expression back to source-ish text for identity
+// checks. Only the shapes the renewal loops actually use are rendered; anything
+// else yields the empty string and therefore fails the numerator check closed.
+func renderExpr(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.SelectorExpr:
+		return renderExpr(typed.X) + "." + typed.Sel.Name
+	}
+	return ""
 }
 
 // checkClaimPrecedesHandler proves the idempotency claim is taken before the
@@ -460,36 +523,56 @@ func checkClaimPrecedesHandler(path string) error {
 	if err != nil {
 		return fmt.Errorf("cannot parse %s: %w", path, err)
 	}
-	claimAt, handlerAt := token.NoPos, token.NoPos
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, isCall := node.(*ast.CallExpr)
-		if !isCall {
+	// Both calls must be found in the SAME function. Comparing the first claim
+	// and the first handler call anywhere in the file lets a decoy function --
+	// or simply an unrelated helper declared earlier -- satisfy the ordering
+	// while the function that actually runs jobs has them reversed.
+	found := 0
+	var orderingErr error
+	for _, declaration := range file.Decls {
+		function, isFunction := declaration.(*ast.FuncDecl)
+		if !isFunction || function.Body == nil {
+			continue
+		}
+		claimAt, handlerAt := token.NoPos, token.NoPos
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, isCall := node.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			outer, isSelector := call.Fun.(*ast.SelectorExpr)
+			if !isSelector {
+				return true
+			}
+			inner, isInner := outer.X.(*ast.SelectorExpr)
+			if !isInner {
+				return true
+			}
+			switch {
+			case inner.Sel.Name == "idempotency" && outer.Sel.Name == "Begin" && !claimAt.IsValid():
+				claimAt = call.Pos()
+			case inner.Sel.Name == "handler" && outer.Sel.Name == "Work" && !handlerAt.IsValid():
+				handlerAt = call.Pos()
+			}
 			return true
+		})
+		if !claimAt.IsValid() || !handlerAt.IsValid() {
+			continue
 		}
-		outer, isSelector := call.Fun.(*ast.SelectorExpr)
-		if !isSelector {
-			return true
+		found++
+		if claimAt >= handlerAt {
+			orderingErr = fmt.Errorf("the idempotency claim at %s no longer precedes the handler at %s "+
+				"in %s; the idempotency lease may now outlive the domain lease",
+				fileSet.Position(claimAt), fileSet.Position(handlerAt), function.Name.Name)
 		}
-		inner, isInner := outer.X.(*ast.SelectorExpr)
-		if !isInner {
-			return true
-		}
-		switch {
-		case inner.Sel.Name == "idempotency" && outer.Sel.Name == "Begin" && !claimAt.IsValid():
-			claimAt = call.Pos()
-		case inner.Sel.Name == "handler" && outer.Sel.Name == "Work" && !handlerAt.IsValid():
-			handlerAt = call.Pos()
-		}
-		return true
-	})
-	if !claimAt.IsValid() || !handlerAt.IsValid() {
-		return fmt.Errorf("cannot find both the idempotency claim and the handler call in %s; "+
-			"the claim-ordering premise can no longer be checked", path)
 	}
-	if claimAt >= handlerAt {
-		return fmt.Errorf("the idempotency claim at %s no longer precedes the handler at %s; "+
-			"the idempotency lease may now outlive the domain lease",
-			fileSet.Position(claimAt), fileSet.Position(handlerAt))
+	if orderingErr != nil {
+		return orderingErr
+	}
+	if found != 1 {
+		return fmt.Errorf("cannot find exactly one function in %s containing both the idempotency "+
+			"claim and the handler call (found %d); the claim-ordering premise can no longer be checked",
+			path, found)
 	}
 	return nil
 }

@@ -182,6 +182,16 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 		}
 	}
 
+	// codex review 2026-08-20: every domain join must be organization-scoped.
+	// Without it a contract-valid envelope naming another tenant's UUID lets
+	// this repair rearm across the tenant boundary. The provider-unit prior
+	// art has carried this predicate since it was written.
+	for name, query := range queries {
+		if !strings.Contains(query, "outbox.args ->> 'organization_id'") {
+			t.Fatalf("the %s query no longer scopes its domain join by organization", name)
+		}
+	}
+
 	// The domain-lease predicate, per shape.
 	if !strings.Contains(queries["partition"], "partition.lease_expires_at <= $1") ||
 		!strings.Contains(queries["partition"], "partition.status = 'running'") {
@@ -189,9 +199,27 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	}
 	// The finalize shape must keep ClaimFinalize's own eligibility guard, or it
 	// rearms a finalizer that can only no-op.
-	if !strings.Contains(queries["finalize"], "sibling.status <> 'succeeded'") ||
-		!strings.Contains(queries["finalize"], "NOT EXISTS") {
+	finalize := queries["finalize"]
+	if !strings.Contains(finalize, "sibling.status <> 'succeeded'") ||
+		!strings.Contains(finalize, "NOT EXISTS") {
 		t.Fatal("the finalize query lost its partitions-all-succeeded guard")
+	}
+	// codex review 2026-08-20: the finalize status and lease predicates were
+	// unasserted, so deleting them would have passed this test. They mirror
+	// classifyLease exactly: a 'running' finalization is reclaimable ONLY
+	// through the non-NULL expired-lease branch; 'pending'/'failed' are
+	// claimable outright. Accepting 'running' with a NULL lease would rearm a
+	// finalizer ClaimFinalize then refuses.
+	if !strings.Contains(finalize, "run.finalization_status = 'running'") ||
+		!strings.Contains(finalize, "run.finalization_lease_expires_at IS NOT NULL") ||
+		!strings.Contains(finalize, "run.finalization_lease_expires_at <= $1") {
+		t.Fatal("the finalize query lost the running-with-expired-lease branch")
+	}
+	if !strings.Contains(finalize, "run.finalization_status IN ('pending', 'failed')") {
+		t.Fatal("the finalize query lost its claimable-status branch")
+	}
+	if strings.Contains(finalize, "run.finalization_status IN ('pending', 'running', 'failed')") {
+		t.Fatal("the finalize query treats 'running' as claimable outright; classifyLease does not")
 	}
 	// The work-graph shape must bind kind as well as id, and accept only the
 	// two states PostgresStore.Claim will reclaim.
@@ -202,6 +230,17 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	if !strings.Contains(workGraph, "request.state = 'running'") ||
 		!strings.Contains(workGraph, "request.state = 'pending'") {
 		t.Fatal("the workgraph query lost one of the two reclaimable states")
+	}
+	// codex review 2026-08-20: the lease predicates were unasserted, so
+	// deleting `request.lease_expires_at <= $1` would have passed. Without it
+	// a request with a LIVE lease is rearmed under its current owner.
+	if !strings.Contains(workGraph, "request.lease_expires_at IS NOT NULL") ||
+		!strings.Contains(workGraph, "request.lease_expires_at <= $1") {
+		t.Fatal("the workgraph query lost its expired-lease predicate")
+	}
+	if !strings.Contains(workGraph, "request.claim_token IS NULL") ||
+		!strings.Contains(workGraph, "request.lease_expires_at IS NULL") {
+		t.Fatal("the workgraph query lost the never-claimed shape of its pending branch")
 	}
 	for _, excluded := range []string{"'ambiguous'", "'succeeded'", "'failed'", "'canceled'"} {
 		if strings.Contains(workGraph, excluded) {

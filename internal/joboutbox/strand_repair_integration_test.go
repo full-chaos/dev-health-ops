@@ -288,6 +288,70 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
+	// codex review 2026-08-20 / classifyLease audit. ClaimFinalize reaches its
+	// reclaimable branch only when the finalize lease is NON-NULL; with a NULL
+	// lease a 'running' finalization falls through to `claimable`, which
+	// excludes 'running', and settles. Rearming that row mints a finalizer
+	// ClaimFinalize then refuses -- a job that can only no-op.
+	t.Run("a running finalization with no lease is refused", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		runID := integrationUUID(50)
+		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "running", nil)
+		outboxID := deliverDailyFinalize(t, ctx, fixture, runID, now)
+		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Rearmed != 0 {
+			t.Fatalf("Step() = %+v, want the row left alone: ClaimFinalize would refuse it", result)
+		}
+
+		// Control: the SAME row with an expired lease IS reclaimable, so the
+		// refusal above is the NULL-lease branch and not the fixture failing
+		// to match at all.
+		if _, err := admin.Exec(ctx,
+			"UPDATE public.daily_metrics_runs SET finalization_lease_expires_at=$2 WHERE id=$1",
+			runID, now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		result, err = repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Rearmed != 1 {
+			t.Fatalf("control Step() = %+v, want 1 rearmed once the lease exists and is expired", result)
+		}
+	})
+
+	// codex review 2026-08-20: the domain joins carried no organization
+	// predicate, so a contract-valid envelope naming another tenant's UUID
+	// could be rearmed across the tenant boundary.
+	t.Run("a domain row belonging to another organization does not match", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		partitionID := integrationUUID(60)
+		runID := integrationUUID(61)
+		otherOrg := integrationUUID(7002)
+		// The domain rows belong to a DIFFERENT organization than the envelope
+		// the outbox row carries.
+		seedDailyRun(t, ctx, admin, otherOrg, runID, "running", "pending", nil)
+		seedDailyPartition(t, ctx, admin, otherOrg, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
+		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Rearmed != 0 {
+			t.Fatalf("Step() = %+v, want no cross-tenant rearm", result)
+		}
+		assertOutboxStillDelivered(t, ctx, admin, outboxID, riverJobFor(t, ctx, admin, outboxID))
+	})
+
 	t.Run("work graph requests", func(t *testing.T) {
 		for _, testCase := range []struct {
 			name         string

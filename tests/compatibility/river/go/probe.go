@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -397,6 +398,7 @@ func runInternalWorkload(
 	executeLatencies := make([]float64, 0, opts.Samples)
 	var execute JobResult
 	for sample := range opts.Samples {
+		sampleStarted := time.Now()
 		executeMarker := newMarker(fmt.Sprintf("execute-%d", sample), opts.Mode)
 		worker.Register(executeMarker, ScenarioExecute)
 		executeQueuedAt := time.Now().UTC()
@@ -406,15 +408,28 @@ func runInternalWorkload(
 			Source:          "go",
 		}, insertOptions(opts, time.Time{}))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d insert FAILED err=%v\n", opts.Mode, sample, err)
 			return WorkloadResult{}, phaseError("insert_execute_job", err)
 		}
 		executeStart, err := waitForStart(ctx, worker.Starts(), executeMarker, 1)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d wait_start FAILED after %s err=%v\n", opts.Mode, sample, time.Since(sampleStarted), err)
 			return WorkloadResult{}, phaseError("wait_execute_start", err)
+		}
+		// CHAOS-4011: these two waits are unbounded (no timeout of their own,
+		// only the outer --timeout). Flagging any sample slow enough to be a
+		// candidate for the intermittent session-profile hang, without
+		// spamming stderr on the normal fast path.
+		if elapsed := time.Since(sampleStarted); elapsed > time.Second {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d slow wait_start elapsed=%s\n", opts.Mode, sample, elapsed)
 		}
 		executeEvent, err := waitForEvent(ctx, events, executeInsert.Job.ID, river.EventKindJobCompleted)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d wait_complete FAILED after %s err=%v\n", opts.Mode, sample, time.Since(sampleStarted), err)
 			return WorkloadResult{}, phaseError("wait_execute_complete", err)
+		}
+		if elapsed := time.Since(sampleStarted); elapsed > time.Second {
+			fmt.Fprintf(os.Stderr, "river-compat sample-trace: mode=%s sample=%d slow wait_complete elapsed=%s\n", opts.Mode, sample, elapsed)
 		}
 		observed, err := observeJob(ctx, client, executeInsert.Job.ID, executeEvent, executeStart, executeQueuedAt, nil)
 		if err != nil {
@@ -466,6 +481,19 @@ func runInternalWorkload(
 	}
 	scheduledResult.Outcome = "scheduled_state_observed"
 
+	// CHAOS-4011: this cross-client/same-client running-job-cancellation
+	// sequence (direct and session modes only; poll-only's transaction-mode
+	// PgBouncer doesn't support the LISTEN/NOTIFY this depends on, hence the
+	// documented poll_only_running_cancel_not_propagated architecture
+	// blocker) is the sole source of an intermittent river-compatibility CI
+	// flake: the final fallback wait below has no timeout of its own and can
+	// silently ride the outer --timeout (90s for the matrix operation) with
+	// zero diagnostic output, since every river.Client in this file uses
+	// discardLogger(). The stderr breadcrumbs here are cheap, run.sh only
+	// surfaces them on failure (redact_diagnostic_stream + tail -n 40 of the
+	// per-invocation stderr capture), and they turn the next organic hit into
+	// a self-diagnosing artifact instead of a silent 90s hang. Do not remove
+	// without replacing with equivalent visibility into which stage stalled.
 	cancelMarker := newMarker("cancel", opts.Mode)
 	worker.Register(cancelMarker, ScenarioBlockFirst)
 	cancelQueuedAt := time.Now().UTC()
@@ -479,11 +507,15 @@ func runInternalWorkload(
 	}
 	cancelStart, err := waitForStart(ctx, worker.Starts(), cancelMarker, 1)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_start FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_start", err)
 	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancel job started job_id=%d\n", opts.Mode, cancelInsert.Job.ID)
 	if _, err := inserter.JobCancel(ctx, cancelInsert.Job.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client JobCancel FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("cancel_running_job", err)
 	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client JobCancel issued\n", opts.Mode)
 	cancelObservationWindow := 5 * time.Second
 	if opts.Mode == ModePollOnly {
 		cancelObservationWindow = max(3*opts.FetchPollInterval, 500*time.Millisecond)
@@ -492,6 +524,7 @@ func runInternalWorkload(
 	crossCtx, cancelCross := context.WithTimeout(ctx, cancelObservationWindow)
 	cancelFinish, crossErr := waitForFinish(crossCtx, worker.Finishes(), cancelMarker, 1)
 	cancelCross()
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client wait done err=%v cause=%v elapsed=%s\n", opts.Mode, crossErr, cancelFinish.Cause, time.Since(crossStarted))
 	cancellation := RunningCancellationResult{
 		CrossClientContextCancelled: crossErr == nil && errors.Is(cancelFinish.Cause, river.ErrJobCancelledRemotely),
 		CrossClientObservationMS:    milliseconds(time.Since(crossStarted)),
@@ -507,28 +540,39 @@ func runInternalWorkload(
 			)
 		}
 	} else if crossErr != nil && !errors.Is(crossErr, context.DeadlineExceeded) {
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client wait unexpected error err=%v\n", opts.Mode, crossErr)
 		return WorkloadResult{}, phaseError("wait_cross_client_cancel_context", crossErr)
 	}
 
 	if !cancellation.CrossClientContextCancelled {
 		cancellation.SameClientAttempted = true
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s falling back to same-client cancel\n", opts.Mode)
 		if _, err := client.JobCancel(ctx, cancelInsert.Job.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s same-client JobCancel FAILED err=%v\n", opts.Mode, err)
 			return WorkloadResult{}, phaseError("cancel_running_job_same_client", err)
 		}
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s same-client JobCancel issued\n", opts.Mode)
 		sameStarted := time.Now()
 		sameCtx, cancelSame := context.WithTimeout(ctx, cancelObservationWindow)
 		cancelFinish, err = waitForFinish(sameCtx, worker.Finishes(), cancelMarker, 1)
 		cancelSame()
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s same-client wait done err=%v cause=%v elapsed=%s\n", opts.Mode, err, cancelFinish.Cause, time.Since(sameStarted))
 		cancellation.SameClientObservationMS = milliseconds(time.Since(sameStarted))
 		cancellation.SameClientContextCancelled = err == nil && errors.Is(cancelFinish.Cause, river.ErrJobCancelledRemotely)
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s same-client wait unexpected error err=%v\n", opts.Mode, err)
 			return WorkloadResult{}, phaseError("wait_same_client_cancel_context", err)
 		}
 		if !cancellation.SameClientContextCancelled {
+			fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s calling worker.Release\n", opts.Mode)
 			if err := worker.Release(cancelMarker); err != nil {
+				fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s worker.Release FAILED err=%v\n", opts.Mode, err)
 				return WorkloadResult{}, phaseError("release_cancel_probe", err)
 			}
+			fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s worker.Release OK, waiting for finish (UNBOUNDED)\n", opts.Mode)
+			releaseWaitStarted := time.Now()
 			cancelFinish, err = waitForFinish(ctx, worker.Finishes(), cancelMarker, 1)
+			fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s post-release wait done err=%v cause=%v elapsed=%s\n", opts.Mode, err, cancelFinish.Cause, time.Since(releaseWaitStarted))
 			if err != nil {
 				return WorkloadResult{}, phaseError("wait_cancel_probe_release", err)
 			}
@@ -538,10 +582,13 @@ func runInternalWorkload(
 			cancellation.ProbeReleaseUsed = true
 		}
 	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancellation flow complete, waiting for JobCancelled event\n", opts.Mode)
 	cancelEvent, err := waitForEvent(ctx, events, cancelInsert.Job.ID, river.EventKindJobCancelled)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_event FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_event", err)
 	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s JobCancelled event observed\n", opts.Mode)
 	cancelRow, err := client.JobGet(ctx, cancelInsert.Job.ID)
 	if err != nil {
 		return WorkloadResult{}, phaseError("read_cancel_job", err)

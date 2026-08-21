@@ -32,6 +32,8 @@ N_MINUS_ONE_BINARY=""
 COMPOSE_ATTEMPTED=0
 CRASH_PID=""
 CURRENT_PHASE="bootstrap"
+POOL_POLLER_PID=""
+GO_TRACE_FILES=()
 
 usage() {
   cat <<'EOF'
@@ -100,8 +102,14 @@ cleanup() {
   local status=$?
 
   trap - EXIT HUP INT TERM
+  # Stop the live poller unconditionally (including on success) so it never
+  # outlives the script as an orphaned background loop once this process
+  # exits and TEMP_DIR is removed out from under it.
+  stop_session_pool_poller
   if [ "${status}" -ne 0 ]; then
     progress "exited during ${CURRENT_PHASE} with status ${status}"
+    dump_go_traces
+    dump_session_pool_diagnostics
   fi
   if [ -n "${CRASH_PID}" ] && kill -0 "${CRASH_PID}" >/dev/null 2>&1; then
     kill -KILL "${CRASH_PID}" >/dev/null 2>&1 || true
@@ -175,6 +183,152 @@ dump_bootstrap_diagnostics() {
   printf 'river compatibility harness: bootstrap diagnostics (sanitized) ----------\n' >&2
   cat -- "${status_file}" >&2 || true
   printf 'river compatibility harness: ---- end bootstrap diagnostics ----------\n' >&2
+}
+
+# Portable wall-clock bound for a diagnostic subprocess. Prefers GNU
+# coreutils `timeout` (always present on the Ubuntu CI runners this harness
+# targets), falls back to `gtimeout` (Homebrew coreutils, common on macOS
+# dev machines), and finally to a manual background-and-kill loop. Without
+# this, a PgBouncer/Postgres that accepts a TCP connection but never answers
+# a query would wedge cleanup() itself — turning a best-effort diagnostic
+# into a second, worse hang (codex review, CHAOS-4011).
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}s" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "${seconds}s" "$@"
+    return $?
+  fi
+  "$@" &
+  local pid=$! waited=0
+  while kill -0 "${pid}" >/dev/null 2>&1; do
+    if [ "${waited}" -ge "${seconds}" ]; then
+      kill -KILL "${pid}" >/dev/null 2>&1 || true
+      wait "${pid}" >/dev/null 2>&1 || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "${pid}"
+}
+
+# One bounded, redacted snapshot of pgbouncer-session's admin console plus
+# pg_stat_activity (bypassing the pooler), appended with a timestamp.
+# statement_timeout bounds query execution server-side; run_with_timeout
+# bounds the whole client-side call in case the server never answers at all.
+session_pool_snapshot() {
+  local ts
+  ts="$(date -u +%H:%M:%S 2>/dev/null || date -u)"
+  printf -- '[%s] -- pgbouncer-session SHOW POOLS/CLIENTS/SERVERS (port %s) --\n' "${ts}" "${pgbouncer_session_port}"
+  PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 run_with_timeout 5 psql \
+    -h 127.0.0.1 -p "${pgbouncer_session_port}" -U river_compat -d pgbouncer \
+    -X -A -t -c 'SHOW POOLS;' -c 'SHOW CLIENTS;' -c 'SHOW SERVERS;' 2>&1
+  if [ -n "${postgres_port:-}" ]; then
+    printf -- '[%s] -- pg_stat_activity for application_name=chaos3034-river-compat (port %s) --\n' "${ts}" "${postgres_port}"
+    # Connects to the "postgres" administrative database, not "river_compat"
+    # (codex review, CHAOS-4011): pg_stat_activity is a cluster-wide catalog
+    # view, readable from any database, but the CONNECTION itself would
+    # otherwise register as one more backend against river_compat's own
+    # pg_stat_database counters — exactly the numbers readDatabaseCounters
+    # samples for the harness's own Postgres.Delta measurements. Polling
+    # every 2s from that database would contaminate the load deltas under
+    # test; polling from "postgres" instead observes without participating.
+    PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 run_with_timeout 5 psql \
+      -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d postgres \
+      -X -A -t -c "SET statement_timeout = '3000';" -c "
+        SELECT pid, state, wait_event_type, wait_event, backend_start,
+               xact_start, query_start, state_change, left(query, 200)
+        FROM pg_stat_activity
+        WHERE application_name = 'chaos3034-river-compat'
+        ORDER BY pid;
+      " 2>&1
+  fi
+}
+
+# CHAOS-4011: started right after pgbouncer-session comes up, running for the
+# rest of the harness's life. A snapshot taken only in cleanup() — after
+# run_go_checked's `if ! "${GO_BINARY}" ...` has already returned — is too
+# late: Go's own deferred pool.Close() has already torn everything down by
+# the time a failed probe invocation exits, so a post-mortem query mostly
+# shows an idle pool, not the contention that caused the failure (codex
+# review, CHAOS-4011; confirmed directly — two live catches during this
+# investigation showed nothing but idle connections precisely because the
+# probe had already exited and released them by the time they were
+# queried). Polling continuously and dumping the tail on failure instead
+# captures state from moments before/during the hang, not after it.
+start_session_pool_poller() {
+  [ -n "${pgbouncer_session_port:-}" ] || return 0
+  if ! command -v psql >/dev/null 2>&1; then
+    progress "psql unavailable; skipping the live session pool poller"
+    return 0
+  fi
+
+  local poll_file="${TEMP_DIR}/session-pool-live.log"
+  (
+    while true; do
+      session_pool_snapshot 2>&1 | redact_diagnostic_stream >>"${poll_file}" || true
+      sleep 2
+    done
+  ) &
+  POOL_POLLER_PID=$!
+}
+
+# Called unconditionally from cleanup() (success and failure alike) so the
+# poller never outlives the script as an orphaned background loop.
+stop_session_pool_poller() {
+  [ -n "${POOL_POLLER_PID}" ] || return 0
+  kill -TERM "${POOL_POLLER_PID}" >/dev/null 2>&1 || true
+  wait "${POOL_POLLER_PID}" >/dev/null 2>&1 || true
+  POOL_POLLER_PID=""
+}
+
+# Called from cleanup() on ANY non-zero exit, after stop_session_pool_poller
+# has already stopped the poller. Surfaces the tail of its rolling,
+# continuously-captured log — the live supply-vs-demand state, and (joined
+# directly against Postgres) exactly which backend was busy on what, right
+# up to the failure, instead of a fresh best-effort query fired after
+# everything has already unwound. Best-effort only: never calls die(),
+# never blocks or fails teardown.
+dump_session_pool_diagnostics() {
+  local poll_file="${TEMP_DIR}/session-pool-live.log"
+  [ -s "${poll_file}" ] || return 0
+
+  printf 'river compatibility harness: session pool diagnostics (sanitized, live-polled) ----------\n' >&2
+  tail -n 100 -- "${poll_file}" >&2 || true
+  printf 'river compatibility harness: ---- end session pool diagnostics ----------\n' >&2
+}
+
+# Called from cleanup() on ANY non-zero exit. Surfaces every tracked Go
+# invocation's stderr that has content (codex review, CHAOS-4011): a probe
+# invocation can exit 0 and still fail a downstream contract assertion
+# (assert_matrix, assert_all_emitted_gates) called after run_go_checked
+# returns — that invocation's own die() branch never runs, so its
+# cancellation/sample breadcrumbs would otherwise be captured to disk and
+# then silently discarded with TEMP_DIR. Steady-state stays quiet: a
+# passing invocation with no slow samples and immediate cross-client
+# cancellation produces an empty stderr file, so nothing prints for it.
+dump_go_traces() {
+  local file label printed=0
+  for file in "${GO_TRACE_FILES[@]:-}"; do
+    if [ -z "${file}" ] || [ ! -s "${file}" ]; then
+      continue
+    fi
+    if [ "${printed}" -eq 0 ]; then
+      printf 'river compatibility harness: probe traces (sanitized) ----------\n' >&2
+      printed=1
+    fi
+    label="$(basename -- "${file}" .stderr)"
+    printf -- '-- %s --\n' "${label}" >&2
+    redact_diagnostic_stream <"${file}" | tail -n 100 >&2 || true
+  done
+  if [ "${printed}" -eq 1 ]; then
+    printf 'river compatibility harness: ---- end probe traces ----------\n' >&2
+  fi
 }
 
 resolve_local_port() {
@@ -258,11 +412,22 @@ run_go_checked() {
   local output_file="$3"
   shift 3
 
+  # CHAOS-4011: tracked regardless of outcome. A Go invocation can exit 0
+  # (a valid result the probe is satisfied with, e.g. the same-client or
+  # release fallback completing successfully) and still fail a downstream
+  # contract assertion below or in the caller (assert_matrix requires
+  # session mode's cross-client cancellation to succeed on the first try —
+  # same_client_attempted must be false — so a fallback that "worked" is
+  # itself a gate failure). Without this, that invocation's cancellation
+  # breadcrumbs would be captured to disk and then silently deleted with
+  # TEMP_DIR, even though they're exactly the trace this class of flake
+  # needs. dump_go_traces (called from cleanup() on any failure, not just
+  # this function's own die() calls) surfaces every non-empty one.
+  GO_TRACE_FILES+=("${TEMP_DIR}/${label}.stderr")
+
   if ! RIVER_COMPAT_DATABASE_URL="${database_url}" "${GO_BINARY}" "$@" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
-    progress "${label} failed; sanitized diagnostic follows"
-    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
-    die "${label} failed"
+    die "${label} failed; see the probe traces below"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
   if ! assert_all_emitted_gates "${output_file}"; then
@@ -367,7 +532,7 @@ run_python_case() {
   if ! "${PYTHON_BIN}" "${PYTHON_CLI}" "${args[@]}" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
     progress "${label} failed; sanitized diagnostic follows"
-    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 40 >&2 || true
+    redact_diagnostic_stream <"${TEMP_DIR}/${label}.stderr" | tail -n 100 >&2 || true
     die "${label} failed"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
@@ -596,6 +761,7 @@ run_mode_matrix() {
   local queue="$4"
   local output_file="$5"
 
+  CURRENT_PHASE="${mode}_matrix"
   progress "running the ${mode} 20-sample Go matrix"
   run_go_checked \
     "${mode}-matrix" \
@@ -631,6 +797,7 @@ run_profile() {
   local rollback_marker="python-rollback-${mode}-${compose_project}-${RANDOM}"
   local unique_marker="python-unique-${mode}-${compose_project}-${RANDOM}"
 
+  CURRENT_PHASE="${mode}_profile"
   progress "running the ${mode} Python transaction and cross-language matrix"
   run_python_case \
     "${mode}-python-commit" \
@@ -1086,6 +1253,8 @@ pgbouncer_session_port="$(resolve_local_port pgbouncer-session 6433)"
 direct_database_url="postgresql://river_compat:river_compat@127.0.0.1:${postgres_port}/river_compat"
 poll_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_port}/river_compat"
 session_database_url="postgresql://river_compat:river_compat@127.0.0.1:${pgbouncer_session_port}/river_compat"
+
+start_session_pool_poller
 
 direct_profile="${TEMP_DIR}/direct-profile.json"
 poll_profile="${TEMP_DIR}/poll-only-profile.json"

@@ -532,7 +532,9 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 		)`,
 		`CREATE TABLE public.integration_datasets (
 			id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
-			dataset_key text NOT NULL, options jsonb NOT NULL DEFAULT '{}'::jsonb
+			dataset_key text NOT NULL, options jsonb NOT NULL DEFAULT '{}'::jsonb,
+			unavailable_reason varchar(64), unavailable_since timestamptz,
+			unavailable_last_seen_at timestamptz
 		)`,
 		`CREATE TABLE public.sync_runs (
 			id uuid PRIMARY KEY, org_id text NOT NULL, status text NOT NULL,

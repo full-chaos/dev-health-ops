@@ -63,7 +63,10 @@ const EffectRecoveryAmbiguousCategory = "effect_recovery_ambiguous"
 // ProviderDatasetUnavailableCategory records an account-level provider
 // capability limitation. It is distinct from authentication and exhaustion:
 // retrying the same valid credential cannot make the dataset available.
-const ProviderDatasetUnavailableCategory = "provider_dataset_unavailable"
+// Aliased from providersync, which also stamps this category onto
+// IntegrationDataset (CHAOS-4048) and cannot import this package back
+// (providerunit already imports providersync) -- one literal, not two.
+const ProviderDatasetUnavailableCategory = providersync.ProviderDatasetUnavailableCategory
 
 // deterministicTerminalCategory maps executor failures that no retry can clear
 // onto their own durable category. Anything not listed keeps the ordinary

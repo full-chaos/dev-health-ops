@@ -555,7 +555,11 @@ const claimStateSQL = `
 //
 // So the property is real but rests on the publishers, not on a constraint,
 // which is why the org and kind predicates below bind the row tightly rather
-// than trusting the key alone.
+// than trusting the key alone. For the daily shapes the org lives ONLY on
+// daily_metrics_runs -- daily_metrics_partitions carries no org_id column, a
+// partition's org is reachable solely through its run_id foreign key -- so
+// both shapes bind the envelope's organization_id against run.org_id, the
+// partition shape via its run join and the finalize shape directly.
 //
 // # Why rearming is safe for every kind covered
 //
@@ -572,10 +576,9 @@ const repairStrandedPartitionSQL = `
 	FROM public.worker_job_outbox AS outbox
 	JOIN public.daily_metrics_partitions AS partition
 		ON partition.id::text = outbox.args #>> '{domain,id}'
-		AND partition.org_id::text = outbox.args ->> 'organization_id'
 	JOIN public.daily_metrics_runs AS run
 		ON run.id = partition.run_id
-		AND run.org_id = partition.org_id
+		AND run.org_id::text = outbox.args ->> 'organization_id'
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind = 'metrics.daily_partition'
@@ -635,7 +638,6 @@ const repairStrandedFinalizeSQL = `
 		AND NOT EXISTS (
 			SELECT 1 FROM public.daily_metrics_partitions AS sibling
 			WHERE sibling.run_id = run.id
-				AND sibling.org_id = run.org_id
 				AND sibling.status <> 'succeeded'
 		)
 		%s

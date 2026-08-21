@@ -259,7 +259,23 @@ DEVHOPS="${DEVHOPS:-${ROOT}/.venv/bin/dev-hops}"
 #     exercising a real shared Redis that CI's unit tier never did, which is
 #     exactly what made test_429_backoff_grows_exponentially fail locally and
 #     pass in CI in the first place.
-PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
+#   - GO_PROVIDER_ROUTES / DEV_HEALTH_ENV (CHAOS-3988): ops/.env's direnv setup
+#     exports GO_PROVIDER_ROUTES=all and DEV_HEALTH_ENV=local for local `dev-hops`
+#     CLI convenience. _provider_route_environment()
+#     (workers/provider_unit_route.py:107-135) treats that pair as the "local
+#     all-routes" preset and setdefaults every WORKER_<provider>_<dataset>_ENABLED
+#     switch to true. tests/test_sync_units.py has 20 tests asserting the
+#     default-OFF behavior of that same switch; with the preset live every one
+#     goes red — an ambient-env artifact, not a real defect. `ci/check_go.sh`'s
+#     live-Python-oracle stage inherits the same pair (it shells out to python3
+#     with the ambient environment attached) and produces a matching false-red in
+#     TestBuildScheduledPlanMatchesLivePythonPlanner; see check_go.sh's own
+#     GO_ENV_OFF for that side. Confirmed by two lanes in one morning
+#     (2026-08-21): one false-GREEN that masked a real switch-off case, one
+#     35-test false-RED across the full gate — both traced to this exact pair,
+#     both cleared the moment it was unset. CHAOS-3986 and CHAOS-3987 were filed
+#     and cancelled from this same contamination before the cause was found.
+PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------
 # The ops-local-validate skill (.claude/skills/ops-local-validate/SKILL.md) documented

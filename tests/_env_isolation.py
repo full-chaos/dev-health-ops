@@ -212,6 +212,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "DASHSCOPE_BASE_URL",
         "DATABASE_URL",
         "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI",
+        "DEV_HEALTH_ENV",
         "DEV_HEALTH_SINK",
         "EMAIL_API_KEY",
         "EMAIL_FROM_ADDRESS",
@@ -248,6 +249,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "GITHUB_WEBHOOK_SECRET",
         "GITLAB_NOTES_LIMIT",
         "GITLAB_WEBHOOK_TOKEN",
+        "GO_PROVIDER_ROUTES",
         "GRAPHQL_AUTH_REQUIRED",
         "GRAPHQL_MAX_QUERY_BYTES",
         "HIDE_MIGRATED_CHILD_CONFIGS",
@@ -532,9 +534,31 @@ def discover_env_example_names(path: Path | None = None) -> set[str]:
     }
 
 
+#: Names read through an indirection the AST walker structurally cannot follow.
+#: ``_provider_route_environment()`` (``workers/provider_unit_route.py:107-135``)
+#: takes a ``Mapping[str, str]`` parameter -- populated from ``os.environ`` by ITS
+#: caller two lines away, not read directly in the function that looks the names
+#: up -- and reads ``environment.get(_PROVIDER_ROUTES_PRESET_ENV, ...)``. The
+#: receiver there is a local parameter named ``environment``, not one of
+#: ``_ENV_TARGETS`` (``os`` / ``os.environ`` / ``environ``), so
+#: ``discover_src_env_names()`` never sees the call no matter how constants are
+#: resolved. CHAOS-3988: this exact blind spot let GO_PROVIDER_ROUTES and
+#: DEV_HEALTH_ENV leak past this scrub for months -- ``ci/local_validate.sh``'s
+#: separate shell-level PROXY_OFF scrub is what actually caught the incident;
+#: this list would have stayed silent even after that fix landed. Listed here by
+#: hand because the discovery algorithm cannot derive them; if the algorithm
+#: later learns to follow parameter indirection, drop this constant instead of
+#: leaving it to double up.
+_INDIRECT_ENV_READS: frozenset[str] = frozenset(
+    {"DEV_HEALTH_ENV", "GO_PROVIDER_ROUTES"}
+)
+
+
 def derive_scrub_names() -> set[str]:
     """Recompute :data:`SCRUB_ENV_NAMES` from the tree."""
-    return (discover_src_env_names() | discover_env_example_names()) - KEEP_ENV_NAMES
+    return (
+        discover_src_env_names() | discover_env_example_names() | _INDIRECT_ENV_READS
+    ) - KEEP_ENV_NAMES
 
 
 def render_scrub_literal() -> str:

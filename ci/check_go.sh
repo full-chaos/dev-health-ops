@@ -16,6 +16,33 @@ DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANI
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
 INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.go"
 
+# --- Ambient-env scrub (CHAOS-3988). ------------------------------------------------
+# This script previously had NO scrub at all -- it inherited the caller's shell
+# environment wholesale into every `go` invocation below. ops/.env's direnv setup
+# exports GO_PROVIDER_ROUTES=all and DEV_HEALTH_ENV=local for local `dev-hops` CLI
+# convenience:
+#   - internal/platform/config (config.go:58-59) reads both directly via
+#     os.LookupEnv to enable the "local all-routes" preset for the Go worker's own
+#     typed config, exercised anywhere `go test ./...` builds that package.
+#   - live-python-oracles below shells out to `python3` (exec.Command inherits the
+#     ambient environment by default -- Go does not scrub subprocess env unless the
+#     caller sets cmd.Env explicitly), and the Python side's
+#     _provider_route_environment() (src/dev_health_ops/workers/provider_unit_route.py:
+#     107-135) treats the SAME pair as its own "local all-routes" preset, expanding
+#     the full work-item family. The Go scheduler's non-GitHub branch emits
+#     contributing aliases instead, so the two planners disagree and
+#     internal/scheduler/sync::TestBuildScheduledPlanMatchesLivePythonPlanner goes
+#     false-red -- not a real defect, an ambient-env artifact (CHAOS-3988). See
+#     ci/local_validate.sh's PROXY_OFF for the matching pytest-side scrub and the
+#     fuller incident history (CHAOS-3986, CHAOS-3987, two lanes in one morning on
+#     2026-08-21).
+# Mirrors PROXY_OFF's mechanism exactly (an `env -u` array prefixed onto every
+# invocation) rather than inventing a second one. Applied uniformly to every `go`
+# call in this script, not only the one confirmed offender: none of these gate
+# stages need either var, and CI never sets them, so scrubbing everywhere keeps
+# this script's signal CI-equivalent by construction instead of by memory.
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV)
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
@@ -203,7 +230,7 @@ run_in_modules() {
       cd "${ROOT}/${module_dir}"
       # Keep a nested N-1 compatibility module pinned to its own go.mod even if
       # a go.work file is introduced later at the repository root.
-      GOWORK=off "$@"
+      "${GO_ENV_OFF[@]}" GOWORK=off "$@"
     )
   done
 }
@@ -254,7 +281,8 @@ check_live_python_oracles() {
   printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
   if ! (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -287,7 +315,8 @@ check_live_python_oracles() {
   printf 'go test -count=1: internal/providerfoundation (live Python encryption compatibility)\n'
   if ! (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -308,7 +337,8 @@ check_live_python_oracles() {
   printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
   if ! (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -327,7 +357,8 @@ check_live_python_oracles() {
   printf 'go test -count=1: internal/jobs/metrics/daily (live Python repository discovery source is outside the Go embed/cache boundary)\n'
   if ! (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHON="${PYTHON:-python3}" \
@@ -349,7 +380,8 @@ check_live_python_oracles() {
   printf 'go test -count=1: internal/synccoverage (live Python coverage builder is outside the Go embed/cache boundary)\n'
   if ! (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -407,7 +439,7 @@ check_contract() {
   printf 'job contracts: validate\n'
   (
     cd "${ROOT}"
-    GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
+    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
       validate --root "${contract_root}"
   )
 
@@ -417,7 +449,7 @@ check_contract() {
     printf 'job contracts: compare %s\n' "${contract_base}"
     (
       cd "${ROOT}"
-      GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
+      "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
         compare --base "${contract_base}" --candidate "${contract_root}"
     )
   fi
@@ -794,7 +826,7 @@ discover_providersync_tests() {
 
   if ! files_output="$(
     cd "${ROOT}"
-    GOWORK=off go list -mod=readonly -tags=integration \
+    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
       -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
       ./internal/providersync
   )"; then
@@ -1043,7 +1075,7 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 
@@ -1091,7 +1123,7 @@ check_providersync_test_shard() {
     "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
   )
 }
 
@@ -1141,7 +1173,7 @@ check_integration() {
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
     (
       cd "${ROOT}/${module_dir}"
-      GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 }
@@ -1153,7 +1185,8 @@ check_multi_replica_workers() {
   result=0
   (
     cd "${ROOT}"
-    GOWORK=off \
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
       go test -mod=readonly -tags=integration -count=1 -timeout=5m \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \

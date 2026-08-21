@@ -315,7 +315,9 @@ dump_session_pool_diagnostics() {
 dump_go_traces() {
   local file label printed=0
   for file in "${GO_TRACE_FILES[@]:-}"; do
-    [ -n "${file}" ] && [ -s "${file}" ] || continue
+    if [ -z "${file}" ] || [ ! -s "${file}" ]; then
+      continue
+    fi
     if [ "${printed}" -eq 0 ]; then
       printf 'river compatibility harness: probe traces (sanitized) ----------\n' >&2
       printed=1
@@ -324,7 +326,9 @@ dump_go_traces() {
     printf -- '-- %s --\n' "${label}" >&2
     redact_diagnostic_stream <"${file}" | tail -n 100 >&2 || true
   done
-  [ "${printed}" -eq 1 ] && printf 'river compatibility harness: ---- end probe traces ----------\n' >&2 || true
+  if [ "${printed}" -eq 1 ]; then
+    printf 'river compatibility harness: ---- end probe traces ----------\n' >&2
+  fi
 }
 
 resolve_local_port() {

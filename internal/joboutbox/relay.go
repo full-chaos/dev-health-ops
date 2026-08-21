@@ -38,6 +38,8 @@ func (config RelayConfig) validate() error {
 type StepResult struct {
 	Recovered                             int
 	PostRepairContractRejectionsRecovered int
+	StrandsRearmed                        int
+	StrandJobsSkippedLive                 int
 	Claimed                               int
 	Deferred                              int
 	Delivered                             int
@@ -55,6 +57,7 @@ type Relay struct {
 	deferredKinds []string
 	routes        RouteResolver
 	repair        TerminalDeliveryRepairStepper
+	strandRepair  StrandRepairStepper
 }
 
 type RouteResolver interface {
@@ -64,6 +67,17 @@ type RouteResolver interface {
 
 type TerminalDeliveryRepairStepper interface {
 	Step(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error)
+}
+
+// StrandRepairStepper is the second queue-side recovery seam. It is kept
+// separate from TerminalDeliveryRepairStepper rather than folded into it
+// because the two answer different questions -- one asks whether River threw a
+// delivery away, the other asks whether the domain row says the work never
+// finished -- and because their counters must stay distinguishable. A strand
+// rearm and a terminal-delivery recovery collapsing into one number would hide
+// exactly the signal CHAOS-3997 exists to watch.
+type StrandRepairStepper interface {
+	Step(context.Context, time.Time, int) (StrandRepairResult, error)
 }
 
 func NewRelay(repository *Repository, inserter *RiverInserter, config RelayConfig) (*Relay, error) {
@@ -121,6 +135,29 @@ func NewRelayWithRoutesAndRecovery(
 	return relay, nil
 }
 
+// NewRelayWithRoutesRecoveryAndStrandRepair adds the daily-metrics and
+// work-graph strand sweep beside the provider-unit terminal-delivery repair.
+// Both run before rows are claimed in the same step, so a row rearmed by
+// either is delivered in the pass that rearmed it rather than one tick later.
+func NewRelayWithRoutesRecoveryAndStrandRepair(
+	repository *Repository,
+	inserter *RiverInserter,
+	routes RouteResolver,
+	repair TerminalDeliveryRepairStepper,
+	strandRepair StrandRepairStepper,
+	config RelayConfig,
+) (*Relay, error) {
+	if strandRepair == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	relay, err := NewRelayWithRoutesAndRecovery(repository, inserter, routes, repair, config)
+	if err != nil {
+		return nil, err
+	}
+	relay.strandRepair = strandRepair
+	return relay, nil
+}
+
 func deferredRelayKinds(registry RelayPolicyRegistry) ([]string, error) {
 	if registry == nil {
 		return nil, ErrInvalidConfiguration
@@ -155,10 +192,11 @@ func deferredRelayKinds(registry RelayPolicyRegistry) ([]string, error) {
 	return deferred, nil
 }
 
-func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepResult, error) {
-	if relay == nil || now.IsZero() {
-		return StepResult{}, ErrInvalidConfiguration
-	}
+// stepRecovery runs both queue-side repair seams before any row is claimed,
+// so a row rearmed by either is delivered in the pass that rearmed it. It is
+// separate from Step so each seam's contribution to StepResult can be asserted
+// without standing up a repository.
+func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) (StepResult, error) {
 	result := StepResult{}
 	if relay.repair != nil {
 		recovered, err := relay.repair.Step(ctx, now, limit)
@@ -167,6 +205,25 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		}
 		result.Recovered = recovered.Recovered
 		result.PostRepairContractRejectionsRecovered = recovered.PostRepairContractRejectionsRecovered
+	}
+	if relay.strandRepair != nil {
+		rearmed, err := relay.strandRepair.Step(ctx, now, limit)
+		if err != nil {
+			return result, err
+		}
+		result.StrandsRearmed = rearmed.Rearmed
+		result.StrandJobsSkippedLive = rearmed.SkippedJobLive
+	}
+	return result, nil
+}
+
+func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepResult, error) {
+	if relay == nil || now.IsZero() {
+		return StepResult{}, ErrInvalidConfiguration
+	}
+	result, err := relay.stepRecovery(ctx, now, limit)
+	if err != nil {
+		return result, err
 	}
 	deferred := relay.deferredKinds
 	if relay.routes != nil {

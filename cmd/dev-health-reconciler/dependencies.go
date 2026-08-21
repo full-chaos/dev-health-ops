@@ -387,8 +387,20 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	return joboutbox.NewRelayWithRoutesAndRecovery(
-		repository, inserter, routes, repair, joboutbox.DefaultRelayConfig(),
+	// The strand sweep shares the queue pool with the provider-unit repair
+	// because it does the same class of work: it rearms an outbox row and
+	// deletes the dead River delivery in one transaction. It reads the
+	// daily-metrics and work-graph domain rows through the queue role, which
+	// requires the SELECT grants and allow-list entries added alongside this
+	// (scripts/worker/provision_river_roles.sql,
+	// internal/storage/postgres/queue_authorization.go). Without them every
+	// pass returns joboutbox.ErrNotAuthorized rather than a silent zero.
+	strandRepair, err := joboutbox.NewStrandRepair(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	return joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair(
+		repository, inserter, routes, repair, strandRepair, joboutbox.DefaultRelayConfig(),
 	)
 }
 

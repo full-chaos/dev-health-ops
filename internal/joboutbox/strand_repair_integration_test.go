@@ -125,7 +125,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		partitionID := integrationUUID(1)
 		runID := integrationUUID(2)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		jobID := riverJobFor(t, ctx, admin, outboxID)
 		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
@@ -155,7 +155,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		partitionID := integrationUUID(3)
 		runID := integrationUUID(4)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		firstJob := riverJobFor(t, ctx, admin, outboxID)
 		makeJobTerminal(t, ctx, admin, firstJob, "completed", now.Add(-2*time.Hour))
@@ -194,7 +194,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				partitionID := integrationUUID(5)
 				runID := integrationUUID(6)
 				seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-				seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+				seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 				outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 				jobID := riverJobFor(t, ctx, admin, outboxID)
 				setJobState(t, ctx, admin, jobID, state)
@@ -224,7 +224,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		partitionID := integrationUUID(7)
 		runID := integrationUUID(8)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(5*time.Minute)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(5*time.Minute)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
@@ -284,7 +284,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				partitionID := integrationUUID(70)
 				runID := integrationUUID(71)
 				seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-				seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+				seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 				outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 				makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
@@ -319,7 +319,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		partitionID := integrationUUID(72)
 		runID := integrationUUID(73)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
@@ -340,8 +340,8 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		runID := integrationUUID(10)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "running", ptr(now.Add(-time.Hour)))
-		seedDailyPartition(t, ctx, admin, fixture.orgID, integrationUUID(11), runID, "succeeded", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, integrationUUID(12), runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, integrationUUID(11), runID, "succeeded", nil)
+		seedDailyPartition(t, ctx, admin, integrationUUID(12), runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyFinalize(t, ctx, fixture, runID, now)
 		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
@@ -355,7 +355,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 
 		// Once every sibling has succeeded the same row becomes eligible.
 		if _, err := admin.Exec(ctx,
-			"UPDATE public.daily_metrics_partitions SET status='succeeded', lease_expires_at=NULL WHERE run_id=$1",
+			"UPDATE public.daily_metrics_partitions SET status='succeeded', claim_token=NULL, lease_expires_at=NULL WHERE run_id=$1",
 			runID); err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +437,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		// The domain rows belong to a DIFFERENT organization than the envelope
 		// the outbox row carries.
 		seedDailyRun(t, ctx, admin, otherOrg, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, otherOrg, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
@@ -525,7 +525,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		byDeliveredAt := make([]string, seeded)
 		for index := range seeded {
 			partitionID := integrationUUID(31 + index)
-			seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+			seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 			outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 			makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 			age := seeded - 1 - index
@@ -578,7 +578,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		partitionID := integrationUUID(40)
 		runID := integrationUUID(41)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
-		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		seedDailyPartition(t, ctx, admin, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 		jobID := riverJobFor(t, ctx, admin, outboxID)
 		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
@@ -650,13 +650,24 @@ func seedJobRun(
 		token := integrationUUID(9500)
 		claimToken = &token
 	}
+	// finished_at follows ck_worker_job_run_claim_state from alembic 0052: a
+	// 'running' row has a claim and no finish time, every other status has a
+	// finish time and no claim. An expired lease is still a lease, so the
+	// reclaimable 'running' fixture stays valid.
+	var finishedAt *time.Time
+	if status != "running" {
+		finished := time.Now().UTC().Truncate(time.Microsecond)
+		finishedAt = &finished
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.worker_job_runs (
 			id, job_kind, idempotency_key, org_id, domain_type, domain_id,
-			status, claim_token, lease_expires_at
-		) VALUES ($1, $2, $3, $4, 'daily_metrics_partition', $5, $6, $7, $8)`,
+			status, claim_token, lease_expires_at, attempt_count,
+			started_at, finished_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'daily_metrics_partition', $5, $6, $7, $8, 1,
+			statement_timestamp(), $9, statement_timestamp(), statement_timestamp())`,
 		integrationUUID(9600), jobKind, idempotencyKey, orgID, domainID,
-		status, claimToken, leaseExpires); err != nil {
+		status, claimToken, leaseExpires, finishedAt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -684,41 +695,75 @@ func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 
 func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	// daily_metrics_* and work_graph_execution_requests carry only the columns
-	// the repair's predicates read, plus the constraints that make an invalid
-	// fixture impossible to write -- notably the work-graph CHECK that forces a
-	// non-running request to hold a NULL claim token and lease, which is what
-	// makes the "pending" row unable to carry a lease at all.
+	// Every table is DERIVED FROM THE ALEMBIC MIGRATIONS, column for column and
+	// constraint for constraint, not hand-written to match the repair's
+	// predicates. The first draft of this file invented an org_id column on
+	// daily_metrics_partitions that production does not have, so the suite
+	// stayed green while the shipped query crash-looped the prod reconciler on
+	// `column partition.org_id does not exist`. The per-table authorities:
+	//
+	//   - daily_metrics_runs / daily_metrics_partitions: alembic 0057, with the
+	//     'no_repositories' status widened in by 0095.
+	//   - work_graph_execution_requests: alembic 0060, including its
+	//     terminal-immutability trigger.
+	//   - worker_job_outbox: alembic 0046, plus 0063's
+	//     prerequisite_completion_key column.
+	//   - worker_job_completion_fences: alembic 0063.
+	//   - worker_job_runs: alembic 0052.
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE public.daily_metrics_runs (
 			id uuid PRIMARY KEY,
 			org_id uuid NOT NULL,
-			status text NOT NULL,
-			finalization_status text NOT NULL DEFAULT 'pending',
+			target_day date NOT NULL,
+			generation varchar(64) NOT NULL,
+			status varchar(16) NOT NULL DEFAULT 'pending',
+			finalization_status varchar(16) NOT NULL DEFAULT 'pending',
 			finalization_claim_token uuid NULL,
 			finalization_lease_expires_at timestamptz NULL,
 			finalized_at timestamptz NULL,
-			-- Copied verbatim from alembic 0057. Production forbids a 'running'
-			-- finalization without a token AND lease, and forbids any other
-			-- status from holding either. Without this constraint the fixture
-			-- can express rows production cannot, and a test built on an
-			-- impossible row proves nothing about production.
-			CONSTRAINT daily_metrics_runs_finalization_claim CHECK (
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_daily_metrics_run_status CHECK (
+				status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')
+			),
+			CONSTRAINT ck_daily_metrics_finalize_status CHECK (
+				finalization_status IN ('pending', 'running', 'succeeded', 'failed')
+			),
+			CONSTRAINT ck_daily_metrics_finalize_lease CHECK (
 				(finalization_status = 'running' AND finalization_claim_token IS NOT NULL
 					AND finalization_lease_expires_at IS NOT NULL)
 				OR (finalization_status <> 'running' AND finalization_claim_token IS NULL
 					AND finalization_lease_expires_at IS NULL)
-			)
+			),
+			CONSTRAINT uq_daily_metrics_run_generation UNIQUE (org_id, target_day, generation)
 		);
 		CREATE TABLE public.daily_metrics_partitions (
 			id uuid PRIMARY KEY,
-			org_id uuid NOT NULL,
-			run_id uuid NOT NULL REFERENCES public.daily_metrics_runs(id),
-			status text NOT NULL,
+			run_id uuid NOT NULL REFERENCES public.daily_metrics_runs(id) ON DELETE CASCADE,
+			ordinal integer NOT NULL,
+			repo_ids json NOT NULL,
+			status varchar(16) NOT NULL DEFAULT 'pending',
 			claim_token uuid NULL,
 			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL DEFAULT 0
+			attempt_count integer NOT NULL DEFAULT 0,
+			completed_at timestamptz NULL,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_daily_metrics_partition_ordinal CHECK (ordinal >= 0),
+			CONSTRAINT ck_daily_metrics_partition_status CHECK (
+				status IN ('pending', 'running', 'succeeded', 'failed')
+			),
+			CONSTRAINT ck_daily_metrics_partition_attempts CHECK (attempt_count >= 0),
+			CONSTRAINT ck_daily_metrics_partition_lease CHECK (
+				(status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+				OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL)
+			),
+			CONSTRAINT uq_daily_metrics_partition_ordinal UNIQUE (run_id, ordinal)
 		);
+		CREATE INDEX ix_daily_metrics_partition_reclaim
+			ON public.daily_metrics_partitions (status, lease_expires_at);
+		CREATE INDEX ix_daily_metrics_partition_run_status
+			ON public.daily_metrics_partitions (run_id, status);
 		CREATE TABLE public.work_graph_execution_requests (
 			id uuid PRIMARY KEY,
 			org_id uuid NOT NULL,
@@ -726,18 +771,41 @@ func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				'workgraph.build', 'investment.materialize', 'investment.dispatch',
 				'investment.chunk', 'investment.finalize'
 			)),
+			scope jsonb NOT NULL,
+			model_ref text NULL CHECK (model_ref IS NULL OR length(model_ref) <= 128),
+			prompt_ref text NULL CHECK (prompt_ref IS NULL OR length(prompt_ref) <= 128),
+			llm_concurrency integer NOT NULL CHECK (llm_concurrency BETWEEN 1 AND 16),
+			spend_limit_microunits bigint NOT NULL CHECK (spend_limit_microunits >= 0),
+			correlation_id text NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+			idempotency_key text NOT NULL UNIQUE CHECK (length(idempotency_key) BETWEEN 1 AND 256),
 			state text NOT NULL DEFAULT 'pending' CHECK (state IN (
 				'pending', 'running', 'succeeded', 'failed', 'ambiguous', 'canceled'
 			)),
 			claim_token uuid NULL,
 			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL DEFAULT 0,
+			attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+			created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+			updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
 			CHECK ((state = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
 				OR (state <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL))
 		);
+		CREATE INDEX ix_work_graph_execution_claim
+			ON public.work_graph_execution_requests (kind, state, lease_expires_at);
+		CREATE OR REPLACE FUNCTION forbid_work_graph_terminal_mutation()
+		RETURNS trigger AS $trigger$
+		BEGIN
+			IF OLD.state IN ('succeeded', 'failed', 'canceled') THEN
+				RAISE EXCEPTION 'terminal work graph execution request is immutable';
+			END IF;
+			RETURN NEW;
+		END;
+		$trigger$ LANGUAGE plpgsql;
+		CREATE TRIGGER work_graph_execution_terminal_immutable
+		BEFORE UPDATE ON public.work_graph_execution_requests
+		FOR EACH ROW EXECUTE FUNCTION forbid_work_graph_terminal_mutation();
 		CREATE TABLE public.worker_job_outbox (
 			id uuid PRIMARY KEY,
-			dedupe_key varchar(256) NOT NULL UNIQUE,
+			dedupe_key varchar(256) NOT NULL,
 			job_kind varchar(96) NOT NULL,
 			contract_version integer NOT NULL,
 			args json NOT NULL,
@@ -757,38 +825,94 @@ func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			last_error_code varchar(64),
 			last_error_detail varchar(256),
 			last_error_at timestamptz,
-			river_job_id bigint UNIQUE,
+			river_job_id bigint,
 			delivered_at timestamptz,
-			prerequisite_completion_key text NULL,
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL,
-			CONSTRAINT worker_job_outbox_status CHECK (status IN ('pending','claimed','delivered','dead')),
-			CONSTRAINT worker_job_outbox_claim CHECK (
-				(status='claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL AND claim_expires_at IS NOT NULL)
-				OR (status<>'claimed' AND claim_token IS NULL AND claimed_at IS NULL AND claim_expires_at IS NULL)
+			prerequisite_completion_key text NULL CHECK (
+				prerequisite_completion_key IS NULL
+				OR (
+					length(prerequisite_completion_key) BETWEEN 1 AND 256
+					AND prerequisite_completion_key ~ '^[a-z][a-z0-9_]{0,95}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+				)
 			),
-			CONSTRAINT worker_job_outbox_delivery CHECK (
-				(status='delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
-				OR (status<>'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
-			)
+			CONSTRAINT ck_worker_job_outbox_status CHECK (status IN ('pending', 'claimed', 'delivered', 'dead')),
+			CONSTRAINT ck_worker_job_outbox_contract_version CHECK (contract_version > 0),
+			CONSTRAINT ck_worker_job_outbox_priority CHECK (priority BETWEEN 1 AND 4),
+			CONSTRAINT ck_worker_job_outbox_max_attempts CHECK (max_attempts BETWEEN 1 AND 25),
+			CONSTRAINT ck_worker_job_outbox_attempt_count CHECK (attempt_count >= 0),
+			CONSTRAINT ck_worker_job_outbox_payload_hash CHECK (
+				length(payload_hash) = 71 AND payload_hash LIKE 'sha256:%'
+			),
+			CONSTRAINT ck_worker_job_outbox_args_size CHECK (length(CAST(args AS TEXT)) <= 16384),
+			CONSTRAINT ck_worker_job_outbox_claim_state CHECK (
+				(status = 'claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL AND claim_expires_at IS NOT NULL)
+				OR (status <> 'claimed' AND claim_token IS NULL AND claimed_at IS NULL AND claim_expires_at IS NULL)
+			),
+			CONSTRAINT ck_worker_job_outbox_delivery_state CHECK (
+				(status = 'delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
+				OR (status <> 'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
+			),
+			CONSTRAINT ck_worker_job_outbox_error_state CHECK (
+				(last_error_code IS NULL AND last_error_detail IS NULL AND last_error_at IS NULL)
+				OR (last_error_code IS NOT NULL AND last_error_detail IS NOT NULL AND last_error_at IS NOT NULL)
+			),
+			CONSTRAINT uq_worker_job_outbox_dedupe_key UNIQUE (dedupe_key),
+			CONSTRAINT uq_worker_job_outbox_river_job_id UNIQUE (river_job_id)
 		);
+		CREATE INDEX ix_worker_job_outbox_due
+			ON public.worker_job_outbox (status, next_attempt_at, scheduled_at, created_at)
+			WHERE status IN ('pending', 'claimed');
+		CREATE INDEX ix_worker_job_outbox_claim_expiry
+			ON public.worker_job_outbox (claim_expires_at)
+			WHERE status = 'claimed';
+		CREATE INDEX ix_worker_job_outbox_terminal
+			ON public.worker_job_outbox (status, delivered_at, updated_at)
+			WHERE status IN ('delivered', 'dead');
+		CREATE INDEX ix_worker_job_outbox_prerequisite
+			ON public.worker_job_outbox (prerequisite_completion_key)
+			WHERE prerequisite_completion_key IS NOT NULL;
 		CREATE TABLE public.worker_job_completion_fences (
-			completion_key text PRIMARY KEY,
+			completion_key text PRIMARY KEY
+				CHECK (
+					length(completion_key) BETWEEN 1 AND 256
+					AND completion_key ~ '^[a-z][a-z0-9_]{0,95}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+				),
 			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 		);
 		CREATE TABLE public.worker_job_runs (
 			id uuid PRIMARY KEY,
-			job_kind text NOT NULL,
-			idempotency_key text NOT NULL,
+			job_kind varchar(96) NOT NULL,
+			idempotency_key varchar(256) NOT NULL,
 			org_id uuid NULL,
-			domain_type text NOT NULL,
+			domain_type varchar(64) NOT NULL,
 			domain_id uuid NOT NULL,
-			status text NOT NULL,
+			status varchar(16) NOT NULL,
 			claim_token uuid NULL,
 			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL DEFAULT 1,
-			UNIQUE (job_kind, idempotency_key)
-		)`)
+			attempt_count integer NOT NULL,
+			started_at timestamptz NOT NULL,
+			finished_at timestamptz NULL,
+			result varchar(16) NULL,
+			error_category varchar(32) NULL,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			CONSTRAINT ck_worker_job_run_status CHECK (
+				status IN ('running', 'retryable', 'succeeded', 'terminal')
+			),
+			CONSTRAINT ck_worker_job_run_attempt_count CHECK (attempt_count >= 1),
+			CONSTRAINT ck_worker_job_run_claim_state CHECK (
+				(status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL AND finished_at IS NULL)
+				OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL AND finished_at IS NOT NULL)
+			),
+			CONSTRAINT ck_worker_job_run_result_state CHECK (
+				(result IS NULL AND error_category IS NULL)
+				OR (result IS NOT NULL AND error_category IS NOT NULL)
+			),
+			CONSTRAINT uq_worker_job_run_key UNIQUE (job_kind, idempotency_key)
+		);
+		CREATE INDEX ix_worker_job_run_reclaim
+			ON public.worker_job_runs (status, lease_expires_at)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,19 +939,34 @@ func seedDailyRun(
 		token := integrationUUID(9700)
 		claimToken = &token
 	}
+	// The generation is derived from the run id so uq_daily_metrics_run_generation
+	// can never collide across fixtures that share the org and target day. It is
+	// passed as its own parameter rather than reusing $1: a parameter bound to a
+	// uuid column in one place and a varchar column in another is exactly the
+	// "inconsistent types deduced" parse failure this hotfix documents.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.daily_metrics_runs (
-			id, org_id, status, finalization_status,
-			finalization_claim_token, finalization_lease_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6)`,
-		runID, orgID, status, finalizationStatus, claimToken, finalizationLease); err != nil {
+			id, org_id, target_day, generation, status, finalization_status,
+			finalization_claim_token, finalization_lease_expires_at,
+			created_at, updated_at
+		) VALUES ($1, $2, CURRENT_DATE, $7, $3, $4, $5, $6,
+			statement_timestamp(), statement_timestamp())`,
+		runID, orgID, status, finalizationStatus, claimToken, finalizationLease,
+		runID); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// seedDailyPartition takes no organization: daily_metrics_partitions has no
+// org_id column in production, a partition's org is reachable ONLY through its
+// run_id foreign key. The first draft of this fixture invented that column,
+// which is exactly how the suite stayed green against a schema production does
+// not have. The ordinal is assigned as the next free slot for the run, which
+// keeps uq_daily_metrics_partition_ordinal satisfied without every caller
+// numbering its partitions by hand.
 func seedDailyPartition(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool,
-	orgID, partitionID, runID, status string, leaseExpires *time.Time,
+	partitionID, runID, status string, leaseExpires *time.Time,
 ) {
 	t.Helper()
 	var claimToken *string
@@ -836,9 +975,15 @@ func seedDailyPartition(
 		claimToken = &token
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.daily_metrics_partitions (id, org_id, run_id, status, claim_token, lease_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		partitionID, orgID, runID, status, claimToken, leaseExpires); err != nil {
+		INSERT INTO public.daily_metrics_partitions (
+			id, run_id, ordinal, repo_ids, status, claim_token, lease_expires_at,
+			created_at, updated_at
+		)
+		SELECT $1, $2, COALESCE(MAX(sibling.ordinal) + 1, 0), '[]'::json, $3, $4, $5,
+			statement_timestamp(), statement_timestamp()
+		FROM public.daily_metrics_partitions AS sibling
+		WHERE sibling.run_id = $2`,
+		partitionID, runID, status, claimToken, leaseExpires); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -855,10 +1000,22 @@ func seedWorkGraphRequest(
 	} else {
 		leaseExpires = nil
 	}
+	// scope, llm_concurrency, spend_limit_microunits, correlation_id and
+	// idempotency_key are NOT NULL without defaults in alembic 0060, so the
+	// fixture must supply them. The idempotency key is kind-prefixed exactly as
+	// the work-graph publisher builds its dedupe keys, and stays unique across
+	// the cross-kind fixture because the kind is part of it. The request id is
+	// passed again as $7 for the text columns rather than reusing $1: a
+	// parameter bound to a uuid column in one place and a text column in
+	// another is exactly the "inconsistent types deduced" parse failure this
+	// hotfix documents.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.work_graph_execution_requests (id, org_id, kind, state, claim_token, lease_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		requestID, orgID, kind, state, claimToken, leaseExpires); err != nil {
+		INSERT INTO public.work_graph_execution_requests (
+			id, org_id, kind, scope, llm_concurrency, spend_limit_microunits,
+			correlation_id, idempotency_key, state, claim_token, lease_expires_at
+		) VALUES ($1, $2, $3, '{}'::jsonb, 1, 0, $7, $3 || ':' || $7, $4, $5, $6)`,
+		requestID, orgID, kind, state, claimToken, leaseExpires,
+		requestID); err != nil {
 		t.Fatal(err)
 	}
 }

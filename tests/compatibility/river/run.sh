@@ -102,6 +102,7 @@ cleanup() {
   trap - EXIT HUP INT TERM
   if [ "${status}" -ne 0 ]; then
     progress "exited during ${CURRENT_PHASE} with status ${status}"
+    dump_session_pool_diagnostics
   fi
   if [ -n "${CRASH_PID}" ] && kill -0 "${CRASH_PID}" >/dev/null 2>&1; then
     kill -KILL "${CRASH_PID}" >/dev/null 2>&1 || true
@@ -175,6 +176,50 @@ dump_bootstrap_diagnostics() {
   printf 'river compatibility harness: bootstrap diagnostics (sanitized) ----------\n' >&2
   cat -- "${status_file}" >&2 || true
   printf 'river compatibility harness: ---- end bootstrap diagnostics ----------\n' >&2
+}
+
+# CHAOS-4011: called from cleanup() on ANY non-zero exit once
+# pgbouncer-session has come up. Session-mode PgBouncer pins one backend to a
+# client for that connection's whole life, and every river.Client in this
+# harness discards its logger, so a session-profile hang has historically
+# left zero trace beyond a bounded "did not start"/"failed" message — the
+# live supply-vs-demand state, and (joined directly against Postgres,
+# bypassing the pooler) exactly which backend is stuck and on what, used to
+# only be recoverable by catching the failure live with a poller attached.
+# This makes that state part of the failure artifact itself. Best-effort
+# only: never calls die(), never blocks or fails teardown, and does nothing
+# once the harness fails before the session pooler's port is known (that
+# path is already covered by dump_bootstrap_diagnostics).
+dump_session_pool_diagnostics() {
+  [ -n "${pgbouncer_session_port:-}" ] || return 0
+  if ! command -v psql >/dev/null 2>&1; then
+    progress "psql unavailable; skipping session PgBouncer/Postgres diagnostics"
+    return 0
+  fi
+
+  local diag_file="${TEMP_DIR}/session-pool-diagnostics.log"
+  {
+    printf -- '-- pgbouncer-session SHOW POOLS/CLIENTS/SERVERS (port %s) --\n' "${pgbouncer_session_port}"
+    PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 psql \
+      -h 127.0.0.1 -p "${pgbouncer_session_port}" -U river_compat -d pgbouncer \
+      -X -A -t -c 'SHOW POOLS;' -c 'SHOW CLIENTS;' -c 'SHOW SERVERS;' 2>&1
+    if [ -n "${postgres_port:-}" ]; then
+      printf -- '\n-- pg_stat_activity for application_name=chaos3034-river-compat (port %s) --\n' "${postgres_port}"
+      PGPASSWORD=river_compat PGCONNECT_TIMEOUT=3 psql \
+        -h 127.0.0.1 -p "${postgres_port}" -U river_compat -d river_compat \
+        -X -A -t -c "
+          SELECT pid, state, wait_event_type, wait_event, backend_start,
+                 xact_start, query_start, state_change, left(query, 200)
+          FROM pg_stat_activity
+          WHERE application_name = 'chaos3034-river-compat'
+          ORDER BY pid;
+        " 2>&1
+    fi
+  } 2>&1 | redact_diagnostic_stream >"${diag_file}" || true
+
+  printf 'river compatibility harness: session pool diagnostics (sanitized) ----------\n' >&2
+  cat -- "${diag_file}" >&2 || true
+  printf 'river compatibility harness: ---- end session pool diagnostics ----------\n' >&2
 }
 
 resolve_local_port() {
@@ -596,6 +641,7 @@ run_mode_matrix() {
   local queue="$4"
   local output_file="$5"
 
+  CURRENT_PHASE="${mode}_matrix"
   progress "running the ${mode} 20-sample Go matrix"
   run_go_checked \
     "${mode}-matrix" \
@@ -631,6 +677,7 @@ run_profile() {
   local rollback_marker="python-rollback-${mode}-${compose_project}-${RANDOM}"
   local unique_marker="python-unique-${mode}-${compose_project}-${RANDOM}"
 
+  CURRENT_PHASE="${mode}_profile"
   progress "running the ${mode} Python transaction and cross-language matrix"
   run_python_case \
     "${mode}-python-commit" \

@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 const (
@@ -80,6 +83,52 @@ type plannerOracleCase struct {
 	Datasets                []plannerOracleDataset   `json:"datasets"`
 	Watermarks              []plannerOracleWatermark `json:"watermarks"`
 	Route                   *plannerOracleRoute      `json:"route,omitempty"`
+	// RouteSwitches carries WORKER_*_ENABLED-style env var names (CHAOS-4047).
+	// Present (even empty) means the durable sync.provider_unit route is a
+	// River outbox route: both sides build a real route-switch mapping from
+	// it (Go via completeRouteSwitchesFromCase, Python via
+	// ProviderUnitRouteSwitches.from_environment). Absent (nil) means
+	// off-River -- both sides plan unfiltered, unchanged from every case
+	// above that predates CHAOS-4047.
+	RouteSwitches map[string]string `json:"route_switches,omitempty"`
+}
+
+// completeRouteSwitchesFromCase converts the case's env-var-name-keyed map
+// into the same providersync.CompleteRouteSwitches struct
+// providersync.RouteSwitchesFromConfig builds in production, so the Go side
+// of the oracle exercises the real struct rather than a second
+// representation. The switch set here is deliberately small (only the names
+// these test cases actually use) and panics on an unmapped name to catch a
+// typo in a new case rather than silently ignoring it.
+func completeRouteSwitchesFromCase(env map[string]string) *providersync.CompleteRouteSwitches {
+	if env == nil {
+		return nil
+	}
+	switches := providersync.CompleteRouteSwitches{}
+	for name, value := range env {
+		enabled := value == "true"
+		switch name {
+		case "WORKER_GITHUB_PRS_ENABLED":
+			switches.GithubPRs = enabled
+		case "WORKER_GITHUB_PR_REVIEWS_ENABLED":
+			switches.GithubPRReviews = enabled
+		case "WORKER_GITHUB_PR_COMMENTS_ENABLED":
+			switches.GithubPRComments = enabled
+		case "WORKER_GITHUB_CICD_ENABLED":
+			switches.GithubCICD = enabled
+		case "WORKER_GITHUB_TESTS_ENABLED":
+			switches.GithubTests = enabled
+		case "WORKER_GITHUB_SECURITY_ENABLED":
+			switches.GithubSecurity = enabled
+		case "WORKER_GITHUB_WORK_ITEMS_ENABLED":
+			switches.GithubWorkItems = enabled
+		case "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED":
+			switches.LaunchDarklyFeatureFlags = enabled
+		default:
+			panic(fmt.Sprintf("completeRouteSwitchesFromCase: unmapped env var %q", name))
+		}
+	}
+	return &switches
 }
 
 func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
@@ -289,6 +338,65 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			},
 		})
 	}
+	// CHAOS-4047: the plan-time route-switch gate. Owner decision,
+	// 2026-08-21 retired the Celery fallback, so this is switch-only parity
+	// -- no consumer-presence dimension to vary.
+	for _, routeSwitchCase := range []struct {
+		id            string
+		datasets      []string
+		routeSwitches map[string]string
+	}{
+		{
+			// Regression: the exact production failure shape (CHAOS-4047/4048)
+			// -- prs enabled, its pr-comments/pr-reviews aliases left off.
+			id:       "route_switch_disabled_alias_with_sibling_enabled_is_not_planned",
+			datasets: []string{"prs", "pr-comments", "pr-reviews"},
+			routeSwitches: map[string]string{
+				"WORKER_GITHUB_PRS_ENABLED":         "true",
+				"WORKER_GITHUB_PR_COMMENTS_ENABLED": "false",
+				"WORKER_GITHUB_PR_REVIEWS_ENABLED":  "false",
+			},
+		},
+		{
+			// A standalone dataset with its switch off and no alias sibling
+			// to explain it -- the general "switch is off" exclusion.
+			id:            "route_switch_disabled_with_no_fallback_is_not_planned",
+			datasets:      []string{"security"},
+			routeSwitches: map[string]string{"WORKER_GITHUB_SECURITY_ENABLED": "false"},
+		},
+		{
+			id:            "route_switch_enabled_pair_is_planned",
+			datasets:      []string{"security"},
+			routeSwitches: map[string]string{"WORKER_GITHUB_SECURITY_ENABLED": "true"},
+		},
+		{
+			// Codex review finding: the work-item family's CANONICAL claim
+			// ("work-items") is an ordinary routable pair with its own switch,
+			// unrelated to the alias-collapse machinery that deliberately
+			// skips per-alias route checks. A disabled canonical switch must
+			// still exclude it.
+			id:            "route_switch_disabled_work_item_family_canonical_claim_is_not_planned",
+			datasets:      []string{"work-items"},
+			routeSwitches: map[string]string{"WORKER_GITHUB_WORK_ITEMS_ENABLED": "false"},
+		},
+		{
+			id:            "route_switch_enabled_work_item_family_canonical_claim_is_planned",
+			datasets:      []string{"work-items"},
+			routeSwitches: map[string]string{"WORKER_GITHUB_WORK_ITEMS_ENABLED": "true"},
+		},
+	} {
+		datasets := make([]plannerOracleDataset, 0, len(routeSwitchCase.datasets))
+		for _, dataset := range routeSwitchCase.datasets {
+			datasets = append(datasets, plannerOracleDataset{DatasetKey: dataset})
+		}
+		cases = append(cases, plannerOracleCase{
+			ID: routeSwitchCase.id, OrgID: "org-route-switch", IntegrationID: "integration-route-switch",
+			Provider: "github", Mode: SyncModeIncremental, Now: "2026-08-21T12:00:00Z", TierCap: &cap30,
+			Sources:       []plannerOracleSource{{ID: "source-route", ExternalID: "owner/route", Provider: "github", FullName: "owner/route"}},
+			Datasets:      datasets,
+			RouteSwitches: routeSwitchCase.routeSwitches,
+		})
+	}
 	allDatasets := []string{
 		"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments",
 		"cicd", "tests", "deployments", "incidents", "security", "work-items", "work-item-labels",
@@ -327,7 +435,8 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			OrgID: test.OrgID, IntegrationID: test.IntegrationID, Mode: test.Mode, Now: now,
 			Before: parsedBefore, IntegrationDepthDays: test.IntegrationDepth,
 			TierBackfillDaysCap: test.TierCap, WatermarkOverlap: time.Duration(test.WatermarkOverlapSeconds) * time.Second,
-			Watermarks: make(map[WatermarkKey]time.Time),
+			Watermarks:    make(map[WatermarkKey]time.Time),
+			RouteSwitches: completeRouteSwitchesFromCase(test.RouteSwitches),
 		}
 		requested := map[string]bool(nil)
 		if test.Route != nil {

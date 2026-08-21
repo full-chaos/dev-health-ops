@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -85,7 +86,7 @@ func (stubOccurrenceStepper) Reconcile(
 	return schedulersync.OccurrenceReconcileResult{}, nil
 }
 
-func stubOccurrenceSource(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+func stubOccurrenceSource(*pgxpool.Pool, *pgxpool.Pool, providersync.CompleteRouteSwitches) (schedulersync.OccurrenceStepper, error) {
 	return stubOccurrenceStepper{}, nil
 }
 
@@ -185,7 +186,7 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			})
 		},
 		newLoop: schedulersync.NewLoop,
-		newOccurrences: func(pool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		newOccurrences: func(pool, domainPool *pgxpool.Pool, routeSwitches providersync.CompleteRouteSwitches) (schedulersync.OccurrenceStepper, error) {
 			// CHAOS-3114: scheduled_sync_occurrences is coordinator-exclusive,
 			// so the reconciler must also run on the coordinator pool.
 			if pool != database.coordinatorPool {
@@ -194,7 +195,7 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			if domainPool != database.pool {
 				t.Fatal("materializer received the wrong pool; want the domain pool")
 			}
-			return stubOccurrenceSource(pool, domainPool)
+			return stubOccurrenceSource(pool, domainPool, routeSwitches)
 		},
 		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry, _ *slog.Logger) (fixedScheduleRuntime, error) {
 			// CHAOS-3114 (second half): the fixed engine runs on the

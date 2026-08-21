@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -128,6 +129,18 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
+	// RouteSwitches, when non-nil, is the same effective switch state the Go
+	// worker consults (providersync.RouteSwitchesFromConfig, CHAOS-3941). A
+	// dataset whose pair does not resolve to River under it is never planned
+	// (CHAOS-4047): the switch topology forbids it (a mutually exclusive
+	// complete-unit alias, or a pair not yet rolled out). Owner decision,
+	// 2026-08-21: the Celery fallback is retired, so this gates on the
+	// switch alone -- no consumer-presence signal is consulted, symmetric
+	// with the Python planner. Nil preserves pre-CHAOS-4047 behaviour,
+	// planning every enabled dataset unfiltered (the durable
+	// sync.provider_unit route is not a River outbox route there, so Celery
+	// still owns everything).
+	RouteSwitches *providersync.CompleteRouteSwitches
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -235,6 +248,18 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				family = append(family, dataset)
 				continue
 			}
+			// CHAOS-4047: a unit is never minted for a pair the switch
+			// topology forbids -- mutually exclusive complete-unit aliases
+			// (e.g. github pr-comments while prs is enabled) and pairs not
+			// yet rolled out. Family datasets are deliberately excluded from
+			// this check above: their admission is governed by the
+			// atomic-family switch collapse, not a per-alias route switch.
+			if input.RouteSwitches != nil {
+				descriptor, ok := input.RouteSwitches.Descriptor(provider, dataset.Key)
+				if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
+					continue
+				}
+			}
 			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
 			if !ok {
 				// Already synced past the requested end (or a corrupt,
@@ -247,6 +272,20 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		}
 		if len(family) == 0 {
 			continue
+		}
+		// CHAOS-4047: individual family ALIASES are deliberately unchecked
+		// above -- their admission is the atomic-family collapse's business,
+		// not a per-alias route switch. But the CANONICAL claim this
+		// collapse emits (e.g. "work-items") is itself an ordinary routable
+		// pair with its own switch (WORKER_GITHUB_WORK_ITEMS_ENABLED), and
+		// skipping the whole family branch skipped that canonical check too.
+		// Route-gate it here, after collapse, the same way every non-family
+		// dataset already is above (codex review finding).
+		if input.RouteSwitches != nil {
+			descriptor, ok := input.RouteSwitches.Descriptor(provider, canonicalWorkItemsDataset)
+			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
+				continue
+			}
 		}
 		canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
 		if !ok {

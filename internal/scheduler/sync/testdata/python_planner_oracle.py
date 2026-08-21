@@ -101,6 +101,10 @@ _load(
     "dev_health_ops.providers.github.work_item_options",
     SOURCE / "providers/github/work_item_options.py",
 )
+_load(
+    "dev_health_ops.contract_artifacts",
+    SOURCE / "contract_artifacts.py",
+)
 _module(
     "dev_health_ops.sync.dispatch_outbox",
     OUTBOX_KIND_DISCOVERY="reference_discovery",
@@ -134,6 +138,13 @@ _module(
     _watermark_overlap_seconds=lambda: 0,
 )
 planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
+# Loaded AFTER planner: provider_unit_route imports family-dataset names from
+# dev_health_ops.sync.planner, so loading it earlier would hit a partially
+# initialized module (planner.py itself has no dependency the other way).
+provider_unit_route = _load(
+    "dev_health_ops.workers.provider_unit_route",
+    SOURCE / "workers/provider_unit_route.py",
+)
 trigger_routing = _load(
     "dev_health_ops.sync.trigger_routing", SOURCE / "sync/trigger_routing.py"
 )
@@ -295,6 +306,16 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
                 for dataset in plan_datasets
                 if str(dataset.dataset_key) in allowed_datasets
             ]
+    route_switches_environment = _optional_mapping(
+        case.get("route_switches"), "route_switches"
+    )
+    route_switches = (
+        provider_unit_route.ProviderUnitRouteSwitches.from_environment(
+            environment=route_switches_environment
+        )
+        if route_switches_environment is not None
+        else None
+    )
     units = planner._build_planned_units(
         session=object(),
         request=request,
@@ -303,6 +324,7 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         datasets=plan_datasets,
         mode=str(case["mode"]),
         now=now,
+        route_switches=route_switches,
     )
     return [
         {

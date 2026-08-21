@@ -142,6 +142,8 @@ from dev_health_ops.workers.provider_family_contract import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_DAY = 86_400
@@ -286,6 +288,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     sources = _load_enabled_sources(session, integration, request.source_ids)
     datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
     now = datetime.now(timezone.utc)
+    route_switches = _resolve_plan_time_route_switches(session)
 
     planned_units = _build_planned_units(
         session=session,
@@ -295,6 +298,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         datasets=datasets,
         mode=mode,
         now=now,
+        route_switches=route_switches,
     )
 
     # Plan-time mirror of DispatchGuard's total-unit cap (CHAOS-2512): deny
@@ -673,6 +677,44 @@ def _load_enabled_datasets(
     return list(query.order_by(IntegrationDataset.dataset_key).all())
 
 
+def _resolve_plan_time_route_switches(
+    session: Session,
+) -> ProviderUnitRouteSwitches | None:
+    """The same switch state the dispatcher consults for this pass (CHAOS-3941).
+
+    ``None`` means either the durable ``sync.provider_unit`` route is not a
+    River outbox route (Celery owns every unit regardless of switch state,
+    unchanged from pre-CHAOS-4047 behaviour), or the route could not be
+    resolved at all (missing/paused/drifted row). The latter mirrors
+    ``provider_unit_transport``'s own documented residual case -- "planned
+    while the plan-time gate was unavailable" -- deliberately falling back to
+    unfiltered planning rather than raising: ``dispatch_sync_run`` calls this
+    same resolver and fails closed on the identical condition, so nothing
+    dispatches wrongly either way, and the exclusion is a plan-time
+    optimization on top of that dispatch-time gate, not a substitute for it.
+
+    Imported lazily: ``workers.provider_unit_route`` imports names from this
+    module, so a module-level import here would be circular.
+    """
+    from dev_health_ops.workers.job_routes import (
+        WorkerJobRouteError,
+        resolve_worker_job_route,
+    )
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+    from dev_health_ops.workers.provider_unit_transport import (
+        PROVIDER_UNIT_OUTBOX_ROUTES,
+    )
+
+    try:
+        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+    except WorkerJobRouteError:
+        logger.warning("sync.planner.route_switch_gate_unavailable", exc_info=True)
+        return None
+    if provider_unit_route not in PROVIDER_UNIT_OUTBOX_ROUTES:
+        return None
+    return ProviderUnitRouteSwitches.from_environment()
+
+
 def _prs_dataset_enabled(provider: str, datasets: list[IntegrationDataset]) -> bool:
     """True if any enabled dataset maps to the legacy ``prs`` target.
 
@@ -699,6 +741,7 @@ def _build_planned_units(
     datasets: list[IntegrationDataset],
     mode: str,
     now: datetime,
+    route_switches: ProviderUnitRouteSwitches | None = None,
 ) -> list[PlannedUnit]:
     planned_units: list[PlannedUnit] = []
     for source in sources:
@@ -708,6 +751,26 @@ def _build_planned_units(
         for dataset in datasets:
             spec = get_dataset_spec(provider, dataset.dataset_key)
             if spec is None or not spec.supported:
+                continue
+
+            # CHAOS-4047: a unit is never minted for a pair whose own River
+            # switch is off -- mutually exclusive complete-unit aliases (e.g.
+            # github pr-comments while prs is enabled) and not-yet-rolled-out
+            # pairs. Owner decision, 2026-08-21: the Celery fallback is
+            # retired, so a disabled switch means no runtime will ever serve
+            # the pair -- this does not consult Celery consumer presence.
+            # ``None`` means ``sync.provider_unit`` is not a River outbox
+            # route -- Celery still owns everything there, unfiltered,
+            # matching pre-CHAOS-4047 behaviour (that machinery stays wired
+            # for now; a separate ticket owns removing it). Work-item-family
+            # datasets are deliberately excluded from this check: their
+            # admission is governed by the atomic-family switch collapse
+            # below, not a per-alias route switch.
+            if (
+                route_switches is not None
+                and dataset.dataset_key not in _WORK_ITEM_FAMILY_DATASETS
+                and not route_switches.routes_to_river(provider, dataset.dataset_key)
+            ):
                 continue
 
             # CHAOS-2721 (AD-3): work-item-family datasets are collapsed into a
@@ -749,19 +812,33 @@ def _build_planned_units(
                     )
                 )
 
-        planned_units.extend(
-            _build_work_item_family_units(
-                session=session,
-                request=request,
-                integration=integration,
-                source=source,
-                provider=provider,
-                mode=mode,
-                now=now,
-                family_specs=family_specs,
-                prs_enabled=prs_enabled,
-            )
+        family_units = _build_work_item_family_units(
+            session=session,
+            request=request,
+            integration=integration,
+            source=source,
+            provider=provider,
+            mode=mode,
+            now=now,
+            family_specs=family_specs,
+            prs_enabled=prs_enabled,
         )
+        # CHAOS-4047 (codex review finding): individual family ALIASES are
+        # deliberately unchecked above -- their admission is the atomic-family
+        # collapse's business, not a per-alias route switch. But the
+        # CANONICAL claim this collapse emits (e.g. "work-items") is itself an
+        # ordinary routable pair with its own switch
+        # (WORKER_GITHUB_WORK_ITEMS_ENABLED), and skipping the whole family
+        # branch skipped that canonical check too. Route-gate it here, after
+        # collapse, the same way every non-family dataset already is.
+        if route_switches is not None:
+            family_units = [
+                unit
+                for unit in family_units
+                if unit.dataset_key != _FAMILY_CANONICAL_DATASET_KEY
+                or route_switches.routes_to_river(provider, unit.dataset_key)
+            ]
+        planned_units.extend(family_units)
     return planned_units
 
 

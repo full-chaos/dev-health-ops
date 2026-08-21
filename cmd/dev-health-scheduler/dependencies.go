@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -249,8 +250,11 @@ type schedulerRuntimeSources struct {
 	// newOccurrences builds the consumer for the occurrences the sync loop
 	// hands off. It is constructed in the same process for the same reason:
 	// the marker advances on handoff, so an unconsumed occurrence is stranded
-	// work rather than a delayed one.
-	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
+	// work rather than a delayed one. The route switches are the same
+	// effective state the Go worker consults (providersync.RouteSwitchesFromConfig),
+	// threaded through so BuildScheduledPlan never mints a unit the switch
+	// topology forbids (CHAOS-4047).
+	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool, providersync.CompleteRouteSwitches) (schedulersync.OccurrenceStepper, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -274,11 +278,12 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
 	newFixedLoop:   buildFixedScheduleLoop,
-	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool, routeSwitches providersync.CompleteRouteSwitches) (schedulersync.OccurrenceStepper, error) {
 		materializer, err := schedulersync.NewNativeMaterializer(domainPool)
 		if err != nil {
 			return nil, err
 		}
+		materializer.WithRouteSwitches(&routeSwitches)
 		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
 }
@@ -397,7 +402,7 @@ func buildSchedulerLoopWithSources(
 	if coordinator == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_coordinator_unavailable")
 	}
-	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
+	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool, providersync.RouteSwitchesFromConfig(cfg))
 	if err != nil || occurrences == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
 	}

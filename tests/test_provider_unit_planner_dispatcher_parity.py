@@ -405,17 +405,25 @@ def test_planner_and_dispatcher_agree_on_routable_set(
 def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
     """Guard the sweep itself: most pairs must really produce planned units.
 
-    Without this, a change that made ``plan_sync_run`` return zero units for
-    every pair would turn the parity sweep green while proving nothing.
+    CHAOS-4047 (owner decision, 2026-08-21): planning now gates on the pair's
+    own River switch -- Celery fallback is retired, so a disabled switch
+    means "never planned," not "planned and handled by some other runtime."
+    Each pair's own switch is set ON here (never a blanket preset) so the
+    sweep also proves ``_SWITCH_ENV``/``MATRIX_PAIRS``' derived field names
+    actually enable their pair. Without this, a change that made
+    ``plan_sync_run`` return zero units for every ENABLED pair would turn the
+    parity sweep green while proving nothing.
     """
 
-    _pin_presence(monkeypatch, CeleryConsumerPresence.PRESENT)
+    _disable_local_all_routes_preset(monkeypatch)
     planning_pairs = 0
-    for provider, dataset, _field in MATRIX_PAIRS:
+    for provider, dataset, field in MATRIX_PAIRS:
+        monkeypatch.setenv(_SWITCH_ENV[field], "true")
         with _fresh_session() as session:
             outcome = _plan_and_dispatch(
                 session, monkeypatch, provider=provider, dataset=dataset
             )
+        monkeypatch.delenv(_SWITCH_ENV[field], raising=False)
         if outcome["planned_pairs"]:
             planning_pairs += 1
     assert planning_pairs >= 40, (
@@ -484,78 +492,117 @@ def test_dispatch_refuses_to_publish_into_a_consumerless_broker(
         assert unit.last_retry_reason
 
 
-def test_dispatch_still_uses_celery_when_consumers_are_present(
+def test_route_disabled_pair_is_never_planned_regardless_of_celery_presence(
     monkeypatch,
 ) -> None:
-    """CUT-19 / mixed-run rollback: a live Celery fallback still gets its work.
+    """CHAOS-4047 (owner decision, 2026-08-21): Celery fallback is retired.
 
-    CHAOS-3091 requires starting the complete Celery fallback profile and running
-    a representative job through it. Consumer presence -- not the switch -- is
-    what this change gates on, so that rehearsal is unaffected.
+    Formerly ``test_dispatch_still_uses_celery_when_consumers_are_present``,
+    pinning the CUT-19 mixed-run rollback rehearsal: a disabled switch still
+    planned a unit, and a live Celery fallback profile picked it up. The
+    owner decommissioned that fallback outright ("why bother saving any
+    celery work at all ... I literally made the call to get rid of it") --
+    ``plan_sync_run`` now excludes a route-disabled pair at plan time no
+    matter what a Celery consumer probe would say, because there is no
+    longer any runtime the switch-off pair could reach. The dispatcher's
+    CELERY/DEFER machinery is deliberately left in place (a separate ticket
+    owns removing it) but this proves it is now unreachable from planning.
     """
 
-    import dev_health_ops.db as db
-    from dev_health_ops.workers import sync_units
-
+    _disable_local_all_routes_preset(monkeypatch)
     monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
-    _pin_presence(monkeypatch, CeleryConsumerPresence.PRESENT)
 
     with _fresh_session() as session:
         integration = _seed_integration(session, "launchdarkly", ("feature-flags",))
-        plan = plan_sync_run(
-            session,
-            SyncPlanRequest(
-                org_id=str(integration.org_id),
-                integration_id=str(integration.id),
-                mode=SyncRunMode.INCREMENTAL.value,
-                triggered_by="parity-test",
-            ),
-        )
-        assert plan.total_units == 1, "a live Celery fallback must still be planned"
-        _mark_discovery_succeeded(session, plan.sync_run_id)
-        published = _capture_celery_publishes(monkeypatch)
-        monkeypatch.setattr(
-            db, "get_postgres_session_sync", lambda: _session_ctx(session)
-        )
-        session.commit()
-
-        sync_units.dispatch_sync_run(plan.sync_run_id)
-
-        session.expire_all()
-        assert [unit_id for unit_id, _queue in published] == list(plan.unit_ids)
-        assert session.query(WorkerJobOutbox).count() == 0
-        assert (
-            session.query(SyncRunUnit).one().status
-            == SyncRunUnitStatus.DISPATCHING.value
-        )
+        for presence in (
+            CeleryConsumerPresence.PRESENT,
+            CeleryConsumerPresence.ABSENT,
+            CeleryConsumerPresence.UNKNOWN,
+        ):
+            _pin_presence(monkeypatch, presence)
+            plan = plan_sync_run(
+                session,
+                SyncPlanRequest(
+                    org_id=str(integration.org_id),
+                    integration_id=str(integration.id),
+                    mode=SyncRunMode.INCREMENTAL.value,
+                    triggered_by="parity-test",
+                ),
+            )
+            assert plan.total_units == 0, (
+                f"presence={presence}: a route-disabled pair must never be "
+                "planned now that the Celery fallback is retired"
+            )
 
 
 # ---------------------------------------------------------------------------
 # CHAOS-3941 review finding (caught by CI, not by the local gate): the
 # transport gate's "fail open" only fails open if it owns a SAVEPOINT.
+#
+# Formerly ``test_undecidable_consumer_state_neither_publishes_nor_terminalizes``,
+# pinning that a reachable-but-undecidable broker (pidbox control plane
+# failing) neither publishes nor terminalizes a planned unit. Retired by
+# owner decision, 2026-08-21: Celery is not a transport anymore, so a probe
+# of "is Celery listening" no longer has a live broker on the other end to
+# be undecidable about. The premise this test exercised (a switch-off unit
+# still gets planned, and dispatch alone must sort out its transport) no
+# longer holds -- ``test_route_disabled_pair_is_never_planned_regardless_of_celery_presence``
+# above already proves presence (including UNKNOWN) has zero bearing on
+# planning, which is the property that matters now. The dispatcher's DEFER
+# branch itself is untouched and stays wired (a separate ticket owns
+# removing the Celery machinery); this just stops asserting a scenario the
+# ratified topology no longer produces.
+# ---------------------------------------------------------------------------
+# CHAOS-4047: the plan-time route-switch gate. Fixtures throughout are real
+# ``IntegrationDataset``/``IntegrationSource`` rows via ``_seed_integration``,
+# never a hand-authored dataset vocabulary.
 # ---------------------------------------------------------------------------
 
 
-def test_undecidable_consumer_state_neither_publishes_nor_terminalizes(
-    monkeypatch,
-) -> None:
-    """UNKNOWN must not publish and must not destroy (review finding).
+def _disable_local_all_routes_preset(monkeypatch) -> None:
+    """Deny the ``GO_PROVIDER_ROUTES=all`` local-only preset explicitly.
 
-    A reachable broker whose pidbox control plane is failing looks like
-    "cannot tell". Publishing there re-opens the void (apply_async succeeds
-    into an empty queue); terminalizing there fails healthy work. The unit is
-    released to PLANNED instead, holding no DispatchGuard slot, and re-claimed
-    next pass.
+    Without this, a developer's own shell (``DEV_HEALTH_ENV=local``,
+    ``GO_PROVIDER_ROUTES=all`` -- a common local setup) makes
+    ``ProviderUnitRouteSwitches.from_environment()`` treat every alias of an
+    explicitly-enabled canonical writer as also enabled
+    (``_LOCAL_ALL_ALIAS_CANONICAL``), which defeats exactly the switch-off
+    assertions these tests make. Explicit switches otherwise win over the
+    preset's *defaults*, but the alias-canonicalization fallback inside
+    ``_switch_enabled`` is not a default -- it re-checks the canonical field
+    whenever the alias's own explicit value is False. CI has neither var set;
+    this makes the tests deterministic regardless of the runner's shell.
     """
 
-    import dev_health_ops.db as db
-    from dev_health_ops.workers import sync_units
+    monkeypatch.delenv("GO_PROVIDER_ROUTES", raising=False)
+    monkeypatch.delenv("DEV_HEALTH_ENV", raising=False)
 
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
-    _pin_presence(monkeypatch, CeleryConsumerPresence.UNKNOWN)
+
+def test_route_disabled_alias_with_sibling_enabled_is_never_planned(
+    monkeypatch,
+) -> None:
+    """Regression: the exact production failure shape from CHAOS-4047/4048.
+
+    github pr-comments, pr-reviews, and tests are mutually exclusive alias
+    identities of the prs/cicd shared writers (config.go:337/:350 reject
+    enabling both). With prs enabled and pr-comments left off -- the actual
+    prod switch profile -- a pre-CHAOS-4047 planner still minted a
+    pr-comments unit that terminalized instantly as
+    ``status=failed, error=feature_disabled, attempts=0`` (200 such units in
+    one window), burying real failures in the same run.
+
+    POSITIVE CONTROL (verified manually, not asserted here): reverting the
+    ``route_switches`` gate in ``_build_planned_units`` back to
+    pre-CHAOS-4047 (drop the ``route_switches`` parameter and its exclusion
+    check) makes this test FAIL with ``total_units == 1``.
+    """
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_PRS_ENABLED", "true")
+    monkeypatch.setenv("WORKER_GITHUB_PR_COMMENTS_ENABLED", "false")
 
     with _fresh_session() as session:
-        integration = _seed_integration(session, "launchdarkly", ("feature-flags",))
+        integration = _seed_integration(session, "github", ("pr-comments",))
         plan = plan_sync_run(
             session,
             SyncPlanRequest(
@@ -565,21 +612,158 @@ def test_undecidable_consumer_state_neither_publishes_nor_terminalizes(
                 triggered_by="parity-test",
             ),
         )
-        _mark_discovery_succeeded(session, plan.sync_run_id)
-        published = _capture_celery_publishes(monkeypatch)
-        monkeypatch.setattr(
-            db, "get_postgres_session_sync", lambda: _session_ctx(session)
-        )
-        session.commit()
 
-        sync_units.dispatch_sync_run(plan.sync_run_id)
+    assert plan.total_units == 0, (
+        "a disabled alias whose sibling is enabled must never be planned; it "
+        "would terminalize instantly as feature_disabled and bury real failures"
+    )
 
-        session.expire_all()
-        unit = session.query(SyncRunUnit).one()
-        assert published == [], "published while consumer state was unknown"
-        assert session.query(WorkerJobOutbox).count() == 0
-        assert unit.status == SyncRunUnitStatus.PLANNED.value, (
-            "an undecidable unit must be released, not left holding a "
-            "DispatchGuard slot in dispatching"
+
+def test_route_disabled_pair_with_no_sibling_is_never_planned(monkeypatch) -> None:
+    """Input symmetry: exclusion is a general 'switch is off' rule.
+
+    github security has no alias sibling at all -- proving the gate is not
+    secretly alias-specific, only "is this pair's own switch on."
+    """
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "false")
+
+    with _fresh_session() as session:
+        integration = _seed_integration(session, "github", ("security",))
+        plan = plan_sync_run(
+            session,
+            SyncPlanRequest(
+                org_id=str(integration.org_id),
+                integration_id=str(integration.id),
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="parity-test",
+            ),
         )
-        assert unit.error is None, "an undecidable unit must not be terminalized"
+
+    assert plan.total_units == 0
+
+
+def test_route_enabled_pair_is_still_planned(monkeypatch) -> None:
+    """Input symmetry: the gate excludes only disabled pairs, not everything."""
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "true")
+
+    with _fresh_session() as session:
+        integration = _seed_integration(session, "github", ("security",))
+        plan = plan_sync_run(
+            session,
+            SyncPlanRequest(
+                org_id=str(integration.org_id),
+                integration_id=str(integration.id),
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="parity-test",
+            ),
+        )
+
+    assert plan.total_units == 1
+
+
+def test_route_switches_are_not_consulted_off_the_river_outbox_route(
+    monkeypatch,
+) -> None:
+    """Input symmetry: a non-River ``sync.provider_unit`` route plans
+    unfiltered, exactly like before CHAOS-4047.
+
+    ``PROVIDER_UNIT_OUTBOX_ROUTES`` and the Celery transport machinery stay in
+    place by owner decision (a separate ticket owns removing them); this pins
+    that the plan-time gate only ever engages when the durable route says
+    River owns the kind.
+    """
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "false")
+
+    with _fresh_session(transport="celery") as session:
+        integration = _seed_integration(session, "github", ("security",))
+        plan = plan_sync_run(
+            session,
+            SyncPlanRequest(
+                org_id=str(integration.org_id),
+                integration_id=str(integration.id),
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="parity-test",
+            ),
+        )
+
+    assert plan.total_units == 1, (
+        "off the River outbox route, every enabled dataset must still be "
+        "planned unfiltered -- route switches govern River eligibility only"
+    )
+
+
+def test_route_disabled_work_item_family_canonical_claim_is_never_planned(
+    monkeypatch,
+) -> None:
+    """Codex review finding: family ALIASES are deliberately unchecked (their
+    admission is the atomic-family collapse's business), but the CANONICAL
+    claim the collapse emits ("work-items") is an ordinary routable pair with
+    its own switch (WORKER_GITHUB_WORK_ITEMS_ENABLED) that must still gate
+    it -- skipping the whole family branch must not also skip that.
+
+    POSITIVE CONTROL (verified manually, not asserted here): dropping the
+    post-collapse ``route_switches`` filter in ``_build_planned_units``
+    (the ``family_units = [... for unit in family_units ...]`` block) makes
+    this test FAIL with ``total_units == 1``.
+    """
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "false")
+
+    with _fresh_session() as session:
+        integration = _seed_integration(session, "github", ("work-items",))
+        plan = plan_sync_run(
+            session,
+            SyncPlanRequest(
+                org_id=str(integration.org_id),
+                integration_id=str(integration.id),
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="parity-test",
+            ),
+        )
+
+    assert plan.total_units == 0, (
+        "the canonical work-items claim's own switch is off; it must never "
+        "be planned regardless of the alias-collapse machinery"
+    )
+
+
+def test_route_enabled_work_item_family_canonical_claim_is_still_planned(
+    monkeypatch,
+) -> None:
+    """Input symmetry: the family canonical-claim gate excludes only a
+    disabled switch, not everything."""
+
+    _disable_local_all_routes_preset(monkeypatch)
+    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+
+    with _fresh_session() as session:
+        integration = _seed_integration(session, "github", ("work-items",))
+        plan = plan_sync_run(
+            session,
+            SyncPlanRequest(
+                org_id=str(integration.org_id),
+                integration_id=str(integration.id),
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="parity-test",
+            ),
+        )
+
+    assert plan.total_units == 1
+
+
+def test_route_unknown_pair_fails_closed_not_open(monkeypatch) -> None:
+    """Input symmetry: a pair the checked-in matrix does not recognize at all
+    is excluded exactly like an explicit switch-off pair -- fail closed by
+    construction (``getattr(..., False)``/matrix membership), never an
+    exception or an accidental route.
+    """
+
+    switches = ProviderUnitRouteSwitches.from_environment(environment={})
+    assert switches.routes_to_river("acme-corp", "widgets") is False

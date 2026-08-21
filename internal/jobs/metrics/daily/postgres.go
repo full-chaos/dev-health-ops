@@ -690,7 +690,7 @@ func (store *PostgresStore) transitionPartition(ctx context.Context, claim Parti
 	}
 	command, err := store.pool.Exec(ctx, `
 UPDATE public.daily_metrics_partitions
-SET status = $1, claim_token = NULL, lease_expires_at = NULL,
+SET status = $1::varchar, claim_token = NULL, lease_expires_at = NULL,
     completed_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE completed_at END,
     updated_at = $2
 WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
@@ -866,7 +866,7 @@ func (store *PostgresStore) transitionFinalize(ctx context.Context, claim Finali
 	}
 	command, err := store.pool.Exec(ctx, `
 UPDATE public.daily_metrics_runs
-SET finalization_status = $1, finalization_claim_token = NULL,
+SET finalization_status = $1::varchar, finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL,
     finalized_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE finalized_at END,
     status = CASE WHEN $1 = 'succeeded' THEN 'succeeded' ELSE status END,

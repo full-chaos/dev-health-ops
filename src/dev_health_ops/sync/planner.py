@@ -120,6 +120,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.family_flags import (
+    FAMILY_CANONICAL_DATASET_KEY,
     WORK_ITEM_DATASETS,
     family_dataset_flag,
 )
@@ -135,14 +136,18 @@ from dev_health_ops.sync.watermarks import (
     get_watermark_with_overlap,
 )
 from dev_health_ops.tracing import current_trace_parent
+from dev_health_ops.workers.job_routes import (
+    WorkerJobRouteError,
+    resolve_worker_job_route,
+)
 from dev_health_ops.workers.provider_family_contract import (
     atomic_provider_family_route_enabled,
 )
+from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+from dev_health_ops.workers.provider_unit_transport import PROVIDER_UNIT_OUTBOX_ROUTES
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
 logger = logging.getLogger(__name__)
 
@@ -707,18 +712,7 @@ def _resolve_plan_time_route_switches(
     best-effort plan-time check needs (the dispatcher takes its own lock at
     dispatch time regardless -- see the module docstring above).
 
-    Imported lazily: ``workers.provider_unit_route`` imports names from this
-    module, so a module-level import here would be circular.
     """
-    from dev_health_ops.workers.job_routes import (
-        WorkerJobRouteError,
-        resolve_worker_job_route,
-    )
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
-    from dev_health_ops.workers.provider_unit_transport import (
-        PROVIDER_UNIT_OUTBOX_ROUTES,
-    )
-
     nested = session.begin_nested()
     try:
         with session.no_autoflush:
@@ -1120,7 +1114,7 @@ def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
 # family. GitLab, Jira, and Linear retain their contributing-dataset flags.
 _WORK_ITEM_FAMILY_DATASET_ORDER = WORK_ITEM_DATASETS
 _WORK_ITEM_FAMILY_DATASETS: frozenset[str] = frozenset(_WORK_ITEM_FAMILY_DATASET_ORDER)
-_FAMILY_CANONICAL_DATASET_KEY = "work-items"
+_FAMILY_CANONICAL_DATASET_KEY = FAMILY_CANONICAL_DATASET_KEY
 # Compatibility alias for route validation consumers. The implementation lives
 # in the pure family-flags module so coverage imports do not initialize planner
 # dependencies.

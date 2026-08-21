@@ -29,10 +29,14 @@ from functools import cache
 from pathlib import Path
 
 from dev_health_ops.contract_artifacts import contract_directory
-from dev_health_ops.sync.planner import (
-    _FAMILY_CANONICAL_DATASET_KEY,
-    _WORK_ITEM_FAMILY_DATASET_ORDER,
-    _family_dataset_flag,
+from dev_health_ops.sync.family_flags import (
+    FAMILY_CANONICAL_DATASET_KEY as _FAMILY_CANONICAL_DATASET_KEY,
+)
+from dev_health_ops.sync.family_flags import (
+    WORK_ITEM_DATASETS as _WORK_ITEM_FAMILY_DATASET_ORDER,
+)
+from dev_health_ops.sync.family_flags import (
+    family_dataset_flag as _family_dataset_flag,
 )
 from dev_health_ops.workers.provider_family_contract import (
     FamilyExecutionMode,

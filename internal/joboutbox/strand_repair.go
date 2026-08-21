@@ -59,6 +59,13 @@ type StrandRepairResult struct {
 	SkippedJobLive      int
 	SkippedClaimLive    int
 	SkippedClaimSettled int
+	// SkippedRaceLost counts candidates that survived the survey and the claim
+	// check but no longer matched under the phase-3 lock -- another replica
+	// rearmed the row, or its delivery stopped being terminal, in between.
+	// Without this the loser of a two-replica race returns a successful zero
+	// and the contention is invisible, breaking the same "counted, not
+	// filtered" rule the other refusals follow.
+	SkippedRaceLost int
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -112,8 +119,19 @@ func newStrandShape(name, template, jobTable string) strandShape {
 	return strandShape{
 		name:   name,
 		survey: fmt.Sprintf(template, jobTable, "", ""),
+		// Phase 3 matches the surveyed (outbox id, river_job_id) PAIR, not the
+		// id alone. Matching on the id would be an ABA hole: between the survey
+		// and the lock another replica can rearm the row and the relay can mint
+		// a REPLACEMENT delivery in the same pass, so an id-only match would
+		// re-read whatever job is current and delete a delivery that was never
+		// surveyed. The pair is the delivery generation, and requiring it makes
+		// phase 3 a true CAS.
 		lock: fmt.Sprintf(template, jobTable,
-			"AND outbox.id = ANY($3::uuid[])", "FOR UPDATE OF outbox, job SKIP LOCKED"),
+			`AND EXISTS (
+				SELECT 1 FROM unnest($3::uuid[], $4::bigint[]) AS approved(outbox_id, river_job_id)
+				WHERE approved.outbox_id = outbox.id
+					AND approved.river_job_id = outbox.river_job_id
+			)`, "FOR UPDATE OF outbox, job SKIP LOCKED"),
 	}
 }
 
@@ -179,6 +197,7 @@ func (repair *StrandRepair) Step(
 		result.SkippedJobLive += shapeResult.SkippedJobLive
 		result.SkippedClaimLive += shapeResult.SkippedClaimLive
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
+		result.SkippedRaceLost += shapeResult.SkippedRaceLost
 	}
 	return result, nil
 }
@@ -226,11 +245,12 @@ func (repair *StrandRepair) stepShape(
 	}
 
 	// Phase 3 -- lock, re-prove, and rearm on the queue pool.
-	rearmed, err := repair.rearm(ctx, shape.lock, now, limit, approved)
+	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
 	if err != nil {
 		return StrandRepairResult{}, err
 	}
 	result.Rearmed += rearmed
+	result.SkippedRaceLost += lost
 	return result, nil
 }
 
@@ -321,19 +341,21 @@ func (repair *StrandRepair) rearm(
 	now time.Time,
 	limit int,
 	approved []strandCandidate,
-) (int, error) {
+) (int, int, error) {
 	ids := make([]string, 0, len(approved))
+	jobIDs := make([]int64, 0, len(approved))
 	for _, candidate := range approved {
 		ids = append(ids, candidate.outboxID)
+		jobIDs = append(jobIDs, candidate.riverJobID)
 	}
 	tx, err := repair.beginQueue(ctx)
 	if err != nil || tx == nil {
-		return 0, classifyStrandError(err)
+		return 0, 0, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, query, now.UTC(), limit, ids)
+	rows, err := tx.Query(ctx, query, now.UTC(), limit, ids, jobIDs)
 	if err != nil || rows == nil {
-		return 0, classifyStrandError(err)
+		return 0, 0, classifyStrandError(err)
 	}
 	defer rows.Close()
 	locked := make([]strandCandidate, 0, len(approved))
@@ -342,29 +364,33 @@ func (repair *StrandRepair) rearm(
 		if err := rows.Scan(&found.outboxID, &found.riverJobID, &found.jobKind,
 			&found.dedupeKey, &found.disposition); err != nil ||
 			!uuidPattern.MatchString(found.outboxID) || found.riverJobID <= 0 {
-			return 0, ErrUnavailable
+			return 0, 0, ErrUnavailable
 		}
 		// The locked re-read must still agree the delivery is terminal. A row
-		// that turned live between the survey and the lock is dropped.
+		// that turned live between the survey and the lock is dropped -- and
+		// counted below rather than vanishing.
 		if found.disposition == dispositionRearm {
 			locked = append(locked, found)
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, classifyStrandError(rows.Err())
+		return 0, 0, classifyStrandError(rows.Err())
 	}
+	// Anything approved that did not come back rearmable lost a race: another
+	// replica took the row, or the delivery stopped being terminal.
+	lost := len(approved) - len(locked)
 	rearmed := 0
 	for _, found := range locked {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, found.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != found.riverJobID {
-			return 0, classifyStrandError(err)
+			return 0, 0, classifyStrandError(err)
 		}
 		// The delete must have removed a terminal row. Re-checking the returned
 		// state closes the window between the predicate and the delete: a job
 		// that became runnable in between must not be removed.
 		if !terminalRiverState(deleted.State) {
-			return 0, ErrUnavailable
+			return 0, 0, ErrUnavailable
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -375,14 +401,14 @@ func (repair *StrandRepair) rearm(
 			WHERE id = $1 AND status = 'delivered'`,
 			found.outboxID, now.UTC(), strandRecoveryCode, strandRecoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return 0, classifyStrandError(err)
+			return 0, 0, classifyStrandError(err)
 		}
 		rearmed++
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, classifyStrandError(err)
+		return 0, 0, classifyStrandError(err)
 	}
-	return rearmed, nil
+	return rearmed, lost, nil
 }
 
 func terminalRiverState(state rivertype.JobState) bool {

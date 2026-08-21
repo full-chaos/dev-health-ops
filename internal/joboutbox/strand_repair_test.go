@@ -248,6 +248,46 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	}
 }
 
+// TestStrandShapeFormsDifferOnlyInLocking pins the two forms newStrandShape
+// generates from each template.
+//
+// codex review 2026-08-20 round 2: phase 3 must bind the surveyed DELIVERY
+// GENERATION, not just the outbox id. Matching on the id alone is an ABA hole
+// -- between the survey and the lock another replica can rearm the row and the
+// relay can mint a REPLACEMENT delivery in the same pass, so an id-only match
+// would re-read whatever job is current and delete a delivery this pass never
+// surveyed.
+func TestStrandShapeFormsDifferOnlyInLocking(t *testing.T) {
+	for name, template := range strandQueriesUnderTest() {
+		shape := newStrandShape(name, template, `"river"."river_job"`)
+
+		// The survey must NOT lock and must NOT reference the approved-set
+		// parameters -- it is called with two parameters only, so a stray $3
+		// or $4 would be a runtime bind error on every pass.
+		if strings.Contains(shape.survey, "FOR UPDATE") {
+			t.Fatalf("the %s survey form locks; it runs before the domain round-trip and must not "+
+				"hold outbox rows across it", name)
+		}
+		for _, parameter := range []string{"$3", "$4"} {
+			if strings.Contains(shape.survey, parameter) {
+				t.Fatalf("the %s survey form references %s but is called with two parameters", name, parameter)
+			}
+		}
+
+		// The locked form must serialize replicas AND pin the generation.
+		if !strings.Contains(shape.lock, "FOR UPDATE OF outbox, job SKIP LOCKED") {
+			t.Fatalf("the %s locked form lost its row lock", name)
+		}
+		if !strings.Contains(shape.lock, "approved.river_job_id = outbox.river_job_id") {
+			t.Fatalf("the %s locked form lost its delivery-generation CAS; matching the outbox id "+
+				"alone would let it delete a replacement delivery it never surveyed", name)
+		}
+		if !strings.Contains(shape.lock, "approved.outbox_id = outbox.id") {
+			t.Fatalf("the %s locked form no longer binds the approved outbox id", name)
+		}
+	}
+}
+
 func strandQueriesUnderTest() map[string]string {
 	return map[string]string{
 		"partition": repairStrandedPartitionSQL,
@@ -280,7 +320,7 @@ func TestRelayStepFailsClosedOnStrandRepairError(t *testing.T) {
 // distinct all the way to StepResult.
 func TestRelayStepCarriesStrandCountsIntoTheResult(t *testing.T) {
 	strand := &fakeStrandRepair{result: StrandRepairResult{
-		Rearmed: 4, SkippedJobLive: 2, SkippedClaimLive: 1, SkippedClaimSettled: 3,
+		Rearmed: 4, SkippedJobLive: 2, SkippedClaimLive: 1, SkippedClaimSettled: 3, SkippedRaceLost: 2,
 	}}
 	relay := &Relay{repair: fakeTerminalRepair{}, strandRepair: strand}
 	// The step is expected to fail once it reaches the nil repository; the
@@ -288,8 +328,9 @@ func TestRelayStepCarriesStrandCountsIntoTheResult(t *testing.T) {
 	// which Step returns alongside the error.
 	result, _ := relay.stepRecovery(context.Background(), time.Now(), 1)
 	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
-		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 {
-		t.Fatalf("result = %+v, want 4 rearmed, 2 job-live, 1 claim-live and 3 claim-settled", result)
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 ||
+		result.StrandRaceLost != 2 {
+		t.Fatalf("result = %+v, want 4 rearmed, 2 job-live, 1 claim-live, 3 claim-settled, 2 race-lost", result)
 	}
 	if result.Recovered != 0 {
 		t.Fatalf("strand rearms leaked into the terminal-delivery counter: %+v", result)
@@ -304,8 +345,8 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 	// other route.
 	clock := &testReconcilerClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
 	results := []StepResult{
-		{Recovered: 1, StrandsRearmed: 4, StrandJobsSkippedLive: 2, StrandClaimsLive: 1, StrandClaimsSettled: 5},
-		{StrandsRearmed: 1, StrandJobsSkippedLive: 1, StrandClaimsLive: 2, StrandClaimsSettled: 1},
+		{Recovered: 1, StrandsRearmed: 4, StrandJobsSkippedLive: 2, StrandClaimsLive: 1, StrandClaimsSettled: 5, StrandRaceLost: 4},
+		{StrandsRearmed: 1, StrandJobsSkippedLive: 1, StrandClaimsLive: 2, StrandClaimsSettled: 1, StrandRaceLost: 3},
 	}
 	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		result := results[0]
@@ -327,6 +368,7 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 		"worker_outbox_reconciler_strand_jobs_skipped_live_total 3",
 		"worker_outbox_reconciler_strand_claims_live_total 3",
 		"worker_outbox_reconciler_strand_claims_settled_total 6",
+		"worker_outbox_reconciler_strand_race_lost_total 7",
 		"worker_outbox_reconciler_terminal_deliveries_recovered_total 1",
 	} {
 		if !strings.Contains(metrics.String(), want+"\n") {

@@ -71,7 +71,12 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	grantStrandQueuePrivileges(t, ctx, admin)
+	// NOTHING is granted by hand. Every privilege the repair needs comes from
+	// ApplyPinnedMigrations, which is the authoritative path -- it REVOKEs ALL
+	// on the queue role and re-grants an explicit list. Hand-granting here
+	// would mask exactly the defect that shipped in the first draft: grants
+	// that existed only in the provisioning script and were erased by this
+	// migration before the reconciler ever started.
 
 	queue := openIntegrationPool(t, ctx,
 		integrationRoleURI(t, instance.URI, strandQueueRole, strandQueuePassword))
@@ -363,41 +368,60 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
-	// codex review 2026-08-20 / classifyLease audit. ClaimFinalize reaches its
-	// reclaimable branch only when the finalize lease is NON-NULL; with a NULL
-	// lease a 'running' finalization falls through to `claimable`, which
-	// excludes 'running', and settles. Rearming that row mints a finalizer
-	// ClaimFinalize then refuses -- a job that can only no-op.
-	t.Run("a running finalization with no lease is refused", func(t *testing.T) {
-		resetStrandTables(t, ctx, admin)
-		now := time.Now().UTC().Truncate(time.Microsecond)
-		runID := integrationUUID(50)
-		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "running", nil)
-		outboxID := deliverDailyFinalize(t, ctx, fixture, runID, now)
-		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
+	// The finalize branches that production can actually reach. Migration 0057
+	// constrains daily_metrics_runs so that a 'running' finalization ALWAYS
+	// carries a token and lease, and 'pending'/'failed' never carry either --
+	// so the reachable cases are exactly these three. The predicate still
+	// mirrors classifyLease's non-NULL requirement defensively, but this suite
+	// no longer claims to test a row the schema forbids.
+	t.Run("finalize eligibility follows ClaimFinalize", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name         string
+			finalization string
+			hasLease     bool
+			leaseOffset  time.Duration
+			wantRearmed  int
+		}{
+			{
+				name: "running with an expired lease is reclaimed", finalization: "running",
+				hasLease: true, leaseOffset: -time.Hour, wantRearmed: 1,
+			},
+			{
+				name: "running with a live lease is refused", finalization: "running",
+				hasLease: true, leaseOffset: 10 * time.Minute, wantRearmed: 0,
+			},
+			{
+				// Reachable and previously UNTESTED: deleting the
+				// pending/failed branch would have passed the old suite.
+				name: "pending is reclaimed", finalization: "pending", wantRearmed: 1,
+			},
+			{
+				name: "failed is reclaimed", finalization: "failed", wantRearmed: 1,
+			},
+			{
+				name: "succeeded is refused", finalization: "succeeded", wantRearmed: 0,
+			},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				resetStrandTables(t, ctx, admin)
+				now := time.Now().UTC().Truncate(time.Microsecond)
+				runID := integrationUUID(80)
+				var lease *time.Time
+				if testCase.hasLease {
+					lease = ptr(now.Add(testCase.leaseOffset))
+				}
+				seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", testCase.finalization, lease)
+				outboxID := deliverDailyFinalize(t, ctx, fixture, runID, now)
+				makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
 
-		result, err := repair.Step(ctx, now, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.Rearmed != 0 {
-			t.Fatalf("Step() = %+v, want the row left alone: ClaimFinalize would refuse it", result)
-		}
-
-		// Control: the SAME row with an expired lease IS reclaimable, so the
-		// refusal above is the NULL-lease branch and not the fixture failing
-		// to match at all.
-		if _, err := admin.Exec(ctx,
-			"UPDATE public.daily_metrics_runs SET finalization_lease_expires_at=$2 WHERE id=$1",
-			runID, now.Add(-time.Hour)); err != nil {
-			t.Fatal(err)
-		}
-		result, err = repair.Step(ctx, now, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.Rearmed != 1 {
-			t.Fatalf("control Step() = %+v, want 1 rearmed once the lease exists and is expired", result)
+				result, err := repair.Step(ctx, now, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.Rearmed != testCase.wantRearmed {
+					t.Fatalf("Step() = %+v, want %d rearmed", result, testCase.wantRearmed)
+				}
+			})
 		}
 	})
 
@@ -491,17 +515,19 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		runID := integrationUUID(30)
 		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
+		ordered := make([]string, 0, 5)
 		for index := range 5 {
 			partitionID := integrationUUID(31 + index)
 			seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
 			outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
 			makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "completed", now.Add(-2*time.Hour))
-			// Stagger delivered_at so oldest-first is observable.
+			// Stagger delivered_at so oldest-first is observable at all.
 			if _, err := admin.Exec(ctx,
 				"UPDATE public.worker_job_outbox SET delivered_at=$2 WHERE id=$1",
 				outboxID, now.Add(time.Duration(index)*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
+			ordered = append(ordered, outboxID)
 		}
 		result, err := repair.Step(ctx, now, 2)
 		if err != nil {
@@ -510,13 +536,23 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		if result.Rearmed != 2 {
 			t.Fatalf("Step(limit=2) = %+v, want exactly 2 rearmed", result)
 		}
-		var remaining int
-		if err := admin.QueryRow(ctx,
-			"SELECT count(*) FROM public.worker_job_outbox WHERE status='delivered'").Scan(&remaining); err != nil {
-			t.Fatal(err)
-		}
-		if remaining != 3 {
-			t.Fatalf("delivered rows remaining = %d, want 3", remaining)
+		// codex review 2026-08-20: asserting only the COUNT was tautological --
+		// reversing ORDER BY and rearming the two NEWEST would have passed.
+		// Assert WHICH rows moved.
+		for index, outboxID := range ordered {
+			var status string
+			if err := admin.QueryRow(ctx,
+				"SELECT status FROM public.worker_job_outbox WHERE id=$1", outboxID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			want := "delivered"
+			if index < 2 {
+				want = "pending"
+			}
+			if status != want {
+				t.Fatalf("outbox row %d (delivered_at +%dm) is %q, want %q: the pass did not take "+
+					"the oldest deliveries first", index, index, status, want)
+			}
 		}
 	})
 
@@ -637,31 +673,6 @@ func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	}
 }
 
-// grantStrandQueuePrivileges mirrors the queue-role grants in
-// scripts/worker/provision_river_roles.sql, including the CHAOS-3997 read-only
-// additions. Mirroring rather than importing keeps the test honest about what
-// production actually grants: SELECT on the domain tables and nothing more.
-func grantStrandQueuePrivileges(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	for _, statement := range []string{
-		"GRANT USAGE ON SCHEMA public TO " + strandQueueRole,
-		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + strandQueueRole,
-		"GRANT SELECT ON TABLE public.daily_metrics_runs TO " + strandQueueRole,
-		"GRANT SELECT ON TABLE public.daily_metrics_partitions TO " + strandQueueRole,
-		"GRANT SELECT ON TABLE public.work_graph_execution_requests TO " + strandQueueRole,
-		// The DOMAIN role owns execution state. The queue role is deliberately
-		// NOT granted worker_job_runs -- that separation is the whole reason
-		// the claim check runs on a second pool, so the test asserts it below
-		// rather than assuming it.
-		"GRANT USAGE ON SCHEMA public TO " + strandDomainRole,
-		"GRANT SELECT ON TABLE public.worker_job_runs TO " + strandDomainRole,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	// daily_metrics_* and work_graph_execution_requests carry only the columns
@@ -675,8 +686,20 @@ func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			org_id uuid NOT NULL,
 			status text NOT NULL,
 			finalization_status text NOT NULL DEFAULT 'pending',
+			finalization_claim_token uuid NULL,
 			finalization_lease_expires_at timestamptz NULL,
-			finalized_at timestamptz NULL
+			finalized_at timestamptz NULL,
+			-- Copied verbatim from alembic 0057. Production forbids a 'running'
+			-- finalization without a token AND lease, and forbids any other
+			-- status from holding either. Without this constraint the fixture
+			-- can express rows production cannot, and a test built on an
+			-- impossible row proves nothing about production.
+			CONSTRAINT daily_metrics_runs_finalization_claim CHECK (
+				(finalization_status = 'running' AND finalization_claim_token IS NOT NULL
+					AND finalization_lease_expires_at IS NOT NULL)
+				OR (finalization_status <> 'running' AND finalization_claim_token IS NULL
+					AND finalization_lease_expires_at IS NULL)
+			)
 		);
 		CREATE TABLE public.daily_metrics_partitions (
 			id uuid PRIMARY KEY,
@@ -778,9 +801,17 @@ func seedDailyRun(
 	orgID, runID, status, finalizationStatus string, finalizationLease *time.Time,
 ) {
 	t.Helper()
+	var claimToken *string
+	if finalizationLease != nil {
+		token := integrationUUID(9700)
+		claimToken = &token
+	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.daily_metrics_runs (id, org_id, status, finalization_status, finalization_lease_expires_at)
-		VALUES ($1, $2, $3, $4, $5)`, runID, orgID, status, finalizationStatus, finalizationLease); err != nil {
+		INSERT INTO public.daily_metrics_runs (
+			id, org_id, status, finalization_status,
+			finalization_claim_token, finalization_lease_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6)`,
+		runID, orgID, status, finalizationStatus, claimToken, finalizationLease); err != nil {
 		t.Fatal(err)
 	}
 }

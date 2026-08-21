@@ -42,6 +42,7 @@ type StepResult struct {
 	StrandJobsSkippedLive                 int
 	StrandClaimsLive                      int
 	StrandClaimsSettled                   int
+	StrandRaceLost                        int
 	Claimed                               int
 	Deferred                              int
 	Delivered                             int
@@ -217,6 +218,7 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.StrandJobsSkippedLive = rearmed.SkippedJobLive
 		result.StrandClaimsLive = rearmed.SkippedClaimLive
 		result.StrandClaimsSettled = rearmed.SkippedClaimSettled
+		result.StrandRaceLost = rearmed.SkippedRaceLost
 	}
 	return result, nil
 }

@@ -113,6 +113,7 @@ type ReconcilerLoop struct {
 	strandJobsSkippedLive        uint64
 	strandClaimsLive             uint64
 	strandClaimsSettled          uint64
+	strandRaceLost               uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -236,6 +237,7 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.strandJobsSkippedLive += nonNegativeUint(result.StrandJobsSkippedLive)
 	loop.strandClaimsLive += nonNegativeUint(result.StrandClaimsLive)
 	loop.strandClaimsSettled += nonNegativeUint(result.StrandClaimsSettled)
+	loop.strandRaceLost += nonNegativeUint(result.StrandRaceLost)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -334,6 +336,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	strandJobsSkippedLive := loop.strandJobsSkippedLive
 	strandClaimsLive := loop.strandClaimsLive
 	strandClaimsSettled := loop.strandClaimsSettled
+	strandRaceLost := loop.strandRaceLost
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -364,6 +367,10 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	// does not provide, which is worth seeing rather than folding into the
 	// live-claim count.
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_claims_settled_total", "Strand candidates left alone because their idempotency claim had already settled.", strandClaimsSettled)
+	// A race loss is a refusal like any other. Without it the loser of a
+	// two-replica contest reports a successful zero pass and the contention
+	// is invisible.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_race_lost_total", "Strand candidates that no longer matched under the phase-3 lock.", strandRaceLost)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

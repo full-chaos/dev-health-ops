@@ -13,7 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // This file stands up its own container and its own schema rather than
@@ -30,9 +32,17 @@ const (
 )
 
 type strandFixture struct {
-	admin *pgxpool.Pool
-	relay *Relay
-	orgID string
+	admin    *pgxpool.Pool
+	relay    *Relay
+	registry *jobruntime.Registry
+	orgID    string
+	// nextOutbox hands out distinct outbox ids. Deriving one from the domain
+	// id or the dedupe key looks tidy and is wrong: the bounded-pass case
+	// seeds five partitions whose keys are all the same length and whose ids
+	// differ only in the last digits, so any such scheme collides on the
+	// primary key and the test fails for a reason that has nothing to do with
+	// the repair.
+	nextOutbox int
 }
 
 func TestStrandRepairAgainstLivePostgres(t *testing.T) {
@@ -87,7 +97,9 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &strandFixture{admin: admin, relay: relay, orgID: integrationUUID(7001)}
+	fixture := &strandFixture{
+		admin: admin, relay: relay, registry: registry, orgID: integrationUUID(7001),
+	}
 
 	t.Run("a stranded partition is rearmed and its dead delivery deleted", func(t *testing.T) {
 		resetStrandTables(t, ctx, admin)
@@ -173,8 +185,9 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if result.Rearmed != 0 || result.SkippedJobLive != 1 {
-					t.Fatalf("Step() = %+v, want 0 rearmed and 1 skipped", result)
+				if result.Rearmed != 0 || result.SkippedJobLive != 1 ||
+					result.SkippedIdempotencyGrace != 0 {
+					t.Fatalf("Step() = %+v, want 0 rearmed and exactly 1 live-job skip", result)
 				}
 				assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
 				if !riverJobExists(t, ctx, admin, jobID) {
@@ -223,8 +236,9 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Rearmed != 0 {
-			t.Fatalf("Step() = %+v, want the row left alone inside the idempotency lease", result)
+		if result.Rearmed != 0 || result.SkippedIdempotencyGrace != 1 {
+			t.Fatalf("Step() = %+v, want the row left alone inside the idempotency lease AND "+
+				"the refusal counted", result)
 		}
 
 		// One second past the lease: now provably safe.
@@ -233,7 +247,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Rearmed != 1 {
+		if result.Rearmed != 1 || result.SkippedIdempotencyGrace != 0 {
 			t.Fatalf("Step() = %+v, want 1 rearmed once the idempotency lease has elapsed", result)
 		}
 	})
@@ -367,6 +381,50 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
+	// The post-delete re-check. Between the predicate that selected a terminal
+	// job and the delete that removes it, River could in principle move that
+	// job back to a runnable state; deleting it then would destroy work that
+	// was about to run. The window is too narrow to hit by scheduling, so it
+	// is driven directly: the real query and the real transaction are used,
+	// and only the delete is replaced by one that reports a job which is no
+	// longer terminal.
+	t.Run("a delivery that turned runnable before the delete is not removed", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		partitionID := integrationUUID(40)
+		runID := integrationUUID(41)
+		seedDailyRun(t, ctx, admin, fixture.orgID, runID, "running", "pending", nil)
+		seedDailyPartition(t, ctx, admin, fixture.orgID, partitionID, runID, "running", ptr(now.Add(-time.Hour)))
+		outboxID := deliverDailyPartition(t, ctx, fixture, partitionID, now)
+		jobID := riverJobFor(t, ctx, admin, outboxID)
+		makeJobTerminal(t, ctx, admin, jobID, "completed", now.Add(-2*time.Hour))
+
+		racing, err := NewStrandRepair(queue, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		racing.client = resurrectingDelete{id: jobID}
+		if _, err := racing.Step(ctx, now, 10); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("Step() error = %v, want ErrUnavailable when the deleted job was not terminal", err)
+		}
+		assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
+		if !riverJobExists(t, ctx, admin, jobID) {
+			t.Fatal("the transaction was committed after a non-terminal delete")
+		}
+
+		// Control: the same repair with the real delete does rearm the row, so
+		// the refusal above is the re-check firing and not the fixture simply
+		// failing to match the predicate.
+		control, err := NewStrandRepair(queue, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := control.Step(ctx, now, 10)
+		if err != nil || result.Rearmed != 1 {
+			t.Fatalf("control Step() = %+v, %v; want 1 rearmed", result, err)
+		}
+	})
+
 	// The blocker, made executable. Without the CHAOS-3997 grants the repair
 	// cannot read the domain row, and the operator must be able to tell that
 	// from a database outage.
@@ -394,6 +452,15 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 }
 
 func ptr(value time.Time) *time.Time { return &value }
+
+// resurrectingDelete reports a successful delete of a job that is no longer
+// terminal, which is what River would report if the job had been made runnable
+// again between the predicate and the delete.
+type resurrectingDelete struct{ id int64 }
+
+func (stub resurrectingDelete) JobDeleteTx(context.Context, pgx.Tx, int64) (*rivertype.JobRow, error) {
+	return &rivertype.JobRow{ID: stub.id, State: rivertype.JobStateAvailable}, nil
+}
 
 func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
@@ -581,26 +648,26 @@ func deliverDailyPartition(t *testing.T, ctx context.Context, fixture *strandFix
 	t.Helper()
 	return deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindDailyMetricsPartition,
 		"metrics.daily_partition:"+partitionID, "daily_metrics_partition", partitionID,
-		jobcontract.DailyMetricsPartitionPayload{PartitionID: partitionID}, "metrics")
+		jobcontract.DailyMetricsPartitionPayload{PartitionID: partitionID})
 }
 
 func deliverDailyFinalize(t *testing.T, ctx context.Context, fixture *strandFixture, runID string, now time.Time) string {
 	t.Helper()
 	return deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindDailyMetricsFinalize,
 		"metrics.daily_finalize:"+runID, "daily_metrics_run", runID,
-		jobcontract.DailyMetricsFinalizePayload{RunID: runID}, "metrics")
+		jobcontract.DailyMetricsFinalizePayload{RunID: runID})
 }
 
 func deliverWorkGraphBuild(t *testing.T, ctx context.Context, fixture *strandFixture, requestID string, now time.Time) string {
 	t.Helper()
 	return deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindWorkGraphBuild,
 		"workgraph.build:"+requestID, "work_graph_request", requestID,
-		jobcontract.WorkGraphBuildPayload{RequestID: requestID}, "workgraph")
+		jobcontract.WorkGraphBuildPayload{RequestID: requestID})
 }
 
 func deliverStrandSeed(
 	t *testing.T, ctx context.Context, fixture *strandFixture, now time.Time,
-	kind, dedupeKey, domainType, domainID string, payload any, queue string,
+	kind, dedupeKey, domainType, domainID string, payload any,
 ) string {
 	t.Helper()
 	envelope := jobcontract.Envelope{
@@ -615,7 +682,18 @@ func deliverStrandSeed(
 	if err != nil {
 		t.Fatal(err)
 	}
-	outboxID := integrationUUID(5000 + len(dedupeKey))
+	fixture.nextOutbox++
+	outboxID := integrationUUID(5000 + fixture.nextOutbox)
+	// Queue, priority and max attempts are read from the registry rather than
+	// written by hand. The inserter rejects a stored row whose policy differs
+	// from its descriptor by even one field, and it does so as a TERMINAL
+	// 'policy_rejected' -- so a hand-picked value does not fail loudly, it
+	// quietly marks the fixture row dead and leaves the assertions below
+	// testing nothing.
+	descriptor, ok := fixture.registry.Descriptor(kind)
+	if !ok {
+		t.Fatalf("no registry descriptor for %s", kind)
+	}
 	seedOutbox(t, ctx, fixture.admin, outboxSeed{
 		ID:          outboxID,
 		DedupeKey:   dedupeKey,
@@ -623,22 +701,24 @@ func deliverStrandSeed(
 		Version:     1,
 		Args:        args,
 		PayloadHash: canonicalHash(args),
-		Queue:       queue,
-		Priority:    2,
-		MaxAttempts: 5,
+		Queue:       descriptor.Queue,
+		Priority:    descriptor.Priority,
+		MaxAttempts: descriptor.MaxAttempts,
 		ScheduledAt: now.Add(-time.Minute),
 	})
 	if _, err := fixture.relay.Step(ctx, now, 10); err != nil {
 		t.Fatal(err)
 	}
-	var status string
-	if err := fixture.admin.QueryRow(ctx,
-		"SELECT status FROM public.worker_job_outbox WHERE id=$1", outboxID).Scan(&status); err != nil {
+	var status, errorCode, errorDetail string
+	if err := fixture.admin.QueryRow(ctx, `
+		SELECT status, coalesce(last_error_code, ''), coalesce(last_error_detail, '')
+		FROM public.worker_job_outbox WHERE id=$1`, outboxID).
+		Scan(&status, &errorCode, &errorDetail); err != nil {
 		t.Fatal(err)
 	}
 	if status != "delivered" {
-		t.Fatalf("fixture outbox row is %q, want delivered: the relay did not produce a delivery "+
-			"and every assertion below would be vacuous", status)
+		t.Fatalf("fixture outbox row is %q (%s: %s), want delivered: the relay did not produce a "+
+			"delivery and every assertion below would be vacuous", status, errorCode, errorDetail)
 	}
 	return outboxID
 }

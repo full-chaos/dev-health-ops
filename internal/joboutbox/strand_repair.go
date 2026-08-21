@@ -20,6 +20,7 @@ const (
 
 	dispositionRearm       = "rearm"
 	dispositionSkipJobLive = "skip_job_live"
+	dispositionSkipGrace   = "skip_idempotency_grace"
 
 	// insufficientPrivilege is PostgreSQL's SQLSTATE for a denied statement.
 	// This repair is the first queue-role path to read the daily-metrics and
@@ -56,6 +57,14 @@ var ErrNotAuthorized = errors.New("worker outbox role is not authorized")
 type StrandRepairResult struct {
 	Rearmed        int
 	SkippedJobLive int
+	// SkippedIdempotencyGrace counts deliveries that are terminal but have not
+	// been terminal for a full idempotency lease yet. They are reported rather
+	// than filtered for the same reason as SkippedJobLive: this guard sits
+	// between a strand and a duplicate success, and a guard whose refusals are
+	// invisible cannot be distinguished from one that never fires. A count
+	// that stays pinned at zero while strands persist means the grace is
+	// mis-derived, not that the window never opens.
+	SkippedIdempotencyGrace int
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -118,6 +127,7 @@ func (repair *StrandRepair) Step(
 		}
 		result.Rearmed += shape.Rearmed
 		result.SkippedJobLive += shape.SkippedJobLive
+		result.SkippedIdempotencyGrace += shape.SkippedIdempotencyGrace
 	}
 	return result, nil
 }
@@ -164,6 +174,9 @@ func (repair *StrandRepair) stepShape(
 		switch found.disposition {
 		case dispositionSkipJobLive:
 			result.SkippedJobLive++
+			continue
+		case dispositionSkipGrace:
+			result.SkippedIdempotencyGrace++
 			continue
 		case dispositionRearm:
 		default:
@@ -310,6 +323,7 @@ const repairStrandedPartitionSQL = `
 	SELECT outbox.id::text, job.id,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
+			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -327,8 +341,6 @@ const repairStrandedPartitionSQL = `
 		AND partition.lease_expires_at IS NOT NULL
 		AND partition.lease_expires_at <= $1
 		AND run.status = 'running'
-		AND job.finalized_at IS NOT NULL
-		AND job.finalized_at <= $3
 	ORDER BY outbox.delivered_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
 	LIMIT $2::int
@@ -342,6 +354,7 @@ const repairStrandedFinalizeSQL = `
 	SELECT outbox.id::text, job.id,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
+			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -363,8 +376,6 @@ const repairStrandedFinalizeSQL = `
 			SELECT 1 FROM public.daily_metrics_partitions AS sibling
 			WHERE sibling.run_id = run.id AND sibling.status <> 'succeeded'
 		)
-		AND job.finalized_at IS NOT NULL
-		AND job.finalized_at <= $3
 	ORDER BY outbox.delivered_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
 	LIMIT $2::int
@@ -383,6 +394,7 @@ const repairStrandedWorkGraphSQL = `
 	SELECT outbox.id::text, job.id,
 		CASE
 			WHEN job.state::text NOT IN ('completed', 'discarded', 'cancelled') THEN 'skip_job_live'
+			WHEN job.finalized_at IS NULL OR job.finalized_at > $3 THEN 'skip_idempotency_grace'
 			ELSE 'rearm'
 		END AS disposition
 	FROM public.worker_job_outbox AS outbox
@@ -409,8 +421,6 @@ const repairStrandedWorkGraphSQL = `
 				AND request.lease_expires_at IS NULL
 			)
 		)
-		AND job.finalized_at IS NOT NULL
-		AND job.finalized_at <= $3
 	ORDER BY outbox.delivered_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED
 	LIMIT $2::int

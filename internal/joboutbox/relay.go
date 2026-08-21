@@ -40,6 +40,7 @@ type StepResult struct {
 	PostRepairContractRejectionsRecovered int
 	StrandsRearmed                        int
 	StrandJobsSkippedLive                 int
+	StrandIdempotencyGraceSkipped         int
 	Claimed                               int
 	Deferred                              int
 	Delivered                             int
@@ -213,6 +214,7 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		}
 		result.StrandsRearmed = rearmed.Rearmed
 		result.StrandJobsSkippedLive = rearmed.SkippedJobLive
+		result.StrandIdempotencyGraceSkipped = rearmed.SkippedIdempotencyGrace
 	}
 	return result, nil
 }

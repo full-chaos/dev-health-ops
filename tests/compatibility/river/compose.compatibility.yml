@@ -65,11 +65,17 @@ services:
       DB_PASSWORD: river_compat
       DB_PORT: 5432
       DB_USER: river_compat
-      DEFAULT_POOL_SIZE: 5
+      # CHAOS-4011: DEFAULT_POOL_SIZE + RESERVE_POOL_SIZE must cover
+      # probe.go's WorkerPoolMaxConns + InserterPoolMaxConns (10 + 2 = 12) —
+      # two separate pgxpools now, split so the "inserter" river.Client's
+      # own synchronous calls don't compete with the "client"/worker's
+      # standing notifier/elector/maintenance/fetch demand for the same
+      # budget. ci/check_river_compat_static.sh derives and enforces this.
+      DEFAULT_POOL_SIZE: 10
       LISTEN_PORT: 6433
       MAX_CLIENT_CONN: 50
       POOL_MODE: session
-      RESERVE_POOL_SIZE: 1
+      RESERVE_POOL_SIZE: 2
     healthcheck:
       test:
         - CMD-SHELL

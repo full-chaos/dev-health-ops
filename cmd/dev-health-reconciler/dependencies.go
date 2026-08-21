@@ -215,12 +215,35 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
 }
 
-// The active mutation pipeline is wired so activation does not ship a 42501:
-// the Materializer
-// reads sync_run_reference_discoveries and sync_run_post_dispatches, both
-// coordinator-exclusive, so it takes the coordinator pool. LeaseRepair, the
-// Kernel's observe side, and the Observer stay on the domain pool -- every
-// table they touch is domain-granted, and widening them would defeat the split.
+// The active mutation pipeline is wired so activation does not ship a 42501.
+// The list below is the whole composition, and it is exhaustive on purpose:
+// CHAOS-4035 was a component added to this pipeline whose pool was never
+// entered here, so it read a coordinator-exclusive table on the domain role
+// and answered 42501 once a second from its first production deploy. Anything
+// added to NewMutationPipeline gets a line here, naming its pool AND the
+// exclusive tables that decide it.
+//
+//   - Materializer: COORDINATOR pool. It reads sync_run_reference_discoveries
+//     and sync_run_post_dispatches, both coordinator-exclusive.
+//   - UnreclaimableSweep: BOTH pools, and it is the only component here that
+//     spans two. Its durable route read of worker_job_routes is
+//     coordinator-exclusive, so that statement takes the coordinator pool and
+//     runs BEFORE the domain transaction opens; candidate selection and the
+//     terminalize write touch sync_run_units, which coordinatorPosture
+//     declares SELECT-only, so they stay in a domain-pool transaction. Neither
+//     role can run the whole sweep. See internal/syncreconciler/
+//     unreclaimable_sweep.go for the same-snapshot trade-off this costs.
+//   - TerminalDeliveryRepair: QUEUE pool -- it works the River job tables.
+//   - Kernel: DOMAIN pool for the observe/claim side, QUEUE pool for the River
+//     delivery side. The second of the two components here that spans pools.
+//   - The River client backing the publisher: QUEUE pool.
+//   - LeaseRepair, the Observer, and the sync-dispatch reference read inside
+//     the publish closure: DOMAIN pool. Every table they touch is
+//     domain-granted, and widening them would defeat the split.
+//
+// pool_composition_test.go enforces this list against the source rather than
+// trusting it: a component added on a pool this comment does not name fails
+// there, which is the check CHAOS-4035 did not have.
 func buildSyncMutationPipeline(
 	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
@@ -233,7 +256,7 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	sweep, err := buildUnreclaimableSweep(domainPool, cfg)
+	sweep, err := buildUnreclaimableSweep(coordinatorPool, domainPool, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -848,7 +871,12 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 // durable worker_job_routes row and declines unless River owns provider units,
 // so a CUT-19 rollback is covered by mechanism rather than by an operator
 // remembering to flip something back.
+//
+// That route row is COORDINATOR-exclusive, which is why this takes two pools
+// (CHAOS-4035). An earlier cut took only the domain pool, and the sweep spent
+// its entire production life answering 42501 on its first statement.
 func buildUnreclaimableSweep(
+	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
 	cfg config.Config,
 ) (syncreconciler.UnreclaimableSweepStepper, error) {
@@ -859,7 +887,7 @@ func buildUnreclaimableSweep(
 	if mode == syncreconciler.SweepModeOff {
 		return nil, nil
 	}
-	return syncreconciler.NewUnreclaimableSweep(domainPool, syncreconciler.UnreclaimableSweepConfig{
+	return syncreconciler.NewUnreclaimableSweep(coordinatorPool, domainPool, syncreconciler.UnreclaimableSweepConfig{
 		Age:      syncreconciler.DefaultUnreclaimableAge,
 		Idle:     syncreconciler.DefaultUnreclaimableIdle,
 		Mode:     mode,

@@ -150,7 +150,21 @@ func (pipeline *MutationPipeline) Step(
 	// net, and taking lease repair down with it would trade a bounded strand
 	// for an unbounded one.
 	if pipeline.sweep != nil {
-		if _, sweepErr := pipeline.sweep.Step(ctx, now, limit); sweepErr != nil {
+		sweepResult, sweepErr := pipeline.sweep.Step(ctx, now, limit)
+		// A fenced decline is not an error -- the sweep correctly refused to
+		// write against a route that moved underneath it -- but it must not be
+		// invisible either. Without this line an operator sees a healthy pass
+		// while selected strands are abandoned every tick, which is the same
+		// class of silence that let CHAOS-3990 sit unnoticed and CHAOS-4035
+		// ship. It is logged BEFORE the error branch below because the two are
+		// mutually exclusive outcomes of the same call.
+		if sweepErr == nil && sweepResult.DeclinedRouteChange {
+			slog.Warn(
+				"syncreconciler.unreclaimable_sweep_declined_route_change",
+				"candidates", sweepResult.Candidates,
+			)
+		}
+		if sweepErr != nil {
 			// Cancellation belongs to the caller and must propagate; anything
 			// else is the safety net failing, which must not fail the pass.
 			if errors.Is(sweepErr, context.Canceled) ||

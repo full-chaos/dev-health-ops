@@ -81,9 +81,20 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL
 		)`,
+		// Alembic 0055, column for column. The hand-rolled two-column version
+		// this replaces omitted `generation`, which the CHAOS-4035 route fence
+		// reads: the invented schema turned a real read into a 42703 and would
+		// have hidden any predicate that depended on the missing columns.
 		`CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY,
-			transport text NOT NULL
+			job_kind varchar(96) NOT NULL,
+			transport varchar(16) NOT NULL,
+			paused boolean NOT NULL DEFAULT false,
+			generation bigint NOT NULL DEFAULT 1,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			CONSTRAINT ck_worker_job_route_transport
+				CHECK (transport IN ('celery', 'shadow', 'river_canary', 'river')),
+			CONSTRAINT ck_worker_job_route_generation CHECK (generation >= 1),
+			CONSTRAINT worker_job_routes_pkey PRIMARY KEY (job_kind)
 		)`,
 		`INSERT INTO public.worker_job_routes (job_kind, transport)
 			VALUES ('sync.provider_unit', 'river_canary')`,
@@ -159,7 +170,11 @@ func strandedSpec(id, dataset, costClass string, now time.Time) sweepUnitSpec {
 
 func newSweepForTest(t *testing.T, pool *pgxpool.Pool, mode SweepMode) *UnreclaimableSweep {
 	t.Helper()
-	sweep, err := NewUnreclaimableSweep(pool, UnreclaimableSweepConfig{
+	// One superuser pool in both positions. That is exactly what makes this
+	// harness blind to the CHAOS-4035 wiring defect, and why the real role
+	// split is proven separately in
+	// unreclaimable_sweep_role_split_integration_test.go rather than here.
+	sweep, err := NewUnreclaimableSweep(pool, pool, UnreclaimableSweepConfig{
 		Age:  DefaultUnreclaimableAge,
 		Idle: DefaultUnreclaimableIdle,
 		Mode: mode,
@@ -608,5 +623,39 @@ func TestUnreclaimableSweepDoesNothingWhenModeIsOff(t *testing.T) {
 	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(90))
 	if status != "dispatching" {
 		t.Fatalf("status = %q, want untouched", status)
+	}
+}
+
+// A paused route is the control plane's STOP. Every other reader of
+// worker_job_routes honours it -- jobroute.Controller.Resolve returns
+// ErrPaused -- and an operator pausing provider units during an incident would
+// otherwise halt producers and relays while leaving the one component that
+// destroys work still running.
+func TestUnreclaimableSweepDefersWhenTheDurableRouteIsPaused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	seedSweepUnit(t, ctx, pool, strandedSpec(sweepUnitID(85), "tests", "heavy", now))
+	// Transport stays river_canary. Only the pause flag moves, so a sweep that
+	// reads transport alone still sees River ownership -- which is exactly the
+	// shape that shipped.
+	if _, err := pool.Exec(ctx,
+		`UPDATE public.worker_job_routes SET paused = TRUE
+		 WHERE job_kind = 'sync.provider_unit'`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want nothing touched under a paused route", result)
+	}
+	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(85))
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want the unit left alone while the route is paused", status)
 	}
 }

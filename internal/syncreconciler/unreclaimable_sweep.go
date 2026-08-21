@@ -3,12 +3,14 @@ package syncreconciler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -50,6 +52,88 @@ const (
 	unreclaimableErrorCategory  = "feature_disabled"
 	unreclaimableProviderUnitID = "sync.provider_unit"
 )
+
+// PER-STEP ERROR IDENTITY (CHAOS-4035 AC4, the CHAOS-4036 masking class).
+//
+// This file used to return the bare package-wide ErrUnavailable from fourteen
+// distinct failure paths (fifteen now, with the closing route fence). When the sweep's route read started returning 42501
+// once a second in production, the only log line an operator had said "sync
+// dispatch observer database unavailable" -- naming a component that was
+// healthy and uninvolved, and saying nothing about permissions, about
+// worker_job_routes, or about which statement failed. Root-causing it needed
+// the postgres server log and a hand-run has_table_privilege matrix.
+//
+// So each path now names its own step, and carries the SQLSTATE when the
+// driver supplied one. errors.Is(err, ErrUnavailable) still holds, because
+// the pipeline and the lifecycle both branch on that classification and a
+// narrowed error that silently stopped matching would be a worse defect than
+// the one this fixes.
+//
+// Only the five-character SQLSTATE is copied out of the driver error, never
+// its Message, Detail or Hint: those can carry row values, and the
+// "no connection material in an error string" property this package already
+// had must survive being made more informative. internal/storage/postgres/
+// posture_diagnostics.go is the precedent.
+const (
+	sweepStepBegin              = "begin domain transaction"
+	sweepStepRouteQuery         = "durable route read of public.worker_job_routes on the coordinator pool"
+	sweepStepRouteFence         = "durable route re-read fencing the terminalize commit"
+	sweepStepRouteFenceBegin    = "begin coordinator transaction for the route fence"
+	sweepStepRouteFenceTimeout  = "arm the route fence lock timeout"
+	sweepStepRouteScan          = "durable route read scan"
+	sweepStepRouteRows          = "durable route read iteration"
+	sweepStepCandidateQuery     = "candidate page read of public.sync_run_units"
+	sweepStepCandidateScan      = "candidate page scan"
+	sweepStepCandidateRows      = "candidate page iteration"
+	sweepStepOutboxQuery        = "published-outbox filter on public.worker_job_outbox"
+	sweepStepOutboxScan         = "published-outbox scan"
+	sweepStepOutboxRows         = "published-outbox iteration"
+	sweepStepTerminalizePayload = "terminalize payload encode"
+	sweepStepTerminalizeExec    = "terminalize write to public.sync_run_units"
+	sweepStepTerminalizeRows    = "terminalize affected-row count"
+	sweepStepCommit             = "commit domain transaction"
+)
+
+// unreclaimableStepError names the sweep step that failed while keeping the
+// package-stable ErrUnavailable classification callers branch on.
+type unreclaimableStepError struct {
+	step     string
+	sqlState string
+}
+
+func (stepErr unreclaimableStepError) Error() string {
+	if stepErr.sqlState != "" {
+		return "unreclaimable sweep " + stepErr.step + " failed (sqlstate " +
+			stepErr.sqlState + "): " + ErrUnavailable.Error()
+	}
+	return "unreclaimable sweep " + stepErr.step + " failed: " + ErrUnavailable.Error()
+}
+
+// Unwrap is what keeps errors.Is(err, ErrUnavailable) true for every step.
+func (stepErr unreclaimableStepError) Unwrap() error { return ErrUnavailable }
+
+// sweepUnavailable builds the step-identified error. cause is used ONLY to
+// recover a SQLSTATE; it is never wrapped, so no driver string can reach a log
+// line through this path.
+func sweepUnavailable(step string, cause error) error {
+	stepErr := unreclaimableStepError{step: step}
+	var pgErr *pgconn.PgError
+	if errors.As(cause, &pgErr) {
+		stepErr.sqlState = pgErr.Code
+	}
+	return stepErr
+}
+
+// SweepStepIdentity returns the step name carried by a sweep failure, or "" if
+// the error did not come from the sweep. Exported so a caller can key a metric
+// or an alert on the step rather than on a substring of a message.
+func SweepStepIdentity(err error) string {
+	var stepErr unreclaimableStepError
+	if errors.As(err, &stepErr) {
+		return stepErr.step
+	}
+	return ""
+}
 
 // SweepMode decides whether the sweep may write.
 //
@@ -125,32 +209,111 @@ type UnreclaimableSweepResult struct {
 	RunIDs       []string
 	Pairs        []string
 	UnitIDs      []string
+	// DeclinedRouteChange reports that the durable route moved underneath this
+	// pass and the write was abandoned. It is distinct from a zero
+	// Terminalized, which is also what a pass with nothing to do returns.
+	DeclinedRouteChange bool
+}
+
+// routeFence is the durable route's identity at one instant: which transport
+// owns provider units, and the generation stamp every route mutation bumps
+// (internal/jobroute/control.go ApplyCheckedIn and Rollback both do
+// `generation = generation + 1` under an optimistic CAS on the old value).
+//
+// The generation is what makes an ownership flip DETECTABLE across two pools.
+// A transport comparison alone would miss celery -> river -> celery inside one
+// pass; the counter cannot be walked back.
+type routeFence struct {
+	transport  string
+	paused     bool
+	generation int64
+}
+
+// riverOwns is the whole authorization to destroy work, so it is fail-closed
+// on both axes.
+//
+// PAUSED is load-bearing and was missing (review finding). The comment above
+// riverOwnsProviderUnits has always said a "missing, paused, duplicated or
+// unreadable row is NOT read as River owns it", but the statement selected
+// only `transport`, so the paused half was never implemented. Every other
+// reader of this table honours it -- jobroute.Controller.Resolve returns
+// ErrPaused -- which means an operator pausing the route during an incident
+// stopped producers and relays while leaving the one component that DELETES
+// work still running. Pause is the control-plane stop; it must stop this too.
+//
+// Both `river` and `river_canary` count as River ownership. A canary that has
+// been promoted to full River ownership owns provider units MORE completely,
+// not less, and refusing to sweep then would disable the safety net exactly
+// when it is most correct. Whether the row matches the checked-in policy
+// artifact is a different question, and it belongs to the route fence in
+// internal/syncroute, not here.
+func (fence routeFence) riverOwns() bool {
+	if fence.paused {
+		return false
+	}
+	return fence.transport == "river" || fence.transport == "river_canary"
+}
+
+// unreclaimableRouteReader is the coordinator-side seam. It is deliberately
+// the smallest thing that can run one read: *pgxpool.Pool satisfies it, and so
+// does pgx.Tx, which is what lets the unit tests drive it with the same fake
+// they already use for the domain transaction.
+type unreclaimableRouteReader interface {
+	// Query runs the unlocked opening read.
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	// Begin opens the short coordinator transaction that holds the closing
+	// fence's row lock across the domain commit.
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // UnreclaimableSweep terminalizes units nothing is working.
+//
+// It spans TWO roles, and therefore two pools (CHAOS-4035):
+//
+//   - routes reads public.worker_job_routes, which the role manifest
+//     attributes exclusively to the COORDINATOR role
+//     (internal/storage/postgres/domain_authorization.go coordinatorPosture);
+//   - begin opens the transaction that selects candidates and terminalizes
+//     them, all on DOMAIN-granted tables, and coordinatorPosture declares
+//     sync_run_units SELECT-only, so the write cannot move to the coordinator
+//     role either.
+//
+// Neither pool alone can run the whole sweep. This is the same two-pool split
+// the Materializer already uses; cmd/dev-health-reconciler/dependencies.go
+// documents the composition.
 type UnreclaimableSweep struct {
 	begin  leaseRepairBeginFunc
+	routes unreclaimableRouteReader
 	config UnreclaimableSweepConfig
 }
 
+// NewUnreclaimableSweep takes both pools because the sweep genuinely needs
+// both. The coordinator pool is a separate positional parameter rather than an
+// optional field for the reason CHAOS-4035 exists: the first version took one
+// pool, the caller passed the domain pool, and the mistake was invisible until
+// production answered 42501 once a second.
 func NewUnreclaimableSweep(
-	pool *pgxpool.Pool,
+	coordinatorPool *pgxpool.Pool,
+	domainPool *pgxpool.Pool,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if pool == nil || !config.valid() {
+	if coordinatorPool == nil || domainPool == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{begin: pool.Begin, config: config}, nil
+	return &UnreclaimableSweep{
+		begin: domainPool.Begin, routes: coordinatorPool, config: config,
+	}, nil
 }
 
 func newUnreclaimableSweep(
+	routes unreclaimableRouteReader,
 	begin leaseRepairBeginFunc,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if begin == nil || !config.valid() {
+	if routes == nil || begin == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{begin: begin, config: config}, nil
+	return &UnreclaimableSweep{begin: begin, routes: routes, config: config}, nil
 }
 
 type unreclaimableCandidate struct {
@@ -174,7 +337,8 @@ func (sweep *UnreclaimableSweep) Step(
 	now time.Time,
 	limit int,
 ) (UnreclaimableSweepResult, error) {
-	if sweep == nil || sweep.begin == nil || ctx == nil || now.IsZero() ||
+	if sweep == nil || sweep.begin == nil || sweep.routes == nil || ctx == nil ||
+		now.IsZero() ||
 		limit < unreclaimableMinimumLimit || limit > unreclaimableMaximumLimit {
 		return UnreclaimableSweepResult{}, ErrInvalidConfiguration
 	}
@@ -188,21 +352,39 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 
 	now = now.UTC()
-	tx, err := sweep.begin(ctx)
-	if err != nil || tx == nil {
-		return UnreclaimableSweepResult{}, ErrUnavailable
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Durable route first, exactly as Python orders it. If River does not own
 	// provider units, Celery does, and nothing here may terminalize its work.
-	riverOwns, err := riverOwnsProviderUnits(ctx, tx)
+	//
+	// TWO POOLS, and the read runs OUTSIDE the transaction below (CHAOS-4035).
+	// worker_job_routes belongs exclusively to the coordinator role, while the
+	// candidate selection and the terminalize write belong exclusively to the
+	// domain role, so no single transaction can hold both: the first cut ran
+	// this read on the domain pool inside the domain transaction and returned
+	// 42501 on every tick from its first production deploy.
+	//
+	// THE TRADE-OFF, stated here rather than left to be rediscovered: this
+	// gives up reading the route row and the candidate rows in one snapshot.
+	// A route flip that lands between these two statements is therefore acted
+	// on one pass late. That is acceptable and deliberate -- Python resolves
+	// worker_job_routes in its own separate statement and has exactly the same
+	// property, so this is parity with the specification rather than a
+	// regression against it -- and the window is one 1s tick against a route
+	// flip that is an operator action. Do NOT "fix" this by moving the read
+	// back inside the transaction; that is the defect, not a tidier form of it.
+	opening, usable, err := readProviderUnitRoute(ctx, sweep.routes, sweepStepRouteQuery)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
-	if !riverOwns {
+	if !usable || !opening.riverOwns() {
 		return result, nil
 	}
+
+	tx, err := sweep.begin(ctx)
+	if err != nil || tx == nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepBegin, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
 	if err != nil {
@@ -235,12 +417,57 @@ func (sweep *UnreclaimableSweep) Step(
 			return UnreclaimableSweepResult{}, err
 		}
 		if affected < 0 || affected > 1 {
-			return UnreclaimableSweepResult{}, ErrUnavailable
+			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepTerminalizeRows, nil)
 		}
 		result.Terminalized += int(affected)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return UnreclaimableSweepResult{}, ErrUnavailable
+
+	// ROUTE FENCE (adversarial review finding). The writes above are staged
+	// and NOT yet committed.
+	//
+	// The failure this closes: the sweep reads river_canary, an operator rolls
+	// provider units back to Celery, and the sweep then commits 'failed' onto
+	// dispatching units Celery is about to claim. Neither existing guard can
+	// see it -- the updated_at CAS only catches a runtime that already touched
+	// the row, and the outbox filter only catches a unit already in the River
+	// relay. Nothing had touched these rows, which is the entire definition of
+	// the strand this sweep selects.
+	//
+	// A comparison alone is not enough, and shipping one while calling the
+	// race closed would be worse than the race. The route decision and the
+	// write live on different pools, so they cannot share a transaction -- but
+	// they CAN be serialized: holdRouteFence takes FOR SHARE on the route row
+	// in a short coordinator transaction and HOLDS it across the domain commit
+	// below, so a concurrent route UPDATE blocks until this pass has finished
+	// deciding. The generation is compared under that lock as well, which
+	// catches a flip that committed earlier in the pass, including a
+	// celery -> river -> celery round trip the transport alone would miss.
+	//
+	// The comparison is over the WHOLE fence -- transport, paused and
+	// generation -- so a mid-pass pause is caught even if a future pause
+	// statement forgets to bump the generation.
+	//
+	// It is taken here rather than at the opening read on purpose: holding it
+	// for the whole pass would block operator route mutations across all the
+	// candidate paging, and this is a safety net, not a control plane.
+	//
+	// Shadow mode never reaches this: it writes nothing, so there is nothing
+	// to fence, and it must not block a rollback either.
+	held, err := sweep.holdRouteFence(ctx, opening)
+	if err != nil {
+		return UnreclaimableSweepResult{}, err
+	}
+	if !held.ok {
+		result.Terminalized = 0
+		result.DeclinedRouteChange = true
+		return result, nil
+	}
+	// The lock is still held here, so no route mutation can interleave with
+	// this commit.
+	commitErr := tx.Commit(ctx)
+	held.release()
+	if commitErr != nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, commitErr)
 	}
 	return result, nil
 }
@@ -308,34 +535,140 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 //
 // A missing, paused, duplicated or unreadable row is NOT read as "River owns
 // it": the sweep declines to act, matching Python's refusal to fall back to a
-// transport during a control-plane fault.
+// transport during a control-plane fault. The paused half of that sentence
+// was an unimplemented claim until CHAOS-4035 -- the statement selected only
+// `transport` -- which is why routeFence.riverOwns now carries the check and
+// says so.
 const selectProviderUnitRouteSQL = `
-SELECT transport
+SELECT transport, paused, generation
 FROM public.worker_job_routes
 WHERE job_kind = $1
 `
 
-func riverOwnsProviderUnits(ctx context.Context, tx pgx.Tx) (bool, error) {
-	rows, err := tx.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
+// heldRouteFence is a lock held open. release MUST be called once the domain
+// commit has been attempted, and never before.
+type heldRouteFence struct {
+	ok      bool
+	release func()
+}
+
+func (sweep *UnreclaimableSweep) holdRouteFence(
+	ctx context.Context, opening routeFence,
+) (heldRouteFence, error) {
+	tx, err := sweep.routes.Begin(ctx)
+	if err != nil || tx == nil {
+		return heldRouteFence{}, sweepUnavailable(sweepStepRouteFenceBegin, err)
+	}
+	release := func() { _ = tx.Rollback(ctx) }
+	// SET LOCAL, so the bound dies with this transaction rather than leaking
+	// onto a pooled connection every other coordinator statement then inherits.
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+unreclaimableFenceLockTimeout+"'"); err != nil {
+		release()
+		return heldRouteFence{}, sweepUnavailable(sweepStepRouteFenceTimeout, err)
+	}
+	closing, usable, err := readProviderUnitRoute(ctx, tx, sweepStepRouteFence)
 	if err != nil {
-		return false, ErrUnavailable
+		release()
+		// A contended row means a route mutation is in flight, so the answer
+		// is already "decline". Only that specific SQLSTATE is swallowed; a
+		// permission or connection fault still surfaces as a step error.
+		if isLockNotAvailable(err) {
+			return heldRouteFence{}, nil
+		}
+		return heldRouteFence{}, err
+	}
+	if !usable || closing != opening {
+		release()
+		return heldRouteFence{}, nil
+	}
+	return heldRouteFence{ok: true, release: release}, nil
+}
+
+// isLockNotAvailable reads the SQLSTATE off the STEP error, not off a wrapped
+// driver error.
+//
+// This is the one place the deliberate non-wrapping in sweepUnavailable bites:
+// the driver error is intentionally dropped so no connection material can ever
+// reach a message, which means errors.As can never find a *pgconn.PgError in
+// this chain. An earlier cut of this fence checked for one anyway, so the
+// contention path it exists to serve was dead code and a contended route row
+// surfaced as a generic failure instead of the decline it is (review finding).
+// The SQLSTATE the step error already carries is the right source, and it
+// works whether pgx reported the timeout from Query or deferred it to
+// rows.Err() -- the two land on different steps but the same code.
+func isLockNotAvailable(err error) bool {
+	var stepErr unreclaimableStepError
+	return errors.As(err, &stepErr) && stepErr.sqlState == lockNotAvailableSQLState
+}
+
+// lockNotAvailableSQLState is PostgreSQL's lock_not_available. Reaching it here
+// means a route mutation holds the row, so the sweep's answer is already
+// "decline" and waiting longer would only delay it.
+const lockNotAvailableSQLState = "55P03"
+
+// The closing fence takes a ROW LOCK, and FOR SHARE specifically.
+//
+// FOR SHARE conflicts with FOR NO KEY UPDATE, which is what a plain UPDATE
+// takes, so it genuinely blocks internal/jobroute/control.go's Rollback and
+// ApplyCheckedIn rather than merely racing them. FOR KEY SHARE would NOT: it
+// only conflicts with key updates, and the route mutation changes transport
+// and generation, neither of which is the key.
+//
+// PostgreSQL requires the UPDATE privilege to take this lock even though no
+// row is written. coordinatorPosture already declares worker_job_routes with
+// AllowUpdate (internal/storage/postgres/domain_authorization.go), for the
+// route mutation itself, so this needs no widening -- and the role-split
+// integration suite executes this exact statement as the real coordinator
+// login rather than assuming it.
+const fenceProviderUnitRouteSQL = `
+SELECT transport, paused, generation
+FROM public.worker_job_routes
+WHERE job_kind = $1
+FOR SHARE
+`
+
+// The fence must never become the thing that stalls the 1s reconcile pass. If
+// a route mutation is in flight and holds the row, waiting it out is pointless
+// -- the answer is already going to be "declined" -- so the lock wait is
+// bounded and a timeout IS a decline rather than an error.
+const unreclaimableFenceLockTimeout = "250ms"
+
+// routeQuerier is the subset both the pool (unlocked opening read) and the
+// fence transaction (locked closing read) satisfy.
+type routeQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func readProviderUnitRoute(
+	ctx context.Context, routes routeQuerier, step string,
+) (routeFence, bool, error) {
+	statement := selectProviderUnitRouteSQL
+	if step == sweepStepRouteFence {
+		statement = fenceProviderUnitRouteSQL
+	}
+	rows, err := routes.Query(ctx, statement, unreclaimableProviderUnitID)
+	if err != nil {
+		return routeFence{}, false, sweepUnavailable(step, err)
 	}
 	defer rows.Close()
-	transports := make([]string, 0, 1)
+	fences := make([]routeFence, 0, 1)
 	for rows.Next() {
-		var transport string
-		if err := rows.Scan(&transport); err != nil {
-			return false, ErrUnavailable
+		var fence routeFence
+		if err := rows.Scan(&fence.transport, &fence.paused, &fence.generation); err != nil {
+			return routeFence{}, false, sweepUnavailable(sweepStepRouteScan, err)
 		}
-		transports = append(transports, strings.TrimSpace(strings.ToLower(transport)))
+		fence.transport = strings.TrimSpace(strings.ToLower(fence.transport))
+		fences = append(fences, fence)
 	}
-	if rows.Err() != nil {
-		return false, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return routeFence{}, false, sweepUnavailable(sweepStepRouteRows, err)
 	}
-	if len(transports) != 1 {
-		return false, nil
+	// A missing, duplicated or unreadable row is a control-plane fault. The
+	// second return value is "usable", never "River owns it".
+	if len(fences) != 1 {
+		return routeFence{}, false, nil
 	}
-	return transports[0] == "river" || transports[0] == "river_canary", nil
+	return fences[0], true, nil
 }
 
 // unroutable mirrors Python's resolve_unit_transport: a pair is sweepable only
@@ -402,7 +735,7 @@ func scanUnreclaimablePage(
 		ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 	)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, sweepUnavailable(sweepStepCandidateQuery, err)
 	}
 	defer rows.Close()
 	page := make([]unreclaimableCandidate, 0, limit)
@@ -413,12 +746,12 @@ func scanUnreclaimablePage(
 			&candidate.provider, &candidate.datasetKey, &candidate.costClass,
 			&candidate.createdAt, &candidate.updatedAt,
 		); err != nil {
-			return nil, ErrUnavailable
+			return nil, sweepUnavailable(sweepStepCandidateScan, err)
 		}
 		page = append(page, candidate)
 	}
-	if rows.Err() != nil {
-		return nil, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return nil, sweepUnavailable(sweepStepCandidateRows, err)
 	}
 	return page, nil
 }
@@ -443,19 +776,19 @@ func dropPublishedUnits(
 	}
 	rows, err := tx.Query(ctx, selectPublishedDedupeKeysSQL, keys)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, sweepUnavailable(sweepStepOutboxQuery, err)
 	}
 	defer rows.Close()
 	published := make(map[string]struct{}, len(keys))
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
-			return nil, ErrUnavailable
+			return nil, sweepUnavailable(sweepStepOutboxScan, err)
 		}
 		published[key] = struct{}{}
 	}
-	if rows.Err() != nil {
-		return nil, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return nil, sweepUnavailable(sweepStepOutboxRows, err)
 	}
 	unpublished := make([]unreclaimableCandidate, 0, len(page))
 	for _, candidate := range page {
@@ -509,7 +842,7 @@ func (sweep *UnreclaimableSweep) terminalize(
 		"dataset_key":    candidate.datasetKey,
 	})
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, sweepUnavailable(sweepStepTerminalizePayload, err)
 	}
 	command, err := tx.Exec(
 		ctx, terminalizeUnreclaimableSQL,
@@ -517,7 +850,7 @@ func (sweep *UnreclaimableSweep) terminalize(
 		now, candidate.updatedAt,
 	)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, sweepUnavailable(sweepStepTerminalizeExec, err)
 	}
 	return command.RowsAffected(), nil
 }

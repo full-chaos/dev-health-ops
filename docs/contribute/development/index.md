@@ -14,3 +14,4 @@ lifecycle: active
 - [Fixtures and live-like validation](fixtures-and-live-validation.md)
 - [Create and validate migrations](migrations.md)
 - [Debug and observe development environments](debugging.md)
+- [Verification traps in the Go worker runtime](go-worker-verification-traps.md)

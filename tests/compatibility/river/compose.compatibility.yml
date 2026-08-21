@@ -69,6 +69,7 @@ services:
       LISTEN_PORT: 6433
       MAX_CLIENT_CONN: 50
       POOL_MODE: session
+      RESERVE_POOL_SIZE: 1
     healthcheck:
       test:
         - CMD-SHELL

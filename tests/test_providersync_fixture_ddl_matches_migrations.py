@@ -32,6 +32,24 @@ def _fixture_function(fixture_source: str) -> str:
     return fixture_source[start:end]
 
 
+def _table_ddl(fixture_ddl: str, table_name: str) -> str:
+    """Just one CREATE TABLE public.<table_name> (...) statement's body.
+
+    A codex adversarial review caught that checking a FK/constraint
+    substring against the WHOLE fixture function is too coarse: several
+    tables here FK to the same referenced table with the identical literal
+    (e.g. `REFERENCES public.integrations(id)`), so a substring check can't
+    tell whether any ONE specific table is missing it as long as some OTHER
+    table in the fixture happens to have it. This slices out exactly the
+    named table's own backtick-quoted DDL string so each assertion is
+    scoped to the table it claims to be about.
+    """
+    marker = f"CREATE TABLE public.{table_name} ("
+    start = fixture_ddl.index(marker)
+    end = fixture_ddl.index(")`", start)
+    return fixture_ddl[start:end]
+
+
 def test_providersync_fixture_matches_integration_data_model_migration() -> None:
     """internal/providersync's Go fixture vs. alembic 0015 (CHAOS-4050).
 
@@ -52,10 +70,16 @@ def test_providersync_fixture_matches_integration_data_model_migration() -> None
     # columns this fixture actually carries (columns alembic requires but no
     # providersync query reads -- integrations.name/provider/is_active/...,
     # sync_runs.triggered_by/mode/..., etc. -- are intentionally not
-    # reproduced; see the createProviderSyncFixture doc comment).
+    # reproduced; see the createProviderSyncFixture doc comment). Checked
+    # against each table's OWN DDL block, not the whole fixture function --
+    # several of these FK to the same referenced table with the identical
+    # literal, so a whole-function substring check can't tell whether any
+    # ONE of them is the table actually missing it (a codex adversarial
+    # review caught sync_runs.integration_id missing this way).
     for table, fk_column, referenced in (
         ("integration_sources", "integration_id", "integrations"),
         ("integration_datasets", "integration_id", "integrations"),
+        ("sync_runs", "integration_id", "integrations"),
         ("sync_run_units", "source_id", "integration_sources"),
         ("sync_run_units", "sync_run_id", "sync_runs"),
     ):
@@ -66,9 +90,10 @@ def test_providersync_fixture_matches_integration_data_model_migration() -> None
             f"expected alembic 0015 to FK {table}.{fk_column} -> {referenced}.id "
             "-- if this changed, the fixture's FK needs to change with it"
         )
-        assert f"REFERENCES public.{referenced}(id)" in fixture_ddl, (
-            f"fixture is missing the real 0015 FK {table}.{fk_column} -> "
-            f"{referenced}.id"
+        table_ddl = _table_ddl(fixture_ddl, table)
+        assert f"REFERENCES public.{referenced}(id)" in table_ddl, (
+            f"fixture's {table} table is missing the real 0015 FK "
+            f"{table}.{fk_column} -> {referenced}.id"
         )
 
     assert "uq_integration_datasets_org_integration_dataset" in migration_source

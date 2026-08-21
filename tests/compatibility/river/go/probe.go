@@ -574,7 +574,10 @@ func runInternalWorkload(
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_start FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_start", err)
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancel job started job_id=%d\n", opts.Mode, cancelInsert.Job.ID)
+	// No job ID in this trace line: README.md's failure-log redaction
+	// contract (Tool stdout/stderr section) explicitly excludes River job
+	// IDs from what may reach CI stderr (codex review, CHAOS-4011).
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancel job started\n", opts.Mode)
 	if _, err := inserter.JobCancel(ctx, cancelInsert.Job.ID); err != nil {
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client JobCancel FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("cancel_running_job", err)

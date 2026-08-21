@@ -59,16 +59,28 @@ docker compose \
 # 90s matrix timeout) expire. This is the second time a PgBouncer
 # pool-budget mismatch has shipped a defect (prod river pool 37 was the
 # first) — enforce the invariant instead of only fixing the instance.
-probe_max_conns_sum="$(
-  {
-    grep -oE 'WorkerPoolMaxConns = [0-9]+' "${ROOT}/tests/compatibility/river/go/probe.go" | grep -oE '[0-9]+$'
-    grep -oE 'InserterPoolMaxConns = [0-9]+' "${ROOT}/tests/compatibility/river/go/probe.go" | grep -oE '[0-9]+$'
-  } | jq -s 'add'
+# CHAOS-4011 (codex review): extract each constant into its own variable and
+# require both explicitly, rather than concatenating both greps' output into
+# one stream and summing whatever came out — if a rename ever silently broke
+# one grep, that would leave the other's single value looking like a valid
+# (but wrong, too-low) sum, and this check would keep passing.
+worker_pool_max_conns="$(
+  grep -oE 'WorkerPoolMaxConns = [0-9]+' "${ROOT}/tests/compatibility/river/go/probe.go" \
+    | grep -oE '[0-9]+$'
 )"
-[ -n "${probe_max_conns_sum}" ] && [ "${probe_max_conns_sum}" != "null" ] || {
-  printf 'ERROR: cannot find WorkerPoolMaxConns/InserterPoolMaxConns in tests/compatibility/river/go/probe.go\n' >&2
+inserter_pool_max_conns="$(
+  grep -oE 'InserterPoolMaxConns = [0-9]+' "${ROOT}/tests/compatibility/river/go/probe.go" \
+    | grep -oE '[0-9]+$'
+)"
+if [ -z "${worker_pool_max_conns}" ]; then
+  printf 'ERROR: cannot find WorkerPoolMaxConns in tests/compatibility/river/go/probe.go\n' >&2
   exit 1
-}
+fi
+if [ -z "${inserter_pool_max_conns}" ]; then
+  printf 'ERROR: cannot find InserterPoolMaxConns in tests/compatibility/river/go/probe.go\n' >&2
+  exit 1
+fi
+probe_max_conns_sum=$((worker_pool_max_conns + inserter_pool_max_conns))
 session_pool_budget="$(
   docker compose \
     --project-name rivercompat-static-check \

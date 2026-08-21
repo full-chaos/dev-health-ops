@@ -556,14 +556,17 @@ INSERT INTO public.sync_run_units (
 //     daily_metrics_runs.status, just not yet exploited by a live query here.
 //   - sync_run_unit_effect_snapshots: alembic 0092+0093 (snapshotFixtureDDL,
 //     unchanged, already guarded by tests/test_effect_snapshot_migration.py).
-//   - sync_watermarks: alembic 0001+0015. The prior fixture also carried a
-//     fabricated UNIQUE (org_id, repo_id, target) that does not exist
-//     anywhere in alembic -- 0001 only ever indexed (org_id, repo_id), never
-//     made it unique with target. That invented constraint made this suite
-//     MORE restrictive than production, the opposite direction from
-//     CHAOS-4041 but the same root cause: schema asserted here without a
-//     migration behind it. Only the real 0015 constraint
-//     (uq_sync_watermark_org_source_dataset) survives.
+//   - sync_watermarks: alembic 0001+0015. Both real unique constraints are
+//     kept -- 0001's uq_sync_watermark_org_repo_target (the original
+//     org_id/repo_id/target key) and 0015's uq_sync_watermark_org_source_dataset
+//     (org_id/source_id/dataset_key), since 0015 adds the newer columns and
+//     their constraint without ever dropping the legacy one. An earlier draft
+//     of this fix treated the legacy constraint as fabricated and dropped it
+//     -- codex's adversarial review caught that the fixture would then be
+//     MORE permissive than production on exactly the legacy-key uniqueness
+//     CHAOS-4041's class is about: two rows sharing an (org_id, repo_id,
+//     target) but differing in source_id/dataset_key would pass here and
+//     violate a real constraint in production.
 //   - sync_dispatch_outbox / sync_dispatch_transport_routes: alembic 0020+
 //     0049. The prior fixture had no transport-route table, no
 //     ck_sync_dispatch_outbox_claim_route_coherence /
@@ -680,6 +683,8 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
 			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,
 			last_synced_at timestamptz, updated_at timestamptz NOT NULL,
+			CONSTRAINT uq_sync_watermark_org_repo_target
+				UNIQUE (org_id, repo_id, target),
 			CONSTRAINT uq_sync_watermark_org_source_dataset
 				UNIQUE (org_id, source_id, dataset_key)
 		)`,

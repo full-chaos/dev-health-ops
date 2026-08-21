@@ -136,34 +136,39 @@ def test_providersync_fixture_matches_chunked_persistence_migration() -> None:
         )
 
 
-def test_providersync_fixture_has_no_fabricated_watermark_constraint() -> None:
-    """sync_watermarks' only real unique key is alembic 0015's.
+def test_providersync_fixture_keeps_both_watermark_unique_constraints() -> None:
+    """sync_watermarks carries TWO real unique keys, from two migrations.
 
-    A prior version of this fixture also declared UNIQUE (org_id, repo_id,
-    target). No migration -- 0001 (the table's origin) or 0015 (which adds
-    source_id/dataset_key) -- ever makes that combination unique; 0001 only
-    ever *indexes* (org_id, repo_id), never uniquely. An invented constraint
-    with no migration behind it makes this suite MORE restrictive than
-    production, the opposite direction from CHAOS-4041 but the same root
-    cause: schema asserted here without a migration to back it.
+    0001 (the table's origin) declares uq_sync_watermark_org_repo_target on
+    (org_id, repo_id, target). 0015 adds the newer source_id/dataset_key
+    columns and its own uq_sync_watermark_org_source_dataset -- WITHOUT ever
+    dropping the legacy constraint. A migrated production database therefore
+    enforces both at once.
+
+    An earlier draft of this fixture treated the legacy (org_id, repo_id,
+    target) constraint as fabricated and dropped it, which a codex
+    adversarial review caught: that made the fixture MORE permissive than
+    production on exactly the class of schema-drift bug this ticket is
+    about. Two sync_watermarks rows sharing an (org_id, repo_id, target) but
+    differing in source_id/dataset_key would pass this fixture and then hit
+    a real unique violation in production.
     """
     initial_schema = _migration_source("0001_initial_schema.py")
     integration_data_model = _migration_source("0015_add_integration_data_model.py")
     fixture_ddl = _fixture_function(_fixture_source())
 
+    assert "uq_sync_watermark_org_repo_target" in initial_schema
+    assert "uq_sync_watermark_org_repo_target" in fixture_ddl
+    assert "UNIQUE (org_id, repo_id, target)" in fixture_ddl
+
     assert "uq_sync_watermark_org_source_dataset" in integration_data_model
     assert "uq_sync_watermark_org_source_dataset" in fixture_ddl
     assert "UNIQUE (org_id, source_id, dataset_key)" in fixture_ddl
 
-    # 0001 only ever gives (org_id, repo_id) a plain index, never a unique
-    # constraint on (org_id, repo_id, target) -- if a future migration adds
-    # one, this assertion should start failing and prompt adding it above.
-    assert "sync_watermarks" in initial_schema
-    assert (
-        "UNIQUE"
-        not in initial_schema.split("sync_watermarks")[1].split("op.create_table")[0]
-    )
-    assert "UNIQUE (org_id, repo_id, target)" not in fixture_ddl
+    # 0015 must not be the migration that drops the legacy constraint -- if a
+    # future migration does, this fixture needs to drop it too, deliberately,
+    # not by accident.
+    assert "uq_sync_watermark_org_repo_target" not in integration_data_model
 
 
 def test_providersync_fixture_matches_dispatch_transport_fence_migration() -> None:

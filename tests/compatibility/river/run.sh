@@ -464,8 +464,8 @@ assert_matrix() {
       and .mode == $mode
       and .go_version == "go1.25.9"
       and .pgx_version == "v5.10.0"
-      and .river_driver_version == "v0.40.0"
-      and .river_version == "v0.40.0"
+      and .river_driver_version == "v0.44.0"
+      and .river_version == "v0.44.0"
       and .poll_only == $poll_only
       and .migration.latest_version > 0
       and .migration.version_count > 0
@@ -632,8 +632,8 @@ assert_external_consume() {
       and .mode == $mode
       and .go_version == "go1.25.9"
       and .pgx_version == "v5.10.0"
-      and .river_driver_version == "v0.40.0"
-      and .river_version == "v0.40.0"
+      and .river_driver_version == "v0.44.0"
+      and .river_version == "v0.44.0"
       and .workload.external.source == $source
       and .workload.external.queue == $queue
       and .workload.external.priority == 2
@@ -1033,8 +1033,8 @@ run_nested_n_minus_one() {
         and .mode == "direct"
         and .go_version == "go1.25.9"
         and .pgx_version == "v5.10.0"
-        and .river_driver_version == "v0.40.0"
-        and .river_version == "v0.40.0"
+        and .river_driver_version == "v0.44.0"
+        and .river_version == "v0.44.0"
         and .workload.external.source == "go"
         and .workload.external.queue == $queue
         and .workload.external.state == "completed"
@@ -1058,8 +1058,8 @@ run_nested_n_minus_one() {
         and .mode == "direct"
         and .go_version == "go1.25.9"
         and .pgx_version == "v5.10.0"
-        and .river_driver_version == "v0.40.0"
-        and .river_version == "v0.40.0"
+        and .river_driver_version == "v0.44.0"
+        and .river_version == "v0.44.0"
         and .migration.latest_version == 7
         and .workload.external.source == "go"
         and .workload.external.queue == $queue

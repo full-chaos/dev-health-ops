@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -514,5 +515,116 @@ func TestUnreclaimableSweepShadowPassUnderTheRealRoleSplit(t *testing.T) {
 	}
 	if status != "dispatching" {
 		t.Fatalf("status = %q, want shadow mode to write nothing", status)
+	}
+}
+
+// flipOnSecondRead is the adversarial ordering, made deterministic. It passes
+// every route read through to the real coordinator pool, but immediately
+// BEFORE the second read -- the fence re-read, which happens with the
+// terminalize writes staged and uncommitted -- it commits an operator rollback
+// to Celery through the admin connection.
+//
+// That is precisely the window an adversarial review raised against the
+// two-pool split: the sweep decides River owns provider units, ownership is
+// rolled back to Celery, and the sweep writes 'failed' onto units Celery is
+// about to claim.
+type flipOnSecondRead struct {
+	t           *testing.T
+	ctx         context.Context
+	admin       *pgxpool.Pool
+	coordinator *pgxpool.Pool
+	reads       int
+	flipped     bool
+}
+
+func (routes *flipOnSecondRead) Query(
+	ctx context.Context, sql string, args ...any,
+) (pgx.Rows, error) {
+	routes.reads++
+	if routes.reads == 2 && !routes.flipped {
+		routes.flipped = true
+		// The real mutation shape from internal/jobroute/control.go Rollback:
+		// the transport moves and the generation is bumped in the same write.
+		if _, err := routes.admin.Exec(routes.ctx, `
+			UPDATE public.worker_job_routes
+			SET transport = 'celery', generation = generation + 1, updated_at = now()
+			WHERE job_kind = $1`, unreclaimableProviderUnitID); err != nil {
+			routes.t.Fatalf("rollback the route mid-pass: %v", err)
+		}
+	}
+	return routes.coordinator.Query(ctx, sql, args...)
+}
+
+// TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass is the negative
+// race control. Without the closing fence this test terminalizes the unit:
+// the opening read saw river_canary, the domain transaction never observes
+// worker_job_routes at all, and the terminalize CAS on updated_at cannot see
+// an ownership flip because no runtime has touched the row.
+func TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startRoleSplitHarness(t, ctx)
+	now := time.Now().UTC()
+	seedSplitStrand(t, ctx, admin, now)
+	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+
+	routes := &flipOnSecondRead{t: t, ctx: ctx, admin: admin, coordinator: coordinator}
+	sweep, err := newUnreclaimableSweep(routes, domain.Begin, splitSweepConfig(SweepModeActive))
+	if err != nil {
+		t.Fatalf("construct sweep: %v", err)
+	}
+	result, err := sweep.Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if !routes.flipped {
+		t.Fatal("the route was never rolled back, so this test proved nothing; " +
+			"the sweep is no longer re-reading the route before it commits")
+	}
+	if result.Candidates != 1 {
+		t.Fatalf("result = %+v, want the strand still selected", result)
+	}
+	if result.Terminalized != 0 || !result.DeclinedRouteChange {
+		t.Fatalf("result = %+v, want the write abandoned and the decline reported; "+
+			"the sweep terminalized work Celery had just been handed back", result)
+	}
+
+	var status string
+	if err := admin.QueryRow(ctx,
+		"SELECT status FROM public.sync_run_units WHERE id = $1", splitUnit,
+	).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want the unit left for Celery", status)
+	}
+}
+
+// The fence must not fire on a pass where nothing changed, or the sweep never
+// commits anything and the whole safety net is dead in a quieter way than
+// CHAOS-4035 killed it.
+func TestUnreclaimableSweepFenceDoesNotFireOnAStableRoute(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startRoleSplitHarness(t, ctx)
+	now := time.Now().UTC()
+	seedSplitStrand(t, ctx, admin, now)
+	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeActive))
+	if err != nil {
+		t.Fatalf("construct sweep: %v", err)
+	}
+	result, err := sweep.Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.DeclinedRouteChange {
+		t.Fatalf("result = %+v, want no decline on an unchanged route", result)
+	}
+	if result.Terminalized != 1 {
+		t.Fatalf("result = %+v, want the strand terminalized", result)
 	}
 }

@@ -56,7 +56,7 @@ const (
 // PER-STEP ERROR IDENTITY (CHAOS-4035 AC4, the CHAOS-4036 masking class).
 //
 // This file used to return the bare package-wide ErrUnavailable from fourteen
-// distinct failure paths. When the sweep's route read started returning 42501
+// distinct failure paths (fifteen now, with the closing route fence). When the sweep's route read started returning 42501
 // once a second in production, the only log line an operator had said "sync
 // dispatch observer database unavailable" -- naming a component that was
 // healthy and uninvolved, and saying nothing about permissions, about
@@ -77,6 +77,7 @@ const (
 const (
 	sweepStepBegin              = "begin domain transaction"
 	sweepStepRouteQuery         = "durable route read of public.worker_job_routes on the coordinator pool"
+	sweepStepRouteFence         = "durable route re-read fencing the terminalize commit"
 	sweepStepRouteScan          = "durable route read scan"
 	sweepStepRouteRows          = "durable route read iteration"
 	sweepStepCandidateQuery     = "candidate page read of public.sync_run_units"
@@ -206,6 +207,27 @@ type UnreclaimableSweepResult struct {
 	RunIDs       []string
 	Pairs        []string
 	UnitIDs      []string
+	// DeclinedRouteChange reports that the durable route moved underneath this
+	// pass and the write was abandoned. It is distinct from a zero
+	// Terminalized, which is also what a pass with nothing to do returns.
+	DeclinedRouteChange bool
+}
+
+// routeFence is the durable route's identity at one instant: which transport
+// owns provider units, and the generation stamp every route mutation bumps
+// (internal/jobroute/control.go ApplyCheckedIn and Rollback both do
+// `generation = generation + 1` under an optimistic CAS on the old value).
+//
+// The generation is what makes an ownership flip DETECTABLE across two pools.
+// A transport comparison alone would miss celery -> river -> celery inside one
+// pass; the counter cannot be walked back.
+type routeFence struct {
+	transport  string
+	generation int64
+}
+
+func (fence routeFence) riverOwns() bool {
+	return fence.transport == "river" || fence.transport == "river_canary"
 }
 
 // unreclaimableRouteReader is the coordinator-side seam. It is deliberately
@@ -322,11 +344,11 @@ func (sweep *UnreclaimableSweep) Step(
 	// regression against it -- and the window is one 1s tick against a route
 	// flip that is an operator action. Do NOT "fix" this by moving the read
 	// back inside the transaction; that is the defect, not a tidier form of it.
-	riverOwns, err := riverOwnsProviderUnits(ctx, sweep.routes)
+	opening, usable, err := readProviderUnitRoute(ctx, sweep.routes, sweepStepRouteQuery)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
-	if !riverOwns {
+	if !usable || !opening.riverOwns() {
 		return result, nil
 	}
 
@@ -370,6 +392,38 @@ func (sweep *UnreclaimableSweep) Step(
 			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepTerminalizeRows, nil)
 		}
 		result.Terminalized += int(affected)
+	}
+
+	// ROUTE FENCE, re-read on the coordinator pool with the writes staged but
+	// NOT yet committed (adversarial review finding).
+	//
+	// The route decision and the write live on different pools, so they cannot
+	// share a transaction and no lock taken on one connection can hold the
+	// other. What can be done is to make an ownership flip detectable and to
+	// give it the narrowest possible window: every route mutation bumps
+	// generation, so re-reading here and demanding the exact opening fence
+	// turns "acted on a stale route" into "noticed and declined". A rollback
+	// to Celery that commits any time between the opening read and this point
+	// -- which is after ALL the slow work, the candidate paging included --
+	// discards the whole pass instead of terminalizing units Celery is about
+	// to own.
+	//
+	// This does NOT make the sweep atomic with route mutation, and claiming it
+	// did would be worse than the gap. The residual window is one coordinator
+	// round-trip plus the commit below. Note also that the pre-CHAOS-4035
+	// shape had NO such fence and a WIDER window: pool.Begin is READ COMMITTED
+	// here as everywhere in this repo, so reading the route inside the domain
+	// transaction never gave the candidate statements a shared snapshot with
+	// it either. Shadow mode skips the re-read: it writes nothing, so there is
+	// nothing to fence.
+	closing, usable, err := readProviderUnitRoute(ctx, sweep.routes, sweepStepRouteFence)
+	if err != nil {
+		return UnreclaimableSweepResult{}, err
+	}
+	if !usable || closing != opening {
+		result.Terminalized = 0
+		result.DeclinedRouteChange = true
+		return result, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, err)
@@ -442,32 +496,37 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 // it": the sweep declines to act, matching Python's refusal to fall back to a
 // transport during a control-plane fault.
 const selectProviderUnitRouteSQL = `
-SELECT transport
+SELECT transport, generation
 FROM public.worker_job_routes
 WHERE job_kind = $1
 `
 
-func riverOwnsProviderUnits(ctx context.Context, routes unreclaimableRouteReader) (bool, error) {
+func readProviderUnitRoute(
+	ctx context.Context, routes unreclaimableRouteReader, step string,
+) (routeFence, bool, error) {
 	rows, err := routes.Query(ctx, selectProviderUnitRouteSQL, unreclaimableProviderUnitID)
 	if err != nil {
-		return false, sweepUnavailable(sweepStepRouteQuery, err)
+		return routeFence{}, false, sweepUnavailable(step, err)
 	}
 	defer rows.Close()
-	transports := make([]string, 0, 1)
+	fences := make([]routeFence, 0, 1)
 	for rows.Next() {
-		var transport string
-		if err := rows.Scan(&transport); err != nil {
-			return false, sweepUnavailable(sweepStepRouteScan, err)
+		var fence routeFence
+		if err := rows.Scan(&fence.transport, &fence.generation); err != nil {
+			return routeFence{}, false, sweepUnavailable(sweepStepRouteScan, err)
 		}
-		transports = append(transports, strings.TrimSpace(strings.ToLower(transport)))
+		fence.transport = strings.TrimSpace(strings.ToLower(fence.transport))
+		fences = append(fences, fence)
 	}
 	if err := rows.Err(); err != nil {
-		return false, sweepUnavailable(sweepStepRouteRows, err)
+		return routeFence{}, false, sweepUnavailable(sweepStepRouteRows, err)
 	}
-	if len(transports) != 1 {
-		return false, nil
+	// A missing, duplicated or unreadable row is a control-plane fault. The
+	// second return value is "usable", never "River owns it".
+	if len(fences) != 1 {
+		return routeFence{}, false, nil
 	}
-	return transports[0] == "river" || transports[0] == "river_canary", nil
+	return fences[0], true, nil
 }
 
 // unroutable mirrors Python's resolve_unit_transport: a pair is sweepable only

@@ -81,9 +81,20 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL
 		)`,
+		// Alembic 0055, column for column. The hand-rolled two-column version
+		// this replaces omitted `generation`, which the CHAOS-4035 route fence
+		// reads: the invented schema turned a real read into a 42703 and would
+		// have hidden any predicate that depended on the missing columns.
 		`CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY,
-			transport text NOT NULL
+			job_kind varchar(96) NOT NULL,
+			transport varchar(16) NOT NULL,
+			paused boolean NOT NULL DEFAULT false,
+			generation bigint NOT NULL DEFAULT 1,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			CONSTRAINT ck_worker_job_route_transport
+				CHECK (transport IN ('celery', 'shadow', 'river_canary', 'river')),
+			CONSTRAINT ck_worker_job_route_generation CHECK (generation >= 1),
+			CONSTRAINT worker_job_routes_pkey PRIMARY KEY (job_kind)
 		)`,
 		`INSERT INTO public.worker_job_routes (job_kind, transport)
 			VALUES ('sync.provider_unit', 'river_canary')`,

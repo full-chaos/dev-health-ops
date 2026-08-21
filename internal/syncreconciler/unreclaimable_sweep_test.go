@@ -373,8 +373,9 @@ func TestSweepStepErrorsCarryNoConnectionMaterial(t *testing.T) {
 // would quietly re-create the exact ambiguity this ticket removed.
 func TestSweepStepIdentitiesAreDistinct(t *testing.T) {
 	steps := sweepStepIdentities()
-	if len(steps) != 14 {
-		t.Fatalf("declared %d steps, want the 14 failure paths this file has", len(steps))
+	if len(steps) != 15 {
+		t.Fatalf("declared %d steps, want the 15 failure paths this file has "+
+			"(the original 14, plus the closing route fence)", len(steps))
 	}
 	seen := make(map[string]struct{}, len(steps))
 	for _, step := range steps {
@@ -398,7 +399,8 @@ func TestSweepStepIdentitiesAreDistinct(t *testing.T) {
 func sweepStepIdentities() []string {
 	return []string{
 		sweepStepBegin,
-		sweepStepRouteQuery, sweepStepRouteScan, sweepStepRouteRows,
+		sweepStepRouteQuery, sweepStepRouteFence,
+		sweepStepRouteScan, sweepStepRouteRows,
 		sweepStepCandidateQuery, sweepStepCandidateScan, sweepStepCandidateRows,
 		sweepStepOutboxQuery, sweepStepOutboxScan, sweepStepOutboxRows,
 		sweepStepTerminalizePayload, sweepStepTerminalizeExec,

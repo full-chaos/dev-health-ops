@@ -263,6 +263,42 @@ Do not purge queues, delete execution rows, or change a route merely to make a
 deployment appear healthy. Those actions can discard work or create duplicate
 effects.
 
+### Deploy the Go fleet in order
+
+The Go steps are a dependency chain, not a convention. Each is gated on the
+previous one completing successfully:
+
+```text
+migrate                (Alembic + ClickHouse)
+  └─ go-river-provision   (creates the three database roles, first grants)
+      └─ go-river-migrate     (River bundle; revokes and re-grants authoritatively)
+          └─ go-contractcheck     (validates the job registry and deployment manifest)
+              └─ workers / reconciler / scheduler / stream runners
+```
+
+Role provisioning runs **after** the Python migration so guarded grants see
+every current semantic table, including on an already-initialised volume.
+
+Two couplings decide whether a deploy starts at all:
+
+- **Bump both images together for a privilege change.** Provisioning runs from
+  the ops runtime image, which carries the provisioning SQL; the checks that
+  verify those grants ship in the Go worker image. Bumping only one makes the
+  fleet refuse to start, with a deploy-time cause and a startup-time symptom.
+- **Treat an environment edit as a fleet event.** Compose derives a config hash
+  from the environment, so editing `.env` recreates dependent containers and a
+  recreated database or pooler returns on a new address. Workers admitted before
+  the change keep pools and cached lookups against the old one, and readiness is
+  evaluated only at startup — so they continue to report healthy while
+  completing no work. Restart the workers after the pooler settles.
+
+Worker containers are distroless: no shell, read-only root, all capabilities
+dropped. Collect diagnostics from logs, metrics, or a sidecar container rather
+than `docker exec`.
+
+Why these boundaries exist, and what breaks when they are crossed:
+[Go worker runtime architecture](../../contribute/architecture/go-worker-runtime.md).
+
 ## Recover a stalled or failing queue
 
 First identify whether the problem is admission, routing, execution, or

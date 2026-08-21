@@ -1045,6 +1045,68 @@ dev-hops workers start-scheduler
 For queue cleanup, stale reserved jobs, and failed-result cleanup, see
 [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
+### Worker operator CLI
+
+`dev-health-workerctl` is the authenticated Go operator binary. Read this before
+the verb reference below — three of its requirements are not discoverable from
+the verbs themselves.
+
+**Mint a credential first.** The operator token the verbs require is a service
+credential, created with the Python CLI against the Postgres backend:
+
+```bash
+# --service defaults to `acr`. A workerctl credential MUST name worker-operator,
+# and --scope is repeated once per scope rather than given as a list.
+dev-hops service-credentials create \
+  --service worker-operator \
+  --scope workers:read \
+  --scope workers:operate
+
+dev-hops service-credentials list --service worker-operator
+
+dev-hops service-credentials rotate <credential-id> \
+  --service worker-operator \
+  --scope workers:read \
+  --scope workers:operate \
+  --overlap-seconds 300
+
+dev-hops service-credentials revoke <credential-id>
+```
+
+All four subcommands require the Postgres backend. The secret is printed once,
+by `create` and `rotate` only; `list` returns metadata without secrets. Supply
+the secret to `workerctl` through `WORKER_OPERATOR_TOKEN` or
+`WORKER_OPERATOR_TOKEN_FILE`. Status and inspection verbs require the
+`workers:read` scope; every mutation requires `workers:operate`.
+
+**Flags must precede the positional argument.** Go's `flag` package stops
+parsing at the first positional, so an id-first invocation fails with a generic
+`invalid_request` that names neither the cause nor the fix:
+
+```bash
+dev-health-workerctl jobs retry 9457 --reason r --correlation-id c   # invalid_request
+dev-health-workerctl jobs retry --reason r --correlation-id c 9457   # parses
+```
+
+**`COORDINATOR_DATABASE_URI` is required, and not every image carries it.**
+`workerctl` authenticates the operator token against `internal_service_credentials`,
+which is a coordinator-exclusive read, so without that DSN the CLI is entirely
+non-functional and returns `configuration_error`. A `workerctl` invocation needs
+all three database URIs — `POSTGRES_URI`, `WORKER_DATABASE_URI`, and
+`COORDINATOR_DATABASE_URI` — plus the session-safe mode settings. The
+`go-reconciler` container carries the coordinator DSN; `go-worker-heavy` does
+not, so reaching for the nearest worker container returns `configuration_error`
+with no hint that a different container would work.
+
+!!! warning "`jobs retry` and `jobs cancel` cannot succeed in Phase 1"
+    Both verbs are advertised and both are refused unconditionally. The Phase-1
+    domain guard returns an unsupported-precondition error from every branch,
+    ignores the requested action, and inspects no domain state, so no amount of
+    configuration makes either verb work. The refusal is deliberate: the frozen
+    contracts name domain links that have no authoritative semantic table yet.
+    Treat them as unavailable until CHAOS-4030 lands. There is currently no
+    supported path to re-drive a stranded job by hand.
+
 ### `dev-health-workerctl routes`
 
 Inspect or control one fixed sync-dispatch transport route through the

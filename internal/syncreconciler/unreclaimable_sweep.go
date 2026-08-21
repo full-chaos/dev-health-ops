@@ -555,10 +555,27 @@ func (sweep *UnreclaimableSweep) holdRouteFence(
 	return heldRouteFence{ok: true, release: release}, nil
 }
 
+// isLockNotAvailable reads the SQLSTATE off the STEP error, not off a wrapped
+// driver error.
+//
+// This is the one place the deliberate non-wrapping in sweepUnavailable bites:
+// the driver error is intentionally dropped so no connection material can ever
+// reach a message, which means errors.As can never find a *pgconn.PgError in
+// this chain. An earlier cut of this fence checked for one anyway, so the
+// contention path it exists to serve was dead code and a contended route row
+// surfaced as a generic failure instead of the decline it is (review finding).
+// The SQLSTATE the step error already carries is the right source, and it
+// works whether pgx reported the timeout from Query or deferred it to
+// rows.Err() -- the two land on different steps but the same code.
 func isLockNotAvailable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+	var stepErr unreclaimableStepError
+	return errors.As(err, &stepErr) && stepErr.sqlState == lockNotAvailableSQLState
 }
+
+// lockNotAvailableSQLState is PostgreSQL's lock_not_available. Reaching it here
+// means a route mutation holds the row, so the sweep's answer is already
+// "decline" and waiting longer would only delay it.
+const lockNotAvailableSQLState = "55P03"
 
 // The closing fence takes a ROW LOCK, and FOR SHARE specifically.
 //

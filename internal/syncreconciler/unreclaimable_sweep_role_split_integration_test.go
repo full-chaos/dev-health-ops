@@ -692,3 +692,59 @@ func TestUnreclaimableSweepFenceDoesNotFireOnAStableRoute(t *testing.T) {
 		t.Fatalf("result = %+v, want the strand terminalized", result)
 	}
 }
+
+// TestUnreclaimableSweepDeclinesWhenTheRouteRowIsLockedByAMutation drives a
+// real 55P03 through the production fence helper.
+//
+// The raw lock-conflict probe above proves FOR SHARE blocks the route UPDATE.
+// It does NOT prove the sweep does anything sensible when IT is the one that
+// gets blocked, and an earlier cut of this fence got exactly that wrong: the
+// contention branch tested for a wrapped *pgconn.PgError that sweepUnavailable
+// deliberately never produces, so the branch was unreachable and a contended
+// route surfaced as a generic sweep failure. Only a test that blocks the real
+// helper can see that.
+func TestUnreclaimableSweepDeclinesWhenTheRouteRowIsLockedByAMutation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startRoleSplitHarness(t, ctx)
+	now := time.Now().UTC()
+	seedSplitStrand(t, ctx, admin, now)
+	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+
+	// An in-flight route mutation, held open for the duration of the pass.
+	// FOR UPDATE is what jobroute's UPDATE effectively takes, and it conflicts
+	// with the fence's FOR SHARE.
+	mutation, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mutation.Rollback(ctx) }()
+	if _, err := mutation.Exec(ctx,
+		`SELECT generation FROM public.worker_job_routes WHERE job_kind = $1 FOR UPDATE`,
+		unreclaimableProviderUnitID); err != nil {
+		t.Fatalf("hold the route row: %v", err)
+	}
+
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeActive))
+	if err != nil {
+		t.Fatalf("construct sweep: %v", err)
+	}
+	result, stepErr := sweep.Step(ctx, now, 100)
+	if stepErr != nil {
+		t.Fatalf("a contended route row must be a decline, not a failure: %v "+
+			"(step %q)", stepErr, SweepStepIdentity(stepErr))
+	}
+	if result.Terminalized != 0 || !result.DeclinedRouteChange {
+		t.Fatalf("result = %+v, want the write abandoned and the decline reported", result)
+	}
+	var status string
+	if err := admin.QueryRow(ctx,
+		"SELECT status FROM public.sync_run_units WHERE id = $1", splitUnit,
+	).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dispatching" {
+		t.Fatalf("status = %q, want the unit untouched under route contention", status)
+	}
+}

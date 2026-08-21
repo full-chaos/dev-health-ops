@@ -8,6 +8,7 @@ con-platform	con-arch	/contribute/architecture/platform/	Platform architecture	a
 con-storage	con-arch	/contribute/architecture/data-and-storage/	Data and storage boundaries	architecture	true	public	planned	false	
 con-contracts	con-arch	/contribute/architecture/contracts/	Stable contracts and source-of-truth rules	architecture	true	public	planned	false
 con-team-attribution	con-arch	/contribute/architecture/team-attribution/	Work-item team attribution	architecture	true	public	planned	false	Restored 2026-08-19 (CHAOS-3968); see the page's own restoration note.
+con-go-worker-runtime	con-arch	/contribute/architecture/go-worker-runtime/	Go worker runtime architecture	architecture	true	public	planned	false	Database roles, lease layers, delivery generations, repair seams, and deployment couplings of the Go worker fleet.
 con-ask-dev-v2	con-arch	/contribute/architecture/ask-dev-contracts-v2/	Ask Dev v2 contracts (Wave 3.1)	architecture	true	public	planned	false	
 con-ask-dev-preflight	con-arch	/contribute/architecture/ask-dev-subject-preflight/	Ask Dev subject preflight	architecture	true	public	planned	false	
 con-ask-dev-role-readiness	con-arch	/contribute/architecture/ask-dev-role-readiness/	Ask Dev role readiness	architecture	true	public	planned	false	
@@ -17,6 +18,7 @@ con-tests	con-dev	/contribute/development/testing/	Testing layers and local vali
 con-fixtures	con-dev	/contribute/development/fixtures-and-live-validation/	Fixtures and production-like validation	task-guide	true	public	planned	false	
 con-migrations	con-dev	/contribute/development/migrations/	Create and validate database migrations	task-guide	true	public	planned	false	
 con-debug	con-dev	/contribute/development/debugging/	Debug and observe development environments	task-guide	true	public	planned	false	
+con-go-worker-traps	con-dev	/contribute/development/go-worker-verification-traps/	Verification traps in the Go worker runtime	reference	true	public	planned	false	Checks in the Go worker codebase that report success while the thing they check is broken.
 con-review	contribute	/contribute/review-and-release/	Review and release	landing	true	public	planned	false	
 con-pr	con-review	/contribute/review-and-release/pull-requests/	Prepare and review a pull request	task-guide	true	public	planned	false	
 con-release	con-review	/contribute/review-and-release/releases/	Release and rollback expectations	task-guide	true	public	planned	false	

@@ -25,6 +25,10 @@ Use it when work looks stuck but nothing has reported an error. For the
 recovery sequence itself, see
 [Worker or queue failure](../runbooks/worker-or-queue-failure.md).
 
+For why the two lease layers exist, what identifies one delivery attempt, and
+which repair loop covers which failure, see
+[Go worker runtime architecture](../../contribute/architecture/go-worker-runtime.md).
+
 ## Recovery is gated twice, not once
 
 River rescues jobs stranded in `running` through its maintenance loop, which

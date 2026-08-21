@@ -13,5 +13,6 @@ lifecycle: active
 - [Data and storage boundaries](data-and-storage.md)
 - [Stable contracts and source-of-truth rules](contracts.md)
 - [Work-item team attribution](team-attribution.md)
+- [Go worker runtime architecture](go-worker-runtime.md)
 
 Publish the current durable boundary, not the chronological history of a project or pull request.

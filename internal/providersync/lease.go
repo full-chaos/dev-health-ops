@@ -48,6 +48,15 @@ var (
 	)
 )
 
+// ProviderDatasetUnavailableCategory records an account-level provider
+// capability limitation. It is distinct from authentication and exhaustion:
+// retrying the same valid credential cannot make the dataset available.
+// Exported so internal/jobs/providerunit (which already imports this
+// package to classify ErrProviderDatasetUnavailable) and the mark/clear
+// writes in repository_postgres.go share one definition instead of two
+// literals that could silently drift apart.
+const ProviderDatasetUnavailableCategory = "provider_dataset_unavailable"
+
 type Unit struct {
 	ID                    string
 	SyncRunID             string

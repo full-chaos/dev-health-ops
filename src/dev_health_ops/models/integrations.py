@@ -158,6 +158,17 @@ class IntegrationDataset(Base):
     dataset_key: Mapped[str] = mapped_column(String, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     options: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # Set by the Go/Python terminal-failure stamp when this dataset fails with
+    # error_category=provider_dataset_unavailable (an account-level provider
+    # capability loss, not a transient error). Cleared by the next successful
+    # unit for this dataset -- self-heals, never a permanent disable.
+    unavailable_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    unavailable_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    unavailable_last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     integration: Mapped[Integration] = relationship(back_populates="datasets")
 

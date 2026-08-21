@@ -115,6 +115,11 @@ def _dataset_to_response(dataset: object) -> IntegrationDatasetResponse:
             "dataset_key": str(getattr(dataset, "dataset_key")),
             "is_enabled": bool(getattr(dataset, "is_enabled")),
             "options": dict(getattr(dataset, "options") or {}),
+            "unavailable_reason": getattr(dataset, "unavailable_reason", None),
+            "unavailable_since": getattr(dataset, "unavailable_since", None),
+            "unavailable_last_seen_at": getattr(
+                dataset, "unavailable_last_seen_at", None
+            ),
         }
     )
 

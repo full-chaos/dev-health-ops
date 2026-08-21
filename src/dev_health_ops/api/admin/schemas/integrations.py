@@ -88,6 +88,9 @@ class IntegrationDatasetResponse(BaseModel):
     dataset_key: str
     is_enabled: bool
     options: dict[str, Any]
+    unavailable_reason: str | None = None
+    unavailable_since: datetime | None = None
+    unavailable_last_seen_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

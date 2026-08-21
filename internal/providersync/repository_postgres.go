@@ -170,6 +170,14 @@ func (repository *PostgresRepository) Complete(
 	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
 		return err
 	}
+	// A terminal success proves the provider capability is back, regardless of
+	// whether this attempt happened to advance a watermark, so this runs
+	// unconditionally rather than inside the watermark block below.
+	if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
+		claim.OrgID, claim.IntegrationID, claim.Dataset,
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
 			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
@@ -247,6 +255,11 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
 			uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
 			normalized, completedAt.UTC(),
+		); err != nil {
+			return ErrInvalidConfiguration
+		}
+		if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
+			claim.OrgID, claim.IntegrationID, datasetKey,
 		); err != nil {
 			return ErrInvalidConfiguration
 		}
@@ -425,6 +438,13 @@ func (repository *PostgresRepository) Fail(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	if category == ProviderDatasetUnavailableCategory {
+		if _, err := tx.Exec(ctx, markDatasetUnavailableSQL,
+			claim.OrgID, claim.IntegrationID, claim.Dataset, category, completedAt.UTC(),
+		); err != nil {
+			return ErrInvalidConfiguration
+		}
 	}
 	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
 	// resumable by a RUNNING unit of the same generation. Terminalizing the
@@ -837,6 +857,37 @@ WHERE unit.id = $1::uuid
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
+
+// markDatasetUnavailableSQL surfaces a repeated provider_dataset_unavailable
+// terminalization onto the IntegrationDataset row the owner-facing API
+// already reads (GET /integrations/{id}/datasets), instead of leaving an
+// account-level capability loss visible only as a stream of individually
+// failed sync units nobody watches (CHAOS-4048). unavailable_since tracks the
+// earliest outage instant and unavailable_last_seen_at the latest, via
+// LEAST/GREATEST rather than a plain COALESCE/assign: multiple units for the
+// same dataset can fail concurrently and commit out of wall-clock order, and
+// a plain assign would let a late-committing older failure regress
+// last_seen_at, or let COALESCE pin unavailable_since to whichever
+// transaction happened to land first rather than the truly earliest attempt.
+// Postgres LEAST/GREATEST ignore NULL arguments, so no COALESCE is needed for
+// the first-ever failure on a dataset.
+const markDatasetUnavailableSQL = `
+UPDATE public.integration_datasets
+SET unavailable_reason = $4,
+    unavailable_since = LEAST(unavailable_since, $5::timestamptz),
+    unavailable_last_seen_at = GREATEST(unavailable_last_seen_at, $5::timestamptz)
+WHERE org_id = $1 AND integration_id = $2::uuid AND dataset_key = $3`
+
+// clearDatasetUnavailableSQL self-heals the marker: a terminal success on the
+// same (org, integration, dataset) proves the provider capability came back,
+// so the next successful unit -- not an operator -- clears it. Never a
+// permanent disable.
+const clearDatasetUnavailableSQL = `
+UPDATE public.integration_datasets
+SET unavailable_reason = NULL,
+    unavailable_since = NULL,
+    unavailable_last_seen_at = NULL
+WHERE org_id = $1 AND integration_id = $2::uuid AND dataset_key = $3`
 
 // upsertWatermarkSQL is monotonic (CHAOS-2578) with ONE narrow exception
 // (CHAOS-3412 clause C10(b), mirrored from Python's `_monotonic_update`):

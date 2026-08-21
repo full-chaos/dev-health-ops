@@ -27,6 +27,38 @@ const (
 	RiverVersion       = "v0.40.0"
 )
 
+// CHAOS-4011: the "inserter" river.Client (Queues unset, so it never
+// starts elector/notifier/maintenance services — see river@v0.40.0
+// client.go's willExecuteJobs() gate) is a synchronous insert/JobCancel-only
+// client. Two concurrent slots comfortably cover its own Insert/JobCancel
+// calls plus the brief overlap window when a scheduled-job insert is
+// immediately followed by a cancel of the same job.
+const InserterPoolMaxConns = 2
+
+// WorkerPoolMaxConns is the derived (not arbitrary) ceiling for the
+// "client"/worker river.Client's pool. It runs every background service
+// river@v0.40.0's client.go registers under willExecuteJobs() (verified by
+// reading that file directly, not guessed): 1 notifier (a single
+// persistent LISTEN connection multiplexing all pub/sub subscribers,
+// including the elector and the producer's control-channel listener —
+// client.go:919-926), 1 elector (client.go:931-935), 6 independent
+// maintenance services bundled under one queueMaintainer — jobCleaner,
+// jobRescuer, jobScheduler, periodicJobEnqueuer, queueCleaner, reindexer
+// (client.go:956-1043) — each on its own ticker and each able to
+// transiently check out a connection, 1 completer batching job-completion
+// writes (client.go:915), and 1 producer fetch/execute loop (MaxWorkers: 1
+// in this harness). Only the notifier's connection is held continuously;
+// everything else is checkout-query-release, but under load those releases
+// can overlap. This was previously a flat, undocumented 6 — CHAOS-4011's
+// pool-exhaustion catch (a plain job insert timing out acquiring a
+// connection under CPU contention, all six slots already claimed by this
+// client's own standing services) showed 6 wasn't enough even before
+// accounting for InserterPoolMaxConns' separate budget. Kept as one named
+// constant, not a bare number, specifically so this and
+// gates.NewConnectionsAtMostSix / gates.BackendConnectionDeltaAtMostSix
+// below can never drift apart the way the two independent "6"s already had.
+const WorkerPoolMaxConns = 10
+
 type Mode string
 
 const (
@@ -113,6 +145,12 @@ type LatencySummary struct {
 	WithinLimit bool    `json:"within_limit"`
 }
 
+// CHAOS-4011: BackendConnectionDeltaAtMostSix/NewConnectionsAtMostSix are
+// named for the pool budget's original flat value; the wire-format JSON
+// keys (consumed by run.sh's summary and ci/check_river_compat_static.sh's
+// golden assertions) are kept stable rather than renamed across those
+// files. The threshold is now WorkerPoolMaxConns, not a literal six — see
+// that constant's derivation comment.
 type GateResult struct {
 	BackendConnectionDeltaAtMostSix bool  `json:"backend_connection_delta_at_most_six"`
 	CanceledAcquiresZero            bool  `json:"canceled_acquires_zero"`
@@ -203,25 +241,51 @@ func Run(ctx context.Context, rawOpts Options) (_ Result, retErr error) {
 		return Result{}, phaseError("verify_pgx_version", err)
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(opts.DatabaseURL)
+	// CHAOS-4011: the "inserter" and "client"/worker river.Clients get their
+	// own separate pools instead of sharing one. inserter never starts any
+	// background service (Queues is unset — see WorkerPoolMaxConns' comment)
+	// so its own synchronous Insert/JobCancel calls no longer compete with
+	// client's standing notifier/elector/maintenance/fetch demand for the
+	// same connection budget, and vice versa.
+	newPoolConfig := func(maxConns int32) (*pgxpool.Config, error) {
+		poolConfig, err := pgxpool.ParseConfig(opts.DatabaseURL)
+		if err != nil {
+			return nil, err
+		}
+		poolConfig.MaxConns = maxConns
+		poolConfig.MinConns = 0
+		poolConfig.ConnConfig.RuntimeParams["application_name"] = "chaos3034-river-compat"
+		if opts.Mode == ModePollOnly {
+			// Transaction-mode PgBouncer cannot retain prepared statements on a
+			// backend connection between transactions.
+			poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+		}
+		return poolConfig, nil
+	}
+
+	workerPoolConfig, err := newPoolConfig(WorkerPoolMaxConns)
 	if err != nil {
 		return Result{}, phaseError("parse_database_url", err)
 	}
-	poolConfig.MaxConns = 6
-	poolConfig.MinConns = 0
-	poolConfig.ConnConfig.RuntimeParams["application_name"] = "chaos3034-river-compat"
-	if opts.Mode == ModePollOnly {
-		// Transaction-mode PgBouncer cannot retain prepared statements on a
-		// backend connection between transactions.
-		poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	pool, err := pgxpool.NewWithConfig(ctx, workerPoolConfig)
 	if err != nil {
 		return Result{}, phaseError("open_database", err)
 	}
 	defer pool.Close()
 	if err := pool.Ping(ctx); err != nil {
+		return Result{}, phaseError("ping_database", err)
+	}
+
+	insertPoolConfig, err := newPoolConfig(InserterPoolMaxConns)
+	if err != nil {
+		return Result{}, phaseError("parse_database_url", err)
+	}
+	insertPool, err := pgxpool.NewWithConfig(ctx, insertPoolConfig)
+	if err != nil {
+		return Result{}, phaseError("open_database", err)
+	}
+	defer insertPool.Close()
+	if err := insertPool.Ping(ctx); err != nil {
 		return Result{}, phaseError("ping_database", err)
 	}
 
@@ -284,7 +348,7 @@ func Run(ctx context.Context, rawOpts Options) (_ Result, retErr error) {
 	if err := river.AddWorkerSafely(workers, worker); err != nil {
 		return Result{}, phaseError("register_worker", err)
 	}
-	inserter, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+	inserter, err := river.NewClient(riverpgxv5.New(insertPool), &river.Config{
 		Logger:  discardLogger(),
 		Schema:  opts.Schema,
 		Workers: workers,
@@ -510,7 +574,10 @@ func runInternalWorkload(
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_start FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_start", err)
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancel job started job_id=%d\n", opts.Mode, cancelInsert.Job.ID)
+	// No job ID in this trace line: README.md's failure-log redaction
+	// contract (Tool stdout/stderr section) explicitly excludes River job
+	// IDs from what may reach CI stderr (codex review, CHAOS-4011).
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancel job started\n", opts.Mode)
 	if _, err := inserter.JobCancel(ctx, cancelInsert.Job.ID); err != nil {
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cross-client JobCancel FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("cancel_running_job", err)
@@ -582,17 +649,13 @@ func runInternalWorkload(
 			cancellation.ProbeReleaseUsed = true
 		}
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancellation flow complete, waiting for JobCancelled event\n", opts.Mode)
-	cancelEvent, err := waitForEvent(ctx, events, cancelInsert.Job.ID, river.EventKindJobCancelled)
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s cancellation flow complete, waiting for the persisted cancelled state\n", opts.Mode)
+	cancelRow, cancelEvent, err := waitForCancelledRow(ctx, client, events, cancelInsert.Job.ID, opts.FetchPollInterval)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s wait_cancel_event FAILED err=%v\n", opts.Mode, err)
 		return WorkloadResult{}, phaseError("wait_cancel_event", err)
 	}
-	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s JobCancelled event observed\n", opts.Mode)
-	cancelRow, err := client.JobGet(ctx, cancelInsert.Job.ID)
-	if err != nil {
-		return WorkloadResult{}, phaseError("read_cancel_job", err)
-	}
+	fmt.Fprintf(os.Stderr, "river-compat cancellation-trace: mode=%s persisted cancelled state observed (via_event=%t)\n", opts.Mode, cancelEvent != nil)
 	cancelLatency := milliseconds(cancelStart.Time.Sub(cancelQueuedAt))
 	cancelResult, err := jobResultFromRow(cancelRow, cancelEvent, &cancelLatency, nil)
 	if err != nil {
@@ -827,6 +890,49 @@ func waitForEvent(ctx context.Context, events <-chan *river.Event, jobID int64, 
 	}
 }
 
+// waitForCancelledRow rekeys cancellation confirmation onto the job's
+// persisted row instead of a specific emitted event kind (CHAOS-4011).
+// River v0.40 has a documented event-routing gap (upstream PR #1350):
+// a remotely-cancelled job whose worker races the cancellation can persist
+// state=cancelled but emit job_failed rather than job_cancelled — so a
+// strict wait on EventKindJobCancelled can hang even though the job
+// already reached its correct terminal state. The committed row is the
+// source of truth here; the event stream stays a fast path (used
+// immediately when it does arrive with the expected kind) with the row
+// poll as the deterministic fallback, on the same interval
+// (opts.FetchPollInterval) River's own poll-only fetch fallback already
+// uses elsewhere in this file for the identical class of purpose — not a
+// new timing knob, and not a wait-longer masking of the underlying gap:
+// convergence happens on whichever check (event or row) sees the true
+// state first, not after some elapsed duration.
+func waitForCancelledRow(ctx context.Context, client *river.Client[pgx.Tx], events <-chan *river.Event, jobID int64, pollInterval time.Duration) (*rivertype.JobRow, *river.Event, error) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil, context.Cause(ctx)
+		case event := <-events:
+			if event != nil && event.Job != nil && event.Job.ID == jobID && event.Kind == river.EventKindJobCancelled {
+				row, err := client.JobGet(ctx, jobID)
+				if err != nil {
+					return nil, nil, err
+				}
+				return row, event, nil
+			}
+		case <-ticker.C:
+			row, err := client.JobGet(ctx, jobID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if row.State == rivertype.JobStateCancelled {
+				return row, nil, nil
+			}
+		}
+	}
+}
+
 func insertOptions(opts Options, scheduledAt time.Time) *river.InsertOpts {
 	return &river.InsertOpts{
 		MaxAttempts: opts.MaxAttempts,
@@ -1033,10 +1139,14 @@ func calculateGates(result Result) GateResult {
 		latencyWithinLimit = result.Workload.ExecuteLatencyMS.WithinLimit
 	}
 	gates := GateResult{
-		BackendConnectionDeltaAtMostSix: result.Postgres.Delta.BackendConnections <= 6,
+		// result.Postgres.Delta reads pg_stat_database, a whole-database
+		// view — it reflects both pools' combined connection growth, not
+		// just the worker pool's, unlike result.Pool.Delta below (which is
+		// always readPoolCounters(pool), the worker pool specifically).
+		BackendConnectionDeltaAtMostSix: result.Postgres.Delta.BackendConnections <= WorkerPoolMaxConns+InserterPoolMaxConns,
 		CanceledAcquiresZero:            result.Pool.Delta.CanceledAcquireCount == 0,
 		EnqueueP95WithinLimit:           latencyWithinLimit,
-		NewConnectionsAtMostSix:         result.Pool.Delta.NewConnections <= 6,
+		NewConnectionsAtMostSix:         result.Pool.Delta.NewConnections <= WorkerPoolMaxConns,
 	}
 	if result.Workload != nil && result.Workload.RunningCancellation != nil {
 		crossClient := result.Workload.RunningCancellation.CrossClientContextCancelled

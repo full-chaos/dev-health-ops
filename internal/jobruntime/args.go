@@ -17,12 +17,20 @@ type ContractArgs interface {
 // EnvelopeArgs preserves the exact versioned JSON envelope while keeping the
 // payload statically typed for handlers.
 type EnvelopeArgs[T any] struct {
-	ContractVersion int                    `json:"contract_version"`
-	OrganizationID  *string                `json:"organization_id,omitempty"`
-	CorrelationID   string                 `json:"correlation_id"`
-	IdempotencyKey  string                 `json:"idempotency_key"`
-	Domain          jobcontract.DomainLink `json:"domain"`
-	Payload         T                      `json:"payload"`
+	ContractVersion int     `json:"contract_version"`
+	OrganizationID  *string `json:"organization_id,omitempty"`
+	CorrelationID   string  `json:"correlation_id"`
+	IdempotencyKey  string  `json:"idempotency_key"`
+	// TraceParent is the optional W3C traceparent the producer captured at
+	// enqueue time (CHAOS-3993). It MUST be carried here, not just in the
+	// wire envelope: Adapter.execute compares jobcontract.Decode's envelope
+	// with ContractEnvelope() by reflect.DeepEqual and cancels the job on
+	// drift, so a field present on the wire and absent here cancels every
+	// traced job at attempt 1 with error_category "validation", before the
+	// handler or the idempotency claim runs (CHAOS-4093).
+	TraceParent string                 `json:"trace_parent,omitempty"`
+	Domain      jobcontract.DomainLink `json:"domain"`
+	Payload     T                      `json:"payload"`
 }
 
 func (args EnvelopeArgs[T]) envelope() jobcontract.Envelope {
@@ -31,6 +39,7 @@ func (args EnvelopeArgs[T]) envelope() jobcontract.Envelope {
 		OrganizationID:  args.OrganizationID,
 		CorrelationID:   args.CorrelationID,
 		IdempotencyKey:  args.IdempotencyKey,
+		TraceParent:     args.TraceParent,
 		Domain:          args.Domain,
 		Payload:         args.Payload,
 	}

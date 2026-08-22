@@ -1,10 +1,15 @@
 package jobruntime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -61,6 +66,72 @@ func TestStartJobSpanExtractsEnvelopeTraceParent(t *testing.T) {
 		}
 		if parentSpanID := got.Parent.SpanID().String(); parentSpanID != "00f067aa0ba902b7" {
 			t.Fatalf("parent span id = %s, want the span id carried by envelope.TraceParent", parentSpanID)
+		}
+	})
+
+	// CHAOS-4093. The two cases above drive startJobSpan DIRECTLY, which is
+	// exactly why they passed for the entire window in which no traced job
+	// could reach it: EnvelopeArgs carried no TraceParent, so
+	// ContractEnvelope() returned an empty one, Adapter.execute's DeepEqual
+	// against the decoded envelope saw drift, and the job was cancelled
+	// ~200 lines before startJobSpan ran. This case drives the REAL path --
+	// adapter.Work over a job whose encoded_args carry a traceparent -- so
+	// the parenting claim is made about production's call chain rather than
+	// about a helper called in isolation.
+	t.Run("adapter.Work parents the job span from the envelope's trace_parent", func(t *testing.T) {
+		exporter.Reset()
+		envelope := jobcontract.Envelope{
+			ContractVersion: 1,
+			CorrelationID:   "corr-adapter-1",
+			IdempotencyKey:  "retention:2026-07-21",
+			TraceParent:     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			Domain: jobcontract.DomainLink{
+				Type: "maintenance_run",
+				ID:   "11111111-1111-4111-8111-111111111111",
+			},
+			Payload: jobcontract.RetentionCleanupPayload{
+				BatchSize:       100,
+				DeleteBefore:    "2026-07-01T00:00:00Z",
+				RetentionPolicy: jobcontract.RetentionWorkerTerminal,
+			},
+		}
+		raw, err := jobcontract.MarshalCanonical(envelope)
+		if err != nil {
+			t.Fatalf("MarshalCanonical: %v", err)
+		}
+		// Unmarshalled from the same bytes River puts in encoded_args, which
+		// is what makes the DeepEqual in Adapter.execute meaningful here.
+		var typed RetentionCleanupArgs
+		if err := json.Unmarshal(raw, &typed); err != nil {
+			t.Fatalf("unmarshal typed args: %v", err)
+		}
+
+		var logs bytes.Buffer
+		adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](
+			func(context.Context, *Execution[RetentionCleanupArgs]) error { return nil },
+		), &recordingObserver{}, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &logs)
+		job := &river.Job[RetentionCleanupArgs]{
+			JobRow: &rivertype.JobRow{
+				ID: 44, Attempt: 1, CreatedAt: time.Now().UTC(), EncodedArgs: raw,
+				Kind: jobcontract.KindRetentionCleanup, MaxAttempts: 3, Priority: 3,
+				Queue: "retention", ScheduledAt: time.Now().UTC(), State: rivertype.JobStateRunning,
+			},
+			Args: typed,
+		}
+		if err := adapter.Work(context.Background(), job); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+
+		spans := exporter.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected 1 exported span, got %d", len(spans))
+		}
+		got := spans[0]
+		if traceID := got.SpanContext.TraceID().String(); traceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+			t.Fatalf("trace id = %s, want the trace id carried by encoded_args", traceID)
+		}
+		if !got.Parent.IsRemote() || got.Parent.SpanID().String() != "00f067aa0ba902b7" {
+			t.Fatalf("parent = %+v, want the remote parent carried by encoded_args", got.Parent)
 		}
 	})
 

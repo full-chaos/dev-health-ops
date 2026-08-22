@@ -98,6 +98,20 @@ if _PROMETHEUS_AVAILABLE:
         ["result"],
     )
 
+    SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _prometheus_client_module.Counter(
+        "sync_coverage_datasets_excluded_by_intent_total",
+        "Datasets dropped from a sync coverage scope because their "
+        "integration_datasets row is disabled",
+        ["provider"],
+    )
+
+    SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _prometheus_client_module.Counter(
+        "sync_target_dataset_drift_repaired_total",
+        "IntegrationDataset rows disabled because the config's sync_targets "
+        "could not account for them (CHAOS-4106 drift repair)",
+        ["provider"],
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -343,6 +357,8 @@ else:
     CELERY_TASKS_TOTAL = _noop_counter()
     CELERY_TASK_DURATION_SECONDS = _noop_histogram()
     REPORT_RUN_LEASE_EXPIRED_TOTAL = _noop_counter()
+    SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _noop_counter()
+    SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     LLM_REQUESTS_TOTAL = _noop_counter()

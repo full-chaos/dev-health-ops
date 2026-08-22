@@ -1314,3 +1314,52 @@ func TestASwallowedFailureOnASuccessfulPassDoesNotClearTheGauges(t *testing.T) {
 		t.Fatalf("a successful pass reported the observer unhealthy:\n%s", metrics.String())
 	}
 }
+
+// SHADOW MODE'S SIGNAL, end to end, because shadow is the DEFAULT and it
+// writes nothing at all: the candidate gauge is the only durable trace a
+// shadow deployment leaves. If it never moves, a shadow sweep selecting the
+// same strand on every tick is invisible to every dashboard, which is the
+// state CHAOS-4097 already had to fix once at the log layer.
+//
+// The gauge must MOVE under a synthesized selection, not merely be present in
+// the scrape, and the terminalized counter must stay flat — shadow selects
+// without destroying, and a counter that moved here would report work that
+// never happened.
+func TestShadowSelectionMovesTheCandidateGaugeWithoutTheTerminalizedCounter(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		observation.UnreclaimableMeasured = true
+		observation.RunawayMeasured = true
+		if steps.Add(1) > 1 {
+			// A shadow pass that WOULD have terminalized seven units.
+			observation.UnreclaimableCandidates = 7
+			observation.UnreclaimableTerminalized = 0
+		}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	// Baseline: nothing selected yet. Without this the assertion below could
+	// pass against a gauge that was always 7.
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 0")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 7")
+	// Shadow destroys nothing, so the counter must not have moved. A shadow
+	// deployment reporting terminalizations would be a far worse defect than
+	// the silence this series replaces.
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 0")
+}

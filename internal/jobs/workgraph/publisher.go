@@ -1,10 +1,10 @@
 package workgraph
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -117,12 +117,26 @@ func sameRequest(existing, expected Request, scope []byte) bool {
 		existing.CorrelationID == expected.CorrelationID && existing.IdempotencyKey == expected.IdempotencyKey
 }
 
+// sameJSON compares scope JSON semantically, not byte-for-byte. Postgres
+// jsonb does not preserve object-key order or source whitespace on
+// round-trip (the value read back from work_graph_execution_requests.scope
+// can reorder keys relative to what the caller marshaled), so comparing
+// json.Compact output directly rejected a byte-identical retry the instant
+// the scope had more than one key -- exactly the crash-after-write/
+// before-ack retry path WriteTx exists to make harmless. Unmarshal both
+// sides into a Go value and compare those instead; map/object comparison is
+// key-order-independent by construction. Canonicalizing at the producer
+// (the Go marshal side) would not fix this: Go's json.Marshal of a map
+// already emits keys in sorted order, but Postgres re-encodes jsonb on its
+// own internal schedule on the way back out, independent of what was
+// written -- the mismatch is introduced by the storage round-trip, not by
+// the writer, so only a semantic comparison at the check site closes it.
 func sameJSON(left, right []byte) bool {
-	var compactLeft, compactRight bytes.Buffer
-	if json.Compact(&compactLeft, left) != nil || json.Compact(&compactRight, right) != nil {
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
 		return false
 	}
-	return bytes.Equal(compactLeft.Bytes(), compactRight.Bytes())
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func envelopeFor(request Request) jobcontract.Envelope {

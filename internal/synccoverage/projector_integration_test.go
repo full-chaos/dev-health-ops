@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,82 @@ func TestProjectorPostgresLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("user-disabled datasets are not advertised as backfills", func(t *testing.T) {
+		resetProjectorTables(t, ctx, pool)
+		fixture := seedDisabledDatasetFixture(t, ctx, pool, "org-intent", now)
+		raw, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+
+		// The whole point: no advertised window may name a disabled dataset.
+		for _, rawWindow := range payload["backfill_windows"].([]any) {
+			window := rawWindow.(map[string]any)
+			for _, rawKey := range window["dataset_keys"].([]any) {
+				if strings.HasPrefix(rawKey.(string), "work-item") {
+					t.Fatalf("backfill window advertises user-disabled dataset %q: %#v", rawKey, window)
+				}
+			}
+		}
+
+		// And the disabled datasets must still be visible as not_enabled --
+		// silently vanishing would be its own lie -- while the enabled,
+		// selected dataset keeps its real coverage.
+		statuses := make(map[string]string)
+		gapCounts := make(map[string]int)
+		for _, rawDataset := range payload["datasets"].([]any) {
+			dataset := rawDataset.(map[string]any)
+			key := dataset["dataset_key"].(string)
+			statuses[key] = dataset["status"].(string)
+			gapCounts[key] = len(dataset["gaps"].([]any)) + len(dataset["failed_ranges"].([]any))
+		}
+		for _, key := range []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"} {
+			if statuses[key] != "not_enabled" {
+				t.Fatalf("dataset %q status = %q, want not_enabled", key, statuses[key])
+			}
+			if gapCounts[key] != 0 {
+				t.Fatalf("dataset %q still carries %d advertisable ranges", key, gapCounts[key])
+			}
+		}
+		if statuses["commits"] != "healthy" {
+			t.Fatalf("commits status = %q, want healthy: narrowing must not drop an enabled, selected dataset", statuses["commits"])
+		}
+	})
+
+	t.Run("rows present but all disabled yields an empty scope", func(t *testing.T) {
+		resetProjectorTables(t, ctx, pool)
+		fixture := seedDisabledDatasetFixture(t, ctx, pool, "org-all-off", now)
+		// Switch the remaining git-family rows off too, so the integration has
+		// dataset rows but NOT ONE enabled. A query filtered to enabled rows
+		// cannot tell this from "never seeded"; treating it as unseeded would
+		// advertise every selected dataset the operator just switched off.
+		if _, err := pool.Exec(ctx, `UPDATE integration_datasets SET is_enabled=FALSE WHERE org_id=$1`, fixture.OrgID); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if windows := payload["backfill_windows"].([]any); len(windows) != 0 {
+			t.Fatalf("all datasets disabled, yet %d backfill window(s) advertised: %#v", len(windows), windows)
+		}
+		for _, rawDataset := range payload["datasets"].([]any) {
+			dataset := rawDataset.(map[string]any)
+			if status := dataset["status"].(string); status != "not_enabled" {
+				t.Fatalf("dataset %q status = %q, want not_enabled when every row is disabled",
+					dataset["dataset_key"], status)
+			}
+		}
+	})
+
 	t.Run("tenant isolation", func(t *testing.T) {
 		resetProjectorTables(t, ctx, pool)
 		first := seedProjectorFixture(t, ctx, pool, "org-first", now)
@@ -289,6 +366,53 @@ func TestProjectorPostgresLifecycle(t *testing.T) {
 			t.Fatal("failed rebuild cleared invalidated_at")
 		}
 	})
+}
+
+// seedDisabledDatasetFixture reproduces CHAOS-4106: a target-scoped config whose
+// sync_targets still select the work-item family, an intent plane where that
+// family is switched OFF, and real work-item history carrying a failed window.
+// Before the fix, coverage scoped work-items in purely from sync_targets and
+// advertised that failed window as an actionable backfill the planner would
+// have refused (planner.py::_load_enabled_datasets filters is_enabled).
+func seedDisabledDatasetFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string, now time.Time) projectorFixture {
+	t.Helper()
+	fixture := projectorFixture{
+		OrgID: orgID, ConfigID: uuid.New(), IntegrationID: uuid.New(), SourceID: uuid.New(),
+		RunID: uuid.New(), UnitID: uuid.New(),
+	}
+	statements := []struct {
+		SQL  string
+		Args []any
+	}{
+		{`INSERT INTO sync_configurations (id,org_id,name,provider,sync_targets,is_active,planner_managed,integration_id) VALUES ($1,$2,'sync','github','["git", "work-items"]',TRUE,FALSE,$3)`, []any{fixture.ConfigID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name) VALUES ($1,$2,$3,'github','repository','acme/api','api','acme/api')`, []any{fixture.SourceID, orgID, fixture.IntegrationID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id,status,started_at,completed_at,created_at) VALUES ($1,$2,$3,'success',$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
+		// commits is selected AND enabled: it must survive the narrowing.
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'github','commits','{}',$6,$7,'success',$8,$8)`, []any{fixture.UnitID, orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24 * time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)}},
+		// work-items is selected but DISABLED, and has a failed window wide
+		// enough to clear the adjacency tolerance -- i.e. real advertisable history.
+		{`INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'github','work-items','{}',$6,$7,'failed',$8,$8)`, []any{uuid.New(), orgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-240 * time.Hour), now.Add(-120 * time.Hour), now.Add(-time.Hour)}},
+		{`INSERT INTO scheduled_jobs (id,org_id,name,job_type,provider,schedule_cron,status,sync_config_id,next_run_at,created_at,updated_at) VALUES ($1,$2,'sync','sync','github','0 * * * *',0,$3,$4,$5,$5)`, []any{uuid.New(), orgID, fixture.ConfigID, now.Add(time.Hour), now.Add(-24 * time.Hour)}},
+	}
+	// The intent plane: the git family stays on, the whole work-item family is off.
+	for _, key := range []string{"repo-metadata", "commits", "commit-stats", "files"} {
+		statements = append(statements, struct {
+			SQL  string
+			Args []any
+		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled) VALUES ($1,$2,$3,$4,TRUE)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
+	}
+	for _, key := range []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"} {
+		statements = append(statements, struct {
+			SQL  string
+			Args []any
+		}{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled) VALUES ($1,$2,$3,$4,FALSE)`, []any{uuid.New(), orgID, fixture.IntegrationID, key}})
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.SQL, statement.Args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fixture
 }
 
 func seedProjectorFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string, now time.Time) projectorFixture {

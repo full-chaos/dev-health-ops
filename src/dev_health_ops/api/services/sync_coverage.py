@@ -18,6 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.dml import Update
 
+from dev_health_ops.metrics.prometheus import (
+    SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL,
+)
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.integrations import (
     IntegrationDataset,
@@ -656,32 +659,85 @@ async def resolve_effective_scope(
             stage_limit=MAX_COVERAGE_SOURCES,
         )
     ]
-    if config.source_id is not None:
-        sources = tuple(source_rows)
-        dataset_keys = _dataset_keys_for_config(config)
-    elif bool(config.planner_managed):
-        sources = tuple(source_rows)
-        dataset_keys = ()
-    else:
-        sources = tuple(source_rows)
-        dataset_keys = _dataset_keys_for_config(config)
+    sources = tuple(source_rows)
+    target_scoped = config.source_id is not None or not bool(config.planner_managed)
+    target_dataset_keys = _dataset_keys_for_config(config) if target_scoped else ()
 
-    if not dataset_keys:
-        dataset_stmt = select(IntegrationDataset.dataset_key).where(
-            IntegrationDataset.org_id == org_id,
-            IntegrationDataset.integration_id == integration_id,
-            IntegrationDataset.is_enabled.is_(True),
-        )
-        dataset_keys = tuple(
-            row[0]
-            for row in await _bounded_query_rows(
-                session,
-                dataset_stmt,
-                budget,
-                stage="effective_datasets",
-                stage_limit=MAX_COVERAGE_DATASETS,
+    # Both the enabled keys AND whether any intent row exists at all come from
+    # one query. Selecting only `is_enabled IS TRUE` rows makes an empty result
+    # ambiguous between "this integration was never seeded" and "the operator
+    # switched everything off" -- and those two demand opposite behaviour
+    # (Codex adversarial review, round 2).
+    dataset_stmt = select(
+        IntegrationDataset.dataset_key, IntegrationDataset.is_enabled
+    ).where(
+        IntegrationDataset.org_id == org_id,
+        IntegrationDataset.integration_id == integration_id,
+    )
+    dataset_rows = await _bounded_query_rows(
+        session,
+        dataset_stmt,
+        budget,
+        stage="effective_datasets",
+        stage_limit=MAX_COVERAGE_DATASETS,
+    )
+    intent_rows_exist = bool(dataset_rows)
+    enabled_dataset_keys = tuple(row[0] for row in dataset_rows if row[1])
+
+    # Mirrors resolveScope in internal/synccoverage/repository.go; the two must
+    # stay in lockstep. A target-scoped config (source-scoped child, or any
+    # non-planner-managed config) derives its datasets from sync_targets alone,
+    # which says nothing about whether the dataset is still enabled. The planner
+    # is is_enabled-authoritative on every path (planner.py::
+    # _load_enabled_datasets filters is_enabled IS TRUE and only then narrows by
+    # the requested keys), so without this intersection coverage advertises gap
+    # windows and backfill buttons for datasets the planner would refuse to plan
+    # (CHAOS-4106).
+    #
+    # The intersection deliberately does NOT run for a planner-managed parent.
+    # There dataset_keys already come from the enabled rows -- exactly what the
+    # planner reads -- and intersecting with target keys would drop "blame" and
+    # "security", neither of which is derivable from an operator-selectable
+    # target, leaving coverage blind to two datasets that really are syncing.
+    #
+    # A config with no sync_targets at all keeps the pre-existing fallback of
+    # scoping to every enabled dataset. Only a non-empty selection is
+    # intersected, so "every selected dataset is disabled" resolves to an empty
+    # scope rather than inverting into the fallback and advertising everything.
+    #
+    # An integration with NO integration_datasets rows at all is left alone: an
+    # unseeded intent plane is not a statement of intent, and reading it as one
+    # would blank an otherwise working config's coverage. But rows that EXIST
+    # and are all disabled ARE a statement of intent -- the operator switched
+    # everything off -- and must narrow to an empty scope. Hence
+    # `intent_rows_exist` rather than `enabled_dataset_keys` as the test.
+    if not target_scoped or not target_dataset_keys:
+        dataset_keys = enabled_dataset_keys
+    elif not intent_rows_exist:
+        dataset_keys = target_dataset_keys
+    else:
+        enabled_set = set(enabled_dataset_keys)
+        dataset_keys = tuple(key for key in target_dataset_keys if key in enabled_set)
+        excluded = sorted(set(target_dataset_keys) - enabled_set)
+        if excluded:
+            SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL.labels(
+                provider=str(config.provider)
+            ).inc(len(excluded))
+            logger.warning(
+                "sync_coverage_scope_excluded_user_disabled_datasets",
+                extra={
+                    "org_id": org_id,
+                    "sync_config_id": str(config.id),
+                    "integration_id": str(integration_id),
+                    "provider": str(config.provider),
+                    "excluded_dataset_keys": ",".join(excluded),
+                    "excluded_count": len(excluded),
+                    "reason": (
+                        "integration_datasets.is_enabled is false; coverage must "
+                        "not advertise backfill windows the planner would refuse"
+                    ),
+                },
             )
-        )
     return EffectiveScope(integration_id, sources, tuple(sorted(set(dataset_keys))))
 
 

@@ -352,3 +352,80 @@ def processor_sync_targets() -> list[str]:
         if flags:
             targets.update(_LEGACY_TARGETS_BY_DATASET[dataset_key])
     return [target for target in _LEGACY_TARGET_ORDER if target in targets]
+
+
+# The sync targets an operator can actually check in the config form. Pinned to
+# ``ALL_SYNC_TARGETS`` in web ``src/components/admin/sync/config-form/
+# constants.ts``: that form is the ONLY user-facing control over
+# ``IntegrationDataset`` rows (``PATCH /integrations/{id}/datasets`` has no web
+# caller at all), so this list defines what "the operator selected it" can even
+# mean.
+#
+# Deliberately narrower than :func:`supported_legacy_targets`, which is derived
+# from every dataset's ``legacy_targets`` and therefore also yields "blame" and
+# "security" -- neither of which is a checkbox. "blame" reaches a dataset row
+# only through :func:`planner_dataset_keys`'s git-implies-blame expansion, and
+# "security" only through the platform's own
+# ``_ensure_security_dataset_for_scheduled_code_host_sync``. Deriving the
+# controlled universe from this list is what keeps both of those
+# platform-managed datasets outside operator control (CHAOS-4106).
+OPERATOR_SELECTABLE_SYNC_TARGETS: frozenset[str] = frozenset(
+    {
+        "git",
+        "prs",
+        "cicd",
+        "tests",
+        "deployments",
+        "incidents",
+        "work-items",
+        "feature-flags",
+        "operational",
+    }
+)
+
+
+def planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
+    """Dataset keys a config's ``sync_targets`` selection maps to.
+
+    This is the single mapping used at integration-create time, by the
+    sync_targets reconciliation on edit, and by the CHAOS-4106 data repair, so
+    all three agree on provider-specific rules by construction.
+    """
+    targets = {str(target) for target in sync_targets if target is not None}
+    provider_key = provider.lower()
+    if provider_key == "pagerduty" and targets != {"operational"}:
+        raise ValueError("PagerDuty sync target must be operational")
+    if provider_key in {"github", "gitlab"} and "git" in targets:
+        targets.add(DatasetKey.BLAME.value)
+    return [
+        spec.dataset_key
+        for spec in supported_datasets(provider)
+        if targets.intersection(spec.legacy_targets)
+    ]
+
+
+def operator_controlled_dataset_keys(provider: str) -> set[str]:
+    """Every dataset key an operator's checkboxes could enable for ``provider``.
+
+    Computed by running :func:`planner_dataset_keys` over every selectable
+    target at once, rather than reading ``legacy_targets`` directly. That
+    matters: the universe inherits provider-specific expansion rules for free,
+    so github/gitlab's git-implies-blame puts "blame" inside the universe and
+    unchecking "git" disables it symmetrically. "security" is reachable from no
+    selectable target and so is never in the universe, on any provider.
+
+    The intersection with the provider's own supported targets is required, not
+    cosmetic: :func:`planner_dataset_keys` raises for PagerDuty unless the
+    target set is exactly ``{"operational"}``.
+    """
+    selectable = sorted(
+        OPERATOR_SELECTABLE_SYNC_TARGETS.intersection(
+            supported_legacy_targets(provider)
+        )
+    )
+    if not selectable:
+        return set()
+    try:
+        return set(planner_dataset_keys(provider, selectable))
+    except ValueError:
+        return set()

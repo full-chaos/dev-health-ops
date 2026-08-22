@@ -44,6 +44,9 @@ from dev_health_ops.api.services.sync_coverage import (
     ensure_utc,
     invalidate_sync_coverage_projection,
 )
+from dev_health_ops.metrics.prometheus import (
+    SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL,
+)
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
     Integration,
@@ -71,8 +74,8 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_targets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.datasets import (
-    DatasetKey,
-    supported_datasets,
+    operator_controlled_dataset_keys,
+    planner_dataset_keys,
     supported_legacy_targets,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
@@ -946,18 +949,12 @@ async def _upsert_scheduled_job(
     job.status = status
 
 
-def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
-    targets = {str(target) for target in sync_targets if target is not None}
-    provider_key = provider.lower()
-    if provider_key == "pagerduty" and targets != {"operational"}:
-        raise ValueError("PagerDuty sync target must be operational")
-    if provider_key in {"github", "gitlab"} and "git" in targets:
-        targets.add(DatasetKey.BLAME.value)
-    return [
-        spec.dataset_key
-        for spec in supported_datasets(provider)
-        if targets.intersection(spec.legacy_targets)
-    ]
+# Both live in ``sync/datasets.py`` so the create path, the edit-time
+# reconciliation, and the CHAOS-4106 alembic data repair share one
+# implementation rather than three that can drift. Re-exported under the
+# historical private names their existing callers and tests already use.
+_planner_dataset_keys = planner_dataset_keys
+_operator_controlled_dataset_keys = operator_controlled_dataset_keys
 
 
 async def _reconcile_dataset_rows_for_sync_targets(
@@ -967,6 +964,7 @@ async def _reconcile_dataset_rows_for_sync_targets(
     provider: str,
     sync_targets: list[str],
     previous_sync_targets: list[str],
+    config_id: uuid.UUID,
 ) -> None:
     """Make an edited ``sync_targets`` list authoritative over ``IntegrationDataset``
     rows, in BOTH directions.
@@ -995,14 +993,28 @@ async def _reconcile_dataset_rows_for_sync_targets(
 
     Both directions run through the SAME ``_planner_dataset_keys`` used at
     create time, so provider-specific rules (e.g. github/gitlab's
-    git-implies-blame expansion) apply identically to both the old and new
-    computed sets -- removing "git" symmetrically drops "blame" from
-    ``desired_keys`` too, with no special-casing needed. Datasets never
+    git-implies-blame expansion) apply identically -- removing "git"
+    symmetrically drops "blame", with no special-casing needed. Datasets never
     exposed as a sync_targets checkbox (e.g. "security", which the platform
-    manages via ``_ensure_security_dataset_for_scheduled_code_host_sync``)
-    have legacy_targets that never appear in an operator-supplied
-    sync_targets list, so they never appear in either the old or new
-    computed set and are untouched by this function either way.
+    manages via ``_ensure_security_dataset_for_scheduled_code_host_sync``) are
+    unreachable from any selectable target, so they are outside the controlled
+    universe and untouched by this function either way.
+
+    SELF-HEALING, not diff-based (CHAOS-4106). The disable set used to be
+    ``previous_sync_targets - sync_targets``, which only ever saw the delta of
+    the edit in front of it. A row that drifted enabled BEFORE CHAOS-3398
+    landed -- or by any path that wrote rows without writing sync_targets --
+    was invisible to every subsequent edit, forever. That is not theoretical:
+    on production the github integration carried all five work-item rows
+    enabled while "work-items" had been unchecked for months, so the planner
+    kept syncing a dataset the operator had opted out of and coverage
+    honestly advertised backfills for it.
+
+    The disable set is therefore ``controlled universe - desired``: every key
+    the checkboxes COULD have enabled, minus the ones currently selected. Any
+    edit now repairs the whole integration rather than just its own delta.
+    ``previous_sync_targets`` is retained only to report drift -- keys this
+    call disables that a diff-based reconcile would have missed.
     """
     try:
         desired_keys = set(_planner_dataset_keys(provider, sync_targets))
@@ -1015,21 +1027,137 @@ async def _reconcile_dataset_rows_for_sync_targets(
     except ValueError:
         previously_desired_keys = set()
 
-    if not desired_keys and not previously_desired_keys:
+    controlled_keys = _operator_controlled_dataset_keys(provider)
+    if not desired_keys and not controlled_keys:
         return
 
+    # IntegrationDataset rows are SHARED by every config on this integration
+    # (CHAOS-2762), so "desired" is the union across every WHOLE-INTEGRATION
+    # config, not just the one being edited. The old diff-based disable set
+    # (previous - new) could only ever touch keys THIS config had just
+    # deselected, which made the sibling case mostly harmless. Widening the
+    # disable set to `controlled - desired` removes that accident: without this
+    # union, editing a config that never selected work-items would disable the
+    # work-item rows a sibling config still selects, silently stopping the
+    # sibling's planner. The 0108 data repair already unions across siblings;
+    # the live path has to agree or the two fight each other.
+    #
+    # `_assert_single_planner_parent_for_integration` does NOT make this
+    # unreachable: it forbids a second planner-managed PARENT, while any
+    # non-planner-managed config with source_id IS NULL is also a
+    # whole-integration config, and no unique constraint covers that case.
+    #
+    # Serialise reconciliation per integration BEFORE reading siblings. The
+    # sibling read and the enable/disable writes are separate statements, so
+    # two concurrent whole-integration edits could otherwise interleave: the
+    # deselecting request reads a sibling's pre-edit targets, the selecting
+    # request commits its enable, and the stale disable then lands on top --
+    # leaving a shared row disabled that a committed sibling selects (Codex
+    # adversarial review, round 2). A transaction-scoped advisory lock keyed on
+    # the integration makes the read-then-write pair atomic against other
+    # reconciliations of the same shared rows.
+    #
+    # Same mechanism the coverage projection already uses
+    # (sync_coverage.py::_sync_coverage_lock_statement), keyed on the
+    # integration rather than the config because the ROWS are per-integration.
+    # PostgreSQL only: aiosqlite has no advisory locks and no concurrency to
+    # guard in the test harness.
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(
+                        f"sync-target-dataset-reconcile:{org_id}:{integration_id}", 0
+                    )
+                )
+            )
+        )
+
+    # The edited config is excluded by id and represented by the targets passed
+    # in, rather than trusting that the caller's in-session mutation has been
+    # flushed by the time this query autoflushes. ``config_id`` is REQUIRED
+    # rather than optional-with-None: `SyncConfiguration.id != None` renders as
+    # a comparison to NULL, which matches no rows, which would silently empty
+    # the sibling union and reinstate exactly the bug this guards against.
+    #
+    # Siblings are NOT filtered by is_active: a paused config's selection still
+    # pins its shared rows on. Shared rows cannot express divergent intent
+    # across sibling configs at all -- see CHAOS-4115.
+    sibling_rows = (
+        await session.execute(
+            select(SyncConfiguration.provider, SyncConfiguration.sync_targets).where(
+                SyncConfiguration.org_id == org_id,
+                SyncConfiguration.integration_id == integration_id,
+                SyncConfiguration.source_id.is_(None),
+                SyncConfiguration.id != config_id,
+            )
+        )
+    ).all()
+    for sibling_provider, sibling_targets in sibling_rows:
+        try:
+            desired_keys.update(
+                _planner_dataset_keys(
+                    str(sibling_provider),
+                    [str(target) for target in (sibling_targets or [])],
+                )
+            )
+        except ValueError:
+            # A sibling whose targets cannot be mapped is intent we cannot
+            # read. Enabling stays safe; disabling does not, so the disable
+            # pass is dropped rather than guessing on a sibling's behalf.
+            logger.warning(
+                "sync_target_reconcile_skipped_unreadable_sibling",
+                extra={
+                    "org_id": org_id,
+                    "integration_id": str(integration_id),
+                    "sibling_provider": str(sibling_provider),
+                    "reason": (
+                        "a sibling whole-integration config's sync_targets could "
+                        "not be mapped to dataset keys; shared rows are left "
+                        "enabled rather than disabled on a guess"
+                    ),
+                },
+            )
+            controlled_keys = set()
+            break
+
     svc = IntegrationDatasetService(session, org_id)
-    for dataset_key in desired_keys:
+    for dataset_key in sorted(desired_keys):
         dataset = await svc.get_by_key(str(integration_id), dataset_key)
         if dataset is None:
             await svc.create(integration_id, dataset_key, True)
         elif not dataset.is_enabled:
             await svc.set_enabled(dataset, True)
 
-    for dataset_key in previously_desired_keys - desired_keys:
+    disabled_keys: list[str] = []
+    for dataset_key in sorted(controlled_keys - desired_keys):
         dataset = await svc.get_by_key(str(integration_id), dataset_key)
         if dataset is not None and dataset.is_enabled:
             await svc.set_enabled(dataset, False)
+            disabled_keys.append(dataset_key)
+
+    # Drift is exactly what the old diff-based reconcile could not have seen:
+    # a row this call switched off that the previous-vs-new delta never named.
+    drifted_keys = sorted(set(disabled_keys) - (previously_desired_keys - desired_keys))
+    if drifted_keys:
+        SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL.labels(provider=str(provider)).inc(
+            len(drifted_keys)
+        )
+        logger.warning(
+            "sync_target_dataset_drift_repaired",
+            extra={
+                "org_id": org_id,
+                "integration_id": str(integration_id),
+                "provider": provider,
+                "drifted_dataset_keys": ",".join(drifted_keys),
+                "drifted_count": len(drifted_keys),
+                "reason": (
+                    "integration_datasets rows were enabled that this config's "
+                    "sync_targets cannot account for; the planner was syncing "
+                    "datasets the operator had deselected"
+                ),
+            },
+        )
 
 
 def _planner_source_rows(
@@ -2220,9 +2348,16 @@ async def update_sync_config(
         # adversarial-review finding, round 2). Only the config that
         # represents the WHOLE integration (source_id is None) may mutate
         # the shared rows.
+        #
+        # The config's own id is required, not optional: the reconciliation
+        # excludes it from the sibling-config union by id, and without one it
+        # could not tell this config's stale persisted targets apart from a
+        # sibling's live selection. Skipping is the safe branch.
+        config_row_id = getattr(config, "id", None)
         if (
             config_integration_id is not None
             and getattr(config, "source_id", None) is None
+            and config_row_id is not None
         ):
             await _reconcile_dataset_rows_for_sync_targets(
                 session,
@@ -2231,6 +2366,7 @@ async def update_sync_config(
                 str(getattr(config, "provider", "")),
                 payload.sync_targets,
                 previous_sync_targets,
+                config_id=config_row_id,
             )
     if sync_options_provided:
         merged_options = {

@@ -216,12 +216,15 @@ func TestBuildScheduledPlanRequiresExecutedProofOrWaiver(t *testing.T) {
 	// CHAOS-4060: fixture/golden proof (RouteReady && Plannable) stops being
 	// sufficient. github/security carries no ExecutedProofWaiver, so it must
 	// license new work only when the CHAOS-4060 evidence snapshot actually
-	// proves a live executed run for it -- and it must NOT plan when a
-	// non-nil snapshot proves everything else but that pair, which is the
-	// negative control: the gate must actually fail when proof is absent,
-	// not merely pass when proof happens to be present.
+	// proves a live executed run for it, OR when the pair has never been
+	// attempted at all (bootstrap convergence -- see
+	// providersync.ExecutedProofEvidence). It must NOT plan when a non-nil
+	// snapshot records the pair as ATTEMPTED but never proven, which is the
+	// negative control: the gate must actually fail when proof is absent
+	// despite a real attempt, not merely pass when proof happens to be
+	// present or the pair is untouched.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	input := func(evidence providersync.ExecutedProofEvidence) PlannerInput {
+	input := func(evidence *providersync.ExecutedProofEvidence) PlannerInput {
 		return PlannerInput{
 			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
 			Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
@@ -230,20 +233,24 @@ func TestBuildScheduledPlanRequiresExecutedProofOrWaiver(t *testing.T) {
 		}
 	}
 
-	// Negative control: proof exists for other pairs, but not this one.
-	units, err := BuildScheduledPlan(input(providersync.ExecutedProofEvidence{
-		"github/commits": true,
+	// Negative control: github/security has been attempted (a real prior
+	// unit exists for it) but never proven. Other pairs being proven is
+	// irrelevant -- this pair's own state is what the gate reads.
+	units, err := BuildScheduledPlan(input(&providersync.ExecutedProofEvidence{
+		Proven:    map[string]bool{"github/commits": true},
+		Attempted: map[string]bool{"github/commits": true, "github/security": true},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero: github/security has no evidence and no waiver", units)
+		t.Fatalf("units=%+v, want zero: github/security was attempted and never proven, and has no waiver", units)
 	}
 
 	// Positive control: proof exists for this exact pair.
-	units, err = BuildScheduledPlan(input(providersync.ExecutedProofEvidence{
-		"github/security": true,
+	units, err = BuildScheduledPlan(input(&providersync.ExecutedProofEvidence{
+		Proven:    map[string]bool{"github/security": true},
+		Attempted: map[string]bool{"github/security": true},
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -252,21 +259,29 @@ func TestBuildScheduledPlanRequiresExecutedProofOrWaiver(t *testing.T) {
 		t.Fatalf("units=%+v, want exactly one: github/security has live executed proof", units)
 	}
 
-	// Empty-but-non-nil evidence: the gate is wired and enforced, and proves
-	// nothing -- same outcome as the negative control above.
-	units, err = BuildScheduledPlan(input(providersync.ExecutedProofEvidence{}))
+	// Empty-but-non-nil evidence: the gate is wired and enforced, but
+	// github/security has never been ATTEMPTED at all -- this is the
+	// CHAOS-4060 bootstrap case (a fresh database, or any pair with zero
+	// sync_run_units history), and it must plan so the pair can earn its
+	// own first attempt.
+	units, err = BuildScheduledPlan(input(&providersync.ExecutedProofEvidence{
+		Proven: map[string]bool{}, Attempted: map[string]bool{},
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero against empty (but non-nil) evidence", units)
+	if len(units) != 1 {
+		t.Fatalf(
+			"units=%+v, want exactly one: never-attempted must bootstrap through, not deadlock",
+			units,
+		)
 	}
 
 	// Nil evidence: this caller has not wired the gate -- pre-CHAOS-4060
 	// behavior, unchanged. This is exactly
 	// TestBuildScheduledPlanPlansAKnownRoutablePairUnconditionally's
-	// assertion, repeated here to pin that "not wired" and "wired but proof
-	// absent" are deliberately different outcomes.
+	// assertion, repeated here to pin that "not wired" and "wired but
+	// never attempted" reach the same outcome by different reasoning.
 	units, err = BuildScheduledPlan(input(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -285,9 +300,11 @@ func TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence(t *testing
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "repo-metadata"}},
-		ExecutedProof: providersync.ExecutedProofEvidence{},
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "repo-metadata"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven: map[string]bool{}, Attempted: map[string]bool{},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -303,19 +320,23 @@ func TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence(t *testing
 func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(t *testing.T) {
 	// Same CHAOS-4060 requirement as TestBuildScheduledPlanRequiresExecutedProofOrWaiver,
 	// applied to the family-collapse gate: the canonical work-items claim
-	// must not plan against non-nil evidence that proves nothing for it.
+	// must not plan against non-nil evidence recording it as attempted but
+	// never proven.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "work-items"}},
-		ExecutedProof: providersync.ExecutedProofEvidence{"github/commits": true},
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "work-items"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven:    map[string]bool{"github/commits": true},
+			Attempted: map[string]bool{"github/commits": true, "github/work-items": true},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero: github/work-items has no evidence and no waiver", units)
+		t.Fatalf("units=%+v, want zero: github/work-items was attempted and never proven, and has no waiver", units)
 	}
 }
 

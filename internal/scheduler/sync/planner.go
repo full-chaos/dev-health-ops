@@ -129,13 +129,15 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
-	// ExecutedProof is the CHAOS-4060 durable evidence snapshot: which
-	// provider/dataset pairs have at least one live sync_run_units row that
-	// completed with persisted-row evidence. A nil map means
-	// this caller has not wired the gate (see providersync.ExecutedProofEvidence)
-	// and planning behaves exactly as it did before CHAOS-4060. The production
-	// caller (NativeMaterializer) always supplies a real, non-nil snapshot.
-	ExecutedProof providersync.ExecutedProofEvidence
+	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
+	// which provider/dataset pairs have at least one live sync_run_units row
+	// that completed with persisted-row evidence (proven), have been
+	// attempted at all (any status), or neither (never-attempted, which
+	// bootstraps through -- see providersync.ExecutedProofEvidence). A nil
+	// pointer means this caller has not wired the gate and planning behaves
+	// exactly as it did before CHAOS-4060. The production caller
+	// (NativeMaterializer) always supplies a real, non-nil snapshot.
+	ExecutedProof *providersync.ExecutedProofEvidence
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.

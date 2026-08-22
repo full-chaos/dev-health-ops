@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -425,6 +426,19 @@ func buildSchedulerLoopWithSources(
 	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
 	if err != nil || occurrences == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
+	}
+	// CHAOS-4060: expose the executed-proof gate's own health (refresh
+	// failures, degraded state) as a Prometheus source, separate from the
+	// scheduler's own readiness -- a degraded gate still completes
+	// zero-unit occurrences successfully, so readiness alone cannot surface
+	// it. *schedulersync.OccurrenceReconciler (the concrete type behind
+	// OccurrenceStepper in production) satisfies this only when its
+	// materializer does too (NativeMaterializer does); a test double simply
+	// does not match, so this is a no-op outside production composition.
+	if source, ok := occurrences.(interface{ WritePrometheus(io.Writer) error }); ok {
+		if err := registry.RegisterMetrics("scheduler_executed_proof_gate", source); err != nil {
+			return nil, err
+		}
 	}
 	loop, err := sources.newLoop(
 		repository,

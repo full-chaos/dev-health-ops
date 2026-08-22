@@ -2,12 +2,19 @@ package providersync
 
 import "testing"
 
-func TestExecutedProofSatisfiedRequiresEvidenceOrWaiver(t *testing.T) {
+func TestExecutedProofSatisfiedRequiresProofUnlessWaivedOrNeverAttempted(t *testing.T) {
 	proven := CompleteRouteDescriptor{
 		Provider: "github", RequestedDataset: "prs", CanonicalDataset: "prs",
 	}
-	unproven := CompleteRouteDescriptor{
+	attemptedUnproven := CompleteRouteDescriptor{
+		// The CHAOS-4048/CHAOS-4049 motivating shape: tried repeatedly,
+		// never once produced a real row.
 		Provider: "pagerduty", RequestedDataset: "teams", CanonicalDataset: "teams",
+	}
+	neverAttempted := CompleteRouteDescriptor{
+		// No sync_run_units row at all -- a brand-new pair, or any pair in a
+		// fresh database. Must bootstrap through, not deadlock forever.
+		Provider: "linear", RequestedDataset: "work-items", CanonicalDataset: "work-items",
 	}
 	waived := CompleteRouteDescriptor{
 		Provider: "github", RequestedDataset: "repo-metadata", CanonicalDataset: "repo-metadata",
@@ -19,24 +26,31 @@ func TestExecutedProofSatisfiedRequiresEvidenceOrWaiver(t *testing.T) {
 		// CanonicalDataset, not RequestedDataset.
 		Provider: "github", RequestedDataset: "pr-reviews", CanonicalDataset: "prs",
 	}
-	evidence := ExecutedProofEvidence{"github/prs": true}
+	evidence := &ExecutedProofEvidence{
+		Proven:    map[string]bool{"github/prs": true},
+		Attempted: map[string]bool{"github/prs": true, "pagerduty/teams": true},
+	}
 
 	cases := []struct {
 		name       string
 		descriptor CompleteRouteDescriptor
-		evidence   ExecutedProofEvidence
+		evidence   *ExecutedProofEvidence
 		want       bool
 	}{
 		{"proven pair with matching evidence", proven, evidence, true},
-		{"unproven pair, non-nil evidence lacking it: gate fails closed", unproven, evidence, false},
+		{"attempted-unproven pair: gate fails closed", attemptedUnproven, evidence, false},
+		{"never-attempted pair: bootstraps through even with non-nil evidence", neverAttempted, evidence, true},
 		{"waived pair with no evidence at all: waiver bypasses the gate", waived, evidence, true},
 		{"waived pair even against nil evidence", waived, nil, true},
 		{"alias identity inherits its canonical writer's evidence", alias, evidence, true},
 		{
 			"nil evidence: caller has not wired the gate, pre-CHAOS-4060 pass-through",
-			unproven, nil, true,
+			attemptedUnproven, nil, true,
 		},
-		{"non-nil but empty evidence: nothing proven anywhere", proven, ExecutedProofEvidence{}, false},
+		{
+			"non-nil but entirely empty evidence: nothing attempted anywhere, bootstrap passes",
+			proven, &ExecutedProofEvidence{Proven: map[string]bool{}, Attempted: map[string]bool{}}, true,
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -48,15 +62,30 @@ func TestExecutedProofSatisfiedRequiresEvidenceOrWaiver(t *testing.T) {
 }
 
 func TestExecutedProofEvidenceHasExecutedProofIsCaseInsensitiveOnMatrixKey(t *testing.T) {
-	evidence := ExecutedProofEvidence{"github/prs": true}
+	evidence := &ExecutedProofEvidence{Proven: map[string]bool{"github/prs": true}}
 	if !evidence.HasExecutedProof("GitHub", "PRs") {
 		t.Fatal("HasExecutedProof should normalize case exactly like matrixKey does")
 	}
 	if evidence.HasExecutedProof("github", "commits") {
 		t.Fatal("HasExecutedProof must not manufacture proof for an absent key")
 	}
-	var nilEvidence ExecutedProofEvidence
+	var nilEvidence *ExecutedProofEvidence
 	if nilEvidence.HasExecutedProof("github", "prs") {
-		t.Fatal("a nil evidence map must never report proof directly")
+		t.Fatal("a nil evidence pointer must never report proof directly")
+	}
+	if nilEvidence.HasBeenAttempted("github", "prs") {
+		t.Fatal("a nil evidence pointer must never report an attempt directly")
+	}
+}
+
+func TestExecutedProofEvidenceHasBeenAttempted(t *testing.T) {
+	evidence := &ExecutedProofEvidence{
+		Attempted: map[string]bool{"pagerduty/teams": true},
+	}
+	if !evidence.HasBeenAttempted("PagerDuty", "Teams") {
+		t.Fatal("HasBeenAttempted should normalize case exactly like matrixKey does")
+	}
+	if evidence.HasBeenAttempted("github", "commits") {
+		t.Fatal("HasBeenAttempted must not manufacture an attempt for an absent key")
 	}
 }

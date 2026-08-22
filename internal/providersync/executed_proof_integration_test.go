@@ -18,8 +18,10 @@ import (
 // Go route whose window happened to be empty, a legacy Python row that
 // "succeeded" with zero persisted rows (the pagerduty/teams counterexample),
 // a legacy Python row that genuinely persisted rows, a unit that would count
-// except it never reached success, and a malformed result blob -- and asserts
-// the evidence query tells exactly those cases apart.
+// except it never reached success, a malformed result blob, and a legacy row
+// planned directly under an ALIAS identity that must canonicalize onto its
+// writer -- and asserts the evidence query's tri-state (Proven / Attempted /
+// neither) tells exactly those cases apart.
 func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -115,6 +117,14 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 		// must still prove -- the digit-length bound must not reject a
 		// legitimate (if implausibly large) value that happens to be long.
 		{"gitlab", "cicd", "success", `{"go_provider_route":{"records":999999999999999999}}`},
+		// The codex-review round-3 alias-canonicalization case: a
+		// pre-CHAOS-4054 row planned directly under the "tests" alias
+		// identity (Python never collapsed aliases onto their canonical
+		// writer the way the Go registry does). This is real, durable proof
+		// of the SAME writer github/cicd owns -- canonicalRouteIdentity
+		// folds "tests" onto "cicd", so this row must prove github/cicd even
+		// though no row is ever seeded under "cicd" itself for github.
+		{"github", "tests", "success", `{"persisted":8}`},
 	}
 	for _, seed := range seeds {
 		if _, err := pool.Exec(ctx, `
@@ -136,27 +146,63 @@ INSERT INTO public.sync_run_units (
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ExecutedProofEvidence{
+
+	wantProven := map[string]bool{
 		"github/prs":     true,
 		"jira/incidents": true,
 		"gitlab/cicd":    true,
+		// Proven ONLY via the alias-canonicalization fold from the
+		// github/tests seed row above -- no row is ever seeded directly
+		// under github/cicd.
+		"github/cicd": true,
 	}
-	if len(evidence) != len(want) {
-		t.Fatalf("evidence = %+v, want exactly %+v", evidence, want)
-	}
-	for key := range want {
-		if !evidence[key] {
-			t.Errorf("evidence missing proof for %q: %+v", key, evidence)
+	for key := range wantProven {
+		if !evidence.Proven[key] {
+			t.Errorf("evidence.Proven missing %q: %+v", key, evidence.Proven)
 		}
 	}
-	// Negative controls: none of these ever proves itself, no matter how the
-	// gate consults it.
-	for _, absent := range []string{
+	if len(evidence.Proven) != len(wantProven) {
+		t.Fatalf("evidence.Proven = %+v, want exactly %+v", evidence.Proven, wantProven)
+	}
+
+	// Every seeded pair (any status) must be Attempted, regardless of
+	// whether it ever proved itself -- that is what lets a genuinely
+	// unproven pair distinguish itself from one that was simply never tried.
+	wantAttempted := map[string]bool{
+		"github/prs": true, "github/commits": true, "github/deployments": true,
+		"pagerduty/teams": true, "jira/incidents": true, "gitlab/security": true,
+		"launchdarkly/feature-flags": true, "gitlab/blame": true, "jira/work-items": true,
+		"gitlab/cicd": true, "github/cicd": true,
+	}
+	for key := range wantAttempted {
+		if !evidence.Attempted[key] {
+			t.Errorf("evidence.Attempted missing %q: %+v", key, evidence.Attempted)
+		}
+	}
+	if len(evidence.Attempted) != len(wantAttempted) {
+		t.Fatalf("evidence.Attempted = %+v, want exactly %+v", evidence.Attempted, wantAttempted)
+	}
+
+	// Negative controls: attempted but never proven, no matter how the gate
+	// consults it.
+	for _, unproven := range []string{
 		"github/commits", "github/deployments", "pagerduty/teams", "gitlab/security",
 		"launchdarkly/feature-flags", "gitlab/blame", "jira/work-items",
 	} {
-		if evidence[absent] {
-			t.Errorf("evidence wrongly proved %q: %+v", absent, evidence)
+		if evidence.Proven[unproven] {
+			t.Errorf("evidence wrongly proved %q: %+v", unproven, evidence.Proven)
+		}
+		if !evidence.Attempted[unproven] {
+			t.Errorf("evidence should still record %q as attempted: %+v", unproven, evidence.Attempted)
+		}
+	}
+
+	// A pair nobody ever seeded at all: never attempted, never proven --
+	// the bootstrap-friendly case ExecutedProofSatisfied lets through.
+	for _, neverTouched := range []string{"github/blame", "linear/work-items"} {
+		if evidence.Proven[neverTouched] || evidence.Attempted[neverTouched] {
+			t.Errorf("evidence has %q, want it absent from both sets entirely: proven=%v attempted=%v",
+				neverTouched, evidence.Proven[neverTouched], evidence.Attempted[neverTouched])
 		}
 	}
 }

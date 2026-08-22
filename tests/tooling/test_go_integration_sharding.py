@@ -244,12 +244,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
-    # CHAOS-4060 added 3 top-level tests to internal/providersync:
-    # TestExecutedProofSatisfiedRequiresEvidenceOrWaiver and
-    # TestExecutedProofEvidenceHasExecutedProofIsCaseInsensitiveOnMatrixKey
-    # (ordinary), plus TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess
+    # CHAOS-4060 added 4 top-level tests to internal/providersync:
+    # TestExecutedProofSatisfiedRequiresProofUnlessWaivedOrNeverAttempted,
+    # TestExecutedProofEvidenceHasExecutedProofIsCaseInsensitiveOnMatrixKey,
+    # and TestExecutedProofEvidenceHasBeenAttempted (ordinary), plus
+    # TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess
     # (integration-tagged).
-    assert len(expected_provider_tests) == 933
+    assert len(expected_provider_tests) == 934
     assert len(expected_integration_tests) == 110
     assert expected_integration_tests < expected_provider_tests
 
@@ -266,7 +267,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 933
+    assert len(provider_flattened) == len(set(provider_flattened)) == 934
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -327,7 +328,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 933
+    assert len(selected_tests) == len(set(selected_tests)) == 934
     assert set(selected_tests) == expected_tests
 
 

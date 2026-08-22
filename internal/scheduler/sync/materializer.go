@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"reflect"
@@ -50,6 +51,14 @@ type NativeMaterializer struct {
 	executedProofNextRefreshAt   atomic.Int64
 	executedProofRefreshInterval time.Duration
 	now                          func() time.Time
+	// executedProofRefreshFailuresTotal and executedProofLastRefreshOK back
+	// WritePrometheus: a codex-review finding (round 3) was that a degraded
+	// gate is only visible as a log line, indistinguishable from a healthy
+	// scheduler at the readiness-endpoint level. This is the "cheap half"
+	// fix -- a counter plus a gauge, matching the CHAOS-4073 loud-failure
+	// pattern -- not readiness-endpoint surgery.
+	executedProofRefreshFailuresTotal atomic.Uint64
+	executedProofLastRefreshOK        atomic.Bool
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -92,11 +101,13 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 // A query failure must not silently restore full pre-CHAOS-4060 permissive
 // behavior for the rest of this process's lifetime -- that would defeat the
 // gate this ticket exists to add. So: if this is the very first load (no
-// snapshot installed yet), an error still installs an EMPTY, non-nil
-// snapshot -- the gate becomes enforced and conservative (nothing proven,
-// only explicit waivers pass) rather than silently disabled. A later,
-// unrelated transient error leaves whatever snapshot is already loaded in
-// place rather than wiping it. Either way the error is always returned so
+// snapshot installed yet), an error still installs a DEGRADED, non-nil
+// snapshot -- the gate becomes enforced and blocks every non-waived pair
+// outright, rather than silently disabled OR (worse, now that
+// never-attempted legitimately bootstraps through) misread as a fresh,
+// healthy, fully-permissive database. A later, unrelated transient error
+// leaves whatever snapshot is already loaded in place rather than wiping
+// it. Either way the error is always returned so
 // the caller can log it loud; this method never fails the whole scheduler
 // pass over an evidence-query failure (CHAOS-4073's precedent: a safety
 // layer that cannot confirm its own precondition fails loud, never takes the
@@ -105,15 +116,41 @@ func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context
 	if materializer == nil || materializer.domainPool == nil {
 		return ErrInvalidMaterializer
 	}
+	// Any refresh -- explicit (a caller's startup call, or a test) or
+	// automatic (maybeRefreshExecutedProof) -- resets the throttle window.
+	// Without this, an explicit call left executedProofNextRefreshAt at its
+	// zero value, so the very next Materialize call would see "now >= 0",
+	// consider a refresh immediately overdue, and fire a SECOND query right
+	// away regardless of the configured interval -- silently curing a
+	// just-installed Degraded snapshot with whatever the database happens to
+	// answer a moment later, before the interval the caller configured ever
+	// had a chance to matter.
+	if materializer.now != nil {
+		materializer.executedProofNextRefreshAt.Store(
+			materializer.now().Add(materializer.executedProofRefreshInterval).UnixNano(),
+		)
+	}
 	evidence, err := providersync.QueryExecutedProofEvidence(ctx, materializer.domainPool)
 	if err != nil {
+		materializer.executedProofRefreshFailuresTotal.Add(1)
+		materializer.executedProofLastRefreshOK.Store(false)
 		if materializer.executedProof.Load() == nil {
-			empty := providersync.ExecutedProofEvidence{}
-			materializer.executedProof.Store(&empty)
+			// Degraded, not merely empty: the query FAILED, so an empty
+			// Proven/Attempted shape here would be indistinguishable from a
+			// healthy database that has genuinely never attempted anything
+			// -- which now legitimately bootstraps every pair through. That
+			// would turn a startup outage into full pre-CHAOS-4060
+			// permissiveness. Degraded blocks every non-waived pair instead.
+			degraded := &providersync.ExecutedProofEvidence{
+				Proven: make(map[string]bool), Attempted: make(map[string]bool),
+				Degraded: true,
+			}
+			materializer.executedProof.Store(degraded)
 		}
 		return err
 	}
-	materializer.executedProof.Store(&evidence)
+	materializer.executedProofLastRefreshOK.Store(true)
+	materializer.executedProof.Store(evidence)
 	return nil
 }
 
@@ -148,6 +185,46 @@ func (materializer *NativeMaterializer) maybeRefreshExecutedProof(ctx context.Co
 			"error", err,
 		)
 	}
+}
+
+// WritePrometheus reports the CHAOS-4060 executed-proof gate's own health,
+// separately from whatever it decides about any given route: an operator
+// watching only scheduler readiness cannot tell a degraded gate (running on
+// a failed or never-succeeded evidence load, silently suppressing every
+// non-waived route) from a healthy one, because a degraded gate still lets
+// Materialize complete a zero-unit occurrence successfully. This is the
+// "cheap half" fix codex round 3 asked for: a counter and a gauge, not
+// readiness-endpoint surgery.
+func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error {
+	if materializer == nil || output == nil {
+		return errors.New("Prometheus output is required")
+	}
+	wired := materializer.executedProof.Load() != nil
+	failures := materializer.executedProofRefreshFailuresTotal.Load()
+	degraded := wired && !materializer.executedProofLastRefreshOK.Load()
+	var text strings.Builder
+	fmt.Fprintf(&text,
+		"# HELP devhealth_scheduler_executed_proof_refresh_failures_total "+
+			"CHAOS-4060 executed-proof evidence refresh failures (startup or periodic).\n"+
+			"# TYPE devhealth_scheduler_executed_proof_refresh_failures_total counter\n"+
+			"devhealth_scheduler_executed_proof_refresh_failures_total %d\n",
+		failures,
+	)
+	fmt.Fprint(&text,
+		"# HELP devhealth_scheduler_executed_proof_gate_degraded "+
+			"Whether the executed-proof gate is running on a failed or "+
+			"never-succeeded evidence load (1) or a healthy one (0); 0 when the "+
+			"gate has never been wired by this process.\n"+
+			"# TYPE devhealth_scheduler_executed_proof_gate_degraded gauge\n"+
+			"devhealth_scheduler_executed_proof_gate_degraded ",
+	)
+	if degraded {
+		text.WriteString("1\n")
+	} else {
+		text.WriteString("0\n")
+	}
+	_, err := io.WriteString(output, text.String())
+	return err
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -212,9 +289,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	if snapshot := materializer.executedProof.Load(); snapshot != nil {
-		loaded.input.ExecutedProof = *snapshot
-	}
+	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
 		units, err = BuildScheduledPlan(loaded.input)

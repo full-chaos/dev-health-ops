@@ -286,6 +286,53 @@ func TestCapacityFanoutSuppliesTheRequiredGenerationSeed(t *testing.T) {
 	}
 }
 
+// The recommendations bridge derives its evaluation day from the scope. Without
+// an as_of the Python side falls back to wall-clock now.date()
+// (src/dev_health_ops/api/internal/worker_metrics.py:979-981), so a catch-up
+// occurrence for a missed day would evaluate the wrong day AND check the wrong
+// day's daily_metrics_runs row in the readiness gate, which keys on
+// (org_id, target_day) -- and target_day for the 01:00 daily_metrics_fanout run
+// is that same occurrence day (CHAOS-4066).
+func TestRecommendationsFanoutPinsTheOccurrenceDayRatherThanWallClock(t *testing.T) {
+	schedule := scheduleByID(t, "recommendations_daily_fanout")
+	producer, store, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
+	// A catch-up occurrence: scheduled for 2026-07-24, produced a day late.
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T02:00:00Z"), mustTime(t, "2026-07-25T09:13:00Z"),
+	)
+	if _, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence); err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("started %d recommendations runs", len(store.requests))
+	}
+	if len(store.requests[0].Scopes) != 1 {
+		t.Fatalf("recommendations run carries %d scopes", len(store.requests[0].Scopes))
+	}
+	var scope struct {
+		Version int     `json:"version"`
+		Window  int     `json:"window"`
+		AsOf    *string `json:"as_of"`
+	}
+	if err := json.Unmarshal(store.requests[0].Scopes[0], &scope); err != nil {
+		t.Fatalf("decode recommendations scope: %v", err)
+	}
+	if scope.AsOf == nil {
+		t.Fatal("recommendations scope has no as_of; the bridge falls back to wall clock")
+	}
+	if *scope.AsOf != "2026-07-24" {
+		t.Fatalf("as_of = %q, want the occurrence day 2026-07-24", *scope.AsOf)
+	}
+	if scope.Version != 1 || scope.Window != 14 {
+		t.Fatalf("recommendations scope = %+v, want the legacy version/window preserved", scope)
+	}
+	// The run's identity key stays the day, so adding as_of cannot split one
+	// occurrence into two runs.
+	if store.requests[0].ScopeKey != "2026-07-24" {
+		t.Fatalf("scope key = %q, want the occurrence day", store.requests[0].ScopeKey)
+	}
+}
+
 // Non-capacity families must NOT carry a seed: the store rejects one.
 func TestNonCapacityFanoutOmitsTheGenerationSeed(t *testing.T) {
 	for _, id := range []string{

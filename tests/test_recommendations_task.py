@@ -259,6 +259,13 @@ def test_per_team_failure_raises_so_caller_can_retry(
 
 # ---------------------------------------------------------------------------
 # Readiness gate: _daily_metrics_ready semantics
+#
+# The Postgres-backed truth table (CHAOS-4066) lives in
+# tests/test_recommendations_readiness_daily_metrics_runs.py: the gate now
+# reads daily_metrics_runs.finalization_status, so its behaviour can only be
+# proven against the real alembic-derived schema. The three mock-based
+# checkpoint tests that used to sit here pinned the dead
+# metric_checkpoints/'daily_finalize' read and were deleted with it.
 # ---------------------------------------------------------------------------
 
 
@@ -267,57 +274,3 @@ def test_daily_metrics_ready_default_org_is_always_ready():
     from dev_health_ops.workers.recommendations_tasks import _daily_metrics_ready
 
     assert _daily_metrics_ready("default", date(2026, 4, 8)) is True
-
-
-def test_daily_metrics_ready_proceeds_when_no_checkpoint():
-    """Absent finalize checkpoint -> proceed (chord path not driving this org)."""
-    from dev_health_ops.workers import recommendations_tasks
-
-    with (
-        patch("dev_health_ops.metrics.checkpoints.get_checkpoint", return_value=None),
-        patch("dev_health_ops.db.get_postgres_session_sync") as mock_session,
-    ):
-        mock_session.return_value.__enter__.return_value = MagicMock()
-        ready = recommendations_tasks._daily_metrics_ready("org-x", date(2026, 4, 8))
-
-    assert ready is True
-
-
-def test_daily_metrics_ready_blocks_when_finalize_running():
-    """A RUNNING finalize checkpoint -> metrics mid-flight -> skip."""
-    from dev_health_ops.metrics.checkpoints import CheckpointStatus
-    from dev_health_ops.workers import recommendations_tasks
-
-    checkpoint = MagicMock()
-    checkpoint.status = CheckpointStatus.RUNNING
-
-    with (
-        patch(
-            "dev_health_ops.metrics.checkpoints.get_checkpoint", return_value=checkpoint
-        ),
-        patch("dev_health_ops.db.get_postgres_session_sync") as mock_session,
-    ):
-        mock_session.return_value.__enter__.return_value = MagicMock()
-        ready = recommendations_tasks._daily_metrics_ready("org-x", date(2026, 4, 8))
-
-    assert ready is False
-
-
-def test_daily_metrics_ready_proceeds_when_finalize_completed():
-    """A COMPLETED finalize checkpoint -> metrics fresh -> proceed."""
-    from dev_health_ops.metrics.checkpoints import CheckpointStatus
-    from dev_health_ops.workers import recommendations_tasks
-
-    checkpoint = MagicMock()
-    checkpoint.status = CheckpointStatus.COMPLETED
-
-    with (
-        patch(
-            "dev_health_ops.metrics.checkpoints.get_checkpoint", return_value=checkpoint
-        ),
-        patch("dev_health_ops.db.get_postgres_session_sync") as mock_session,
-    ):
-        mock_session.return_value.__enter__.return_value = MagicMock()
-        ready = recommendations_tasks._daily_metrics_ready("org-x", date(2026, 4, 8))
-
-    assert ready is True

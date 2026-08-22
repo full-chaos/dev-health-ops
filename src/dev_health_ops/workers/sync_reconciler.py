@@ -1308,20 +1308,29 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
             for unit in units
             if not routes_to_river(str(unit.provider), str(unit.dataset_key))
         ]
-    except Exception as exc:  # noqa: BLE001 - fail safe: never destroy on a guess
-        from dev_health_ops.metrics.prometheus import (
-            SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL,
-        )
-
-        SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL.labels(
-            exception_type=type(exc).__name__
-        ).inc()
-        # ERROR, not WARNING (CHAOS-4073 precedent): this codebase's Sentry
-        # LoggingIntegration only turns ERROR+ records into events, and there
-        # are no manual capture_exception call sites to fall back on -- log
-        # level is the only automatic incident-surfacing path here. Skipping
-        # this pass is a policy choice about what the sweep DOES; it must not
-        # also decide how loudly the underlying read failure gets reported.
+    except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
+        # ERROR, not WARNING (CHAOS-4073 precedent for the log-level choice):
+        # this codebase's Sentry LoggingIntegration only turns ERROR+ records
+        # into events, and there are no manual capture_exception call sites to
+        # fall back on. Skipping this pass is a policy choice about what the
+        # sweep DOES; it must not also decide how loudly the underlying read
+        # failure gets reported.
+        #
+        # NO counter here (adversarial review finding, CHAOS-4073's pattern
+        # does NOT apply as-is): reconcile_sync_dispatch is Celery-scheduled,
+        # and CHAOS-4026 retired Celery -- zero Python celery services run in
+        # prod since the 2026-08-19 stop (workers/config.py's beat_schedule
+        # comment; docs/operate/run/workers-and-jobs.md). This task is one of
+        # a small set kept checked-in and test-covered only because its
+        # removal needs its own reviewed pass
+        # (tests/workers/test_celery_dead_code_contract.py's
+        # _FLAGGED_SURVIVING_TASK_NAMES), not because anything executes it
+        # today -- not prod, and not the ask-dev-acceptance fleet's real
+        # Celery worker/beat either (that fleet exercises monitor-queue-depths
+        # and the prune tasks, not this one). A Prometheus counter+alert for a
+        # code path with no live execution path would assert an operational
+        # signal that cannot exist; adding one back is only correct once this
+        # task either runs somewhere again or gains a real metrics export.
         logger.exception(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
         )

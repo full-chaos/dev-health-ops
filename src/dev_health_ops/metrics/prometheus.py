@@ -324,43 +324,6 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # ---------------------------------------------------------------------------
-    # Sync reconciler unreclaimable sweep (CHAOS-3957)
-    # ---------------------------------------------------------------------------
-    # KNOWN GAP (adversarial review finding, not fixed here): reconcile_sync_dispatch
-    # runs as a Celery task (workers/config.py's beat_schedule), and the Celery
-    # worker/beat containers run no metrics server -- compose.yml wires
-    # prometheus-fastapi-instrumentator's /metrics only onto the FastAPI API
-    # process (api/_observability.py), and there is no PROMETHEUS_MULTIPROC_DIR /
-    # exporter sidecar for the worker containers. Nothing scrapes THIS counter
-    # today; the pre-existing CELERY_TASKS_TOTAL below has the identical gap,
-    # already documented as "celery_process_metrics_not_exported" in
-    # .github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/
-    # capture.json. The counter is defined anyway (harmless, and ready for
-    # whenever that export gap closes), but it is NOT what makes this failure
-    # loud today -- ``logger.exception`` at the call site is: this codebase's
-    # Sentry LoggingIntegration turns ERROR+ log records into events directly
-    # from wherever the process runs, independent of any Prometheus scrape
-    # path, which is why the call site stays at ERROR rather than being
-    # downgraded. Wiring Celery worker metrics export (or moving this signal
-    # onto the active Go reconciler's already-scraped registry) is tracked as
-    # a follow-up, not part of CHAOS-3957.
-    SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL = (
-        _prometheus_client_module.Counter(
-            "devhealth_sync_reconciler_unreclaimable_routability_fail_open_total",
-            "_only_unroutable's resolve_worker_job_route read raised, so the "
-            "unreclaimable-dispatching sweep skipped this pass rather than "
-            "risk terminalizing a unit no runtime has actually abandoned. "
-            "Skip-and-signal is deliberate (a paused/drifted route or an "
-            "unreadable capability matrix must not abort reconcile_sync_dispatch "
-            "and take lease repair and wakeup materialization down with it, "
-            "hunt finding). NOT currently scraped -- see the comment above this "
-            "counter's definition (metrics/prometheus.py); the accompanying "
-            "logger.exception, not this counter, is what is alertable today.",
-            ["exception_type"],
-        )
-    )
-
-    # ---------------------------------------------------------------------------
     # Integration credentials (issue 3694)
     # ---------------------------------------------------------------------------
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _prometheus_client_module.Counter(
@@ -407,7 +370,6 @@ else:
     ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
-    SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
 
 

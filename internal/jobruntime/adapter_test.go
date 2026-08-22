@@ -481,3 +481,77 @@ func (*recordingObserver) BudgetWait(context.Context, JobLabels, time.Duration, 
 func (observer *recordingObserver) JobWait(_ context.Context, _ JobLabels, wait time.Duration) {
 	observer.jobWaits = append(observer.jobWaits, wait)
 }
+
+// TestAdapterAcceptsEnvelopeCarryingTraceParent is the CHAOS-4093 regression.
+//
+// CHAOS-3993 added trace_parent to the wire envelope and jobcontract.Decode
+// populates jobcontract.Envelope.TraceParent from it. EnvelopeArgs -- the
+// typed River form every kind embeds -- did not carry the field, so
+// ContractEnvelope() always returned an empty TraceParent while the decoded
+// envelope carried the real one. Adapter.execute compares the two with
+// reflect.DeepEqual and cancels on drift, so in production EVERY job whose
+// producer captured a traceparent was cancelled with error_category
+// "validation" at attempt 1, terminally, before the handler or the
+// idempotency claim ran. For sync.provider_unit that stranded the unit in
+// 'dispatching' forever: the outbox row was already 'delivered', so the
+// unreclaimable sweep's published-outbox filter skipped it, and the pair was
+// routable, so its routability filter skipped it too.
+//
+// The job is built the way River builds one: the typed args are unmarshalled
+// from the SAME canonical bytes that land in encoded_args.
+func TestAdapterAcceptsEnvelopeCarryingTraceParent(t *testing.T) {
+	t.Parallel()
+
+	const traceParent = "00-9edef9ef79314c405d4cb812ba493826-46eef2b618f33ca0-03"
+	envelope := jobcontract.Envelope{
+		ContractVersion: 1,
+		CorrelationID:   "corr-test-1",
+		IdempotencyKey:  "retention:2026-07-21",
+		TraceParent:     traceParent,
+		Domain: jobcontract.DomainLink{
+			Type: "maintenance_run",
+			ID:   "11111111-1111-4111-8111-111111111111",
+		},
+		Payload: jobcontract.RetentionCleanupPayload{
+			BatchSize:       100,
+			DeleteBefore:    "2026-07-01T00:00:00Z",
+			RetentionPolicy: jobcontract.RetentionWorkerTerminal,
+		},
+	}
+	raw, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatalf("MarshalCanonical: %v", err)
+	}
+	var typed RetentionCleanupArgs
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		t.Fatalf("unmarshal typed args: %v", err)
+	}
+	if got := typed.ContractEnvelope().TraceParent; got != traceParent {
+		t.Fatalf("ContractEnvelope().TraceParent = %q, want %q", got, traceParent)
+	}
+
+	reached := false
+	var logs bytes.Buffer
+	observer := &recordingObserver{}
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		reached = true
+		return nil
+	}), observer, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &logs)
+	job := &river.Job[RetentionCleanupArgs]{
+		JobRow: &rivertype.JobRow{
+			ID: 42, Attempt: 1, CreatedAt: time.Now().UTC(), EncodedArgs: raw,
+			Kind: jobcontract.KindRetentionCleanup, MaxAttempts: 3, Priority: 3,
+			Queue: "retention", ScheduledAt: time.Now().UTC(), State: rivertype.JobStateRunning,
+		},
+		Args: typed,
+	}
+	if err := adapter.Work(context.Background(), job); err != nil {
+		t.Fatalf("Work rejected an envelope carrying trace_parent: %v", err)
+	}
+	if !reached {
+		t.Fatal("handler never ran for an envelope carrying trace_parent")
+	}
+	if observer.result != ResultSuccess || observer.category != CategoryNone {
+		t.Fatalf("observed %s/%s, want success/none", observer.result, observer.category)
+	}
+}

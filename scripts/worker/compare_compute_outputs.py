@@ -208,6 +208,8 @@ def canonical_scalar(value: Any, kind: str) -> str:
     if value is None:
         return "\x00null"
     if kind == "json":
+        if not isinstance(value, (str, Mapping, list, tuple, int, float)):
+            raise ComparisonError(_type_error("json", value))
         decoded = (
             value
             if not isinstance(value, str)
@@ -219,30 +221,54 @@ def canonical_scalar(value: Any, kind: str) -> str:
     if kind == "date":
         if isinstance(value, dt.datetime):
             value = value.date()
-        if isinstance(value, dt.date):
-            return "d:" + value.isoformat()
-        return "d:" + str(value)
+        if not isinstance(value, dt.date):
+            raise ComparisonError(_type_error("date", value))
+        return "d:" + value.isoformat()
     if kind == "uuid":
         try:
             return "u:" + str(uuid.UUID(str(value)))
         except (ValueError, AttributeError, TypeError) as error:
             raise ComparisonError("uuid_unparseable") from error
     if kind == "bool":
-        return "b:" + ("true" if bool(value) else "false")
+        if not isinstance(value, bool):
+            raise ComparisonError(_type_error("bool", value))
+        return "b:" + ("true" if value else "false")
     if kind == "int":
-        return "i:" + str(int(value))
+        # `int("1")` is 1 and `int(1.9)` is 1. Coercing here would let a column
+        # that changed type -- or a driver that started returning strings --
+        # compare equal to the value it used to hold, which is schema drift
+        # reported as parity.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ComparisonError(_type_error("int", value))
+        return "i:" + str(value)
     if kind == "float":
         # repr() of a Python float round-trips exactly; Decimal keeps its own
         # exact value. Neither goes through a lossy string format.
         if isinstance(value, Decimal):
+            if not value.is_finite():
+                raise ComparisonError("non_finite_value:float")
             return "f:" + str(Fraction(value))
-        return "f:" + repr(float(value))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ComparisonError(_type_error("float", value))
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            # NaN and the infinities canonicalize to the same text on both
+            # sides, so an exact policy would call two garbage values equal.
+            raise ComparisonError("non_finite_value:float")
+        return "f:" + repr(number)
     if kind == "array":
-        items = list(value) if isinstance(value, (list, tuple)) else [value]
+        if not isinstance(value, (list, tuple)):
+            raise ComparisonError(_type_error("array", value))
         return (
-            "a:[" + ",".join(canonical_scalar(item, "string") for item in items) + "]"
+            "a:[" + ",".join(canonical_scalar(item, "string") for item in value) + "]"
         )
-    return "s:" + str(value)
+    if not isinstance(value, str):
+        raise ComparisonError(_type_error("string", value))
+    return "s:" + value
+
+
+def _type_error(kind: str, value: Any) -> str:
+    return f"value_type_mismatch:declared_{kind}:got_{type(value).__name__}"
 
 
 def sha256_text(text: str) -> str:

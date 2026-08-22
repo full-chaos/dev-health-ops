@@ -1193,3 +1193,53 @@ def test_combined_input_digest_is_order_independent_and_framed():
     )
     assert left == right
     assert left != different
+
+
+# --------------------------------------------------------------------------
+# Canonicalization validates the declared type; it does not coerce to it
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        ("int", "1"),
+        ("int", 1.0),
+        ("int", True),
+        ("float", "1.0"),
+        ("float", True),
+        ("string", 1),
+        ("string", dt.date(2026, 8, 22)),
+        ("date", "2026-08-22"),
+        ("bool", 1),
+        ("array", "not-an-array"),
+    ],
+)
+def test_a_value_of_the_wrong_type_is_refused_not_coerced(kind, value):
+    """`int("1")` is 1 and `str(1)` is "1".
+
+    Coercing would let a column whose type drifted -- or a driver that started
+    returning strings -- compare equal to the value it used to hold, and report
+    schema drift as parity.
+    """
+    with pytest.raises(comparator.ComparisonError, match="value_type_mismatch"):
+        comparator.canonical_scalar(value, kind)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_float_is_refused_before_it_can_compare_equal(value):
+    """NaN and the infinities render to identical text on both sides.
+
+    Under an exact policy that made two garbage values compare EQUAL, and the
+    non-finite check up to now only guarded the tolerance path.
+    """
+    with pytest.raises(comparator.ComparisonError, match="non_finite_value"):
+        comparator.canonical_scalar(value, "float")
+
+
+def test_well_typed_values_still_canonicalize():
+    assert comparator.canonical_scalar(1, "int") == "i:1"
+    assert comparator.canonical_scalar(1.5, "float") == "f:1.5"
+    assert comparator.canonical_scalar("x", "string") == "s:x"
+    assert comparator.canonical_scalar(dt.date(2026, 8, 22), "date") == "d:2026-08-22"
+    assert comparator.canonical_scalar(None, "int") == "\x00null"

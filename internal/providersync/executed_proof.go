@@ -25,9 +25,10 @@ type ExecutedProofWaiver struct {
 // ExecutedProofEvidence is the durable, observed-state snapshot behind the
 // CHAOS-4060 executed-proof gate: the set of provider/dataset pairs (matrixKey
 // form) with at least one live sync_run_units row that completed
-// status='success' and reported nonzero persisted/effects-written rows. It
-// says an execution actually happened and its artifacts/rows exist -- never a
-// timing window, a retry count, or any other heuristic.
+// status='success' and reported a nonzero persisted ROW count (see
+// executedProofEvidenceSQL for why that must be a row count, not a batch
+// count). It says an execution actually happened and its artifacts/rows
+// exist -- never a timing window, a retry count, or any other heuristic.
 //
 // A nil map is the "not wired" sentinel: a caller that has not composed
 // QueryExecutedProofEvidence (most existing planner tests, and any context
@@ -77,23 +78,42 @@ func (descriptor CompleteRouteDescriptor) ExecutedProofSatisfied(evidence Execut
 
 // executedProofEvidenceSQL asks Postgres itself, not Go, to decide what
 // counts as a persisted row: a numeric, positive count under either the Go
-// completion payload's go_provider_route.effects_written key
-// (cmd/dev-health-worker payload shape written by providerunit.Handler.Work)
-// or the legacy Python persisted key (CHAOS-4049) that pre-cutover rows still
-// carry. The regex guards each cast so one malformed historical result blob
-// cannot fail the whole evidence query -- an unparseable value simply
-// contributes no evidence, exactly like a genuinely absent key would.
+// completion payload's go_provider_route.records key or the legacy Python
+// persisted key (CHAOS-4049) that pre-cutover rows still carry.
+//
+// records, not effects_written, is the correct Go-side signal: effects_written
+// (EffectCommitResult.Written, cmd/dev-health-worker payload shape written by
+// providerunit.Handler.Work) counts committed EFFECT BATCHES -- one per
+// destination table -- not rows. A route can commit a batch with zero rows in
+// it (an optional upstream API returning nothing this window is a legitimate
+// success, not a failure) and effects_written would still count it, which is
+// exactly the CHAOS-4049 "succeeded but persisted nothing" shape this gate
+// exists to catch, reintroduced by the gate's own evidence source. records
+// (ProductionContractComparator.CompareCompleteRoute's row count,
+// result.Comparison.NativeRecords, or the chunked executor's CommittedRows)
+// is a true per-row count summed across every committed batch, mandatory on
+// every completed unit -- so a batch that wrote nothing contributes 0, not 1.
+//
+// Each cast is guarded by a regex bounded to at most 18 digits: bigint's
+// range is +-9223372036854775807 (19 digits), so an unbounded `^[0-9]+$`
+// still lets a 19+ digit value reach `::bigint` and raise "value out of
+// range", which errors the WHOLE query rather than just skipping that row.
+// 18 digits is always in range, so the bound trades an implausible
+// (999+ quadrillion row) count for keeping the query alive -- exactly the
+// same "one malformed historical result blob cannot fail the whole evidence
+// query" contract the regex already existed to provide, extended to cover
+// magnitude as well as shape.
 const executedProofEvidenceSQL = `
 SELECT lower(provider), lower(dataset_key)
 FROM public.sync_run_units
 WHERE status = 'success'
   AND (
     (
-      (result #>> '{go_provider_route,effects_written}') ~ '^[0-9]+$'
-      AND (result #>> '{go_provider_route,effects_written}')::bigint > 0
+      (result #>> '{go_provider_route,records}') ~ '^[0-9]{1,18}$'
+      AND (result #>> '{go_provider_route,records}')::bigint > 0
     )
     OR (
-      (result ->> 'persisted') ~ '^[0-9]+$'
+      (result ->> 'persisted') ~ '^[0-9]{1,18}$'
       AND (result ->> 'persisted')::bigint > 0
     )
   )

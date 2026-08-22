@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -282,15 +283,24 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 			return nil, err
 		}
 		// CHAOS-4060: load the executed-proof snapshot once at process
-		// startup. A failed load is not fatal -- the materializer already
-		// starts with the gate unwired (nil evidence, pre-CHAOS-4060
-		// behavior) and RefreshExecutedProof leaves that in place on error --
-		// but it must be loud: an operator needs to know the gate is not
-		// actually enforcing anything in this process.
-		if refreshErr := materializer.RefreshExecutedProof(context.Background()); refreshErr != nil {
+		// startup, bounded so a blocked query cannot hang scheduler
+		// construction indefinitely. A failed load is not fatal to the
+		// PROCESS -- RefreshExecutedProof installs an empty, non-nil,
+		// enforced snapshot on the first failure (fail CLOSED, not open:
+		// every non-waived route is conservatively unproven rather than the
+		// gate going silently unenforced), and maybeRefreshExecutedProof
+		// keeps retrying on its normal bounded interval from inside
+		// Materialize. This must still be loud: an operator needs to know
+		// route planning is running proof-less, not just that the process
+		// came up "ready".
+		startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
+		refreshErr := materializer.RefreshExecutedProof(startupCtx)
+		cancelStartup()
+		if refreshErr != nil {
 			slog.Default().Error(
 				"executed-proof evidence load failed at scheduler startup; "+
-					"route readiness gate is unenforced in this process (CHAOS-4060)",
+					"every non-waived route is being treated as UNPROVEN (fail "+
+					"closed) until a later refresh succeeds (CHAOS-4060)",
 				"error", refreshErr,
 			)
 		}

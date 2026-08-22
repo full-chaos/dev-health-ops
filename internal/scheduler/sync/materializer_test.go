@@ -53,6 +53,45 @@ func TestNewNativeMaterializerPortsPythonEnvironmentBounds(t *testing.T) {
 	}
 }
 
+// TestNewNativeMaterializerCapsExecutedProofRefreshIntervalAgainstOverflow is
+// the codex-review regression case: boundedEnvInt only lower-bounds
+// SYNC_EXECUTED_PROOF_REFRESH_SECONDS, so an operator-supplied (or typo'd)
+// huge value multiplied by time.Second would overflow time.Duration's
+// int64-nanosecond range and go negative -- making maybeRefreshExecutedProof
+// treat every Materialize call as overdue for a refresh, the opposite of
+// what a refresh INTERVAL is for. The 24h cap must hold even for a value
+// that would otherwise genuinely overflow.
+func TestNewNativeMaterializerCapsExecutedProofRefreshIntervalAgainstOverflow(t *testing.T) {
+	t.Setenv("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", "9223372037")
+	materializer, err := NewNativeMaterializer(&pgxpool.Pool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 24 * time.Hour
+	if materializer.executedProofRefreshInterval != want {
+		t.Fatalf(
+			"executedProofRefreshInterval=%s, want %s (capped, not overflowed)",
+			materializer.executedProofRefreshInterval, want,
+		)
+	}
+	if materializer.executedProofRefreshInterval <= 0 {
+		t.Fatalf(
+			"executedProofRefreshInterval=%s must be positive: a zero or negative "+
+				"interval makes every refresh check read as immediately overdue",
+			materializer.executedProofRefreshInterval,
+		)
+	}
+
+	t.Setenv("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", "")
+	materializer, err = NewNativeMaterializer(&pgxpool.Pool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 300 * time.Second; materializer.executedProofRefreshInterval != want {
+		t.Fatalf("default executedProofRefreshInterval=%s, want %s", materializer.executedProofRefreshInterval, want)
+	}
+}
+
 // TestNewNativeMaterializerMirrorsPythonIntWhitespaceGrammar pins the parse
 // GRAMMAR, not just the bounds. Python reads both settings through int():
 // _watermark_overlap_seconds does max(0, int(os.getenv("SYNC_WATERMARK_OVERLAP",

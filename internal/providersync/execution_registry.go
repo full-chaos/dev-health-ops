@@ -166,8 +166,8 @@ type CompleteRouteDescriptor struct {
 	// ExecutedProofWaiver, when non-nil, is an explicit, dated, reasoned
 	// operator waiver of the CHAOS-4060 executed-proof requirement: this
 	// identity may keep planning new work on fixture/golden proof alone even
-	// though no live unit has ever completed with persisted (effects-written)
-	// evidence. It is a code fact recorded by a human, not a computed value —
+	// though no live unit has ever completed with a nonzero persisted-row
+	// count. It is a code fact recorded by a human, not a computed value —
 	// see ExecutedProofSatisfied.
 	ExecutedProofWaiver *ExecutedProofWaiver
 }
@@ -291,7 +291,7 @@ func Descriptor(
 		// executed-proof gate this waiver satisfies): no org has this dataset
 		// enabled yet, so no sync_run_units evidence can exist for it by
 		// construction. Retire this waiver once a live unit reports
-		// persisted (effects-written) evidence, at which point
+		// a nonzero persisted-row count, at which point
 		// ExecutedProofSatisfied stops needing it.
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true

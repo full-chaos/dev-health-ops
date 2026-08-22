@@ -843,7 +843,7 @@ func TestNativeMaterializerRefreshExecutedProofGatesPlanningEndToEnd(t *testing.
 
 	// Seed real, terminal, nonzero-persisted evidence and refresh again.
 	seedPriorSyncRunUnit(t, fixture, "commits", "success",
-		`{"go_provider_route":{"effects_written":4}}`)
+		`{"go_provider_route":{"records":4}}`)
 	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +972,7 @@ func TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart(t *te
 	// maybeRefreshExecutedProof is deliberately throttled, not called fresh
 	// on every occurrence.
 	seedPriorSyncRunUnit(t, fixture, "commits", "success",
-		`{"go_provider_route":{"effects_written":7}}`)
+		`{"go_provider_route":{"records":7}}`)
 	stillWithinWindow := fixture.occurrence
 	stillWithinWindow.ID = "occurrence:v1:scheduled:within-window"
 	stillWithinWindow.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)

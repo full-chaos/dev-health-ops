@@ -78,24 +78,43 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 	}
 	seeds := []seedUnit{
 		// Go route, real rows written: proven.
-		{"github", "prs", "success", `{"go_provider_route":{"effects_written":3,"effects_skipped":0}}`},
+		{"github", "prs", "success", `{"go_provider_route":{"records":3,"effects_written":1}}`},
 		// Go route, success but nothing to write this window: not proven --
 		// a clean empty run is not evidence the writer path has ever landed
 		// a row.
-		{"github", "commits", "success", `{"go_provider_route":{"effects_written":0}}`},
+		{"github", "commits", "success", `{"go_provider_route":{"records":0,"effects_written":0}}`},
+		// The codex-review regression case: a route that commits an EMPTY
+		// effect batch (an optional upstream API returning nothing this
+		// window) still increments effects_written once per batch, but
+		// records -- the actual row count -- is 0. Must not count: proving
+		// on effects_written here would readmit the exact CHAOS-4049 shape
+		// (a "successful" unit that persisted nothing) through the gate's
+		// own evidence source.
+		{"github", "deployments", "success", `{"go_provider_route":{"records":0,"effects_written":1}}`},
 		// The CHAOS-4049 motivating counterexample: legacy Python "success"
 		// that persisted nothing, 149 times over in prod. Must not count.
 		{"pagerduty", "teams", "success", `{"persisted":0}`},
 		{"pagerduty", "teams", "success", `{"persisted":0}`},
 		// Legacy Python row that genuinely persisted rows: proven.
 		{"jira", "incidents", "success", `{"persisted":5}`},
-		// Real effects_written, but the unit never reached success: not
-		// proven. A row's own claimed effect count is not evidence unless
-		// the unit terminalized successfully.
-		{"gitlab", "security", "failed", `{"go_provider_route":{"effects_written":9}}`},
+		// Real records, but the unit never reached success: not proven. A
+		// row's own claimed record count is not evidence unless the unit
+		// terminalized successfully.
+		{"gitlab", "security", "failed", `{"go_provider_route":{"records":9}}`},
 		// Malformed/non-numeric result payload: must not crash the query and
 		// must not manufacture evidence out of an unparseable value.
-		{"launchdarkly", "feature-flags", "success", `{"go_provider_route":{"effects_written":"NaN"}}`},
+		{"launchdarkly", "feature-flags", "success", `{"go_provider_route":{"records":"NaN"}}`},
+		// A value that IS all-digits but overflows bigint (19+ digits) must
+		// not crash the whole evidence query either -- it is silently not
+		// evidence, exactly like a malformed value, rather than an
+		// unhandled Postgres "value out of range" error that would fail
+		// every OTHER pair's evidence too.
+		{"gitlab", "blame", "success", `{"go_provider_route":{"records":99999999999999999999}}`},
+		{"jira", "work-items", "success", `{"persisted":99999999999999999999}`},
+		// Boundary control: an 18-digit value is always in bigint range and
+		// must still prove -- the digit-length bound must not reject a
+		// legitimate (if implausibly large) value that happens to be long.
+		{"gitlab", "cicd", "success", `{"go_provider_route":{"records":999999999999999999}}`},
 	}
 	for _, seed := range seeds {
 		if _, err := pool.Exec(ctx, `
@@ -120,6 +139,7 @@ INSERT INTO public.sync_run_units (
 	want := ExecutedProofEvidence{
 		"github/prs":     true,
 		"jira/incidents": true,
+		"gitlab/cicd":    true,
 	}
 	if len(evidence) != len(want) {
 		t.Fatalf("evidence = %+v, want exactly %+v", evidence, want)
@@ -132,7 +152,8 @@ INSERT INTO public.sync_run_units (
 	// Negative controls: none of these ever proves itself, no matter how the
 	// gate consults it.
 	for _, absent := range []string{
-		"github/commits", "pagerduty/teams", "gitlab/security", "launchdarkly/feature-flags",
+		"github/commits", "github/deployments", "pagerduty/teams", "gitlab/security",
+		"launchdarkly/feature-flags", "gitlab/blame", "jira/work-items",
 	} {
 		if evidence[absent] {
 			t.Errorf("evidence wrongly proved %q: %+v", absent, evidence)

@@ -61,6 +61,19 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
 	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
 	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
+	// boundedEnvInt only lower-bounds. Without an upper bound here too, a
+	// value shaped like a typo (or a deliberately huge one) multiplied by
+	// time.Second can overflow time.Duration's int64-nanosecond range and go
+	// negative -- which makes every future "is it time to refresh yet"
+	// comparison in maybeRefreshExecutedProof read as perpetually overdue,
+	// turning the throttle it was meant to configure into a query storm on
+	// every single Materialize call. Cap at 24h: nothing about "let a route
+	// unblock without a restart" needs a longer window, and 24h*time.Second
+	// is nowhere near time.Duration's ~292-year ceiling.
+	const maxExecutedProofRefreshSeconds = 24 * 60 * 60
+	if refreshSeconds > maxExecutedProofRefreshSeconds {
+		refreshSeconds = maxExecutedProofRefreshSeconds
+	}
 	return &NativeMaterializer{
 		domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second,
 		defaultUnitCap:               cap,

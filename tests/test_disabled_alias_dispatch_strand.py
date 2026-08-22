@@ -66,9 +66,11 @@ def db_session():
     engine.dispose()
 
 
-#: The three aliases the Go runtime disabled at the 2026-08-19 20:00 UTC
-#: cutover (``WORKER_GITHUB_{TESTS,PR_REVIEWS,PR_COMMENTS}_ENABLED=false``),
-#: and the exact set found stranded in production.
+#: The three github aliases disabled at the 2026-08-19 20:00 UTC cutover --
+#: originally by their per-pair env switches, now unconditionally by the
+#: checked-in capability matrix (route_ready, never plannable; CHAOS-4054
+#: deleted the switch plane outright) -- and the exact set found stranded in
+#: production.
 DISABLED_ALIASES = ("tests", "pr-reviews", "pr-comments")
 
 #: Sorts after every filler id below, so the cap always reaches it.
@@ -256,10 +258,12 @@ def test_capped_enabled_alias_unit_still_publishes_normally(
 ) -> None:
     """Input symmetry: the control that must NOT be terminalized.
 
-    Same capped-bucket shape, but the stale unit's pair has its River switch
-    ENABLED. A live runtime can execute it, so the fix must reclaim it and
-    publish it -- proving the change frees stuck capacity rather than simply
-    failing whatever the cap happened to reach.
+    Same capped-bucket shape, but the stale unit's pair (``repo-metadata``) is
+    an ordinary route-ready, plannable identity -- capability is always on in
+    the binary now, so there is no switch to flip. A live runtime can execute
+    it, so the fix must reclaim it and publish it -- proving the change frees
+    stuck capacity rather than simply failing whatever the cap happened to
+    reach.
     """
 
     from dev_health_ops.workers import sync_units
@@ -267,7 +271,6 @@ def test_capped_enabled_alias_unit_still_publishes_normally(
     run, stranded = _seed_capped_bucket(
         db_session, monkeypatch, dataset_key="repo-metadata"
     )
-    monkeypatch.setenv("WORKER_GITHUB_REPO_METADATA_ENABLED", "true")
     _patch_worker_enqueues(monkeypatch)
 
     sync_units.dispatch_sync_run(str(run.id))
@@ -388,41 +391,62 @@ def test_run_with_disabled_alias_units_finalizes_partial_failed(
 
 
 @pytest.mark.parametrize(
-    ("provider", "dataset_key", "expected_switch"),
+    ("provider", "dataset_key"),
     (
-        ("github", "tests", "WORKER_GITHUB_TESTS_ENABLED"),
-        ("github", "pr-reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
-        ("github", "pr-comments", "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
-        ("launchdarkly", "feature-flags", "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED"),
-        # Family aliases are governed by the CANONICAL switch, so munging the
-        # dataset name would print a variable that does not exist and send an
-        # operator looking for a switch they cannot flip.
-        ("github", "work-item-labels", "WORKER_GITHUB_WORK_ITEMS_ENABLED"),
-        ("github", "work-item-history", "WORKER_GITHUB_WORK_ITEMS_ENABLED"),
+        ("github", "tests"),
+        ("github", "pr-reviews"),
+        ("github", "pr-comments"),
     ),
 )
-def test_reason_names_the_switch_an_operator_would_actually_flip(
-    provider: str, dataset_key: str, expected_switch: str
+def test_reason_names_the_matrix_for_a_non_family_alias(
+    provider: str, dataset_key: str
 ) -> None:
-    """The durable reason is only useful if the switch it names is real."""
+    """CHAOS-4054: the durable reason never names an env var an operator
+    could flip -- capability is always on in the binary, so a non-family
+    alias identity is refused because the capability matrix does not mark it
+    both route-ready and plannable, full stop."""
 
-    from dev_health_ops.workers.provider_unit_route import (
-        ProviderUnitRouteSwitches,
-        route_switch_environment_name,
-    )
     from dev_health_ops.workers.sync_units import _unroutable_reason
 
-    assert route_switch_environment_name(provider, dataset_key) == expected_switch
-    # A River route IS in effect here (all switches present but off), which is
-    # the branch that may legitimately name a per-pair switch.
-    reason = _unroutable_reason(
-        provider, dataset_key, switches=ProviderUnitRouteSwitches()
-    )
-    assert expected_switch in reason
-    # And the variable must correspond to a real switch field, not a plausible
-    # string: every name here is one ``from_environment`` actually reads.
-    field = expected_switch.removeprefix("WORKER_").removesuffix("_ENABLED").lower()
-    assert field in ProviderUnitRouteSwitches.__dataclass_fields__
+    reason = _unroutable_reason(provider, dataset_key, river_owns_units=True)
+    assert "route-ready and plannable" in reason
+    assert "WORKER_" not in reason
+    assert "_ENABLED" not in reason
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key"),
+    (
+        ("github", "work-item-labels"),
+        ("github", "work-item-history"),
+    ),
+)
+def test_reason_names_the_atomic_family_for_a_work_item_alias(
+    provider: str, dataset_key: str
+) -> None:
+    """A work-item-family alias is refused because it is a non-canonical
+    member of an atomic provider family, not because of any switch."""
+
+    from dev_health_ops.workers.sync_units import _unroutable_reason
+
+    reason = _unroutable_reason(provider, dataset_key, river_owns_units=True)
+    assert "atomic provider family" in reason
+    assert "canonical work-items claim" in reason
+    assert "WORKER_" not in reason
+    assert "_ENABLED" not in reason
+
+
+def test_reason_names_the_non_river_route_when_river_does_not_own_units() -> None:
+    """Off the River outbox route, the reason is about the route, not the
+    pair -- River never even considered this pair, so a per-pair explanation
+    would be actively misleading."""
+
+    from dev_health_ops.workers.sync_units import _unroutable_reason
+
+    reason = _unroutable_reason("github", "tests", river_owns_units=False)
+    assert "not a River" in reason or "not a River route" in reason
+    assert "WORKER_" not in reason
+    assert "_ENABLED" not in reason
 
 
 def test_reclaims_do_not_raise_total_in_flight_above_the_cap(
@@ -756,33 +780,12 @@ def test_reconciler_does_not_touch_a_leased_running_unit(
     assert untouched.status == SyncRunUnitStatus.RUNNING.value
 
 
-def test_reason_does_not_blame_a_river_switch_when_no_river_route_applies() -> None:
-    """A reason must not send an operator to flip an irrelevant switch.
-
-    ``UNROUTABLE`` also arises when the durable ``sync.provider_unit`` route is
-    not a River route at all -- ``switches`` is ``None`` and no per-pair switch
-    is consulted. Naming one there would be actively misleading (adversarial
-    review finding).
-    """
-
-    from dev_health_ops.workers.sync_units import _unroutable_reason
-
-    reason = _unroutable_reason("github", "tests", switches=None)
-    assert "WORKER_GITHUB_TESTS_ENABLED" not in reason
-    assert "not a River route" in reason
-
-
-def test_reason_names_the_family_cause_for_a_non_canonical_alias() -> None:
-    """A family alias is refused regardless of its canonical switch state."""
-
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
-    from dev_health_ops.workers.sync_units import _unroutable_reason
-
-    reason = _unroutable_reason(
-        "github", "work-item-labels", switches=ProviderUnitRouteSwitches()
-    )
-    assert "atomic provider family" in reason
-    assert "WORKER_GITHUB_WORK_ITEMS_ENABLED" in reason
+# NOTE: the two "does not blame a switch" tests formerly here are superseded
+# by ``test_reason_names_the_non_river_route_when_river_does_not_own_units``
+# and ``test_reason_names_the_atomic_family_for_a_work_item_alias`` above --
+# CHAOS-4054 deleted the switch plane those tests guarded against naming, so
+# their successor asserts the (now switch-free) reason text directly rather
+# than the absence of one particular deleted variable name.
 
 
 def test_sweep_still_reaches_a_unit_the_dispatcher_keeps_re_stamping(
@@ -1035,16 +1038,15 @@ def test_sweep_spares_work_when_consumer_presence_is_unknown(
     assert survivor.error is None
 
 
-def test_sweep_spares_an_enabled_pair_even_with_no_consumers(
+def test_sweep_spares_a_plannable_pair_even_with_no_consumers(
     db_session, monkeypatch
 ) -> None:
-    """Routability, not age, is the gate: an enabled pair routes to River."""
+    """Routability, not age, is the gate: a plannable pair routes to River."""
 
     from dev_health_ops.workers import sync_reconciler
 
     run, unit = _seed_already_stranded_unit(db_session, dataset_key="repo-metadata")
-    monkeypatch.setenv("WORKER_GITHUB_REPO_METADATA_ENABLED", "true")
-    # A River route must actually be in effect for a per-pair switch to apply.
+    # A River route must actually be in effect for the matrix to apply.
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
@@ -1301,7 +1303,6 @@ def test_sweep_reaches_a_strand_behind_a_page_of_routable_units(
                 updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
             )
         )
-    monkeypatch.setenv("WORKER_GITHUB_REPO_METADATA_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})

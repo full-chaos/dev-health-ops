@@ -103,7 +103,7 @@ func TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("jira", "incidents")
+	descriptor, ok := Descriptor("jira", "incidents")
 	if !ok || !descriptor.RouteReady || descriptor.Executor != ExecutorNativeGo {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}

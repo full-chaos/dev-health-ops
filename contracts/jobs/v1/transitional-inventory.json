@@ -142,7 +142,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 777
+        "line": 774
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -166,7 +166,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1265
+        "line": 1257
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -190,7 +190,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2120
+        "line": 2112
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -1294,7 +1294,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1159
+        "line": 1151
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -1318,7 +1318,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1751
+        "line": 1743
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -1342,7 +1342,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2722
+        "line": 2719
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

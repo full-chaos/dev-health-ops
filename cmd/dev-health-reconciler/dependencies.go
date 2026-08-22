@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"log/slog"
 	"time"
 
@@ -888,9 +887,8 @@ func buildUnreclaimableSweep(
 		return nil, nil
 	}
 	return syncreconciler.NewUnreclaimableSweep(coordinatorPool, domainPool, syncreconciler.UnreclaimableSweepConfig{
-		Age:      syncreconciler.DefaultUnreclaimableAge,
-		Idle:     syncreconciler.DefaultUnreclaimableIdle,
-		Mode:     mode,
-		Switches: providersync.RouteSwitchesFromConfig(cfg),
+		Age:  syncreconciler.DefaultUnreclaimableAge,
+		Idle: syncreconciler.DefaultUnreclaimableIdle,
+		Mode: mode,
 	})
 }

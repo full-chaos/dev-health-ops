@@ -37,10 +37,7 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository := newMemoryUnitRepository(providerUnit())
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -75,10 +72,7 @@ func TestProviderUnitLifecycleLogsIdentifyTheClaimedScope(t *testing.T) {
 	repository := newMemoryUnitRepository(unit)
 	var output bytes.Buffer
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -141,10 +135,7 @@ func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
 				errors.New("GET https://alice:secret@github.example.test/repos/octo/hello"),
 			)
 			handler := &Handler{
-				Repository: repository,
-				Switches: providersync.CompleteRouteSwitches{
-					LaunchDarklyFeatureFlags: true,
-				},
+				Repository:    repository,
 				LeaseDuration: time.Minute,
 				Heartbeat:     10 * time.Second,
 				Now:           func() time.Time { return now },
@@ -192,10 +183,7 @@ func TestProviderBudgetContentionDefersWithoutConsumingTheRiverAttempt(t *testin
 	unit := providerUnit()
 	repository := newMemoryUnitRepository(unit)
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -229,10 +217,7 @@ func TestProviderBudgetStoreUnavailableRemainsAnAttemptFailure(t *testing.T) {
 	unit := providerUnit()
 	repository := newMemoryUnitRepository(unit)
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -266,10 +251,7 @@ func TestProviderDatasetUnavailableTerminalizesOnFirstAttempt(t *testing.T) {
 	unit.SourceName = "group/project"
 	repository := newMemoryUnitRepository(unit)
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			GitlabFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -332,10 +314,7 @@ func TestProviderUnitLifecycleLogsCaptureTraversalFailureDetail(t *testing.T) {
 		errors.New("GET https://alice:secret@github.example.test/repos/acme/api"),
 	)
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -382,10 +361,7 @@ func TestProviderUnitPersistsCanonicalProviderUsageObservations(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository := newMemoryUnitRepository(providerUnit())
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -416,10 +392,7 @@ func TestProviderUnitKeepsWatermarkUnadvancedWhenGitHubFilesTraversalFails(t *te
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository := newMemoryUnitRepository(githubFilesUnit())
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			GithubFiles: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -447,10 +420,7 @@ func TestProviderUnitRecordsGitHubFilesTraversalFailureAfterRetriesExhaust(t *te
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository := newMemoryUnitRepository(githubFilesUnit())
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			GithubFiles: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -498,10 +468,7 @@ func TestFreshHandlerRecoversExpiredProcessClaimAndReleasesForRiverRetry(
 		t.Fatalf("NewMetricsCollector: %v", err)
 	}
 	fresh := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return recoveryNow },
@@ -556,10 +523,7 @@ func TestRecoveredExpiredLeaseAttemptExhaustionRecordsFailedResolution(t *testin
 	}
 	const maxAttempts = 2
 	fresh := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return recoveryNow },

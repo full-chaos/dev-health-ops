@@ -867,79 +867,14 @@ func selectedQueueBudgets(queues, targets []string, concurrency map[string]int) 
 	return selected
 }
 
-// workerRouteSwitches is the single translation from process configuration to
-// route switches. The readiness check below and the handler that actually
-// executes claims (buildProviderSyncHandler) both read it, so a route can
-// never be reported ready against one switch set while being served under
-// another — the drift that a hardcoded `LaunchDarklyFeatureFlags: true` in the
-// handler used to permit (CHAOS-3123).
-func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
-	return providersync.RouteSwitchesFromConfig(cfg)
-}
-
-type providerRouteSwitch struct {
-	provider   string
-	dataset    string
-	configured bool
-}
-
-func effectiveProviderRouteSwitches(cfg config.Config) []providerRouteSwitch {
-	switches := workerRouteSwitches(cfg)
-	routes := []providerRouteSwitch{
-		{"linear", "work-items", cfg.WorkerLinearWorkItemsEnabled},
-		{"jira", "work-items", cfg.WorkerJiraWorkItemsEnabled},
-		{"jira", "incidents", cfg.WorkerJiraIncidentsEnabled},
-		{"launchdarkly", "feature-flags", cfg.WorkerLaunchDarklyFeatureFlagsEnabled},
-		{"github", "repo-metadata", cfg.WorkerGithubRepoMetadataEnabled},
-		{"gitlab", "repo-metadata", cfg.WorkerGitlabRepoMetadataEnabled},
-		{"gitlab", "incidents", cfg.WorkerGitlabIncidentsEnabled},
-		{"gitlab", "commits", cfg.WorkerGitlabCommitsEnabled},
-		{"gitlab", "commit-stats", cfg.WorkerGitlabCommitStatsEnabled},
-		{"gitlab", "cicd", cfg.WorkerGitlabCICDEnabled},
-		{"gitlab", "tests", cfg.WorkerGitlabTestsEnabled},
-		{"gitlab", "deployments", cfg.WorkerGitlabDeploymentsEnabled},
-		{"gitlab", "feature-flags", cfg.WorkerGitlabFeatureFlagsEnabled},
-		{"gitlab", "files", cfg.WorkerGitlabFilesEnabled},
-		{"gitlab", "blame", cfg.WorkerGitlabBlameEnabled},
-		{"gitlab", "prs", cfg.WorkerGitlabPRsEnabled},
-		{"gitlab", "pr-reviews", cfg.WorkerGitlabPRReviewsEnabled},
-		{"gitlab", "pr-comments", cfg.WorkerGitlabPRCommentsEnabled},
-		{"gitlab", "security", cfg.WorkerGitlabSecurityEnabled},
-		{"gitlab", "work-items", cfg.WorkerGitlabWorkItemsEnabled},
-		{"pagerduty", "services", cfg.WorkerPagerDutyServicesEnabled},
-		{"pagerduty", "business-services", cfg.WorkerPagerDutyBusinessServicesEnabled},
-		{"pagerduty", "escalation-policies", cfg.WorkerPagerDutyEscalationPoliciesEnabled},
-		{"pagerduty", "schedules", cfg.WorkerPagerDutySchedulesEnabled},
-		{"pagerduty", "on-calls", cfg.WorkerPagerDutyOnCallsEnabled},
-		{"pagerduty", "users", cfg.WorkerPagerDutyUsersEnabled},
-		{"pagerduty", "teams", cfg.WorkerPagerDutyTeamsEnabled},
-		{"pagerduty", "incidents", cfg.WorkerPagerDutyIncidentsEnabled},
-		{"pagerduty", "incident-alerts", cfg.WorkerPagerDutyIncidentsEnabled},
-		{"pagerduty", "incident-log-entries", cfg.WorkerPagerDutyIncidentsEnabled},
-		{"pagerduty", "incident-notes", cfg.WorkerPagerDutyIncidentsEnabled},
-		{"github", "prs", cfg.WorkerGithubPRsEnabled},
-		{"github", "pr-reviews", cfg.WorkerGithubPRReviewsEnabled},
-		{"github", "pr-comments", cfg.WorkerGithubPRCommentsEnabled},
-		{"github", "cicd", cfg.WorkerGithubCICDEnabled},
-		{"github", "commits", cfg.WorkerGithubCommitsEnabled},
-		{"github", "deployments", cfg.WorkerGithubDeploymentsEnabled},
-		{"github", "security", cfg.WorkerGithubSecurityEnabled},
-		{"github", "files", cfg.WorkerGithubFilesEnabled},
-		{"github", "commit-stats", cfg.WorkerGithubCommitStatsEnabled},
-		{"github", "blame", cfg.WorkerGithubBlameEnabled},
-		{"github", "tests", cfg.WorkerGithubTestsEnabled},
-		{"github", "work-items", cfg.WorkerGithubWorkItemsEnabled},
-	}
-	effective := make([]providerRouteSwitch, 0, len(routes))
-	for _, route := range routes {
-		descriptor, ok := switches.Descriptor(route.provider, route.dataset)
-		if route.configured || (ok && descriptor.RouteEnabled) {
-			effective = append(effective, route)
-		}
-	}
-	return effective
-}
-
+// providerRouteSwitchesReady asserts the serving plane agrees with itself.
+//
+// CHAOS-4054 removed the route enablement plane: capability is always on in the
+// binary, so there is no per-route switch to reconcile against the registry.
+// What remains is the -Q topology contract — a process that selected the
+// provider-unit queue must actually have constructed the provider-sync runtime
+// (and validated the work-item runtime config it captures), or it consumes a
+// queue whose units nothing can execute.
 func providerRouteSwitchesReady(
 	cfg config.Config,
 	runtimeConstructed *bool,
@@ -947,31 +882,15 @@ func providerRouteSwitchesReady(
 	if !queueSelected(cfg.Queues, providerUnitQueue) {
 		return func(context.Context) error { return nil }
 	}
-	switches := workerRouteSwitches(cfg)
-	routes := effectiveProviderRouteSwitches(cfg)
 	return func(context.Context) error {
 		// The same helper feeds the production BuildExecutor closure below.
-		// A route cannot report ready for one pair of config files and construct
-		// the handler with another, and ambient STATUS_MAPPING_PATH is rejected
-		// before either side opens a provider connection (D19).
+		// Ambient STATUS_MAPPING_PATH is rejected before either side opens a
+		// provider connection (D19).
 		if _, err := workItemsRuntimeConfigFrom(cfg); err != nil {
 			return errWorkerDependencyUnavailable
 		}
-		for _, route := range routes {
-			descriptor, ok := switches.Descriptor(route.provider, route.dataset)
-			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-				return errWorkerDependencyUnavailable
-			}
-			// Any enabled route implies the provider-sync runtime must have
-			// been constructed: buildProviderSyncWorker builds the family when
-			// ANY route switch is on, so an enabled switch with no runtime
-			// behind it means units are being dispatched at a process that
-			// registered no handler for them. This was previously checked for
-			// launchdarkly alone, which was correct only while it was the sole
-			// switch that could construct the family (CHAOS-3123).
-			if runtimeConstructed == nil || !*runtimeConstructed {
-				return errWorkerDependencyUnavailable
-			}
+		if runtimeConstructed == nil || !*runtimeConstructed {
+			return errWorkerDependencyUnavailable
 		}
 		return nil
 	}

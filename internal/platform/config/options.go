@@ -156,7 +156,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Flag: "environment", Env: devHealthEnv, Kind: KindString, Group: GroupRuntime,
-		Usage: "deployment environment name; GO_PROVIDER_ROUTES=all requires local",
+		Usage: "deployment environment name; local selects packaged config artifacts",
 	},
 	{
 		Flag: "stream-replicas", Env: "DEV_HEALTH_STREAM_REPLICAS", Kind: KindInt,
@@ -356,14 +356,11 @@ func settingLabel(env string) string {
 // EnvNames returns every environment variable the registry reads, sorted. It
 // backs the deployment-surface contract tests.
 func EnvNames() []string {
-	names := make([]string, 0, len(optionRegistry)+len(routeRegistry))
+	names := make([]string, 0, len(optionRegistry))
 	for _, option := range optionRegistry {
 		if option.Env != "" {
 			names = append(names, option.Env)
 		}
-	}
-	for _, route := range routeRegistry {
-		names = append(names, route.Env)
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
@@ -415,16 +412,14 @@ func HelpText(service string, requireQueues bool) string {
 		out.WriteString(optionHelpLine(option))
 	}
 
-	// The forty WORKER_*_ENABLED provider route switches are deliberately not
-	// listed as options: they have no flag. What a worker executes follows
-	// from the queues it consumes, and the switches survive only so the Python
-	// planner and the Go executor agree about what to plan.
+	// There is no provider route switch surface. CHAOS-4054 deleted it: a
+	// shipped route is always executable, the user's sync config decides what
+	// should run, and --queues decides what this process serves.
 	out.WriteString(
-		"\nPROVIDER ROUTE SWITCHES:\n" +
-			"  Environment only, and not selected here. A worker executes the queues it\n" +
-			"  is told to consume with --queues; the WORKER_<PROVIDER>_<DATASET>_ENABLED\n" +
-			"  variables remain the producer/executor agreement and are documented in\n" +
-			"  docs/operate/run/workers-and-jobs.md.\n",
+		"\nPROVIDER ROUTES:\n" +
+			"  Not selected here, and not selectable anywhere. Every shipped provider\n" +
+			"  route is executable; this worker serves exactly the queues it is told to\n" +
+			"  consume with --queues. See docs/operate/run/workers-and-jobs.md.\n",
 	)
 	return out.String()
 }

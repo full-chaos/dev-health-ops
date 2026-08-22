@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -142,7 +141,7 @@ type RouteFault struct {
 	Dataset           string
 	DescriptorPresent bool
 	RouteReady        bool
-	RouteEnabled      bool
+	Plannable         bool
 	Attempt           int
 	MaxAttempts       int
 	// Released reports whether the claim was handed back to dispatching. When
@@ -202,7 +201,6 @@ type ChunkContinuationRepository interface {
 
 type Handler struct {
 	Repository    UnitRepository
-	Switches      providersync.CompleteRouteSwitches
 	BuildExecutor ExecutorFactory
 	LeaseDuration time.Duration
 	Heartbeat     time.Duration
@@ -322,9 +320,9 @@ func (handler *Handler) reconcileRouteFault(
 	fault := RouteFault{
 		Provider: claim.Provider, Dataset: claim.Dataset,
 		DescriptorPresent: descriptorPresent, RouteReady: descriptor.RouteReady,
-		RouteEnabled: descriptor.RouteEnabled,
-		Attempt:      execution.Attempt,
-		MaxAttempts:  execution.Definition.MaxAttempts,
+		Plannable:   descriptor.Plannable,
+		Attempt:     execution.Attempt,
+		MaxAttempts: execution.Definition.MaxAttempts,
 	}
 	// Releasing on the terminal attempt would strand the unit: River discards
 	// the job after the last attempt, leaving the unit `dispatching` with no
@@ -365,29 +363,19 @@ func routeReconciliationError(configurationErr error) error {
 	return fmt.Errorf("%w: %w", ErrRouteReconciliationRequired, configurationErr)
 }
 
-func validateProviderFamilyExecutionClaim(
-	claim providersync.Claim,
-	switches providersync.CompleteRouteSwitches,
-) error {
+func validateProviderFamilyExecutionClaim(claim providersync.Claim) error {
 	policy, family := providerfamilycontract.PolicyFor(claim.Provider, claim.Dataset)
 	if !family || policy.Mode == providerfamilycontract.Independent {
 		return nil
 	}
-	// GitHub retains its already-landed always-exact claim contract. Other
-	// work-item providers remain on their D16 legacy claim shape until their
-	// actual typed Go switch is enabled. GitLab deliberately has no switch yet,
-	// so cataloguing its family cannot activate admission or execution.
-	strict := false
-	switch strings.ToLower(strings.TrimSpace(claim.Provider)) {
-	case "github":
-		strict = true
-	case "jira":
-		strict = switches.JiraWorkItems
-	case "linear":
-		strict = switches.LinearWorkItems
-	}
+	// CHAOS-4054: an atomic family has exactly one canonical claim shape, and
+	// capability is always on. The exactness of the claim was previously gated
+	// on each provider's route switch, which meant a malformed persisted claim
+	// was admitted purely because a deployment had not turned the route on.
+	// With the switches gone the contract is what it always described: every
+	// atomic family validates strictly.
 	if err := providerfamilycontract.ValidateClaim(
-		claim.Provider, claim.Dataset, claim.ProcessorFlags, strict,
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, true,
 	); err != nil {
 		return fmt.Errorf("%w: %w", providersync.ErrInvalidConfiguration, err)
 	}
@@ -423,14 +411,14 @@ func (handler *Handler) Work(
 		return jobruntime.Permanent(err)
 	}
 	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "", nil)
-	descriptor, descriptorPresent := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
+	descriptor, descriptorPresent := providersync.Descriptor(claim.Provider, claim.Dataset)
 	// This admission boundary is intentionally before LeaseSession and
 	// BuildExecutor. A stale River unit can otherwise fetch credentials and
 	// commit an incomplete work-item family before the completion-side
 	// defense-in-depth check observes its flags.
-	familyClaimErr := validateProviderFamilyExecutionClaim(claim, handler.Switches)
+	familyClaimErr := validateProviderFamilyExecutionClaim(claim)
 	if familyClaimErr != nil || !descriptorPresent ||
-		!descriptor.RouteReady || !descriptor.RouteEnabled {
+		!descriptor.RouteReady || !descriptor.Plannable {
 		return handler.reconcileRouteFault(
 			ctx, execution, claim, descriptor, descriptorPresent, startedAt, familyClaimErr,
 		)

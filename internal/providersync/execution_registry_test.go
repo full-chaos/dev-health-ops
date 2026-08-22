@@ -1,60 +1,72 @@
 package providersync
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 )
 
-func TestAggregateProviderDescriptorsAreNativeReadyAndDefaultOff(t *testing.T) {
+// TestAggregateProviderDescriptorsAreNativeReadyAndPlannableMatchesTopology
+// replaces the pre-CHAOS-4054 "default off" census: capability is always on
+// in the binary, so what varies across this table is not activation but
+// registry topology -- whether each identity is the canonical writer for its
+// family (Plannable) or an alias kept RouteReady for audit/watermark
+// visibility only.
+func TestAggregateProviderDescriptorsAreNativeReadyAndPlannableMatchesTopology(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		provider     string
 		dataset      string
+		plannable    bool
 		destinations []string
 	}{
-		{"gitlab", "deployments", []string{"deployments"}},
-		{"gitlab", "feature-flags", []string{"feature_flag", "feature_flag_event", "work_graph_edges"}},
-		{"gitlab", "files", []string{"git_files"}},
-		{"gitlab", "blame", []string{"git_blame"}},
-		{"gitlab", "prs", []string{"git_pull_requests", "git_pull_request_reviews"}},
-		{"gitlab", "pr-reviews", []string{"git_pull_requests", "git_pull_request_reviews"}},
-		{"gitlab", "pr-comments", []string{"git_pull_requests", "git_pull_request_reviews"}},
-		{"gitlab", "security", []string{"security_alerts"}},
-		{"gitlab", "work-items", workItemRouteDestinations()},
-		{"gitlab", "work-item-labels", workItemRouteDestinations()},
-		{"gitlab", "work-item-projects", workItemRouteDestinations()},
-		{"gitlab", "work-item-history", workItemRouteDestinations()},
-		{"gitlab", "work-item-comments", workItemRouteDestinations()},
-		{"jira", "work-items", append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-labels", append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-projects", append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-history", append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-comments", append(workItemRouteDestinations(), "worklogs")},
-		{"linear", "work-items", workItemRouteDestinations()},
-		{"linear", "work-item-labels", workItemRouteDestinations()},
-		{"linear", "work-item-projects", workItemRouteDestinations()},
-		{"linear", "work-item-history", workItemRouteDestinations()},
-		{"linear", "work-item-comments", workItemRouteDestinations()},
-		{"pagerduty", "services", []string{"operational_services", "operational_service_repository_mappings"}},
-		{"pagerduty", "business-services", []string{"operational_services"}},
-		{"pagerduty", "escalation-policies", []string{"operational_escalation_policies"}},
-		{"pagerduty", "schedules", []string{"operational_on_call_schedules"}},
-		{"pagerduty", "on-calls", []string{"operational_on_call_assignments"}},
-		{"pagerduty", "users", []string{"operational_users"}},
-		{"pagerduty", "teams", []string{"operational_teams"}},
-		{"pagerduty", "incidents", []string{"operational_incidents"}},
-		{"pagerduty", "incident-alerts", []string{"operational_alerts"}},
-		{"pagerduty", "incident-log-entries", []string{"operational_incident_timeline_events"}},
-		{"pagerduty", "incident-notes", []string{"operational_incident_notes"}},
+		{"gitlab", "deployments", true, []string{"deployments"}},
+		{"gitlab", "feature-flags", true, []string{"feature_flag", "feature_flag_event", "work_graph_edges"}},
+		{"gitlab", "files", true, []string{"git_files"}},
+		{"gitlab", "blame", true, []string{"git_blame"}},
+		{"gitlab", "prs", true, []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "pr-reviews", false, []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "pr-comments", false, []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "security", true, []string{"security_alerts"}},
+		{"gitlab", "work-items", true, workItemRouteDestinations()},
+		{"gitlab", "work-item-labels", false, workItemRouteDestinations()},
+		{"gitlab", "work-item-projects", false, workItemRouteDestinations()},
+		{"gitlab", "work-item-history", false, workItemRouteDestinations()},
+		{"gitlab", "work-item-comments", false, workItemRouteDestinations()},
+		{"jira", "work-items", true, append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-labels", false, append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-projects", false, append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-history", false, append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-comments", false, append(workItemRouteDestinations(), "worklogs")},
+		{"linear", "work-items", true, workItemRouteDestinations()},
+		{"linear", "work-item-labels", false, workItemRouteDestinations()},
+		{"linear", "work-item-projects", false, workItemRouteDestinations()},
+		{"linear", "work-item-history", false, workItemRouteDestinations()},
+		{"linear", "work-item-comments", false, workItemRouteDestinations()},
+		// PagerDuty's whole family is deliberately NOT collapsed: every dataset
+		// is its own independent, canonical, plannable claim (CHAOS-4054).
+		{"pagerduty", "services", true, []string{"operational_services", "operational_service_repository_mappings"}},
+		{"pagerduty", "business-services", true, []string{"operational_services"}},
+		{"pagerduty", "escalation-policies", true, []string{"operational_escalation_policies"}},
+		{"pagerduty", "schedules", true, []string{"operational_on_call_schedules"}},
+		{"pagerduty", "on-calls", true, []string{"operational_on_call_assignments"}},
+		{"pagerduty", "users", true, []string{"operational_users"}},
+		{"pagerduty", "teams", true, []string{"operational_teams"}},
+		{"pagerduty", "incidents", true, []string{"operational_incidents"}},
+		{"pagerduty", "incident-alerts", true, []string{"operational_alerts"}},
+		{"pagerduty", "incident-log-entries", true, []string{"operational_incident_timeline_events"}},
+		{"pagerduty", "incident-notes", true, []string{"operational_incident_notes"}},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.provider+"/"+test.dataset, func(t *testing.T) {
 			t.Parallel()
-			descriptor, ok := (CompleteRouteSwitches{}).Descriptor(test.provider, test.dataset)
+			descriptor, ok := Descriptor(test.provider, test.dataset)
 			if !ok || descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
-				descriptor.RouteEnabled || !slices.Equal(descriptor.Destinations, test.destinations) {
-				t.Fatalf("descriptor=%+v known=%t want destinations=%v", descriptor, ok, test.destinations)
+				descriptor.Plannable != test.plannable ||
+				!slices.Equal(descriptor.Destinations, test.destinations) {
+				t.Fatalf("descriptor=%+v known=%t want plannable=%v destinations=%v",
+					descriptor, ok, test.plannable, test.destinations)
 			}
 		})
 	}
@@ -66,14 +78,13 @@ func TestAggregateProviderDescriptorsAreNativeReadyAndDefaultOff(t *testing.T) {
 // descriptor path the router does not consult.
 func TestCanonicalDescriptorRecognisesEveryCapability(t *testing.T) {
 	t.Parallel()
-	switches := CompleteRouteSwitches{}
 	for _, provider := range MatrixProviders() {
 		capabilities := Capabilities(provider)
 		if len(capabilities) == 0 {
 			t.Fatalf("%s has no capabilities", provider)
 		}
 		for _, capability := range capabilities {
-			descriptor, ok := switches.Descriptor(provider, capability.Dataset)
+			descriptor, ok := Descriptor(provider, capability.Dataset)
 			if !ok || descriptor.Provider != provider ||
 				descriptor.RequestedDataset != capability.Dataset ||
 				descriptor.Executor != ProviderExecutor(provider, capability.Dataset) ||
@@ -82,21 +93,26 @@ func TestCanonicalDescriptorRecognisesEveryCapability(t *testing.T) {
 			}
 		}
 	}
-	if _, ok := switches.Descriptor("github", "feature-flags"); ok {
+	if _, ok := Descriptor("github", "feature-flags"); ok {
 		t.Fatal("unconfigured pair resolved a descriptor")
 	}
-	if _, ok := switches.Descriptor("bitbucket", "commits"); ok {
+	if _, ok := Descriptor("bitbucket", "commits"); ok {
 		t.Fatal("unknown provider resolved a descriptor")
 	}
 }
 
-func TestCompleteRouteSwitchesKeepWorkItemAliasesCanonicalOnlyAndIndependent(t *testing.T) {
+// TestWorkItemAliasesStayCanonicalOnlyAcrossIndependentFamilies replaces the
+// old switches-independence test. There is no configuration left to be
+// independent of (CHAOS-4054: Descriptor takes none), so what this now pins
+// is registry topology: every provider's work-item family collapses onto its
+// one canonical `work-items` writer while its four sibling dataset identities
+// stay RouteReady-but-not-Plannable aliases, and unrelated families
+// (jira/incidents, launchdarkly/feature-flags) are unconditionally plannable
+// on their own, independent of any other family's state.
+func TestWorkItemAliasesStayCanonicalOnlyAcrossIndependentFamilies(t *testing.T) {
 	t.Parallel()
-	switches := CompleteRouteSwitches{
-		LinearWorkItems: true, JiraIncidents: true,
-	}
-	linear, ok := switches.Descriptor("linear", "work-items")
-	if !ok || !linear.RouteReady || !linear.RouteEnabled ||
+	linear, ok := Descriptor("linear", "work-items")
+	if !ok || !linear.RouteReady || !linear.Plannable ||
 		linear.RouteDataset != "work-items" ||
 		len(linear.Destinations) != len(workItemRouteDestinations()) {
 		t.Fatalf("linear route=%+v ok=%v", linear, ok)
@@ -105,17 +121,17 @@ func TestCompleteRouteSwitchesKeepWorkItemAliasesCanonicalOnlyAndIndependent(t *
 		"work-item-labels", "work-item-projects",
 		"work-item-history", "work-item-comments",
 	} {
-		descriptor, ok := switches.Descriptor("linear", alias)
-		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+		descriptor, ok := Descriptor("linear", alias)
+		if !ok || !descriptor.RouteReady || descriptor.Plannable ||
 			descriptor.RouteDataset != "work-items" {
 			t.Fatalf("linear alias %s=%+v ok=%v", alias, descriptor, ok)
 		}
 	}
-	jiraWorkItems, _ := switches.Descriptor("jira", "work-items")
-	jiraIncidents, _ := switches.Descriptor("jira", "incidents")
-	launchDarkly, _ := switches.Descriptor("launchdarkly", "feature-flags")
-	if jiraWorkItems.RouteEnabled || !jiraIncidents.RouteReady ||
-		!jiraIncidents.RouteEnabled || launchDarkly.RouteEnabled {
+	jiraWorkItems, _ := Descriptor("jira", "work-items")
+	jiraIncidents, _ := Descriptor("jira", "incidents")
+	launchDarkly, _ := Descriptor("launchdarkly", "feature-flags")
+	if !jiraWorkItems.Plannable || !jiraIncidents.RouteReady ||
+		!jiraIncidents.Plannable || !launchDarkly.Plannable {
 		t.Fatalf(
 			"independent routes jira_work=%+v jira_incidents=%+v ld=%+v",
 			jiraWorkItems, jiraIncidents, launchDarkly,
@@ -159,9 +175,8 @@ func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 // becoming a second capability registry.
 func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 	t.Parallel()
-	switches := CompleteRouteSwitches{}
 	for _, provider := range []string{"github", "gitlab"} {
-		descriptor, _ := switches.Descriptor(provider, "repo-metadata")
+		descriptor, _ := Descriptor(provider, "repo-metadata")
 		shadow, ok := descriptor.Shadow(true)
 		if !ok || shadow.Provider != provider || shadow.Dataset != "repo-metadata" ||
 			!shadow.Write {
@@ -177,7 +192,7 @@ func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 		{"launchdarkly", "feature-flags"},
 		{"pagerduty", "incidents"},
 	} {
-		descriptor, ok := switches.Descriptor(test.provider, test.dataset)
+		descriptor, ok := Descriptor(test.provider, test.dataset)
 		if !ok {
 			t.Fatalf("%s/%s has no descriptor", test.provider, test.dataset)
 		}
@@ -192,23 +207,18 @@ func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 // family while direct aliases remain closed claims.
 func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 	t.Parallel()
-	switches := CompleteRouteSwitches{
-		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
-		LaunchDarklyFeatureFlags: true,
-		GithubWorkItems:          true, GitlabWorkItems: true,
-	}
 	for _, dataset := range []string{
 		"work-items", "work-item-labels", "work-item-projects",
 		"work-item-history", "work-item-comments",
 	} {
-		descriptor, ok := switches.Descriptor("github", dataset)
+		descriptor, ok := Descriptor("github", dataset)
 		if !ok || descriptor.NativeShadow || !descriptor.RouteReady ||
 			descriptor.Executor != ExecutorNativeGo ||
 			!slices.Equal(descriptor.Destinations, workItemRouteDestinations()) {
 			t.Fatalf("github/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
 		if dataset == "work-items" {
-			if !descriptor.RouteEnabled || !descriptor.PreparedManifestRecovery ||
+			if !descriptor.Plannable || !descriptor.PreparedManifestRecovery ||
 				descriptor.RouteDataset != "work-items" {
 				t.Fatalf("canonical github/%s descriptor=%+v", dataset, descriptor)
 			}
@@ -220,7 +230,7 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 		// through here would run a partial writer. providerunit.Handler observes
 		// this disabled descriptor before BuildExecutor can resolve credentials,
 		// make HTTP calls, write effects, or advance a watermark.
-		if descriptor.RouteEnabled || descriptor.PreparedManifestRecovery ||
+		if descriptor.Plannable || descriptor.PreparedManifestRecovery ||
 			descriptor.RouteDataset != dataset {
 			t.Fatalf("direct alias github/%s descriptor=%+v", dataset, descriptor)
 		}
@@ -234,7 +244,7 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 			"work-items", "work-item-labels", "work-item-projects",
 			"work-item-history", "work-item-comments",
 		} {
-			descriptor, ok := switches.Descriptor(provider, dataset)
+			descriptor, ok := Descriptor(provider, dataset)
 			wantRouteDataset := dataset
 			if provider == "jira" || provider == "linear" {
 				wantRouteDataset = "work-items"
@@ -245,8 +255,8 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 				!slices.Equal(descriptor.Destinations, wantDestinations) {
 				t.Fatalf("%s/%s descriptor=%+v ok=%v", provider, dataset, descriptor, ok)
 			}
-			if descriptor.RouteEnabled != (dataset == "work-items") {
-				t.Fatalf("%s/%s enabled=%t", provider, dataset, descriptor.RouteEnabled)
+			if descriptor.Plannable != (dataset == "work-items") {
+				t.Fatalf("%s/%s enabled=%t", provider, dataset, descriptor.Plannable)
 			}
 		}
 	}
@@ -254,7 +264,9 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 
 // TestPagerDutyIsCoveredByTheSameContract closes the largest CUT-08 gap: every
 // PagerDuty dataset now resolves the same descriptor type as every other
-// provider, with native readiness and default-off activation.
+// provider, with native readiness. The family is deliberately NOT collapsed
+// (CHAOS-4054 decision record): every dataset is its own independent,
+// unconditionally plannable claim, not an alias of any sibling.
 func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 	t.Parallel()
 	datasets := []string{
@@ -262,10 +274,9 @@ func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 		"on-calls", "users", "teams", "incidents", "incident-alerts",
 		"incident-log-entries", "incident-notes",
 	}
-	switches := CompleteRouteSwitches{}
 	for _, dataset := range datasets {
-		descriptor, ok := switches.Descriptor("pagerduty", dataset)
-		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+		descriptor, ok := Descriptor("pagerduty", dataset)
+		if !ok || !descriptor.RouteReady || !descriptor.Plannable ||
 			descriptor.Executor != ExecutorNativeGo || len(descriptor.Destinations) == 0 {
 			t.Fatalf("pagerduty/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
@@ -280,45 +291,106 @@ func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 	}
 }
 
-func TestPagerDutyDescriptorSwitchesArePerDataset(t *testing.T) {
+// TestPagerDutyDescriptorSwitchesArePerDataset had no successor: its premise
+// was that only one dataset's switch was enabled at a time, isolating that
+// dataset's Plannable=true from its siblings. CHAOS-4054 deleted the switch
+// plane entirely, and the decision record deliberately keeps PagerDuty's
+// family uncollapsed -- every one of its eleven datasets is unconditionally
+// Plannable at once (see TestPagerDutyIsCoveredByTheSameContract). There is no
+// "isolated switch" state left to assert; the per-dataset independence this
+// test protected is now a permanent, unconditional fact, not a probe-by-probe
+// one, so it was deleted rather than left checking something the API can no
+// longer express.
+
+// completeRouteWriterFamily names the writer family a RouteReady identity
+// belongs to, matching the CHAOS-4054 decision record precisely: every
+// provider's work-item dataset identities collapse onto that provider's
+// "work-items"; GitHub/GitLab's pr-reviews and pr-comments collapse onto
+// "prs"; GitHub/GitLab's tests collapses onto "cicd". Every other identity,
+// including every PagerDuty dataset, is its own single-member family.
+func completeRouteWriterFamily(provider, dataset string) string {
+	switch {
+	case isWorkItemFamilyDataset(dataset):
+		return "work-items"
+	case (provider == "github" || provider == "gitlab") &&
+		(dataset == "pr-reviews" || dataset == "pr-comments"):
+		return "prs"
+	case (provider == "github" || provider == "gitlab") && dataset == "tests":
+		return "cicd"
+	default:
+		return dataset
+	}
+}
+
+// TestExactlyOnePlannableIdentityPerWriterFamily is CHAOS-4054's step-1
+// acceptance for the plannable-identity accessor: Descriptor's Plannable
+// field must resolve to exactly one plannable member per writer family,
+// never a sibling alias independently listed alongside its canonical writer,
+// and never a family with zero plannable members either.
+func TestExactlyOnePlannableIdentityPerWriterFamily(t *testing.T) {
 	t.Parallel()
-	datasets := []string{
-		"services", "business-services", "escalation-policies", "schedules",
-		"on-calls", "users", "teams", "incidents", "incident-alerts",
-		"incident-log-entries", "incident-notes",
+	plannableByFamily := map[string]int{}
+	familiesSeen := map[string]struct{}{}
+	for _, pair := range BuildProviderMatrix().Pairs {
+		if !pair.RouteReady {
+			continue
+		}
+		family := pair.Provider + "/" + completeRouteWriterFamily(pair.Provider, pair.Dataset)
+		familiesSeen[family] = struct{}{}
+		if pair.Plannable {
+			plannableByFamily[family]++
+		}
 	}
-	probes := []struct {
-		dataset  string
-		switches CompleteRouteSwitches
-	}{
-		{"services", CompleteRouteSwitches{PagerDutyServices: true}},
-		{"business-services", CompleteRouteSwitches{PagerDutyBusinessServices: true}},
-		{"escalation-policies", CompleteRouteSwitches{PagerDutyEscalationPolicies: true}},
-		{"schedules", CompleteRouteSwitches{PagerDutySchedules: true}},
-		{"on-calls", CompleteRouteSwitches{PagerDutyOnCalls: true}},
-		{"users", CompleteRouteSwitches{PagerDutyUsers: true}},
-		{"teams", CompleteRouteSwitches{PagerDutyTeams: true}},
-		{"incidents", CompleteRouteSwitches{PagerDutyIncidents: true}},
-		{"incident-alerts", CompleteRouteSwitches{PagerDutyIncidentAlerts: true}},
-		{"incident-log-entries", CompleteRouteSwitches{PagerDutyIncidentLogEntries: true}},
-		{"incident-notes", CompleteRouteSwitches{PagerDutyIncidentNotes: true}},
+	if len(familiesSeen) == 0 {
+		t.Fatal("no route-ready writer families found")
 	}
-	for _, probe := range probes {
-		probe := probe
-		t.Run(probe.dataset, func(t *testing.T) {
-			t.Parallel()
-			for _, dataset := range datasets {
-				descriptor, ok := probe.switches.Descriptor("pagerduty", dataset)
-				if !ok || !descriptor.RouteReady {
-					t.Fatalf("pagerduty/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
-				}
-				if descriptor.RouteEnabled != (dataset == probe.dataset) {
-					t.Fatalf(
-						"switch %s enabled pagerduty/%s=%t",
-						probe.dataset, dataset, descriptor.RouteEnabled,
-					)
-				}
+	for family := range familiesSeen {
+		if count := plannableByFamily[family]; count != 1 {
+			t.Fatalf("writer family %s has %d plannable identities, want exactly 1", family, count)
+		}
+	}
+}
+
+// TestDescriptorTakesNoConfigurationFromTheEnvironment pins CHAOS-4054's core
+// invariant directly: capability is always on in the binary, and Descriptor
+// reads nothing but its two arguments. No environment variable -- including
+// names shaped like the deleted per-route enable switches -- may move
+// RouteReady or Plannable for any pair.
+func TestDescriptorTakesNoConfigurationFromTheEnvironment(t *testing.T) {
+	type probe struct {
+		provider, dataset string
+		descriptor        CompleteRouteDescriptor
+	}
+	var baseline []probe
+	for _, provider := range MatrixProviders() {
+		for _, capability := range Capabilities(provider) {
+			descriptor, ok := Descriptor(provider, capability.Dataset)
+			if !ok {
+				t.Fatalf("%s/%s lost its descriptor", provider, capability.Dataset)
 			}
-		})
+			baseline = append(baseline, probe{provider, capability.Dataset, descriptor})
+		}
+	}
+	// Deliberately shaped like the deleted route-enable switches, but never
+	// matching the WORKER_*_ENABLED pattern itself: that exact family must
+	// never be read anywhere in this package (see .remember/chaos-4054-context.md).
+	for key, value := range map[string]string{
+		"GITHUB_CICD_ENABLED":               "true",
+		"GITHUB_TESTS_ENABLED":              "true",
+		"GITHUB_WORK_ITEM_COMMENTS_ENABLED": "true",
+		"GITLAB_BLAME_ENABLED":              "false",
+		"LINEAR_WORK_ITEMS_ENABLED":         "true",
+		"PAGERDUTY_INCIDENTS_ENABLED":       "false",
+	} {
+		t.Setenv(key, value)
+	}
+	for _, want := range baseline {
+		got, ok := Descriptor(want.provider, want.dataset)
+		if !ok || !reflect.DeepEqual(got, want.descriptor) {
+			t.Fatalf(
+				"%s/%s descriptor moved under environment configuration: got=%+v want=%+v",
+				want.provider, want.dataset, got, want.descriptor,
+			)
+		}
 	}
 }

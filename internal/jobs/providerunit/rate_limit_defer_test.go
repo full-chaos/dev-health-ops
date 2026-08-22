@@ -28,7 +28,6 @@ func TestProviderRateLimitDefersWithoutConsumingTheAttempt(t *testing.T) {
 	repository := newMemoryUnitRepository(unit)
 	handler := &Handler{
 		Repository:    repository,
-		Switches:      providersync.CompleteRouteSwitches{LaunchDarklyFeatureFlags: true},
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -71,7 +70,6 @@ func TestProviderRateLimitWithoutDelayUsesTheDefaultCountdown(t *testing.T) {
 	repository := newMemoryUnitRepository(unit)
 	handler := &Handler{
 		Repository:    repository,
-		Switches:      providersync.CompleteRouteSwitches{LaunchDarklyFeatureFlags: true},
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -118,7 +116,6 @@ func TestProviderRateLimitBudgetExhaustionFailsWithTheRateLimitCategory(t *testi
 			repository.rateLimitFirstSeen = test.episode.FirstSeenAt
 			handler := &Handler{
 				Repository:    repository,
-				Switches:      providersync.CompleteRouteSwitches{LaunchDarklyFeatureFlags: true},
 				LeaseDuration: time.Minute,
 				Heartbeat:     10 * time.Second,
 				Now:           func() time.Time { return now },

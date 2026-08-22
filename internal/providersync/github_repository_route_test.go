@@ -106,7 +106,7 @@ func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "repo-metadata")
+	descriptor, ok := Descriptor("github", "repo-metadata")
 	if !ok {
 		t.Fatal("github/repo-metadata has no canonical descriptor")
 	}

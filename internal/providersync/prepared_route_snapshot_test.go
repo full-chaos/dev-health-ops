@@ -156,13 +156,13 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	prepared.Effects[1].StartedAt = &startedAt
 	ledger.state = prepared
 
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
-	if !ok || !descriptor.PreparedManifestRecovery || !descriptor.RouteReady || descriptor.RouteEnabled {
-		t.Fatalf("inactive recovery descriptor=%+v ok=%v", descriptor, ok)
+	descriptor, ok := Descriptor("github", "work-items")
+	if !ok || !descriptor.PreparedManifestRecovery || !descriptor.RouteReady || !descriptor.Plannable {
+		t.Fatalf("github/work-items descriptor=%+v ok=%v", descriptor, ok)
 	}
 	descriptor.Destinations = workItemRouteDestinations()
 	descriptor.RouteReady = true
-	descriptor.RouteEnabled = true
+	descriptor.Plannable = true
 	handler := &staticCompleteRouteHandler{
 		batch: CompleteRouteBatch{Result: map[string]any{"live_provider": "mutated"}},
 	}
@@ -230,9 +230,9 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 		t.Fatal(err)
 	}
 
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live_provider": "changed"},
 	}}
@@ -278,9 +278,9 @@ func TestCompleteRouteExecutorSuppressesForgedLiveIncompleteWatermark(t *testing
 		t.Fatal("fixture must carry a forged candidate watermark")
 	}
 
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	ledger := &memoryEffectLedger{}
 	executor := completeRouteExecutor(now, handler, ledger, &memoryEffectSink{})
@@ -311,9 +311,9 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 	); err != nil {
 		t.Fatal(err)
 	}
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live": "changed"},
 	}}
@@ -349,9 +349,9 @@ func TestCompleteRouteExecutorFailsClosedWhenPreparedSnapshotIsMissing(t *testin
 		SchemaVersion: "v1", ContentDigest: strings.Repeat("a", 64), PayloadBytes: 1,
 	}
 	ledger.state = state
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
 		now.Add(time.Hour), handler, ledger, &memoryEffectSink{},
@@ -544,9 +544,9 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	ledger := &memoryEffectLedger{state: legacy, preparedSnapshot: payload}
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
 		now.Add(time.Hour), handler, ledger, &memoryEffectSink{},
@@ -585,7 +585,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 			descriptor := CompleteRouteDescriptor{
 				Provider: pair.provider, RequestedDataset: pair.dataset,
 				RouteDataset: pair.dataset, Destinations: workItemRouteDestinations(),
-				PreparedManifestRecovery: true, RouteReady: true, RouteEnabled: true,
+				PreparedManifestRecovery: true, RouteReady: true, Plannable: true,
 			}
 			handler := &staticCompleteRouteHandler{
 				batch: preparedGitHubWorkItemsFixture(t, claim),
@@ -623,9 +623,9 @@ func TestRouteRequiringPreparedRecoveryRefusesALedgerWithoutASnapshotStore(t *te
 	t.Parallel()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	_, session := preparedGitHubWorkItemsSession(t, now)
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{}
 	sink := &memoryEffectSink{}
 	_, err := completeRouteExecutor(
@@ -653,10 +653,10 @@ func TestPreparedRecoveryRevalidatesTheManifestAgainstTheLiveDescriptor(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	full := workItemRouteDestinations()
 	descriptor.Destinations = full[:len(full)-1]
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	sink := &memoryEffectSink{}
 	_, err := completeRouteExecutor(
@@ -869,9 +869,9 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 	sinkFailure := errors.New("sink refused the write")
 	sink := &memoryEffectSink{failAfterWrite: refused, failure: sinkFailure}
 
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, _ := Descriptor("github", "work-items")
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err := completeRouteExecutor(
 		now.Add(time.Hour), handler, ledger, sink,
@@ -927,12 +927,12 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 			batch.Result[githubWorkItemsIncompleteResultKey])
 	}
 
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, ok := Descriptor("github", "work-items")
 	if !ok || !descriptor.PreparedManifestRecovery {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
 	descriptor.Destinations = workItemRouteDestinations()
-	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	descriptor.RouteReady, descriptor.Plannable = true, true
 
 	ledger := &memoryEffectLedger{}
 	collecting := &staticCompleteRouteHandler{batch: batch}

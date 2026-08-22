@@ -245,57 +245,17 @@ services:
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
-      # Provider/dataset route switches are read by the Python producer gate
-      # and the Go worker from the SAME env var names. Keep the complete typed
-      # config surface here so one explicit override reaches both halves; every
-      # switch remains false until its own reviewed route release.
-      WORKER_LINEAR_WORK_ITEMS_ENABLED: ${WORKER_LINEAR_WORK_ITEMS_ENABLED:-false}
-      WORKER_JIRA_WORK_ITEMS_ENABLED: ${WORKER_JIRA_WORK_ITEMS_ENABLED:-false}
-      WORKER_JIRA_INCIDENTS_ENABLED: ${WORKER_JIRA_INCIDENTS_ENABLED:-false}
-      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
-      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
-      WORKER_GITHUB_PRS_ENABLED: ${WORKER_GITHUB_PRS_ENABLED:-false}
-      WORKER_GITHUB_PR_REVIEWS_ENABLED: ${WORKER_GITHUB_PR_REVIEWS_ENABLED:-false}
-      WORKER_GITHUB_PR_COMMENTS_ENABLED: ${WORKER_GITHUB_PR_COMMENTS_ENABLED:-false}
-      WORKER_GITHUB_CICD_ENABLED: ${WORKER_GITHUB_CICD_ENABLED:-false}
-      WORKER_GITHUB_COMMITS_ENABLED: ${WORKER_GITHUB_COMMITS_ENABLED:-false}
-      WORKER_GITHUB_DEPLOYMENTS_ENABLED: ${WORKER_GITHUB_DEPLOYMENTS_ENABLED:-false}
-      WORKER_GITHUB_SECURITY_ENABLED: ${WORKER_GITHUB_SECURITY_ENABLED:-false}
-      WORKER_GITHUB_FILES_ENABLED: ${WORKER_GITHUB_FILES_ENABLED:-false}
-      WORKER_GITHUB_COMMIT_STATS_ENABLED: ${WORKER_GITHUB_COMMIT_STATS_ENABLED:-false}
-      WORKER_GITHUB_BLAME_ENABLED: ${WORKER_GITHUB_BLAME_ENABLED:-false}
-      WORKER_GITHUB_TESTS_ENABLED: ${WORKER_GITHUB_TESTS_ENABLED:-false}
+      # There are no provider/dataset route switches. CHAOS-4054: capability is
+      # always on in the binary, the user's sync config decides what should run,
+      # and each worker's -Q/--queues topology decides what it serves.
       # GitHub work-items is a five-alias matrix family, but only its canonical
-      # work-items claim may execute. Its Go route also requires these two
-      # explicit, validated config paths. They intentionally have no guessed
-      # source-relative default; turning the switch on without both inputs
-      # fails Go readiness before a provider request or write.
-      WORKER_GITHUB_WORK_ITEMS_ENABLED: ${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}
+      # work-items claim may execute. Its Go route requires these two config
+      # artifacts. Leave them unset: every worker image ships them at
+      # /app/config, which is what the binary defaults to. Point them elsewhere
+      # only to override the packaged artifacts — an unreadable path fails Go
+      # readiness before a provider request or write.
       WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
       WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
-      WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
-      WORKER_GITLAB_COMMITS_ENABLED: ${WORKER_GITLAB_COMMITS_ENABLED:-false}
-      WORKER_GITLAB_COMMIT_STATS_ENABLED: ${WORKER_GITLAB_COMMIT_STATS_ENABLED:-false}
-      WORKER_GITLAB_CICD_ENABLED: ${WORKER_GITLAB_CICD_ENABLED:-false}
-      WORKER_GITLAB_TESTS_ENABLED: ${WORKER_GITLAB_TESTS_ENABLED:-false}
-      WORKER_GITLAB_INCIDENTS_ENABLED: ${WORKER_GITLAB_INCIDENTS_ENABLED:-false}
-      WORKER_GITLAB_DEPLOYMENTS_ENABLED: ${WORKER_GITLAB_DEPLOYMENTS_ENABLED:-false}
-      WORKER_GITLAB_FEATURE_FLAGS_ENABLED: ${WORKER_GITLAB_FEATURE_FLAGS_ENABLED:-false}
-      WORKER_GITLAB_FILES_ENABLED: ${WORKER_GITLAB_FILES_ENABLED:-false}
-      WORKER_GITLAB_BLAME_ENABLED: ${WORKER_GITLAB_BLAME_ENABLED:-false}
-      WORKER_GITLAB_PRS_ENABLED: ${WORKER_GITLAB_PRS_ENABLED:-false}
-      WORKER_GITLAB_PR_REVIEWS_ENABLED: ${WORKER_GITLAB_PR_REVIEWS_ENABLED:-false}
-      WORKER_GITLAB_PR_COMMENTS_ENABLED: ${WORKER_GITLAB_PR_COMMENTS_ENABLED:-false}
-      WORKER_GITLAB_SECURITY_ENABLED: ${WORKER_GITLAB_SECURITY_ENABLED:-false}
-      WORKER_GITLAB_WORK_ITEMS_ENABLED: ${WORKER_GITLAB_WORK_ITEMS_ENABLED:-false}
-      WORKER_PAGERDUTY_SERVICES_ENABLED: ${WORKER_PAGERDUTY_SERVICES_ENABLED:-false}
-      WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED: ${WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED:-false}
-      WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED: ${WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED:-false}
-      WORKER_PAGERDUTY_SCHEDULES_ENABLED: ${WORKER_PAGERDUTY_SCHEDULES_ENABLED:-false}
-      WORKER_PAGERDUTY_ON_CALLS_ENABLED: ${WORKER_PAGERDUTY_ON_CALLS_ENABLED:-false}
-      WORKER_PAGERDUTY_USERS_ENABLED: ${WORKER_PAGERDUTY_USERS_ENABLED:-false}
-      WORKER_PAGERDUTY_TEAMS_ENABLED: ${WORKER_PAGERDUTY_TEAMS_ENABLED:-false}
-      WORKER_PAGERDUTY_INCIDENTS_ENABLED: ${WORKER_PAGERDUTY_INCIDENTS_ENABLED:-false}
       AUTO_RUN_MIGRATIONS: "false"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}

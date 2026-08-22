@@ -41,7 +41,7 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "deployments")
+	descriptor, ok := Descriptor("github", "deployments")
 	if !ok {
 		t.Fatal("github/deployments has no canonical descriptor")
 	}

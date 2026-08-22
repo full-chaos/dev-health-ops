@@ -2566,7 +2566,6 @@ def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
@@ -2595,9 +2594,24 @@ def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
     }
 
 
-def test_dispatch_sync_run_launchdarkly_route_off_stays_on_celery(
+def test_dispatch_sync_run_durable_celery_route_overrides_plannable_capability(
     db_session, monkeypatch
 ):
+    """CHAOS-4054: capability is always on in the binary -- launchdarkly's
+    (provider, dataset) pair is always route-ready and plannable, with no
+    switch left to turn it off. The only thing that can still keep it on
+    Celery is the durable ``sync.provider_unit`` route itself: the
+    ``db_session`` fixture seeds that route as ``celery`` by default (no
+    override here), so a fully plannable pair still stays on Celery.
+
+    This is the merged successor to the old
+    ``test_dispatch_sync_run_launchdarkly_route_off_stays_on_celery`` /
+    ``test_dispatch_sync_run_durable_celery_route_overrides_enabled_capability``
+    pair, which differed only in which now-deleted switches they set --
+    under the matrix, both exercised the exact same durable-route-wins
+    behavior.
+    """
+
     from dev_health_ops.workers import sync_units
 
     run, _ = _seed_run(
@@ -2608,30 +2622,6 @@ def test_dispatch_sync_run_launchdarkly_route_off_stays_on_celery(
     )
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
-
-    result = sync_units.dispatch_sync_run(str(run.id))
-
-    assert result == {"status": "dispatched", "queued_units": 1}
-    assert len(unit_publish_calls) == 1
-    assert db_session.query(WorkerJobOutbox).count() == 0
-
-
-def test_dispatch_sync_run_durable_celery_route_overrides_enabled_capability(
-    db_session, monkeypatch
-):
-    from dev_health_ops.workers import sync_units
-
-    run, _ = _seed_run(
-        db_session,
-        provider="launchdarkly",
-        source_type="project",
-        dataset_key="feature-flags",
-    )
-    _patch_db_session(monkeypatch, db_session)
-    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
-    monkeypatch.setenv("WORKER_LINEAR_WORK_ITEMS_ENABLED", "true")
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2757,7 +2747,6 @@ def test_dispatch_planned_caught_up_github_family_keeps_one_writer(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -2792,7 +2781,6 @@ def test_dispatch_sync_run_github_work_items_forward_excludes_python_writer(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -2819,9 +2807,11 @@ def test_dispatch_sync_run_github_work_items_rollback_disables_go_before_python(
     )
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    # Even with Go's per-family switch on, durable Celery selection removes Go
-    # routing before the legacy writer receives the valid canonical claim.
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+    # CHAOS-4054: capability is always on in the binary -- the canonical
+    # work-items claim is always route-ready and plannable, with no switch
+    # left to turn it off. Durable Celery selection alone (the default
+    # ``db_session`` fixture route, unchanged here) removes Go routing before
+    # the legacy writer receives the valid canonical claim.
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -2852,7 +2842,6 @@ def test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
 
     with pytest.raises(WorkerJobRouteError, match="canonical"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -2905,7 +2894,6 @@ def test_dispatch_sync_run_github_work_items_rejects_partial_canonical_claim(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
 
     with pytest.raises(WorkerJobRouteError, match="complete canonical"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -2976,7 +2964,6 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv(f"WORKER_{provider.upper()}_WORK_ITEMS_ENABLED", "true")
 
     with pytest.raises(WorkerJobRouteError, match="complete canonical family"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -2987,34 +2974,19 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
-@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
-@pytest.mark.parametrize("transport", ("river_canary", "celery"))
-def test_dispatch_default_off_work_item_family_keeps_legacy_claim_admissible(
-    db_session, monkeypatch, provider: str, transport: str
-) -> None:
-    """Default-off admission does not break D16's contributing-flag claims."""
-
-    from dev_health_ops.workers import sync_units
-
-    run, _ = _seed_run(
-        db_session,
-        provider=provider,
-        dataset_key="work-items",
-        processor_flags={"family_dataset_work_items": True},
-    )
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: transport})
-    db_session.commit()
-    _patch_db_session(monkeypatch, db_session)
-    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-
-    assert sync_units.dispatch_sync_run(str(run.id)) == {
-        "status": "dispatched",
-        "queued_units": 1,
-    }
-    assert len(unit_publish_calls) == 1
-    assert db_session.query(WorkerJobOutbox).count() == 0
+# NOTE: ``test_dispatch_default_off_work_item_family_keeps_legacy_claim_admissible``
+# formerly here asserted the OPPOSITE of the test just above: that an
+# incomplete work-item-family claim was still admissible for gitlab/jira/
+# linear when their route switch was off ("default-off admission"). CHAOS-4054
+# deleted that leniency along with the switch plane -- every production
+# caller now passes ``strict_atomic=True`` unconditionally
+# (``provider_family_contract.validate_provider_family_claim``), so an
+# incomplete claim is rejected for every provider, every transport, with no
+# "default-off" carve-out left. That is exactly what
+# ``test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport``
+# above already proves for gitlab/jira/linear (its ``provider`` parametrize
+# covers all three), so the deleted test's assertion would now be a
+# contradiction, not a fixup.
 
 
 @pytest.mark.parametrize(
@@ -3034,6 +3006,14 @@ def test_dispatch_pagerduty_incident_family_preserves_independent_d16_claims(
     processor_flags: dict[str, bool],
     transport: str,
 ) -> None:
+    """PagerDuty's incident quartet stays INDEPENDENT (D16): each of the four
+    datasets is its own admissible claim, never atomic-family-collapsed --
+    ``validate_provider_family_claim`` never rejects them regardless of the
+    (now-strict-by-default) atomic admission rule. All four are also always
+    route-ready and plannable (CHAOS-4054), so which writer receives the
+    admitted claim is purely a function of the durable transport route.
+    """
+
     from dev_health_ops.workers import sync_units
 
     run, _ = _seed_run(
@@ -3058,91 +3038,81 @@ def test_dispatch_pagerduty_incident_family_preserves_independent_d16_claims(
         "status": "dispatched",
         "queued_units": 1,
     }
-    assert len(unit_publish_calls) == 1
-    assert db_session.query(WorkerJobOutbox).count() == 0
+    if transport == "river_canary":
+        assert unit_publish_calls == []
+        assert db_session.query(WorkerJobOutbox).count() == 1
+    else:
+        assert len(unit_publish_calls) == 1
+        assert db_session.query(WorkerJobOutbox).count() == 0
 
 
 _AGGREGATE_ROUTE_DISPATCH_CASES = (
-    pytest.param(
-        "gitlab",
-        "deployments",
-        {},
-        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
-        id="gitlab-deployments",
-    ),
+    pytest.param("gitlab", "deployments", {}, id="gitlab-deployments"),
     pytest.param(
         "gitlab",
         "work-items",
         _GITHUB_WORK_ITEM_FAMILY_FLAGS,
-        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
         id="gitlab-work-items",
     ),
     pytest.param(
         "jira",
         "work-items",
         _GITHUB_WORK_ITEM_FAMILY_FLAGS,
-        "WORKER_JIRA_WORK_ITEMS_ENABLED",
         id="jira-work-items",
     ),
     pytest.param(
         "linear",
         "work-items",
         _GITHUB_WORK_ITEM_FAMILY_FLAGS,
-        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
         id="linear-work-items",
     ),
-    pytest.param(
-        "pagerduty",
-        "services",
-        {},
-        "WORKER_PAGERDUTY_SERVICES_ENABLED",
-        id="pagerduty-services",
-    ),
+    pytest.param("pagerduty", "services", {}, id="pagerduty-services"),
     pytest.param(
         "pagerduty",
         "incidents",
         {"sync_incidents": True},
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
         id="pagerduty-incidents",
     ),
-    pytest.param(
-        "pagerduty",
-        "incident-alerts",
-        {},
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
-        id="pagerduty-incident-alerts",
-    ),
+    pytest.param("pagerduty", "incident-alerts", {}, id="pagerduty-incident-alerts"),
     pytest.param(
         "pagerduty",
         "incident-log-entries",
         {},
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
         id="pagerduty-incident-log-entries",
     ),
-    pytest.param(
-        "pagerduty",
-        "incident-notes",
-        {},
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
-        id="pagerduty-incident-notes",
-    ),
+    pytest.param("pagerduty", "incident-notes", {}, id="pagerduty-incident-notes"),
 )
 
 
 @pytest.mark.parametrize(
-    ("provider", "dataset_key", "processor_flags", "environment_name"),
+    ("provider", "dataset_key", "processor_flags"),
     _AGGREGATE_ROUTE_DISPATCH_CASES,
 )
-def test_dispatch_enabled_aggregate_route_has_only_the_river_writer(
+def test_dispatch_plannable_aggregate_route_has_only_the_river_writer(
     db_session,
     monkeypatch,
     provider: str,
     dataset_key: str,
     processor_flags: dict[str, bool],
-    environment_name: str,
 ) -> None:
+    """CHAOS-4054: each pair here is always route-ready and plannable, with
+    no switch left to flip -- capability is always on in the binary. Under
+    an active River route, that alone is enough to send the unit to River
+    and nowhere else.
+
+    The old switch-off counterpart of this test
+    (``test_dispatch_default_off_aggregate_route_has_only_the_celery_writer``)
+    has no successor: these are all canonical/independently-plannable
+    identities (never aliases), so there is no longer any way to make one of
+    them stay on Celery while the durable route is River. That combination
+    (plannable pair + River route + still on Celery) is now structurally
+    impossible -- see ``.remember/chaos-4054-context.md``. The durable-route-
+    wins scenario itself is still covered, e.g. by
+    ``test_dispatch_sync_run_durable_celery_route_overrides_plannable_capability``
+    and ``test_dispatch_sync_run_github_work_items_rollback_disables_go_before_python``.
+    """
+
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
     run, unit = _seed_run(
         db_session,
@@ -3156,20 +3126,6 @@ def test_dispatch_enabled_aggregate_route_has_only_the_river_writer(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv(environment_name, "true")
-    monkeypatch.setattr(
-        ProviderUnitRouteSwitches,
-        "is_route_ready",
-        staticmethod(
-            lambda candidate_provider, candidate_dataset: (
-                (
-                    candidate_provider.strip().lower(),
-                    candidate_dataset.strip().lower(),
-                )
-                == (provider, dataset_key)
-            )
-        ),
-    )
     if provider == "pagerduty":
         monkeypatch.setattr(
             sync_units,
@@ -3187,72 +3143,24 @@ def test_dispatch_enabled_aggregate_route_has_only_the_river_writer(
     assert rows[0].dedupe_key == f"sync.provider_unit:{unit.id}"
 
 
-@pytest.mark.parametrize(
-    ("provider", "dataset_key", "processor_flags", "environment_name"),
-    _AGGREGATE_ROUTE_DISPATCH_CASES,
-)
-def test_dispatch_default_off_aggregate_route_has_only_the_celery_writer(
-    db_session,
-    monkeypatch,
-    provider: str,
-    dataset_key: str,
-    processor_flags: dict[str, bool],
-    environment_name: str,
-) -> None:
-    from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
-
-    run, _ = _seed_run(
-        db_session,
-        provider=provider,
-        dataset_key=dataset_key,
-        processor_flags=processor_flags,
-    )
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
-    db_session.commit()
-    _patch_db_session(monkeypatch, db_session)
-    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.delenv(environment_name, raising=False)
-    monkeypatch.setattr(
-        ProviderUnitRouteSwitches,
-        "is_route_ready",
-        staticmethod(
-            lambda candidate_provider, candidate_dataset: (
-                (
-                    candidate_provider.strip().lower(),
-                    candidate_dataset.strip().lower(),
-                )
-                == (provider, dataset_key)
-            )
-        ),
-    )
-    if provider == "pagerduty":
-        monkeypatch.setattr(
-            sync_units,
-            "require_canonical_incident_feature_for_update_sync",
-            lambda *_args: None,
-        )
-
-    assert sync_units.dispatch_sync_run(str(run.id)) == {
-        "status": "dispatched",
-        "queued_units": 1,
-    }
-    assert len(unit_publish_calls) == 1
-    assert db_session.query(WorkerJobOutbox).count() == 0
-
-
-def test_dispatch_sync_run_river_canary_default_off_keeps_celery_writer(
+def test_dispatch_sync_run_river_canary_non_plannable_pair_keeps_celery_writer(
     db_session, monkeypatch
 ):
+    """CHAOS-4054 successor: there is no switch left that can keep a
+    plannable pair off River while the durable route IS ``river_canary`` --
+    launchdarkly's old role here (route-ready, "switch off") is structurally
+    impossible now (see ``.remember/chaos-4054-context.md``). What still
+    keeps a unit on the Celery writer under an active River route is the
+    matrix marking the pair an alias: route-ready, but never plannable.
+    """
+
     from dev_health_ops.workers import sync_units
 
     run, unit = _seed_run(
         db_session,
-        provider="launchdarkly",
-        source_type="project",
-        dataset_key="feature-flags",
+        provider="github",
+        source_type="repo",
+        dataset_key="pr-comments",
     )
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
@@ -3260,7 +3168,6 @@ def test_dispatch_sync_run_river_canary_default_off_keeps_celery_writer(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
 
     assert sync_units.dispatch_sync_run(str(run.id)) == {
         "status": "dispatched",
@@ -3298,7 +3205,6 @@ def test_dispatch_sync_run_canary_scope_route_faults_fail_closed(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
 
     with pytest.raises(WorkerJobRouteError):
         sync_units.dispatch_sync_run(str(run.id))
@@ -3343,7 +3249,6 @@ def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
     )
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
@@ -3411,7 +3316,6 @@ def test_dispatch_sync_run_plain_river_route_also_reaches_outbox(
     )
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     monkeypatch.setattr(
         sync_units, "resolve_worker_job_route", lambda *args, **kwargs: "river"
     )
@@ -3428,16 +3332,17 @@ def test_dispatch_sync_run_plain_river_route_also_reaches_outbox(
 def test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently(
     db_session, monkeypatch
 ):
-    """Proves the mechanism generalizes past the one production-ready pair,
-    not just that a ready pair coexists with celery fallback (already true
-    before CHAOS-3131). With a SECOND hypothetical route-ready+enabled pair
-    (github/commits, injected via monkeypatch fixture rather than editing the
-    checked-in matrix), a three-unit run routes BOTH ready pairs to the
-    outbox and leaves the one pair the matrix does not recognise on Celery,
-    in the same dispatch pass -- N pairs to River, the rest to Celery.
+    """Proves the mechanism generalizes past one route-ready pair: with TWO
+    real route-ready+plannable pairs (launchdarkly/feature-flags,
+    github/commits) in the SAME run as a pair the checked-in matrix does not
+    recognise at all (``synthetic/matrix-incomplete``), a three-unit run
+    routes both ready pairs to the outbox and leaves the unrecognised pair on
+    Celery, in the same dispatch pass -- N pairs to River, the rest to
+    Celery. CHAOS-4054 deleted the switch plane this used to inject a
+    hypothetical second ready pair through; the real matrix already has more
+    than one ready pair, so no injection is needed any more.
     """
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
     run, launchdarkly_unit = _seed_run(
         db_session,
@@ -3458,49 +3363,28 @@ def test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently
         attempts=0,
         processor_flags={"sync_git": True, "sync_commits": True},
     )
-    gitlab_unit = SyncRunUnit(
+    unrouted_unit = SyncRunUnit(
         org_id=run.org_id,
         sync_run_id=run.id,
         integration_id=launchdarkly_unit.integration_id,
         source_id=launchdarkly_unit.source_id,
-        provider="gitlab",
-        dataset_key="blame",
+        provider="synthetic",
+        dataset_key="matrix-incomplete",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
         attempts=0,
-        processor_flags={"sync_git": True, "sync_commits": True},
+        processor_flags={},
     )
     run.total_units = 3
-    db_session.add_all([github_unit, gitlab_unit])
+    db_session.add_all([github_unit, unrouted_unit])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
     db_session.commit()
-
-    ready_pairs = {("launchdarkly", "feature-flags"), ("github", "commits")}
-
-    def fake_is_route_ready(provider: str, dataset: str) -> bool:
-        return (provider.lower(), dataset.lower()) in ready_pairs
-
-    real_routes_to_river = ProviderUnitRouteSwitches.routes_to_river
-
-    def fake_routes_to_river(self, provider, dataset):
-        self.require_complete_routes()
-        if (provider.lower(), dataset.lower()) == ("github", "commits"):
-            return True
-        return real_routes_to_river(self, provider, dataset)
-
-    monkeypatch.setattr(
-        ProviderUnitRouteSwitches, "is_route_ready", staticmethod(fake_is_route_ready)
-    )
-    monkeypatch.setattr(
-        ProviderUnitRouteSwitches, "routes_to_river", fake_routes_to_river
-    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -3511,7 +3395,7 @@ def test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently
         f"sync.provider_unit:{github_unit.id}",
     }
     assert len(unit_publish_calls) == 1
-    assert unit_publish_calls[0][0] == str(gitlab_unit.id)
+    assert unit_publish_calls[0][0] == str(unrouted_unit.id)
 
 
 def test_finalize_aggregates_success_across_mixed_transport_units(
@@ -3703,7 +3587,6 @@ def test_dispatch_sync_run_concurrency_cap_defers_regardless_of_transport(
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
@@ -3778,7 +3661,6 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
     ).update({WorkerJobRoute.transport: "river_canary"})
@@ -3798,121 +3680,21 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
     assert unit_publish_calls[0][0] == str(celery_unit.id)
 
 
-@pytest.mark.parametrize(
-    ("provider", "dataset_key"),
-    (
-        ("github", "pr-reviews"),
-        ("github", "pr-comments"),
-        ("github", "tests"),
-        ("gitlab", "pr-reviews"),
-        ("gitlab", "pr-comments"),
-        ("gitlab", "tests"),
-    ),
-)
-def test_local_all_reclaims_stale_complete_writer_alias_to_river_without_celery(
-    db_session, monkeypatch, provider: str, dataset_key: str
-) -> None:
-    """A local Go-only redispatch must durably recover every alias identity."""
-
-    from dev_health_ops.workers import sync_units
-
-    run, unit = _seed_run(
-        db_session,
-        provider=provider,
-        dataset_key=dataset_key,
-        processor_flags={"sync_prs": True}
-        if dataset_key.startswith("pr-")
-        else {"sync_tests": True},
-    )
-    unit.status = SyncRunUnitStatus.DISPATCHING.value
-    unit.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
-    db_session.commit()
-    _patch_db_session(monkeypatch, db_session)
-    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
-    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
-    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
-
-    assert sync_units.dispatch_sync_run(str(run.id)) == {
-        "status": "dispatched",
-        "queued_units": 1,
-    }
-
-    db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
-    assert unit_publish_calls == []
-    outbox = db_session.query(WorkerJobOutbox).all()
-    assert len(outbox) == 1
-    assert outbox[0].dedupe_key == f"sync.provider_unit:{unit.id}"
-    assert outbox[0].args["payload"] == {"unit_id": str(unit.id)}
-
-
-@pytest.mark.parametrize("provider", ("github", "gitlab"))
-def test_local_all_routes_complete_writer_identity_set_only_to_river(
-    db_session, monkeypatch, provider: str
-) -> None:
-    """One Go-only pass must stage every persisted complete-writer identity."""
-
-    from dev_health_ops.workers import sync_units
-
-    run, first = _seed_run(
-        db_session,
-        provider=provider,
-        dataset_key="prs",
-        processor_flags={"sync_prs": True},
-    )
-    units = [first]
-    for dataset_key, processor_flags in (
-        ("pr-reviews", {"sync_prs": True}),
-        ("pr-comments", {"sync_prs": True}),
-        ("cicd", {"sync_cicd": True}),
-        ("tests", {"sync_tests": True}),
-    ):
-        units.append(
-            SyncRunUnit(
-                org_id=run.org_id,
-                sync_run_id=run.id,
-                integration_id=first.integration_id,
-                source_id=first.source_id,
-                provider=provider,
-                dataset_key=dataset_key,
-                cost_class="medium",
-                mode=SyncRunMode.INCREMENTAL.value,
-                status=SyncRunUnitStatus.DISPATCHING.value,
-                attempts=0,
-                processor_flags=processor_flags,
-            )
-        )
-    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
-    for unit in units:
-        unit.status = SyncRunUnitStatus.DISPATCHING.value
-        unit.updated_at = stale
-    run.total_units = len(units)
-    db_session.add_all(units[1:])
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
-    db_session.commit()
-    _patch_db_session(monkeypatch, db_session)
-    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
-    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
-    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
-    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
-    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "20")
-    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "20")
-
-    assert sync_units.dispatch_sync_run(str(run.id)) == {
-        "status": "dispatched",
-        "queued_units": len(units),
-    }
-
-    assert unit_publish_calls == []
-    assert {row.dedupe_key for row in db_session.query(WorkerJobOutbox).all()} == {
-        f"sync.provider_unit:{unit.id}" for unit in units
-    }
+# NOTE: ``test_local_all_reclaims_stale_complete_writer_alias_to_river_without_celery``
+# and ``test_local_all_routes_complete_writer_identity_set_only_to_river``
+# formerly here exercised the ``DEV_HEALTH_ENV=local`` / ``GO_PROVIDER_ROUTES=all``
+# local-only convenience preset, which made pr-reviews/pr-comments/tests
+# aliases ALSO route straight to River in a developer's local shell.
+# CHAOS-4054 deleted that whole preset outright, along with every
+# ``_LOCAL_ALL_*`` machinery (see ``.remember/chaos-4054-context.md``): an
+# alias identity is route-ready but never plannable in the checked-in matrix,
+# full stop, with no environment override of any kind -- local or otherwise.
+# "every persisted complete-writer identity routes to River in one Go-only
+# pass" is therefore a structurally impossible claim to make about an alias
+# any more, so these tests have no successor. The alias-stays-on-celery
+# behavior itself is covered elsewhere, e.g.
+# ``test_dispatch_sync_run_river_canary_non_plannable_pair_keeps_celery_writer``
+# and the DISABLED_ALIASES sweep in ``tests/test_disabled_alias_dispatch_strand.py``.
 
 
 def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
@@ -4439,7 +4221,11 @@ def test_dispatch_sync_run_logs_linear_budget_guard_route_family_dry_run(
         name="TEAM",
         full_name="TEAM",
         dataset_key="work-items",
-        processor_flags={},
+        # CHAOS-4054: every atomic family is validated strictly now (no more
+        # switch-gated leniency), so this claim must carry the complete
+        # canonical family to reach the budget-guard logging this test
+        # actually exercises -- unrelated to which flags are set.
+        processor_flags=_GITHUB_WORK_ITEM_FAMILY_FLAGS,
     )
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)

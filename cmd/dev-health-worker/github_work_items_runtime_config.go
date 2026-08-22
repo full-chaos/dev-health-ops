@@ -35,10 +35,6 @@ func (runtimeConfig workItemsRuntimeConfig) configured() bool {
 func workItemsRuntimeConfigFrom(
 	cfg config.Config,
 ) (workItemsRuntimeConfig, error) {
-	if !cfg.WorkerGithubWorkItemsEnabled && !cfg.WorkerGitlabWorkItemsEnabled &&
-		!cfg.WorkerJiraWorkItemsEnabled && !cfg.WorkerLinearWorkItemsEnabled {
-		return workItemsRuntimeConfig{}, nil
-	}
 	// LoadStatusMapping tests the raw environment value, not its trimmed form.
 	// A whitespace-only override would still replace the explicit path at
 	// execution time, so reject every nonempty ambient value here.

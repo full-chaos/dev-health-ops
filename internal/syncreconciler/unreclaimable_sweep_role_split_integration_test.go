@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
@@ -344,8 +343,11 @@ func splitSweepConfig(mode SweepMode) UnreclaimableSweepConfig {
 		Age:  DefaultUnreclaimableAge,
 		Idle: DefaultUnreclaimableIdle,
 		Mode: mode,
-		// tests / pr-reviews / pr-comments left off: the production wedge.
-		Switches: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
+		// CHAOS-4054: no route switch left. github/tests is RouteReady but
+		// aliases onto the canonical `cicd` writer, so it is never
+		// independently Plannable and stays sweepable unconditionally --
+		// that is the production wedge this suite proves against the real
+		// role split.
 	}
 }
 

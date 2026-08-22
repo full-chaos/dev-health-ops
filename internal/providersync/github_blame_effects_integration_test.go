@@ -390,7 +390,7 @@ func TestGitHubBlameCrashWindowRecoversWithoutDuplicateVersion(t *testing.T) {
 		Repository: freshRepository, Claim: recovered, LeaseDuration: time.Minute,
 		Deadline: recoveryNow.Add(5 * time.Minute), Now: func() time.Time { return recoveryNow },
 	}
-	descriptor, _ := (CompleteRouteSwitches{GithubBlame: true}).Descriptor("github", "blame")
+	descriptor, _ := Descriptor("github", "blame")
 	executor := CompleteRouteExecutor{
 		Credentials: providerfoundation.CredentialResolver{
 			Repository: githubBlameIntegrationCredentialRepository{},
@@ -691,7 +691,7 @@ func executeRecoveredGitHubBlame(
 		Repository: repository, Claim: claim, LeaseDuration: time.Minute,
 		Deadline: now.Add(5 * time.Minute), Now: func() time.Time { return now },
 	}
-	descriptor, _ := (CompleteRouteSwitches{GithubBlame: true}).Descriptor("github", "blame")
+	descriptor, _ := Descriptor("github", "blame")
 	return (CompleteRouteExecutor{
 		Credentials: providerfoundation.CredentialResolver{
 			Repository: githubBlameIntegrationCredentialRepository{},

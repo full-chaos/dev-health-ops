@@ -153,7 +153,6 @@ func pagerDutyEffectsFactory(
 // this ticket exists to eliminate, must fail that test.
 func buildProviderSyncHandler(
 	repository providerSyncRepository,
-	switches providersync.CompleteRouteSwitches,
 	decryptor providerfoundation.CredentialDecryptor,
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
@@ -163,7 +162,7 @@ func buildProviderSyncHandler(
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
-		repository, switches, decryptor, clickhouseConnection, valkeyClient,
+		repository, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, jiraIncidentEntitlement, collector, logger,
 		workItemsRuntimeConfig{},
 	)
@@ -174,7 +173,6 @@ func buildProviderSyncHandler(
 // the provider-neutral work-item runtime below.
 func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	repository providerSyncRepository,
-	switches providersync.CompleteRouteSwitches,
 	decryptor providerfoundation.CredentialDecryptor,
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
@@ -185,7 +183,7 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	githubWorkItemsRuntime githubWorkItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
-		repository, switches, decryptor, clickhouseConnection, valkeyClient,
+		repository, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, jiraIncidentEntitlement, collector, logger,
 		githubWorkItemsRuntime,
 	)
@@ -193,7 +191,6 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 
 func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 	repository providerSyncRepository,
-	switches providersync.CompleteRouteSwitches,
 	decryptor providerfoundation.CredentialDecryptor,
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
@@ -204,14 +201,13 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 	workItemsRuntime workItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithRuntimeDependencies(
-		repository, switches, decryptor, nil, clickhouseConnection, valkeyClient,
+		repository, decryptor, nil, clickhouseConnection, valkeyClient,
 		domainPool, jiraIncidentEntitlement, collector, logger, workItemsRuntime,
 	)
 }
 
 func buildProviderSyncHandlerWithRuntimeDependencies(
 	repository providerSyncRepository,
-	switches providersync.CompleteRouteSwitches,
 	decryptor providerfoundation.CredentialDecryptor,
 	credentialHydrator providerfoundation.CredentialHydrator,
 	clickhouseConnection driver.Conn,
@@ -230,12 +226,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 	// series rather than a constructed-but-never-registered family.
 	providerMetrics := providerfoundation.NewMetrics()
 	handler := &providerunit.Handler{
-		Repository: repository,
-		// Derived from process configuration, not hardcoded. A hardcoded
-		// switch set makes the handler serve a route the readiness check says
-		// is off (or refuse one it says is on); both sides now read
-		// workerRouteSwitches (CHAOS-3123).
-		Switches:      switches,
+		Repository:    repository,
 		LeaseDuration: providerUnitLeaseDuration,
 		Heartbeat:     providerUnitHeartbeat,
 		// LeaseMetrics observes worker_sync_lease_expired_total. Only claims
@@ -255,7 +246,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				"dataset", fault.Dataset,
 				"descriptor_present", fault.DescriptorPresent,
 				"route_ready", fault.RouteReady,
-				"route_enabled", fault.RouteEnabled,
+				"plannable", fault.Plannable,
 				"attempt", fault.Attempt,
 				"max_attempts", fault.MaxAttempts,
 				"released_for_retry", fault.Released,
@@ -608,10 +599,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
-				// reported RouteReady && RouteEnabled, and the cases
-				// above are the only pairs CompleteRouteSwitches.Descriptor
-				// ever marks RouteReady. Fail closed rather than construct an
-				// executor with a nil Handler.
+				// reported RouteReady && Plannable, and the cases above are
+				// the only pairs providersync.Descriptor ever marks
+				// RouteReady. Fail closed rather than construct an executor
+				// with a nil Handler.
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
@@ -681,13 +672,13 @@ func buildProviderSyncWorker(
 	logger *slog.Logger,
 	workers *river.Workers,
 ) (workerFamily, error) {
-	// Construct the family when ANY route switch is on, not launchdarkly's
-	// alone: (github, repo-metadata) became routable in CHAOS-3123,
-	// (github, prs) in CHAOS-3122, and (gitlab, repo-metadata) in CHAOS-3342.
-	// A process that dispatches either provider's units while refusing to build
-	// the handler for them would strand every unit at a worker with nothing
-	// registered.
-	if !queueSelected(cfg.Queues, providerUnitQueue) || !providerSyncWorkerEnabled(cfg) {
+	// Capability is always on (CHAOS-4054): a worker that consumes the
+	// provider-unit queue constructs the handler for every RouteReady pair.
+	// Which routes it actually serves is decided by the queues it was started
+	// with, never by a per-route switch. A process that dispatches units while
+	// refusing to build the handler for them would strand every unit at a
+	// worker with nothing registered.
+	if !queueSelected(cfg.Queues, providerUnitQueue) {
 		return workerFamily{}, nil
 	}
 	return constructProviderSyncWorker(ctx, cfg, database, registry, observer, logger, workers)
@@ -759,7 +750,7 @@ func constructProviderSyncWorkerWithDependencies(
 	// such as a test double.
 	collector, _ := observer.(*jobruntime.MetricsCollector)
 	handler, providerMetrics := buildProviderSyncHandlerWithRuntimeDependencies(
-		repository, workerRouteSwitches(cfg), decryptor,
+		repository, decryptor,
 		providerfoundation.PagerDutyOAuthHydrator{
 			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
 				Pool: postgresDatabase.pools.Domain,
@@ -815,39 +806,6 @@ func newWorkerCredentialCipher(cfg config.Config) (providerfoundation.FernetDecr
 		cfg.SettingsEncryptionKey,
 		cfg.SettingsEncryptionSalt.Reveal(),
 	)
-}
-
-func providerSyncWorkerEnabled(cfg config.Config) bool {
-	return cfg.WorkerLaunchDarklyFeatureFlagsEnabled || cfg.WorkerGithubRepoMetadataEnabled ||
-		cfg.WorkerGitlabRepoMetadataEnabled ||
-		cfg.WorkerGitlabCommitsEnabled ||
-		cfg.WorkerGitlabCommitStatsEnabled ||
-		cfg.WorkerGitlabCICDEnabled ||
-		cfg.WorkerGitlabTestsEnabled ||
-		cfg.WorkerGitlabIncidentsEnabled ||
-		cfg.WorkerGitlabDeploymentsEnabled ||
-		cfg.WorkerGitlabFeatureFlagsEnabled ||
-		cfg.WorkerGitlabFilesEnabled ||
-		cfg.WorkerGitlabBlameEnabled ||
-		cfg.WorkerGitlabPRsEnabled ||
-		cfg.WorkerGitlabPRReviewsEnabled ||
-		cfg.WorkerGitlabPRCommentsEnabled ||
-		cfg.WorkerGitlabSecurityEnabled ||
-		cfg.WorkerGitlabWorkItemsEnabled ||
-		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubPRReviewsEnabled ||
-		cfg.WorkerGithubPRCommentsEnabled || cfg.WorkerGithubCICDEnabled ||
-		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
-		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
-		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled ||
-		cfg.WorkerJiraWorkItemsEnabled || cfg.WorkerLinearWorkItemsEnabled ||
-		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled ||
-		cfg.WorkerGithubWorkItemsEnabled ||
-		cfg.WorkerPagerDutyServicesEnabled ||
-		cfg.WorkerPagerDutyBusinessServicesEnabled ||
-		cfg.WorkerPagerDutyEscalationPoliciesEnabled ||
-		cfg.WorkerPagerDutySchedulesEnabled ||
-		cfg.WorkerPagerDutyOnCallsEnabled || cfg.WorkerPagerDutyUsersEnabled ||
-		cfg.WorkerPagerDutyTeamsEnabled || cfg.WorkerPagerDutyIncidentsEnabled
 }
 
 type providerUnitTenantScope struct{}

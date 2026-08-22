@@ -79,7 +79,7 @@ func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *test
 		Destination: "provider_records", HeartbeatInterval: 30 * time.Second,
 		Now: func() time.Time { return now },
 	}
-	canonical, known := (CompleteRouteSwitches{}).Descriptor("github", "repo-metadata")
+	canonical, known := Descriptor("github", "repo-metadata")
 	descriptor, ok := canonical.Shadow(true)
 	if !known || !ok || !descriptor.Write {
 		t.Fatal("GitHub shadow projection was not derived from the canonical descriptor")
@@ -126,7 +126,7 @@ func TestExecutorDormantRouteRunsShadowWithoutSinkSideEffects(t *testing.T) {
 		Comparator:        matchingComparator{},
 		HeartbeatInterval: 30 * time.Second,
 	}
-	canonical, _ := (CompleteRouteSwitches{}).Descriptor("github", "repo-metadata")
+	canonical, _ := Descriptor("github", "repo-metadata")
 	descriptor, _ := canonical.Shadow(false)
 	result, err := executor.Execute(context.Background(), session, descriptor)
 	if err != nil || !result.ShadowOnly || result.BlocksWritten != 0 {
@@ -174,7 +174,7 @@ func TestExecutorRefusesAmbiguousWritingBlockOutsideFiniteDedupeWindow(t *testin
 		Destination: "provider_records", HeartbeatInterval: 30 * time.Second,
 		Now: func() time.Time { return now },
 	}
-	canonical, _ := (CompleteRouteSwitches{}).Descriptor("github", "repo-metadata")
+	canonical, _ := Descriptor("github", "repo-metadata")
 	descriptor, _ := canonical.Shadow(true)
 	if _, err := executor.Execute(context.Background(), session, descriptor); !errors.Is(err, ErrGenerationBlockAmbiguous) {
 		t.Fatalf("error=%v", err)

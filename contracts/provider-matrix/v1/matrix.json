@@ -30,6 +30,8 @@
         "github_blame_path_progress"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "blame",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -59,6 +61,8 @@
         "test_suite_results"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "cicd",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -84,6 +88,8 @@
         "git_commit_stats"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "commit-stats",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -109,6 +115,8 @@
         "git_commits"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "commits",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -133,6 +141,8 @@
         "deployments"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "deployments",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -158,6 +168,8 @@
         "git_files"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "files",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -183,6 +195,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -208,6 +222,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -233,6 +249,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -255,6 +273,8 @@
         "repos"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "repo-metadata",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -279,6 +299,8 @@
         "security_alerts"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "security",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -308,6 +330,8 @@
         "test_suite_results"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "cicd",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -345,6 +369,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -382,6 +408,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -419,6 +447,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -456,6 +486,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -493,6 +525,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"
@@ -518,6 +552,8 @@
         "git_blame"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "blame",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -546,6 +582,8 @@
         "test_suite_results"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "cicd",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -570,6 +608,8 @@
         "git_commit_stats"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "commit-stats",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -594,6 +634,8 @@
         "git_commits"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "commits",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -617,6 +659,8 @@
         "deployments"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "deployments",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -640,6 +684,8 @@
         "work_graph_edges"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "feature-flags",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -664,6 +710,8 @@
         "git_files"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "files",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -689,6 +737,8 @@
         "operational_services"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incidents",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -713,6 +763,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -737,6 +789,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -761,6 +815,8 @@
         "git_pull_requests"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "prs",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -782,6 +838,8 @@
         "repos"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "repo-metadata",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -805,6 +863,8 @@
         "security_alerts"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "security",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -833,6 +893,8 @@
         "test_suite_results"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "cicd",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -869,6 +931,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -905,6 +969,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -941,6 +1007,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -977,6 +1045,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -1013,6 +1083,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "personal_access_token"
       ]
@@ -1034,6 +1106,8 @@
         "operational_incidents"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incidents",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1073,6 +1147,8 @@
         "worklogs"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1112,6 +1188,8 @@
         "worklogs"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1151,6 +1229,8 @@
         "worklogs"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1190,6 +1270,8 @@
         "worklogs"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1229,6 +1311,8 @@
         "worklogs"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1255,6 +1339,8 @@
         "work_graph_edges"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "feature-flags",
       "credential_modes": [
         "api_key"
       ]
@@ -1291,6 +1377,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "api_key"
       ]
@@ -1327,6 +1415,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "api_key"
       ]
@@ -1363,6 +1453,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "api_key"
       ]
@@ -1399,6 +1491,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": false,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "api_key"
       ]
@@ -1435,6 +1529,8 @@
         "work_items"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "work-items",
       "credential_modes": [
         "api_key"
       ]
@@ -1456,6 +1552,8 @@
         "operational_services"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "business-services",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1479,6 +1577,8 @@
         "operational_escalation_policies"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "escalation-policies",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1502,6 +1602,8 @@
         "operational_alerts"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incident-alerts",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1525,6 +1627,8 @@
         "operational_incident_timeline_events"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incident-log-entries",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1548,6 +1652,8 @@
         "operational_incident_notes"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incident-notes",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1573,6 +1679,8 @@
         "operational_incidents"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "incidents",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1596,6 +1704,8 @@
         "operational_on_call_assignments"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "on-calls",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1619,6 +1729,8 @@
         "operational_on_call_schedules"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "schedules",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1643,6 +1755,8 @@
         "operational_services"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "services",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1666,6 +1780,8 @@
         "operational_teams"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "teams",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1689,6 +1805,8 @@
         "operational_users"
       ],
       "route_ready": true,
+      "plannable": true,
+      "canonical_dataset": "users",
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",

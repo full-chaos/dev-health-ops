@@ -22,7 +22,9 @@ from dev_health_ops.sync.datasets import (
     get_dataset_spec,
 )
 from dev_health_ops.workers.provider_unit_route import (
-    ProviderUnitRouteSwitches,
+    is_plannable,
+    is_route_ready,
+    routes_to_river,
 )
 
 CONTRACT = Path(__file__).parents[2] / "contracts/provider-matrix/v1/matrix.json"
@@ -238,11 +240,11 @@ def test_producer_route_readiness_matches_the_checked_in_matrix_exactly(
     scope whose Go descriptor is absent or disabled.'
 
     Pre-CHAOS-3131 this only had to hold for one hardcoded pair
-    (``is_canary_scope``). Now that ``ProviderUnitRouteSwitches.is_route_ready``
+    (``is_canary_scope``). Now that ``provider_unit_route.is_route_ready``
     reads the checked-in matrix directly, this is the test that binds Python's
     readiness notion to Go's: Go regenerates the same contract from
-    ``CompleteRouteSwitches.Descriptor`` and fails CI on any byte-level
-    divergence (``internal/providersync/capability_matrix_test.go`` ->
+    ``providersync.Descriptor`` and fails CI on any byte-level divergence
+    (``internal/providersync/capability_matrix_test.go`` ->
     ``TestProviderMatrixMatchesCheckedInContract``), so asserting Python's
     reader agrees with every row of that file transitively binds Python to
     Go's descriptor logic without a live cross-language call.
@@ -256,7 +258,7 @@ def test_producer_route_readiness_matches_the_checked_in_matrix_exactly(
     python_ready = {
         (provider, dataset)
         for provider, dataset in _python_pairs()
-        if ProviderUnitRouteSwitches.is_route_ready(provider, dataset)
+        if is_route_ready(provider, dataset)
     }
 
     assert python_ready, "the producer gate must recognise at least one scope"
@@ -269,46 +271,88 @@ def test_producer_route_readiness_matches_the_checked_in_matrix_exactly(
     # even a member of the frozen provider/dataset universe must also read as
     # not-ready, so a typo'd or renamed pair fails closed rather than
     # silently matching nothing.
-    assert not ProviderUnitRouteSwitches.is_route_ready(
-        "not-a-real-provider", "not-a-real-dataset"
-    )
+    assert not is_route_ready("not-a-real-provider", "not-a-real-dataset")
 
 
-def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(
+# CHAOS-4054: 37 of the 59 route-ready pairs are the canonical, independently
+# plannable writer of their family; the other 22 are alias identities that
+# fold into a sibling's canonical claim (github/gitlab pr-reviews/pr-comments
+# fold into prs, tests folds into cicd; the four work-item-* aliases across
+# all four work-item providers fold into work-items).
+EXPECTED_PLANNABLE_COUNTS = {
+    "github": 10,
+    "gitlab": 12,
+    "jira": 2,
+    "launchdarkly": 1,
+    "linear": 1,
+    "pagerduty": 11,
+}
+
+
+def test_every_route_ready_pair_declares_a_boolean_plannable_field(
     matrix: dict[str, Any],
 ) -> None:
-    """The env-driven gate itself, not just the static scope predicate."""
+    for pair in matrix["pairs"]:
+        if pair["route_ready"]:
+            assert isinstance(pair.get("plannable"), bool), (
+                pair["provider"],
+                pair["dataset"],
+            )
 
-    route_ready = {
+
+def test_plannable_census_matches_the_audit(matrix: dict[str, Any]) -> None:
+    """Independently asserted census (CHAOS-4054 decision record): a silent
+    change to which identity is "the" canonical writer of a family cannot be
+    laundered through a contract regeneration."""
+
+    counts: dict[str, int] = {provider: 0 for provider in EXPECTED_PLANNABLE_COUNTS}
+    for pair in matrix["pairs"]:
+        if pair["route_ready"] and pair["plannable"]:
+            counts[pair["provider"]] += 1
+    assert counts == EXPECTED_PLANNABLE_COUNTS
+    assert sum(counts.values()) == 37
+
+
+def test_producer_gate_routes_exactly_the_ready_and_plannable_set(
+    matrix: dict[str, Any],
+) -> None:
+    """The producer gate itself, not just the static scope predicates."""
+
+    ready_and_plannable = {
         (pair["provider"], pair["dataset"])
         for pair in matrix["pairs"]
-        if pair["route_ready"]
+        if pair["route_ready"] and pair["plannable"]
     }
-    switches = ProviderUnitRouteSwitches(launchdarkly_feature_flags=True)
-    routed = {
+    python_routed = {
         (provider, dataset)
         for provider, dataset in _python_pairs()
-        if switches.routes_to_river(provider, dataset)
+        if routes_to_river(provider, dataset)
     }
-    assert routed <= route_ready
-    assert routed == {("launchdarkly", "feature-flags")}
+    assert python_routed == ready_and_plannable
 
-    github_work_items = ProviderUnitRouteSwitches(github_work_items=True)
-    github_routed = {
-        (provider, dataset)
-        for provider, dataset in _python_pairs()
-        if github_work_items.routes_to_river(provider, dataset)
+    # An alias identity is route_ready but never routes on its own -- matrix
+    # readiness is a five-way (or three-way) capability/audit surface, but
+    # only the canonical writer becomes a producer route.
+    alias_pairs = {
+        (pair["provider"], pair["dataset"])
+        for pair in matrix["pairs"]
+        if pair["route_ready"] and not pair["plannable"]
     }
-    # Matrix readiness is a five-alias capability/audit surface; direct
-    # siblings cannot become Python producer routes just by sharing a switch.
-    assert github_routed == {("github", "work-items")}
+    assert alias_pairs, "expected at least one alias identity in the matrix"
+    for provider, dataset in alias_pairs:
+        assert is_route_ready(provider, dataset)
+        assert not is_plannable(provider, dataset)
+        assert not routes_to_river(provider, dataset)
 
-    # With every allowed switch off, nothing routes.
-    closed = ProviderUnitRouteSwitches()
-    assert not any(
-        closed.routes_to_river(provider, dataset)
-        for provider, dataset in _python_pairs()
-    )
+
+# NOTE: the old `test_producer_gate_cannot_route_any_scope_outside_the_ready_set`
+# instantiated `ProviderUnitRouteSwitches` with individual fields on/off to
+# prove the env-driven gate routed only the switch that was set. CHAOS-4054
+# deleted that whole switch plane -- there is no "some routes on, others off"
+# runtime state left to exercise, so it has no successor as a config test.
+# `test_producer_gate_routes_exactly_the_ready_and_plannable_set` above is its
+# replacement: it proves the (now switch-free) producer gate routes exactly
+# the ready+plannable set and nothing outside it.
 
 
 def test_go_executor_kinds_are_bounded_and_honest(

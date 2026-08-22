@@ -145,8 +145,8 @@ func TestChunkedExecutorResumesPreparedChunksWithoutRecollection(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-	descriptor, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
-	if !ok || !descriptor.RouteEnabled || !descriptor.Chunked {
+	descriptor, ok := Descriptor("github", "cicd")
+	if !ok || !descriptor.Plannable || !descriptor.Chunked {
 		t.Fatalf("descriptor=%+v ok=%t", descriptor, ok)
 	}
 	descriptor.ChunkPolicy = ChunkPolicy{
@@ -201,7 +201,7 @@ func TestChunkedExecutorStreamsPagesAndResumesCursor(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-	descriptor, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
 	if !ok || !descriptor.Chunked {
 		t.Fatalf("descriptor=%+v ok=%t", descriptor, ok)
 	}

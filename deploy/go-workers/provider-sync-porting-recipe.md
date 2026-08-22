@@ -45,15 +45,13 @@ are not style guidance.
 **Further port preconditions:**
 
 1. **A cited constructor is not proof of capability.** It must be reachable
-   with only its own switch enabled. `github/security` shipped a correct case
-   in `cmd/dev-health-worker/provider_sync.go:127`, but an upstream activation
-   gate returned an empty worker family because that switch was missing from
-   the gate condition. The registry said Go owned it; the binary could not
-   construct it. Add the switch to the activation condition and extend the
-   table-driven `TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch`
-   test, including `providerSyncRouteEnabled`, so only that pair's switch
-   enabled constructs a worker family. Remove the switch and prove the test
-   fails.
+   for its own pair. `github/security` shipped a correct case in
+   `cmd/dev-health-worker/provider_sync.go`, but an upstream activation gate
+   returned an empty worker family because the pair was missing from the gate
+   condition. The registry said Go owned it; the binary could not construct
+   it. That gate is now the queue topology alone, so extend the table-driven
+   worker-construction test to cover the new pair and prove it fails when the
+   `BuildExecutor` arm is removed.
 2. **The cross-tenant test must be a true collision, not a one-sided check.**
    A row under only the foreign tenant proves only that a foreign row is not
    returned. Insert the SAME natural key under TWO `org_id` values with
@@ -815,15 +813,14 @@ Every destination table in this codebase so far is
 
 ### 5. Wire `execution_registry.go`
 
-Three edits, always in this order:
+Two edits, always in this order:
 
 1. `providerExecutorRegistry["<provider>/<dataset>"] = ExecutorNativeGo`.
-2. Add a field to `CompleteRouteSwitches` (e.g. `GithubPRs bool`) — one field
-   per pair, never shared. Document in its comment which *other* dataset
-   aliases must NOT be opened by it (see step 8).
-3. Add a `case provider == "x" && dataset == "y":` arm to
-   `CompleteRouteSwitches.Descriptor`, setting `Destinations`,
-   `RouteReady = true`, and `RouteEnabled = switches.<TheNewField>`.
+2. Add a `case provider == "x" && dataset == "y":` arm to `Descriptor`,
+   setting `Destinations`, `RouteReady = true`, and `Plannable = true`. Leave
+   `Plannable` false only for an alias identity that folds into another
+   writer's canonical claim (see step 8) — that, not a boolean nobody may set
+   at once with another, is where alias mutual-exclusivity lives.
    `NativeShadow` stays `false` unless the pair also gets a dedicated
    `ShadowSource` (see `nativeShadowReady` — today only
    `github/repo-metadata` qualifies, deliberately; read its doc comment
@@ -839,26 +836,21 @@ Three edits, always in this order:
 - Widen `buildProviderSyncWorker`'s "construct the family when ANY route
   switch is on" condition to include the new config flag.
 
-`cmd/dev-health-worker/dependencies.go`:
-
-- Add the new field to `workerRouteSwitches`'s literal.
-- Add a `{provider, dataset, cfg.WorkerXEnabled}` entry to
-  `providerRouteSwitchesReady`'s `routes` slice.
-
+`cmd/dev-health-worker/dependencies.go` and
 `internal/platform/config/config.go`:
 
-- Add `WorkerXEnabled bool` + a `WORKER_X_ENABLED` entry in the `boolEnv`
-  loop + a `slog.Bool` line in `SafeAttrs`. Off by default, same as every
-  existing switch — this is what keeps `route_ready: true` from moving any
-  live traffic by itself.
+- Nothing. CHAOS-4054 deleted the route enablement plane: there is no switch
+  field to add, no `workerRouteSwitches` literal, and no readiness entry. A
+  route becomes executable the moment its descriptor is `RouteReady` in
+  `internal/providersync/execution_registry.go`, which is exactly the reviewed
+  code fact you land in step 5. Set `descriptor.Plannable = true` too unless
+  the identity is an alias that folds into another writer.
 
-`src/dev_health_ops/workers/provider_unit_route.py` (Python producer side —
-optional but recommended for the two-key gate to actually be usable later
-without a second PR): add the mirroring `x_dataset: bool = False` field +
-`_flag(source, "WORKER_X_ENABLED")` wiring in `from_environment`. Without
-this, `_switch_field_name` still fails closed (no field ⇒ `getattr` default
-`False`), so skipping it is *safe*, just leaves the producer half of the gate
-unimplemented until someone adds it.
+`src/dev_health_ops/workers/provider_unit_route.py` (Python producer side):
+
+- Nothing. It reads `route_ready` and `plannable` straight out of the
+  regenerated matrix contract, so the producer and the executor agree by
+  construction rather than by two hand-maintained switch banks.
 
 ### 7. Regenerate the matrix contract
 

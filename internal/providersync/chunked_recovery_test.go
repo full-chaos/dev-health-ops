@@ -182,7 +182,7 @@ func (sink *recoveryRowSink) duplicates() int {
 func TestChunkedExecutorSubchunkCrashDoesNotDuplicateRows(t *testing.T) {
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-	descriptor, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
 	if !ok {
 		t.Fatal("descriptor")
 	}
@@ -239,7 +239,7 @@ func TestChunkedExecutorSubchunkCrashDoesNotDuplicateRows(t *testing.T) {
 func TestChunkedExecutorReportsCumulativeRecordCount(t *testing.T) {
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
-	descriptor, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
 	if !ok {
 		t.Fatal("descriptor")
 	}

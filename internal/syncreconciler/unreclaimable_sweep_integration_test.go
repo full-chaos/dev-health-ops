@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -178,8 +177,12 @@ func newSweepForTest(t *testing.T, pool *pgxpool.Pool, mode SweepMode) *Unreclai
 		Age:  DefaultUnreclaimableAge,
 		Idle: DefaultUnreclaimableIdle,
 		Mode: mode,
-		// tests / pr-reviews / pr-comments left off: the production wedge.
-		Switches: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
+		// CHAOS-4054: capability is always on and there is no route switch
+		// left. github/repo-metadata is RouteReady && Plannable
+		// unconditionally, so it is never swept. tests / pr-reviews /
+		// pr-comments are alias identities -- RouteReady but never
+		// independently Plannable -- so they stay sweepable regardless of
+		// any configuration; that is the production wedge this test proves.
 	})
 	if err != nil {
 		t.Fatal(err)

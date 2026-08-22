@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -58,14 +57,13 @@ func (routes failingRoutes) Begin(ctx contextT) (txT, error) {
 	return nil, routes.err
 }
 
-func absentSweep(t *testing.T, switches providersync.CompleteRouteSwitches) *UnreclaimableSweep {
+func absentSweep(t *testing.T) *UnreclaimableSweep {
 	t.Helper()
 	sweep, err := newUnreclaimableSweep(
 		unreadableRoutes{t: t, reason: "this sweep must not read the durable route"},
 		func(ctx contextT) (txT, error) { return nil, nil },
 		UnreclaimableSweepConfig{
 			Age: time.Hour, Idle: 15 * time.Minute, Mode: SweepModeActive,
-			Switches: switches,
 		},
 	)
 	if err != nil {
@@ -110,27 +108,30 @@ func TestParseSweepModeRejectsUnknownValues(t *testing.T) {
 	}
 }
 
+// TestUnroutableGate is the CHAOS-4054 successor: github/repo-metadata used
+// to be swept whenever its route switch was off, and github/tests used to
+// stay unswept once GithubTests was flipped on. There is no route switch
+// left. github/repo-metadata is now RouteReady && Plannable unconditionally,
+// so it is NEVER unroutable; github/tests is RouteReady but aliases onto the
+// canonical `cicd` writer, so it is ALWAYS unroutable. Neither depends on any
+// configuration any more.
 func TestUnroutableGate(t *testing.T) {
-	enabled := providersync.CompleteRouteSwitches{GithubTests: true, GithubRepoMetadata: true}
-	disabled := providersync.CompleteRouteSwitches{}
-
 	for _, testCase := range []struct {
 		name     string
-		switches providersync.CompleteRouteSwitches
 		provider string
 		dataset  string
 		want     bool
 	}{
-		// The production strand: River declines the pair.
-		{"disabled pair", disabled, "github", "tests", true},
-		// A pair a live River runtime can execute is never swept.
-		{"enabled pair", enabled, "github", "tests", false},
-		{"enabled repo-metadata", enabled, "github", "repo-metadata", false},
+		// An alias identity is RouteReady but never independently Plannable,
+		// so it is always sweepable.
+		{"alias identity is always unroutable", "github", "tests", true},
+		// A canonical, shipped pair is never swept.
+		{"routable pair is never unroutable", "github", "repo-metadata", false},
 		// An unknown pair is not proof of anything.
-		{"unknown pair", disabled, "nosuch", "nosuch", false},
+		{"unknown pair", "nosuch", "nosuch", false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			sweep := absentSweep(t, testCase.switches)
+			sweep := absentSweep(t)
 			candidate := unreclaimableCandidate{
 				provider: testCase.provider, datasetKey: testCase.dataset,
 			}
@@ -145,8 +146,7 @@ func TestUnroutableGate(t *testing.T) {
 // A non-canonical member of an atomic family is never executable on its own,
 // so it must remain sweepable even when the family switch is on.
 func TestUnroutableAtomicFamilyAlias(t *testing.T) {
-	switches := providersync.CompleteRouteSwitches{GithubWorkItems: true}
-	sweep := absentSweep(t, switches)
+	sweep := absentSweep(t)
 
 	canonical := unreclaimableCandidate{provider: "github", datasetKey: "work-items"}
 	if sweep.unroutable(canonical) {
@@ -234,7 +234,7 @@ func TestStepDefersWhenModeIsOff(t *testing.T) {
 }
 
 func TestStepRejectsInvalidLimits(t *testing.T) {
-	sweep := absentSweep(t, providersync.CompleteRouteSwitches{})
+	sweep := absentSweep(t)
 	for _, limit := range []int{0, -1, unreclaimableMaximumLimit + 1} {
 		if _, err := sweep.Step(testContext(), time.Now().UTC(), limit); err != ErrInvalidConfiguration {
 			t.Fatalf("limit %d returned %v, want ErrInvalidConfiguration", limit, err)

@@ -1258,7 +1258,6 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
         return []
 
     from dev_health_ops.workers.job_routes import resolve_worker_job_route
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
     from dev_health_ops.workers.provider_unit_transport import (
         PROVIDER_UNIT_OUTBOX_ROUTES,
         UnitTransport,
@@ -1273,12 +1272,8 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
     # (hunt finding).
     try:
         route = resolve_worker_job_route(session, "sync.provider_unit")
-        switches = (
-            ProviderUnitRouteSwitches.from_environment()
-            if route in PROVIDER_UNIT_OUTBOX_ROUTES
-            else None
-        )
-        presence = resolve_celery_presence(units, switches=switches)
+        river_owns_units = route in PROVIDER_UNIT_OUTBOX_ROUTES
+        presence = resolve_celery_presence(units, river_owns_units=river_owns_units)
     except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
         logger.warning(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
@@ -1291,7 +1286,7 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
         if resolve_unit_transport(
             str(unit.provider),
             str(unit.dataset_key),
-            switches=switches,
+            river_owns_units=river_owns_units,
             celery_presence=presence,
         )
         is UnitTransport.UNROUTABLE

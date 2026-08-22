@@ -89,18 +89,30 @@ how a typo'd `OTEL_SERVICE_NAMEi` survived unnoticed in production.
 `--queue-concurrency` remains accepted as a deprecated alias so supervisors
 outside this repository keep working.
 
-#### Provider route switches stay in the environment
+#### There are no provider route switches
 
-The forty `WORKER_<PROVIDER>_<DATASET>_ENABLED` switches are **not** on the CLI
-and deliberately have no flag. What a worker executes follows from the queues it
-subscribes to; a parallel forty-switch enablement surface does not scale, and it
-is the thing being designed away.
+CHAOS-4054 deleted them. The forty `WORKER_<PROVIDER>_<DATASET>_ENABLED`
+variables no longer exist in either runtime, and setting one has no effect
+anywhere. Capability is always on in the binary: every provider/dataset pair
+the capability matrix marks `route_ready` is executable.
 
-They remain as environment variables because the Python planner reads the
-identical names through `ProviderUnitRouteSwitches` to decide what to *plan*.
-Producer and executor must agree: a planner that emits units for a route no
-executor serves is the wedge shape CHAOS-3990 exists to prevent. `GO_PROVIDER_ROUTES=all`
-(local only, requires `DEV_HEALTH_ENV=local`) is unchanged.
+Two planes decide whether a route runs, and both are visible without reading
+source or shelling into a container:
+
+- **Intent** — the user's own sync config (`IntegrationDataset.is_enabled`).
+  This is the only authority on what *should* run.
+- **Serving** — the `-Q`/`--queues` topology each worker is started with, in
+  the tracked service definitions (`deploy/go-workers/deployment.json` and the
+  compose/k8s/Helm files generated from it). This is the only authority on
+  where it *can* run.
+
+So a route that is not running has exactly two explanations: the user turned it
+off, or no deployed worker consumes its queue. Never "a switch somewhere is
+off and nobody can see it".
+
+Producer and executor cannot disagree about capability any more: both read
+`route_ready` and `plannable` out of the same generated contract at
+`contracts/provider-matrix/v1/matrix.json`.
 
 #### What stays in the environment
 

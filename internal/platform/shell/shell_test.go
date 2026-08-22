@@ -589,7 +589,7 @@ func TestHelpListsEveryOptionAndExitsCleanly(t *testing.T) {
 				"-Q, --queues",
 				"-c, --concurrency",
 				"DEV_HEALTH_QUEUE_CONCURRENCY",
-				"PROVIDER ROUTE SWITCHES",
+				"PROVIDER ROUTES:",
 				"POSTGRES_URI",
 				"environment only",
 			} {

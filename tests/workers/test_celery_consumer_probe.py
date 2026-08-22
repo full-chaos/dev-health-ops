@@ -232,4 +232,6 @@ def test_dispatcher_asks_about_the_queue_the_unit_would_land_in(monkeypatch) -> 
         dataset_key = "commits"
         cost_class = "medium"
 
-    assert celery_fallback_queues([_Unit()], switches=None) == frozenset({"sync"})
+    assert celery_fallback_queues([_Unit()], river_owns_units=False) == frozenset(
+        {"sync"}
+    )

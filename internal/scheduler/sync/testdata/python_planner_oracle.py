@@ -137,16 +137,22 @@ _module(
     # than against this process's ambient environment.
     _watermark_overlap_seconds=lambda: 0,
 )
-planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
-# Order no longer matters for correctness (CHAOS-4047's structural fix moved
-# the shared family-dataset vocabulary to sync.family_flags, so
-# provider_unit_route no longer imports sync.planner at all -- neither module
-# depends on the other). Loaded here, after planner, only because that is
-# where route_switches construction below needs it in scope.
+# CHAOS-4054: planner.py now imports `routes_to_river` from
+# provider_unit_route at MODULE level (`from
+# dev_health_ops.workers.provider_unit_route import routes_to_river`), so
+# provider_unit_route MUST already be in sys.modules before planner.py loads,
+# or the import fails. provider_unit_route's own dependencies
+# (sync.family_flags, workers.provider_family_contract,
+# contract_artifacts) are already loaded above, so this ordering is now load
+# bearing where the old comment said order didn't matter -- that was true only
+# while provider_unit_route carried the (now-deleted)
+# ProviderUnitRouteSwitches env-var machinery and planner.py lazily imported
+# it inside a function.
 provider_unit_route = _load(
     "dev_health_ops.workers.provider_unit_route",
     SOURCE / "workers/provider_unit_route.py",
 )
+planner = _load("dev_health_ops.sync.planner", SOURCE / "sync/planner.py")
 trigger_routing = _load(
     "dev_health_ops.sync.trigger_routing", SOURCE / "sync/trigger_routing.py"
 )
@@ -308,16 +314,13 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
                 for dataset in plan_datasets
                 if str(dataset.dataset_key) in allowed_datasets
             ]
-    route_switches_environment = _optional_mapping(
-        case.get("route_switches"), "route_switches"
-    )
-    route_switches = (
-        provider_unit_route.ProviderUnitRouteSwitches.from_environment(
-            environment=route_switches_environment
-        )
-        if route_switches_environment is not None
-        else None
-    )
+    # CHAOS-4054: there is no route-switch input any more. Both
+    # _build_planned_units and Go's BuildScheduledPlan now filter
+    # unconditionally on the checked-in capability matrix
+    # (provider_unit_route.routes_to_river / providersync.Descriptor), so a
+    # case's planned identities depend only on IntegrationDataset.is_enabled
+    # (which of these datasets were even requested) and the matrix -- never on
+    # an environment variable.
     units = planner._build_planned_units(
         session=object(),
         request=request,
@@ -326,7 +329,6 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         datasets=plan_datasets,
         mode=str(case["mode"]),
         now=now,
-        route_switches=route_switches,
     )
     return [
         {

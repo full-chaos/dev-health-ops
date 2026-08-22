@@ -5,9 +5,15 @@ provider/dataset pairs the system would act on:
 
   * the PLANNER decided which units to CREATE, from ``IntegrationDataset``
     rows (per-org, customer-facing, in Postgres), and
-  * the DISPATCHER decided where to SEND them, from
-    ``ProviderUnitRouteSwitches`` (per-process ``WORKER_*_ENABLED``
-    environment variables, defaulting to False for anything unset).
+  * the DISPATCHER decided where to SEND them, from a per-process bank of
+    ``WORKER_*_ENABLED`` environment switches, defaulting to False for
+    anything unset.
+
+CHAOS-4054 deleted that second plane entirely -- capability is always on in the
+binary and routability is a property of the capability matrix alone -- so the
+two can no longer disagree by construction. This module survives only to select
+between River and the CUT-19 Celery rollback profile; it is retired with Celery
+under CHAOS-4026.
 
 Nothing asserted the two agreed. When they disagreed the planner created a
 unit that no runtime would execute: not River (its switch was off) and not
@@ -45,12 +51,12 @@ from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.workers import celery_consumers as _celery_consumers
 from dev_health_ops.workers.celery_consumers import CeleryConsumerPresence
 from dev_health_ops.workers.job_routes import RIVER_CANARY_ROUTE, RIVER_ROUTE
-from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+from dev_health_ops.workers.provider_unit_route import routes_to_river
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 
-#: The durable ``sync.provider_unit`` routes under which the per-pair River
-#: switches apply at all. Any other route (``celery``) means Celery owns every
-#: provider unit -- the CUT-19 full-rollback state.
+#: The durable ``sync.provider_unit`` routes under which River owns provider
+#: units at all. Any other route (``celery``) means Celery owns every provider
+#: unit -- the CUT-19 full-rollback state.
 PROVIDER_UNIT_OUTBOX_ROUTES = frozenset({RIVER_CANARY_ROUTE, RIVER_ROUTE})
 
 #: Error/category stamped on a unit no runtime can execute. Reuses the
@@ -75,13 +81,13 @@ def resolve_unit_transport(
     provider: str,
     dataset: str,
     *,
-    switches: ProviderUnitRouteSwitches | None,
+    river_owns_units: bool,
     celery_presence: CeleryConsumerPresence,
 ) -> UnitTransport:
     """Resolve the one runtime that may execute ``(provider, dataset)``.
 
-    ``switches`` is ``None`` when the durable ``sync.provider_unit`` route is
-    not a River outbox route -- Celery owns everything, unchanged.
+    ``river_owns_units`` is ``False`` when the durable ``sync.provider_unit``
+    route is not a River outbox route -- Celery owns everything, unchanged.
 
     ``UNROUTABLE`` is returned only when River declines the pair AND the
     broker confirmed that nothing consumes the queue this unit would land in.
@@ -96,7 +102,7 @@ def resolve_unit_transport(
     work on a guess.
     """
 
-    if switches is not None and switches.routes_to_river(provider, dataset):
+    if river_owns_units and routes_to_river(provider, dataset):
         return UnitTransport.RIVER
     if celery_presence is CeleryConsumerPresence.ABSENT:
         return UnitTransport.UNROUTABLE
@@ -128,7 +134,7 @@ class RoutableUnit(Protocol):
 def celery_fallback_queues(
     units: Iterable[RoutableUnit],
     *,
-    switches: ProviderUnitRouteSwitches | None,
+    river_owns_units: bool,
 ) -> frozenset[str]:
     """The Celery queues these units would actually be published to.
 
@@ -140,9 +146,7 @@ def celery_fallback_queues(
     queues: set[str] = set()
     cost_class_queues_enabled = _cost_class_queues_enabled()
     for unit in units:
-        if switches is not None and switches.routes_to_river(
-            unit.provider, unit.dataset_key
-        ):
+        if river_owns_units and routes_to_river(unit.provider, unit.dataset_key):
             continue
         queues.add(
             route(
@@ -158,7 +162,7 @@ def celery_fallback_queues(
 def resolve_celery_presence(
     units: Iterable[RoutableUnit],
     *,
-    switches: ProviderUnitRouteSwitches | None,
+    river_owns_units: bool,
 ) -> CeleryConsumerPresence:
     """Probe Celery consumers, but only when some unit would need them.
 
@@ -173,7 +177,7 @@ def resolve_celery_presence(
     put the units straight back into the void.
     """
 
-    queues = celery_fallback_queues(units, switches=switches)
+    queues = celery_fallback_queues(units, river_owns_units=river_owns_units)
     if not queues:
         # Nothing needs the fallthrough: never pay for a broadcast. PRESENT,
         # not UNKNOWN -- an unasked question must not defer River-bound work.

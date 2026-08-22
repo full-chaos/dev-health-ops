@@ -212,7 +212,6 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "DASHSCOPE_BASE_URL",
         "DATABASE_URL",
         "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI",
-        "DEV_HEALTH_ENV",
         "DEV_HEALTH_SINK",
         "EMAIL_API_KEY",
         "EMAIL_FROM_ADDRESS",
@@ -249,7 +248,6 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "GITHUB_WEBHOOK_SECRET",
         "GITLAB_NOTES_LIMIT",
         "GITLAB_WEBHOOK_TOKEN",
-        "GO_PROVIDER_ROUTES",
         "GRAPHQL_AUTH_REQUIRED",
         "GRAPHQL_MAX_QUERY_BYTES",
         "HIDE_MIGRATED_CHILD_CONFIGS",
@@ -397,49 +395,9 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "VALIDATE_LOADER_OUTPUT",
         "WORKER_CELERY_CONSUMER_PROBE_TIMEOUT_SECONDS",
         "WORKER_CELERY_CONSUMER_PROBE_TTL_SECONDS",
-        "WORKER_GITHUB_BLAME_ENABLED",
-        "WORKER_GITHUB_CICD_ENABLED",
-        "WORKER_GITHUB_COMMITS_ENABLED",
-        "WORKER_GITHUB_COMMIT_STATS_ENABLED",
-        "WORKER_GITHUB_DEPLOYMENTS_ENABLED",
-        "WORKER_GITHUB_FILES_ENABLED",
-        "WORKER_GITHUB_PRS_ENABLED",
-        "WORKER_GITHUB_PR_COMMENTS_ENABLED",
-        "WORKER_GITHUB_PR_REVIEWS_ENABLED",
-        "WORKER_GITHUB_REPO_METADATA_ENABLED",
-        "WORKER_GITHUB_SECURITY_ENABLED",
-        "WORKER_GITHUB_TESTS_ENABLED",
-        "WORKER_GITHUB_WORK_ITEMS_ENABLED",
         "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
         "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
-        "WORKER_GITLAB_BLAME_ENABLED",
-        "WORKER_GITLAB_CICD_ENABLED",
-        "WORKER_GITLAB_COMMITS_ENABLED",
-        "WORKER_GITLAB_COMMIT_STATS_ENABLED",
-        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
-        "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
-        "WORKER_GITLAB_FILES_ENABLED",
-        "WORKER_GITLAB_INCIDENTS_ENABLED",
-        "WORKER_GITLAB_PRS_ENABLED",
-        "WORKER_GITLAB_PR_COMMENTS_ENABLED",
-        "WORKER_GITLAB_PR_REVIEWS_ENABLED",
-        "WORKER_GITLAB_REPO_METADATA_ENABLED",
-        "WORKER_GITLAB_SECURITY_ENABLED",
-        "WORKER_GITLAB_TESTS_ENABLED",
-        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_INCIDENTS_ENABLED",
-        "WORKER_JIRA_WORK_ITEMS_ENABLED",
-        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
-        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
         "WORKER_OPERATIONAL_BRIDGE_TOKEN",
-        "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
-        "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
-        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
-        "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
-        "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
-        "WORKER_PAGERDUTY_SERVICES_ENABLED",
-        "WORKER_PAGERDUTY_TEAMS_ENABLED",
-        "WORKER_PAGERDUTY_USERS_ENABLED",
     }
 )
 
@@ -535,23 +493,21 @@ def discover_env_example_names(path: Path | None = None) -> set[str]:
 
 
 #: Names read through an indirection the AST walker structurally cannot follow.
-#: ``_provider_route_environment()`` (``workers/provider_unit_route.py:107-135``)
-#: takes a ``Mapping[str, str]`` parameter -- populated from ``os.environ`` by ITS
-#: caller two lines away, not read directly in the function that looks the names
-#: up -- and reads ``environment.get(_PROVIDER_ROUTES_PRESET_ENV, ...)``. The
-#: receiver there is a local parameter named ``environment``, not one of
-#: ``_ENV_TARGETS`` (``os`` / ``os.environ`` / ``environ``), so
-#: ``discover_src_env_names()`` never sees the call no matter how constants are
-#: resolved. CHAOS-3988: this exact blind spot let GO_PROVIDER_ROUTES and
-#: DEV_HEALTH_ENV leak past this scrub for months -- ``ci/local_validate.sh``'s
-#: separate shell-level PROXY_OFF scrub is what actually caught the incident;
-#: this list would have stayed silent even after that fix landed. Listed here by
-#: hand because the discovery algorithm cannot derive them; if the algorithm
-#: later learns to follow parameter indirection, drop this constant instead of
-#: leaving it to double up.
-_INDIRECT_ENV_READS: frozenset[str] = frozenset(
-    {"DEV_HEALTH_ENV", "GO_PROVIDER_ROUTES"}
-)
+#: CHAOS-3988 originally listed ``GO_PROVIDER_ROUTES`` and ``DEV_HEALTH_ENV``
+#: here: ``_provider_route_environment()`` took a ``Mapping[str, str]``
+#: parameter -- populated from ``os.environ`` by ITS caller two lines away,
+#: not read directly in the function that looked the names up -- so
+#: ``discover_src_env_names()`` could never see the call no matter how
+#: constants were resolved. CHAOS-4054 deleted that whole function along with
+#: the route-switch environment plane it served (the local-all
+#: ``DEV_HEALTH_ENV=local`` / ``GO_PROVIDER_ROUTES=all`` convenience preset is
+#: gone too), so the blind spot's cause no longer exists in ``src/`` --
+#: neither name is read by any Python indirection any more (Go's typed config
+#: and the CI ``dev-hops`` CLI still read ``DEV_HEALTH_ENV`` directly, which
+#: is why it stays out of this Python-only scrub without needing an entry
+#: here). Kept as an empty set, not deleted outright, so the NEXT indirection
+#: blind spot has a documented place to land by hand.
+_INDIRECT_ENV_READS: frozenset[str] = frozenset()
 
 
 def derive_scrub_names() -> set[str]:

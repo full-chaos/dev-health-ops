@@ -118,10 +118,7 @@ from dev_health_ops.workers.provider_family_contract import (
     validate_provider_family_claim,
 )
 from dev_health_ops.workers.provider_unit_route import (
-    ProviderUnitRouteSwitches,
     is_atomic_provider_family_direct_alias,
-    provider_family_strict_admission_enabled,
-    route_switch_environment_name,
 )
 from dev_health_ops.workers.provider_unit_transport import (
     PROVIDER_UNIT_OUTBOX_ROUTES,
@@ -156,9 +153,9 @@ _TERMINAL_RUN_STATUSES = {
 # individual unit here -- shadow's dual-dispatch semantics are not
 # implemented for this producer, and celery is the rollback route every
 # per-pair decision below falls back to. Per-pair routability is decided
-# independently per unit (ProviderUnitRouteSwitches.routes_to_river), so a
-# run whose units span both a ready+enabled pair and pairs that are not is
-# expected to dispatch a mix of river and celery units in the same pass.
+# independently per unit (provider_unit_route.routes_to_river), so a run whose
+# units span both a routable pair and pairs that are not is expected to
+# dispatch a mix of river and celery units in the same pass.
 # Defined once in workers.provider_unit_transport, which is also what the
 # planner consults -- the two must never drift (CHAOS-3941).
 _PROVIDER_UNIT_OUTBOX_ROUTES = PROVIDER_UNIT_OUTBOX_ROUTES
@@ -1001,18 +998,14 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         # transition with every producer, including a non-canary batch during
         # a paused or drifted control-plane state.
         provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
-        provider_unit_routes = (
-            ProviderUnitRouteSwitches.from_environment()
-            if provider_unit_route in _PROVIDER_UNIT_OUTBOX_ROUTES
-            else None
-        )
+        river_owns_units = provider_unit_route in _PROVIDER_UNIT_OUTBOX_ROUTES
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         # CHAOS-3941: resolve Celery consumer presence ONCE per pass, and only
         # if some claimed pair would actually need the Celery fallthrough. In
         # the fully cut-over steady state no probe runs at all.
         celery_presence = _celery_consumer_presence(
             units,
-            switches=provider_unit_routes,
+            river_owns_units=river_owns_units,
         )
         signatures = []
         unroutable_units: list[SyncRunUnit] = []
@@ -1022,26 +1015,24 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             unit_dataset = str(unit.dataset_key)
             # Atomic provider families are admitted before transport selection,
             # so a malformed claim can reach neither River nor rollback Celery.
-            # GitHub retains its already-landed always-exact ownership contract;
-            # the other work-item providers become strict only with their Go
-            # family switch enabled, preserving default-off D16 legacy claims.
-            strict_family = provider_family_strict_admission_enabled(
-                unit_provider, unit_dataset
-            )
+            # CHAOS-4054: every atomic family is validated strictly. Strictness
+            # used to be gated on each provider's route switch, which meant a
+            # malformed persisted claim was admitted purely because a
+            # deployment had not turned the route on.
             if not validate_provider_family_claim(
                 unit_provider,
                 unit_dataset,
                 unit.processor_flags,
-                strict_atomic=strict_family,
+                strict_atomic=True,
             ):
                 raise WorkerJobRouteError(
                     "provider-unit claim requires the complete canonical family"
                 )
-            # Routability is decided per pair, not per run: the matrix
-            # (ProviderUnitRouteSwitches.is_route_ready) is the only source of
-            # which pairs are even candidates, so a run mixing a route-ready
-            # pair with 58 pairs the matrix has not marked ready dispatches a
-            # mix of river and celery units in the same pass, by design.
+            # Routability is decided per pair, not per run: the capability
+            # matrix is the only source of which pairs are candidates, so a run
+            # mixing routable pairs with pairs the matrix does not mark
+            # route-ready and plannable dispatches a mix of river and celery
+            # units in the same pass, by design.
             # ONE resolver, shared verbatim with the planner
             # (workers.provider_unit_transport). The planner refuses to CREATE
             # a unit this call would mark UNROUTABLE; anything that still
@@ -1051,11 +1042,12 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             transport = resolve_unit_transport(
                 unit_provider,
                 unit_dataset,
-                switches=provider_unit_routes,
+                river_owns_units=river_owns_units,
                 celery_presence=celery_presence,
             )
             if transport is UnitTransport.RIVER:
-                # Readiness and the pair/family switch must both select River.
+                # The durable route and the pair's own routability must both
+                # select River.
                 # The `continue` is the one-writer fence: an admitted unit is
                 # staged in the durable outbox and never receives a Celery
                 # signature.
@@ -1070,8 +1062,8 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 river_queued += 1
                 continue
             if transport is UnitTransport.UNROUTABLE:
-                # No River switch, and the broker confirmed nothing consumes
-                # the queue this unit would land in. Publishing here is what
+                # River declines the pair, and the broker confirmed nothing
+                # consumes the queue this unit would land in. Publishing here is what
                 # wedged 27 units for 90 minutes in production; refuse instead.
                 unroutable_units.append(unit)
                 continue
@@ -1081,7 +1073,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 # and look again next pass.
                 deferred_units.append(unit)
                 continue
-            # A not-ready or default-off pair falls through to the existing
+            # A pair the matrix does not route falls through to the existing
             # Python writer, preserving mixed-run rollback and CUT-19's Celery
             # fallback profile -- both of which have live consumers.
             dispatch_route = route(
@@ -1115,7 +1107,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
 
         if unroutable_units:
             terminalized = _terminalize_unroutable_units(
-                session, unroutable_units, switches=provider_unit_routes
+                session, unroutable_units, river_owns_units=river_owns_units
             )
             logger.warning(
                 "dispatch_sync_run.unroutable_units_terminalized",
@@ -2569,7 +2561,7 @@ def _fail_stale_dispatching_units(session, run_uuid: uuid.UUID, error: str) -> i
 def _celery_consumer_presence(
     units: Sequence[SyncRunUnit],
     *,
-    switches: ProviderUnitRouteSwitches | None,
+    river_owns_units: bool,
 ) -> CeleryConsumerPresence:
     """Module-level seam over the broker probe (CHAOS-3941).
 
@@ -2579,7 +2571,7 @@ def _celery_consumer_presence(
     be listening on the developer's broker.
     """
 
-    return resolve_celery_presence(units, switches=switches)
+    return resolve_celery_presence(units, river_owns_units=river_owns_units)
 
 
 def _release_undecidable_units(
@@ -2620,7 +2612,7 @@ def _terminalize_unroutable_units(
     session,
     units: Sequence[SyncRunUnit],
     *,
-    switches: ProviderUnitRouteSwitches | None = None,
+    river_owns_units: bool = False,
 ) -> int:
     """Fail claimed units that no runtime can execute (CHAOS-3941).
 
@@ -2636,17 +2628,19 @@ def _terminalize_unroutable_units(
         return 0
     now = datetime.now(timezone.utc)
 
-    # CHAOS-3990: group by pair so the durable reason NAMES the pair and the
-    # switch that refused it. The previous single-string bulk update stamped
-    # only the bare category, which is why an operator querying these rows saw
-    # a retry loop with thousands of attempts and no reason attached.
+    # CHAOS-3990: group by pair so the durable reason NAMES the pair and why it
+    # was refused. The previous single-string bulk update stamped only the bare
+    # category, which is why an operator querying these rows saw a retry loop
+    # with thousands of attempts and no reason attached.
     units_by_pair: dict[tuple[str, str], list[uuid.UUID]] = defaultdict(list)
     for unit in units:
         units_by_pair[(str(unit.provider), str(unit.dataset_key))].append(unit.id)
 
     terminalized = 0
     for (provider, dataset_key), unit_ids in sorted(units_by_pair.items()):
-        reason = _unroutable_reason(provider, dataset_key, switches=switches)
+        reason = _unroutable_reason(
+            provider, dataset_key, river_owns_units=river_owns_units
+        )
         result = session.execute(
             update(SyncRunUnit)
             .where(
@@ -2681,7 +2675,7 @@ def _unroutable_reason(
     provider: str,
     dataset_key: str,
     *,
-    switches: ProviderUnitRouteSwitches | None = None,
+    river_owns_units: bool = False,
 ) -> str:
     """The operator-facing sentence for a pair no runtime will execute.
 
@@ -2689,32 +2683,35 @@ def _unroutable_reason(
     actions, so the reason must not assert the wrong one (review finding):
 
       * the durable ``sync.provider_unit`` route is not a River route at all,
-        so ``switches`` is ``None`` and NO River switch is consulted -- naming
-        one would send an operator to flip a variable that changes nothing;
-      * the pair is a non-canonical atomic-family alias, which is refused
-        regardless of its canonical switch; or
-      * the pair's own River switch is off.
+        so River was never asked about this pair;
+      * the pair is a non-canonical member of an atomic provider family, served
+        only through its canonical claim; or
+      * the capability matrix does not mark the pair route-ready and plannable,
+        so no shipped writer owns it.
 
-    Every branch also implies the Celery fallback had no consumer, since that
-    is what turns "not River" into UNROUTABLE rather than a Celery publish.
+    None of them is ever "a switch is off" -- CHAOS-4054 deleted that plane, so
+    an operator is never sent to flip a variable. Every branch also implies the
+    Celery fallback had no consumer, since that is what turns "not River" into
+    UNROUTABLE rather than a Celery publish.
     """
 
-    prefix = f"no enabled worker can execute {provider}/{dataset_key}"
+    prefix = f"no worker can execute {provider}/{dataset_key}"
     suffix = "and the Celery fallback queue has no consumer"
-    if switches is None:
+    if not river_owns_units:
         return (
             f"{prefix}: the durable sync.provider_unit route is not a River "
-            f"route, so no per-pair River switch applies, {suffix}"
+            f"route, so River never owned this unit, {suffix}"
         )
     if is_atomic_provider_family_direct_alias(provider, dataset_key):
-        canonical = route_switch_environment_name(provider, dataset_key)
         return (
             f"{prefix}: it is a non-canonical member of an atomic provider "
-            f"family, which is never routed on its own (the family is "
-            f"governed by {canonical}), {suffix}"
+            f"family, which is never routed on its own (the family is served "
+            f"by its canonical work-items claim), {suffix}"
         )
-    switch = route_switch_environment_name(provider, dataset_key)
-    return f"{prefix}: the River route switch ({switch}) is disabled, {suffix}"
+    return (
+        f"{prefix}: the provider capability matrix does not mark it "
+        f"route-ready and plannable, so no shipped writer owns it, {suffix}"
+    )
 
 
 def _enqueue_denied_active_finalize(sync_run_id: str) -> None:

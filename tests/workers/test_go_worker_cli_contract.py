@@ -389,42 +389,46 @@ def test_kubernetes_args_never_shadow_the_configmap() -> None:
             )
 
 
-def test_provider_route_switches_have_no_flag_surface() -> None:
-    """Route enablement must stay off the CLI.
+def test_provider_routes_have_no_enablement_surface_at_all() -> None:
+    """Route enablement must not exist, on the CLI or anywhere else.
 
-    A worker executes the queues it subscribes to (``-Q``); a parallel
-    forty-switch enablement surface does not scale and is the thing CHAOS-4020
-    designed away. The forty ``WORKER_*_ENABLED`` variables survive only as the
-    agreement between the Python planner, which reads the same names to decide
-    what to *plan*, and the Go executor.
-
-    Nothing else pins that. If a ``Flag``/``Short``/``Aliases`` field ever
-    appears on a ``Route``, forty options quietly return to ``--help`` and the
-    decision reverses without anyone choosing it — so the registry is asserted
-    to declare data and targets only.
+    CHAOS-4054 deleted the plane outright. A worker executes the queues it
+    subscribes to (``-Q``); the user's sync config decides what should run. The
+    previous guard settled for "the forty switches have no flag", which was the
+    right guard while the switches existed. The successor guard checks the
+    thing that actually matters now: the registry file is gone, the Config type
+    carries no route enablement field, and no route enablement name survives as
+    a recognised setting.
     """
-    source = _ROUTES_SOURCE.read_text(encoding="utf-8")
+    assert not _ROUTES_SOURCE.exists(), (
+        f"{_ROUTES_SOURCE.name} is back; the provider route switch registry was "
+        "deleted with the enablement plane and must not return"
+    )
 
-    # Matched as bare identifiers, not "Flag:", so this catches BOTH a struct
-    # field declaration on Route and a literal assignment in the registry. An
-    # earlier version of this guard required the colon and silently ignored
-    # `Flag string` added to the type -- it passed a mutation that should have
-    # failed it.
-    offending = sorted(set(re.findall(r"\b(Flag|Short|Aliases)\b", source)))
-    assert not offending, (
-        f"routes.go declares CLI field(s) {offending}; provider route switches "
-        "are environment-only and must not gain a flag surface"
-    )
-    assert "--routes" not in source, "routes.go must not reintroduce a --routes flag"
+    config_source = (_CONFIG_PACKAGE / "config.go").read_text(encoding="utf-8")
+    options_source = (_CONFIG_PACKAGE / "options.go").read_text(encoding="utf-8")
 
-    # The registry is still the complete deprecation map: one entry per switch,
-    # each wired to a Config field.
-    entries = re.findall(
-        r'\{Env: "(WORKER_[A-Z0-9_]+_ENABLED)", target: func\(c \*Config\) \*bool',
-        source,
+    # Assembled from parts so this guard does not report its own source.
+    switch_pattern = "WORKER_" + "[A-Z0-9_]+" + "_ENABLED"
+    for name, source in (
+        ("config.go", config_source),
+        ("options.go", options_source),
+    ):
+        offending = sorted(set(re.findall(switch_pattern, source)))
+        assert not offending, (
+            f"{name} reintroduced route enablement variable(s) {offending}; "
+            "capability is always on in the binary"
+        )
+
+    offending_fields = sorted(set(re.findall(r"\bWorker\w+Enabled\b", config_source)))
+    assert not offending_fields, (
+        f"config.go reintroduced route enablement field(s) {offending_fields}"
     )
-    assert len(entries) == 40, (
-        f"routes.go declares {len(entries)} route switches, want the 40 the "
-        "inventory found"
+
+    assert "--routes" not in options_source, (
+        "options.go must not introduce a --routes flag; queue topology is the "
+        "only serving lever"
     )
-    assert len(set(entries)) == len(entries), "duplicate route switch in routes.go"
+    assert "GO_PROVIDER_ROUTES" not in config_source, (
+        "the all-routes preset was deleted with the switches it defaulted on"
+    )

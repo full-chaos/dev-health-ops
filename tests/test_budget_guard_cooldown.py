@@ -72,13 +72,37 @@ from dev_health_ops.sync.budget_types import (
     BudgetEstimate,
 )
 from dev_health_ops.sync.dispatch_outbox import OUTBOX_KIND_DISPATCH
-from tests._helpers import seed_sync_dispatch_transport_routes
+from tests._helpers import (
+    pin_provider_unit_routability,
+    seed_sync_dispatch_transport_routes,
+)
 from tests.test_sync_units import (
     _aware,
     _patch_db_session,
     _patch_worker_enqueues,
     _seed_run,
 )
+
+
+@pytest.fixture(autouse=True)
+def _routable_synthetic_pairs(monkeypatch):
+    """Pin provider-unit routability for this module (CHAOS-4054 step 4).
+
+    Every unit in this file uses a synthetic dataset key -- a bucket label,
+    not a capability-matrix identity. Before step 4 those keys still reached a
+    dispatcher, because a pair the matrix declined fell through to the Celery
+    writer. Step 4 deleted that fallthrough: River is the only runtime, so an
+    unrouted pair is now terminalized as ``feature_disabled`` and never
+    dispatched at all.
+
+    Without this pin every test below would observe a terminalized unit
+    instead of the budget/guard/invariant behaviour it exists to assert. No
+    test in this module is about routability; see
+    ``tests/_helpers.pin_provider_unit_routability`` for why pinning beats
+    renaming the keys to real datasets.
+    """
+
+    pin_provider_unit_routability(monkeypatch)
 
 
 @pytest.fixture

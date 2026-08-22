@@ -25,7 +25,11 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.guard import DispatchGuard
-from tests._helpers import seed_sync_dispatch_transport_routes
+from tests._helpers import (
+    pin_provider_unit_routability,
+    provider_unit_outbox_keys,
+    seed_sync_dispatch_transport_routes,
+)
 
 
 @pytest.fixture
@@ -223,22 +227,10 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
     )
 
-    unit_queued = []
+    # These dataset keys are synthetic bucket labels, not matrix identities;
+    # the subject here is the concurrency cap, not routability.
+    pin_provider_unit_routability(monkeypatch)
 
-    class FakeUnitSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            unit_queued.append(self)
-            return self
-
-        def apply_async(self):
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -248,7 +240,8 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
     # Run must NOT be FAILED.
     assert run.status != "failed", f"run must not be FAILED, got {run.status}"
     # 1 allowed slot → 1 unit dispatched.
-    assert len(unit_queued) == 1, f"expected 1 unit dispatched, got {len(unit_queued)}"
+    dispatched = provider_unit_outbox_keys(db_session)
+    assert len(dispatched) == 1, f"expected 1 unit dispatched, got {len(dispatched)}"
     # 2 capped units remain PLANNED.
     planned = [u for u in units if u.status == "planned"]
     assert len(planned) == 2, f"expected 2 units PLANNED, got {len(planned)}"
@@ -327,22 +320,10 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
     )
 
-    unit_queued = []
+    # These dataset keys are synthetic bucket labels, not matrix identities;
+    # the subject here is the concurrency cap, not routability.
+    pin_provider_unit_routability(monkeypatch)
 
-    class FakeUnitSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            unit_queued.append(self)
-            return self
-
-        def apply_async(self):
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -351,7 +332,7 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
 
     assert result["status"] == "dispatched"
     # 1 unit dispatched (the allowed slot).
-    assert len(unit_queued) == 1
+    assert len(provider_unit_outbox_keys(db_session)) == 1
     # 1 unit remains PLANNED (the capped one).
     planned = [u for u in units if u.status == "planned"]
     assert len(planned) == 1
@@ -793,21 +774,11 @@ def test_independent_unit_publish_capped_redispatch_failure_preserves_published_
         db_session, monkeypatch, unit_count=2, cap=2, active_slots=1
     )
 
-    class FakeUnitSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
+    # Synthetic bucket labels again: the subject is that one admitted unit's
+    # published work survives a capped sibling, not whether the matrix routes
+    # "commits-0".
+    pin_provider_unit_routability(monkeypatch)
 
-        def set(self, *, queue):
-            return self
-
-        def apply_async(self):
-            call_count[0] += 1
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
-    call_count = [0]
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -816,12 +787,20 @@ def test_independent_unit_publish_capped_redispatch_failure_preserves_published_
 
     assert run.status == SyncRunStatus.DISPATCHING.value
     assert run.completed_at is None
+    dispatching = [
+        unit for unit in units if unit.status == SyncRunUnitStatus.DISPATCHING.value
+    ]
     assert sorted(unit.status for unit in units) == [
         SyncRunUnitStatus.DISPATCHING.value,
         SyncRunUnitStatus.PLANNED.value,
     ]
     assert result == {"status": "dispatched", "queued_units": 1}
-    assert call_count[0] == 1
+    # The published work IS the durable outbox row, and it names the one unit
+    # that was admitted -- stronger than the old publish-count spy, which
+    # could not tell WHICH unit had been published.
+    assert provider_unit_outbox_keys(db_session) == {
+        f"sync.provider_unit:{dispatching[0].id}"
+    }
     assert (
         db_session.query(SyncDispatchOutbox)
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)

@@ -133,3 +133,54 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
         )
     )
     session.flush()
+
+
+def pin_provider_unit_routability(monkeypatch: Any) -> None:
+    """Treat every ``(provider, dataset)`` as matrix-routable for one test.
+
+    CHAOS-4054 step 4 left the provider-unit dispatcher with exactly one
+    question: does the checked-in capability matrix route this pair? A pair it
+    does not route is terminalized as ``feature_disabled`` rather than
+    published, because there is no second runtime left to publish to.
+
+    The suites that call this helper are about something else entirely -- the
+    DispatchGuard concurrency cap, budget-surplus admission, the CHAOS-2581
+    invariants, the orchestration baseline -- and their dataset keys are
+    deliberately SYNTHETIC bucket labels (``commits-active``, ``commits-0``,
+    ``commits-stale``), chosen so they never collide with a real matrix
+    identity and never pick up a real budget estimate. They reached a
+    dispatcher before step 4 only because the Celery fallthrough accepted any
+    pair. With that gone, an unpinned synthetic key terminalizes and the
+    guard's decision -- the actual subject -- is never observed.
+
+    Pinning routability changes exactly one thing. The alternative, renaming
+    the synthetic keys to real matrix datasets, would ALSO change each unit's
+    budget estimate and therefore which units fit the cap, silently altering
+    what these tests prove.
+
+    Routability itself is covered directly by
+    ``tests/workers/test_provider_unit_route.py`` and end to end by
+    ``tests/test_provider_unit_planner_dispatcher_parity.py``; this helper
+    must never be used to paper over a routability assertion.
+    """
+
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setattr(sync_units, "routes_to_river", lambda *_args, **_kwargs: True)
+
+
+def provider_unit_outbox_keys(session: Session) -> set[str]:
+    """Every provider-unit dedupe key staged in the durable outbox.
+
+    The post-step-4 replacement for spying on ``run_sync_unit.s(...)``: the
+    outbox row IS the dispatch now, so "which units were dispatched" is a
+    database question rather than a mock-call question.
+    """
+
+    from dev_health_ops.models import WorkerJobOutbox
+
+    return {
+        row.dedupe_key
+        for row in session.query(WorkerJobOutbox).all()
+        if row.job_kind == "sync.provider_unit"
+    }

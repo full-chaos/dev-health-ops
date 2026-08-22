@@ -4,6 +4,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -21,8 +22,33 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from tests._helpers import seed_sync_dispatch_transport_routes
+from tests._helpers import (
+    pin_provider_unit_routability,
+    provider_unit_outbox_keys,
+    seed_sync_dispatch_transport_routes,
+)
 from tests.canonical_incident_orchestration_support import SYNC_FIXTURE_BEFORE
+
+
+@pytest.fixture(autouse=True)
+def _routable_synthetic_pairs(monkeypatch):
+    """Pin provider-unit routability for this module (CHAOS-4054 step 4).
+
+    Every unit in this file uses a synthetic dataset key -- a bucket label,
+    not a capability-matrix identity. Before step 4 those keys still reached a
+    dispatcher, because a pair the matrix declined fell through to the Celery
+    writer. Step 4 deleted that fallthrough: River is the only runtime, so an
+    unrouted pair is now terminalized as ``feature_disabled`` and never
+    dispatched at all.
+
+    Without this pin every test below would observe a terminalized unit
+    instead of the budget/guard/invariant behaviour it exists to assert. No
+    test in this module is about routability; see
+    ``tests/_helpers.pin_provider_unit_routability`` for why pinning beats
+    renaming the keys to real datasets.
+    """
+
+    pin_provider_unit_routability(monkeypatch)
 
 
 @contextmanager
@@ -115,11 +141,6 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
             "dev_health_ops.db.get_postgres_session_sync",
             lambda: _session_context(session),
         )
-        monkeypatch.setattr(
-            sync_units.run_sync_unit,
-            "s",
-            lambda unit_id: _Signature(unit_id, queued),
-        )
         # When
         dispatch_result = sync_units.dispatch_sync_run(plan.sync_run_id)
 
@@ -129,7 +150,11 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
         assert dispatch_result == {"status": "dispatched", "queued_units": 1}
         assert run.status == SyncRunStatus.DISPATCHING.value
         assert unit.status == SyncRunUnitStatus.DISPATCHING.value
-        assert queued[0] == f"sync:{unit.id}"
+        # CHAOS-4054 step 4: the dispatch IS the durable outbox row. This used
+        # to assert the Celery queue the unit's signature was routed to
+        # ("sync:<id>"); there is no queue choice left to characterize, so the
+        # baseline records the staged row instead.
+        assert provider_unit_outbox_keys(session) == {f"sync.provider_unit:{unit.id}"}
 
         monkeypatch.setattr(
             sync_units,

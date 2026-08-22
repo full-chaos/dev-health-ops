@@ -318,19 +318,39 @@ func (pipeline *MutationPipeline) Step(
 	// report was added to end. ERROR for the same reason the report itself is
 	// ERROR: the measurement layer failing is not a degraded state, it is a
 	// blind one.
-	if materialized.RunawayReportStep != "" {
+	// THE COUNTER MEANS "THE REPORT DID NOT RUN", NOT "THE REPORT FAILED"
+	// (review finding). Those differ, and the difference was a blind spot:
+	// a transaction that could not begin, an earlier materialization
+	// statement that faulted, or a failed commit all return an empty
+	// MaterializerResult with RunawayReportStep unset. The detector
+	// demonstrably did not look, and the counter advertised as separating
+	// "nothing found" from "nothing looked" would have said it did.
+	//
+	// So every path that prevents the report counts, and the log names which
+	// one it was.
+	if materialized.RunawayReportStep != "" || err != nil {
+		step := materialized.RunawayReportStep
+		if step == "" {
+			step = runawayReportStepUpstream
+		}
 		slog.Error(
 			"syncreconciler.dispatch_wakeup_report_unavailable",
-			"step", materialized.RunawayReportStep,
+			"step", step,
 		)
-		// One per failed pass, so the counter's rate IS the failure rate.
+		// One per affected pass, so the counter's rate IS the blind rate.
 		recovered.WakeupReportFailures = 1
 	}
-	// The gauge is only meaningful when the report actually ran. Publishing a
-	// zero for a pass that could not look would be the same fails-toward-fine
-	// shape the failure counter beside it exists to expose, so it is left at
-	// zero ONLY as the honest "report ran, found none" value.
-	recovered.RunawayDispatchWakeups = int64(len(materialized.Runaway))
+	// THE EXACT TOTAL, never len(Runaway) (review finding). Runaway is a
+	// sample capped at runawayDispatchScan; CHAOS-4093 held 83 stuck runs, so
+	// a gauge fed from the sample would have reported 20 for an incident more
+	// than four times that size. Understating scope is the specific way a
+	// scope metric fails, and it fails silently.
+	//
+	// A pass where the report did not run publishes zero here, and that zero
+	// is NOT a claim -- it is unproven, and the failure counter above is what
+	// says so. The two are only meaningful read together, which is why the
+	// HELP text on both says so.
+	recovered.RunawayDispatchWakeups = materialized.RunawayTotal
 	if err != nil {
 		return recovered, err
 	}

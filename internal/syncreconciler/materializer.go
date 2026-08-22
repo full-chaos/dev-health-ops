@@ -49,6 +49,13 @@ const (
 	runawayReportStepQuery = "runaway dispatch-wakeup report read of public.sync_dispatch_outbox"
 	runawayReportStepScan  = "runaway dispatch-wakeup report scan"
 	runawayReportStepRows  = "runaway dispatch-wakeup report iteration"
+	// runawayReportStepUpstream covers every way the pass ended before the
+	// report could run at all: a transaction that would not begin, an earlier
+	// materialization statement that faulted, a failed commit. The report
+	// itself never failed in those cases -- it never executed -- and the
+	// distinction matters, because "the detector is broken" and "the pass died
+	// before reaching the detector" want different first questions.
+	runawayReportStepUpstream = "materializer step ended before the runaway report ran"
 )
 
 // RunawayDispatchWakeup is one dispatch outbox row whose attempt count has
@@ -69,8 +76,17 @@ type MaterializerResult struct {
 	Finalize  int64
 	Discovery int64
 	PostSync  int64
-	// Runaway is the CHAOS-4097 report. Empty on a healthy pass.
+	// Runaway is the CHAOS-4097 report: a bounded SAMPLE, worst-first, never
+	// more than runawayDispatchScan entries. It is what a log line can carry.
 	Runaway []RunawayDispatchWakeup
+	// RunawayTotal is the EXACT number of rows over the threshold, unbounded
+	// by the sample cap, and it is what the metric must publish.
+	//
+	// len(Runaway) is not that number and must never be used as it (review
+	// finding). The cap is 20; CHAOS-4093 held 83 stuck runs, so a gauge fed
+	// from the sample would have read 20 for an incident three times that
+	// size, and understating scope is the specific way a scope metric fails.
+	RunawayTotal int64
 	// RunawayTruncated says the report hit runawayDispatchScan and there are
 	// more rows over the threshold than are listed. A capped report that did
 	// not say so would read as "these are all of them", which is the class of
@@ -178,11 +194,11 @@ func (materializer *Materializer) Step(
 	// but it must not vanish either. The step name is carried out on the
 	// result and the caller reports it; see RunawayReportStep for why a
 	// swallowed error would be the very failure this report exists to end.
-	runaway, truncated, failedStep := readRunawayDispatchWakeups(ctx, tx)
+	runaway, total, truncated, failedStep := readRunawayDispatchWakeups(ctx, tx)
 	if failedStep != "" {
 		result.RunawayReportStep = failedStep
 	} else {
-		result.Runaway, result.RunawayTruncated = runaway, truncated
+		result.Runaway, result.RunawayTotal, result.RunawayTruncated = runaway, total, truncated
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return MaterializerResult{}, ErrUnavailable
@@ -197,6 +213,18 @@ func (materializer *Materializer) Step(
 //
 // ORDER BY attempts DESC puts the worst row first, so a capped report is
 // still the most useful twenty rows rather than an arbitrary twenty.
+//
+// count(*) OVER () is the EXACT total, and it is computed here rather than in
+// a second statement so the count and the sample can never describe different
+// instants. SQL evaluates window functions over the whole filtered set before
+// LIMIT applies, so the value is the true count even on a capped page.
+//
+// It does cost the short-circuit: the planner must see every matching row
+// rather than stopping at twenty-one. That is affordable BECAUSE of what the
+// predicate selects -- zero rows on a healthy system, and tens on a sick one
+// (CHAOS-4093's worst hour was 83). It would not be affordable on a predicate
+// that matched a large fraction of the table, and this one never can:
+// attempts >= 1000 is four figures above the healthy p99.
 //
 // # Measured plan, so the next reader does not have to guess (CHAOS-4097)
 //
@@ -226,7 +254,7 @@ func (materializer *Materializer) Step(
 // silence this report exists to end. Tracked as CHAOS-4107 rather than folded
 // here: a migration is a different blast radius from a read.
 const selectRunawayDispatchWakeupsSQL = `
-SELECT outbox.sync_run_id::text, outbox.attempts
+SELECT outbox.sync_run_id::text, outbox.attempts, count(*) OVER () AS total
 FROM public.sync_dispatch_outbox AS outbox
 JOIN public.sync_runs AS run ON run.id = outbox.sync_run_id
 WHERE outbox.kind = 'dispatch_sync_run'
@@ -241,22 +269,27 @@ LIMIT $2
 // statement" -- and no caller may see a driver string. "" means it worked.
 func readRunawayDispatchWakeups(
 	ctx context.Context, tx pgx.Tx,
-) ([]RunawayDispatchWakeup, bool, string) {
+) ([]RunawayDispatchWakeup, int64, bool, string) {
 	rows, err := tx.Query(
 		ctx, selectRunawayDispatchWakeupsSQL,
 		int64(runawayDispatchAttempts), runawayDispatchScan+1,
 	)
 	if err != nil {
-		return nil, false, runawayReportStepQuery
+		return nil, 0, false, runawayReportStepQuery
 	}
 	defer rows.Close()
 	report := make([]RunawayDispatchWakeup, 0, runawayDispatchScan)
 	truncated := false
+	total := int64(0)
 	for rows.Next() {
 		var wakeup RunawayDispatchWakeup
-		if err := rows.Scan(&wakeup.SyncRunID, &wakeup.Attempts); err != nil {
-			return nil, false, runawayReportStepScan
+		var rowTotal int64
+		if err := rows.Scan(&wakeup.SyncRunID, &wakeup.Attempts, &rowTotal); err != nil {
+			return nil, 0, false, runawayReportStepScan
 		}
+		// Identical on every row by construction; taking it from the first is
+		// enough, and re-taking it is harmless.
+		total = rowTotal
 		// The window asks for one more row than it reports, so "there are
 		// more" is observed rather than inferred from a full page.
 		if len(report) == runawayDispatchScan {
@@ -266,12 +299,12 @@ func readRunawayDispatchWakeups(
 		report = append(report, wakeup)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, runawayReportStepRows
+		return nil, 0, false, runawayReportStepRows
 	}
 	if len(report) == 0 {
-		return nil, false, ""
+		return nil, 0, false, ""
 	}
-	return report, truncated, ""
+	return report, total, truncated, ""
 }
 
 // materializeDispatchSQL mirrors _dispatchable_run_ids followed by

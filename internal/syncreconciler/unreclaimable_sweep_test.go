@@ -720,11 +720,14 @@ func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testi
 			return TerminalDeliveryRepairResult{}, nil
 		}),
 		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			// Sample deliberately SMALLER than the true total, so a
+			// regression to len(Runaway) cannot pass here either.
 			return MaterializerResult{
 				Runaway: []RunawayDispatchWakeup{
 					{SyncRunID: "run-a", Attempts: 5000},
 					{SyncRunID: "run-b", Attempts: 4000},
 				},
+				RunawayTotal:      9,
 				RunawayReportStep: "",
 			}, nil
 		}),
@@ -753,8 +756,9 @@ func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testi
 	if observation.UnreclaimableCandidates != 6 || observation.UnreclaimableTerminalized != 4 {
 		t.Fatalf("sweep figures did not reach the observation: %+v", observation)
 	}
-	if observation.RunawayDispatchWakeups != 2 {
-		t.Fatalf("runaway count = %d, want the 2 reported rows", observation.RunawayDispatchWakeups)
+	if observation.RunawayDispatchWakeups != 9 {
+		t.Fatalf("runaway gauge = %d, want the exact 9 over the threshold rather "+
+			"than the 2-row sample", observation.RunawayDispatchWakeups)
 	}
 	if observation.WakeupReportFailures != 0 {
 		t.Fatalf("a working report was counted as a failure: %+v", observation)
@@ -845,5 +849,72 @@ func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
 	}
 	if observation.UnreclaimableTerminalized != 3 || observation.UnreclaimableCandidates != 3 {
 		t.Fatalf("a failed pass dropped the sweep's already-committed work: %+v", observation)
+	}
+}
+
+// "THE REPORT DID NOT RUN" IS WIDER THAN "THE REPORT FAILED" (adversarial
+// review finding), and the gap was a blind spot in the very counter added to
+// remove blind spots.
+//
+// A transaction that will not begin, an earlier materialization statement that
+// faults, a failed commit — all return an empty MaterializerResult with
+// RunawayReportStep unset. The detector demonstrably did not look, and the
+// counter advertised as separating "nothing found" from "nothing looked" would
+// have said it did, publishing a reassuring zero gauge beside it.
+//
+// This drives the upstream shape specifically: the materializer errors WITHOUT
+// naming a report step.
+func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	failure := errors.New("scripted materializer transaction failure")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			// Exactly what a begin/commit/earlier-SQL failure produces: an
+			// empty result and an error, with no report step named because
+			// the report never executed.
+			return MaterializerResult{}, failure
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			t.Fatal("the kernel must not run after the materializer failed")
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if !errors.Is(stepErr, failure) {
+		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	}
+	if observation.WakeupReportFailures != 1 {
+		t.Fatalf("WakeupReportFailures = %d: the detector did not look, and the "+
+			"counter that exists to say so stayed silent — the gauge's zero on "+
+			"this pass is then indistinguishable from a real measurement",
+			observation.WakeupReportFailures)
+	}
+	record, found := findSlogRecord(*captured, "syncreconciler.dispatch_wakeup_report_unavailable")
+	if !found {
+		t.Fatal("a pass that never reached the detector logged nothing about it")
+	}
+	// The two causes want different first questions from an operator, so the
+	// log distinguishes them even though the counter merges them.
+	if record["step"] != runawayReportStepUpstream {
+		t.Fatalf("record step = %v, want the upstream cause named rather than a "+
+			"report-statement failure it was not", record["step"])
 	}
 }

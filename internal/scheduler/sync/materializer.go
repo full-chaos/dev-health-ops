@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -32,13 +34,22 @@ type NativeMaterializer struct {
 	watermarkOverlap  time.Duration
 	defaultUnitCap    int
 	// executedProof is the CHAOS-4060 evidence snapshot consulted by every
-	// Materialize call. It starts nil (gate not wired: pre-CHAOS-4060
-	// behavior) and becomes a real, non-nil snapshot only once
-	// RefreshExecutedProof succeeds. It is deliberately not reloaded per
-	// occurrence: the fact it observes -- "has this pair ever completed with
-	// persisted evidence" -- is monotonic (never un-proves itself), and
-	// sync_run_units has no index shaped for a per-occurrence global scan.
-	executedProof providersync.ExecutedProofEvidence
+	// Materialize call. A nil pointer means the gate has never been wired by
+	// any caller -- Materialize falls back to nil ExecutedProofEvidence
+	// (pre-CHAOS-4060, gate-not-enforced pass-through), which is what every
+	// existing test that never calls RefreshExecutedProof still gets. The
+	// FIRST call to RefreshExecutedProof (successful or not -- see that
+	// method) always installs a non-nil pointer, which is also what turns on
+	// maybeRefreshExecutedProof's periodic reload below: a caller that has
+	// never opted in never pays for a query it didn't ask for.
+	executedProof atomic.Pointer[providersync.ExecutedProofEvidence]
+	// executedProofNextRefreshAt is a UnixNano deadline, CAS-guarded so
+	// concurrent Materialize calls (TestNativeMaterializerConcurrentReplayConverges
+	// is a real production shape) elect exactly one refresher instead of a
+	// thundering herd of identical queries.
+	executedProofNextRefreshAt   atomic.Int64
+	executedProofRefreshInterval time.Duration
+	now                          func() time.Time
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -49,27 +60,81 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	}
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
 	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
-	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
+	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
+	return &NativeMaterializer{
+		domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second,
+		defaultUnitCap:               cap,
+		executedProofRefreshInterval: time.Duration(refreshSeconds) * time.Second,
+		now:                          time.Now,
+	}, nil
 }
 
 // RefreshExecutedProof loads the CHAOS-4060 executed-proof snapshot from the
 // domain pool and swaps it in for every subsequent Materialize call. The
-// caller decides when this runs (typically once at process startup); a
-// failed refresh leaves any previously-loaded snapshot in place and reports
-// the error so the caller can fail loud without taking the whole scheduler
-// down over a transient evidence-query failure -- an absent or stale
-// snapshot only makes the gate conservative (nothing new proves itself),
-// never permissive.
+// caller decides when this first runs (typically once at process startup);
+// after that, Materialize itself keeps it fresh on a bounded interval (see
+// maybeRefreshExecutedProof) so a route that earns its first live proof
+// unblocks without a process restart.
+//
+// A query failure must not silently restore full pre-CHAOS-4060 permissive
+// behavior for the rest of this process's lifetime -- that would defeat the
+// gate this ticket exists to add. So: if this is the very first load (no
+// snapshot installed yet), an error still installs an EMPTY, non-nil
+// snapshot -- the gate becomes enforced and conservative (nothing proven,
+// only explicit waivers pass) rather than silently disabled. A later,
+// unrelated transient error leaves whatever snapshot is already loaded in
+// place rather than wiping it. Either way the error is always returned so
+// the caller can log it loud; this method never fails the whole scheduler
+// pass over an evidence-query failure (CHAOS-4073's precedent: a safety
+// layer that cannot confirm its own precondition fails loud, never takes the
+// pass down -- but "loud" here also means "closed", not "open").
 func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context) error {
 	if materializer == nil || materializer.domainPool == nil {
 		return ErrInvalidMaterializer
 	}
 	evidence, err := providersync.QueryExecutedProofEvidence(ctx, materializer.domainPool)
 	if err != nil {
+		if materializer.executedProof.Load() == nil {
+			empty := providersync.ExecutedProofEvidence{}
+			materializer.executedProof.Store(&empty)
+		}
 		return err
 	}
-	materializer.executedProof = evidence
+	materializer.executedProof.Store(&evidence)
 	return nil
+}
+
+// maybeRefreshExecutedProof reloads the executed-proof snapshot on a bounded
+// interval, but ONLY for a materializer some caller has already opted into the
+// gate via at least one explicit RefreshExecutedProof call (executedProof
+// still nil means nobody asked for this, so no query fires -- every
+// pre-CHAOS-4060 test that never touches this feature keeps costing zero
+// queries). This is what lets a route that just earned its first live
+// executed-proof row start planning again without an operator restarting the
+// scheduler process, which a load-once-at-startup snapshot alone cannot do.
+func (materializer *NativeMaterializer) maybeRefreshExecutedProof(ctx context.Context) {
+	if materializer.executedProof.Load() == nil {
+		return
+	}
+	now := materializer.now().UnixNano()
+	next := materializer.executedProofNextRefreshAt.Load()
+	if now < next {
+		return
+	}
+	if !materializer.executedProofNextRefreshAt.CompareAndSwap(
+		next, now+materializer.executedProofRefreshInterval.Nanoseconds(),
+	) {
+		// Another concurrent Materialize call already won the refresh race.
+		return
+	}
+	if err := materializer.RefreshExecutedProof(ctx); err != nil {
+		slog.Default().Error(
+			"executed-proof evidence refresh failed; route readiness gate "+
+				"keeps its last-known (or empty, conservative) snapshot until "+
+				"the next refresh window (CHAOS-4060)",
+			"error", err,
+		)
+	}
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -125,6 +190,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if !occurrence.ConfigActive || occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
 		return PlanResult{}, ErrOccurrenceIneligible
 	}
+	materializer.maybeRefreshExecutedProof(ctx)
 	ids, err := deterministicMaterializationIDs(occurrence.ID)
 	if err != nil {
 		return PlanResult{}, err
@@ -133,7 +199,9 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	loaded.input.ExecutedProof = materializer.executedProof
+	if snapshot := materializer.executedProof.Load(); snapshot != nil {
+		loaded.input.ExecutedProof = *snapshot
+	}
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
 		units, err = BuildScheduledPlan(loaded.input)

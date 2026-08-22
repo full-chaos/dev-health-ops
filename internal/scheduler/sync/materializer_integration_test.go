@@ -868,3 +868,141 @@ func TestNativeMaterializerRefreshExecutedProofGatesPlanningEndToEnd(t *testing.
 		t.Fatalf("total_units=%d, want 1: github/commits now has live executed proof", units)
 	}
 }
+
+// TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError is the
+// codex adversarial-review finding this pins: a failed initial evidence load
+// must NOT silently restore full pre-CHAOS-4060 permissive behavior for the
+// rest of the process's lifetime. Before this test existed, a startup query
+// error left executedProof nil, and nil is the documented "gate not wired"
+// pass-through -- meaning a transient Postgres hiccup at boot would have
+// permitted every unproven route for as long as the process ran.
+func TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the first load to fail: an already-canceled context makes the
+	// underlying query return context.Canceled immediately, standing in for
+	// any real query failure (permission error, schema mismatch, connection
+	// refused -- QueryExecutedProofEvidence returns the same shape of error
+	// for all of them).
+	failCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	refreshErr := materializer.RefreshExecutedProof(failCtx)
+	if refreshErr == nil {
+		t.Fatal("RefreshExecutedProof against a canceled context unexpectedly succeeded")
+	}
+
+	snapshot := materializer.executedProof.Load()
+	if snapshot == nil {
+		t.Fatal("a failed FIRST load must still install a non-nil (empty) snapshot -- fail closed, not open")
+	}
+	if len(*snapshot) != 0 {
+		t.Fatalf("failed first load snapshot = %+v, want empty", *snapshot)
+	}
+
+	// The gate is now enforced: github/commits carries no waiver and has no
+	// evidence, so it must not plan -- exactly the outcome that must survive
+	// a query failure, not the permissive nil-evidence pass-through.
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var units int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: a failed initial evidence load must fail the gate closed, not open",
+			units,
+		)
+	}
+}
+
+// TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart is the
+// second codex adversarial-review finding this pins: a load-once-at-startup
+// snapshot alone can never observe evidence that appears after the process
+// booted, so a route earning its first live proof would stay gated for the
+// rest of the process's lifetime -- an operator would have to bounce the
+// scheduler to unstick it. maybeRefreshExecutedProof's bounded periodic
+// reload closes that gap; this drives it through Materialize with a fake
+// clock, asserting BOTH that it stays quiet inside the refresh window (no
+// thundering-herd query on every occurrence) and that it actually unblocks
+// once the window elapses, with no manual RefreshExecutedProof call at all.
+func TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer.executedProofRefreshInterval = time.Minute
+	clock := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	materializer.now = func() time.Time { return clock }
+
+	// Opt into the gate the same way production does: one explicit initial
+	// load. At this instant github/commits has no evidence.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var units int
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf("total_units=%d, want 0 before evidence exists", got)
+	}
+
+	// Real evidence now exists, but the clock has not moved: a second
+	// occurrence inside the same refresh window must NOT see it yet --
+	// maybeRefreshExecutedProof is deliberately throttled, not called fresh
+	// on every occurrence.
+	seedPriorSyncRunUnit(t, fixture, "commits", "success",
+		`{"go_provider_route":{"effects_written":7}}`)
+	stillWithinWindow := fixture.occurrence
+	stillWithinWindow.ID = "occurrence:v1:scheduled:within-window"
+	stillWithinWindow.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, stillWithinWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: still inside the refresh window, evidence must not be visible yet",
+			got,
+		)
+	}
+
+	// Advance the clock past the refresh interval and materialize a third
+	// occurrence with NO manual RefreshExecutedProof call -- this is the
+	// exact "unblocks without a restart" behavior the finding asked for.
+	clock = clock.Add(2 * time.Minute)
+	afterWindow := fixture.occurrence
+	afterWindow.ID = "occurrence:v1:scheduled:after-window"
+	afterWindow.ScheduledFor = fixture.occurrence.ScheduledFor.Add(2 * time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, afterWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf(
+			"total_units=%d, want 1: the refresh window elapsed, so Materialize should have "+
+				"picked up the new evidence on its own",
+			got,
+		)
+	}
+}

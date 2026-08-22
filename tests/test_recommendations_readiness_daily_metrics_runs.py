@@ -39,6 +39,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import sqlalchemy as sa
@@ -356,6 +357,67 @@ def test_superseded_fanout_strand_does_not_wedge_a_finalized_day(
     assert _ready() is True
 
 
+def test_newer_unfinished_fanout_supersedes_an_earlier_success(
+    daily_metrics_runs: Engine,
+) -> None:
+    """Reverse of the strand case: newest wins even when the OLDER one succeeded.
+
+    A day can be recomputed. The 01:00 fan-out finalized, then a second
+    generation for the same day started and has not. The metric tables are
+    being rewritten right now, so the gate must block. An implementation that
+    accepts *any* succeeded fan-out row for the day -- rather than reading the
+    newest one and only then checking its status -- passes every other test in
+    this file, so without this case that mutation survives.
+    """
+    _insert_run(
+        daily_metrics_runs,
+        generation=_FANOUT_GENERATION,
+        status="succeeded",
+        finalization_status="succeeded",
+        created_at=_BASE_TIME,
+    )
+    _insert_run(
+        daily_metrics_runs,
+        generation=_LATER_FANOUT_GENERATION,
+        status="running",
+        finalization_status="pending",
+        created_at=_BASE_TIME + timedelta(minutes=30),
+    )
+
+    assert _ready() is False
+
+
+def test_run_status_failed_is_abandoned_rather_than_in_flight(
+    daily_metrics_runs: Engine,
+) -> None:
+    """`status='failed'` is terminal at the RUN level, unlike a failed finalize.
+
+    The two are easy to confuse and behave oppositely. A *finalize* that failed
+    leaves ``status='running'`` and is retried by River, so it still blocks
+    (see the truth table above). A run whose own ``status`` is ``'failed'``
+    is terminal -- Go will not claim dispatch or finalize for it
+    (internal/jobs/metrics/daily/postgres.go:377-379, :750-752) -- so it can
+    never reach ``'succeeded'`` and must not be treated as in-flight. Without
+    this case, narrowing the exclusion to ``('canceled')`` alone is undetected.
+    """
+    _insert_run(
+        daily_metrics_runs,
+        generation=_FANOUT_GENERATION,
+        status="succeeded",
+        finalization_status="succeeded",
+        created_at=_BASE_TIME,
+    )
+    _insert_run(
+        daily_metrics_runs,
+        generation=_LATER_FANOUT_GENERATION,
+        status="failed",
+        finalization_status="pending",
+        created_at=_BASE_TIME + timedelta(minutes=30),
+    )
+
+    assert _ready() is True
+
+
 def test_canceled_run_is_abandoned_rather_than_in_flight(
     daily_metrics_runs: Engine,
 ) -> None:
@@ -443,7 +505,12 @@ def test_default_sentinel_proceeds_without_a_query(
         finalization_status="pending",
     )
 
-    assert _ready(org_id="default") is True
+    # Asserting the boolean alone is not enough: with a pending run seeded, a
+    # gate that DID query and then swallowed the uuid cast error in the
+    # fail-open handler would also return True. Prove no session was opened.
+    with mock.patch("dev_health_ops.db.get_postgres_session_sync") as session_factory:
+        assert _ready(org_id="default") is True
+    session_factory.assert_not_called()
 
 
 def test_unreadable_database_fails_open(

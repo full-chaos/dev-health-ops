@@ -127,12 +127,13 @@ type Loop struct {
 	// the threshold, sweep candidates) stay in the observation snapshot,
 	// because for those a total that kept climbing after the condition
 	// cleared is precisely what an operator must not be shown.
-	wakeupReportFailures      uint64
-	unreclaimableTerminalized uint64
-	lastOK                    time.Time
-	up                        bool
-	errors                    chan error
-	recorderBusy              chan struct{}
+	wakeupReportFailures       uint64
+	unreclaimableTerminalized  uint64
+	unreclaimableSweepFailures uint64
+	lastOK                     time.Time
+	up                         bool
+	errors                     chan error
+	recorderBusy               chan struct{}
 }
 
 func NewLoop(stepper Stepper, config LoopConfig) (*Loop, error) {
@@ -323,6 +324,9 @@ func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
 	loop.unreclaimableTerminalized = accumulateCount(
 		loop.unreclaimableTerminalized, observation.UnreclaimableTerminalized,
 	)
+	loop.unreclaimableSweepFailures = accumulateCount(
+		loop.unreclaimableSweepFailures, observation.UnreclaimableSweepFailures,
+	)
 }
 
 // accumulateCount adds one step's events to a process total, refusing both a
@@ -447,6 +451,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	exhaustedRecoveries := loop.exhaustedRecoveries
 	wakeupReportFailures := loop.wakeupReportFailures
 	unreclaimableTerminalized := loop.unreclaimableTerminalized
+	unreclaimableSweepFailures := loop.unreclaimableSweepFailures
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -486,8 +491,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	// selects what is reported, never what is written.
 	fmt.Fprintf(&text, "# HELP sync_dispatch_runaway_dispatch_wakeups Non-terminal runs whose dispatch wakeup has exceeded %d attempts. Exact, not sampled. Unproven while sync_dispatch_wakeup_report_failures_total is climbing: read the pair, never this alone.\n# TYPE sync_dispatch_runaway_dispatch_wakeups gauge\nsync_dispatch_runaway_dispatch_wakeups %d\n", runawayDispatchAttempts, observation.RunawayDispatchWakeups)
 	fmt.Fprintf(&text, "# HELP sync_dispatch_wakeup_report_failures_total Passes on which the runaway dispatch-wakeup report did not run at all -- whether the report faulted or the pass ended before reaching it. While this climbs, the gauge above is a stale zero rather than a measurement.\n# TYPE sync_dispatch_wakeup_report_failures_total counter\nsync_dispatch_wakeup_report_failures_total %d\n", wakeupReportFailures)
-	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_candidates Units the unreclaimable sweep selected on its last pass. Non-zero in shadow mode means work it WOULD have terminalized.\n# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n", observation.UnreclaimableCandidates)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_candidates Units the unreclaimable sweep selected on its last pass. Non-zero in shadow mode means work it WOULD have terminalized. Unproven while sync_dispatch_unreclaimable_sweep_failures_total is climbing.\n# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n", observation.UnreclaimableCandidates)
 	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_terminalized_total Units the unreclaimable sweep destroyed. Always zero in shadow mode; a persistent gap against the candidate gauge means writes are being refused.\n# TYPE sync_dispatch_unreclaimable_terminalized_total counter\nsync_dispatch_unreclaimable_terminalized_total %d\n", unreclaimableTerminalized)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_sweep_failures_total Passes on which the unreclaimable sweep could not run. The candidate gauge above reads zero on those passes, identically to a healthy idle system, so read the pair.\n# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter\nsync_dispatch_unreclaimable_sweep_failures_total %d\n", unreclaimableSweepFailures)
 	text.WriteString("# HELP sync_dispatch_observer_up Whether the observer loop is currently healthy.\n# TYPE sync_dispatch_observer_up gauge\nsync_dispatch_observer_up ")
 	if up {
 		text.WriteString("1\n")

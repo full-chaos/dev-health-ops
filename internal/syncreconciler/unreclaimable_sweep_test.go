@@ -918,3 +918,47 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 			"report-statement failure it was not", record["step"])
 	}
 }
+
+// A FAILING SWEEP MUST REACH THE COUNTER (adversarial review finding).
+//
+// TestPipelineStepSurvivesSweepFailure above pins that a sweep failure does
+// not fail the pass, and that is correct: taking lease repair down with the
+// safety net would trade a bounded strand for an unbounded one. But the
+// consequence is that a sweep which has stopped working entirely leaves a
+// healthy pass behind it and a candidate gauge of zero — indistinguishable
+// from a system with nothing to sweep.
+//
+// CHAOS-4035 is what that looks like in production: this component answered
+// 42501 once a second from its first deploy, and survived because nothing but
+// a log line could see it.
+func TestPipelineStepCountsASweepFailureOntoTheObservation(t *testing.T) {
+	pipeline := pipelineWithSweep(t, failingSweep{err: ErrUnavailable})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("a sweep failure took the pass down with it: %v", err)
+	}
+	if observation.UnreclaimableSweepFailures != 1 {
+		t.Fatalf("UnreclaimableSweepFailures = %d: the safety net failed and the "+
+			"only metric that could say so stayed at zero, which is what a "+
+			"healthy idle system reports", observation.UnreclaimableSweepFailures)
+	}
+	// ...and the gauges must not fabricate a selection for a pass that failed.
+	if observation.UnreclaimableCandidates != 0 || observation.UnreclaimableTerminalized != 0 {
+		t.Fatalf("a failed sweep pass published figures it never measured: %+v", observation)
+	}
+}
+
+// NON-VACUITY: a working sweep must leave the failure counter alone, or it
+// climbs on every tick and stops distinguishing anything.
+func TestPipelineStepLeavesTheSweepFailureCounterAloneOnAHealthyPass(t *testing.T) {
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{
+		Mode: SweepModeActive, Candidates: 2, Terminalized: 2,
+	}})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.UnreclaimableSweepFailures != 0 {
+		t.Fatalf("a successful sweep was counted as a failure: %+v", observation)
+	}
+}

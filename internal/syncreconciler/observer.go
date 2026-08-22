@@ -129,15 +129,29 @@ type Observation struct {
 	// purpose: the two diverging is exactly how a fenced decline or a lost CAS
 	// becomes visible.
 	UnreclaimableTerminalized int64
-	CeleryDuePending          int64
-	RiverDuePending           int64
-	SampledCandidates         int64
-	Truncated                 bool
-	ObservedAt                time.Time
-	Limit                     int
-	PredicateVersion          string
-	DigestVersion             string
-	CandidateDigest           string
+	// UnreclaimableSweepFailures counts passes on which the sweep could not
+	// run. It is the counterpart of WakeupReportFailures for the other new
+	// signal, and it exists because this repository has already been burned by
+	// exactly its absence: CHAOS-4035 was the sweep answering 42501 once a
+	// second for its entire production life, and what made that survivable for
+	// so long was that nothing outside a log line could see it.
+	//
+	// Without this, a persistent permission, schema or connection fault leaves
+	// the observer reporting healthy with a candidate gauge of zero — which is
+	// indistinguishable from a system with nothing to sweep. The pipeline
+	// deliberately does NOT fail the pass on a sweep error (taking lease
+	// repair down with the safety net would trade a bounded strand for an
+	// unbounded one), so a counter is the only thing that can carry it.
+	UnreclaimableSweepFailures int64
+	CeleryDuePending           int64
+	RiverDuePending            int64
+	SampledCandidates          int64
+	Truncated                  bool
+	ObservedAt                 time.Time
+	Limit                      int
+	PredicateVersion           string
+	DigestVersion              string
+	CandidateDigest            string
 }
 
 type candidateRow struct {

@@ -248,6 +248,13 @@ func (pipeline *MutationPipeline) Step(
 				"syncreconciler.unreclaimable_sweep_failed",
 				"error", sweepErr.Error(),
 			)
+			// ...and a log line is not an alertable signal. The candidate
+			// gauge reads zero on a failed pass, which is exactly what a
+			// healthy idle system reads, so without this counter a sweep that
+			// has stopped working entirely is invisible to every dashboard.
+			// That is not hypothetical: CHAOS-4035 was this component
+			// answering 42501 once a second from its first deploy.
+			swept.UnreclaimableSweepFailures = 1
 		}
 	}
 	terminal, err := pipeline.terminal.Step(ctx, now, limit)
@@ -375,5 +382,6 @@ func (pipeline *MutationPipeline) Step(
 	observation.WakeupReportFailures = recovered.WakeupReportFailures
 	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
 	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
+	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
 	return observation, err
 }

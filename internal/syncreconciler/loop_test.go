@@ -202,6 +202,11 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 		"# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter": true,
 		"# TYPE sync_dispatch_wakeup_report_failures_total counter":        true,
 		"# TYPE sync_dispatch_unreclaimable_terminalized_total counter":    true,
+		// The sweep-failure counter is an event count for the same reason:
+		// CHAOS-4035's 42501-per-second sweep was survivable for its whole
+		// production life precisely because nothing outside a log could see
+		// it, and a gauge would clear the evidence on the next pass.
+		"# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter": true,
 	}
 	for _, line := range strings.Split(metrics.String(), "\n") {
 		if !strings.HasSuffix(line, " counter") {
@@ -961,6 +966,7 @@ func TestLoopAccumulatesTheRunawayAndSweepCountersAcrossSteps(t *testing.T) {
 		if position < len(failures) {
 			observation.WakeupReportFailures = failures[position]
 			observation.UnreclaimableTerminalized = terminalized[position]
+			observation.UnreclaimableSweepFailures = failures[position]
 		}
 		calls <- struct{}{}
 		return observation, nil
@@ -977,6 +983,7 @@ func TestLoopAccumulatesTheRunawayAndSweepCountersAcrossSteps(t *testing.T) {
 	<-calls
 	assertMetricLine(t, loop, "sync_dispatch_wakeup_report_failures_total 1")
 	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 4")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_sweep_failures_total 1")
 
 	clock.mu.Lock()
 	ticker := clock.ticker
@@ -987,6 +994,7 @@ func TestLoopAccumulatesTheRunawayAndSweepCountersAcrossSteps(t *testing.T) {
 	}
 	assertMetricLine(t, loop, "sync_dispatch_wakeup_report_failures_total 2")
 	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 7")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_sweep_failures_total 2")
 }
 
 func assertMetricLine(t *testing.T, loop *Loop, want string) {
@@ -997,5 +1005,40 @@ func assertMetricLine(t *testing.T, loop *Loop, want string) {
 	}
 	if !strings.Contains(metrics.String(), want+"\n") {
 		t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+	}
+}
+
+// A SWEEP THAT HAS STOPPED WORKING MUST BE VISIBLE TO A DASHBOARD
+// (adversarial review finding).
+//
+// The pipeline deliberately does not fail a pass when the sweep errors --
+// taking lease repair down with the safety net would trade a bounded strand
+// for an unbounded one -- so a persistent permission, schema or connection
+// fault leaves the observer healthy and the candidate gauge at zero, which is
+// exactly what a system with nothing to sweep reports.
+//
+// This is not a hypothetical failure mode. CHAOS-4035 was this component
+// answering 42501 once a second from its first production deploy, and what
+// let that survive was that nothing but a log line could see it.
+func TestMetricsCarryTheSweepFailureCounter(t *testing.T) {
+	loop := &Loop{clock: systemClock{}}
+	loop.unreclaimableSweepFailures = 5
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter",
+		"sync_dispatch_unreclaimable_sweep_failures_total 5",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		}
+	}
+	// The pairing has to be discoverable from the metric itself: a zero
+	// candidate gauge means nothing while this counter is moving.
+	if !strings.Contains(metrics.String(), "Unproven while sync_dispatch_unreclaimable_sweep_failures_total is climbing") {
+		t.Fatalf("the candidate gauge does not name its staleness signal:\n%s", metrics.String())
 	}
 }

@@ -68,11 +68,17 @@ const (
 // than this with no claim never will be.
 //
 // It reads SYNC_UNIT_DISPATCH_STALE_SECONDS at call time -- the same
-// operator-facing knob the Python dispatch-layer guard, budget guard, and
-// stale reaper already read -- so a production override actually reaches
-// both language planes instead of only one. Parse failures and an unset var
-// fall back to the checked-in default, exactly like Python's _env_int; a
-// parsed negative value clamps to zero, never negative.
+// operator-facing knob sync/guard.py's _stale_dispatch_seconds_guard and
+// workers/sync_units.py's _stale_dispatch_seconds already read -- so a
+// production override actually reaches both language planes instead of only
+// one. Parse failures and an unset var fall back to the checked-in default;
+// a parsed value clamps to a 1-second floor, mirroring those two functions'
+// identical `max(1, int(getenv(..., "900")))` exactly -- NOT the codebase's
+// separate max(0, ...) `_env_int` helper used for other settings. Zero and
+// negative both being accepted was a real defect (CHAOS-3929 review round
+// 2): a zero-second window makes every DISPATCHING row look orphaned
+// immediately, and MutationPipelineConfig.valid() requires StaleDispatchAge
+// > 0, so zero could also fail the reconciler's own config validation.
 //
 // Declared once here, the same fix as RiverQueue above (CHAOS-3938): before
 // CHAOS-3929 this was a private 15-minute literal in the reconciler's mutation
@@ -87,10 +93,10 @@ func DispatchStaleAge() time.Duration {
 	if raw := os.Getenv(dispatchStaleSecondsEnv); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil {
 			seconds = parsed
-			if seconds < 0 {
-				seconds = 0
-			}
 		}
+	}
+	if seconds < 1 {
+		seconds = 1
 	}
 	return time.Duration(seconds) * time.Second
 }

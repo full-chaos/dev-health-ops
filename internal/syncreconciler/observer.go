@@ -95,15 +95,49 @@ type Observation struct {
 	// progressing -- the reclaimed row is otherwise indistinguishable from a
 	// healthy one.
 	ExhaustedDeliveriesRecovered int64
-	CeleryDuePending             int64
-	RiverDuePending              int64
-	SampledCandidates            int64
-	Truncated                    bool
-	ObservedAt                   time.Time
-	Limit                        int
-	PredicateVersion             string
-	DigestVersion                string
-	CandidateDigest              string
+	// The CHAOS-4097 series. Like ExhaustedDeliveriesRecovered above, these
+	// describe what the MUTATION pipeline did or saw, not outbox state, so the
+	// read-only Observer always leaves them zero; they live here because Loop
+	// is the only component holding the metrics registration.
+	//
+	// They exist because CHAOS-4097 shipped its reporting as log lines only,
+	// on the reasoning that "counters do not export from this deployment
+	// (CHAOS-4094)". That is true of the OTel pipeline and false of this one:
+	// Loop.WritePrometheus is a scrape endpoint and has been serving
+	// sync_dispatch_exhausted_delivery_recoveries_total all along. A signal
+	// that only an operator reading logs can find is not the same as one an
+	// alert can fire on, and the whole of CHAOS-4093 was a condition nobody
+	// was told about for twenty-two hours.
+	//
+	// RunawayDispatchWakeups is a GAUGE quantity: non-terminal runs whose
+	// dispatch wakeup is over the threshold right now. A counter would keep
+	// climbing after the condition cleared, which is the opposite of what an
+	// operator needs to know.
+	RunawayDispatchWakeups int64
+	// WakeupReportFailures counts passes on which the runaway report could not
+	// run at all. It is the "is the detector alive" signal: without it, a
+	// RunawayDispatchWakeups of zero means either "nothing is looping" or
+	// "nothing looked", and those demand opposite responses.
+	WakeupReportFailures int64
+	// UnreclaimableCandidates is what the sweep SELECTED this pass, gauge-wise.
+	// It is the signal shadow mode otherwise lacks entirely: shadow writes
+	// nothing, so without this the only trace a shadow deployment leaves is a
+	// log line.
+	UnreclaimableCandidates int64
+	// UnreclaimableTerminalized is what the sweep actually destroyed, and is
+	// always zero in shadow mode. Kept separate from the candidate count on
+	// purpose: the two diverging is exactly how a fenced decline or a lost CAS
+	// becomes visible.
+	UnreclaimableTerminalized int64
+	CeleryDuePending          int64
+	RiverDuePending           int64
+	SampledCandidates         int64
+	Truncated                 bool
+	ObservedAt                time.Time
+	Limit                     int
+	PredicateVersion          string
+	DigestVersion             string
+	CandidateDigest           string
 }
 
 type candidateRow struct {

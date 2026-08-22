@@ -707,3 +707,143 @@ func TestPipelineStepStaysSilentWhenTheRunawayReportWorked(t *testing.T) {
 		t.Fatal("a healthy pass claimed the runaway detector was unavailable")
 	}
 }
+
+// The metric is only real if the number reaches the loop. A field the pipeline
+// populates but never carries out is the same silence in a different place --
+// the exact shape of the shadow-mode gap this ticket already had to fix once.
+func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{
+				Runaway: []RunawayDispatchWakeup{
+					{SyncRunID: "run-a", Attempts: 5000},
+					{SyncRunID: "run-b", Attempts: 4000},
+				},
+				RunawayReportStep: "",
+			}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		// The read-only Observer authors none of these fields, so a non-empty
+		// observation here proves the pipeline copied rather than got lucky.
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{CeleryDuePending: 42}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{
+			Mode: SweepModeActive, Candidates: 6, Terminalized: 4,
+		}},
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.UnreclaimableCandidates != 6 || observation.UnreclaimableTerminalized != 4 {
+		t.Fatalf("sweep figures did not reach the observation: %+v", observation)
+	}
+	if observation.RunawayDispatchWakeups != 2 {
+		t.Fatalf("runaway count = %d, want the 2 reported rows", observation.RunawayDispatchWakeups)
+	}
+	if observation.WakeupReportFailures != 0 {
+		t.Fatalf("a working report was counted as a failure: %+v", observation)
+	}
+	// The observer's own snapshot must survive the copy: a struct-level
+	// assignment would have silently erased it.
+	if observation.CeleryDuePending != 42 {
+		t.Fatalf("the observer's own fields were clobbered: %+v", observation)
+	}
+}
+
+// A broken detector must reach the counter, and it must NOT publish a
+// reassuring zero gauge on the same pass -- "nothing looked" and "nothing
+// found" are the two readings this whole series exists to separate.
+func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{RunawayReportStep: runawayReportStepQuery}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.WakeupReportFailures != 1 {
+		t.Fatalf("WakeupReportFailures = %d, want exactly one per failed pass",
+			observation.WakeupReportFailures)
+	}
+}
+
+// THE DURABLE-WORK RULE, extended to the sweep (the ExhaustedDeliveriesRecovered
+// comment states it for the repair). The sweep commits before the stages after
+// it run, so a later failure does not un-destroy the units it already
+// terminalized. An observation reporting zero after a real terminalization
+// would put destroyed work under its own alert threshold -- and the sweep is
+// the one component here whose mistakes are unrecoverable.
+func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
+	failure := errors.New("scripted terminal-delivery repair failure")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, failure
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			t.Fatal("the materializer must not run after the repair failed")
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{
+			Mode: SweepModeActive, Candidates: 3, Terminalized: 3,
+		}},
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if !errors.Is(stepErr, failure) {
+		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	}
+	if observation.UnreclaimableTerminalized != 3 || observation.UnreclaimableCandidates != 3 {
+		t.Fatalf("a failed pass dropped the sweep's already-committed work: %+v", observation)
+	}
+}

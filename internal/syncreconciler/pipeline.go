@@ -161,8 +161,15 @@ func (pipeline *MutationPipeline) Step(
 		return Observation{}, err
 	}
 	now = now.UTC()
+	// swept carries the sweep and materializer figures out through EVERY
+	// return below, not just the happy one. The existing
+	// ExhaustedDeliveriesRecovered comment states the rule and the reason: a
+	// later stage failing does not un-happen what an earlier one already
+	// committed, and an observation reporting zero after the sweep destroyed
+	// work would put a real terminalization under its own alert threshold.
+	swept := Observation{}
 	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
-		return Observation{}, err
+		return swept, err
 	}
 	// CHAOS-4005: the never-leased strand. Lease repair above reaches only a
 	// RUNNING unit whose lease expired; a unit stuck in 'dispatching' holds no
@@ -222,12 +229,16 @@ func (pipeline *MutationPipeline) Step(
 				"unit_id_sample_truncated", len(sweepResult.UnitIDs) > sweepReportSample,
 			)
 		}
+		if sweepErr == nil {
+			swept.UnreclaimableCandidates = int64(sweepResult.Candidates)
+			swept.UnreclaimableTerminalized = int64(sweepResult.Terminalized)
+		}
 		if sweepErr != nil {
 			// Cancellation belongs to the caller and must propagate; anything
 			// else is the safety net failing, which must not fail the pass.
 			if errors.Is(sweepErr, context.Canceled) ||
 				errors.Is(sweepErr, context.DeadlineExceeded) {
-				return Observation{}, sweepErr
+				return swept, sweepErr
 			}
 			// But it must never fail SILENTLY. Swallowing this without a word
 			// reports a healthy pass while the strand the sweep exists to
@@ -241,7 +252,7 @@ func (pipeline *MutationPipeline) Step(
 	}
 	terminal, err := pipeline.terminal.Step(ctx, now, limit)
 	if err != nil {
-		return Observation{}, err
+		return swept, err
 	}
 	// A repair cannot recover more rows than its own bounded window. Treating
 	// an out-of-range count as a failed step keeps a miscounting repair from
@@ -253,16 +264,15 @@ func (pipeline *MutationPipeline) Step(
 		terminal.Recovered > limit {
 		// The count itself is untrustworthy here, so it is the one case that
 		// deliberately reports nothing rather than a number it cannot stand behind.
-		return Observation{}, ErrUnavailable
+		return swept, ErrUnavailable
 	}
 	// The repair commits its own transaction before anything below runs, so its
 	// recoveries are already durable no matter how this step ends. Every return
 	// from here on carries the count: an observation reporting zero recoveries
 	// after rows were in fact reclaimed would let a cycling delivery stay under
 	// its own alert threshold, which is the failure the counter exists to catch.
-	recovered := Observation{
-		ExhaustedDeliveriesRecovered: int64(terminal.ExhaustedRecovered),
-	}
+	recovered := swept
+	recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
 	// A rescue-only cancel is a registry or queue-routing fault: the job was
 	// inserted onto a queue whose client does not execute that kind. Unlike
 	// the other two recoveries it will repeat deterministically until someone
@@ -313,7 +323,14 @@ func (pipeline *MutationPipeline) Step(
 			"syncreconciler.dispatch_wakeup_report_unavailable",
 			"step", materialized.RunawayReportStep,
 		)
+		// One per failed pass, so the counter's rate IS the failure rate.
+		recovered.WakeupReportFailures = 1
 	}
+	// The gauge is only meaningful when the report actually ran. Publishing a
+	// zero for a pass that could not look would be the same fails-toward-fine
+	// shape the failure counter beside it exists to expose, so it is left at
+	// zero ONLY as the honest "report ran, found none" value.
+	recovered.RunawayDispatchWakeups = int64(len(materialized.Runaway))
 	if err != nil {
 		return recovered, err
 	}
@@ -328,6 +345,15 @@ func (pipeline *MutationPipeline) Step(
 		return recovered, err
 	}
 	observation, err := pipeline.observer.Step(ctx, now, limit)
+	// The read-only Observer leaves every pipeline-authored field zero, so
+	// they are copied across rather than merged. One assignment per field,
+	// spelled out: a struct-level copy would silently drop the observer's own
+	// queue snapshot, and a loop over reflection would hide the next field
+	// somebody forgets to carry.
 	observation.ExhaustedDeliveriesRecovered = recovered.ExhaustedDeliveriesRecovered
+	observation.RunawayDispatchWakeups = recovered.RunawayDispatchWakeups
+	observation.WakeupReportFailures = recovered.WakeupReportFailures
+	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
+	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
 	return observation, err
 }

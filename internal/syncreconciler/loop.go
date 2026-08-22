@@ -120,10 +120,19 @@ type Loop struct {
 	// so a snapshot is what would misreport it -- the next step's zero would
 	// erase the only evidence that a delivery had to be reclaimed at all.
 	exhaustedRecoveries uint64
-	lastOK              time.Time
-	up                  bool
-	errors              chan error
-	recorderBusy        chan struct{}
+	// wakeupReportFailures and unreclaimableTerminalized accumulate for the
+	// same reason exhaustedRecoveries does: both are EVENTS that already
+	// happened, so the next step's zero would erase the only evidence they
+	// occurred. The two gauge quantities beside them (runaway wakeups over
+	// the threshold, sweep candidates) stay in the observation snapshot,
+	// because for those a total that kept climbing after the condition
+	// cleared is precisely what an operator must not be shown.
+	wakeupReportFailures      uint64
+	unreclaimableTerminalized uint64
+	lastOK                    time.Time
+	up                        bool
+	errors                    chan error
+	recorderBusy              chan struct{}
 }
 
 func NewLoop(stepper Stepper, config LoopConfig) (*Loop, error) {
@@ -305,14 +314,31 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 // the process total. A negative count cannot be represented in the metric and a
 // wrapped total would read as a drop, so both are refused rather than exported.
 func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
-	recovered := observation.ExhaustedDeliveriesRecovered
-	if recovered <= 0 {
-		return
+	loop.exhaustedRecoveries = accumulateCount(
+		loop.exhaustedRecoveries, observation.ExhaustedDeliveriesRecovered,
+	)
+	loop.wakeupReportFailures = accumulateCount(
+		loop.wakeupReportFailures, observation.WakeupReportFailures,
+	)
+	loop.unreclaimableTerminalized = accumulateCount(
+		loop.unreclaimableTerminalized, observation.UnreclaimableTerminalized,
+	)
+}
+
+// accumulateCount adds one step's events to a process total, refusing both a
+// negative count -- which the metric cannot represent -- and an overflow,
+// which would wrap and read as a DROP. A counter that goes backwards is worse
+// than one that stops: every rate() over it reports a spike that never
+// happened. Refusing leaves the total flat, which is at least honest about
+// having stopped counting.
+func accumulateCount(total uint64, delta int64) uint64 {
+	if delta <= 0 {
+		return total
 	}
-	if loop.exhaustedRecoveries > math.MaxUint64-uint64(recovered) {
-		return
+	if total > math.MaxUint64-uint64(delta) {
+		return total
 	}
-	loop.exhaustedRecoveries += uint64(recovered)
+	return total + uint64(delta)
 }
 
 func (loop *Loop) offerObservation(observation Observation) {
@@ -419,6 +445,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	loop.mu.Lock()
 	observation := copyObservation(loop.observation)
 	exhaustedRecoveries := loop.exhaustedRecoveries
+	wakeupReportFailures := loop.wakeupReportFailures
+	unreclaimableTerminalized := loop.unreclaimableTerminalized
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -444,6 +472,22 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 		text.WriteString("0\n")
 	}
 	fmt.Fprintf(&text, "# HELP sync_dispatch_exhausted_delivery_recoveries_total Coordinator deliveries reclaimed after River spent their whole attempt budget.\n# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter\nsync_dispatch_exhausted_delivery_recoveries_total %d\n", exhaustedRecoveries)
+	// CHAOS-4097. The two gauges are the alertable pair: a runaway count above
+	// zero says a run is looping, and a failure counter that climbs says the
+	// thing which would have told you is broken. Reading either one alone can
+	// mislead -- a quiet gauge is meaningless while the detector is down --
+	// which is why both are exported rather than only the interesting one.
+	//
+	// The runaway threshold is stated in the HELP text rather than left in the
+	// Go source, because the number is what an operator needs to interpret the
+	// series and they are not reading materializer.go at 3am. It is derived
+	// from the production distribution (healthy p99 43-211 attempts against
+	// 6499 and 72601 for the CHAOS-4093 rows), and it decides nothing: it
+	// selects what is reported, never what is written.
+	fmt.Fprintf(&text, "# HELP sync_dispatch_runaway_dispatch_wakeups Non-terminal runs whose dispatch wakeup has exceeded %d attempts.\n# TYPE sync_dispatch_runaway_dispatch_wakeups gauge\nsync_dispatch_runaway_dispatch_wakeups %d\n", runawayDispatchAttempts, observation.RunawayDispatchWakeups)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_wakeup_report_failures_total Passes on which the runaway dispatch-wakeup report could not run, leaving the gauge above unproven.\n# TYPE sync_dispatch_wakeup_report_failures_total counter\nsync_dispatch_wakeup_report_failures_total %d\n", wakeupReportFailures)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_candidates Units the unreclaimable sweep selected on its last pass. Non-zero in shadow mode means work it WOULD have terminalized.\n# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n", observation.UnreclaimableCandidates)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_terminalized_total Units the unreclaimable sweep destroyed. Always zero in shadow mode; a persistent gap against the candidate gauge means writes are being refused.\n# TYPE sync_dispatch_unreclaimable_terminalized_total counter\nsync_dispatch_unreclaimable_terminalized_total %d\n", unreclaimableTerminalized)
 	text.WriteString("# HELP sync_dispatch_observer_up Whether the observer loop is currently healthy.\n# TYPE sync_dispatch_observer_up gauge\nsync_dispatch_observer_up ")
 	if up {
 		text.WriteString("1\n")

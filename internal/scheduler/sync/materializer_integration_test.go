@@ -771,3 +771,100 @@ func TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan(t *te
 		t.Fatalf("zero-unit plan hydrated auth: units=%d credential=%v auth=%v", units, credential, auth)
 	}
 }
+
+// seedPriorSyncRunUnit inserts one terminal sync_run_units row for the
+// fixture's sole integration/source, so a later RefreshExecutedProof call has
+// real evidence to find -- exercising the query this materializer actually
+// runs, not a hand-built evidence map.
+func seedPriorSyncRunUnit(t *testing.T, fixture materializerFixture, dataset, status, result string) {
+	t.Helper()
+	ctx := context.Background()
+	runID := "00000000-0000-4000-8000-000000002001"
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO sync_runs (
+	id, org_id, integration_id, triggered_by, mode, status,
+	total_units, completed_units, failed_units, created_at
+) VALUES (
+	$1::uuid, $2, (SELECT integration_id FROM sync_configurations LIMIT 1),
+	'scheduled', 'incremental', $3, 1, 1, 0, now()
+) ON CONFLICT (id) DO NOTHING`,
+		runID, fixture.occurrence.OrgID, status,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO sync_run_units (
+	id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+	cost_class, mode, status, attempts, result, created_at, updated_at
+) VALUES (
+	gen_random_uuid(), $1, $2::uuid,
+	(SELECT integration_id FROM sync_configurations LIMIT 1),
+	(SELECT id FROM integration_sources LIMIT 1),
+	'github', $3, 'medium', 'incremental', $4, 1, $5, now(), now()
+)`,
+		fixture.occurrence.OrgID, runID, dataset, status, result,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNativeMaterializerRefreshExecutedProofGatesPlanningEndToEnd is the
+// CHAOS-4060 end-to-end control: it drives the real wiring
+// (RefreshExecutedProof -> materializer.executedProof -> Materialize ->
+// PlannerInput.ExecutedProof -> BuildScheduledPlan), not just the unit-level
+// gate, and proves both directions -- the gate blocks a proof-less pair and
+// clears once real evidence exists.
+func TestNativeMaterializerRefreshExecutedProofGatesPlanningEndToEnd(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Negative control: the gate is refreshed against a Postgres with zero
+	// executed history for github/commits (no waiver either), so the
+	// snapshot is real, non-nil, and empty -- the pair must not plan.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var units int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 0 {
+		t.Fatalf("total_units=%d, want 0: github/commits has no executed proof yet", units)
+	}
+
+	// Seed real, terminal, nonzero-persisted evidence and refresh again.
+	seedPriorSyncRunUnit(t, fixture, "commits", "success",
+		`{"go_provider_route":{"effects_written":4}}`)
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh occurrence identity: the prior occurrence's materialization
+	// already committed a (zero-unit) domain graph, and Materialize's replay
+	// contract deliberately rejects replanning a committed occurrence with a
+	// different result (TestNativeMaterializerRejectsReplayAcrossInitializedFieldFamilies).
+	// The gate change is a genuinely new plan, so it earns a new occurrence.
+	secondOccurrence := fixture.occurrence
+	secondOccurrence.ID = "occurrence:v1:scheduled:second"
+	secondOccurrence.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, secondOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 {
+		t.Fatalf("total_units=%d, want 1: github/commits now has live executed proof", units)
+	}
+}

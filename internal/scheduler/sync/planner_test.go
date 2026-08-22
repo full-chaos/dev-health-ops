@@ -212,6 +212,113 @@ func TestBuildScheduledPlanPlansAKnownRoutablePairUnconditionally(t *testing.T) 
 	}
 }
 
+func TestBuildScheduledPlanRequiresExecutedProofOrWaiver(t *testing.T) {
+	// CHAOS-4060: fixture/golden proof (RouteReady && Plannable) stops being
+	// sufficient. github/security carries no ExecutedProofWaiver, so it must
+	// license new work only when the CHAOS-4060 evidence snapshot actually
+	// proves a live executed run for it -- and it must NOT plan when a
+	// non-nil snapshot proves everything else but that pair, which is the
+	// negative control: the gate must actually fail when proof is absent,
+	// not merely pass when proof happens to be present.
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	input := func(evidence providersync.ExecutedProofEvidence) PlannerInput {
+		return PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+			Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+			Datasets:      []PlanDataset{{Key: "security"}},
+			ExecutedProof: evidence,
+		}
+	}
+
+	// Negative control: proof exists for other pairs, but not this one.
+	units, err := BuildScheduledPlan(input(providersync.ExecutedProofEvidence{
+		"github/commits": true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("units=%+v, want zero: github/security has no evidence and no waiver", units)
+	}
+
+	// Positive control: proof exists for this exact pair.
+	units, err = BuildScheduledPlan(input(providersync.ExecutedProofEvidence{
+		"github/security": true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("units=%+v, want exactly one: github/security has live executed proof", units)
+	}
+
+	// Empty-but-non-nil evidence: the gate is wired and enforced, and proves
+	// nothing -- same outcome as the negative control above.
+	units, err = BuildScheduledPlan(input(providersync.ExecutedProofEvidence{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("units=%+v, want zero against empty (but non-nil) evidence", units)
+	}
+
+	// Nil evidence: this caller has not wired the gate -- pre-CHAOS-4060
+	// behavior, unchanged. This is exactly
+	// TestBuildScheduledPlanPlansAKnownRoutablePairUnconditionally's
+	// assertion, repeated here to pin that "not wired" and "wired but proof
+	// absent" are deliberately different outcomes.
+	units, err = BuildScheduledPlan(input(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("units=%+v, want exactly one: nil evidence means the gate is not wired by this caller", units)
+	}
+}
+
+func TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence(t *testing.T) {
+	// github/repo-metadata carries CHAOS-4054's ratified interim
+	// ExecutedProofWaiver (no production users yet). It must keep planning
+	// even against a non-nil, fully-enforced evidence snapshot that proves
+	// nothing for it -- the waiver is the "explicit, dated operator waiver"
+	// alternative the ticket names, not merely an absence of enforcement.
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	units, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets:      []PlanDataset{{Key: "repo-metadata"}},
+		ExecutedProof: providersync.ExecutedProofEvidence{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf(
+			"units=%+v, want exactly one: github/repo-metadata's ExecutedProofWaiver bypasses empty evidence",
+			units,
+		)
+	}
+}
+
+func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(t *testing.T) {
+	// Same CHAOS-4060 requirement as TestBuildScheduledPlanRequiresExecutedProofOrWaiver,
+	// applied to the family-collapse gate: the canonical work-items claim
+	// must not plan against non-nil evidence that proves nothing for it.
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	units, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets:      []PlanDataset{{Key: "work-items"}},
+		ExecutedProof: providersync.ExecutedProofEvidence{"github/commits": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("units=%+v, want zero: github/work-items has no evidence and no waiver", units)
+	}
+}
+
 func TestScheduledPlannerDescriptorFailsClosedForUnknownPair(t *testing.T) {
 	// Input symmetry: a pair the checked-in matrix does not recognize at all
 	// fails closed (ok=false), never an accidental route -- the fail-closed

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,14 @@ type NativeMaterializer struct {
 	afterDomainCommit func() error
 	watermarkOverlap  time.Duration
 	defaultUnitCap    int
+	// executedProof is the CHAOS-4060 evidence snapshot consulted by every
+	// Materialize call. It starts nil (gate not wired: pre-CHAOS-4060
+	// behavior) and becomes a real, non-nil snapshot only once
+	// RefreshExecutedProof succeeds. It is deliberately not reloaded per
+	// occurrence: the fact it observes -- "has this pair ever completed with
+	// persisted evidence" -- is monotonic (never un-proves itself), and
+	// sync_run_units has no index shaped for a per-occurrence global scan.
+	executedProof providersync.ExecutedProofEvidence
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -41,6 +50,26 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
 	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
 	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
+}
+
+// RefreshExecutedProof loads the CHAOS-4060 executed-proof snapshot from the
+// domain pool and swaps it in for every subsequent Materialize call. The
+// caller decides when this runs (typically once at process startup); a
+// failed refresh leaves any previously-loaded snapshot in place and reports
+// the error so the caller can fail loud without taking the whole scheduler
+// down over a transient evidence-query failure -- an absent or stale
+// snapshot only makes the gate conservative (nothing new proves itself),
+// never permissive.
+func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context) error {
+	if materializer == nil || materializer.domainPool == nil {
+		return ErrInvalidMaterializer
+	}
+	evidence, err := providersync.QueryExecutedProofEvidence(ctx, materializer.domainPool)
+	if err != nil {
+		return err
+	}
+	materializer.executedProof = evidence
+	return nil
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -104,6 +133,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	loaded.input.ExecutedProof = materializer.executedProof
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
 		units, err = BuildScheduledPlan(loaded.input)

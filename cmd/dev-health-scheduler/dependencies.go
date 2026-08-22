@@ -281,6 +281,19 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		if err != nil {
 			return nil, err
 		}
+		// CHAOS-4060: load the executed-proof snapshot once at process
+		// startup. A failed load is not fatal -- the materializer already
+		// starts with the gate unwired (nil evidence, pre-CHAOS-4060
+		// behavior) and RefreshExecutedProof leaves that in place on error --
+		// but it must be loud: an operator needs to know the gate is not
+		// actually enforcing anything in this process.
+		if refreshErr := materializer.RefreshExecutedProof(context.Background()); refreshErr != nil {
+			slog.Default().Error(
+				"executed-proof evidence load failed at scheduler startup; "+
+					"route readiness gate is unenforced in this process (CHAOS-4060)",
+				"error", refreshErr,
+			)
+		}
 		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
 }

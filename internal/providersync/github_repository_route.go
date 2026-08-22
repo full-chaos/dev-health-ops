@@ -90,9 +90,12 @@ type gitHubRepositoryPayload struct {
 // TestGitHubRepositoryRouteEmitsOneBoundedReposEffect and
 // TestRepositoryIdentityMatchesPythonDerivation). Live non-empty parity
 // against a real credentialed GitHub repository has NOT been captured; that
-// remains open (TestGitHubRepositoryLiveParityHarness) and, along with the
-// GithubRepoMetadata switch, is what still stands between this pair and live
-// traffic. Capability metadata is not execution evidence (TRD §10.1).
+// remains open (TestGitHubRepositoryLiveParityHarness). There is no route
+// enablement switch left to gate this on (CHAOS-4054); what actually stands
+// between this pair and live traffic is CHAOS-4060's executed-proof gate,
+// recorded on the descriptor as an explicit, dated ExecutedProofWaiver until
+// a live unit reports persisted evidence. Capability metadata is not
+// execution evidence (TRD §10.1).
 type GitHubRepositoryRouteHandler struct{ Now func() time.Time }
 
 func (handler GitHubRepositoryRouteHandler) now() time.Time {

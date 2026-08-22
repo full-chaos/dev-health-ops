@@ -239,15 +239,23 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// CHAOS-4054: these default to the artifacts every worker image ships
+	// (docker/go-worker.Dockerfile copies both into /app/config in the runtime
+	// stage). They used to default only under the local all-routes preset,
+	// because outside it the work-item route was switched off and never needed
+	// them. With capability always on, a worker that consumes the provider-unit
+	// queue must be able to serve the work-item family, so the default has to
+	// hold everywhere the binary runs — a deployment that leaves these unset is
+	// not opting out of anything, it is running the image that has them.
 	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
-		conditionalDefault(environmentIsLocal(lookup), localStatusMappingPath),
+		localStatusMappingPath,
 	)
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-		conditionalDefault(environmentIsLocal(lookup), localInvestmentAreasPath),
+		localInvestmentAreasPath,
 	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -481,21 +489,6 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-// environmentIsLocal reports whether this process is configured as a local
-// deployment. It selects packaged local artifact paths as defaults; it never
-// decides what a route may execute — capability is always on (CHAOS-4054).
-func environmentIsLocal(lookup secrets.LookupEnv) bool {
-	environment, _ := lookup(devHealthEnv)
-	return strings.ToLower(strings.TrimSpace(environment)) == "local"
-}
-
-func conditionalDefault(enabled bool, value string) string {
-	if enabled {
-		return value
-	}
-	return ""
 }
 
 // SafeAttrs is the only supported startup-config logging surface. It includes

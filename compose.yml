@@ -249,12 +249,11 @@ services:
       # always on in the binary, the user's sync config decides what should run,
       # and each worker's -Q/--queues topology decides what it serves.
       # GitHub work-items is a five-alias matrix family, but only its canonical
-      # work-items claim may execute. Its Go route requires these two explicit,
-      # validated config paths. They intentionally have no guessed
-      # source-relative default; supplying one without the other, or an
-      # unreadable artifact, fails Go readiness before a provider request or
-      # write. Supplying neither means this deployment cannot serve the
-      # work-item family and says so on every such claim.
+      # work-items claim may execute. Its Go route requires these two config
+      # artifacts. Leave them unset: every worker image ships them at
+      # /app/config, which is what the binary defaults to. Point them elsewhere
+      # only to override the packaged artifacts — an unreadable path fails Go
+      # readiness before a provider request or write.
       WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
       WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
       AUTO_RUN_MIGRATIONS: "false"

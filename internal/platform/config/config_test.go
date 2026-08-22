@@ -395,9 +395,14 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	if cfg.StreamConfiguredReplicas != 1 {
 		t.Fatalf("stream replicas = %d, want 1", cfg.StreamConfiguredReplicas)
 	}
-	if cfg.WorkerGithubWorkItemsStatusMappingPath != "" ||
-		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "" {
-		t.Fatal("work-item runtime artifact paths must have no guessed default")
+	// CHAOS-4054: these default to the artifacts every worker image ships,
+	// because a process that serves the provider-unit queue must be able to
+	// serve the work-item family and no switch can say otherwise any more.
+	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/app/config/status_mapping.yaml" ||
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/app/config/investment_areas.yaml" {
+		t.Fatalf("work-item runtime artifact paths = %q, %q; want the packaged image defaults",
+			cfg.WorkerGithubWorkItemsStatusMappingPath,
+			cfg.WorkerGithubWorkItemsInvestmentConfigPath)
 	}
 }
 

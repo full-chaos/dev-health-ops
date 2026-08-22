@@ -188,10 +188,11 @@ services:
   # run at all is the user's own sync config. If a route is not running, it is
   # visible in one of those two places and nowhere else.
   #
-  # The canonical work-items route additionally needs the two explicit
-  # config-file paths below; no ambient STATUS_MAPPING_PATH override is
-  # accepted. A deployment that supplies neither cannot serve the work-item
-  # family and reports that on every such claim.
+  # The canonical work-items route needs two config artifacts. Every worker
+  # image ships them at /app/config and the binary defaults there, so the
+  # values below are overrides, not requirements. No ambient
+  # STATUS_MAPPING_PATH override is accepted, and an unreadable path fails
+  # readiness at startup rather than on the first claim.
   go-worker:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}

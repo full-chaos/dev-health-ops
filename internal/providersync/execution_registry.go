@@ -149,6 +149,11 @@ type CompleteRouteDescriptor struct {
 	// deployment configuration. There is no route enablement plane: user sync
 	// config decides intent and -Q queue topology decides serving.
 	RouteReady bool
+	// CanonicalDataset names the one plannable identity of this pair's writer
+	// family. For a canonical identity it is the dataset itself; for an alias
+	// it is the writer the alias folds onto, which is what a planner mints a
+	// unit for when a user enabled only the alias.
+	CanonicalDataset string
 	// Plannable reports whether this identity may be planned and claimed on its
 	// own. Exactly one identity per writer family is plannable: the canonical
 	// writer (`prs`, `cicd`, `work-items`). Alias identities stay RouteReady so
@@ -210,8 +215,9 @@ func Descriptor(
 	}
 	descriptor := CompleteRouteDescriptor{
 		Provider: provider, RequestedDataset: dataset, RouteDataset: dataset,
-		Executor:     ProviderExecutor(provider, dataset),
-		NativeShadow: nativeShadowReady(provider, dataset),
+		CanonicalDataset: canonicalRouteIdentity(dataset),
+		Executor:         ProviderExecutor(provider, dataset),
+		NativeShadow:     nativeShadowReady(provider, dataset),
 	}
 	// The GitHub work-item implementation owns this family identity. Do not
 	// derive route activation from Linear's expired-lease recovery oracle: both
@@ -451,6 +457,27 @@ func Descriptor(
 		descriptor.ChunkPolicy = DefaultChunkPolicy()
 	}
 	return descriptor, true
+}
+
+// canonicalRouteIdentity maps an identity onto the one plannable identity of
+// its writer family.
+//
+// This is the other half of the alias collapse. Plannable says an alias may
+// not be minted as its own unit; this says which unit carries its intent
+// instead, so a user who enabled only `pr-comments` or only `tests` gets the
+// canonical writer rather than silence. Every dataset that is not an alias is
+// its own canonical identity.
+func canonicalRouteIdentity(dataset string) string {
+	switch {
+	case isWorkItemFamilyDataset(dataset):
+		return "work-items"
+	case dataset == "pr-reviews" || dataset == "pr-comments":
+		return "prs"
+	case dataset == "tests":
+		return "cicd"
+	default:
+		return dataset
+	}
 }
 
 func launchDarklyRouteDestinations() []string {

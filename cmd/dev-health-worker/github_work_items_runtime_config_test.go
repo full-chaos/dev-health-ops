@@ -84,9 +84,15 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 		})
 	}
 
-	disabled, err := githubWorkItemsRuntimeConfigFrom(config.Config{})
-	if err != nil || disabled.configured() {
-		t.Fatalf("disabled config = %+v, error = %v", disabled, err)
+	// CHAOS-4054: there is no "disabled" case left. A route switch used to say
+	// "this deployment does not serve work-items", so unset artifacts were
+	// simply not needed. Capability is always on now, so unset artifacts are a
+	// configuration error that must surface at readiness, not a quiet opt-out
+	// that turns into a per-claim executor failure later.
+	if _, err := githubWorkItemsRuntimeConfigFrom(config.Config{}); !errors.Is(
+		err, providersync.ErrInvalidConfiguration,
+	) {
+		t.Fatalf("unset artifact paths: error = %v, want ErrInvalidConfiguration", err)
 	}
 }
 

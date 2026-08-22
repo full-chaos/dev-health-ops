@@ -74,6 +74,7 @@ class ProviderUnitRouteError(ValueError):
 class _MatrixRoutes:
     ready: frozenset[tuple[str, str]]
     plannable: frozenset[tuple[str, str]]
+    canonical: Mapping[tuple[str, str], str]
 
 
 @cache
@@ -98,6 +99,7 @@ def _load_matrix_routes(path: Path) -> _MatrixRoutes:
         ) from error
     ready: set[tuple[str, str]] = set()
     plannable: set[tuple[str, str]] = set()
+    canonical: dict[tuple[str, str], str] = {}
     for pair in raw.get("pairs", ()):
         key = (
             str(pair["provider"]).strip().lower(),
@@ -106,9 +108,14 @@ def _load_matrix_routes(path: Path) -> _MatrixRoutes:
         if pair.get("route_ready") is not True:
             continue
         ready.add(key)
+        canonical[key] = str(pair.get("canonical_dataset") or key[1]).strip().lower()
         if pair.get("plannable") is True:
             plannable.add(key)
-    return _MatrixRoutes(ready=frozenset(ready), plannable=frozenset(plannable))
+    return _MatrixRoutes(
+        ready=frozenset(ready),
+        plannable=frozenset(plannable),
+        canonical=canonical,
+    )
 
 
 def _matrix_routes() -> _MatrixRoutes:
@@ -148,6 +155,28 @@ def is_plannable(provider: str, dataset: str) -> bool:
         provider.strip().lower(),
         dataset.strip().lower(),
     ) in _matrix_routes().plannable
+
+
+def canonical_identity(provider: str, dataset: str) -> str | None:
+    """The one plannable identity that carries this pair's intent.
+
+    This is the other half of the alias collapse. ``is_plannable`` says an
+    alias may not be minted as its own unit; this says which unit carries its
+    intent instead, so a user who enabled only ``pr-comments`` or only
+    ``tests`` gets the canonical writer rather than silence.
+
+    ``None`` means nothing serves the pair: it is not route-ready, or its
+    canonical identity is not itself plannable.
+    """
+
+    key = (provider.strip().lower(), dataset.strip().lower())
+    routes = _matrix_routes()
+    if key not in routes.ready:
+        return None
+    canonical = routes.canonical.get(key, key[1])
+    if (key[0], canonical) not in routes.plannable:
+        return None
+    return canonical
 
 
 def routes_to_river(provider: str, dataset: str) -> bool:

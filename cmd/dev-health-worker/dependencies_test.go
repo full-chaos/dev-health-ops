@@ -136,8 +136,11 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 //     work-item runtime config or whether the provider-sync runtime was ever
 //     constructed.
 //   - queue selected: the check passes only if the work-item runtime config
-//     is valid (or trivially absent) AND the provider-sync runtime was
-//     constructed.
+//     is valid AND the provider-sync runtime was constructed. "Valid" has no
+//     absent case any more: capability is always on, so a process that serves
+//     the provider-unit queue must be able to serve the work-item family, and
+//     unreadable or unset artifacts fail readiness rather than deferring the
+//     problem to the first claim.
 //
 // Every one of the ~40 deleted WORKER_*_ENABLED switches used to gate one
 // route's slice of this same check (github/repo-metadata "on" and
@@ -163,13 +166,14 @@ func TestProviderRouteSwitchesReadyFollowsQueueTopology(t *testing.T) {
 		t.Fatal("queue selected without a constructed runtime: want error")
 	}
 
-	// Queue selected, runtime constructed, no work-item family configured:
-	// ready (the work-items artifact paths are optional config, not a route
-	// switch).
+	// Queue selected, runtime constructed, no work-item artifacts at all:
+	// refused. There is no route switch left that could mean "this deployment
+	// opted out of work-items", so unset artifacts are a serving-plane fault
+	// an operator must see at startup, not a per-claim surprise.
 	constructed := true
-	trivial := config.Config{Queues: []string{providerUnitQueue}}
-	if err := providerRouteSwitchesReady(trivial, &constructed)(context.Background()); err != nil {
-		t.Fatalf("queue selected with a constructed runtime: error = %v, want nil", err)
+	unconfigured := config.Config{Queues: []string{providerUnitQueue}}
+	if err := providerRouteSwitchesReady(unconfigured, &constructed)(context.Background()); err == nil {
+		t.Fatal("queue selected with no work-item runtime artifacts: want error")
 	}
 
 	// Queue selected, runtime constructed, but the work-item runtime config
@@ -324,12 +328,17 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	registry := health.NewRegistry(100 * time.Millisecond)
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{
-			Queues: []string{"sync", "sync_provider"}, RiverDatabaseSchema: "river",
-			WorkerQueueConcurrency: map[string]int{"sync": 4, "sync_provider": 2},
-			DomainDatabaseMaxConns: 4,
-			QueueDatabaseMaxConns:  2,
-		},
+		func() config.Config {
+			// The provider-unit queue is selected here, so readiness now
+			// requires real work-item artifacts (CHAOS-4054).
+			cfg := validGitHubWorkItemsRuntimeConfig(t)
+			cfg.Queues = []string{"sync", "sync_provider"}
+			cfg.RiverDatabaseSchema = "river"
+			cfg.WorkerQueueConcurrency = map[string]int{"sync": 4, "sync_provider": 2}
+			cfg.DomainDatabaseMaxConns = 4
+			cfg.QueueDatabaseMaxConns = 2
+			return cfg
+		}(),
 		registry, sources,
 	)
 	if err != nil {

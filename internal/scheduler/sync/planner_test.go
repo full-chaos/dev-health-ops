@@ -167,7 +167,8 @@ func TestBuildScheduledPlanNeverPlansAnAliasIdentityEvenWithACanonicalSibling(t 
 	// Regression: the exact production failure shape from CHAOS-4047/4048.
 	// github pr-comments aliases onto the canonical `prs` writer -- RouteReady
 	// but never independently Plannable -- so it must never be minted as its
-	// own unit, whether or not the sibling prs dataset is also requested.
+	// own unit, and requesting both aliases must still collapse to ONE unit
+	// rather than two claims racing for the same rows.
 	// Successor to
 	// TestBuildScheduledPlanExcludesRouteDisabledAliasWithSiblingEnabled: the
 	// exclusion no longer depends on any switch profile, it is unconditional.
@@ -221,5 +222,49 @@ func TestScheduledPlannerDescriptorFailsClosedForUnknownPair(t *testing.T) {
 	// providersync.Descriptor function is the sole entry point now.
 	if _, ok := providersync.Descriptor("acme-corp", "widgets"); ok {
 		t.Fatal("Descriptor() ok=true for an unrecognized pair, want fail-closed")
+	}
+}
+
+// TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter is the
+// other half of the alias collapse, and the half whose absence would be
+// silent. A user can enable `pr-comments` or `tests` without their canonical
+// sibling — all six are independently selectable IntegrationDataset rows — and
+// the writer that serves them is `prs`/`cicd`. Planning nothing would leave
+// that user with no collection and no failure, which is exactly the invisible
+// third-plane behaviour CHAOS-4054 exists to remove.
+func TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		provider  string
+		dataset   string
+		canonical string
+	}{
+		{"github pr-comments", "github", "pr-comments", "prs"},
+		{"github pr-reviews", "github", "pr-reviews", "prs"},
+		{"github tests", "github", "tests", "cicd"},
+		{"gitlab pr-comments", "gitlab", "pr-comments", "prs"},
+		{"gitlab tests", "gitlab", "tests", "cicd"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			units, err := BuildScheduledPlan(PlannerInput{
+				OrgID: "org", IntegrationID: "integration",
+				Mode: SyncModeIncremental, Now: now,
+				Sources: []PlanSource{{
+					ID: "source", ExternalID: "owner/repo",
+					Provider: test.provider, FullName: "owner/repo",
+				}},
+				Datasets: []PlanDataset{{Key: test.dataset}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(units) != 1 || units[0].Dataset != test.canonical {
+				t.Fatalf(
+					"units=%+v, want exactly one unit claimed under %q: the alias's intent is served by its canonical writer, never dropped",
+					units, test.canonical,
+				)
+			}
+		})
 	}
 }

@@ -27,6 +27,7 @@ type ProviderMatrixEntry struct {
 	RouteDestinations []string          `json:"route_destinations"`
 	RouteReady        bool              `json:"route_ready"`
 	Plannable         bool              `json:"plannable"`
+	CanonicalDataset  string            `json:"canonical_dataset"`
 	CredentialModes   []string          `json:"credential_modes"`
 }
 
@@ -104,6 +105,7 @@ func BuildProviderMatrix() ProviderMatrix {
 				RouteDestinations: sortedStrings(descriptor.Destinations),
 				RouteReady:        descriptor.RouteReady,
 				Plannable:         descriptor.Plannable,
+				CanonicalDataset:  descriptor.CanonicalDataset,
 				CredentialModes:   CredentialModes(provider),
 			})
 		}

@@ -213,6 +213,7 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 |---|---|---|---|
 | A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
 | PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
+| A PR that WAS attributed via `linked_issue` silently becomes `unassigned` on a later run | 5 → 7 | is the donor edge older than the sync window? compare the edge's `last_synced` against the run window — donor and dependent stamped minutes apart rules staleness out | **fixed CHAOS-4112**: the donor preload unions the STORED inheritable edges for the items being recomputed with the fresh ones (`_merge_stored_inheritable_edges`), so an edge aging out of the window no longer un-attributes the PR. Watch `devhealth_work_item_team_attribution_downgrades_total` — a teamed→`unassigned` transition is always a bug |
 | `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=6`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
 | A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
 | A PR inherits via `linked_issue` from a donor that only has a `manual_fallback` (e.g. `issue_key_prefix`) rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; a manual-only donor is never a linked_issue donor (done CS3) |
@@ -310,6 +311,35 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   identity. Cycle-time rows can still provide activity windows, durations,
   work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
   owning team identity.
+- **Which edges linked-issue inheritance considers (CHAOS-4112):** the donor
+  preload in `metrics/job_work_items.py` unions the **stored** inheritable
+  edges for the items being recomputed with this run's **fresh** ones. Fresh
+  edges remain authoritative for their own
+  `(source, target, relationship_type)` key, and
+  `build_linked_issue_team_resolver`'s `latest_edge` collapse settles any
+  conflict by `last_synced`, so a relationship retyped `relates_to` →
+  `blocked_by` still supersedes the stored inheritable row. Before this,
+  only the fresh edges were considered: because attribution rows are
+  re-stamped on every run, a PR whose edge had aged out of the sync window
+  was rebuilt as `unassigned`, superseding its own earlier correct
+  `linked_issue` attribution (69 items org-wide at the time of the fix).
+  Removed links do NOT resurrect, even though `work_item_dependencies` is
+  insert-only and carries no tombstone. The providers re-extract an item's
+  links on every sync and stamp them `last_synced=now`, so a link still
+  present upstream reappears among this run's fresh edges. A stored edge is
+  therefore discarded when its source item contributed **at least one fresh
+  edge this run** — positive evidence the extractor ran and simply did not
+  re-emit that link. When an item produced no fresh edges at all, "removed"
+  and "this sync path does not extract dependencies" are indistinguishable,
+  so its stored edges are kept rather than risk re-introducing the decay.
+  (Verified in the dev store: 1,263 edges are stamped in the same pass as
+  their source item, and all 25 that lag their item belong to items that also
+  have fresh edges.) Residual: an item whose links were *all* removed in one
+  sync emits no fresh edge, so its stored edges keep donating until it gains
+  any link again — narrow, and in the safe direction.
+  A teamed → `unassigned` transition across recomputes is counted by
+  `devhealth_work_item_team_attribution_downgrades_total` and logged at WARN
+  — it is always a bug, never a precedence change.
 - **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
   Investment `unit_team` resolution reads **both** the `issues` **and** the
   `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`

@@ -101,7 +101,7 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
     day (CHAOS-2373). The fixed-schedule inventory states the requirement
     directly -- ``recommendations_daily_fanout`` is the "safety net behind the
     finalize-gated primary trigger. The producer must preserve the in-flight
-    daily_finalize skip" (internal/scheduler/fixed/inventory.go:110-112).
+    daily_finalize skip" (internal/scheduler/fixed/inventory.go:110-111).
 
     Semantics (see the ``_LATEST_DAILY_METRICS_RUN_SQL`` comment above for the
     Go-side citation of every status value):

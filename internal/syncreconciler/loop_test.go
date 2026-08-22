@@ -1064,6 +1064,10 @@ func TestFailedPassStillPublishesTheRunawayAndSweepGauges(t *testing.T) {
 		return Observation{
 			RunawayDispatchWakeups:  83,
 			UnreclaimableCandidates: 12,
+			// Both were genuinely taken before the later stage faulted, which
+			// is what makes them publishable.
+			RunawayMeasured:       true,
+			UnreclaimableMeasured: true,
 		}, failure
 	}), clock)
 	openReadinessGate(t, registry)
@@ -1101,6 +1105,7 @@ func TestFailedPassDoesNotPublishTheObserversOwnGauges(t *testing.T) {
 	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
 		return Observation{
 			RunawayDispatchWakeups: 4,
+			RunawayMeasured:        true,
 			// A half-built observation from an aborted pass.
 			CeleryDuePending:  999,
 			RiverDuePending:   999,
@@ -1123,4 +1128,111 @@ func TestFailedPassDoesNotPublishTheObserversOwnGauges(t *testing.T) {
 		t.Fatalf("a failed pass published the observer's unreliable queue figures:\n%s",
 			metrics.String())
 	}
+}
+
+// AN UNMEASURED PASS MUST NOT CLEAR A REAL INCIDENT (adversarial review
+// finding, and the inverse of the one before it).
+//
+// Two rounds argued opposite sides of this single field: one that a failed
+// pass must publish its gauges because the degraded pass is where the incident
+// is, the next that a failed pass must not, because overwriting 83 with an
+// unmeasured zero clears a gauge-based alert exactly while measurement is
+// unavailable. Both are right, and the conflict only exists while one number
+// is asked to mean two things — "I looked and found none" versus "I did not
+// look".
+//
+// The measured bit settles both. This test is the second half; the pair above
+// is the first, and neither passes without the other under the wrong design.
+func TestAnUnmeasuredPassLeavesTheLastMeasuredGaugeStanding(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	failure := errors.New("scripted detector outage")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		if steps.Add(1) == 1 {
+			// A healthy pass that measured a real incident.
+			observation := testObservation()
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+			observation.RunawayMeasured = true
+			observation.UnreclaimableMeasured = true
+			return observation, nil
+		}
+		// The detector then goes down: zero values, and nothing measured them.
+		return Observation{WakeupReportFailures: 1, UnreclaimableSweepFailures: 1}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("an unmeasured pass cleared a live incident, missing %q — a "+
+				"gauge alert would report recovery at the moment measurement "+
+				"stopped:\n%s", want, metrics.String())
+		}
+	}
+	// The staleness is still declared, so nobody mistakes the held value for
+	// a fresh one.
+	for _, want := range []string{
+		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_unreclaimable_sweep_failures_total 1",
+		"sync_dispatch_observer_up 0",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("the held gauge is not marked stale, missing %q:\n%s", want, metrics.String())
+		}
+	}
+}
+
+// ...and a MEASURED zero must still clear it, or the gauge latches forever and
+// a resolved incident never resolves on the dashboard.
+func TestAMeasuredZeroClearsTheGauge(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		observation.RunawayMeasured = true
+		observation.UnreclaimableMeasured = true
+		if steps.Add(1) == 1 {
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+		}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 0")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 0")
 }

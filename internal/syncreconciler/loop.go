@@ -288,12 +288,21 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		// ONLY these two fields are merged, never the whole observation: the
 		// observer's own queue gauges are unreliable on a failed pass, and
 		// publishing them would trade one stale number for several wrong ones.
-		// A zero here is not a claim either -- the failure counters accumulated
-		// above are what say whether anything looked.
+		//
+		// And only when the pass MEASURED them. Overwriting a real 83 with a
+		// zero the pass never took would clear a gauge-based alert at exactly
+		// the moment measurement became unavailable -- the opposite failure
+		// from dropping the evidence, and just as bad. An unmeasured pass
+		// leaves the last measured value standing; the failure counters above
+		// and readiness below are what mark it stale.
 		loop.mu.Lock()
 		if !loop.stopping {
-			loop.observation.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
-			loop.observation.UnreclaimableCandidates = observation.UnreclaimableCandidates
+			if observation.RunawayMeasured {
+				loop.observation.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
+			}
+			if observation.UnreclaimableMeasured {
+				loop.observation.UnreclaimableCandidates = observation.UnreclaimableCandidates
+			}
 		}
 		loop.mu.Unlock()
 		// Unknown stored kinds are a failed observation, but their bounded total

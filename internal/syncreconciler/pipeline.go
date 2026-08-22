@@ -232,6 +232,9 @@ func (pipeline *MutationPipeline) Step(
 		if sweepErr == nil {
 			swept.UnreclaimableCandidates = int64(sweepResult.Candidates)
 			swept.UnreclaimableTerminalized = int64(sweepResult.Terminalized)
+			// The sweep ran and answered, so its zero -- if it is a zero -- is
+			// a finding rather than an absence.
+			swept.UnreclaimableMeasured = true
 		}
 		if sweepErr != nil {
 			// Cancellation belongs to the caller and must propagate; anything
@@ -358,6 +361,10 @@ func (pipeline *MutationPipeline) Step(
 	// says so. The two are only meaningful read together, which is why the
 	// HELP text on both says so.
 	recovered.RunawayDispatchWakeups = materialized.RunawayTotal
+	// Measured only when the report actually delivered. Anything else leaves
+	// the previous value standing rather than overwriting a real count with a
+	// zero nobody took (review finding).
+	recovered.RunawayMeasured = materialized.RunawayReportStep == "" && err == nil
 	if err != nil {
 		return recovered, err
 	}
@@ -383,5 +390,7 @@ func (pipeline *MutationPipeline) Step(
 	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
 	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
 	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
+	observation.RunawayMeasured = recovered.RunawayMeasured
+	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
 	return observation, err
 }

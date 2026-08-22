@@ -143,15 +143,38 @@ type Observation struct {
 	// repair down with the safety net would trade a bounded strand for an
 	// unbounded one), so a counter is the only thing that can carry it.
 	UnreclaimableSweepFailures int64
-	CeleryDuePending           int64
-	RiverDuePending            int64
-	SampledCandidates          int64
-	Truncated                  bool
-	ObservedAt                 time.Time
-	Limit                      int
-	PredicateVersion           string
-	DigestVersion              string
-	CandidateDigest            string
+	// RunawayMeasured and UnreclaimableMeasured say whether this pass actually
+	// TOOK each measurement, as opposed to reporting a zero it never made.
+	//
+	// These exist because two review rounds argued opposite sides of the same
+	// field, which is the signature of a missing primitive rather than a
+	// missing patch. One round: a failed pass must still publish the gauges,
+	// because the degraded pass is where the incident is. The next: a failed
+	// pass must NOT publish them, because overwriting 83 with an unmeasured 0
+	// makes an alert clear exactly while measurement is unavailable. Both are
+	// right, and they only conflict while a single number is being asked to
+	// mean two things -- "I looked and found none" and "I did not look".
+	//
+	// Splitting the bit out settles both at once. A measured zero overwrites,
+	// because that is a real recovery. An unmeasured pass leaves the last
+	// measured value standing, so no alert clears on missing data, while the
+	// failure counters and readiness say the value is stale.
+	//
+	// They are NOT derivable from the failure counters. A pass that died
+	// before reaching the sweep at all increments nothing, yet measured
+	// nothing either -- inferring "measured" from "did not fail" would call
+	// that a zero.
+	RunawayMeasured       bool
+	UnreclaimableMeasured bool
+	CeleryDuePending      int64
+	RiverDuePending       int64
+	SampledCandidates     int64
+	Truncated             bool
+	ObservedAt            time.Time
+	Limit                 int
+	PredicateVersion      string
+	DigestVersion         string
+	CandidateDigest       string
 }
 
 type candidateRow struct {

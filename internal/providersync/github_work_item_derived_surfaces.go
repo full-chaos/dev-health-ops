@@ -23,7 +23,7 @@ import (
 
 // githubWorkItemDerivedDay is a calendar day, not an instant. The daily
 // destinations persist a ClickHouse Date, and the generic oracle comparator
-// tags a value carrying oracleDate() as "date" so it can never compare equal
+// tags a value carrying OracleDate() as "date" so it can never compare equal
 // to a same-looking plain string.
 type githubWorkItemDerivedDay string
 
@@ -31,7 +31,7 @@ func newGitHubWorkItemDerivedDay(value time.Time) githubWorkItemDerivedDay {
 	return githubWorkItemDerivedDay(value.UTC().Format("2006-01-02"))
 }
 
-func (day githubWorkItemDerivedDay) oracleDate() string { return string(day) }
+func (day githubWorkItemDerivedDay) OracleDate() string { return string(day) }
 
 // githubEstimateCoverageMetricsDailyRow mirrors
 // EstimateCoverageMetricsDailyRecord (metrics/schemas.py).

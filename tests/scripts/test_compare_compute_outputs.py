@@ -1133,3 +1133,44 @@ def test_a_failing_producer_reports_its_exit_code(tmp_path):
             "2026-08-22T00:00:00Z",
             timeout_seconds=30,
         )
+
+
+def test_a_manifest_without_a_pinned_fixture_digest_says_what_it_did_not_prove(
+    tmp_path,
+):
+    """Agreement between two destinations is not provenance.
+
+    A stale copy, or a hand-authored set that happens to be identical on both
+    sides, agrees perfectly. Only a pinned digest ties the run to the
+    checked-in fixture pipeline, and a run without one must say so rather than
+    let a reader infer it.
+    """
+    document = base_manifest()
+    assert "digest" not in document["fixture"]
+    manifest = write_manifest(tmp_path, document)
+    assert manifest.fixture.get("digest") is None
+
+
+def test_the_wired_manifest_pins_its_fixture_digest():
+    """metrics.dora is reproducible, so it has no excuse not to pin one."""
+    manifest = comparator.load_manifest(MANIFEST_DIR / "metrics.dora.json")
+    digest = manifest.fixture.get("digest")
+    assert isinstance(digest, str) and len(digest) == 64
+    assert manifest.fixture.get("anchor"), (
+        "a wall-clock-anchored generator needs a declared anchor, or the digest "
+        "it pins cannot be reproduced tomorrow"
+    )
+
+
+def test_combined_input_digest_is_order_independent_and_framed():
+    left = comparator._combined_input_digest(
+        {"tables": {"a": {"left_digest": "1" * 64}, "b": {"left_digest": "2" * 64}}}
+    )
+    right = comparator._combined_input_digest(
+        {"tables": {"b": {"left_digest": "2" * 64}, "a": {"left_digest": "1" * 64}}}
+    )
+    different = comparator._combined_input_digest(
+        {"tables": {"a": {"left_digest": "2" * 64}, "b": {"left_digest": "1" * 64}}}
+    )
+    assert left == right
+    assert left != different

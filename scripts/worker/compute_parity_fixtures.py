@@ -35,7 +35,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +125,31 @@ DORA_INPUT_TABLES = (
 )
 
 
-def seed_metrics_dora(dsn: str, *, seed: int, days: int) -> dict[str, Any]:
+FIXTURE_ANCHOR = "2026-08-22T00:00:00+00:00"
+
+
+def _rebase(values: Sequence[Any], anchor: datetime) -> timedelta:
+    """Offset that maps the generators' wall-clock window onto a fixed anchor.
+
+    The production fixture generators anchor their windows on
+    ``datetime.now()``, so the same seed produces different absolute timestamps
+    on every run and no fixture digest could ever be pinned. Aligning the
+    latest generated instant to a declared anchor makes the whole set a
+    function of (seed, anchor) alone: every other timestamp is that instant
+    minus a seeded delta. The row shapes, value distributions, and producer
+    path are untouched -- only the epoch the window hangs from is fixed.
+    """
+    latest = max(value for value in values if value is not None)
+    return anchor - latest
+
+
+def _shift(value: datetime | None, offset: timedelta) -> datetime | None:
+    return None if value is None else value + offset
+
+
+def seed_metrics_dora(
+    dsn: str, *, seed: int, days: int, as_of: str = FIXTURE_ANCHOR
+) -> dict[str, Any]:
     """Seed the DORA pilot inputs through the production fixture producers."""
     from dev_health_ops.fixtures.generator import SyntheticDataGenerator
     from dev_health_ops.providers.operational_migration import (
@@ -135,6 +159,7 @@ def seed_metrics_dora(dsn: str, *, seed: int, days: int) -> dict[str, Any]:
     )
     from dev_health_ops.storage import ClickHouseStore
 
+    anchor = _parse_anchor(as_of)
     generator = SyntheticDataGenerator(repo_name=PARITY_REPO_NAME, seed=seed)
     repo = generator.generate_repo()
     deployments = generator.generate_deployments(days=days, deployments_per_day=2)
@@ -143,6 +168,34 @@ def seed_metrics_dora(dsn: str, *, seed: int, days: int) -> dict[str, Any]:
         raise FixtureError("fixture_generated_no_deployments")
     if not incidents:
         raise FixtureError("fixture_generated_no_incidents")
+
+    offset = _rebase(
+        [
+            value
+            for deployment in deployments
+            for value in (
+                deployment.started_at,
+                deployment.finished_at,
+                deployment.deployed_at,
+                deployment.merged_at,
+            )
+        ]
+        + [
+            value
+            for incident in incidents
+            for value in (incident.started_at, incident.resolved_at)
+        ],
+        anchor,
+    )
+    # The generators return SQLAlchemy model instances, not dataclasses, and
+    # these are freshly built and unattached to any session, so shifting the
+    # window in place is the correct move here.
+    for deployment in deployments:
+        for column in ("started_at", "finished_at", "deployed_at", "merged_at"):
+            setattr(deployment, column, _shift(getattr(deployment, column), offset))
+    for incident in incidents:
+        for column in ("started_at", "resolved_at"):
+            setattr(incident, column, _shift(getattr(incident, column), offset))
 
     async def write() -> None:
         store = ClickHouseStore(dsn)
@@ -195,6 +248,8 @@ def seed_metrics_dora(dsn: str, *, seed: int, days: int) -> dict[str, Any]:
         "deployments": len(deployments),
         "incidents": len(incidents),
         "org_id": PARITY_ORG_ID,
+        "anchor": anchor.isoformat(),
+        "seed": seed,
     }
 
 
@@ -229,6 +284,15 @@ def kind_entry(kind: str) -> Mapping[str, Any]:
     if kind not in KINDS:
         raise FixtureError(f"unknown_kind:{kind}")
     return KINDS[kind]
+
+
+def _parse_anchor(as_of: str) -> datetime:
+    text = (as_of or "").strip() or FIXTURE_ANCHOR
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise FixtureError("as_of_unparseable") from error
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _as_of_date(as_of: str) -> date:
@@ -351,6 +415,11 @@ def build_parser() -> argparse.ArgumentParser:
     seed_step.add_argument("--dsn")
     seed_step.add_argument("--seed", type=int, default=20260822)
     seed_step.add_argument("--days", type=int, default=14)
+    seed_step.add_argument(
+        "--as-of",
+        default=FIXTURE_ANCHOR,
+        help="Instant the generated window is anchored to. Fixes the fixture digest.",
+    )
 
     clone_step = steps.add_parser(
         "clone", help="Copy declared input tables between dbs."
@@ -382,7 +451,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = provision(_dsn(args.dsn), reset=args.reset)
         elif args.step == "seed":
             handler: Callable[..., dict[str, Any]] = kind_entry(args.kind)["seed"]
-            result = handler(_dsn(args.dsn), seed=args.seed, days=args.days)
+            result = handler(
+                _dsn(args.dsn), seed=args.seed, days=args.days, as_of=args.as_of
+            )
         elif args.step == "clone":
             result = clone(args.kind, args.from_dsn, args.to_dsn)
         else:

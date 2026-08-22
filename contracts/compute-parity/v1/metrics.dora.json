@@ -14,7 +14,11 @@
       "--kind",
       "metrics.dora",
       "--days",
-      "14"
+      "14",
+      "--seed",
+      "20260822",
+      "--as-of",
+      "2026-08-22T00:00:00+00:00"
     ],
     "clone_command": [
       "scripts/worker/compute_parity_fixtures.py",
@@ -24,7 +28,8 @@
     ],
     "seed": 20260822,
     "digest_algorithm": "sha256",
-    "digest": null
+    "digest": "4076da650ce90eb7ff1a31782b04d6f2792ad1f530cd87b1c78705a335896b38",
+    "anchor": "2026-08-22T00:00:00+00:00"
   },
   "determinism": {
     "clock": {
@@ -34,7 +39,7 @@
     "seed": {
       "policy": "fixed",
       "value": 20260822,
-      "notes": "SyntheticDataGenerator seeds the process RNG. Both destinations receive the same rows by cloning the seeded tables, so parity does not rest on the generator being reproducible across processes."
+      "notes": "SyntheticDataGenerator seeds the process RNG, and the seeder then aligns the generated window's latest instant to fixture.anchor. Without that rebase the generators anchor on datetime.now(), the same seed yields different absolute timestamps on every run, and no fixture.digest could ever be pinned. Row shapes, value distributions, and the producer path are untouched -- only the epoch the window hangs from is fixed. Verified: two independent seed runs in separate processes produce the identical combined input digest."
     },
     "id_source": {
       "policy": "derived_from_fixture",

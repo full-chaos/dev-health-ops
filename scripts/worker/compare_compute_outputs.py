@@ -1225,14 +1225,30 @@ def _terminate_group(process: subprocess.Popen[str]) -> None:
         os.killpg(os.getpgid(process.pid), signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
         process.terminate()
-    try:
-        process.communicate(timeout=15)
-    except subprocess.TimeoutExpired:
+    if not _reaped(process, 15):
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             process.kill()
-        process.communicate()
+        if not _reaped(process, 15):
+            # A descendant that escaped the group can hold the inherited pipes
+            # open forever. Closing our ends turns a permanent block into an
+            # EOF, so the advertised execution bound stays a bound.
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
+            _reaped(process, 5)
+
+
+def _reaped(process: subprocess.Popen[str], timeout_seconds: int) -> bool:
+    try:
+        process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
 
 
 def normalize_command(command: Sequence[str]) -> list[str]:
@@ -1380,37 +1396,39 @@ def compare_rows(
         # 1. Inputs first. A parity verdict over outputs is meaningless unless
         #    both sides actually consumed the same fixture, so an input
         #    mismatch is INDETERMINATE, never DIFFERENT.
-        input_report: dict[str, Any] = {"verified": True, "tables": {}}
-        for input_spec in manifest.inputs:
-            left_rows = snapshot(left_reader, input_spec.table, input_spec.select)
-            right_rows = snapshot(right_reader, input_spec.table, input_spec.select)
-            _validate_projection(
-                input_spec.table, input_spec.fields, left_rows, left_label
-            )
-            _validate_projection(
-                input_spec.table, input_spec.fields, right_rows, right_label
-            )
-            left_digest = digest_of_sorted(
-                canonical_typed_row(input_spec.fields, row) for row in left_rows.rows
-            )
-            right_digest = digest_of_sorted(
-                canonical_typed_row(input_spec.fields, row) for row in right_rows.rows
-            )
-            equal = left_digest == right_digest
-            input_report["tables"][input_spec.table] = {
-                "left_digest": left_digest,
-                "right_digest": right_digest,
-                "left_count": len(left_rows.rows),
-                "right_count": len(right_rows.rows),
-                "equal": equal,
-            }
-            if not equal:
-                input_report["verified"] = False
+        input_report: dict[str, Any] = {
+            "verified": True,
+            "tables": _input_digests(
+                manifest, left_reader, right_reader, left_label, right_label
+            ),
+        }
+        if any(not entry["equal"] for entry in input_report["tables"].values()):
+            input_report["verified"] = False
+        combined = _combined_input_digest(input_report)
+        input_report["combined_digest"] = combined
+        pinned = manifest.fixture.get("digest")
+        input_report["pinned_digest"] = pinned
+        # Provenance, not just agreement. Two destinations can agree on a
+        # dataset that never came from the declared fixture pipeline at all --
+        # a stale copy, or a hand-authored set that happens to be identical on
+        # both sides. A pinned digest is what ties the run to the checked-in
+        # fixture; without one the report says so instead of implying it.
+        input_report["attested"] = bool(pinned) and pinned == combined
         report["inputs"] = input_report
         if not input_report["verified"]:
             report["verdict"] = VERDICT_INDETERMINATE
             report["reason"] = "input_fixture_mismatch"
             return report
+        if pinned and pinned != combined:
+            report["verdict"] = VERDICT_INDETERMINATE
+            report["reason"] = "fixture_digest_mismatch"
+            return report
+        if not pinned:
+            report.setdefault("does_not_prove", []).append(
+                "fixture_provenance:manifest pins no fixture.digest, so this run "
+                "shows only that both destinations agree, not that either came "
+                "from the declared fixture pipeline"
+            )
 
         # Keyed by table: the PREVIOUS run's stats per side. Every replay is
         # checked against the run before it, not only run 2 against run 1 --
@@ -1419,6 +1437,11 @@ def compare_rows(
         previous_stats: dict[str, dict[str, SnapshotStats]] = {}
         previous_tombstones: dict[str, dict[str, int | None]] = {}
         for run_index in range(1, max(1, repeat) + 1):
+            # Re-read the inputs around EVERY execution. A producer (or a
+            # dependency of one) that mutates an input table would otherwise
+            # leave the second side consuming a different fixture than the
+            # first, with nothing in the report to show it: the precondition
+            # was checked once, before either producer had run.
             if left_command:
                 run_producer(
                     left_command,
@@ -1437,6 +1460,28 @@ def compare_rows(
                     as_of,
                     producer_timeout,
                 )
+
+            after = _input_digests(
+                manifest, left_reader, right_reader, left_label, right_label
+            )
+            drifted = [
+                table
+                for table, digests in after.items()
+                if digests["left_digest"]
+                != input_report["tables"][table]["left_digest"]
+                or digests["right_digest"]
+                != input_report["tables"][table]["right_digest"]
+            ]
+            if drifted:
+                report["inputs"]["mutated_during_run"] = {
+                    "run": run_index,
+                    "tables": sorted(drifted),
+                }
+                report["verdict"] = VERDICT_INDETERMINATE
+                report["reason"] = "input_mutated_during_run:" + ",".join(
+                    sorted(drifted)
+                )
+                return report
 
             run_entry: dict[str, Any] = {"index": run_index, "tables": {}}
             for output_spec in manifest.outputs:
@@ -1524,6 +1569,50 @@ def compare_rows(
         VERDICT_EQUAL if not report["differences"] else VERDICT_DIFFERENT
     )
     return report
+
+
+def _combined_input_digest(input_report: Mapping[str, Any]) -> str:
+    """One digest over every input table's own digest.
+
+    Comparable with a manifest's pinned ``fixture.digest``: order-independent
+    and framed like every other digest in this tool.
+    """
+    return digest_of_sorted(
+        f"{table}:{digests['left_digest']}"
+        for table, digests in input_report["tables"].items()
+    )
+
+
+def _input_digests(
+    manifest: Manifest,
+    left_reader: Reader,
+    right_reader: Reader,
+    left_label: str,
+    right_label: str,
+) -> dict[str, dict[str, Any]]:
+    """Read and digest every declared input table on both sides."""
+    result: dict[str, dict[str, Any]] = {}
+    for input_spec in manifest.inputs:
+        left_rows = snapshot(left_reader, input_spec.table, input_spec.select)
+        right_rows = snapshot(right_reader, input_spec.table, input_spec.select)
+        _validate_projection(input_spec.table, input_spec.fields, left_rows, left_label)
+        _validate_projection(
+            input_spec.table, input_spec.fields, right_rows, right_label
+        )
+        left_digest = digest_of_sorted(
+            canonical_typed_row(input_spec.fields, row) for row in left_rows.rows
+        )
+        right_digest = digest_of_sorted(
+            canonical_typed_row(input_spec.fields, row) for row in right_rows.rows
+        )
+        result[input_spec.table] = {
+            "left_digest": left_digest,
+            "right_digest": right_digest,
+            "left_count": len(left_rows.rows),
+            "right_count": len(right_rows.rows),
+            "equal": left_digest == right_digest,
+        }
+    return result
 
 
 def _tombstone_count(reader: Reader, spec: OutputSpec) -> int | None:
@@ -1771,6 +1860,16 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
         "observation": {
             "build": observation.get("build"),
             "window": observation.get("window"),
+            "dataset_scope": observation.get("dataset_scope"),
+            "run_scope": observation.get("run_scope"),
+            # The attestation is SELF-DECLARED. The digests and the build
+            # identity are checked for shape and internal consistency, not
+            # recomputed from an independent source and not resolved against an
+            # artifact registry, because no such attestation plane exists in
+            # this repo yet. A reader must weigh this claim by how much they
+            # trust whoever produced the file. Recorded here rather than left
+            # implied, and it is the reason this mode never says "verified".
+            "attestation": "self_declared",
         },
         "comparisons": comparisons,
         "findings": findings,

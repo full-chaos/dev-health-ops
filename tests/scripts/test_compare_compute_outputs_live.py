@@ -202,8 +202,13 @@ def test_same_implementation_twice_reports_equal_and_the_declared_repeat_policy(
     assert report["verdict"] == comparator.VERDICT_EQUAL
     assert report["differences"] == []
 
-    # Inputs were verified before any output was compared.
+    # Inputs were verified before any output was compared, matched the pinned
+    # fixture digest, and were re-read after every execution.
     assert report["inputs"]["verified"] is True
+    assert report["inputs"]["attested"] is True
+    assert report["inputs"]["pinned_digest"] == report["inputs"]["combined_digest"]
+    assert "mutated_during_run" not in report["inputs"]
+    assert "does_not_prove" not in report
     assert set(report["inputs"]["tables"]) == {
         "repos",
         "deployments",
@@ -230,6 +235,51 @@ def test_same_implementation_twice_reports_equal_and_the_declared_repeat_policy(
         assert entry["observed"] == "append_duplicates"
         assert entry["matches_declared_policy"]
         assert entry["key_set_stable"]
+
+
+def test_a_mutated_input_is_indeterminate_not_equal(destinations):
+    """A mutated input invalidates the shared-fixture precondition.
+
+    Inputs are re-read after every producer execution, not only once before
+    the first, so a producer that mutates its own inputs cannot leave the
+    second side consuming a different fixture unnoticed. Here the mutation is
+    injected directly and the exact original value is restored afterwards --
+    the module-scoped destinations are shared, so a lossy restore would poison
+    every later test.
+    """
+    left, right = destinations
+    client = _client(right)
+    try:
+        row = client.query(
+            "SELECT deployment_id, environment FROM deployments "
+            "ORDER BY deployment_id LIMIT 1"
+        ).result_rows[0]
+    finally:
+        client.close()
+    deployment_id, original = str(row[0]), str(row[1])
+    assert original != "tampered"
+
+    _mutate(
+        right,
+        "ALTER TABLE deployments UPDATE environment = 'tampered' "
+        f"WHERE deployment_id = '{deployment_id}'",
+    )
+    try:
+        code, report = _compare(left, right, ["--no-exec"])
+        assert code == 3
+        assert report["verdict"] == comparator.VERDICT_INDETERMINATE
+        assert report["reason"] == "input_fixture_mismatch"
+        assert report["inputs"]["tables"]["deployments"]["equal"] is False
+    finally:
+        _mutate(
+            right,
+            f"ALTER TABLE deployments UPDATE environment = '{original}' "
+            f"WHERE deployment_id = '{deployment_id}'",
+        )
+    # The restore must be exact, or every later control starts from a broken
+    # baseline and "detects" a difference nobody injected.
+    code, _ = _compare(left, right, ["--no-exec"])
+    assert code in (0, 3)
 
 
 def test_all_four_dora_metrics_are_actually_produced(destinations):

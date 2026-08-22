@@ -111,7 +111,18 @@ section that reads like "nothing was violated".
    entry needs a written `notes`; a guard test fails an empty one. Anything you
    do not declare here and do not canonicalize in `outputs[]` shows up as a
    false difference in every future run.
-4. **Declare the inputs, typed.** Each input needs `fields` exactly like an
+4. **Pin the fixture digest.** `fixture.digest` is a sha256 over every declared
+   input table's own row digest. The comparator recomputes it and refuses the
+   run (`INDETERMINATE`, `fixture_digest_mismatch`) when it disagrees. Leaving
+   it null is allowed, but then the run shows only that two destinations
+   *agree* — not that either came from the declared fixture pipeline — and the
+   report says exactly that under `does_not_prove`. A stale copy, or a
+   hand-authored set that happens to be identical on both sides, agrees
+   perfectly. If the fixture generators anchor their window on the wall clock,
+   the seeder must rebase onto a declared `fixture.anchor` or no digest is
+   pinnable at all; `metrics.dora` does this, and two independent seed runs in
+   separate processes produce the identical digest.
+5. **Declare the inputs, typed.** Each input needs `fields` exactly like an
    output does. The comparator validates both sides' projections against them
    and digests the rows with the same type-aware, framed encoding it uses for
    outputs, *before* comparing any output. A mismatch makes the run
@@ -119,11 +130,11 @@ section that reads like "nothing was violated".
    inputs is not a parity claim, and an untyped digest would compare a
    timestamp by its repr and let a delimiter inside a value forge a field
    boundary.
-5. **Declare the outputs.** For each table: the `select`, the `semantic_key`,
+6. **Declare the outputs.** For each table: the `select`, the `semantic_key`,
    every selected column under `fields`, and the `repeat_policy`. The
    comparator refuses a snapshot whose columns disagree with `fields`, so a
    `select` cannot quietly drift away from the declaration.
-6. **Canonicalize the volatile columns**, not the meaningful ones:
+7. **Canonicalize the volatile columns**, not the meaningful ones:
    - `drop` — no product meaning and differs every run (a `computed_at` stamp).
    - `placeholder` — only null-ness is comparable.
    - `utc_normalize` — a real timestamp; normalized to UTC then compared exactly.
@@ -131,28 +142,28 @@ section that reads like "nothing was violated".
      values is meaningful even though the value is not.
    A key column may not be canonicalized away; the loader refuses it, because a
    collapsed key hides a missing row behind an extra one.
-7. **Expect the loader to be strict.** Manifest values are read at their
+8. **Expect the loader to be strict.** Manifest values are read at their
    declared type and never coerced (`bool("false")` is `True`, which would have
    turned a typo into permission for two empty outputs to report EQUAL), and an
    unknown key anywhere in an input, output, field, or numeric block is
    refused rather than ignored.
-8. **Set the numeric policy per field.** `exact` is the posture. A tolerance is
+9. **Set the numeric policy per field.** `exact` is the posture. A tolerance is
    declared on the one field that needs it and must carry a written `reason`
    naming the persisted column precision that forces it — the loader refuses a
    tolerance without one, and the schema has no place for a global tolerance.
    A tolerance-compared field is excluded from the canonical row digest and the
    report names it under `digest_excluded_fields`, so the reduction in what was
    proven is visible rather than implied.
-9. **Add the Go producer** under `producers.go` once the port exists. Nothing
+10. **Add the Go producer** under `producers.go` once the port exists. Nothing
    else in the manifest changes when a kind is ported — that is the point.
-10. **Decide whether an empty output is ever acceptable.** By default it is
+11. **Decide whether an empty output is ever acceptable.** By default it is
    not: two empty tables have equal counts and equal digests at every level, so
    the comparator returns `INDETERMINATE` rather than `EQUAL` when a table is
    empty on both sides. That is usually a fixture that produced nothing or a
    projection that matched nothing — an absence of evidence, not parity. Set
    `allow_empty: true` on a table a kind may legitimately leave empty, and say
    why in the manifest `description`.
-11. **Prove it.** Add the kind to the live test's coverage and run the
+12. **Prove it.** Add the kind to the live test's coverage and run the
    self-test (same implementation both sides → `EQUAL`) plus the three negative
    controls (mutate a row, drop a row, nudge a float past its policy → each
    reported precisely). A comparator that has not been shown to fail has not
@@ -186,6 +197,24 @@ would be reported as a repeat-policy violation rather than passing because it
 second run against the first, so a producer that honours its policy once and
 drifts on the third replay is still caught. Each entry in the report's `repeat`
 list names the `run` it came from.
+
+## What a green run does not prove
+
+Stated here so nobody has to infer it from silence:
+
+- **`rows`** proves the two destinations hold the same product rows, that both
+  consumed the pinned fixture, that neither producer mutated its inputs (they
+  are re-read after every execution), and — with a replay — that each side
+  honours its declared repeat policy. It does not prove anything about
+  resource use or latency.
+- **`runtime`** compares self-declared measurements. The observation's scope
+  digests and build identity are checked for shape and internal consistency;
+  they are **not** recomputed from an independent source and the build is not
+  resolved against an artifact registry, because no attestation plane exists in
+  this repo yet. Every report records `attestation: "self_declared"` for that
+  reason. Weigh the claim by how much you trust whoever produced the file. This
+  gap belongs with the outstanding v3 threshold approval, not with a single
+  slice.
 
 ## Safety
 

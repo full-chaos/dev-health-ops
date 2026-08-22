@@ -94,7 +94,11 @@
             "null"
           ],
           "pattern": "^[0-9a-f]{64}$",
-          "description": "Recorded digest of a known-good fixture, when one has been pinned. The comparator always recomputes and compares the two sides' input digests regardless of this field."
+          "description": "sha256 over every declared input table's own row digest, order-independent and framed. The comparator recomputes it and refuses the run (INDETERMINATE, fixture_digest_mismatch) when it disagrees. Null is allowed but means the run proves only that two destinations agree, NOT that either came from the declared fixture pipeline -- the report says so under `does_not_prove`."
+        },
+        "anchor": {
+          "type": "string",
+          "description": "Instant the generated window is anchored to. Required for a pinnable digest whenever the fixture generators derive their window from the wall clock."
         }
       }
     },

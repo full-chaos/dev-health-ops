@@ -14,6 +14,23 @@ const (
 	maximumMutationStaleDispatchAge = 24 * time.Hour
 )
 
+// sweepReportSample bounds the identifier list on the selection log line. A
+// pass can select up to `limit` units, and a log line carrying a hundred UUIDs
+// every tick is a different kind of unreadable from a log line carrying none.
+// The COUNT is always exact; only the sample is cut, and the line says when it
+// was.
+const sweepReportSample = 10
+
+// sampleIdentifiers returns at most sweepReportSample entries. It never sorts
+// or dedupes: the caller's order is selection order, which is the order an
+// operator would page through.
+func sampleIdentifiers(identifiers []string) []string {
+	if len(identifiers) <= sweepReportSample {
+		return identifiers
+	}
+	return identifiers[:sweepReportSample]
+}
+
 // LeaseRepairStepper is the bounded expired-lease repair seam used by the
 // command-owned mutation pipeline.
 type LeaseRepairStepper interface {
@@ -171,6 +188,40 @@ func (pipeline *MutationPipeline) Step(
 				"candidates", sweepResult.Candidates,
 			)
 		}
+		// SHADOW MODE HAD NO OUTPUT AT ALL (adversarial review finding).
+		//
+		// Shadow is the DEFAULT, and the sweep's own documentation justifies
+		// that default by saying "every deployment gets would-terminalize
+		// observability at zero write risk". Nothing implemented the
+		// observability half: this pipeline consumed only DeclinedRouteChange
+		// and threw Candidates, UnitIDs and Pairs away, so a shadow deployment
+		// could identify the same strand on every tick for weeks and emit not
+		// one line. That is the same unimplemented-claim shape the sweep file
+		// already records twice, and CHAOS-4097 widens what shadow selects, so
+		// leaving it silent would have made a new population invisible too.
+		//
+		// Logged for BOTH modes. In active mode the terminalized rows carry
+		// their own durable reason, so the line is a convenience; in shadow
+		// mode it is the only record that exists, which is why it is emitted
+		// on selection rather than on write.
+		if sweepErr == nil && sweepResult.Candidates > 0 {
+			slog.Warn(
+				"syncreconciler.unreclaimable_sweep_selected",
+				"mode", string(sweepResult.Mode),
+				"candidates", sweepResult.Candidates,
+				"terminalized", sweepResult.Terminalized,
+				"runs", len(sweepResult.RunIDs),
+				// Pairs are few by construction -- production carried 23
+				// across the whole CHAOS-4093 population -- and they are the
+				// field an operator groups by first, so they are not sampled.
+				"pairs", sweepResult.Pairs,
+				// Unit ids are up to `limit` per pass, so they ARE sampled.
+				// The count above is the truth; this is a handle for going
+				// and looking at one.
+				"unit_id_sample", sampleIdentifiers(sweepResult.UnitIDs),
+				"unit_id_sample_truncated", len(sweepResult.UnitIDs) > sweepReportSample,
+			)
+		}
 		if sweepErr != nil {
 			// Cancellation belongs to the caller and must propagate; anything
 			// else is the safety net failing, which must not fail the pass.
@@ -196,6 +247,9 @@ func (pipeline *MutationPipeline) Step(
 	// an out-of-range count as a failed step keeps a miscounting repair from
 	// quietly inflating the recovery metric operators alert on.
 	if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
+		terminal.RescueOnlyCancelsRecovered < 0 ||
+		terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
+		terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
 		terminal.Recovered > limit {
 		// The count itself is untrustworthy here, so it is the one case that
 		// deliberately reports nothing rather than a number it cannot stand behind.
@@ -209,12 +263,58 @@ func (pipeline *MutationPipeline) Step(
 	recovered := Observation{
 		ExhaustedDeliveriesRecovered: int64(terminal.ExhaustedRecovered),
 	}
-	if _, err := pipeline.materializer.Step(
+	// A rescue-only cancel is a registry or queue-routing fault: the job was
+	// inserted onto a queue whose client does not execute that kind. Unlike
+	// the other two recoveries it will repeat deterministically until someone
+	// changes a deployment, so it is logged rather than only counted
+	// (CHAOS-4097).
+	if terminal.RescueOnlyCancelsRecovered > 0 {
+		slog.Warn(
+			"syncreconciler.rescue_only_cancel_recovered",
+			"recovered", terminal.RescueOnlyCancelsRecovered,
+		)
+	}
+	materialized, err := pipeline.materializer.Step(
 		ctx,
 		now,
 		now.Add(-pipeline.config.StaleDispatchAge),
 		limit,
-	); err != nil {
+	)
+	// CHAOS-4097: one sync_dispatch_outbox row reached attempts = 72601 in
+	// production, generating roughly 1500 no-op River jobs a minute for
+	// twenty-two hours, and nothing anywhere said a word. Counters do not
+	// export from this deployment (CHAOS-4094), so the durable column is read
+	// and reported directly. ERROR, not WARN: a run re-arming four figures of
+	// times is not degraded, it is looping, and it will not stop on its own.
+	//
+	// Reported even when the step failed, because the report is taken before
+	// the commit and a materialization failure does not make a looping run
+	// less true. It is emitted per row rather than as a total so the log line
+	// names something an operator can go and look at.
+	for _, wakeup := range materialized.Runaway {
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_attempts_exceeded",
+			"sync_run_id", wakeup.SyncRunID,
+			"attempts", wakeup.Attempts,
+			"threshold", runawayDispatchAttempts,
+			"truncated", materialized.RunawayTruncated,
+		)
+	}
+	// A BROKEN DETECTOR MUST NOT READ AS A CLEAN ONE (adversarial review
+	// finding). An empty Runaway above means one of two opposite things: no
+	// run is looping, or the statement that would have said so did not run.
+	// Without this line the second is indistinguishable from the first, and a
+	// permission or schema fault would reproduce exactly the silence this
+	// report was added to end. ERROR for the same reason the report itself is
+	// ERROR: the measurement layer failing is not a degraded state, it is a
+	// blind one.
+	if materialized.RunawayReportStep != "" {
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_report_unavailable",
+			"step", materialized.RunawayReportStep,
+		)
+	}
+	if err != nil {
 		return recovered, err
 	}
 	if _, err := pipeline.kernel.Step(

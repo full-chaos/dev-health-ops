@@ -97,6 +97,14 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		)`,
 		`INSERT INTO public.worker_job_routes (job_kind, transport)
 			VALUES ('sync.provider_unit', 'river_canary')`,
+		// river_job_id, delivered_at and ck_worker_job_outbox_delivery_state
+		// are copied from the production table (\d public.worker_job_outbox),
+		// not invented. The constraint is the load-bearing part: it is what
+		// makes "status = 'delivered'" and "river_job_id IS NOT NULL" the same
+		// statement, which is why CHAOS-4097's liveness read needs none of the
+		// text-cast defensiveness the sibling coordinator-plane repair carries.
+		// A fixture without it would let a test seed a shape production cannot
+		// hold and prove nothing.
 		`CREATE TABLE public.worker_job_outbox (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			dedupe_key text NOT NULL UNIQUE,
@@ -110,7 +118,33 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			scheduled_at timestamptz NOT NULL,
 			status text NOT NULL,
 			next_attempt_at timestamptz NOT NULL,
-			attempt_count integer NOT NULL DEFAULT 0
+			attempt_count integer NOT NULL DEFAULT 0,
+			river_job_id bigint,
+			delivered_at timestamptz,
+			CONSTRAINT uq_worker_job_outbox_river_job_id UNIQUE (river_job_id),
+			CONSTRAINT ck_worker_job_outbox_delivery_state CHECK (
+				status = 'delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL
+				OR status <> 'delivered' AND river_job_id IS NULL AND delivered_at IS NULL
+			)
+		)`,
+		`CREATE SCHEMA river`,
+		// The state column is a real enum, as it is in River's own migration,
+		// so `state::text` in the sweep is exercised as the cast it actually
+		// is. A text column here would silently accept a value River could
+		// never store and make the closed IN list untestable.
+		`CREATE TYPE river.river_job_state AS ENUM (
+			'available', 'cancelled', 'completed', 'discarded',
+			'pending', 'retryable', 'running', 'scheduled'
+		)`,
+		`CREATE TABLE river.river_job (
+			id bigserial PRIMARY KEY,
+			state river.river_job_state NOT NULL,
+			attempt smallint NOT NULL DEFAULT 0,
+			max_attempts smallint NOT NULL DEFAULT 5,
+			kind text NOT NULL,
+			errors jsonb[] NOT NULL DEFAULT '{}',
+			finalized_at timestamptz,
+			created_at timestamptz NOT NULL DEFAULT now()
 		)`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
@@ -169,11 +203,11 @@ func strandedSpec(id, dataset, costClass string, now time.Time) sweepUnitSpec {
 
 func newSweepForTest(t *testing.T, pool *pgxpool.Pool, mode SweepMode) *UnreclaimableSweep {
 	t.Helper()
-	// One superuser pool in both positions. That is exactly what makes this
-	// harness blind to the CHAOS-4035 wiring defect, and why the real role
-	// split is proven separately in
+	// One superuser pool in all three positions. That is exactly what makes
+	// this harness blind to the CHAOS-4035 wiring defect, and why the real
+	// role split is proven separately in
 	// unreclaimable_sweep_role_split_integration_test.go rather than here.
-	sweep, err := NewUnreclaimableSweep(pool, pool, UnreclaimableSweepConfig{
+	sweep, err := NewUnreclaimableSweep(pool, pool, pool, "river", UnreclaimableSweepConfig{
 		Age:  DefaultUnreclaimableAge,
 		Idle: DefaultUnreclaimableIdle,
 		Mode: mode,
@@ -660,5 +694,370 @@ func TestUnreclaimableSweepDefersWhenTheDurableRouteIsPaused(t *testing.T) {
 	status, _, _, _ := sweepUnitState(t, ctx, pool, sweepUnitID(85))
 	if status != "dispatching" {
 		t.Fatalf("status = %q, want the unit left alone while the route is paused", status)
+	}
+}
+
+// seedSweepDelivery writes the production delivery shape: a 'delivered' outbox
+// row bound by value to a real river_job row.
+//
+// The outbox row is minted through the SAME dedupe key the sweep computes
+// (unreclaimableDedupeKey), because that key -- not a foreign key -- is the
+// only linkage between a unit and its delivery. Hand-writing the string here
+// would let the two drift and quietly make every assertion below vacuous.
+func seedSweepDelivery(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	unitID string,
+	jobState string,
+	jobError string,
+) int64 {
+	t.Helper()
+	// A spent budget by default. For a discarded job that is what makes it
+	// unrecoverable and therefore sweepable; for every other state the column
+	// is not read at all.
+	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5)
+}
+
+// seedSweepDeliveryWithBudget exists so a test can put a discarded job on
+// EITHER side of the disjointness boundary with internal/joboutbox's
+// terminal-delivery repair. That boundary is the whole safety argument for
+// sweeping discarded jobs at all, so it has to be reachable from a fixture.
+func seedSweepDeliveryWithBudget(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	unitID string,
+	jobState string,
+	jobError string,
+	attempt int,
+	maxAttempts int,
+) int64 {
+	t.Helper()
+	var jobID int64
+	// finalized_at is set exactly when the state is terminal, matching River:
+	// a live job has none, and the sweep's liveness read requires it.
+	var finalized any
+	switch jobState {
+	case "cancelled", "discarded", "completed":
+		finalized = time.Now().UTC()
+	}
+	// The errors array is built in SQL rather than as a hand-written literal.
+	// A jsonb[] literal needs two levels of escaping and a mistake there
+	// produces a row that parses but says something else, which is the class
+	// of fixture bug that makes an assertion pass for the wrong reason.
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO river.river_job (state, attempt, max_attempts, kind, errors, finalized_at)
+		VALUES ($1::river.river_job_state, $4, $5, 'sync.provider_unit',
+			CASE
+				WHEN $2::text = '' THEN '{}'::jsonb[]
+				ELSE ARRAY[jsonb_build_object('attempt', 1, 'error', $2::text)]
+			END,
+			$3)
+		RETURNING id`,
+		jobState, jobError, finalized, attempt, maxAttempts,
+	).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.worker_job_outbox (
+			dedupe_key, job_kind, contract_version, args, payload_hash, queue,
+			priority, max_attempts, scheduled_at, status, next_attempt_at,
+			attempt_count, river_job_id, delivered_at
+		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, $2, 'sync',
+			1, 5, now(), 'delivered', now(), 1, $3, now())`,
+		unreclaimableDedupeKey(unitID), "sha256:"+strings.Repeat("0", 64), jobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return jobID
+}
+
+// THE CHAOS-4093 SHAPE, seeded exactly (CHAOS-4097).
+//
+// This is the RED CONTROL for the whole ticket. On the code this replaces, the
+// unit is dropped by the published-outbox filter before routability is even
+// considered, so the sweep reports zero candidates and the unit sits in
+// 'dispatching' forever holding a per-bucket concurrency slot. Production held
+// 650 of these across 83 runs for twenty-two hours and every repair path in
+// the system was structurally blind to all of them.
+//
+// The pair is repo-metadata deliberately: it is RouteReady AND Plannable, so
+// unroutable() returns false for it. If this test passes only because the pair
+// happens to be declinable, it is proving the OLD branch and nothing new --
+// which is precisely the mistake the ticket warns about, since every one of
+// the 650 production units was routable.
+func TestUnreclaimableSweepTerminalizesAUnitWhoseRiverDeliveryWasCancelled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(60)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	// The exact text production logged: the adapter cancelled at validation,
+	// before the handler and before the idempotency claim, so nothing was
+	// written back to the unit.
+	jobID := seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+
+	// Non-vacuity: prove the pair really is routable, so this cannot be the
+	// pre-existing unroutable() branch passing under a new name.
+	if sweep := newSweepForTest(t, pool, SweepModeActive); sweep.unroutable(
+		unreclaimableCandidate{provider: "github", datasetKey: "repo-metadata"},
+	) {
+		t.Fatal("github/repo-metadata is declinable, so this test would pass " +
+			"on the old code and proves nothing about the liveness proof")
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 1 || result.Terminalized != 1 {
+		t.Fatalf("result = %+v, want the dead delivery's unit terminalized", result)
+	}
+	status, errText, reason, payload := sweepUnitState(t, ctx, pool, unit)
+	if status != "failed" {
+		t.Fatalf("unit status = %q, want failed", status)
+	}
+	if errText == nil || *errText != unreclaimableTerminalDeliveryCategory {
+		t.Fatalf("unit error = %v, want %q", errText, unreclaimableTerminalDeliveryCategory)
+	}
+	// The acceptance criterion is explicit that the durable reason must NAME
+	// the terminal job state, so an operator can tell this apart from a
+	// declined capability without leaving the row.
+	if reason == nil || !strings.Contains(*reason, "cancelled") {
+		t.Fatalf("unit reason = %v, want it to name the terminal River state", reason)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["error_category"] != unreclaimableTerminalDeliveryCategory ||
+		decoded["river_job_state"] != "cancelled" ||
+		decoded["river_job_id"] != fmt.Sprintf("%d", jobID) {
+		t.Fatalf("result payload = %#v, want the delivery evidence carried durably", decoded)
+	}
+}
+
+// The same shape with a DISCARDED job. Both terminal non-success states are
+// swept, and asserting only the CHAOS-4093 one would leave the other branch of
+// the closed IN list untested.
+func TestUnreclaimableSweepTerminalizesAUnitWhoseRiverDeliveryWasDiscarded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(61)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "discarded", "dev-health job failed [permanent]")
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Terminalized != 1 {
+		t.Fatalf("result = %+v, want the discarded delivery's unit terminalized", result)
+	}
+	_, _, reason, _ := sweepUnitState(t, ctx, pool, unit)
+	if reason == nil || !strings.Contains(*reason, "discarded") {
+		t.Fatalf("unit reason = %v, want it to name the discarded state", reason)
+	}
+}
+
+// PER-DIMENSION NON-VACUITY for the liveness read.
+//
+// Every state River can hold that is NOT a terminal failure must leave the
+// unit alone. Without these the new branch would pass just as happily if the
+// IN list had been written as "every state", which is the change that would
+// destroy live work -- a running job's unit is about to be claimed, and a
+// completed job's unit is finished.
+func TestUnreclaimableSweepSparesAUnitWhoseRiverDeliveryIsNotTerminallyFailed(t *testing.T) {
+	for index, state := range []string{
+		"available", "running", "retryable", "scheduled", "pending", "completed",
+	} {
+		t.Run(state, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			pool := startSweepPostgres(t, ctx)
+			now := time.Now().UTC()
+			seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+			unit := sweepUnitID(70 + index)
+			seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+			seedSweepDelivery(t, ctx, pool, unit, state, "")
+
+			result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			if result.Candidates != 0 || result.Terminalized != 0 {
+				t.Fatalf("result = %+v, want state %q left to River", result, state)
+			}
+			if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
+				t.Fatalf("unit status = %q, want it untouched", status)
+			}
+		})
+	}
+}
+
+// A published row that is NOT 'delivered' carries no river_job_id, so there is
+// nothing to prove death with. It must be dropped, not swept.
+//
+// This is the live case for a row that internal/joboutbox's TerminalDeliveryRepair
+// has just rearmed: a replacement delivery is on its way, and terminalizing
+// then would destroy work that is about to run.
+func TestUnreclaimableSweepSparesAUnitWhoseDeliveryWasRearmed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(80)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	// Exactly what the rearm does: status back to pending, delivery cleared.
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.worker_job_outbox
+		SET status = 'pending', river_job_id = NULL, delivered_at = NULL
+		WHERE dedupe_key = $1`, unreclaimableDedupeKey(unit)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want the rearmed delivery left alone", result)
+	}
+}
+
+// THE CAS, executed rather than argued.
+//
+// The liveness proof is taken on the queue-control pool, outside the domain
+// transaction, so a rearm can land between the proof and the commit. The write
+// therefore re-asserts the exact (dedupe_key, river_job_id) PAIR it was proven
+// on. This drives the statement directly because the race itself is not
+// reproducible from the Step() seam -- and a guard whose refusal is never
+// observed is indistinguishable from one that does not exist.
+func TestTerminalizeTerminalDeliveryRefusesWhenTheDeliveryChanged(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(90)
+	spec := strandedSpec(unit, "repo-metadata", "light", now)
+	seedSweepUnit(t, ctx, pool, spec)
+	jobID := seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	key := unreclaimableDedupeKey(unit)
+
+	exec := func(pinnedJobID int64) int64 {
+		t.Helper()
+		tag, err := pool.Exec(ctx, terminalizeTerminalDeliverySQL,
+			unit, unreclaimableTerminalDeliveryCategory, "reason", "{}",
+			now, spec.updatedAt, key, pinnedJobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tag.RowsAffected()
+	}
+
+	// POSITIVE CONTROL FIRST. Without it a zero below could mean the CAS
+	// works, or that the statement never matches anything at all.
+	if affected := exec(jobID); affected != 1 {
+		t.Fatalf("the unchanged delivery was refused (%d rows); this test cannot "+
+			"distinguish a working CAS from a statement that matches nothing", affected)
+	}
+	// Put the unit back so the negative case differs ONLY in the pinned pair.
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.sync_run_units
+		SET status = 'dispatching', error = NULL, last_retry_reason = NULL,
+			result = NULL, updated_at = $2
+		WHERE id = $1`, unit, spec.updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if affected := exec(jobID + 1); affected != 0 {
+		t.Fatalf("the write landed on a delivery it was never proven against "+
+			"(%d rows); a replacement delivery would be destroyed", affected)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
+		t.Fatalf("unit status = %q, want it untouched by the refused write", status)
+	}
+}
+
+// THE DISJOINTNESS BOUNDARY with internal/joboutbox's terminal-delivery
+// repair, in both directions (adversarial review finding).
+//
+// That repair rearms a provider-unit outbox row -- deleting the dead River job
+// and minting a replacement delivery -- when the job was DISCARDED by River's
+// unhandled-kind rescue with attempts still on the clock, and its recovery
+// requires the unit to still be 'dispatching'. If this sweep terminalized such
+// a unit first, the repair could never run and a transport failure River was
+// about to retry would become permanent domain failure.
+//
+// The two live in different reconcile loops, so ordering cannot be relied on.
+// The predicates are disjoint by construction instead: the repair takes
+// `attempt < max_attempts`, this sweep takes `attempt >= max_attempts`. Both
+// halves are asserted here, because only the pair proves disjointness -- the
+// refusal alone would also pass if the sweep had simply stopped sweeping
+// discarded jobs altogether.
+func TestUnreclaimableSweepLeavesRecoverableDiscardedDeliveriesToTheOutboxRepair(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		attempt     int
+		maxAttempts int
+		wantSwept   bool
+		why         string
+	}{
+		{
+			name: "attempts remaining is the outbox repair's row", attempt: 2, maxAttempts: 5,
+			wantSwept: false,
+			why: "internal/joboutbox/terminal_delivery_repair.go can still delete this " +
+				"job and mint a replacement delivery, but only while the unit is " +
+				"'dispatching' -- terminalizing it here destroys a recoverable retry",
+		},
+		{
+			name: "a spent budget is nobody's row but this sweep's", attempt: 5, maxAttempts: 5,
+			wantSwept: true,
+			why: "River has no retry left and the outbox repair's " +
+				"`attempt < max_attempts` predicate excludes it, so refusing here " +
+				"would strand the unit exactly as CHAOS-4093 did",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			pool := startSweepPostgres(t, ctx)
+			now := time.Now().UTC()
+			seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+			unit := sweepUnitID(95)
+			seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+			// The exact error the outbox repair keys on, so the row is a genuine
+			// candidate for it rather than being excluded for some other reason.
+			seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts)
+
+			result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			swept := result.Terminalized == 1
+			if swept != testCase.wantSwept {
+				t.Fatalf("terminalized=%t, want %t: %s", swept, testCase.wantSwept, testCase.why)
+			}
+			status, _, _, _ := sweepUnitState(t, ctx, pool, unit)
+			wantStatus := "dispatching"
+			if testCase.wantSwept {
+				wantStatus = "failed"
+			}
+			if status != wantStatus {
+				t.Fatalf("unit status = %q, want %q: %s", status, wantStatus, testCase.why)
+			}
+		})
 	}
 }

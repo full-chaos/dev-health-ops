@@ -25,10 +25,12 @@ import (
 // sees together -- the call, the pin, and the comment -- instead of one that
 // nobody sees at all.
 var checkedInPoolComposition = map[string][]string{
-	// The defect: this one needs BOTH. worker_job_routes is
+	// The defect: this one needs ALL THREE. worker_job_routes is
 	// coordinator-exclusive; sync_run_units is SELECT-only for the
-	// coordinator, so the write cannot follow the read.
-	"buildUnreclaimableSweep": {"coordinatorPool", "domainPool"},
+	// coordinator, so the write cannot follow the read; and river_job lives
+	// under the queue role's schema USAGE alone (CHAOS-4097), so the
+	// delivery-liveness read cannot join either of the other two.
+	"buildUnreclaimableSweep": {"coordinatorPool", "domainPool", "queuePool"},
 	// sync_run_reference_discoveries and sync_run_post_dispatches are
 	// coordinator-exclusive.
 	"syncreconciler.NewMaterializer": {"coordinatorPool"},

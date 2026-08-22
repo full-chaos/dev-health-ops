@@ -5,6 +5,7 @@ package syncreconciler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -243,6 +244,99 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 		}
 	})
 
+	// CHAOS-4097. A rescue-only worker cancels rather than executing a domain
+	// effect in the wrong worker family, so NOTHING ran and the coordinator
+	// row is stranded exactly as an unhandled rescue would strand it.
+	//
+	// RED CONTROL: on the code this replaces, the SQL matched
+	// `job.state::text = 'discarded'` and nothing else, so a cancelled job was
+	// structurally invisible here no matter what its errors said.
+	t.Run("rescue-only cancel is reclaimed under its own evidence code", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		cancelRiverJob(t, ctx, adminPool, jobID, now, riverRescueOnlyCancelError, false)
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result.Recovered != 1 || result.RescueOnlyCancelsRecovered != 1 ||
+			result.ExhaustedRecovered != 0 {
+			t.Fatalf("result = %#v, want one recovery counted as a rescue-only cancel", result)
+		}
+		assertOutboxDelivery(t, ctx, adminPool, "pending", riverRescueOnlyCancelEvidence, false)
+	})
+
+	// THE BOUNDARY THIS TICKET TURNS ON. An operator using the joboperator
+	// Cancel verb has deliberately stopped this job; republishing it would
+	// silently revert a human decision.
+	//
+	// River's own JobCancel query is what separates the two: it stamps
+	// metadata.cancel_attempted_at and appends nothing to errors, while a
+	// worker-returned cancel appends an errors entry and never sets that key.
+	// This case seeds the sentinel text AND the metadata key together, so it
+	// fails unless the STRUCTURAL half of the predicate is doing work -- a
+	// version matching on the error text alone would reclaim it.
+	t.Run("operator cancel is never reclaimed even carrying the sentinel", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		cancelRiverJob(t, ctx, adminPool, jobID, now, riverRescueOnlyCancelError, true)
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("result = %#v: an operator cancellation was reverted by the repair", result)
+		}
+		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
+	})
+
+	// A cancel from any other cause is a terminal decision made with the job's
+	// own arguments in hand. Only the rescue-only sentinel proves nothing ran.
+	t.Run("cancel carrying another error is never reclaimed", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		cancelRiverJob(t, ctx, adminPool, jobID, now,
+			"JobCancelError: dev-health job failed [permanent]", false)
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("result = %#v, want no recovery", result)
+		}
+		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
+	})
+
+	// A cancelled job is always at attempt 1 with its budget unspent, so it can
+	// never satisfy the exhausted branch. Seeding a spent budget ON a cancelled
+	// job proves the state comparison really did move INTO the branches: with
+	// `state IN ('discarded','cancelled')` hoisted above the disjunction, this
+	// row would be reclaimed by the attempt arithmetic alone -- as an operator
+	// cancellation, silently.
+	t.Run("cancelled job with a spent budget does not reach the exhausted branch", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+		cancelRiverJob(t, ctx, adminPool, jobID, now, exhaustionBridgeError, true)
+		if _, err := adminPool.Exec(ctx,
+			`UPDATE river.river_job SET attempt = 5, max_attempts = 5 WHERE id = $1`,
+			jobID,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("repair step: %v", err)
+		}
+		if result != (TerminalDeliveryRepairResult{}) {
+			t.Fatalf("result = %#v: a cancelled job was recovered as exhausted", result)
+		}
+		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
+	})
+
 	t.Run("superseded delivery is never reclaimed under a newer one", func(t *testing.T) {
 		resetKernelIntegrationTables(t, ctx, adminPool)
 		retired := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
@@ -428,6 +522,8 @@ func TestTerminalDeliveryRepairJoinUsesJobPrimaryKey(t *testing.T) {
 		riverUnhandledRescueError,
 		riverUnhandledRescueEvidence,
 		riverDeliveryExhaustedEvidence,
+		riverRescueOnlyCancelError,
+		riverRescueOnlyCancelEvidence,
 	).Scan(&explainJSON); err != nil {
 		t.Fatalf("EXPLAIN the repair statement: %v", err)
 	}
@@ -595,6 +691,52 @@ func seedExhaustionDelivery(
 // discardRiverJob drives a River row into the exact terminal shape the repair
 // reads: discarded, finalized, with a bounded error history whose last entry
 // carries the supplied text.
+// cancelRiverJob writes the two shapes River itself produces for a cancelled
+// job, and the difference between them is the whole of CHAOS-4097's item 3.
+//
+//   - operatorCancelled=false: a worker returned river.JobCancel. The executor
+//     persists res.ErrorStr() into errors and never touches metadata.
+//   - operatorCancelled=true: River's own JobCancel query ran. It stamps
+//     metadata.cancel_attempted_at via jsonb_set and appends nothing to errors.
+//
+// The errors entry is written in BOTH cases on purpose. Production can only
+// produce one of the two, but a fixture that omitted it from the operator case
+// would let the repair's `cardinality(job.errors) > 0` predicate exclude that
+// row for a reason unrelated to the metadata check, and the negative control
+// would then pass without ever exercising the guard it exists to prove.
+func cancelRiverJob(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	jobID int64,
+	now time.Time,
+	errorText string,
+	operatorCancelled bool,
+) {
+	t.Helper()
+	metadata := "{}"
+	if operatorCancelled {
+		metadata = fmt.Sprintf(`{"cancel_attempted_at": %q}`, now.Format(time.RFC3339Nano))
+	}
+	if _, err := pool.Exec(
+		ctx,
+		`UPDATE river.river_job
+		 SET state = 'cancelled',
+			 finalized_at = $2,
+			 attempt = 1,
+			 max_attempts = 5,
+			 metadata = $4::jsonb,
+			 errors = ARRAY[jsonb_build_object('error', $3::text, 'attempt', 1)]
+		 WHERE id = $1`,
+		jobID,
+		now.Add(-time.Minute),
+		errorText,
+		metadata,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func discardRiverJob(
 	t *testing.T,
 	ctx context.Context,

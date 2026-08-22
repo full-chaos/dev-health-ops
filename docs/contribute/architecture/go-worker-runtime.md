@@ -353,8 +353,20 @@ None covers another's ground.
 | River rescuer | River maintenance, on the elected leader | A job still present in `running` past `max(RescueStuckJobsAfter, kind timeout)` |
 | Lease repair | `internal/syncreconciler/lease_repair.go` | A sync unit `running` with an expired lease |
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
-| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat, no attempts, and no outbox row |
+| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead (CHAOS-4097) |
 | Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997) |
+
+Two of those four can select the same provider unit, so their predicates are
+disjoint **by construction** rather than by ordering — they run in different
+reconcile loops, and a timing argument is exactly what stops being true during
+an incident. The outbox terminal-delivery repair takes a `discarded` job with
+`attempt < max_attempts`; the unreclaimable sweep takes `cancelled` at any
+attempt count, or `discarded` only once `attempt >= max_attempts`. A discarded
+job with attempts remaining therefore belongs to the repair, which can still
+mint a replacement delivery, and the sweep must not terminalize it out from
+under that recovery (CHAOS-4097). The general rule when adding a fifth seam:
+state its population as a predicate that is provably disjoint from the other
+four, not as a claim about which loop runs first.
 
 The strand repair performs the pair-matched CAS described above, reads
 `worker_job_runs` on the domain pool rather than inferring the claim from a

@@ -42,6 +42,15 @@ const (
 	splitDomainPass      = "sweep_domain_password"
 	splitCoordinatorRole = "sweep_coordinator_runtime"
 	splitCoordinatorPass = "sweep_coordinator_password"
+	// CHAOS-4097 adds the THIRD role. river_job lives in the River schema,
+	// which internal/storage/river/migrate.go grants USAGE on to the queue
+	// role and to nobody else, so the delivery-liveness read is not merely
+	// tidier on its own pool -- it is impossible on either of the other two.
+	// TestSweepDeliveryLivenessReadIsRefusedToTheOtherRoles proves that
+	// rather than asserting it.
+	splitQueueRole   = "sweep_queue_runtime"
+	splitQueuePass   = "sweep_queue_password"
+	splitRiverSchema = "river"
 
 	splitOrg    = "00000000-0000-4000-8000-000000005000"
 	splitRun    = "00000000-0000-4000-8000-000000005001"
@@ -260,8 +269,9 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 	statements := []string{
 		"CREATE ROLE " + splitDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitDomainPass + "'",
 		"CREATE ROLE " + splitCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitCoordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + splitDomainRole + ", " + splitCoordinatorRole,
-		"GRANT USAGE ON SCHEMA public TO " + splitDomainRole + ", " + splitCoordinatorRole,
+		"CREATE ROLE " + splitQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitQueuePass + "'",
+		"GRANT CONNECT ON DATABASE worker_test TO " + splitDomainRole + ", " + splitCoordinatorRole + ", " + splitQueueRole,
+		"GRANT USAGE ON SCHEMA public TO " + splitDomainRole + ", " + splitCoordinatorRole + ", " + splitQueueRole,
 		// PUBLIC holds CREATE on public in older defaults and TEMPORARY on the
 		// database; both are privileges neither runtime role is supposed to
 		// have, and leaving them would weaken every assertion below.
@@ -269,17 +279,52 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 	}
 	statements = append(statements, splitSchemaDDL()...)
+	statements = append(statements, splitRiverSchemaDDL()...)
 	present := splitTablesPresent()
 	statements = append(statements,
 		splitGrantStatements(splitDomainRole, postgres.DomainPosture(), present)...)
 	statements = append(statements,
 		splitGrantStatements(splitCoordinatorRole, postgres.CoordinatorPosture(), present)...)
+	// The queue role's River grants mirror internal/storage/river/migrate.go:
+	// USAGE on the River schema goes to the queue role alone, and the other
+	// two roles are given nothing there. That asymmetry IS the harness --
+	// granting the schema more widely here would make every assertion in this
+	// file about the liveness read vacuous.
+	statements = append(statements,
+		"GRANT USAGE ON SCHEMA "+splitRiverSchema+" TO "+splitQueueRole,
+		"GRANT SELECT ON TABLE "+splitRiverSchema+".river_job TO "+splitQueueRole,
+	)
 	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("harness setup failed: %v\n  statement: %s", err, collapseSQL(statement))
 		}
 	}
 	return admin, instance.URI
+}
+
+// splitRiverSchemaDDL is River v0.44's job table, reduced to the columns this
+// sweep's liveness read touches, with state kept as the real enum so
+// `state::text` is exercised as the cast it actually is. Anything wider would
+// be inventing a schema; anything narrower would let a text column accept a
+// state River can never store.
+func splitRiverSchemaDDL() []string {
+	return []string{
+		"CREATE SCHEMA " + splitRiverSchema,
+		`CREATE TYPE ` + splitRiverSchema + `.river_job_state AS ENUM (
+			'available', 'cancelled', 'completed', 'discarded',
+			'pending', 'retryable', 'running', 'scheduled'
+		)`,
+		`CREATE TABLE ` + splitRiverSchema + `.river_job (
+			id bigserial PRIMARY KEY,
+			state ` + splitRiverSchema + `.river_job_state NOT NULL,
+			attempt smallint NOT NULL DEFAULT 0,
+			max_attempts smallint NOT NULL DEFAULT 5,
+			kind text NOT NULL,
+			errors jsonb[] NOT NULL DEFAULT '{}',
+			finalized_at timestamptz,
+			created_at timestamptz NOT NULL DEFAULT now()
+		)`,
+	}
 }
 
 func connectAsRole(t *testing.T, ctx context.Context, rawURI, role, password string) *pgxpool.Pool {
@@ -365,6 +410,7 @@ func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
 	// The route read: coordinator-only. This is the 42501 production served
 	// once a second.
@@ -414,6 +460,37 @@ func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 	} {
 		if _, err := domain.Exec(ctx, statement.sql, statement.args...); err != nil {
 			t.Errorf("the domain role was denied the %s: %v", statement.name, err)
+		}
+	}
+
+	// THE THIRD ROLE (CHAOS-4097). The delivery-liveness read is queue-only,
+	// and this is what makes that a mechanism rather than a convention: the
+	// River schema's USAGE grant goes to the queue role alone, so the other
+	// two cannot reach river_job by any route.
+	//
+	// Asserted in BOTH directions on purpose. A one-sided "the queue role can
+	// read it" would still pass if someone widened the schema grant to all
+	// three, which is exactly the change that would make moving the read back
+	// into the domain transaction look harmless.
+	livenessSQL := fmt.Sprintf(
+		selectTerminalDeliveryStatesSQL,
+		pgx.Identifier{splitRiverSchema, "river_job"}.Sanitize(),
+	)
+	if _, err := queue.Exec(ctx, livenessSQL, []int64{1}); err != nil {
+		t.Errorf("the queue-control role was denied the delivery-liveness read: %v", err)
+	}
+	for _, refused := range []struct {
+		name string
+		pool *pgxpool.Pool
+	}{
+		{"domain", domain},
+		{"coordinator", coordinator},
+	} {
+		if _, err := refused.pool.Exec(ctx, livenessSQL, []int64{1}); err == nil {
+			t.Errorf("the %s role was PERMITTED the delivery-liveness read; "+
+				"internal/storage/river/migrate.go grants USAGE on the River "+
+				"schema to the queue role alone, so this passing means the "+
+				"harness or the manifest was widened", refused.name)
 		}
 	}
 
@@ -513,8 +590,9 @@ func TestUnreclaimableSweepCompletesAFullPassUnderTheRealRoleSplit(t *testing.T)
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
-	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeActive))
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeActive))
 	if err != nil {
 		t.Fatalf("construct sweep: %v", err)
 	}
@@ -553,8 +631,9 @@ func TestUnreclaimableSweepShadowPassUnderTheRealRoleSplit(t *testing.T) {
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
-	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeShadow))
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeShadow))
 	if err != nil {
 		t.Fatalf("construct sweep: %v", err)
 	}
@@ -634,9 +713,10 @@ func TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass(t *testing.T) {
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
 	routes := &flipOnSecondRead{t: t, ctx: ctx, admin: admin, coordinator: coordinator}
-	sweep, err := newUnreclaimableSweep(routes, domain.Begin, splitSweepConfig(SweepModeActive))
+	sweep, err := newUnreclaimableSweep(routes, domain.Begin, queue, "river", splitSweepConfig(SweepModeActive))
 	if err != nil {
 		t.Fatalf("construct sweep: %v", err)
 	}
@@ -678,8 +758,9 @@ func TestUnreclaimableSweepFenceDoesNotFireOnAStableRoute(t *testing.T) {
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
-	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeActive))
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeActive))
 	if err != nil {
 		t.Fatalf("construct sweep: %v", err)
 	}
@@ -713,6 +794,7 @@ func TestUnreclaimableSweepDeclinesWhenTheRouteRowIsLockedByAMutation(t *testing
 	seedSplitStrand(t, ctx, admin, now)
 	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
 	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
 
 	// An in-flight route mutation, held open for the duration of the pass.
 	// FOR UPDATE is what jobroute's UPDATE effectively takes, and it conflicts
@@ -728,7 +810,7 @@ func TestUnreclaimableSweepDeclinesWhenTheRouteRowIsLockedByAMutation(t *testing
 		t.Fatalf("hold the route row: %v", err)
 	}
 
-	sweep, err := NewUnreclaimableSweep(coordinator, domain, splitSweepConfig(SweepModeActive))
+	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeActive))
 	if err != nil {
 		t.Fatalf("construct sweep: %v", err)
 	}

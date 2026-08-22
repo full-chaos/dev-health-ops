@@ -25,7 +25,71 @@ type fakeMaterializerTx struct {
 	execs     []materializerExec
 	committed bool
 	rolled    bool
+	// runaway is what the CHAOS-4097 report read returns. The embedded nil
+	// pgx.Tx would panic on Query, so the fake answers it explicitly: an
+	// empty result is the healthy pass every pre-existing case here asserts.
+	runaway      []RunawayDispatchWakeup
+	runawayQuery string
+	// Each of the three report statements gets its own injectable failure.
+	// One shared "make it fail" switch would let a fix that only handled the
+	// query error still pass, which is the shape of coverage this ticket is
+	// about.
+	failQuery    bool
+	failScan     bool
+	failRowsIter bool
 }
+
+func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	tx.runawayQuery = sql
+	if tx.failQuery {
+		return nil, errors.New("injected runaway report query failure")
+	}
+	return &fakeRunawayRows{
+		rows: tx.runaway, failScan: tx.failScan, failIter: tx.failRowsIter,
+	}, nil
+}
+
+type fakeRunawayRows struct {
+	pgx.Rows
+	rows     []RunawayDispatchWakeup
+	index    int
+	failScan bool
+	failIter bool
+}
+
+func (rows *fakeRunawayRows) Next() bool {
+	rows.index++
+	return rows.index <= len(rows.rows)
+}
+
+func (rows *fakeRunawayRows) Scan(dest ...any) error {
+	if rows.failScan {
+		return errors.New("injected runaway report scan failure")
+	}
+	if len(dest) != 2 {
+		return errors.New("unexpected runaway projection")
+	}
+	current := rows.rows[rows.index-1]
+	id, ok := dest[0].(*string)
+	if !ok {
+		return errors.New("unexpected runaway sync_run_id target")
+	}
+	attempts, ok := dest[1].(*int64)
+	if !ok {
+		return errors.New("unexpected runaway attempts target")
+	}
+	*id, *attempts = current.SyncRunID, current.Attempts
+	return nil
+}
+
+func (rows *fakeRunawayRows) Err() error {
+	if rows.failIter {
+		return errors.New("injected runaway report iteration failure")
+	}
+	return nil
+}
+
+func (rows *fakeRunawayRows) Close() {}
 
 func (tx *fakeMaterializerTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	tx.execs = append(tx.execs, materializerExec{sql: sql, args: append([]any(nil), args...)})
@@ -65,7 +129,7 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != (MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
+	if !reflect.DeepEqual(result, MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
 		t.Fatalf("Step() result = %#v", result)
 	}
 	if !tx.committed || !tx.rolled || len(tx.execs) != 4 {
@@ -137,7 +201,7 @@ func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 			if !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("Step() error = %v", err)
 			}
-			if result != (MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != failAt {
+			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != failAt {
 				t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
 					result, tx.committed, tx.rolled, len(tx.execs))
 			}
@@ -182,5 +246,82 @@ func TestMaterializerRejectsInvalidBoundariesBeforeOpeningTransaction(t *testing
 	}
 	if begins != 0 {
 		t.Fatalf("invalid calls opened %d transactions", begins)
+	}
+}
+
+// A DETECTOR THAT BREAKS MUST NOT REPORT CLEAN (adversarial review finding).
+//
+// An earlier cut swallowed the report's error so a read fault could not lose
+// the materialization. The instinct was right and the trade was wrong: an
+// empty Runaway then means either "no run is looping" or "the statement that
+// would have told you did not run", and those demand opposite responses from
+// an operator. A permission or schema fault would have reproduced exactly the
+// silence CHAOS-4097 exists to end.
+//
+// All three statements are covered separately, because a fix that handled only
+// the query error would pass a single shared case.
+func TestMaterializerReportsWhenTheRunawayReportItselfFails(t *testing.T) {
+	now := time.Date(2026, time.August, 22, 18, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-15 * time.Minute)
+	for _, testCase := range []struct {
+		name     string
+		mutate   func(*fakeMaterializerTx)
+		wantStep string
+	}{
+		{"query fails", func(tx *fakeMaterializerTx) { tx.failQuery = true }, runawayReportStepQuery},
+		{"scan fails", func(tx *fakeMaterializerTx) {
+			tx.runaway = []RunawayDispatchWakeup{{SyncRunID: "run", Attempts: 5000}}
+			tx.failScan = true
+		}, runawayReportStepScan},
+		{"iteration fails", func(tx *fakeMaterializerTx) { tx.failRowsIter = true }, runawayReportStepRows},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			tx := &fakeMaterializerTx{affected: []int64{1, 0, 0, 0}}
+			testCase.mutate(tx)
+			materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
+				return tx, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := materializer.Step(context.Background(), now, cutoff, 2)
+			// The materialization must SURVIVE a broken report -- losing a
+			// dispatch wakeup because a diagnostic read failed would be a
+			// worse trade than the silence.
+			if err != nil {
+				t.Fatalf("a failed report took the materialization down with it: %v", err)
+			}
+			if !tx.committed || result.Dispatch != 1 {
+				t.Fatalf("materialization did not commit: committed=%t result=%#v", tx.committed, result)
+			}
+			// ...and it must SAY it failed.
+			if result.RunawayReportStep != testCase.wantStep {
+				t.Fatalf("RunawayReportStep = %q, want %q: an empty report that does "+
+					"not admit it failed is indistinguishable from a healthy one",
+					result.RunawayReportStep, testCase.wantStep)
+			}
+			if len(result.Runaway) != 0 || result.RunawayTruncated {
+				t.Fatalf("a failed report returned findings: %#v", result)
+			}
+		})
+	}
+}
+
+// NON-VACUITY: a healthy pass must leave the step empty, or the pipeline would
+// log a broken detector on every tick and the signal would be worthless.
+func TestMaterializerLeavesTheReportStepEmptyOnAHealthyPass(t *testing.T) {
+	now := time.Date(2026, time.August, 22, 18, 0, 0, 0, time.UTC)
+	tx := &fakeMaterializerTx{affected: []int64{1, 0, 0, 0}}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) { return tx, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := materializer.Step(context.Background(), now, now.Add(-time.Minute), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RunawayReportStep != "" {
+		t.Fatalf("RunawayReportStep = %q on a healthy pass", result.RunawayReportStep)
 	}
 }

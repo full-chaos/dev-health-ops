@@ -532,6 +532,65 @@ func TestUnreclaimableSweepFlagBeatsEnvironment(t *testing.T) {
 	}
 }
 
+// TestSyncObservationTimeoutDefaultAndOverride pins CHAOS-4092's new
+// reconciler-only knob: it defaults to syncreconciler's unconfigured 2s
+// (so the option's introduction changes nothing for a deployment that never
+// sets it), an in-bounds override reaches Config verbatim, and an
+// out-of-bounds value is rejected the same way every other durationEnv
+// setting is -- Load fails rather than silently clamping.
+func TestSyncObservationTimeoutDefaultAndOverride(t *testing.T) {
+	t.Parallel()
+
+	reconcilerSpec := func(values map[string]string) Spec {
+		return Spec{Service: "dev-health-reconciler", LookupEnv: lookup(values)}
+	}
+
+	t.Run("defaults to 2s when unset", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(reconcilerSpec(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SyncObservationTimeout != 2*time.Second {
+			t.Fatalf("SyncObservationTimeout = %s, want 2s", cfg.SyncObservationTimeout)
+		}
+	})
+
+	t.Run("env override reaches Config", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(reconcilerSpec(map[string]string{"SYNC_OBSERVATION_TIMEOUT": "9s"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SyncObservationTimeout != 9*time.Second {
+			t.Fatalf("SyncObservationTimeout = %s, want 9s", cfg.SyncObservationTimeout)
+		}
+	})
+
+	t.Run("flag beats env, matching every other layered setting", func(t *testing.T) {
+		t.Parallel()
+		spec := reconcilerSpec(map[string]string{"SYNC_OBSERVATION_TIMEOUT": "9s"})
+		spec.Overrides = map[string]string{"SYNC_OBSERVATION_TIMEOUT": "1s"}
+		cfg, err := Load(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SyncObservationTimeout != 1*time.Second {
+			t.Fatalf("SyncObservationTimeout = %s, want the flag's 1s", cfg.SyncObservationTimeout)
+		}
+	})
+
+	for _, out := range []string{"5ms", "31s", "not-a-duration"} {
+		out := out
+		t.Run("rejects out-of-bounds "+out, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(reconcilerSpec(map[string]string{"SYNC_OBSERVATION_TIMEOUT": out})); err == nil {
+				t.Fatalf("expected SYNC_OBSERVATION_TIMEOUT=%q to fail", out)
+			}
+		})
+	}
+}
+
 // TestBlankValuesAreTreatedAsUnsetOnBothSurfaces pins the edge the removed
 // conflict branches used to arbitrate.
 //

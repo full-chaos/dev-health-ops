@@ -250,6 +250,16 @@ var optionRegistry = []Option{
 		Default: defaultJobCleanerTimeout.String(), Group: GroupDatabase,
 		Usage: "per-run timeout of the River job cleaner (5s-5m)",
 	},
+	// CHAOS-4092: reconciler-only, matching the unreclaimable-sweep flag's
+	// scoping precedent above. This widens the sync-dispatch observer's
+	// per-step budget in place; it does not fix a slow step, it only changes
+	// when readiness gives up waiting for one.
+	{
+		Flag: "sync-observation-timeout", Env: "SYNC_OBSERVATION_TIMEOUT", Kind: KindDuration,
+		Default:  defaultSyncObservationTimeout.String(),
+		Services: []string{"dev-health-reconciler"}, Group: GroupRuntime,
+		Usage: "sync-dispatch observer per-step timeout (10ms-30s, liveness only)",
+	},
 
 	// Provider routes.
 	{

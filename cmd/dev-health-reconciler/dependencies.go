@@ -644,6 +644,18 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
+	// CHAOS-4092: --sync-observation-timeout / SYNC_OBSERVATION_TIMEOUT
+	// overrides the 2s default in place of a redeploy. Config.Load never
+	// returns a zero SyncObservationTimeout -- durationEnv falls back to
+	// defaultSyncObservationTimeout, which config.go keeps equal to
+	// syncreconciler's own default -- so zero here means the caller built a
+	// bare config.Config{} directly (every reconciler unit test does this)
+	// rather than an unset override, and DefaultLoopConfig's built-in default
+	// is left standing instead of failing LoopConfig.validate's >= 10ms
+	// floor.
+	if cfg.SyncObservationTimeout != 0 {
+		syncLoopConfig.ObservationTimeout = cfg.SyncObservationTimeout
+	}
 	syncLoopConfig.Recorder = recorder
 	syncLoopConfig.Logger = logger
 	syncLoop, err := sources.newSyncLoop(syncStepper, syncLoopConfig)

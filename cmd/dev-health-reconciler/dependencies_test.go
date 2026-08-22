@@ -198,6 +198,69 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 }
 
+// TestSyncObservationTimeoutPropagatesFromConfig pins CHAOS-4092's wiring:
+// cfg.SyncObservationTimeout, not the syncreconciler package default, decides
+// the observer loop's per-step budget when the operator set an override, and
+// a bare config.Config{} (every other reconciler test's shape, and what a
+// caller who never wires the option would produce) leaves
+// DefaultLoopConfig's built-in 2s standing rather than tripping
+// LoopConfig.validate's >= 10ms floor with a zero value.
+func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+
+	newSources := func(t *testing.T, captured *time.Duration) reconcilerDependencySources {
+		t.Helper()
+		sources := reconcilerSourcesForTest(t, &fakeReconcilerDatabase{})
+		// buildReconcilerDependencies returns no components (and no error) at
+		// all when the outbox relay loop is nil -- reconcilerSourcesForTest
+		// does not stub buildRelay, so this closes that gap the same way
+		// TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder does.
+		sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+			return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
+				return joboutbox.StepResult{}, nil
+			}), nil
+		}
+		sources.newSyncLoop = func(
+			stepper syncreconciler.Stepper, loopConfig syncreconciler.LoopConfig,
+		) (*syncreconciler.Loop, error) {
+			*captured = loopConfig.ObservationTimeout
+			return syncreconciler.NewLoop(stepper, loopConfig)
+		}
+		return sources
+	}
+
+	t.Run("override reaches the loop", func(t *testing.T) {
+		cfg := reconcilerProductionShapedConfig(t)
+		cfg.SyncObservationTimeout = 7 * time.Second
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 7*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want the configured 7s", captured)
+		}
+	})
+
+	t.Run("bare config.Config{} keeps the package default", func(t *testing.T) {
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), config.Config{RiverDatabaseSchema: "river"},
+			health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 2*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want DefaultLoopConfig's 2s", captured)
+		}
+	})
+}
+
 func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}

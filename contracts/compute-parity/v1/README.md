@@ -64,6 +64,10 @@ Exit codes: `0` EQUAL / WITHIN_ENVELOPE, `1` DIFFERENT / OUTSIDE_ENVELOPE, `2`
 the comparison could not be made at all, `3` INDETERMINATE / UNPROVEN. `2` and
 `3` are not softer versions of `0`.
 
+`--as-of` is required whenever the manifest's `determinism.clock.policy` is a
+pinned one and a producer is being run: without it the producer silently takes
+the host clock, and the two sides can land on different days.
+
 Producers receive `PARITY_DSN`, `PARITY_SIDE`, `PARITY_RUN_INDEX` and
 `PARITY_AS_OF` in the environment. `--no-exec` compares two destinations exactly
 as they stand.
@@ -108,7 +112,14 @@ as they stand.
    proven is visible rather than implied.
 8. **Add the Go producer** under `producers.go` once the port exists. Nothing
    else in the manifest changes when a kind is ported — that is the point.
-9. **Prove it.** Add the kind to the live test's coverage and run the
+9. **Decide whether an empty output is ever acceptable.** By default it is
+   not: two empty tables have equal counts and equal digests at every level, so
+   the comparator returns `INDETERMINATE` rather than `EQUAL` when a table is
+   empty on both sides. That is usually a fixture that produced nothing or a
+   projection that matched nothing — an absence of evidence, not parity. Set
+   `allow_empty: true` on a table a kind may legitimately leave empty, and say
+   why in the manifest `description`.
+10. **Prove it.** Add the kind to the live test's coverage and run the
    self-test (same implementation both sides → `EQUAL`) plus the three negative
    controls (mutate a row, drop a row, nudge a float past its policy → each
    reported precisely). A comparator that has not been shown to fail has not
@@ -124,7 +135,13 @@ against the declared `repeat_policy`, **per side**:
 | `idempotent` | count and canonical row digest both unchanged |
 | `append_duplicates` | key set unchanged, count grew |
 | `replace_window` | key set and count unchanged, rows may differ |
-| `tombstone` | as `replace_window`/`idempotent`, with `tombstone_predicate` naming the marker rows |
+| `tombstone` | `tombstone_predicate` matches at least one row after the replay, with the key set stable |
+
+`tombstone_predicate` is **required** for the `tombstone` policy and rejected
+for every other policy. The comparator counts the rows matching it on each side
+and each run, so the contract is checked rather than assumed: a producer that
+deletes nothing and marks nothing fails it, and two sides that write different
+tombstone counts are reported as a difference.
 
 `metrics.dora` declares `append_duplicates`: `dora_metrics_daily` is a plain
 `MergeTree` and `job_dora` never deletes, so a replay appends a second copy.
@@ -138,3 +155,14 @@ Both sides must be scratch databases. The comparator refuses `default`
 outright — it holds real dev data (see `ops/AGENTS.md`, "Safety rule") and
 `--left-exec`/`--right-exec` write to whatever they are pointed at. It also
 refuses two sides that resolve to the same database.
+
+## Packaging
+
+These manifests are **not** a runtime contract tree. `dev_health_ops` never
+reads them; only `scripts/worker/compare_compute_outputs.py` does, from a
+checkout. They are therefore deliberately absent from
+`[tool.setuptools.data-files]` in `pyproject.toml`, and
+`tests/tooling/test_contract_artifact_packaging.py`'s `RUNTIME_CONTRACT_TREES`
+does not list them. If a manifest ever becomes something the installed package
+reads at runtime, both halves have to change together — see that test's
+docstring for why one without the other is useless.

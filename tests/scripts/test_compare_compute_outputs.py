@@ -125,8 +125,13 @@ def rows() -> list[dict[str, Any]]:
     ]
 
 
-def snap(data: list[dict[str, Any]]) -> Any:
-    return comparator.Snapshot(table="t", rows=tuple(data))
+DECLARED_COLUMNS = ("org_id", "day", "metric_name", "value", "computed_at")
+
+
+def snap(data: list[dict[str, Any]], columns: tuple[str, ...] | None = None) -> Any:
+    if columns is None:
+        columns = tuple(data[0].keys()) if data else DECLARED_COLUMNS
+    return comparator.Snapshot(table="t", columns=columns, rows=tuple(data))
 
 
 # --------------------------------------------------------------------------
@@ -258,6 +263,37 @@ def test_column_drift_between_select_and_manifest_is_refused(tmp_path):
         row["surprise"] = 1
     with pytest.raises(comparator.ComparisonError, match="manifest_column_drift"):
         comparator.validate_columns(spec, snap(drifted), "python")
+
+
+def test_column_drift_is_caught_on_an_EMPTY_result_too(tmp_path):
+    """The fail-open Codex found: a wrong projection that returns no rows.
+
+    Columns are validated from the driver's result metadata, so a select that
+    reads the wrong columns is refused even when it matched nothing -- rather
+    than sailing through as two equal empty tables.
+    """
+    spec = spec_of(tmp_path)
+    empty_wrong_projection = comparator.Snapshot(
+        table="t", columns=("org_id", "day"), rows=()
+    )
+    with pytest.raises(comparator.ComparisonError, match="manifest_column_drift"):
+        comparator.validate_columns(spec, empty_wrong_projection, "python")
+
+
+def test_tombstone_policy_without_a_predicate_is_refused(tmp_path):
+    document = base_manifest()
+    document["outputs"][0]["repeat_policy"] = "tombstone"
+    with pytest.raises(
+        comparator.ComparisonError, match="tombstone_predicate_required"
+    ):
+        write_manifest(tmp_path, document)
+
+
+def test_tombstone_predicate_without_the_policy_is_refused(tmp_path):
+    document = base_manifest()
+    document["outputs"][0]["tombstone_predicate"] = "is_deleted = 1"
+    with pytest.raises(comparator.ComparisonError, match="tombstone_predicate_unused"):
+        write_manifest(tmp_path, document)
 
 
 # --------------------------------------------------------------------------
@@ -477,6 +513,57 @@ def test_repeat_declared_append_duplicates_accepts_growth(tmp_path):
     assert verdict["matches_declared_policy"]
 
 
+def tombstone_spec(tmp_path: Path) -> Any:
+    document = base_manifest()
+    document["outputs"][0]["repeat_policy"] = "tombstone"
+    document["outputs"][0]["tombstone_predicate"] = "value < 0"
+    return spec_of(tmp_path, document)
+
+
+def test_tombstone_policy_is_violated_when_no_marker_row_appears(tmp_path):
+    """The other fail-open Codex found.
+
+    Before the fix, a `tombstone` declaration was satisfied by any replay that
+    merely kept the key set stable -- including a producer that deleted nothing
+    and marked nothing, which is exactly the behaviour the policy exists to
+    catch.
+    """
+    spec = tombstone_spec(tmp_path)
+    verdict = comparator.evaluate_repeat(
+        spec,
+        "python",
+        stats(spec, rows()),
+        stats(spec, rows()),
+        tombstones_first=0,
+        tombstones_second=0,
+    )
+    assert verdict["tombstone_status"] == "absent"
+    assert not verdict["matches_declared_policy"]
+
+
+def test_tombstone_policy_is_satisfied_when_marker_rows_exist(tmp_path):
+    spec = tombstone_spec(tmp_path)
+    verdict = comparator.evaluate_repeat(
+        spec,
+        "python",
+        stats(spec, rows()),
+        stats(spec, rows()),
+        tombstones_first=0,
+        tombstones_second=2,
+    )
+    assert verdict["tombstone_status"] == "present"
+    assert verdict["matches_declared_policy"]
+
+
+def test_tombstone_policy_is_unproven_when_counts_were_not_read(tmp_path):
+    spec = tombstone_spec(tmp_path)
+    verdict = comparator.evaluate_repeat(
+        spec, "python", stats(spec, rows()), stats(spec, rows())
+    )
+    assert verdict["tombstone_status"] == "not_evaluated"
+    assert not verdict["matches_declared_policy"]
+
+
 def test_repeat_detects_a_changed_key_set(tmp_path):
     spec = spec_of(tmp_path)
     second_rows = copy.deepcopy(rows())
@@ -491,6 +578,33 @@ def test_repeat_detects_a_changed_key_set(tmp_path):
 # --------------------------------------------------------------------------
 # Destination safety
 # --------------------------------------------------------------------------
+
+
+def test_a_delimiter_inside_a_value_cannot_forge_a_field_boundary(tmp_path):
+    """Row values are database content; they may contain the join delimiter."""
+    spec = spec_of(tmp_path)
+    stamp = dt.datetime(2026, 8, 22, tzinfo=dt.timezone.utc)
+    left = [
+        {
+            "org_id": "a",
+            "day": dt.date(2026, 8, 20),
+            "metric_name": "x\x1fy",
+            "value": 1.0,
+            "computed_at": stamp,
+        }
+    ]
+    right = [
+        {
+            "org_id": "a",
+            "day": dt.date(2026, 8, 20),
+            "metric_name": "x",
+            "value": 1.0,
+            "computed_at": stamp,
+        }
+    ]
+    result = comparator.compare_snapshots(spec, snap(left), snap(right))
+    assert not result.equal
+    assert comparator.row_key(spec, left[0]) != comparator.row_key(spec, right[0])
 
 
 def test_default_database_is_refused_as_a_comparison_side():
@@ -647,3 +761,58 @@ def test_runtime_mode_refuses_an_observation_carrying_tenant_identifiers(tmp_pat
     observation["org_id"] = "acme"
     with pytest.raises(Exception):
         comparator.compare_runtime(write_observation(tmp_path, observation))
+
+
+def test_runtime_mode_refuses_an_observation_with_no_series(tmp_path):
+    """A truncated capture must not satisfy the operational-health gate.
+
+    Before the fix, the evaluator iterated only over what the observation
+    contained, so an observation carrying no families and no profiles produced
+    no findings at all -- and, once thresholds are approved, would have read as
+    WITHIN_ENVELOPE purely because nothing was measured.
+    """
+    for key in ("families", "profiles"):
+        observation = go_observation()
+        observation[key] = {}
+        with pytest.raises(
+            comparator.ComparisonError, match=f"observation_{key}_missing"
+        ):
+            comparator.compare_runtime(write_observation(tmp_path, observation))
+
+
+def test_runtime_mode_refuses_invalid_counts(tmp_path):
+    observation = go_observation()
+    observation["families"]["metrics"]["counts"]["failure"] = -1
+    with pytest.raises(comparator.ComparisonError, match="observation_counts_invalid"):
+        comparator.compare_runtime(write_observation(tmp_path, observation))
+
+    observation = go_observation()
+    del observation["families"]["metrics"]["counts"]["discard"]
+    with pytest.raises(comparator.ComparisonError, match="observation_counts_invalid"):
+        comparator.compare_runtime(write_observation(tmp_path, observation))
+
+
+def test_runtime_mode_requires_coverage_of_every_recorded_baseline_series(tmp_path):
+    """Coverage is checked against the pinned baseline, not against the input."""
+    report = comparator.compare_runtime(write_observation(tmp_path, go_observation()))
+    not_observed = {
+        finding["check"]
+        for finding in report["findings"]
+        if finding["check"].startswith("baseline_")
+    }
+    assert "baseline_family_not_observed" in not_observed
+    statuses = {
+        entry["name"]: entry["status"]
+        for entry in report["comparisons"]
+        if entry.get("status") == "not_observed"
+    }
+    assert statuses, "the single-family observation covers almost none of v0"
+
+
+def test_runtime_mode_treats_an_unmeasurable_budget_as_a_finding(tmp_path):
+    observation = go_observation()
+    del observation["profiles"]["general"]["cpu_cores"]
+    report = comparator.compare_runtime(write_observation(tmp_path, observation))
+    assert {"check": "cpu_cores_not_measurable", "profile": "general"} in report[
+        "findings"
+    ]

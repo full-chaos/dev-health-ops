@@ -337,3 +337,44 @@ def test_negative_control_float_nudged_past_policy(perturbable):
     mutated = [d for d in report["differences"] if d["shape"] == "row_mutated"]
     assert mutated
     assert mutated[0]["fields"][0]["right"] == repr(nudged)
+
+
+def test_two_empty_output_tables_are_indeterminate_not_equal(perturbable):
+    """Absence of evidence must not read as parity.
+
+    Two empty tables have equal counts and equal digests at every level. Before
+    this was closed, a fixture that produced nothing -- or a projection that
+    matched nothing on both sides -- reported EQUAL with exit code 0.
+    """
+    left, right = perturbable
+    for dsn in (left, right):
+        _mutate(dsn, f"TRUNCATE TABLE {TABLE}")
+    code, report = _compare(left, right, ["--no-exec"])
+    assert code == 3
+    assert report["verdict"] == comparator.VERDICT_INDETERMINATE
+    assert report["reason"] == f"output_empty_on_both_sides:{TABLE}"
+
+
+def test_a_pinned_clock_manifest_refuses_to_run_a_producer_without_as_of(destinations):
+    """metrics.dora declares a pinned run day; the producer must be handed one."""
+    left, right = destinations
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(COMPARATOR),
+            "rows",
+            "--manifest",
+            str(MANIFEST),
+            "--left-dsn",
+            left,
+            "--right-dsn",
+            right,
+            "--repeat",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert completed.returncode == 2
+    assert "as_of_required_for_clock_policy" in completed.stderr

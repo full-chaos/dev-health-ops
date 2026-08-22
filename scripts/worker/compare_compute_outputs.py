@@ -219,9 +219,20 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _framed(part: str) -> str:
+    """Length-prefix a component so a delimiter inside a value cannot forge one.
+
+    Every joined structure below (a semantic key, a canonical row, a digest
+    input) is built from database values. A value containing the delimiter byte
+    could otherwise make two different rows serialize identically, which is a
+    difference the comparator would silently not see.
+    """
+    return f"{len(part)}:{part}"
+
+
 def digest_of_sorted(items: Iterable[str]) -> str:
     """Order-independent digest over a collection of canonical strings."""
-    joined = "\x1e".join(sorted(items))
+    joined = "\x1e".join(_framed(item) for item in sorted(items))
     return sha256_text(joined)
 
 
@@ -286,6 +297,7 @@ class OutputSpec:
     fields: tuple[FieldSpec, ...]
     repeat_policy: str
     tombstone_predicate: str | None
+    allow_empty: bool
 
     def field(self, column: str) -> FieldSpec:
         for spec in self.fields:
@@ -433,6 +445,14 @@ def load_manifest(path: Path) -> Manifest:
             raise ComparisonError(
                 f"manifest_volatile_semantic_key:{table}:{','.join(volatile_key)}"
             )
+        tombstone_predicate = entry.get("tombstone_predicate")
+        if repeat_policy == "tombstone" and not str(tombstone_predicate or "").strip():
+            # Without a predicate there is nothing to check, and the policy
+            # would be satisfied by a producer that deletes nothing and marks
+            # nothing -- the exact behaviour it exists to catch.
+            raise ComparisonError(f"manifest_tombstone_predicate_required:{table}")
+        if tombstone_predicate and repeat_policy != "tombstone":
+            raise ComparisonError(f"manifest_tombstone_predicate_unused:{table}")
         outputs.append(
             OutputSpec(
                 table=table,
@@ -441,7 +461,8 @@ def load_manifest(path: Path) -> Manifest:
                 semantic_key=semantic_key,
                 fields=tuple(fields),
                 repeat_policy=repeat_policy,
-                tombstone_predicate=entry.get("tombstone_predicate"),
+                tombstone_predicate=tombstone_predicate,
+                allow_empty=bool(entry.get("allow_empty", False)),
             )
         )
     if not outputs:
@@ -468,9 +489,14 @@ def load_manifest(path: Path) -> Manifest:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """Rows read from one destination for one declared table."""
+    """Rows read from one destination for one declared table.
+
+    ``columns`` comes from the driver's result metadata, not from the first
+    row, so an empty result still carries the projection it was read with.
+    """
 
     table: str
+    columns: tuple[str, ...]
     rows: tuple[Mapping[str, Any], ...]
 
 
@@ -479,7 +505,7 @@ def row_key(spec: OutputSpec, row: Mapping[str, Any]) -> str:
     for column in spec.semantic_key:
         field_spec = spec.field(column)
         parts.append(canonical_scalar(row.get(column), field_spec.type))
-    return "\x1f".join(parts)
+    return "\x1f".join(_framed(part) for part in parts)
 
 
 def _ordinal_maps(
@@ -527,7 +553,7 @@ def canonical_row(
         else:
             rendered = canonical_scalar(value, field_spec.type)
         parts.append(f"{field_spec.column}={rendered}")
-    return "\x1f".join(parts)
+    return "\x1f".join(_framed(part) for part in parts)
 
 
 @dataclass
@@ -801,7 +827,13 @@ def snapshot_stats(spec: OutputSpec, snap: Snapshot) -> SnapshotStats:
 
 
 def evaluate_repeat(
-    spec: OutputSpec, side: str, first: SnapshotStats, second: SnapshotStats
+    spec: OutputSpec,
+    side: str,
+    first: SnapshotStats,
+    second: SnapshotStats,
+    *,
+    tombstones_first: int | None = None,
+    tombstones_second: int | None = None,
 ) -> dict[str, Any]:
     """Check one side's second execution against the declared repeat policy.
 
@@ -824,21 +856,40 @@ def evaluate_repeat(
     else:
         observed = "changed_key_set"
 
-    matches = observed == spec.repeat_policy or (
-        spec.repeat_policy == "tombstone"
-        and observed in ("replace_window", "idempotent")
-    )
-    return {
+    entry: dict[str, Any] = {
         "table": spec.table,
         "side": side,
         "declared_policy": spec.repeat_policy,
         "observed": observed,
-        "matches_declared_policy": matches,
         "count_first": first.count,
         "count_second": second.count,
         "key_set_stable": keys_stable,
         "row_digest_stable": rows_stable,
     }
+
+    if spec.repeat_policy == "tombstone":
+        # A tombstone contract is a claim about MARKER ROWS, so it is checked
+        # by counting rows matching the manifest's declared predicate -- not by
+        # accepting any replay shape that happens to keep the key set stable.
+        # A producer that touched nothing would satisfy that weaker reading
+        # while writing no tombstone at all.
+        entry["tombstones_first"] = tombstones_first
+        entry["tombstones_second"] = tombstones_second
+        if tombstones_first is None or tombstones_second is None:
+            entry["matches_declared_policy"] = False
+            entry["tombstone_status"] = "not_evaluated"
+            return entry
+        marked = tombstones_second > 0
+        entry["tombstone_status"] = "present" if marked else "absent"
+        entry["matches_declared_policy"] = bool(
+            marked
+            and keys_stable
+            and observed in ("replace_window", "idempotent", "append_duplicates")
+        )
+        return entry
+
+    entry["matches_declared_policy"] = observed == spec.repeat_policy
+    return entry
 
 
 # --------------------------------------------------------------------------
@@ -898,18 +949,41 @@ class Reader:
             self._client = create_engine(self.dsn)
         return self._client
 
-    def rows(self, select: str) -> list[dict[str, Any]]:
+    def read(self, select: str) -> tuple[list[str], list[dict[str, Any]]]:
+        """Return the result's columns AND rows.
+
+        The columns come from result metadata so they survive an empty result:
+        a projection that selects the wrong columns while returning no rows
+        must still be caught, and reading columns off the first row cannot do
+        that.
+        """
         if self.store == "clickhouse":
             result = self._clickhouse().query(select)
             columns = list(getattr(result, "column_names", []) or [])
-            return [
+            rows = [
                 dict(zip(columns, row)) for row in getattr(result, "result_rows", [])
             ]
+            if not columns:
+                # clickhouse-connect returns an EMPTY column_names tuple for a
+                # zero-row result, which would make the manifest-column check
+                # unenforceable on exactly the case it most needs to cover.
+                # DESCRIBE reports the projection's columns from the query
+                # itself, independently of how many rows it matched.
+                described = self._clickhouse().query(f"DESCRIBE ({select})")
+                columns = [str(row[0]) for row in described.result_rows]
+            return columns, rows
         from sqlalchemy import text
 
         with self._postgres().connect() as connection:
             result = connection.execute(text(select))
-            return [dict(row) for row in result.mappings()]
+            columns = [str(key) for key in result.keys()]
+            return columns, [dict(row) for row in result.mappings()]
+
+    def scalar(self, select: str) -> Any:
+        _, rows = self.read(select)
+        if not rows:
+            return None
+        return next(iter(rows[0].values()))
 
     def close(self) -> None:
         if self._client is None:
@@ -922,7 +996,8 @@ class Reader:
 
 
 def snapshot(reader: Reader, table: str, select: str) -> Snapshot:
-    return Snapshot(table=table, rows=tuple(reader.rows(select)))
+    columns, rows = reader.read(select)
+    return Snapshot(table=table, columns=tuple(columns), rows=tuple(rows))
 
 
 def validate_columns(spec: OutputSpec, snap: Snapshot, side: str) -> None:
@@ -932,10 +1007,12 @@ def validate_columns(spec: OutputSpec, snap: Snapshot, side: str) -> None:
     to weaken a parity claim: an undeclared column is simply never compared, and
     the run still reports EQUAL. Checking the actual result columns against the
     declaration turns that into a loud failure the first time either side moves.
+
+    Validated from result metadata, so it holds for an empty result too: a
+    query against the wrong projection that happens to return no rows would
+    otherwise sail through as "equal zero rows".
     """
-    if not snap.rows:
-        return
-    observed = set(snap.rows[0].keys())
+    observed = set(snap.columns)
     declared = {f.column for f in spec.fields}
     if observed != declared:
         missing = sorted(declared - observed)
@@ -1032,6 +1109,17 @@ def compare_rows(
     if _database_of(left_dsn) == _database_of(right_dsn):
         raise ComparisonError("destinations_share_one_database")
 
+    clock_policy = str((manifest.determinism.get("clock") or {}).get("policy", ""))
+    if (
+        "pinned" in clock_policy
+        and not as_of.strip()
+        and (left_command or right_command)
+    ):
+        # The manifest says the producer's window is pinned; running one without
+        # PARITY_AS_OF silently hands it the host clock, and the two sides can
+        # then land on different days. Refuse rather than compare.
+        raise ComparisonError(f"as_of_required_for_clock_policy:{clock_policy}")
+
     stores = {spec.store for spec in manifest.outputs} | {
         spec.store for spec in manifest.inputs
     }
@@ -1104,6 +1192,7 @@ def compare_rows(
             return report
 
         first_stats: dict[str, dict[str, SnapshotStats]] = {}
+        first_tombstones: dict[str, dict[str, int | None]] = {}
         for run_index in range(1, max(1, repeat) + 1):
             if left_command:
                 run_producer(left_command, left_dsn, left_label, run_index, as_of)
@@ -1127,11 +1216,44 @@ def compare_rows(
                 for difference in comparison.differences:
                     report["differences"].append({"run": run_index, **difference})
 
+                if (
+                    not output_spec.allow_empty
+                    and not left_snapshot.rows
+                    and not right_snapshot.rows
+                ):
+                    # Two empty tables have identical counts and identical
+                    # digests. That is not parity, it is an absence of
+                    # evidence -- most often a fixture that produced nothing
+                    # or a projection that matched nothing on both sides.
+                    report["runs"].append(run_entry)
+                    report["verdict"] = VERDICT_INDETERMINATE
+                    report["reason"] = f"output_empty_on_both_sides:{output_spec.table}"
+                    return report
+
+                tombstones = {
+                    left_label: _tombstone_count(left_reader, output_spec),
+                    right_label: _tombstone_count(right_reader, output_spec),
+                }
+                if output_spec.repeat_policy == "tombstone" and (
+                    tombstones[left_label] != tombstones[right_label]
+                ):
+                    report["differences"].append(
+                        {
+                            "run": run_index,
+                            "shape": "tombstone_count_mismatch",
+                            "table": output_spec.table,
+                            "left": tombstones[left_label],
+                            "right": tombstones[right_label],
+                        }
+                    )
+                run_entry["tables"][output_spec.table]["tombstones"] = tombstones
+
                 stats = {
                     left_label: snapshot_stats(output_spec, left_snapshot),
                     right_label: snapshot_stats(output_spec, right_snapshot),
                 }
                 if run_index == 1:
+                    first_tombstones[output_spec.table] = tombstones
                     first_stats[output_spec.table] = stats
                 elif run_index == 2:
                     for side, second in stats.items():
@@ -1140,6 +1262,10 @@ def compare_rows(
                             side,
                             first_stats[output_spec.table][side],
                             second,
+                            tombstones_first=first_tombstones.get(
+                                output_spec.table, {}
+                            ).get(side),
+                            tombstones_second=tombstones[side],
                         )
                         report["repeat"].append(repeat_entry)
                         if not repeat_entry["matches_declared_policy"]:
@@ -1159,6 +1285,23 @@ def compare_rows(
         VERDICT_EQUAL if not report["differences"] else VERDICT_DIFFERENT
     )
     return report
+
+
+def _tombstone_count(reader: Reader, spec: OutputSpec) -> int | None:
+    """Count rows matching the manifest's declared tombstone predicate.
+
+    ``None`` when the table declares no tombstone contract; a number otherwise,
+    which is what makes the tombstone repeat policy checkable instead of
+    assumed.
+    """
+    if not spec.tombstone_predicate:
+        return None
+    value = reader.scalar(
+        f"SELECT count() FROM {spec.table} WHERE {spec.tombstone_predicate}"
+        if reader.store == "clickhouse"
+        else f"SELECT count(*) FROM {spec.table} WHERE {spec.tombstone_predicate}"
+    )
+    return None if value is None else int(value)
 
 
 def _stable(value: Any) -> str:
@@ -1219,14 +1362,46 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     comparisons: list[dict[str, Any]] = []
 
-    for family, observed in (observation.get("families") or {}).items():
+    observed_families = observation.get("families") or {}
+    observed_profiles = observation.get("profiles") or {}
+    if not isinstance(observed_families, Mapping) or not observed_families:
+        raise ComparisonError("observation_families_missing")
+    if not isinstance(observed_profiles, Mapping) or not observed_profiles:
+        raise ComparisonError("observation_profiles_missing")
+
+    # Coverage, checked against the pinned baseline rather than against
+    # whatever the observation happened to include. An operational-health claim
+    # over an arbitrary subset is not the claim: a truncated capture would
+    # otherwise produce no findings and read as compliant.
+    baseline_families = {
+        name
+        for name, recorded in measurements["task_outcome_rates_by_family"].items()
+        if isinstance(recorded, Mapping) and "counts" in recorded
+    }
+    baseline_profiles = {
+        name
+        for name, recorded in measurements["worker_cpu_cores_by_profile"].items()
+        if _baseline_scalar(recorded) is not None
+    }
+    for name in sorted(baseline_families - set(observed_families)):
+        findings.append({"check": "baseline_family_not_observed", "family": name})
+        comparisons.append({"scope": "family", "name": name, "status": "not_observed"})
+    for name in sorted(baseline_profiles - set(observed_profiles)):
+        findings.append({"check": "baseline_profile_not_observed", "profile": name})
+        comparisons.append({"scope": "profile", "name": name, "status": "not_observed"})
+
+    for family, observed in observed_families.items():
         recorded = measurements["task_outcome_rates_by_family"].get(family)
         if not isinstance(recorded, Mapping) or "counts" not in recorded:
-            # Evidence rule: an absent series is `missing`, never a numeric zero.
+            # Evidence rule: an absent series is `missing`, never a numeric
+            # zero -- and a series with no baseline cannot be inside an
+            # envelope the baseline never drew, so it is a finding too.
             comparisons.append(
                 {"scope": "family", "name": family, "status": "missing_in_baseline"}
             )
+            findings.append({"check": "series_missing_in_baseline", "family": family})
             continue
+        _require_counts(observed, family)
         baseline_errors = int(recorded["counts"]["failure"]) + int(
             recorded["counts"]["discard"]
         )
@@ -1270,6 +1445,8 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
             observed_value = observed.get(key)
             if baseline_value is None or observed_value is None:
                 entry[key] = {"status": "missing"}
+                # An unmeasurable budget is not a satisfied budget.
+                findings.append({"check": f"{key}_not_measurable", "profile": profile})
                 continue
             ratio = proof.ratio(float(observed_value), float(baseline_value))
             entry[key] = {
@@ -1341,6 +1518,19 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
         "verdict": verdict,
         "reason": reason,
     }
+
+
+def _require_counts(observed: Any, name: str) -> None:
+    """Refuse an observation series whose counts are absent or not integers."""
+    if not isinstance(observed, Mapping):
+        raise ComparisonError(f"observation_series_shape_invalid:{name}")
+    counts = observed.get("counts")
+    if not isinstance(counts, Mapping):
+        raise ComparisonError(f"observation_counts_missing:{name}")
+    for key in ("success", "retry", "failure", "discard"):
+        value = counts.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ComparisonError(f"observation_counts_invalid:{name}.{key}")
 
 
 def _baseline_scalar(recorded: Any, key: str = "p50") -> float | None:

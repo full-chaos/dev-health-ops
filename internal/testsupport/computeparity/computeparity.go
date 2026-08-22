@@ -28,7 +28,12 @@
 package computeparity
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -347,21 +352,70 @@ func sortedKeys(grouped map[string][]map[string]any) []string {
 	return keys
 }
 
-// Producer names the implementation that filled one side of a comparison.
-//
-// It exists so a report can state WHICH implementations were compared, and so
-// the difference between a comparator self-test and a port proof is a checked
-// fact rather than a claim in a comment.
-type Producer struct {
-	// Side is the label used in divergence messages.
+// Execution records what a harness OBSERVED running for one side of a
+// comparison. It is not a label the caller chose.
+type Execution struct {
+	// Side is the label used in divergence messages. Cosmetic only.
 	Side string
-	// Implementation is the thing that actually ran: "python" for the
-	// reference job, "go" for a native executor.
-	Implementation string
+	// Program is the resolved executable the harness actually invoked.
+	Program string
+	// EntryPoint is the script or subcommand it ran, resolved to an absolute
+	// path where one exists.
+	EntryPoint string
+}
+
+// Identity is what distinguishes one implementation from another: the resolved
+// binary plus the entry point inside it. Two sides that ran the same script
+// through the same interpreter have the same identity no matter what the test
+// called them.
+func (e Execution) Identity() string {
+	return sha256Hex(e.Program + "\x1f" + e.EntryPoint)
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+// RunProducer executes one side's producer and returns what actually ran.
+//
+// The harness resolves the executable itself and records it, so producer
+// identity is OBSERVED rather than declared. An earlier version of this guard
+// took a caller-supplied implementation string, which meant a port test could
+// keep invoking the Python reference on both sides, label one of them "go",
+// and satisfy the guard while proving nothing -- the exact degradation the
+// guard exists to prevent, re-entering through its own input.
+func RunProducer(
+	t *testing.T, side, workingDir string, environment []string, argv ...string,
+) Execution {
+	t.Helper()
+	if len(argv) < 2 {
+		t.Fatalf("%s: a producer invocation needs an executable and an entry point", side)
+	}
+	program, err := exec.LookPath(argv[0])
+	if err != nil {
+		t.Fatalf("%s: resolve %q: %v", side, argv[0], err)
+	}
+	if resolved, err := filepath.Abs(program); err == nil {
+		program = resolved
+	}
+	entryPoint := argv[1]
+	if resolved, err := filepath.Abs(entryPoint); err == nil {
+		if _, statErr := os.Stat(resolved); statErr == nil {
+			entryPoint = resolved
+		}
+	}
+	command := exec.Command(program, argv[1:]...)
+	command.Dir = workingDir
+	command.Env = environment
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %s failed: %v\n%s", side, strings.Join(argv, " "), err, output)
+	}
+	return Execution{Side: side, Program: program, EntryPoint: entryPoint}
 }
 
 // RequirePortProof fails unless the two sides were produced by DIFFERENT
-// implementations.
+// implementations, judged by what the harness observed running.
 //
 // A port proof that runs the reference producer on both sides proves only that
 // the comparator detects injected mutations and that the reference is
@@ -370,7 +424,7 @@ type Producer struct {
 // worst possible failure mode for a release gate. Every kind's port test must
 // call this; a comparator self-test deliberately must not, and should say so
 // in its name.
-func RequirePortProof(t *testing.T, left, right Producer) {
+func RequirePortProof(t *testing.T, left, right Execution) {
 	t.Helper()
 	if violation := PortProofViolation(left, right); violation != "" {
 		t.Fatal(violation)
@@ -383,17 +437,17 @@ func RequirePortProof(t *testing.T, left, right Producer) {
 // Pure, for the same reason oraclecompare's DiffRows is pure: a guard's own
 // logic is exactly the code that must not be trusted on the strength of the
 // runs it reports passing, and it cannot be unit-tested through a t.Fatal.
-func PortProofViolation(left, right Producer) string {
-	if left.Implementation == "" || right.Implementation == "" {
-		return "a port proof must name both implementations"
+func PortProofViolation(left, right Execution) string {
+	if left.Program == "" || right.Program == "" {
+		return "a port proof must record what actually ran on both sides"
 	}
-	if left.Implementation == right.Implementation {
+	if left.Identity() == right.Identity() {
 		return fmt.Sprintf(
-			"both sides ran the %q implementation, so this proves nothing about a "+
-				"port: it shows the comparator detects injected differences and that "+
-				"%q is reproducible. Point one side at the native executor, or name "+
-				"this test a comparator self-test",
-			left.Implementation, left.Implementation,
+			"both sides ran the same implementation (%s %s), so this proves nothing "+
+				"about a port: it shows the comparator detects injected differences "+
+				"and that the reference is reproducible. Point one side at the native "+
+				"executor, or name this test a comparator self-test",
+			left.Program, left.EntryPoint,
 		)
 	}
 	return ""

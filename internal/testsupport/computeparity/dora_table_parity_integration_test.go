@@ -8,7 +8,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -103,21 +102,22 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 	// runs. No DDL is authored here: a hand-typed schema is a second,
 	// unversioned copy of one, and a comparison over it only ever confirms
 	// what the test itself declared.
-	fixtures(t, "provision", "--dsn", leftDSN, "--reset")
-	fixtures(t, "provision", "--dsn", rightDSN, "--reset")
+	fixtures(t, "setup", "provision", "--dsn", leftDSN, "--reset")
+	fixtures(t, "setup", "provision", "--dsn", rightDSN, "--reset")
 
 	// Seed ONE side from the production fixture generators through the
 	// production writers, then clone the declared input tables to the other.
 	// Cloning is what makes "both sides consumed identical input" a fact
 	// rather than an assumption about generator reproducibility.
-	fixtures(t, "seed", "--kind", "metrics.dora", "--dsn", leftDSN, "--as-of", parityAsOf)
-	fixtures(t, "clone", "--kind", "metrics.dora", "--from-dsn", leftDSN, "--to-dsn", rightDSN)
+	fixtures(t, "setup", "seed", "--kind", "metrics.dora", "--dsn", leftDSN, "--as-of", parityAsOf)
+	fixtures(t, "setup", "clone", "--kind", "metrics.dora", "--from-dsn", leftDSN, "--to-dsn", rightDSN)
 
-	produce := func(dsn string) {
-		fixtures(t, "produce", "--kind", "metrics.dora", "--dsn", dsn, "--as-of", parityAsOf)
+	produce := func(side, dsn string) computeparity.Execution {
+		return fixtures(t, side,
+			"produce", "--kind", "metrics.dora", "--dsn", dsn, "--as-of", parityAsOf)
 	}
-	produce(leftDSN)
-	produce(rightDSN)
+	leftExecution := produce("python", leftDSN)
+	rightExecution := produce("python_replica", rightDSN)
 
 	table := doraTable()
 	left := read(ctx, t, leftDSN, table, "python")
@@ -148,15 +148,13 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 	})
 
 	t.Run("this is a self-test, and is not mistakable for a port proof", func(t *testing.T) {
-		// If someone later points this at a native executor without renaming
-		// it, RequirePortProof is what makes that visible. Here it must
-		// REFUSE, because both sides are Python.
-		violation := computeparity.PortProofViolation(
-			computeparity.Producer{Side: "python", Implementation: "python"},
-			computeparity.Producer{Side: "python_replica", Implementation: "python"},
-		)
+		// Both sides genuinely ran the same interpreter and the same script,
+		// so the harness-observed identities match and the guard refuses --
+		// regardless of what either side is called. R1 points one side at the
+		// native executor, and the same guard then accepts it.
+		violation := computeparity.PortProofViolation(leftExecution, rightExecution)
 		if violation == "" {
-			t.Fatal("two identical implementations must not qualify as a port proof")
+			t.Fatal("two runs of the same producer must not qualify as a port proof")
 		}
 	})
 
@@ -167,8 +165,8 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 	})
 
 	t.Run("a replay honours the declared repeat policy on both sides", func(t *testing.T) {
-		produce(leftDSN)
-		produce(rightDSN)
+		produce("python", leftDSN)
+		produce("python_replica", rightDSN)
 		leftAfter := read(ctx, t, leftDSN, table, "python")
 		rightAfter := read(ctx, t, rightDSN, table, "python_replica")
 
@@ -323,24 +321,20 @@ func read(
 
 // fixtures runs the provisioning/seeding CLI. Comparison never goes through
 // here -- this only fills the stores.
-func fixtures(t *testing.T, args ...string) {
+func fixtures(t *testing.T, side string, args ...string) computeparity.Execution {
 	t.Helper()
 	root := repoRoot(t)
 	python := filepath.Join(root, ".venv", "bin", "python")
 	if _, err := os.Stat(python); err != nil {
 		python = "python3"
 	}
-	command := exec.Command(python,
-		append([]string{filepath.Join(root, "scripts", "worker", "compute_parity_fixtures.py")}, args...)...)
-	command.Dir = root
-	command.Env = append(os.Environ(),
+	script := filepath.Join(root, "scripts", "worker", "compute_parity_fixtures.py")
+	environment := append(os.Environ(),
 		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"),
 		"OTEL_ENABLED=false",
 	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("compute_parity_fixtures.py %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
+	return computeparity.RunProducer(t, side, root, environment,
+		append([]string{python, script}, args...)...)
 }
 
 func scratchDSN(t *testing.T, baseDSN, database string) string {

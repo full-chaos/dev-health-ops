@@ -333,31 +333,50 @@ func TestRepeatIsEvaluatedPerSideAndNamesTheSide(t *testing.T) {
 	}
 }
 
-func TestPortProofRequiresTwoDifferentImplementations(t *testing.T) {
+func TestPortProofJudgesWhatRANNotWhatItWasCalled(t *testing.T) {
 	// The failure this guards is the worst kind for a release gate: a port
 	// test that runs the reference producer on both sides stays GREEN while
 	// the port is broken, missing, or wired to the wrong entry point.
+	//
+	// Crucially, identity comes from the resolved binary and entry point the
+	// harness observed, NOT from a name the caller chose -- so mislabelling
+	// Python as "go" cannot buy a passing proof.
+	python := Execution{Side: "python", Program: "/usr/bin/python3", EntryPoint: "/repo/produce.py"}
 	tests := []struct {
 		name          string
-		left, right   Producer
+		left, right   Execution
 		wantViolation bool
 	}{
 		{
-			name:          "two of the same implementation is a self-test, not a port proof",
-			left:          Producer{Side: "python", Implementation: "python"},
-			right:         Producer{Side: "python_replica", Implementation: "python"},
+			name:          "the same script through the same interpreter is a self-test",
+			left:          python,
+			right:         Execution{Side: "python_replica", Program: python.Program, EntryPoint: python.EntryPoint},
 			wantViolation: true,
 		},
 		{
-			name:          "an unnamed implementation proves nothing",
-			left:          Producer{Side: "python", Implementation: "python"},
-			right:         Producer{Side: "go", Implementation: ""},
+			name: "calling one side go does not make it go",
+			left: python,
+			// Same binary, same script, different SIDE label. Under the old
+			// caller-declared design this passed.
+			right:         Execution{Side: "go", Program: python.Program, EntryPoint: python.EntryPoint},
 			wantViolation: true,
 		},
 		{
-			name:          "python against go is a real port proof",
-			left:          Producer{Side: "python", Implementation: "python"},
-			right:         Producer{Side: "go", Implementation: "go"},
+			name:          "an unrecorded execution proves nothing",
+			left:          python,
+			right:         Execution{Side: "go"},
+			wantViolation: true,
+		},
+		{
+			name:          "a genuinely different binary is a real port proof",
+			left:          python,
+			right:         Execution{Side: "go", Program: "/repo/bin/dev-health-worker", EntryPoint: "metrics.dora"},
+			wantViolation: false,
+		},
+		{
+			name:          "the same binary at a different entry point is a real port proof",
+			left:          python,
+			right:         Execution{Side: "go", Program: python.Program, EntryPoint: "/repo/native_produce.py"},
 			wantViolation: false,
 		},
 	}

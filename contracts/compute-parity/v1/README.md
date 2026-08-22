@@ -118,7 +118,30 @@ identical input" a fact rather than an assumption.
 To add a kind, add a `seed_<kind>` function and register it in `KINDS` with the
 input tables it reads.
 
-### 5. Prove it fails
+### 5. Make it a port proof, not a self-test
+
+`computeparity.RunProducer` executes each side and records what actually ran —
+the resolved binary and entry point. `RequirePortProof` then refuses a pair
+whose two sides have the same observed identity:
+
+```go
+left  := computeparity.RunProducer(t, "python", root, env, python, script, "produce", ...)
+right := computeparity.RunProducer(t, "go", root, env, goBinary, "metrics.dora", ...)
+computeparity.RequirePortProof(t, left, right)
+```
+
+Identity is **observed, not declared**. An earlier version took an
+implementation string from the caller, which meant a port test could keep
+invoking the Python reference on both sides, call one of them `"go"`, and
+satisfy the guard while proving nothing — the exact degradation the guard
+exists to prevent, re-entering through its own input. Calling a Python run
+"go" now changes nothing.
+
+`dora_table_parity_integration_test.go` is a comparator **self-test** and says
+so in its name: both sides run Python because the Go DORA executor is slice R1.
+It asserts the guard REFUSES that pair.
+
+### 6. Prove it fails
 
 A comparator that has not been shown to fail has not been shown to work.
 `internal/testsupport/computeparity` ships the three controls the slice was

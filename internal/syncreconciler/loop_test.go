@@ -997,14 +997,52 @@ func TestLoopAccumulatesTheRunawayAndSweepCountersAcrossSteps(t *testing.T) {
 	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_sweep_failures_total 2")
 }
 
+// assertMetricLine waits for the scrape to show a line rather than sampling it
+// once, and the difference is a race I shipped into CI.
+//
+// The loop-driven tests signal from INSIDE the stepper, so the test resumes
+// while the loop goroutine is still between "stepper returned" and
+// "observation stored". Reading the scrape at that instant samples whichever
+// side of the store the scheduler happened to be on. It passed locally and
+// failed on CI, which is the signature of the whole class.
+//
+// Polling the exported state is a wait on the thing itself, not on a proxy
+// for it. The deadline is a test-harness bound, not a correctness knob: a
+// value that is going to appear appears in microseconds, and one that never
+// appears fails with the same message it always did.
 func assertMetricLine(t *testing.T, loop *Loop, want string) {
 	t.Helper()
+	var metrics bytes.Buffer
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		metrics.Reset()
+		if err := loop.WritePrometheus(&metrics); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(metrics.String(), want+"\n") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("metrics never showed %q:\n%s", want, metrics.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// assertMetricLineStable is for the opposite claim -- that a value did NOT
+// change. Polling cannot express that on its own, because the value being
+// asserted is already present, so the caller must first wait for evidence the
+// pass under test has been processed. Both are stored under one lock, so a
+// counter that has moved proves the gauge merge beside it has run too.
+func assertMetricLineStable(t *testing.T, loop *Loop, processed, want string) {
+	t.Helper()
+	assertMetricLine(t, loop, processed)
 	var metrics bytes.Buffer
 	if err := loop.WritePrometheus(&metrics); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(metrics.String(), want+"\n") {
-		t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		t.Fatalf("the pass was processed and %q did not survive it:\n%s", want, metrics.String())
 	}
 }
 
@@ -1176,31 +1214,18 @@ func TestAnUnmeasuredPassLeavesTheLastMeasuredGaugeStanding(t *testing.T) {
 	ticker.ticks <- clock.Now().Add(time.Second)
 	<-calls
 
-	var metrics bytes.Buffer
-	if err := loop.WritePrometheus(&metrics); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"sync_dispatch_runaway_dispatch_wakeups 83",
-		"sync_dispatch_unreclaimable_candidates 12",
-	} {
-		if !strings.Contains(metrics.String(), want) {
-			t.Fatalf("an unmeasured pass cleared a live incident, missing %q — a "+
-				"gauge alert would report recovery at the moment measurement "+
-				"stopped:\n%s", want, metrics.String())
-		}
-	}
-	// The staleness is still declared, so nobody mistakes the held value for
-	// a fresh one.
-	for _, want := range []string{
+	// The failure counter moving is the proof the unmeasured pass was
+	// processed; it and the gauge merge are stored under one lock, so once it
+	// reads 1 the merge has already run or been declined.
+	assertMetricLineStable(t, loop,
 		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_runaway_dispatch_wakeups 83")
+	assertMetricLineStable(t, loop,
 		"sync_dispatch_unreclaimable_sweep_failures_total 1",
-		"sync_dispatch_observer_up 0",
-	} {
-		if !strings.Contains(metrics.String(), want) {
-			t.Fatalf("the held gauge is not marked stale, missing %q:\n%s", want, metrics.String())
-		}
-	}
+		"sync_dispatch_unreclaimable_candidates 12")
+	// The staleness is declared, so nobody mistakes the held value for a
+	// fresh one.
+	assertMetricLine(t, loop, "sync_dispatch_observer_up 0")
 }
 
 // ...and a MEASURED zero must still clear it, or the gauge latches forever and
@@ -1283,36 +1308,17 @@ func TestASwallowedFailureOnASuccessfulPassDoesNotClearTheGauges(t *testing.T) {
 	ticker.ticks <- clock.Now().Add(time.Second)
 	<-calls
 
-	var metrics bytes.Buffer
-	if err := loop.WritePrometheus(&metrics); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"sync_dispatch_runaway_dispatch_wakeups 83",
-		"sync_dispatch_unreclaimable_candidates 12",
-	} {
-		if !strings.Contains(metrics.String(), want) {
-			t.Fatalf("a swallowed failure on a SUCCESSFUL pass cleared a live "+
-				"incident, missing %q — and observer_up stays 1, so nothing "+
-				"even claims the value is stale:\n%s", want, metrics.String())
-		}
-	}
 	// The failure counters are the only staleness signal on this path, which
-	// is exactly why they must move.
-	for _, want := range []string{
+	// is exactly why they must move -- and why they are the processed-proof.
+	assertMetricLineStable(t, loop,
 		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_runaway_dispatch_wakeups 83")
+	assertMetricLineStable(t, loop,
 		"sync_dispatch_unreclaimable_sweep_failures_total 1",
-	} {
-		if !strings.Contains(metrics.String(), want) {
-			t.Fatalf("the held gauge has no staleness signal at all, missing %q:\n%s",
-				want, metrics.String())
-		}
-	}
-	// The observer's OWN figures must still update on a successful pass —
+		"sync_dispatch_unreclaimable_candidates 12")
+	// The observer's OWN figures must still update on a successful pass --
 	// holding those would be the opposite bug.
-	if !strings.Contains(metrics.String(), "sync_dispatch_observer_up 1") {
-		t.Fatalf("a successful pass reported the observer unhealthy:\n%s", metrics.String())
-	}
+	assertMetricLine(t, loop, "sync_dispatch_observer_up 1")
 }
 
 // SHADOW MODE'S SIGNAL, end to end, because shadow is the DEFAULT and it
@@ -1357,11 +1363,11 @@ func TestShadowSelectionMovesTheCandidateGaugeWithoutTheTerminalizedCounter(t *t
 	ticker.ticks <- clock.Now().Add(time.Second)
 	<-calls
 
-	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 7")
-	// Shadow destroys nothing, so the counter must not have moved. A shadow
-	// deployment reporting terminalizations would be a far worse defect than
-	// the silence this series replaces.
-	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 0")
+	// Shadow destroys nothing, so the counter must not have moved. The gauge
+	// reaching 7 is the proof the selecting pass was processed.
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_unreclaimable_candidates 7",
+		"sync_dispatch_unreclaimable_terminalized_total 0")
 }
 
 // THE DEADLINE PATH ALSO CARRIES COMMITTED EVIDENCE (adversarial review).

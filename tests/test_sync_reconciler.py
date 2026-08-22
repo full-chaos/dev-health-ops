@@ -272,6 +272,65 @@ def test_parity_capture_recovery_clears_real_postgres_statement_failure():
         engine.dispose()
 
 
+@pytest.mark.usefixtures("require_postgres_test_uri")
+def test_only_unroutable_route_read_failure_does_not_poison_the_session(monkeypatch):
+    """Poisoned-transaction red control for CHAOS-3957.
+
+    ``_only_unroutable``'s ``except Exception: return []`` around the durable
+    route read (``resolve_worker_job_route``) looks fail-open, but on
+    PostgreSQL a failed statement aborts the whole transaction -- catching the
+    exception does not undo that. ``reconcile_sync_dispatch`` keeps using this
+    SAME session afterward for lease repair and outbox wakeup materialization
+    (sync_reconciler.py: lines 313-386 run in the same transaction as the
+    unreclaimable sweep), so a poisoned session here takes that unrelated work
+    down with it -- the exact class CHAOS-3957 describes, and the twin of the
+    CHAOS-3941 planner-side gate fixed with a savepoint.
+
+    This forces a REAL PostgreSQL statement failure (SQLite cannot poison a
+    transaction, which is why the existing
+    ``test_routability_failure_does_not_abort_the_reconcile_pass`` -- raising
+    a plain Python exception from ``routes_to_river`` after a successful
+    query -- cannot see this class at all). Before the savepoint fix, the
+    final assertion below raises ``InFailedSqlTransaction``.
+    """
+
+    from dev_health_ops.workers import job_routes
+    from dev_health_ops.workers.sync_reconciler import _only_unroutable
+
+    def _broken_statement(kind):
+        return text("SELECT 1 / 0")
+
+    monkeypatch.setattr(job_routes, "_locked_route_statement", _broken_statement)
+
+    # Never touched: the guarded read raises before this list is ever
+    # iterated, so a single unpersisted, minimally-populated row is enough.
+    placeholder_unit = SyncRunUnit(
+        id=uuid.uuid4(),
+        org_id=str(uuid.uuid4()),
+        sync_run_id=uuid.uuid4(),
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.DISPATCHING.value,
+        attempts=0,
+    )
+
+    engine = create_engine(sync_postgres_test_url())
+    try:
+        with Session(engine) as session:
+            result = _only_unroutable(session, [placeholder_unit])
+
+            assert result == []
+
+            # The caller statement that must still succeed: reconcile_sync_dispatch
+            # runs unrelated work (lease repair, wakeup materialization) on this
+            # same session right after the sweep, before it ever commits.
+            assert session.execute(text("SELECT 1")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
 def _seed_run(
     session,
     *,

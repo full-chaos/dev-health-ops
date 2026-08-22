@@ -1267,6 +1267,7 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
 
     from dev_health_ops.workers.job_routes import (
         PROVIDER_UNIT_OUTBOX_ROUTES,
+        WorkerJobRouteError,
         resolve_worker_job_route,
     )
     from dev_health_ops.workers.provider_unit_route import routes_to_river
@@ -1276,21 +1277,97 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
     # route or an unreadable capability matrix must degrade to "sweep nothing
     # this pass", never abort the whole reconcile and take those repairs with
     # it (hunt finding).
+    #
+    # CHAOS-3957: a caught exception alone does NOT make this fail-open on
+    # PostgreSQL. A failed statement inside ``resolve_worker_job_route``
+    # aborts the whole transaction; catching the exception here does not
+    # undo that, and this session is the SAME one reconcile_sync_dispatch
+    # keeps using afterward for lease repair and outbox wakeup
+    # materialization, still uncommitted at this point. Without a savepoint,
+    # the caught exception is real but the fail-OPEN outcome is not -- the
+    # next statement on this session raises InFailedSqlTransaction, taking
+    # that unrelated work down with it. ``session.begin_nested()`` opens a
+    # SAVEPOINT around only the fallible read; its __exit__ rolls back to
+    # the savepoint on failure, leaving the outer transaction (and every
+    # write already staged on it) usable. Same fix shape as the CHAOS-3941
+    # planner-side gate and CHAOS-2580 before it.
     try:
-        if (
-            resolve_worker_job_route(session, "sync.provider_unit")
-            not in PROVIDER_UNIT_OUTBOX_ROUTES
-        ):
+        # Only the fallible DB read sits inside the savepoint. routes_to_river
+        # below is a pure in-memory capability-matrix lookup (no statement, no
+        # poisoning risk) -- it stays under the SAME outer except so a
+        # contract-drift exception there still degrades to "sweep nothing"
+        # exactly as before, without opening a savepoint it doesn't need.
+        with session.begin_nested():
+            route_selects_river = (
+                resolve_worker_job_route(session, "sync.provider_unit")
+                in PROVIDER_UNIT_OUTBOX_ROUTES
+            )
+        if not route_selects_river:
             return []
         return [
             unit
             for unit in units
             if not routes_to_river(str(unit.provider), str(unit.dataset_key))
         ]
+    except WorkerJobRouteError as exc:
+        # Adversarial review finding: a bare ``except Exception`` at ERROR
+        # conflated an operator PAUSING the route (routine, expected,
+        # resolve_worker_job_route's own designed behavior -- job_routes.py's
+        # "worker job route is paused" branch) with a genuine store/policy
+        # failure. reconcile_sync_dispatch is scheduled every 60s and can
+        # revisit the same aged units on every pass, so ERROR-logging a
+        # deliberate pause would fire a Sentry incident roughly once a minute
+        # for as long as an operator keeps the route paused -- exactly the
+        # alert-fatigue failure mode that obscures a genuine one. "paused" is
+        # the only one of WorkerJobRouteError's four raise sites
+        # (job_routes.py:53,61,63,69,71) that is not itself already a
+        # problem: a missing/duplicated policy row, an unreadable store, and
+        # policy drift are all real faults and stay at ERROR below; only the
+        # deliberate-pause message is downgraded.
+        if "paused" in str(exc):
+            logger.warning(
+                "reconcile_sync_dispatch.unreclaimable_routability_paused",
+                exc_info=True,
+            )
+        else:
+            logger.exception(
+                "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
+            )
+        return []
     except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
-        logger.warning(
+        # ERROR, not WARNING (CHAOS-4073 precedent for the log-level choice):
+        # this codebase's Sentry LoggingIntegration only turns ERROR+ records
+        # into events, and there are no manual capture_exception call sites to
+        # fall back on. Skipping this pass is a policy choice about what the
+        # sweep DOES; it must not also decide how loudly the underlying read
+        # failure gets reported.
+        #
+        # NO counter here (adversarial review finding). Two independent
+        # reasons stack:
+        #   1. reconcile_sync_dispatch is Celery-scheduled, and CHAOS-4026
+        #      retired Celery -- zero Python celery services run in prod
+        #      since the 2026-08-19 stop (workers/config.py's beat_schedule
+        #      comment). It is one of a small set kept checked-in and
+        #      test-covered only because its removal needs its own reviewed
+        #      pass (tests/workers/test_celery_dead_code_contract.py's
+        #      _FLAGGED_SURVIVING_TASK_NAMES), not because anything executes
+        #      it today.
+        #   2. Even where a Python code path DOES execute live (e.g. the
+        #      worker_metrics.py operational bridge), a Prometheus counter
+        #      here is unreachable regardless: prod's OTel collector runs
+        #      pull-model receivers for NOTHING app-level (otel.prod.yml's
+        #      metrics pipeline is otlp+docker_stats+hostmetrics only -- a
+        #      deliberate push-model posture), so no scraper exists for any
+        #      app-defined Counter, in any process, API included. Tracked as
+        #      CHAOS-4094 (which also covers an open, separate SigNoz
+        #      pushed-metrics drop). A counter/alert here would assert an
+        #      operational signal that cannot exist until CHAOS-4094 lands.
+        # The working loud signal today is this log line: stdout ERROR logs
+        # flow through the OTel logs pipeline to SigNoz (proven working,
+        # unlike the metrics pipeline), and Sentry's LoggingIntegration
+        # captures it independently of either.
+        logger.exception(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
-            exc_info=True,
         )
         return []
 

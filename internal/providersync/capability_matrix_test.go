@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"maps"
 	"os"
-	"reflect"
 	"slices"
 	"testing"
 )
@@ -107,10 +106,12 @@ func TestProviderMatrixRouteReadyCensus(t *testing.T) {
 }
 
 // routeReadyPairs is the complete, explicitly enumerated set of capability
-// identities whose native route may be admitted through its default-off
-// rollout switch. Route readiness does not itself activate live traffic. Every
-// entry needs its own parity evidence; adding one here without it is the failure
-// this guard exists to prevent.
+// identities that are RouteReady: a shipped, registered, compiled capability
+// (CHAOS-4054). Capability is always on in the binary — there is no rollout
+// switch left to admit it through. RouteReady does not itself mean an identity
+// may be independently planned; see nonPlannableAliasPairs for that narrower
+// set. Every entry needs its own parity evidence; adding one here without it
+// is the failure this guard exists to prevent.
 //
 //   - launchdarkly/feature-flags: CUT-08, native handler + live parity.
 //
@@ -119,10 +120,12 @@ func TestProviderMatrixRouteReadyCensus(t *testing.T) {
 //     Canary staging and live-traffic parity are waived for this program.
 //
 //   - github/cicd: delegates to the same complete-row TestOps unit as
-//     github/tests; config enforces mutual exclusion between their switches.
+//     github/tests; `tests` is a non-plannable alias of `cicd`, so only the
+//     canonical identity can ever be independently claimed.
 //
 //   - gitlab/cicd: delegates to the same complete-row TestOps unit as
-//     gitlab/tests; config enforces mutual exclusion between their switches.
+//     gitlab/tests; `tests` is a non-plannable alias of `cicd`, so only the
+//     canonical identity can ever be independently claimed.
 //
 //   - github/commits: CHAOS-3177, live producer oracle parity plus
 //     tenant-scoped FINAL readback.
@@ -226,216 +229,84 @@ var routeReadyPairs = map[string]struct{}{
 	"github/work-item-comments":      {},
 }
 
-// TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the default-off
-// and canonical-family guard. Readiness describes a compiled capability; only
-// the pair's own switch may enable it, and a noncanonical atomic work-item
-// alias must remain non-routable even though its audit identity is ready.
-func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
+// nonPlannableAliasPairs is the complete, explicitly enumerated set of the 22
+// RouteReady identities that are alias identities of a canonical writer
+// (CHAOS-4054 decision record): {github,gitlab}/{pr-reviews,pr-comments} alias
+// `prs`; {github,gitlab}/tests aliases `cicd`; and the four
+// work-item-{labels,projects,history,comments} identities for each of
+// github/gitlab/jira/linear alias that provider's `work-items`. RouteReady
+// stays true for every one of them (audit and per-alias watermarks must keep
+// telling the truth); Plannable is false because only the canonical writer
+// may be planned and claimed.
+var nonPlannableAliasPairs = map[string]struct{}{
+	"github/pr-reviews": {}, "github/pr-comments": {}, "github/tests": {},
+	"gitlab/pr-reviews": {}, "gitlab/pr-comments": {}, "gitlab/tests": {},
+	"github/work-item-labels": {}, "github/work-item-projects": {},
+	"github/work-item-history": {}, "github/work-item-comments": {},
+	"gitlab/work-item-labels": {}, "gitlab/work-item-projects": {},
+	"gitlab/work-item-history": {}, "gitlab/work-item-comments": {},
+	"jira/work-item-labels": {}, "jira/work-item-projects": {},
+	"jira/work-item-history": {}, "jira/work-item-comments": {},
+	"linear/work-item-labels": {}, "linear/work-item-projects": {},
+	"linear/work-item-history": {}, "linear/work-item-comments": {},
+}
+
+// TestProviderMatrixRouteReadyAndPlannableMatchAudit is the registry/topology
+// guard replacing the old default-off rollout-switch guard (CHAOS-4054:
+// Descriptor takes no configuration, so there is nothing left to admit a pair
+// through). It proves two independent census facts hold for every one of the
+// 59 matrix pairs at once: RouteReady matches the audited routeReadyPairs
+// set, and Plannable is true for exactly the 37 pairs that are RouteReady and
+// not a nonPlannableAliasPairs alias.
+func TestProviderMatrixRouteReadyAndPlannableMatchAudit(t *testing.T) {
 	t.Parallel()
 	ready := map[string]struct{}{}
+	plannableCount := 0
 	for _, pair := range BuildProviderMatrix().Pairs {
+		key := pair.Provider + "/" + pair.Dataset
 		if pair.RouteReady {
-			ready[pair.Provider+"/"+pair.Dataset] = struct{}{}
+			ready[key] = struct{}{}
+		}
+		_, isReady := routeReadyPairs[key]
+		_, isAlias := nonPlannableAliasPairs[key]
+		wantPlannable := isReady && !isAlias
+		if pair.Plannable != wantPlannable {
+			t.Fatalf("%s plannable=%v want %v descriptor=%+v", key, pair.Plannable, wantPlannable, pair)
+		}
+		if pair.Plannable {
+			plannableCount++
 		}
 	}
 	if !maps.Equal(ready, routeReadyPairs) {
 		t.Fatalf("route-ready pairs=%v want %v", ready, routeReadyPairs)
 	}
-	// The four noncanonical aliases in each atomic work-item family describe
-	// matrix/watermark identities, not valid direct claims. planner.py collapses
-	// each family into one canonical work-items claim, so direct aliases stay
-	// disabled and enter route reconciliation before construction or I/O.
-	// The literal below must name every field of CompleteRouteSwitches: a new
-	// switch left out of it would leave its pair unexercised here.
-	all := CompleteRouteSwitches{
-		LocalAllRoutes:  true,
-		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
-		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
-		GitlabRepoMetadata:          true,
-		GitlabCommits:               true,
-		GitlabCommitStats:           true,
-		GitlabCICD:                  true,
-		GitlabTests:                 true,
-		GitlabIncidents:             true,
-		GitlabDeployments:           true,
-		GitlabFeatureFlags:          true,
-		GitlabFiles:                 true,
-		GitlabBlame:                 true,
-		GitlabPRs:                   true,
-		GitlabPRReviews:             true,
-		GitlabPRComments:            true,
-		GitlabSecurity:              true,
-		GitlabWorkItems:             true,
-		PagerDutyServices:           true,
-		PagerDutyBusinessServices:   true,
-		PagerDutyEscalationPolicies: true,
-		PagerDutySchedules:          true,
-		PagerDutyOnCalls:            true,
-		PagerDutyUsers:              true,
-		PagerDutyTeams:              true,
-		PagerDutyIncidents:          true,
-		PagerDutyIncidentAlerts:     true,
-		PagerDutyIncidentLogEntries: true,
-		PagerDutyIncidentNotes:      true,
-		GithubPRs:                   true, GithubPRReviews: true, GithubPRComments: true,
-		GithubCICD: true, GithubCommits: true,
-		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
-		GithubCommitStats: true,
-		GithubBlame:       true,
-		GithubTests:       true,
-		GithubWorkItems:   true,
-	}
-	if reflect.TypeOf(all).NumField() != 44 {
-		t.Fatalf(
-			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
-				"pair is exercised, then update this count",
-		)
-	}
-	for _, pair := range BuildProviderMatrix().Pairs {
-		key := pair.Provider + "/" + pair.Dataset
-		descriptor, ok := all.Descriptor(pair.Provider, pair.Dataset)
-		if !ok {
-			t.Fatalf("%s has no descriptor", key)
-		}
-		_, wantRoutable := routeReadyPairs[key]
-		if slices.Contains([]string{"github", "gitlab", "jira", "linear"}, pair.Provider) &&
-			isWorkItemFamilyDataset(pair.Dataset) &&
-			pair.Dataset != "work-items" {
-			wantRoutable = false
-		}
-		if routable := descriptor.RouteReady && descriptor.RouteEnabled; routable != wantRoutable {
-			t.Fatalf("%s routable=%v want %v descriptor=%+v", key, routable, wantRoutable, descriptor)
-		}
+	if want := len(routeReadyPairs) - len(nonPlannableAliasPairs); plannableCount != want {
+		t.Fatalf("plannable pairs=%d want %d", plannableCount, want)
 	}
 }
 
-func TestGitHubBlameRequiresItsOwnSwitch(t *testing.T) {
+// TestGitHubPRSocialFamilyHasOneCanonicalPlannableWriter pins the D16/CHAOS-4054
+// boundary: `prs`, `pr-reviews`, and `pr-comments` share one complete
+// review-enriched route and the same destinations, but only `prs` — the
+// canonical writer — may be independently planned. The other two stay
+// RouteReady for audit/watermark visibility only.
+func TestGitHubPRSocialFamilyHasOneCanonicalPlannableWriter(t *testing.T) {
 	t.Parallel()
-	descriptor, ok := (CompleteRouteSwitches{GithubBlame: true}).Descriptor("github", "blame")
-	if !ok {
-		t.Fatal("github/blame has no descriptor")
-	}
-	if descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
-		!descriptor.RouteEnabled || !slices.Equal(
-		descriptor.Destinations, []string{"github_blame_path_progress", "git_blame"},
-	) {
-		t.Fatalf("github/blame descriptor=%+v", descriptor)
-	}
-	off, _ := (CompleteRouteSwitches{}).Descriptor("github", "blame")
-	if off.RouteEnabled {
-		t.Fatalf("default github/blame descriptor=%+v", off)
-	}
-}
-
-// TestGithubRepoMetadataSwitchDoesNotOpenGitLab pins the independent switches:
-// enabling GitHub repository sync must not route GitLab repository units.
-func TestGithubRepoMetadataSwitchDoesNotOpenGitLab(t *testing.T) {
-	t.Parallel()
-	switches := CompleteRouteSwitches{GithubRepoMetadata: true}
-	descriptor, ok := switches.Descriptor("gitlab", "repo-metadata")
-	if !ok {
-		t.Fatal("gitlab/repo-metadata has no descriptor")
-	}
-	if !descriptor.RouteReady || descriptor.RouteEnabled ||
-		descriptor.Executor != ExecutorNativeGo {
-		t.Fatalf("gitlab/repo-metadata descriptor=%+v", descriptor)
-	}
-}
-
-func TestGitlabRepoMetadataSwitchRoutesOnlyGitLab(t *testing.T) {
-	t.Parallel()
-	switches := CompleteRouteSwitches{GitlabRepoMetadata: true}
-	gitlab, ok := switches.Descriptor("gitlab", "repo-metadata")
-	if !ok || !gitlab.RouteReady || !gitlab.RouteEnabled ||
-		gitlab.Executor != ExecutorNativeGo {
-		t.Fatalf("gitlab/repo-metadata descriptor=%+v ok=%v", gitlab, ok)
-	}
-	github, ok := switches.Descriptor("github", "repo-metadata")
-	if !ok || github.RouteEnabled {
-		t.Fatalf("github/repo-metadata descriptor=%+v ok=%v", github, ok)
-	}
-}
-
-func TestGitLabCommitsRequiresItsOwnSwitch(t *testing.T) {
-	t.Parallel()
-	off, ok := (CompleteRouteSwitches{GithubCommits: true}).Descriptor("gitlab", "commits")
-	if !ok || !off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
-		t.Fatalf("gitlab/commits with github switch descriptor=%+v ok=%v", off, ok)
-	}
-	on, ok := (CompleteRouteSwitches{GitlabCommits: true}).Descriptor("gitlab", "commits")
-	if !ok || !on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
-		!slices.Equal(on.Destinations, []string{"git_commits"}) {
-		t.Fatalf("gitlab/commits descriptor=%+v ok=%v", on, ok)
-	}
-	github, _ := (CompleteRouteSwitches{GitlabCommits: true}).Descriptor("github", "commits")
-	if github.RouteEnabled {
-		t.Fatalf("gitlab switch opened github/commits: %+v", github)
-	}
-}
-
-func TestGitLabCommitStatsRequiresItsOwnSwitch(t *testing.T) {
-	t.Parallel()
-	off, ok := (CompleteRouteSwitches{GithubCommitStats: true}).Descriptor("gitlab", "commit-stats")
-	if !ok || !off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
-		t.Fatalf("gitlab/commit-stats with github switch descriptor=%+v ok=%v", off, ok)
-	}
-	on, ok := (CompleteRouteSwitches{GitlabCommitStats: true}).Descriptor("gitlab", "commit-stats")
-	if !ok || !on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
-		!slices.Equal(on.Destinations, []string{"git_commit_stats"}) {
-		t.Fatalf("gitlab/commit-stats descriptor=%+v ok=%v", on, ok)
-	}
-	github, _ := (CompleteRouteSwitches{GitlabCommitStats: true}).Descriptor("github", "commit-stats")
-	if github.RouteEnabled {
-		t.Fatalf("gitlab switch opened github/commit-stats: %+v", github)
-	}
-}
-
-func TestGitLabCICDRequiresItsOwnSwitch(t *testing.T) {
-	t.Parallel()
-	off, ok := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("gitlab", "cicd")
-	if !ok || !off.RouteReady || off.RouteEnabled || off.Executor != ExecutorNativeGo {
-		t.Fatalf("gitlab/cicd with github switch descriptor=%+v ok=%v", off, ok)
-	}
-	on, ok := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("gitlab", "cicd")
-	if !ok || !on.RouteReady || !on.RouteEnabled || on.Executor != ExecutorNativeGo ||
-		!slices.Equal(on.Destinations, []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results", "test_case_results", "coverage_snapshots"}) {
-		t.Fatalf("gitlab/cicd descriptor=%+v ok=%v", on, ok)
-	}
-	github, _ := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("github", "cicd")
-	if github.RouteEnabled {
-		t.Fatalf("gitlab switch opened github/cicd: %+v", github)
-	}
-}
-
-// TestGitHubPRSocialPairsRequireIndependentSwitches pins the D16 boundary:
-// every PR-social identity is ready only after the complete review-enriched
-// route landed, while each identity still requires its own default-off switch.
-func TestGitHubPRSocialPairsRequireIndependentSwitches(t *testing.T) {
-	t.Parallel()
-	probes := []struct {
-		dataset  string
-		switches CompleteRouteSwitches
+	for _, probe := range []struct {
+		dataset   string
+		plannable bool
 	}{
-		{"prs", CompleteRouteSwitches{GithubPRs: true}},
-		{"pr-reviews", CompleteRouteSwitches{GithubPRReviews: true}},
-		{"pr-comments", CompleteRouteSwitches{GithubPRComments: true}},
-	}
-	for _, probe := range probes {
-		descriptor, ok := probe.switches.Descriptor("github", probe.dataset)
+		{"prs", true},
+		{"pr-reviews", false},
+		{"pr-comments", false},
+	} {
+		descriptor, ok := Descriptor("github", probe.dataset)
 		if !ok || descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
-			!descriptor.RouteEnabled || !slices.Equal(
+			descriptor.Plannable != probe.plannable || !slices.Equal(
 			descriptor.Destinations, githubPRSocialRouteDestinations(),
 		) {
-			t.Fatalf("github/%s descriptor=%+v ok=%v", probe.dataset, descriptor, ok)
-		}
-		for _, other := range []string{"prs", "pr-reviews", "pr-comments"} {
-			if other == probe.dataset {
-				continue
-			}
-			off, _ := probe.switches.Descriptor("github", other)
-			if off.RouteEnabled {
-				t.Fatalf("github/%s switch opened github/%s: %+v", probe.dataset, other, off)
-			}
+			t.Fatalf("github/%s descriptor=%+v ok=%v want plannable=%v",
+				probe.dataset, descriptor, ok, probe.plannable)
 		}
 	}
 }

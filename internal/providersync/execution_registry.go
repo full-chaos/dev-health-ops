@@ -6,7 +6,7 @@ import (
 
 // ExecutorKind names the fixed provider/dataset execution ownership required
 // by CUT-09. It answers "which code would run this pair", never "may this pair
-// route" — routing is decided only by RouteReady and RouteEnabled. Capability
+// route" — routing is decided only by RouteReady and Plannable. Capability
 // metadata is not execution evidence (TRD §10.1).
 type ExecutorKind string
 
@@ -142,10 +142,21 @@ type CompleteRouteDescriptor struct {
 	// It is independent from PreparedManifestRecovery: the former persists a
 	// sequence of bounded normalized chunks, while the latter persists one
 	// complete mutable-provider manifest.
-	Chunked      bool
-	ChunkPolicy  ChunkPolicy
-	RouteReady   bool
-	RouteEnabled bool
+	Chunked     bool
+	ChunkPolicy ChunkPolicy
+	// RouteReady is the sole capability gate (CHAOS-4054). It is a code fact —
+	// the route is shipped, reviewed, and registered — never a runtime read of
+	// deployment configuration. There is no route enablement plane: user sync
+	// config decides intent and -Q queue topology decides serving.
+	RouteReady bool
+	// Plannable reports whether this identity may be planned and claimed on its
+	// own. Exactly one identity per writer family is plannable: the canonical
+	// writer (`prs`, `cicd`, `work-items`). Alias identities stay RouteReady so
+	// the capability matrix, audit, and per-alias watermarks keep telling the
+	// truth, but they are never independently planned or executed — that is
+	// where alias mutual-exclusivity lives now, as writer topology rather than
+	// as a pair of booleans nobody may set at once.
+	Plannable bool
 }
 
 // ShadowDescriptor is a fixture/parity-only projection of the canonical
@@ -174,104 +185,21 @@ func (descriptor CompleteRouteDescriptor) Shadow(write bool) (ShadowDescriptor, 
 	}, true
 }
 
-// CompleteRouteSwitches carries the config-gated route enablement flags. A
-// provider/dataset pair without a field here can never be enabled, which is
-// why adding github, gitlab, and pagerduty descriptors in CUT-08 cannot widen
-// the live route surface.
-type CompleteRouteSwitches struct {
-	// LocalAllRoutes is set only by the validated local GO_PROVIDER_ROUTES=all
-	// preset. Equivalent persisted aliases inherit its selected complete writer;
-	// explicit deployment switches remain identity-scoped.
-	LocalAllRoutes           bool
-	LinearWorkItems          bool
-	JiraWorkItems            bool
-	JiraIncidents            bool
-	LaunchDarklyFeatureFlags bool
-	// GithubRepoMetadata gates (github, repo-metadata) only. It must never
-	// gate gitlab/repo-metadata, whose independently completed route has its
-	// own switch below.
-	GithubRepoMetadata bool
-	// GitlabRepoMetadata independently gates the native GitLab repository
-	// route. It intentionally does not share GithubRepoMetadata: the two pairs
-	// have different API and persisted-instance semantics.
-	GitlabRepoMetadata bool
-	// GitlabCommits independently gates the native GitLab commit route. It
-	// shares the git_commits destination with GitHub but not route ownership.
-	GitlabCommits bool
-	// GitlabCommitStats gates the isolated aggregate git_commit_stats writer.
-	GitlabCommitStats bool
-	// GitlabCICD and GitlabTests are mutually-exclusive aliases for the same
-	// complete TestOps writer.
-	GitlabCICD  bool
-	GitlabTests bool
-	// GitlabIncidents gates the three-destination canonical operational batch.
-	GitlabIncidents    bool
-	GitlabDeployments  bool
-	GitlabFeatureFlags bool
-	GitlabFiles        bool
-	GitlabBlame        bool
-	GitlabPRs          bool
-	GitlabPRReviews    bool
-	GitlabPRComments   bool
-	GitlabSecurity     bool
-	// GitlabWorkItems gates one canonical, atomic five-alias family. Direct
-	// alias descriptors remain ready for matrix/audit truth but disabled.
-	GitlabWorkItems bool
-	// PagerDuty incident-family identities remain independent D16 claims. The
-	// single incidents switch deliberately gates each of the four claims.
-	PagerDutyServices           bool
-	PagerDutyBusinessServices   bool
-	PagerDutyEscalationPolicies bool
-	PagerDutySchedules          bool
-	PagerDutyOnCalls            bool
-	PagerDutyUsers              bool
-	PagerDutyTeams              bool
-	PagerDutyIncidents          bool
-	PagerDutyIncidentAlerts     bool
-	PagerDutyIncidentLogEntries bool
-	PagerDutyIncidentNotes      bool
-	// GithubPRs, GithubPRReviews, and GithubPRComments independently gate the
-	// three dataset identities Python maps to one complete PR-social execution.
-	// Every identity constructs the same enriched git_pull_requests and
-	// git_pull_request_reviews effects while retaining its own claim ledger.
-	// Go startup and Python admission reject enabling more than one alias.
-	GithubPRs        bool
-	GithubPRReviews  bool
-	GithubPRComments bool
-	// GithubCICD gates the shared complete TestOps route and its six effects.
-	// Configuration rejects enabling it together with GithubTests, so both
-	// aliases share one complete writer and one admission identity.
-	GithubCICD        bool
-	GithubCommits     bool
-	GithubDeployments bool
-	// GithubSecurity gates the isolated tenant-scoped security_alerts writer.
-	GithubSecurity bool
-	// GithubFiles gates the isolated git_files writer only.
-	GithubFiles bool
-	// GithubCommitStats gates the isolated git_commit_stats writer only.
-	GithubCommitStats bool
-	// GithubBlame gates the resumable, tenant-scoped git_blame writer.
-	GithubBlame bool
-	// GithubTests gates the shared complete TestOps route and its six effects.
-	GithubTests bool
-	// GithubWorkItems gates the one complete GitHub work-items execution family.
-	// Python only ever plans its canonical `work-items` claim; the four alias
-	// descriptors stay route-ready for capability/audit truth but intentionally
-	// remain disabled for a direct persisted alias claim. That rejects malformed
-	// direct aliases before credentials, HTTP, effects, or watermarks rather
-	// than treating one alias as a partial writer.
-	GithubWorkItems bool
-}
-
 // Descriptor resolves the canonical capability descriptor for a claimed
 // provider/dataset pair. Recognition is driven by the dataset capability
 // registry, so the descriptor surface and the frozen matrix contract cover the
 // same set by construction.
 //
-// Descriptor collapses Python's five work-item dataset aliases onto the one
-// complete work-items unit. Alias identities remain visible for audit and
-// watermark compatibility, but they can never be activated as partial routes.
-func (switches CompleteRouteSwitches) Descriptor(
+// It takes no configuration. Capability is always on in the binary
+// (CHAOS-4054): a shipped, registered route is executable, and nothing about
+// its functionality is hidden behind an environment switch.
+//
+// Descriptor collapses the alias identities onto their one canonical writer:
+// Python's five work-item dataset aliases onto `work-items`, `pr-reviews` and
+// `pr-comments` onto `prs`, and `tests` onto `cicd`. Alias identities remain
+// visible for audit and watermark compatibility, but they can never be
+// activated as partial routes.
+func Descriptor(
 	provider string,
 	dataset string,
 ) (CompleteRouteDescriptor, bool) {
@@ -301,7 +229,7 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = workItemRouteDestinations()
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
-			descriptor.RouteEnabled = switches.GithubWorkItems
+			descriptor.Plannable = true
 			// Mutable provider selection requires exact prepared-snapshot recovery
 			// before the first sink effect. It is a canonical-claim property, not
 			// a reason to pretend a direct sibling alias is executable.
@@ -312,29 +240,29 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = workItemRouteDestinations()
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
-			descriptor.RouteEnabled = switches.LinearWorkItems
+			descriptor.Plannable = true
 		}
 	case provider == "gitlab" && workItemAlias:
 		descriptor.Destinations = workItemRouteDestinations()
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
-			descriptor.RouteEnabled = switches.GitlabWorkItems
+			descriptor.Plannable = true
 		}
 	case provider == "jira" && workItemAlias:
 		descriptor.RouteDataset = "work-items"
 		descriptor.Destinations = append(workItemRouteDestinations(), "worklogs")
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
-			descriptor.RouteEnabled = switches.JiraWorkItems
+			descriptor.Plannable = true
 		}
 	case provider == "jira" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.JiraIncidents
+		descriptor.Plannable = true
 	case provider == "launchdarkly" && dataset == "feature-flags":
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.LaunchDarklyFeatureFlags
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "repo-metadata":
 		// GitHub has a native complete-route handler
 		// (GitHubRepositoryRouteHandler) and a repos effect sink
@@ -344,124 +272,116 @@ func (switches CompleteRouteSwitches) Descriptor(
 		// get_repo_uuid_from_repo / normalized_operational_provider_instance
 		// / processors/github.py's settings-dict construction) — canary
 		// staging and live-traffic parity are waived for this program (no
-		// production users yet; see plan). RouteEnabled still requires the
-		// GithubRepoMetadata switch, which every existing wiring leaves off
-		// by default, so this change alone moves no live traffic.
+		// production users yet; see plan).
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubRepoMetadata
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "repo-metadata":
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabRepoMetadata
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "commits":
 		descriptor.Destinations = []string{"git_commits"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabCommits
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "commit-stats":
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabCommitStats
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "cicd":
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabCICD
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "tests":
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabTests ||
-			(switches.LocalAllRoutes && switches.GitlabCICD)
 	case provider == "gitlab" && dataset == "incidents":
 		descriptor.Destinations = []string{
 			"operational_services", "operational_service_repository_mappings",
 			"operational_incidents",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabIncidents
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "deployments":
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabDeployments
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "feature-flags":
 		descriptor.Destinations = []string{"feature_flag", "feature_flag_event", "work_graph_edges"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabFeatureFlags
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "files":
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabFiles
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "blame":
 		descriptor.Destinations = []string{"git_blame"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabBlame
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "prs":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabPRs
+		descriptor.Plannable = true
 	case provider == "gitlab" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabPRReviews ||
-			(switches.LocalAllRoutes && switches.GitlabPRs)
 	case provider == "gitlab" && dataset == "pr-comments":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabPRComments ||
-			(switches.LocalAllRoutes && switches.GitlabPRs)
 	case provider == "gitlab" && dataset == "security":
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabSecurity
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "services":
 		descriptor.Destinations = []string{"operational_services", "operational_service_repository_mappings"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyServices
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "business-services":
 		descriptor.Destinations = []string{"operational_services"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyBusinessServices
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "escalation-policies":
 		descriptor.Destinations = []string{"operational_escalation_policies"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyEscalationPolicies
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "schedules":
 		descriptor.Destinations = []string{"operational_on_call_schedules"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutySchedules
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "on-calls":
 		descriptor.Destinations = []string{"operational_on_call_assignments"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyOnCalls
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "users":
 		descriptor.Destinations = []string{"operational_users"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyUsers
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "teams":
 		descriptor.Destinations = []string{"operational_teams"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyTeams
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyIncidents
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "incident-alerts":
 		descriptor.Destinations = []string{"operational_alerts"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyIncidentAlerts
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "incident-log-entries":
 		descriptor.Destinations = []string{"operational_incident_timeline_events"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyIncidentLogEntries
+		descriptor.Plannable = true
 	case provider == "pagerduty" && dataset == "incident-notes":
 		descriptor.Destinations = []string{"operational_incident_notes"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.PagerDutyIncidentNotes
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "prs":
 		// The PR-social route mirrors Python's one
 		// _sync_github_prs_to_store_async boundary: REST PR detail (including
@@ -472,17 +392,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 		// no traffic.
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubPRs
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubPRReviews ||
-			(switches.LocalAllRoutes && switches.GithubPRs)
 	case provider == "github" && dataset == "pr-comments":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubPRComments ||
-			(switches.LocalAllRoutes && switches.GithubPRs)
 	case provider == "github" && dataset == "cicd":
 		// cicd and tests delegate to one complete-row unit. Startup rejects both
 		// switches enabled together, so ci_pipeline_runs has one active writer.
@@ -491,42 +407,40 @@ func (switches CompleteRouteSwitches) Descriptor(
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubCICD
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "commits":
 		descriptor.Destinations = []string{"git_commits"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubCommits
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "deployments":
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubDeployments
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "security":
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubSecurity
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "files":
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubFiles
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "commit-stats":
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubCommitStats
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "blame":
 		// The path-progress effect sorts before git_blame in EffectCommitter.
 		// That ordering is the crash-safety contract: accepted blame rows must
 		// always have a durable selection identity available for recovery.
 		descriptor.Destinations = []string{"github_blame_path_progress", "git_blame"}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubBlame
+		descriptor.Plannable = true
 	case provider == "github" && dataset == "tests":
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubTests ||
-			(switches.LocalAllRoutes && switches.GithubCICD)
 	}
 	// TestOps is the first opt-in chunked route family. The policy is fixed in
 	// code so all workers and recovery attempts agree on the same bounds; every

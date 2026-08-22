@@ -163,7 +163,7 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, _ := (CompleteRouteSwitches{GithubTests: true}).Descriptor("github", "tests")
+	descriptor, _ := Descriptor("github", "tests")
 	if err := batch.validate(descriptor); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	// the assertion above absorbed the kill and the cicd site was never
 	// measured -- a wholesale mutation reading as coverage for two sites while
 	// covering one.
-	cicd, known := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
+	cicd, known := Descriptor("github", "cicd")
 	if !known {
 		t.Fatal("github/cicd capability disappeared")
 	}

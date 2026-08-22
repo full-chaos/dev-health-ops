@@ -149,7 +149,6 @@ type CompleteRouteExecutionResult struct {
 	Watermark           *time.Time
 	Comparison          ShadowComparison
 	Effects             EffectCommitResult
-	ShadowOnly          bool
 	WorklogObservations []JiraWorklogFetchObservation
 }
 
@@ -169,7 +168,8 @@ func (executor CompleteRouteExecutor) Execute(
 		descriptor.Provider != session.Claim.Provider ||
 		descriptor.RequestedDataset != session.Claim.Dataset ||
 		descriptor.RouteDataset != session.Claim.Dataset ||
-		!descriptor.RouteReady || executor.Doer == nil ||
+		!descriptor.RouteReady || !descriptor.Plannable ||
+		executor.Doer == nil ||
 		executor.Credentials.Repository == nil ||
 		executor.Credentials.Decryptor == nil ||
 		executor.Budget == nil || executor.Gate == nil ||
@@ -178,9 +178,8 @@ func (executor CompleteRouteExecutor) Execute(
 		executor.BudgetLimits[session.Claim.CostClass] < 1 {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
-	if descriptor.RouteEnabled &&
-		(executor.Committer.Ledger == nil ||
-			(executor.Committer.Sink == nil && executor.EffectsFactory == nil)) {
+	if executor.Committer.Ledger == nil ||
+		(executor.Committer.Sink == nil && executor.EffectsFactory == nil) {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	if descriptor.PreparedManifestRecovery &&
@@ -190,11 +189,11 @@ func (executor CompleteRouteExecutor) Execute(
 	if descriptor.Chunked && descriptor.PreparedManifestRecovery {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
-	if descriptor.Chunked && descriptor.RouteEnabled {
+	if descriptor.Chunked {
 		return executor.executeChunked(ctx, session, descriptor)
 	}
 	preparedLedger, preparedRecovery := executor.Committer.Ledger.(PreparedEffectLedger)
-	if descriptor.RouteEnabled && descriptor.PreparedManifestRecovery && !preparedRecovery {
+	if descriptor.PreparedManifestRecovery && !preparedRecovery {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	var result CompleteRouteExecutionResult
@@ -208,23 +207,21 @@ func (executor CompleteRouteExecutor) Execute(
 		// Load the durable manifest before touching credentials or provider
 		// state. Snapshot-backed recovery must be able to resume the exact batch
 		// even when the live provider selection has changed since prepare.
-		if descriptor.RouteEnabled {
-			state, loadErr := committer.Ledger.LoadEffects(
-				workContext, session.Claim, normalizedAt,
-			)
-			switch {
-			case loadErr == nil:
-				if state.Generation != session.Claim.GenerationKey() ||
-					state.Provider != session.Claim.Provider ||
-					state.Dataset != session.Claim.Dataset {
-					return ErrEffectLedgerConflict
-				}
-				normalizedAt = state.CreatedAt.UTC()
-				recoveredEffects = &state
-			case errors.Is(loadErr, ErrEffectLedgerNotFound):
-			default:
-				return loadErr
+		state, loadErr := committer.Ledger.LoadEffects(
+			workContext, session.Claim, normalizedAt,
+		)
+		switch {
+		case loadErr == nil:
+			if state.Generation != session.Claim.GenerationKey() ||
+				state.Provider != session.Claim.Provider ||
+				state.Dataset != session.Claim.Dataset {
+				return ErrEffectLedgerConflict
 			}
+			normalizedAt = state.CreatedAt.UTC()
+			recoveredEffects = &state
+		case errors.Is(loadErr, ErrEffectLedgerNotFound):
+		default:
+			return loadErr
 		}
 		if recoveredEffects != nil && descriptor.PreparedManifestRecovery {
 			// Contract point 7. New workers may continue an existing route from
@@ -273,7 +270,7 @@ func (executor CompleteRouteExecutor) Execute(
 		if err != nil {
 			return err
 		}
-		if descriptor.RouteEnabled && executor.EffectsFactory != nil {
+		if executor.EffectsFactory != nil {
 			committer.Sink, committer.Readback, err = executor.EffectsFactory(credential)
 			if err != nil {
 				return err
@@ -375,10 +372,6 @@ func (executor CompleteRouteExecutor) Execute(
 		result.Comparison = comparison
 		if !comparison.Match {
 			return ErrShadowMismatch
-		}
-		if !descriptor.RouteEnabled {
-			result.ShadowOnly = true
-			return nil
 		}
 		// The same instant that stamped these rows must become the persisted
 		// ledger CreatedAt. Letting the committer read its own clock would

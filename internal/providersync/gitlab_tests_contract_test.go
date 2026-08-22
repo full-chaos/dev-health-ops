@@ -13,12 +13,15 @@ func TestGitLabCICDAndTestsAliasesShareOneCompleteRouteContract(t *testing.T) {
 		"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
 		"test_suite_results", "test_case_results", "coverage_snapshots",
 	}
-	cicd, ok := (CompleteRouteSwitches{GitlabCICD: true}).Descriptor("gitlab", "cicd")
-	if !ok || !cicd.RouteReady || !cicd.RouteEnabled || cicd.Executor != ExecutorNativeGo {
+	cicd, ok := Descriptor("gitlab", "cicd")
+	if !ok || !cicd.RouteReady || !cicd.Plannable || cicd.Executor != ExecutorNativeGo {
 		t.Fatalf("gitlab/cicd descriptor=%+v ok=%v", cicd, ok)
 	}
-	tests, ok := (CompleteRouteSwitches{GitlabTests: true}).Descriptor("gitlab", "tests")
-	if !ok || !tests.RouteReady || !tests.RouteEnabled || tests.Executor != ExecutorNativeGo {
+	// `tests` is the non-plannable alias of the canonical `cicd` writer
+	// (CHAOS-4054): RouteReady stays true for audit/watermark visibility, but
+	// only `cicd` may be independently planned.
+	tests, ok := Descriptor("gitlab", "tests")
+	if !ok || !tests.RouteReady || tests.Plannable || tests.Executor != ExecutorNativeGo {
 		t.Fatalf("gitlab/tests descriptor=%+v ok=%v", tests, ok)
 	}
 	if !reflect.DeepEqual(cicd.Destinations, wantDestinations) ||

@@ -58,21 +58,31 @@ Family boundaries remain explicit:
 - GitLab's three PR-social identities share one complete handler/sink while
   retaining independent claims and mutually exclusive rollout switches.
 
-This is capability publication, not deployment cutover. Every checked-in
-switch remains default-off, the transitional inventory remains
-`python_compatibility`, and non-enabled scopes continue through the existing
-Celery/Python path.
-
 Per pair: the Python source anchor, cost class, watermark behavior, legacy
 targets, processor flags, the fixed Go executor kind, shadow eligibility, the
-collapsed route dataset, the route destination manifest, route readiness, and
-the provider's credential modes.
+collapsed route dataset, the route destination manifest, route readiness,
+plannability, and the provider's credential modes.
+
+`route_ready` is a code fact: the route is shipped, reviewed, and registered.
+`plannable` names the one identity of a writer family that may be planned and
+claimed on its own — `prs` (not `pr-reviews`/`pr-comments`), `cicd` (not
+`tests`), `work-items` (not the four `work-item-*` aliases). An alias is
+`route_ready: true, plannable: false`: real for capability, audit, and
+watermark purposes, never a unit of its own.
 
 ## What it deliberately does not freeze
 
-`RouteEnabled` — the per-deployment environment switch. The contract records
-*readiness*, which no environment may widen. A pair with `route_ready: false`
-cannot be routed by any configuration.
+Nothing deployment-shaped, because nothing deployment-shaped exists. CHAOS-4054
+deleted the route enablement environment plane: there is no `RouteEnabled`, no
+per-deployment switch, and no configuration that can widen or narrow what this
+contract says. A pair with `route_ready: false` cannot be routed by any
+deployment; a pair with `route_ready: true` is executable by every worker that
+consumes its queue.
+
+**Historical note.** Sections further down were written while the switch plane
+existed and still describe per-pair `WORKER_*_ENABLED` variables holding a
+route off. Those variables are gone; read those passages as history of how a
+pair reached `route_ready`, not as current deployment instructions.
 
 ## Who verifies it
 
@@ -81,11 +91,11 @@ Both languages regenerate their own side and fail on divergence:
 - Go — `internal/providersync/capability_matrix_test.go`
   (`TestProviderMatrixMatchesCheckedInContract`), which rebuilds the artifact
   from the dataset capability registry and the canonical
-  `CompleteRouteSwitches.Descriptor`.
+  `providersync.Descriptor`.
 - Python — `tests/workers/test_provider_matrix_contract.py`, which rebuilds the
   pair set and per-pair metadata from `src/dev_health_ops/sync/datasets.py` and
   additionally binds producer route eligibility
-  (`ProviderUnitRouteSwitches.is_route_ready`) to `route_ready`.
+  (`provider_unit_route.is_route_ready`) to `route_ready`.
 
 Regenerate after an intentional registry change:
 

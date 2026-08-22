@@ -189,8 +189,6 @@ type UnreclaimableSweepConfig struct {
 	Idle time.Duration
 	// Mode gates writing. Shadow selects and reports without mutating.
 	Mode SweepMode
-	// Switches describe what a River runtime could execute right now.
-	Switches providersync.CompleteRouteSwitches
 }
 
 func (config UnreclaimableSweepConfig) valid() bool {
@@ -674,7 +672,7 @@ func readProviderUnitRoute(
 // unroutable mirrors Python's resolve_unit_transport: a pair is sweepable only
 // when River declines it AND nothing else can run it.
 func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bool {
-	descriptor, known := sweep.config.Switches.Descriptor(
+	descriptor, known := providersync.Descriptor(
 		candidate.provider, candidate.datasetKey,
 	)
 	// An unknown pair is not proof of anything; refuse to destroy on a guess.
@@ -684,7 +682,7 @@ func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bo
 	// River declines the pair. The caller has already confirmed from the
 	// DURABLE route that River owns provider units at all, so nothing else is
 	// going to execute this one.
-	return !(descriptor.RouteReady && descriptor.RouteEnabled)
+	return !(descriptor.RouteReady && descriptor.Plannable)
 }
 
 // TWO CLOCKS, deliberately.

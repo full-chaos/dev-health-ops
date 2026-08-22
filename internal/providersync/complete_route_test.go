@@ -19,10 +19,8 @@ func TestCompleteRouteExecutorRunsEnabledMultiEffectUnit(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, ok := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
-	if !ok || !descriptor.RouteEnabled {
+	descriptor, ok := Descriptor("launchdarkly", "feature-flags")
+	if !ok || !descriptor.Plannable {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
 	handler := &staticCompleteRouteHandler{
@@ -36,7 +34,7 @@ func TestCompleteRouteExecutorRunsEnabledMultiEffectUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ShadowOnly || !result.Comparison.Match ||
+	if !result.Comparison.Match ||
 		result.Effects.Written != 4 || len(sink.destinations) != 4 {
 		t.Fatalf("result=%+v writes=%v", result, sink.destinations)
 	}
@@ -46,9 +44,7 @@ func TestCompleteRouteExecutorBindsCredentialScopedEffectsBeforeCollection(t *te
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	bound := false
 	handler := &effectsFactoryObservingHandler{
 		bound: &bound, batch: completeRouteFixture(t, claim),
@@ -86,9 +82,7 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *test
 	}
 	ledger := &memoryEffectLedger{state: state}
 	handler := &staticCompleteRouteHandler{batch: batch}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	_, err = completeRouteExecutor(
 		now, handler, ledger, &memoryEffectSink{},
 	).Execute(context.Background(), session, descriptor)
@@ -103,10 +97,8 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *test
 func TestCompleteRouteExecutorRejectsAliasActivation(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	descriptor, ok := (CompleteRouteSwitches{
-		LinearWorkItems: true,
-	}).Descriptor("linear", "work-item-comments")
-	if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+	descriptor, ok := Descriptor("linear", "work-item-comments")
+	if !ok || !descriptor.RouteReady || descriptor.Plannable ||
 		descriptor.RouteDataset != "work-items" {
 		t.Fatalf("alias descriptor=%+v ok=%v", descriptor, ok)
 	}
@@ -142,14 +134,19 @@ func TestCompleteRouteExecutorRejectsAliasActivation(t *testing.T) {
 	}
 }
 
-func TestCompleteRouteExecutorBudgetsDisabledShadowAndWritesNoEffects(t *testing.T) {
+// TestCompleteRouteExecutorRejectsNonPlannableDescriptorBeforeAnyIO replaces
+// the pre-CHAOS-4054 "switch off -> shadow only" coverage. There is no route
+// enablement plane left (CompleteRouteExecutionResult.ShadowOnly was
+// deleted): a RouteReady-but-not-Plannable descriptor -- here github/tests,
+// the alias of the canonical github/cicd writer -- must be rejected outright
+// by Execute's precondition check, before any credential resolution, budget
+// acquisition, gate wait, or provider request.
+func TestCompleteRouteExecutorRejectsNonPlannableDescriptorBeforeAnyIO(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	claim, session := completeRouteSession(t, now, false)
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor(
-		"launchdarkly", "feature-flags",
-	)
-	if !ok || !descriptor.RouteReady || descriptor.RouteEnabled {
+	claim, session := completeRouteSessionFor(t, now, false, "github", "tests")
+	descriptor, ok := Descriptor("github", "tests")
+	if !ok || !descriptor.RouteReady || descriptor.Plannable {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
 	budget := &trackingCompleteRouteBudget{}
@@ -167,16 +164,14 @@ func TestCompleteRouteExecutorBudgetsDisabledShadowAndWritesNoEffects(t *testing
 		return gate
 	}
 	executor.Doer = doer
-	result, err := executor.Execute(context.Background(), session, descriptor)
-	if err != nil {
-		t.Fatal(err)
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("non-plannable execution error=%v", err)
 	}
-	if !result.ShadowOnly || result.Effects != (EffectCommitResult{}) ||
-		doer.requests != 1 || budget.acquires != 1 || budget.releases != 1 ||
-		gate.waits != 1 {
+	if doer.requests != 0 || budget.acquires != 0 || gate.waits != 0 {
 		t.Fatalf(
-			"result=%+v requests=%d acquires=%d releases=%d waits=%d",
-			result, doer.requests, budget.acquires, budget.releases, gate.waits,
+			"non-plannable descriptor crossed preflight: requests=%d acquires=%d waits=%d",
+			doer.requests, budget.acquires, gate.waits,
 		)
 	}
 }
@@ -185,9 +180,7 @@ func TestCompleteRouteExecutorRejectsMissingOutboundDependencies(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, _ := (CompleteRouteSwitches{}).Descriptor(
-		"launchdarkly", "feature-flags",
-	)
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	for _, test := range []struct {
 		name   string
 		mutate func(*CompleteRouteExecutor)
@@ -525,9 +518,7 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry(
 	}
 	ledger := &memoryEffectLedger{state: state}
 	handler := &staticCompleteRouteHandler{batch: batch}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 
 	if _, err := completeRouteExecutor(
 		now, handler, ledger, &memoryEffectSink{},
@@ -550,9 +541,7 @@ func TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
 	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 
 	if _, err := completeRouteExecutor(
 		now, handler, &memoryEffectLedger{}, &memoryEffectSink{},
@@ -580,9 +569,7 @@ func TestCompleteRouteExecutorPersistsTheCollectionInstantNotTheCommitClock(
 	claim, session := completeRouteSession(t, collectedAt, false)
 	ledger := &memoryEffectLedger{}
 	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 
 	if _, err := completeRouteExecutorWithCommitClock(
 		collectedAt, committedAt, handler, ledger, &memoryEffectSink{},
@@ -612,9 +599,7 @@ func TestCompleteRouteExecutorRetryReproducesTheDigestAcrossSkewedClocks(
 	firstAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, firstAt, false)
 	ledger := &memoryEffectLedger{}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 
 	first := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
 	if _, err := completeRouteExecutorWithCommitClock(

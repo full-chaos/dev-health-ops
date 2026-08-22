@@ -111,9 +111,7 @@ func TestLaunchDarklyRouteFetchesCompleteUnitAndUsesEventReadbackPolicy(t *testi
 	if err != nil {
 		t.Fatalf("collect error=%v requests=%v", err, requestURLs(doer.requests))
 	}
-	descriptor, _ := (CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}).Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
 	if err := batch.validate(descriptor); err != nil {
 		t.Fatal(err)
 	}

@@ -289,11 +289,11 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 		Repository: repository, Claim: recovered, LeaseDuration: 5 * time.Minute,
 		Deadline: recoveryNow.Add(10 * time.Minute), Now: func() time.Time { return recoveryNow },
 	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor, ok := Descriptor("github", "work-items")
 	if !ok || !descriptor.RouteReady || !descriptor.PreparedManifestRecovery {
 		t.Fatalf("recovery descriptor=%+v ok=%v", descriptor, ok)
 	}
-	descriptor.RouteEnabled = true
+	descriptor.Plannable = true
 	descriptor.Destinations = workItemRouteDestinations()
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"mutable_live_input": true},

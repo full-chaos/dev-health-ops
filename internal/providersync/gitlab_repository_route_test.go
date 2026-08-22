@@ -74,7 +74,7 @@ func TestGitLabRepositoryRouteEmitsCompleteReposEffect(t *testing.T) {
 	if len(doer.requests) != 1 || doer.requests[0].URL.Path != "/api/v4/projects/123" {
 		t.Fatalf("requests=%d path=%q", len(doer.requests), doer.requests[0].URL.Path)
 	}
-	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("gitlab", "repo-metadata")
+	descriptor, ok := Descriptor("gitlab", "repo-metadata")
 	if !ok {
 		t.Fatal("gitlab/repo-metadata has no descriptor")
 	}

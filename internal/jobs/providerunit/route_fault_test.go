@@ -27,7 +27,6 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 	for name, test := range map[string]struct {
 		provider, dataset string
 		costClass         providersync.CostClass
-		switches          providersync.CompleteRouteSwitches
 		descriptorPresent bool
 	}{
 		"descriptor absent for an unconfigured pair": {
@@ -36,22 +35,22 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			// github has no feature-flags capability at all.
 			descriptorPresent: false,
 		},
-		"descriptor present but not route ready": {
-			provider: "pagerduty", dataset: "incidents",
-			costClass:         providersync.CostLight,
-			descriptorPresent: true,
-		},
-		"descriptor route ready but not enabled": {
-			provider: "launchdarkly", dataset: "feature-flags",
+		// CHAOS-4054: capability is always on, so every registered
+		// capability now resolves RouteReady=true unconditionally --
+		// "known but not shipped" is no longer reachable (verified: every
+		// capability entry resolves RouteReady=true). The remaining
+		// unroutable case for a *known* pair is an alias identity that is
+		// RouteReady but not Plannable, covered here and below.
+		"descriptor route ready but not plannable": {
+			provider: "github", dataset: "pr-comments",
 			costClass: providersync.CostMedium,
-			switches:  providersync.CompleteRouteSwitches{},
-			// LaunchDarklyFeatureFlags is off.
+			// pr-comments aliases onto the canonical `prs` writer and is
+			// never independently plannable.
 			descriptorPresent: true,
 		},
 		"work-item alias held closed": {
 			provider: "linear", dataset: "work-item-labels",
 			costClass:         providersync.CostLight,
-			switches:          providersync.CompleteRouteSwitches{LinearWorkItems: true},
 			descriptorPresent: true,
 		},
 		"github work-item direct alias reconciles before executor construction": {
@@ -61,7 +60,6 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			// work-items claim may construct the route. A persisted direct alias
 			// must reconcile before BuildExecutor can resolve credentials, create
 			// HTTP clients, or touch effects/watermarks.
-			switches:          providersync.CompleteRouteSwitches{GithubWorkItems: true},
 			descriptorPresent: true,
 		},
 	} {
@@ -76,7 +74,6 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			var faults []RouteFault
 			handler := &Handler{
 				Repository:    repository,
-				Switches:      test.switches,
 				LeaseDuration: time.Minute,
 				Heartbeat:     10 * time.Second,
 				Now:           func() time.Time { return now },
@@ -117,7 +114,7 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			fault := faults[0]
 			if fault.Provider != test.provider || fault.Dataset != test.dataset ||
 				fault.DescriptorPresent != test.descriptorPresent ||
-				fault.RouteEnabled || !fault.Released || fault.Terminal {
+				fault.Plannable || !fault.Released || fault.Terminal {
 				t.Fatalf("fault=%+v", fault)
 			}
 		})
@@ -204,7 +201,6 @@ func TestGitHubWorkItemFamilyClaimReconcilesBeforeExecutorCredentialsOrEffects(t
 			builds := 0
 			handler := &Handler{
 				Repository:    repository,
-				Switches:      providersync.CompleteRouteSwitches{GithubWorkItems: true},
 				LeaseDuration: time.Minute,
 				Heartbeat:     10 * time.Second,
 				Now:           func() time.Time { return now },
@@ -283,12 +279,9 @@ func TestEnabledProviderNeutralWorkItemFamilyReconcilesBeforeExecutorCredentials
 			},
 		},
 	}
-	providers := map[string]providersync.CompleteRouteSwitches{
-		"jira":   {JiraWorkItems: true},
-		"linear": {LinearWorkItems: true},
-	}
-	for provider, switches := range providers {
-		provider, switches := provider, switches
+	providers := []string{"jira", "linear"}
+	for _, provider := range providers {
+		provider := provider
 		for name, claim := range claims {
 			name, claim := name, claim
 			t.Run(provider+"/"+name, func(t *testing.T) {
@@ -304,7 +297,6 @@ func TestEnabledProviderNeutralWorkItemFamilyReconcilesBeforeExecutorCredentials
 				builds := 0
 				handler := &Handler{
 					Repository:    repository,
-					Switches:      switches,
 					LeaseDuration: time.Minute,
 					Heartbeat:     10 * time.Second,
 					Now:           func() time.Time { return now },
@@ -333,7 +325,15 @@ func TestEnabledProviderNeutralWorkItemFamilyReconcilesBeforeExecutorCredentials
 	}
 }
 
-func TestDefaultOffProviderNeutralWorkItemFamilyKeepsLegacyClaimAdmissible(t *testing.T) {
+// TestSparseWorkItemFamilyClaimIsRejectedForEveryProvider is the strict-
+// validation successor to the deleted per-provider switch gate. Before
+// CHAOS-4054, a sparse legacy work-items claim (only the top-level family
+// flag set, none of the per-alias flags) stayed admissible while a
+// provider's route switch was off. validateProviderFamilyExecutionClaim no
+// longer takes a switches argument and validates every AtomicCanonical
+// family unconditionally, so that same sparse claim must now be rejected for
+// every provider in the family, not silently admitted.
+func TestSparseWorkItemFamilyClaimIsRejectedForEveryProvider(t *testing.T) {
 	t.Parallel()
 	for _, provider := range []string{"gitlab", "jira", "linear"} {
 		unit := providerUnit()
@@ -343,10 +343,8 @@ func TestDefaultOffProviderNeutralWorkItemFamilyKeepsLegacyClaimAdmissible(t *te
 		claim := providersync.Claim{
 			Unit: unit,
 		}
-		if err := validateProviderFamilyExecutionClaim(
-			claim, providersync.CompleteRouteSwitches{},
-		); err != nil {
-			t.Fatalf("provider=%s error=%v", provider, err)
+		if err := validateProviderFamilyExecutionClaim(claim); err == nil {
+			t.Fatalf("provider=%s error=nil, want strict validation to reject a sparse claim", provider)
 		}
 	}
 }
@@ -373,7 +371,6 @@ func TestGitHubWorkItemCompleteFamilyClaimReachesExecutorFactory(t *testing.T) {
 	builds := 0
 	handler := &Handler{
 		Repository:    repository,
-		Switches:      providersync.CompleteRouteSwitches{GithubWorkItems: true},
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },
@@ -411,8 +408,13 @@ func TestRouteFaultAcrossEveryAttemptUpToTheCap(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	const maxAttempts = 5
 	unit := providerUnit()
-	unit.Provider, unit.Dataset = "pagerduty", "incidents"
-	unit.CostClass = providersync.CostLight
+	// CHAOS-4054: every pagerduty pair is now RouteReady && Plannable
+	// unconditionally, so it can no longer stand in for an unroutable scope.
+	// gitlab/tests is RouteReady (it delegates to the same complete-row unit
+	// as cicd) but not independently Plannable, so it still reaches
+	// reconcileRouteFault.
+	unit.Provider, unit.Dataset = "gitlab", "tests"
+	unit.CostClass = providersync.CostHeavy
 	unit.DatasetOptions = map[string]any{}
 	repository := newMemoryUnitRepository(unit)
 	var faults []RouteFault
@@ -483,8 +485,13 @@ func TestUnroutableScopeStaysRetryableWhenReleaseFails(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	unit := providerUnit()
-	unit.Provider, unit.Dataset = "pagerduty", "services"
-	unit.CostClass = providersync.CostLight
+	// CHAOS-4054: every pagerduty pair is now RouteReady && Plannable
+	// unconditionally, so it can no longer stand in for an unroutable scope.
+	// jira/work-item-comments is RouteReady (part of the matrix-ready GitHub
+	// work-item family shape mirrored for jira) but aliases onto the
+	// canonical work-items writer, so it is not Plannable.
+	unit.Provider, unit.Dataset = "jira", "work-item-comments"
+	unit.CostClass = providersync.CostMedium
 	unit.DatasetOptions = map[string]any{}
 	repository := newMemoryUnitRepository(unit)
 	repository.releaseErr = errors.New("release unavailable")
@@ -525,10 +532,7 @@ func TestDeterministicIdentityFaultTerminalizesOnFirstAttempt(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository := newMemoryUnitRepository(providerUnit())
 	handler := &Handler{
-		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		Repository:    repository,
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return now },

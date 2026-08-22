@@ -9,10 +9,10 @@ import (
 // contracts/provider-matrix/v1/matrix.json.
 const ProviderMatrixVersion = 1
 
-// ProviderMatrixEntry is one frozen provider/dataset pair. Fields that depend
-// on deployment configuration (notably RouteEnabled, which is driven by env
-// switches) are deliberately absent: the contract freezes capability and
-// readiness, not the live enablement of any environment.
+// ProviderMatrixEntry is one frozen provider/dataset pair. Nothing here
+// depends on deployment configuration: the contract freezes capability,
+// readiness, and which identity of a writer family may be planned. There is no
+// route enablement plane to record (CHAOS-4054).
 type ProviderMatrixEntry struct {
 	Provider          string            `json:"provider"`
 	Dataset           string            `json:"dataset"`
@@ -26,6 +26,7 @@ type ProviderMatrixEntry struct {
 	RouteDataset      string            `json:"route_dataset"`
 	RouteDestinations []string          `json:"route_destinations"`
 	RouteReady        bool              `json:"route_ready"`
+	Plannable         bool              `json:"plannable"`
 	CredentialModes   []string          `json:"credential_modes"`
 }
 
@@ -77,12 +78,9 @@ func BuildProviderMatrix() ProviderMatrix {
 		Providers:     providers,
 		Pairs:         make([]ProviderMatrixEntry, 0, 64),
 	}
-	// A zero-value switch set is used deliberately: the contract records
-	// route readiness, which no environment flag may change.
-	switches := CompleteRouteSwitches{}
 	for _, provider := range providers {
 		for _, capability := range Capabilities(provider) {
-			descriptor, ok := switches.Descriptor(provider, capability.Dataset)
+			descriptor, ok := Descriptor(provider, capability.Dataset)
 			if !ok {
 				// Unreachable: Descriptor recognises exactly the capability
 				// registry. Recording an honest "none" beats panicking in a
@@ -105,6 +103,7 @@ func BuildProviderMatrix() ProviderMatrix {
 				RouteDataset:      descriptor.RouteDataset,
 				RouteDestinations: sortedStrings(descriptor.Destinations),
 				RouteReady:        descriptor.RouteReady,
+				Plannable:         descriptor.Plannable,
 				CredentialModes:   CredentialModes(provider),
 			})
 		}

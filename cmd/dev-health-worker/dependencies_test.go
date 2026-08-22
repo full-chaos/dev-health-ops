@@ -127,206 +127,64 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	}
 }
 
-func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing.T) {
+// TestProviderRouteSwitchesReadyFollowsQueueTopology proves
+// providerRouteSwitchesReady's CHAOS-4054 contract: capability is always on
+// in the binary, so the only remaining topology question is whether this
+// process selected the provider-unit queue at all.
+//
+//   - queue not selected: the check always passes, regardless of the
+//     work-item runtime config or whether the provider-sync runtime was ever
+//     constructed.
+//   - queue selected: the check passes only if the work-item runtime config
+//     is valid (or trivially absent) AND the provider-sync runtime was
+//     constructed.
+//
+// Every one of the ~40 deleted WORKER_*_ENABLED switches used to gate one
+// route's slice of this same check (github/repo-metadata "on" and
+// launchdarkly "on" reached the identical branch); since capability is now
+// unconditional, none of them distinguish any behavior here, so this test
+// asserts the contract directly instead of repeating it once per deleted
+// switch.
+func TestProviderRouteSwitchesReadyFollowsQueueTopology(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
-	workItems := validGitHubWorkItemsRuntimeConfig(t)
-	gitlabWorkItems := workItems
-	gitlabWorkItems.WorkerGithubWorkItemsEnabled = false
-	gitlabWorkItems.WorkerGitlabWorkItemsEnabled = true
-	jiraWorkItems := workItems
-	jiraWorkItems.WorkerGithubWorkItemsEnabled = false
-	jiraWorkItems.WorkerJiraWorkItemsEnabled = true
-	linearWorkItems := workItems
-	linearWorkItems.WorkerGithubWorkItemsEnabled = false
-	linearWorkItems.WorkerLinearWorkItemsEnabled = true
-	for _, test := range []struct {
-		name    string
-		config  config.Config
-		runtime bool
-		wantErr bool
-	}{
-		{name: "all off", config: config.Config{}},
-		{
-			name: "launchdarkly complete",
-			config: config.Config{
-				WorkerLaunchDarklyFeatureFlagsEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "launchdarkly missing runtime",
-			config: config.Config{
-				WorkerLaunchDarklyFeatureFlagsEnabled: true,
-			},
-			wantErr: true,
-		},
-		{
-			// (github, repo-metadata) is the second RouteReady pair added by
-			// CHAOS-3123; this case pins that the generalised runtimeConstructed
-			// check (any enabled route, not launchdarkly alone) actually covers
-			// it rather than only having been exercised for launchdarkly.
-			name: "github complete",
-			config: config.Config{
-				WorkerGithubRepoMetadataEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "github missing runtime",
-			config: config.Config{
-				WorkerGithubRepoMetadataEnabled: true,
-			},
-			wantErr: true,
-		},
-		{
-			name: "gitlab complete",
-			config: config.Config{
-				WorkerGitlabRepoMetadataEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab missing runtime",
-			config: config.Config{
-				WorkerGitlabRepoMetadataEnabled: true,
-			},
-			wantErr: true,
-		},
-		{
-			name: "gitlab commits complete",
-			config: config.Config{
-				WorkerGitlabCommitsEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab commits missing runtime",
-			config: config.Config{
-				WorkerGitlabCommitsEnabled: true,
-			},
-			wantErr: true,
-		},
-		{
-			name: "gitlab commit stats complete",
-			config: config.Config{
-				WorkerGitlabCommitStatsEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab commit stats missing runtime",
-			config: config.Config{
-				WorkerGitlabCommitStatsEnabled: true,
-			},
-			wantErr: true,
-		},
-		{
-			name: "gitlab cicd complete",
-			config: config.Config{
-				WorkerGitlabCICDEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab tests complete",
-			config: config.Config{
-				WorkerGitlabTestsEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab incidents complete",
-			config: config.Config{
-				WorkerGitlabIncidentsEnabled: true,
-			},
-			runtime: true,
-		},
-		{
-			name: "gitlab incidents missing runtime",
-			config: config.Config{
-				WorkerGitlabIncidentsEnabled: true,
-			},
-			wantErr: true,
-		},
-		{name: "github prs complete", config: config.Config{WorkerGithubPRsEnabled: true}, runtime: true},
-		{name: "github prs missing runtime", config: config.Config{WorkerGithubPRsEnabled: true}, wantErr: true},
-		{name: "github pr reviews complete", config: config.Config{WorkerGithubPRReviewsEnabled: true}, runtime: true},
-		{name: "github pr reviews missing runtime", config: config.Config{WorkerGithubPRReviewsEnabled: true}, wantErr: true},
-		{name: "github pr comments complete", config: config.Config{WorkerGithubPRCommentsEnabled: true}, runtime: true},
-		{name: "github pr comments missing runtime", config: config.Config{WorkerGithubPRCommentsEnabled: true}, wantErr: true},
-		{name: "gitlab deployments complete", config: config.Config{WorkerGitlabDeploymentsEnabled: true}, runtime: true},
-		{name: "gitlab feature flags complete", config: config.Config{WorkerGitlabFeatureFlagsEnabled: true}, runtime: true},
-		{name: "gitlab files complete", config: config.Config{WorkerGitlabFilesEnabled: true}, runtime: true},
-		{name: "gitlab blame complete", config: config.Config{WorkerGitlabBlameEnabled: true}, runtime: true},
-		{name: "gitlab prs complete", config: config.Config{WorkerGitlabPRsEnabled: true}, runtime: true},
-		{name: "gitlab pr reviews complete", config: config.Config{WorkerGitlabPRReviewsEnabled: true}, runtime: true},
-		{name: "gitlab pr comments complete", config: config.Config{WorkerGitlabPRCommentsEnabled: true}, runtime: true},
-		{name: "gitlab security complete", config: config.Config{WorkerGitlabSecurityEnabled: true}, runtime: true},
-		{name: "gitlab work items complete", config: gitlabWorkItems, runtime: true},
-		{name: "pagerduty services complete", config: config.Config{WorkerPagerDutyServicesEnabled: true}, runtime: true},
-		{name: "pagerduty business services complete", config: config.Config{WorkerPagerDutyBusinessServicesEnabled: true}, runtime: true},
-		{name: "pagerduty escalation policies complete", config: config.Config{WorkerPagerDutyEscalationPoliciesEnabled: true}, runtime: true},
-		{name: "pagerduty schedules complete", config: config.Config{WorkerPagerDutySchedulesEnabled: true}, runtime: true},
-		{name: "pagerduty on calls complete", config: config.Config{WorkerPagerDutyOnCallsEnabled: true}, runtime: true},
-		{name: "pagerduty users complete", config: config.Config{WorkerPagerDutyUsersEnabled: true}, runtime: true},
-		{name: "pagerduty teams complete", config: config.Config{WorkerPagerDutyTeamsEnabled: true}, runtime: true},
-		{name: "pagerduty incident family complete", config: config.Config{WorkerPagerDutyIncidentsEnabled: true}, runtime: true},
-		{
-			name:    "linear work items complete",
-			config:  linearWorkItems,
-			runtime: true,
-		},
-		{
-			name:    "jira work items complete",
-			config:  jiraWorkItems,
-			runtime: true,
-		},
-		{
-			name:    "jira incidents incomplete",
-			config:  config.Config{WorkerJiraIncidentsEnabled: true},
-			wantErr: true,
-		},
-	} {
-		if providerSyncWorkerEnabled(test.config) {
-			test.config.Queues = []string{providerUnitQueue}
-		}
-		err := providerRouteSwitchesReady(
-			test.config, &test.runtime,
-		)(context.Background())
-		if (err != nil) != test.wantErr {
-			t.Fatalf("%s error=%v wantErr=%v", test.name, err, test.wantErr)
-		}
-	}
-}
 
-func TestLocalAllStartupReadinessProjectsEveryCompleteWriterAlias(t *testing.T) {
-	values := map[string]string{
-		"DEV_HEALTH_ENV":               "local",
-		"GO_PROVIDER_ROUTES":           "all",
-		"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=4,sync_provider=2",
+	// Queue not selected: always ready, even with an invalid work-item
+	// runtime config and no constructed runtime.
+	invalidWorkItems := config.Config{
+		WorkerGithubWorkItemsStatusMappingPath: "/does/not/exist.yaml",
 	}
-	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-worker", RequireQueues: true,
-		Queues: []string{"sync,sync_provider"},
-		LookupEnv: func(key string) (string, bool) {
-			value, ok := values[key]
-			return value, ok
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
+	if err := providerRouteSwitchesReady(invalidWorkItems, new(bool))(context.Background()); err != nil {
+		t.Fatalf("queue not selected: error = %v, want nil", err)
 	}
-	effective := map[string]bool{}
-	for _, route := range effectiveProviderRouteSwitches(cfg) {
-		effective[route.provider+"/"+route.dataset] = true
+
+	// Queue selected, runtime never constructed: refused.
+	notConstructed := config.Config{Queues: []string{providerUnitQueue}}
+	if err := providerRouteSwitchesReady(notConstructed, new(bool))(context.Background()); err == nil {
+		t.Fatal("queue selected without a constructed runtime: want error")
 	}
-	for _, identity := range []string{
-		"github/pr-reviews", "github/pr-comments", "github/tests",
-		"gitlab/pr-reviews", "gitlab/pr-comments", "gitlab/tests",
-	} {
-		if !effective[identity] {
-			t.Fatalf("startup readiness omitted inherited route %s", identity)
-		}
+
+	// Queue selected, runtime constructed, no work-item family configured:
+	// ready (the work-items artifact paths are optional config, not a route
+	// switch).
+	constructed := true
+	trivial := config.Config{Queues: []string{providerUnitQueue}}
+	if err := providerRouteSwitchesReady(trivial, &constructed)(context.Background()); err != nil {
+		t.Fatalf("queue selected with a constructed runtime: error = %v, want nil", err)
+	}
+
+	// Queue selected, runtime constructed, but the work-item runtime config
+	// is present and invalid: refused.
+	invalidWorkItems.Queues = []string{providerUnitQueue}
+	if err := providerRouteSwitchesReady(invalidWorkItems, &constructed)(context.Background()); err == nil {
+		t.Fatal("queue selected with an invalid work-item runtime config: want error")
+	}
+
+	// Queue selected, runtime constructed, valid work-item runtime config:
+	// ready.
+	valid := validGitHubWorkItemsRuntimeConfig(t)
+	valid.Queues = []string{providerUnitQueue}
+	if err := providerRouteSwitchesReady(valid, &constructed)(context.Background()); err != nil {
+		t.Fatalf("queue selected with a valid work-item runtime config: error = %v, want nil", err)
 	}
 }
 
@@ -344,7 +202,6 @@ func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.
 		{
 			name: "missing explicit status mapping path",
 			config: config.Config{
-				WorkerGithubWorkItemsEnabled:              true,
 				WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
 			},
 			wantErr: true,
@@ -469,10 +326,9 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		context.Background(),
 		config.Config{
 			Queues: []string{"sync", "sync_provider"}, RiverDatabaseSchema: "river",
-			WorkerQueueConcurrency:                map[string]int{"sync": 4, "sync_provider": 2},
-			DomainDatabaseMaxConns:                4,
-			QueueDatabaseMaxConns:                 2,
-			WorkerLaunchDarklyFeatureFlagsEnabled: true,
+			WorkerQueueConcurrency: map[string]int{"sync": 4, "sync_provider": 2},
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
 		},
 		registry, sources,
 	)
@@ -489,7 +345,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 
 	sources.buildProviderSync = nil
 	// Drop the sync-coordinator fake too: this half isolates the
-	// LaunchDarkly provider-route-switch gate itself, and partial handler
+	// provider-route queue-topology gate itself, and partial handler
 	// coverage (team_autoimport alone) would instead fail closed at
 	// construction time -- the invariant TestNestedRiverClientCapabilityIsValidated
 	// already proves -- before the readiness gate this assertion inspects
@@ -500,10 +356,9 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		context.Background(),
 		config.Config{
 			Queues: []string{"sync", "sync_provider"}, RiverDatabaseSchema: "river",
-			WorkerQueueConcurrency:                map[string]int{"sync": 4, "sync_provider": 2},
-			DomainDatabaseMaxConns:                4,
-			QueueDatabaseMaxConns:                 2,
-			WorkerLaunchDarklyFeatureFlagsEnabled: true,
+			WorkerQueueConcurrency: map[string]int{"sync": 4, "sync_provider": 2},
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
 		},
 		missingRegistry, sources,
 	)

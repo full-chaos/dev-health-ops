@@ -80,7 +80,7 @@ func TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes(t *testing.T) {
 		t.Run(test.dataset, func(t *testing.T) {
 			t.Parallel()
 			handler, _ := buildProviderSyncHandler(
-				nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+				nil, nil, nil, nil, nil,
 				nil, nil, slog.Default(),
 			)
 			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
@@ -111,7 +111,7 @@ func TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes(t *testing.T)
 		t.Fatal(err)
 	}
 	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
-		nil, providersync.CompleteRouteSwitches{}, nil,
+		nil, nil,
 		&githubWorkItemsBuildExecutorConn{}, nil, nil, nil, nil,
 		slog.Default(), runtimeConfig,
 	)
@@ -150,7 +150,7 @@ func TestBuildProviderSyncHandlerConfiguresLinearAccountDiscovery(t *testing.T) 
 		t.Fatal(err)
 	}
 	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
-		nil, providersync.CompleteRouteSwitches{}, nil,
+		nil, nil,
 		&githubWorkItemsBuildExecutorConn{}, nil, nil, nil, nil,
 		slog.Default(), runtimeConfig,
 	)
@@ -195,7 +195,7 @@ func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEff
 		t.Run(test.dataset, func(t *testing.T) {
 			t.Parallel()
 			handler, _ := buildProviderSyncHandler(
-				nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+				nil, nil, nil, nil, nil,
 				nil, nil, slog.Default(),
 			)
 			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
@@ -243,7 +243,7 @@ func TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator(t *testing.T) 
 		return credential, nil
 	})
 	handler, _ := buildProviderSyncHandlerWithRuntimeDependencies(
-		nil, providersync.CompleteRouteSwitches{}, nil, hydrator,
+		nil, nil, hydrator,
 		nil, nil, nil, nil, nil, slog.Default(), workItemsRuntimeConfig{},
 	)
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
@@ -306,7 +306,7 @@ func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
 	// unmodified BuildExecutor closure without a live ClickHouse, Valkey, or
 	// Postgres connection.
 	handler, providerMetrics := buildProviderSyncHandler(
-		nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		nil, collector, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -357,7 +357,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeCo
 	}
 	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 		nil,
-		providersync.CompleteRouteSwitches{GithubWorkItems: true},
 		nil,
 		&githubWorkItemsBuildExecutorConn{},
 		nil,
@@ -387,7 +386,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeCo
 
 	withoutPaths, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 		nil,
-		providersync.CompleteRouteSwitches{GithubWorkItems: true},
 		nil,
 		&githubWorkItemsBuildExecutorConn{},
 		nil,
@@ -407,54 +405,17 @@ func TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeCo
 	}
 }
 
-// TestProviderSyncHandlerSwitchesFollowConfiguration pins the CHAOS-3123 fix
-// that the executing handler reads the same switches the readiness check does.
-//
-// The defect this replaces was a literal `LaunchDarklyFeatureFlags: true`
-// inside buildProviderSyncHandler. That is invisible to every behavioral test:
-// the handler serves LaunchDarkly whether or not the process was configured to,
-// and refuses (github, repo-metadata) even when it was — so a unit the Python
-// producer legitimately routed to River is answered with a route fault rather
-// than executed. Reintroducing any hardcoded field here must fail this test.
-func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
-	t.Parallel()
-	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":               {},
-		"github":             {GithubRepoMetadata: true},
-		"gitlab":             {GitlabRepoMetadata: true},
-		"gitlab_commits":     {GitlabCommits: true},
-		"gitlab_stats":       {GitlabCommitStats: true},
-		"gitlab_cicd":        {GitlabCICD: true},
-		"gitlab_tests":       {GitlabTests: true},
-		"gitlab_incidents":   {GitlabIncidents: true},
-		"github_prs":         {GithubPRs: true},
-		"github_pr_reviews":  {GithubPRReviews: true},
-		"github_pr_comments": {GithubPRComments: true},
-		"github_cicd":        {GithubCICD: true},
-		"github_security":    {GithubSecurity: true},
-		"both":               {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			handler, _ := buildProviderSyncHandler(
-				nil, want, nil, nil, nil, nil, nil, nil, slog.Default(),
-			)
-			if handler == nil {
-				t.Fatal("buildProviderSyncHandler returned no handler")
-			}
-			if handler.Switches != want {
-				t.Fatalf("handler.Switches = %+v, want %+v", handler.Switches, want)
-			}
-		})
-	}
-}
-
-func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T) {
+func TestBuildProviderSyncWorkerFollowsQueueTopology(t *testing.T) {
 	originalConstructor := constructProviderSyncWorker
 	t.Cleanup(func() {
 		constructProviderSyncWorker = originalConstructor
 	})
 
+	// CHAOS-4054: capability is always on in the binary. buildProviderSyncWorker's
+	// only gate is the -Q queue topology -- the family is constructed whenever the
+	// provider-unit queue is selected, and never constructed when it is not, with
+	// no WORKER_*_ENABLED flag able to change that either way.
+	constructed := false
 	constructProviderSyncWorker = func(
 		_ context.Context,
 		_ config.Config,
@@ -464,6 +425,7 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 		_ *slog.Logger,
 		_ *river.Workers,
 	) (workerFamily, error) {
+		constructed = true
 		return workerFamily{
 			queues: []jobruntime.QueueBudget{{
 				Queue: providerUnitQueue, MaxWorkers: 17,
@@ -471,454 +433,40 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 		}, nil
 	}
 
-	for _, test := range []struct {
-		name string
-		cfg  config.Config
-	}{
-		{
-			name: "launchdarkly feature flags",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerLaunchDarklyFeatureFlagsEnabled: true,
-			},
-		},
-		{
-			name: "github repo metadata",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubRepoMetadataEnabled: true,
-			},
-		},
-		{
-			name: "gitlab repo metadata",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabRepoMetadataEnabled: true,
-			},
-		},
-		{
-			name: "gitlab commits",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCommitsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab commit stats",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCommitStatsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab cicd",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabCICDEnabled: true,
-			},
-		},
-		{
-			name: "gitlab tests",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabTestsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab incidents",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabIncidentsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab deployments",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabDeploymentsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab feature flags",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabFeatureFlagsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab files",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabFilesEnabled: true,
-			},
-		},
-		{
-			name: "gitlab blame",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabBlameEnabled: true,
-			},
-		},
-		{
-			name: "gitlab prs",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab pr reviews",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRReviewsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab pr comments",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabPRCommentsEnabled: true,
-			},
-		},
-		{
-			name: "gitlab security",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabSecurityEnabled: true,
-			},
-		},
-		{
-			name: "gitlab work items",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGitlabWorkItemsEnabled: true,
-			},
-		},
-		{
-			name: "jira work items",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerJiraWorkItemsEnabled: true,
-			},
-		},
-		{
-			name: "linear work items",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerLinearWorkItemsEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty services",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyServicesEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty business services",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyBusinessServicesEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty escalation policies",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyEscalationPoliciesEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty schedules",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutySchedulesEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty on calls",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyOnCallsEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty users",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyUsersEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty teams",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyTeamsEnabled: true,
-			},
-		},
-		{
-			name: "pagerduty incident family",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerPagerDutyIncidentsEnabled: true,
-			},
-		},
-		{
-			name: "github cicd",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubCICDEnabled: true,
-			},
-		},
-		{
-			name: "github prs",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRsEnabled: true,
-			},
-		},
-		{
-			name: "github pr reviews",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRReviewsEnabled: true,
-			},
-		},
-		{
-			name: "github pr comments",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubPRCommentsEnabled: true,
-			},
-		},
-		{
-			name: "github commits",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubCommitsEnabled: true,
-			},
-		},
-		{
-			name: "github deployments",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubDeploymentsEnabled: true,
-			},
-		},
-		{
-			name: "github security",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubSecurityEnabled: true,
-			},
-		},
-		{
-			name: "github files",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubFilesEnabled: true,
-			},
-		},
-		{
-			name: "github commit stats",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubCommitStatsEnabled: true,
-			},
-		},
-		{
-			name: "github blame",
-			cfg: config.Config{
-				Queues: []string{"sync", "sync_provider"}, WorkerGithubBlameEnabled: true,
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			test.cfg.Queues = []string{providerUnitQueue}
-			family, err := buildProviderSyncWorker(
-				context.Background(), test.cfg, nil, nil, nil, nil, river.NewWorkers(),
-			)
-			if err != nil {
-				t.Fatalf("buildProviderSyncWorker() error = %v", err)
-			}
-			if len(family.queues) == 0 {
-				t.Fatal("buildProviderSyncWorker returned an empty worker family")
-			}
-		})
-	}
-}
-
-// TestWorkerRouteSwitchesMapsEveryConfiguredRoute proves the config->switches
-// translation carries each flag to its own field. A copy/paste that pointed two
-// fields at one config flag would still satisfy a single-flag test.
-func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
-	t.Parallel()
-	if got := workerRouteSwitches(config.Config{}); got != (providersync.CompleteRouteSwitches{}) {
-		t.Fatalf("zero config produced %+v", got)
-	}
-	for name, probe := range map[string]struct {
-		cfg  config.Config
-		want providersync.CompleteRouteSwitches
-	}{
-		"launchdarkly": {
-			cfg:  config.Config{WorkerLaunchDarklyFeatureFlagsEnabled: true},
-			want: providersync.CompleteRouteSwitches{LaunchDarklyFeatureFlags: true},
-		},
-		"github": {
-			cfg:  config.Config{WorkerGithubRepoMetadataEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
-		},
-		"gitlab": {
-			cfg:  config.Config{WorkerGitlabRepoMetadataEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabRepoMetadata: true},
-		},
-		"gitlab_commits": {
-			cfg:  config.Config{WorkerGitlabCommitsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabCommits: true},
-		},
-		"gitlab_commit_stats": {
-			cfg:  config.Config{WorkerGitlabCommitStatsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabCommitStats: true},
-		},
-		"gitlab_cicd": {
-			cfg:  config.Config{WorkerGitlabCICDEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabCICD: true},
-		},
-		"gitlab_tests": {
-			cfg:  config.Config{WorkerGitlabTestsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabTests: true},
-		},
-		"gitlab_incidents": {
-			cfg:  config.Config{WorkerGitlabIncidentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabIncidents: true},
-		},
-		"gitlab_deployments": {
-			cfg:  config.Config{WorkerGitlabDeploymentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabDeployments: true},
-		},
-		"gitlab_feature_flags": {
-			cfg:  config.Config{WorkerGitlabFeatureFlagsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabFeatureFlags: true},
-		},
-		"gitlab_files": {
-			cfg:  config.Config{WorkerGitlabFilesEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabFiles: true},
-		},
-		"gitlab_blame": {
-			cfg:  config.Config{WorkerGitlabBlameEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabBlame: true},
-		},
-		"gitlab_prs": {
-			cfg:  config.Config{WorkerGitlabPRsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabPRs: true},
-		},
-		"gitlab_pr_reviews": {
-			cfg:  config.Config{WorkerGitlabPRReviewsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabPRReviews: true},
-		},
-		"gitlab_pr_comments": {
-			cfg:  config.Config{WorkerGitlabPRCommentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabPRComments: true},
-		},
-		"gitlab_security": {
-			cfg:  config.Config{WorkerGitlabSecurityEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabSecurity: true},
-		},
-		"gitlab_work_items": {
-			cfg:  config.Config{WorkerGitlabWorkItemsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GitlabWorkItems: true},
-		},
-		"pagerduty_services": {
-			cfg:  config.Config{WorkerPagerDutyServicesEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyServices: true},
-		},
-		"pagerduty_business_services": {
-			cfg:  config.Config{WorkerPagerDutyBusinessServicesEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyBusinessServices: true},
-		},
-		"pagerduty_escalation_policies": {
-			cfg:  config.Config{WorkerPagerDutyEscalationPoliciesEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyEscalationPolicies: true},
-		},
-		"pagerduty_schedules": {
-			cfg:  config.Config{WorkerPagerDutySchedulesEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutySchedules: true},
-		},
-		"pagerduty_on_calls": {
-			cfg:  config.Config{WorkerPagerDutyOnCallsEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyOnCalls: true},
-		},
-		"pagerduty_users": {
-			cfg:  config.Config{WorkerPagerDutyUsersEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyUsers: true},
-		},
-		"pagerduty_teams": {
-			cfg:  config.Config{WorkerPagerDutyTeamsEnabled: true},
-			want: providersync.CompleteRouteSwitches{PagerDutyTeams: true},
-		},
-		"pagerduty_incident_family": {
-			cfg: config.Config{WorkerPagerDutyIncidentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{
-				PagerDutyIncidents: true, PagerDutyIncidentAlerts: true,
-				PagerDutyIncidentLogEntries: true, PagerDutyIncidentNotes: true,
-			},
-		},
-		"github_prs": {
-			cfg:  config.Config{WorkerGithubPRsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubPRs: true},
-		},
-		"github_pr_reviews": {
-			cfg:  config.Config{WorkerGithubPRReviewsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubPRReviews: true},
-		},
-		"github_pr_comments": {
-			cfg:  config.Config{WorkerGithubPRCommentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubPRComments: true},
-		},
-		"github_cicd": {
-			cfg:  config.Config{WorkerGithubCICDEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubCICD: true},
-		},
-		"github_commits": {
-			cfg:  config.Config{WorkerGithubCommitsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubCommits: true},
-		},
-		"github_deployments": {
-			cfg:  config.Config{WorkerGithubDeploymentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubDeployments: true},
-		},
-		"github_security": {
-			cfg:  config.Config{WorkerGithubSecurityEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubSecurity: true},
-		},
-		"github_files": {
-			cfg:  config.Config{WorkerGithubFilesEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubFiles: true},
-		},
-		"github_commit_stats": {
-			cfg:  config.Config{WorkerGithubCommitStatsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubCommitStats: true},
-		},
-		"github_blame": {
-			cfg:  config.Config{WorkerGithubBlameEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubBlame: true},
-		},
-		"github_tests": {
-			cfg:  config.Config{WorkerGithubTestsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubTests: true},
-		},
-		"github_work_items": {
-			cfg:  config.Config{WorkerGithubWorkItemsEnabled: true},
-			want: providersync.CompleteRouteSwitches{GithubWorkItems: true},
-		},
-		"linear": {
-			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
-			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
-		},
-		"jira_work_items": {
-			cfg:  config.Config{WorkerJiraWorkItemsEnabled: true},
-			want: providersync.CompleteRouteSwitches{JiraWorkItems: true},
-		},
-		"jira_incidents": {
-			cfg:  config.Config{WorkerJiraIncidentsEnabled: true},
-			want: providersync.CompleteRouteSwitches{JiraIncidents: true},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if got := workerRouteSwitches(probe.cfg); got != probe.want {
-				t.Fatalf("workerRouteSwitches = %+v, want %+v", got, probe.want)
-			}
-		})
-	}
-}
-
-func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T) {
-	t.Parallel()
-	values := map[string]string{
-		"DEV_HEALTH_ENV":               "local",
-		"GO_PROVIDER_ROUTES":           "all",
-		"DEV_HEALTH_QUEUE_CONCURRENCY": "sync=4,sync_provider=2",
-	}
-	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-worker", RequireQueues: true,
-		Queues: []string{"sync,sync_provider"},
-		LookupEnv: func(key string) (string, bool) {
-			value, ok := values[key]
-			return value, ok
-		},
-	})
+	family, err := buildProviderSyncWorker(
+		context.Background(), config.Config{Queues: []string{"sync"}},
+		nil, nil, nil, nil, river.NewWorkers(),
+	)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("buildProviderSyncWorker() error = %v", err)
 	}
-	switches := workerRouteSwitches(cfg)
+	if constructed || len(family.queues) != 0 {
+		t.Fatalf("queue not selected: constructed=%v family=%+v, want no construction", constructed, family)
+	}
+
+	family, err = buildProviderSyncWorker(
+		context.Background(), config.Config{Queues: []string{providerUnitQueue}},
+		nil, nil, nil, nil, river.NewWorkers(),
+	)
+	if err != nil {
+		t.Fatalf("buildProviderSyncWorker() error = %v", err)
+	}
+	if !constructed || len(family.queues) == 0 {
+		t.Fatalf("queue selected: constructed=%v family=%+v, want the constructed family", constructed, family)
+	}
+}
+
+// TestCompleteWriterAliasesAreRouteReadyButNotPlannable proves the CHAOS-4054
+// alias contract for the writer-collapsed identities: github/gitlab
+// pr-reviews and pr-comments (canonical: prs) and github/gitlab tests
+// (canonical: cicd) stay RouteReady -- BuildExecutor still resolves them to
+// the shared canonical handler, since a Python producer may still route a
+// unit to one of these historical identities -- but they are never
+// independently Plannable. Only the canonical writer is.
+func TestCompleteWriterAliasesAreRouteReadyButNotPlannable(t *testing.T) {
+	t.Parallel()
 	handler, _ := buildProviderSyncHandler(
-		nil, switches, nil, nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	for _, route := range []struct {
 		provider string
@@ -927,9 +475,12 @@ func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T)
 		{"github", "pr-reviews"}, {"github", "pr-comments"}, {"github", "tests"},
 		{"gitlab", "pr-reviews"}, {"gitlab", "pr-comments"}, {"gitlab", "tests"},
 	} {
-		descriptor, ok := switches.Descriptor(route.provider, route.dataset)
-		if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-			t.Fatalf("%s/%s descriptor=%+v ok=%v", route.provider, route.dataset, descriptor, ok)
+		descriptor, ok := providersync.Descriptor(route.provider, route.dataset)
+		if !ok || !descriptor.RouteReady || descriptor.Plannable {
+			t.Fatalf(
+				"%s/%s descriptor=%+v ok=%v, want RouteReady && !Plannable",
+				route.provider, route.dataset, descriptor, ok,
+			)
 		}
 		executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 			Claim: providersync.Claim{Unit: providersync.Unit{
@@ -943,19 +494,10 @@ func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T)
 			t.Fatalf("%s/%s executor has no complete handler", route.provider, route.dataset)
 		}
 	}
-	explicit := workerRouteSwitches(config.Config{WorkerGithubPRsEnabled: true})
-	for _, dataset := range []string{"pr-reviews", "pr-comments"} {
-		descriptor, _ := explicit.Descriptor("github", dataset)
-		if descriptor.RouteEnabled {
-			t.Fatalf("explicit github/prs switch widened to github/%s", dataset)
-		}
-	}
 }
-
 func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GithubCommitStats: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -983,8 +525,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubPRSocialAliases(t *testing.T) {
 		t.Run(dataset, func(t *testing.T) {
 			t.Parallel()
 			handler, _ := buildProviderSyncHandler(
-				nil, providersync.CompleteRouteSwitches{},
-				nil, nil, nil, nil, nil, nil, slog.Default(),
+				nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 			)
 			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 				Claim: providersync.Claim{Unit: providersync.Unit{
@@ -1008,8 +549,7 @@ func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T)
 	entitlementFunc := providerSyncEntitlementFunc(func(context.Context, string) error { return nil })
 	entitlement := &entitlementFunc
 	handler, _ := buildProviderSyncHandler(
-		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
-		nil, nil, nil, nil, entitlement, nil, slog.Default(),
+		nil, nil, nil, nil, nil, entitlement, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
@@ -1040,8 +580,7 @@ func TestBuildProviderSyncHandlerConstructsJiraIncidentsCapability(t *testing.T)
 
 func TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
-		nil, providersync.CompleteRouteSwitches{JiraIncidents: true},
-		nil, nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	_, err := handler.BuildExecutor(&providersync.LeaseSession{
 		Claim: providersync.Claim{Unit: providersync.Unit{
@@ -1056,7 +595,6 @@ func TestBuildProviderSyncHandlerRejectsJiraIncidentsWithoutEntitlement(t *testi
 func TestBuildProviderSyncHandlerConstructsGitHubBlameCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GithubBlame: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1081,8 +619,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubBlameCapability(t *testing.T) {
 
 func TestBuildProviderSyncHandlerConstructsGitHubTestsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
-		nil, providersync.CompleteRouteSwitches{GithubTests: true},
-		nil, nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
@@ -1106,7 +643,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubTestsCapability(t *testing.T) {
 func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GithubCICD: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1131,7 +667,6 @@ func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
 func TestBuildProviderSyncHandlerConstructsGitHubCommitsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GithubCommits: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1154,7 +689,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubCommitsCapability(t *testing.T)
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubDeploymentsCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubDeployments: true}, nil, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, nil, nil, nil, nil, nil, nil, slog.Default())
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{Claim: providersync.Claim{Unit: providersync.Unit{Provider: "github", Dataset: "deployments"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -1168,7 +703,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubDeploymentsCapability(t *testin
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubSecurity: true}, nil, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, nil, nil, nil, nil, nil, nil, slog.Default())
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
 	}
@@ -1185,7 +720,7 @@ func TestBuildProviderSyncHandlerConstructsGitHubSecurityCapability(t *testing.T
 }
 
 func TestBuildProviderSyncHandlerConstructsGitHubFilesCapability(t *testing.T) {
-	handler, _ := buildProviderSyncHandler(nil, providersync.CompleteRouteSwitches{GithubFiles: true}, nil, nil, nil, nil, nil, nil, slog.Default())
+	handler, _ := buildProviderSyncHandler(nil, nil, nil, nil, nil, nil, nil, slog.Default())
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("provider sync handler is not constructed")
 	}
@@ -1201,62 +736,9 @@ func TestBuildProviderSyncHandlerConstructsGitHubFilesCapability(t *testing.T) {
 	}
 }
 
-func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
-	for name, cfg := range map[string]config.Config{
-		"launchdarkly":         {WorkerLaunchDarklyFeatureFlagsEnabled: true},
-		"github_repo_metadata": {WorkerGithubRepoMetadataEnabled: true},
-		"gitlab_repo_metadata": {WorkerGitlabRepoMetadataEnabled: true},
-		"gitlab_commits":       {WorkerGitlabCommitsEnabled: true},
-		"gitlab_commit_stats":  {WorkerGitlabCommitStatsEnabled: true},
-		"gitlab_cicd":          {WorkerGitlabCICDEnabled: true},
-		"gitlab_tests":         {WorkerGitlabTestsEnabled: true},
-		"gitlab_incidents":     {WorkerGitlabIncidentsEnabled: true},
-		"gitlab_deployments":   {WorkerGitlabDeploymentsEnabled: true},
-		"gitlab_feature_flags": {WorkerGitlabFeatureFlagsEnabled: true},
-		"gitlab_files":         {WorkerGitlabFilesEnabled: true},
-		"gitlab_blame":         {WorkerGitlabBlameEnabled: true},
-		"gitlab_prs":           {WorkerGitlabPRsEnabled: true},
-		"gitlab_pr_reviews":    {WorkerGitlabPRReviewsEnabled: true},
-		"gitlab_pr_comments":   {WorkerGitlabPRCommentsEnabled: true},
-		"gitlab_security":      {WorkerGitlabSecurityEnabled: true},
-		"gitlab_work_items":    {WorkerGitlabWorkItemsEnabled: true},
-		"jira_work_items":      {WorkerJiraWorkItemsEnabled: true},
-		"linear_work_items":    {WorkerLinearWorkItemsEnabled: true},
-		"pagerduty_services":   {WorkerPagerDutyServicesEnabled: true},
-		"pagerduty_business_services": {
-			WorkerPagerDutyBusinessServicesEnabled: true,
-		},
-		"pagerduty_escalation_policies": {
-			WorkerPagerDutyEscalationPoliciesEnabled: true,
-		},
-		"pagerduty_schedules": {WorkerPagerDutySchedulesEnabled: true},
-		"pagerduty_on_calls":  {WorkerPagerDutyOnCallsEnabled: true},
-		"pagerduty_users":     {WorkerPagerDutyUsersEnabled: true},
-		"pagerduty_teams":     {WorkerPagerDutyTeamsEnabled: true},
-		"pagerduty_incidents": {WorkerPagerDutyIncidentsEnabled: true},
-		"github_cicd":         {WorkerGithubCICDEnabled: true},
-		"github_commits":      {WorkerGithubCommitsEnabled: true},
-		"github_deployments":  {WorkerGithubDeploymentsEnabled: true},
-		"github_security":     {WorkerGithubSecurityEnabled: true},
-		"github_files":        {WorkerGithubFilesEnabled: true},
-		"github_commit_stats": {WorkerGithubCommitStatsEnabled: true},
-		"jira_incidents":      {WorkerJiraIncidentsEnabled: true},
-		"github_blame":        {WorkerGithubBlameEnabled: true},
-		"github_tests":        {WorkerGithubTestsEnabled: true},
-		"github_work_items":   {WorkerGithubWorkItemsEnabled: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if !providerSyncWorkerEnabled(cfg) {
-				t.Fatal("route-ready switch leaves the provider worker family dormant")
-			}
-		})
-	}
-}
-
 func TestBuildProviderSyncHandlerConstructsGitLabRepositoryCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GitlabRepoMetadata: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1284,7 +766,6 @@ func TestBuildProviderSyncHandlerConstructsGitLabRepositoryCapability(t *testing
 func TestBuildProviderSyncHandlerConstructsGitLabCommitsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GitlabCommits: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1312,7 +793,6 @@ func TestBuildProviderSyncHandlerConstructsGitLabCommitsCapability(t *testing.T)
 func TestBuildProviderSyncHandlerConstructsGitLabCommitStatsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,
-		providersync.CompleteRouteSwitches{GitlabCommitStats: true},
 		nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
@@ -1339,15 +819,14 @@ func TestBuildProviderSyncHandlerConstructsGitLabCommitStatsCapability(t *testin
 
 func TestBuildProviderSyncHandlerConstructsGitLabCICDCapability(t *testing.T) {
 	for _, test := range []struct {
-		dataset  string
-		switches providersync.CompleteRouteSwitches
+		dataset string
 	}{
-		{dataset: "cicd", switches: providersync.CompleteRouteSwitches{GitlabCICD: true}},
-		{dataset: "tests", switches: providersync.CompleteRouteSwitches{GitlabTests: true}},
+		{dataset: "cicd"},
+		{dataset: "tests"},
 	} {
 		t.Run(test.dataset, func(t *testing.T) {
 			handler, _ := buildProviderSyncHandler(
-				nil, test.switches, nil, nil, nil, nil, nil, nil, slog.Default(),
+				nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 			)
 			if handler == nil || handler.BuildExecutor == nil {
 				t.Fatal("provider sync handler is not constructed")
@@ -1389,8 +868,7 @@ func TestBuildProviderSyncHandlerConstructsGitLabCICDCapability(t *testing.T) {
 
 func TestBuildProviderSyncHandlerConstructsGitLabIncidentsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
-		nil, providersync.CompleteRouteSwitches{GitlabIncidents: true},
-		nil, nil, nil, nil, nil, nil, slog.Default(),
+		nil, nil, nil, nil, nil, nil, nil, slog.Default(),
 	)
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 		Claim: providersync.Claim{Unit: providersync.Unit{

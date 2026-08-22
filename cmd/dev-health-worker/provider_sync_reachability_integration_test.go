@@ -16,7 +16,16 @@ import (
 	"github.com/riverqueue/river"
 )
 
-func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwitch(t *testing.T) {
+// TestBuildProviderSyncWorkerConstructsRealDependenciesForTheSelectedQueue
+// proves buildProviderSyncWorker wires a real, live-dependency family
+// (ClickHouse, Valkey, Postgres) once the process selects the provider-unit
+// queue. CHAOS-4054 removed every per-route WORKER_*_ENABLED switch: capability
+// is always on, so there is no longer a route-by-route matrix to iterate --
+// the "default" case exercises every RouteReady pair that needs no extra
+// config, and "github_work_items" exercises the one family that still reads
+// explicit config (the shared status-mapping/investment-config artifact
+// paths).
+func TestBuildProviderSyncWorkerConstructsRealDependenciesForTheSelectedQueue(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
@@ -38,28 +47,9 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, enable := range map[string]func(*config.Config){
-		"launchdarkly_feature_flags": func(cfg *config.Config) { cfg.WorkerLaunchDarklyFeatureFlagsEnabled = true },
-		"github_repo_metadata":       func(cfg *config.Config) { cfg.WorkerGithubRepoMetadataEnabled = true },
-		"gitlab_repo_metadata":       func(cfg *config.Config) { cfg.WorkerGitlabRepoMetadataEnabled = true },
-		"gitlab_commits":             func(cfg *config.Config) { cfg.WorkerGitlabCommitsEnabled = true },
-		"gitlab_commit_stats":        func(cfg *config.Config) { cfg.WorkerGitlabCommitStatsEnabled = true },
-		"gitlab_cicd":                func(cfg *config.Config) { cfg.WorkerGitlabCICDEnabled = true },
-		"gitlab_tests":               func(cfg *config.Config) { cfg.WorkerGitlabTestsEnabled = true },
-		"gitlab_incidents":           func(cfg *config.Config) { cfg.WorkerGitlabIncidentsEnabled = true },
-		"github_prs":                 func(cfg *config.Config) { cfg.WorkerGithubPRsEnabled = true },
-		"github_pr_reviews":          func(cfg *config.Config) { cfg.WorkerGithubPRReviewsEnabled = true },
-		"github_pr_comments":         func(cfg *config.Config) { cfg.WorkerGithubPRCommentsEnabled = true },
-		"github_cicd":                func(cfg *config.Config) { cfg.WorkerGithubCICDEnabled = true },
-		"github_commits":             func(cfg *config.Config) { cfg.WorkerGithubCommitsEnabled = true },
-		"github_deployments":         func(cfg *config.Config) { cfg.WorkerGithubDeploymentsEnabled = true },
-		"github_security":            func(cfg *config.Config) { cfg.WorkerGithubSecurityEnabled = true },
-		"github_files":               func(cfg *config.Config) { cfg.WorkerGithubFilesEnabled = true },
-		"github_commit_stats":        func(cfg *config.Config) { cfg.WorkerGithubCommitStatsEnabled = true },
-		"github_blame":               func(cfg *config.Config) { cfg.WorkerGithubBlameEnabled = true },
-		"github_tests":               func(cfg *config.Config) { cfg.WorkerGithubTestsEnabled = true },
+	for name, configure := range map[string]func(*config.Config){
+		"default": func(*config.Config) {},
 		"github_work_items": func(cfg *config.Config) {
-			cfg.WorkerGithubWorkItemsEnabled = true
 			cfg.WorkerGithubWorkItemsStatusMappingPath = filepath.Join(
 				"src", "dev_health_ops", "config", "status_mapping.yaml",
 			)
@@ -77,7 +67,7 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 				ClickHouseURI:          secrets.NewValue(clickhouse.URI),
 				ValkeyURI:              secrets.NewValue(valkey.URI),
 			}
-			enable(&cfg)
+			configure(&cfg)
 			family, err := buildProviderSyncWorker(
 				ctx, cfg, reportBuilderDatabase(t), registry, collector, slog.Default(), river.NewWorkers(),
 			)

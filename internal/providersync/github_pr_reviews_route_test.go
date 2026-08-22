@@ -225,14 +225,27 @@ func TestEnrichPullRequestsWithReviewsLeavesNoReviewRowsUntouched(t *testing.T) 
 	}
 }
 
+// TestGitHubPullRequestSocialRouteRegistryMatchesComposedEffects pins the
+// D16/CHAOS-4054 family shape: `prs`, `pr-reviews`, and `pr-comments` share
+// one complete route and destination set, but only `prs` -- the canonical
+// writer -- is Plannable. The other two stay RouteReady for audit/watermark
+// visibility only.
 func TestGitHubPullRequestSocialRouteRegistryMatchesComposedEffects(t *testing.T) {
 	t.Parallel()
-	for _, dataset := range []string{"prs", "pr-reviews", "pr-comments"} {
-		descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", dataset)
-		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+	for _, test := range []struct {
+		dataset   string
+		plannable bool
+	}{
+		{"prs", true},
+		{"pr-reviews", false},
+		{"pr-comments", false},
+	} {
+		descriptor, ok := Descriptor("github", test.dataset)
+		if !ok || !descriptor.RouteReady || descriptor.Plannable != test.plannable ||
 			descriptor.Executor != ExecutorNativeGo ||
 			!slices.Equal(descriptor.Destinations, githubPRSocialRouteDestinations()) {
-			t.Fatalf("dataset=%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+			t.Fatalf("dataset=%s descriptor=%+v ok=%v want plannable=%v",
+				test.dataset, descriptor, ok, test.plannable)
 		}
 	}
 }

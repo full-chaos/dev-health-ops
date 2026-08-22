@@ -1383,13 +1383,20 @@ func TestADeadlinePassStillCarriesItsMeasuredGauges(t *testing.T) {
 			RunawayMeasured:         true,
 			UnreclaimableMeasured:   true,
 		}
-		deadline, ok := ctx.Deadline()
-		if !ok {
+		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("the step context carried no deadline, so this proves nothing")
 		}
-		for !time.Now().After(deadline) {
-			time.Sleep(time.Millisecond)
-		}
+		// Wait on the CONTEXT, never on the wall clock. The first cut of this
+		// slept until time.Now() passed ctx.Deadline(), which is a proxy for
+		// the state it actually needed: cancellation is delivered by a timer,
+		// so the wall clock can pass the deadline a hair before ctx.Err()
+		// becomes non-nil. The loop then saw a nil error and the test failed
+		// on CI roughly one run in three while passing locally every time.
+		//
+		// ctx.Done() closes exactly when cancellation is observable, so
+		// ctx.Err() is guaranteed non-nil after it and there is no race left
+		// to lose.
+		<-ctx.Done()
 		return observation, nil
 	}), clock, 10*time.Millisecond)
 	openReadinessGate(t, registry)

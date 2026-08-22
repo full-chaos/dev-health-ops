@@ -35,8 +35,15 @@ func (runtimeConfig workItemsRuntimeConfig) configured() bool {
 func workItemsRuntimeConfigFrom(
 	cfg config.Config,
 ) (workItemsRuntimeConfig, error) {
-	if !cfg.WorkerGithubWorkItemsEnabled && !cfg.WorkerGitlabWorkItemsEnabled &&
-		!cfg.WorkerJiraWorkItemsEnabled && !cfg.WorkerLinearWorkItemsEnabled {
+	// CHAOS-4054: there is no per-route switch left to ask "is work-items on".
+	// A deployment that supplies neither artifact path is not misconfigured at
+	// startup — it simply cannot serve the work-item family, and every
+	// work-item claim it receives is refused at executor construction and
+	// reported through OnRouteFault. Supplying one path, or an unreadable one,
+	// is still a hard configuration error: that is a deployment that meant to
+	// serve the family and got it wrong.
+	if strings.TrimSpace(cfg.WorkerGithubWorkItemsStatusMappingPath) == "" &&
+		strings.TrimSpace(cfg.WorkerGithubWorkItemsInvestmentConfigPath) == "" {
 		return workItemsRuntimeConfig{}, nil
 	}
 	// LoadStatusMapping tests the raw environment value, not its trimmed form.

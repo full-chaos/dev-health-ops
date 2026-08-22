@@ -55,8 +55,7 @@ const (
 )
 
 const (
-	providerRoutesPresetEnv = "GO_PROVIDER_ROUTES"
-	devHealthEnv            = "DEV_HEALTH_ENV"
+	devHealthEnv = "DEV_HEALTH_ENV"
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
@@ -163,99 +162,14 @@ type Config struct {
 	OperationalBridgeTimeout       time.Duration
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
-	LocalAllProviderRoutes         bool
 
-	WorkerLinearWorkItemsEnabled          bool
-	WorkerJiraWorkItemsEnabled            bool
-	WorkerJiraIncidentsEnabled            bool
-	WorkerLaunchDarklyFeatureFlagsEnabled bool
-	// WorkerGithubRepoMetadataEnabled is the (github, repo-metadata) half of
-	// the two-key route gate (CHAOS-3123). The matrix marking the pair
-	// route_ready is the other half; neither alone moves traffic. Its Python
-	// counterpart is ProviderUnitRouteSwitches.github_repo_metadata, read from
-	// the same WORKER_GITHUB_REPO_METADATA_ENABLED name, because the producer
-	// and the executor must agree on the route or a dispatched unit finds no
-	// handler.
-	WorkerGithubRepoMetadataEnabled bool
-	// WorkerGitlabRepoMetadataEnabled is the independently gated native
-	// (gitlab, repo-metadata) route. It defaults false and does not activate
-	// traffic merely because the capability matrix is ready.
-	WorkerGitlabRepoMetadataEnabled bool
-	// WorkerGitlabCommitsEnabled gates the isolated (gitlab, commits) route.
-	WorkerGitlabCommitsEnabled bool
-	// WorkerGitlabCommitStatsEnabled gates the isolated aggregate commit-stat route.
-	WorkerGitlabCommitStatsEnabled bool
-	// WorkerGitlabCICDEnabled and WorkerGitlabTestsEnabled gate mutually
-	// exclusive aliases for one complete GitLab TestOps writer.
-	WorkerGitlabCICDEnabled  bool
-	WorkerGitlabTestsEnabled bool
-	// WorkerGitlabIncidentsEnabled gates the canonical operational incident route.
-	WorkerGitlabIncidentsEnabled bool
-	// The remaining GitLab flags gate independently completed native routes.
-	// PR aliases are the exception: all three delegate to one complete PR-social
-	// writer and Load rejects enabling more than one alias at a time.
-	WorkerGitlabDeploymentsEnabled  bool
-	WorkerGitlabFeatureFlagsEnabled bool
-	WorkerGitlabFilesEnabled        bool
-	WorkerGitlabBlameEnabled        bool
-	WorkerGitlabPRsEnabled          bool
-	WorkerGitlabPRReviewsEnabled    bool
-	WorkerGitlabPRCommentsEnabled   bool
-	WorkerGitlabSecurityEnabled     bool
-	// WorkerGitlabWorkItemsEnabled gates the one complete five-alias GitLab
-	// work-item family; sibling alias identities are not independent routes.
-	WorkerGitlabWorkItemsEnabled bool
-	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
-	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
-	// the pair route_ready is the other half; neither alone moves traffic.
-	// Its Python counterpart is ProviderUnitRouteSwitches.github_prs, read
-	// from the same WORKER_GITHUB_PRS_ENABLED name.
-	WorkerGithubPRsEnabled bool
-	// WorkerGithubPRReviewsEnabled and WorkerGithubPRCommentsEnabled gate the
-	// two remaining dataset aliases for the same complete PR-social unit.
-	WorkerGithubPRReviewsEnabled  bool
-	WorkerGithubPRCommentsEnabled bool
-	// WorkerGithubCICDEnabled gates the isolated (github, cicd) route.
-	WorkerGithubCICDEnabled bool
-	// WorkerGithubCommitsEnabled gates the isolated (github, commits) route.
-	WorkerGithubCommitsEnabled bool
-	// WorkerGithubDeploymentsEnabled gates the isolated (github, deployments) route.
-	WorkerGithubDeploymentsEnabled bool
-	// WorkerGithubSecurityEnabled gates the isolated (github, security) route.
-	WorkerGithubSecurityEnabled bool
-	// WorkerGithubFilesEnabled gates the isolated (github, files) route.
-	WorkerGithubFilesEnabled bool
-	// WorkerGithubCommitStatsEnabled gates the isolated (github, commit-stats) route.
-	WorkerGithubCommitStatsEnabled bool
-	// WorkerGithubBlameEnabled gates the resumable (github, blame) route.
-	WorkerGithubBlameEnabled bool
-	// WorkerGithubTestsEnabled gates the complete six-effect (github, tests) route.
-	WorkerGithubTestsEnabled bool
-	// WorkerGithubWorkItemsEnabled gates the one complete five-alias GitHub
-	// work-item family. The Python planner emits only canonical work-items
-	// claims; sibling alias identities survive in processor flags, watermark,
-	// and audit metadata rather than becoming partial writers.
-	WorkerGithubWorkItemsEnabled bool
-	// WorkerGithubWorkItemsStatusMappingPath and
 	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
 	// for the two Python-parity config engines. Production has no source-relative
-	// default; the local-only all-routes preset selects artifacts packaged at
-	// fixed image paths. When the route is enabled, cmd/dev-health-worker validates
-	// both paths and rejects ambient STATUS_MAPPING_PATH overrides.
+	// default; a local deployment falls back to artifacts packaged at fixed
+	// image paths. cmd/dev-health-worker validates both paths and rejects
+	// ambient STATUS_MAPPING_PATH overrides.
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string
-
-	// PagerDuty route switches are default-off and independent. The incidents
-	// switch owns the complete incidents family, including alert, log-entry,
-	// and note alias datasets; those aliases are not separately activatable.
-	WorkerPagerDutyServicesEnabled           bool
-	WorkerPagerDutyBusinessServicesEnabled   bool
-	WorkerPagerDutyEscalationPoliciesEnabled bool
-	WorkerPagerDutySchedulesEnabled          bool
-	WorkerPagerDutyOnCallsEnabled            bool
-	WorkerPagerDutyUsersEnabled              bool
-	WorkerPagerDutyTeamsEnabled              bool
-	WorkerPagerDutyIncidentsEnabled          bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -325,55 +239,15 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	allProviderRoutes, err := localAllProviderRoutes(lookup)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.LocalAllProviderRoutes = allProviderRoutes
-	if err := applyRoutes(&cfg, lookup, allProviderRoutes); err != nil {
-		return Config{}, err
-	}
-	if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {
-		return Config{}, fmt.Errorf("github/cicd and github/tests are mutually exclusive: both delegate to one complete TestOps writer (WORKER_GITHUB_CICD_ENABLED, WORKER_GITHUB_TESTS_ENABLED)")
-	}
-	githubPRSocialAliases := 0
-	for _, enabled := range []bool{
-		cfg.WorkerGithubPRsEnabled,
-		cfg.WorkerGithubPRReviewsEnabled,
-		cfg.WorkerGithubPRCommentsEnabled,
-	} {
-		if enabled {
-			githubPRSocialAliases++
-		}
-	}
-	if githubPRSocialAliases > 1 {
-		return Config{}, fmt.Errorf("github/prs, github/pr-reviews, and github/pr-comments are mutually exclusive: all delegate to one complete PR-social writer")
-	}
-	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
-		return Config{}, fmt.Errorf("gitlab/cicd and gitlab/tests are mutually exclusive: both delegate to one complete TestOps writer (WORKER_GITLAB_CICD_ENABLED, WORKER_GITLAB_TESTS_ENABLED)")
-	}
-	gitlabPRSocialAliases := 0
-	for _, enabled := range []bool{
-		cfg.WorkerGitlabPRsEnabled,
-		cfg.WorkerGitlabPRReviewsEnabled,
-		cfg.WorkerGitlabPRCommentsEnabled,
-	} {
-		if enabled {
-			gitlabPRSocialAliases++
-		}
-	}
-	if gitlabPRSocialAliases > 1 {
-		return Config{}, fmt.Errorf("gitlab/prs, gitlab/pr-reviews, and gitlab/pr-comments are mutually exclusive: all delegate to one complete PR-social writer")
-	}
 	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
-		conditionalDefault(allProviderRoutes, localStatusMappingPath),
+		conditionalDefault(environmentIsLocal(lookup), localStatusMappingPath),
 	)
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-		conditionalDefault(allProviderRoutes, localInvestmentAreasPath),
+		conditionalDefault(environmentIsLocal(lookup), localInvestmentAreasPath),
 	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -609,61 +483,12 @@ func Load(spec Spec) (Config, error) {
 	return cfg, nil
 }
 
-func localAllProviderRoutes(lookup secrets.LookupEnv) (bool, error) {
-	preset, _ := lookup(providerRoutesPresetEnv)
-	preset = strings.ToLower(strings.TrimSpace(preset))
-	if preset == "" {
-		return false, nil
-	}
-	if preset != "all" {
-		return false, fmt.Errorf("%s must be empty or all", providerRoutesPresetEnv)
-	}
-	if !environmentIsLocal(lookup) {
-		return false, fmt.Errorf("%s=all requires %s=local", providerRoutesPresetEnv, devHealthEnv)
-	}
-	return true, nil
-}
-
-func providerRoutePresetDisabledAlias(name string) bool {
-	switch name {
-	case "WORKER_GITHUB_PR_REVIEWS_ENABLED",
-		"WORKER_GITHUB_PR_COMMENTS_ENABLED",
-		"WORKER_GITHUB_TESTS_ENABLED",
-		"WORKER_GITLAB_PR_REVIEWS_ENABLED",
-		"WORKER_GITLAB_PR_COMMENTS_ENABLED",
-		"WORKER_GITLAB_TESTS_ENABLED":
-		return true
-	default:
-		return false
-	}
-}
-
-func providerRoutePresetDefault(lookup secrets.LookupEnv, name string) (bool, error) {
-	if providerRoutePresetDisabledAlias(name) {
-		return false, nil
-	}
-	alternatives := map[string][]string{
-		"WORKER_GITHUB_PRS_ENABLED": {
-			"WORKER_GITHUB_PR_REVIEWS_ENABLED",
-			"WORKER_GITHUB_PR_COMMENTS_ENABLED",
-		},
-		"WORKER_GITHUB_CICD_ENABLED": {"WORKER_GITHUB_TESTS_ENABLED"},
-		"WORKER_GITLAB_PRS_ENABLED": {
-			"WORKER_GITLAB_PR_REVIEWS_ENABLED",
-			"WORKER_GITLAB_PR_COMMENTS_ENABLED",
-		},
-		"WORKER_GITLAB_CICD_ENABLED": {"WORKER_GITLAB_TESTS_ENABLED"},
-	}
-	for _, alternative := range alternatives[name] {
-		enabled, err := boolEnv(lookup, alternative, false)
-		if err != nil {
-			return false, err
-		}
-		if enabled {
-			return false, nil
-		}
-	}
-	return true, nil
+// environmentIsLocal reports whether this process is configured as a local
+// deployment. It selects packaged local artifact paths as defaults; it never
+// decides what a route may execute — capability is always on (CHAOS-4054).
+func environmentIsLocal(lookup secrets.LookupEnv) bool {
+	environment, _ := lookup(devHealthEnv)
+	return strings.ToLower(strings.TrimSpace(environment)) == "local"
 }
 
 func conditionalDefault(enabled bool, value string) string {
@@ -701,45 +526,6 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
 		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
 		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),
-		slog.Bool("worker_linear_work_items_enabled", c.WorkerLinearWorkItemsEnabled),
-		slog.Bool("worker_jira_work_items_enabled", c.WorkerJiraWorkItemsEnabled),
-		slog.Bool("worker_jira_incidents_enabled", c.WorkerJiraIncidentsEnabled),
-		slog.Bool(
-			"worker_launchdarkly_feature_flags_enabled",
-			c.WorkerLaunchDarklyFeatureFlagsEnabled,
-		),
-		slog.Bool("worker_github_repo_metadata_enabled", c.WorkerGithubRepoMetadataEnabled),
-		slog.Bool("worker_gitlab_repo_metadata_enabled", c.WorkerGitlabRepoMetadataEnabled),
-		slog.Bool("worker_gitlab_commits_enabled", c.WorkerGitlabCommitsEnabled),
-		slog.Bool("worker_gitlab_commit_stats_enabled", c.WorkerGitlabCommitStatsEnabled),
-		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
-		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
-		slog.Bool("worker_gitlab_incidents_enabled", c.WorkerGitlabIncidentsEnabled),
-		slog.Bool("worker_gitlab_deployments_enabled", c.WorkerGitlabDeploymentsEnabled),
-		slog.Bool("worker_gitlab_feature_flags_enabled", c.WorkerGitlabFeatureFlagsEnabled),
-		slog.Bool("worker_gitlab_files_enabled", c.WorkerGitlabFilesEnabled),
-		slog.Bool("worker_gitlab_blame_enabled", c.WorkerGitlabBlameEnabled),
-		slog.Bool("worker_gitlab_prs_enabled", c.WorkerGitlabPRsEnabled),
-		slog.Bool("worker_gitlab_pr_reviews_enabled", c.WorkerGitlabPRReviewsEnabled),
-		slog.Bool("worker_gitlab_pr_comments_enabled", c.WorkerGitlabPRCommentsEnabled),
-		slog.Bool("worker_gitlab_security_enabled", c.WorkerGitlabSecurityEnabled),
-		slog.Bool("worker_gitlab_work_items_enabled", c.WorkerGitlabWorkItemsEnabled),
-		slog.Bool("worker_pagerduty_services_enabled", c.WorkerPagerDutyServicesEnabled),
-		slog.Bool("worker_pagerduty_business_services_enabled", c.WorkerPagerDutyBusinessServicesEnabled),
-		slog.Bool("worker_pagerduty_escalation_policies_enabled", c.WorkerPagerDutyEscalationPoliciesEnabled),
-		slog.Bool("worker_pagerduty_schedules_enabled", c.WorkerPagerDutySchedulesEnabled),
-		slog.Bool("worker_pagerduty_on_calls_enabled", c.WorkerPagerDutyOnCallsEnabled),
-		slog.Bool("worker_pagerduty_users_enabled", c.WorkerPagerDutyUsersEnabled),
-		slog.Bool("worker_pagerduty_teams_enabled", c.WorkerPagerDutyTeamsEnabled),
-		slog.Bool("worker_pagerduty_incidents_enabled", c.WorkerPagerDutyIncidentsEnabled),
-		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
-		slog.Bool("worker_github_pr_reviews_enabled", c.WorkerGithubPRReviewsEnabled),
-		slog.Bool("worker_github_pr_comments_enabled", c.WorkerGithubPRCommentsEnabled),
-		slog.Bool("worker_github_commits_enabled", c.WorkerGithubCommitsEnabled),
-		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
-		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),
-		slog.Bool("worker_github_tests_enabled", c.WorkerGithubTestsEnabled),
-		slog.Bool("worker_github_work_items_enabled", c.WorkerGithubWorkItemsEnabled),
 		slog.Bool(
 			"worker_github_work_items_status_mapping_path_configured",
 			c.WorkerGithubWorkItemsStatusMappingPath != "",

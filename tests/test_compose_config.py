@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -9,7 +8,6 @@ import pytest
 import yaml
 
 from dev_health_ops.workers.config import task_queues
-from dev_health_ops.workers.provider_unit_route import _switch_field_name
 
 
 def _parse_queues(command_str: str) -> set[str]:
@@ -192,37 +190,15 @@ _GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
-_MATRIX_CONTRACT = _REPO_ROOT / "contracts" / "provider-matrix" / "v1" / "matrix.json"
 
-
-def _derive_provider_route_switch_names() -> frozenset[str]:
-    """Derive the route-switch census from the provider matrix (CHAOS-3875).
-
-    ``contracts/provider-matrix/v1/matrix.json`` is the single source of truth
-    for which ``(provider, dataset)`` pairs exist. The switch name for a pair is
-    ``_switch_field_name``'s convention uppercased, which is also what
-    ``ProviderUnitRouteSwitches`` reads at runtime -- so family aliases collapse
-    onto their canonical dataset's switch here exactly as they do in the
-    producer.
-
-    This used to be a hand-maintained frozenset, which made the census a fifth
-    copy of a list already written out in Go typed config, ``compose.yml``,
-    ``.env.example``, and the Go-workers overlay. Deriving it binds all four to
-    the matrix: adding a pair there fails the tests below by name until every
-    copy carries it, instead of silently routing a unit to a process with no
-    matching handler.
-    """
-
-    matrix = json.loads(_MATRIX_CONTRACT.read_text(encoding="utf-8"))
-    names = {
-        f"WORKER_{_switch_field_name(pair['provider'], pair['dataset']).upper()}_ENABLED"
-        for pair in matrix["pairs"]
-    }
-    assert names, "the provider matrix declared no pairs"
-    return frozenset(names)
-
-
-_PROVIDER_ROUTE_SWITCH_NAMES = _derive_provider_route_switch_names()
+#: CHAOS-4054 deleted the whole ``WORKER_*_ENABLED`` route-switch plane: no
+#: env var gates whether a shipped route may execute any more (readiness and
+#: plannability live entirely in the checked-in provider matrix). The
+#: per-pair census this module used to derive from the matrix therefore has
+#: no successor value -- see ``test_compose_declares_no_provider_route_switches``
+#: and ``test_provider_route_env_example_declares_no_route_switches`` below,
+#: which assert the literal opposite: zero such keys anywhere in the stack.
+_WORKER_ENABLED_SWITCH_PATTERN = re.compile(r"\bWORKER_[A-Z0-9_]+_ENABLED\b")
 
 _PROVIDER_ROUTE_CONFIG_NAMES = (
     "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
@@ -1041,23 +1017,22 @@ def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None
     assert "sync" in queues
 
 
-def test_platform_compose_wires_local_all_provider_routes_end_to_end() -> None:
-    """The optional monorepo Compose surface must wire one preset to both runtimes."""
+def test_platform_compose_operator_credential_is_wired() -> None:
+    """The optional monorepo Compose surface must expose the route operator.
+
+    CHAOS-4054 deleted the ``DEV_HEALTH_ENV``/``GO_PROVIDER_ROUTES``
+    local-all preset outright (the ``.env.go-all`` convenience file and the
+    per-pair ``WORKER_*_ENABLED`` switch census it used to wire into every
+    service are both gone -- a shipped route is always executable, so there
+    is nothing left for a preset to turn on). What survives from this test is
+    the operator-credential wiring, which has nothing to do with switches.
+    """
 
     compose_path = _platform_compose_path()
     if compose_path is None:
         pytest.skip("platform compose.yml is only present in the monorepo checkout")
 
     services = _load_yaml(compose_path).get("services") or {}
-    for service_name in ("api", "worker", "beat", "go-worker"):
-        environment = services[service_name].get("environment") or {}
-        assert environment["DEV_HEALTH_ENV"] == "${DEV_HEALTH_ENV:-}"
-        assert environment["GO_PROVIDER_ROUTES"] == "${GO_PROVIDER_ROUTES:-}"
-        assert _PROVIDER_ROUTE_SWITCH_NAMES <= environment.keys(), (
-            f"{service_name} is missing provider route switches: "
-            f"{sorted(_PROVIDER_ROUTE_SWITCH_NAMES - environment.keys())}"
-        )
-
     operator = services.get("go-workerctl")
     assert operator is not None, "platform Compose must expose the route operator"
     operator_environment = operator.get("environment") or {}
@@ -1067,20 +1042,6 @@ def test_platform_compose_wires_local_all_provider_routes_end_to_end() -> None:
     assert operator_environment["WORKER_OPERATOR_TOKEN"] == (
         "${WORKER_OPERATOR_TOKEN:-}"
     )
-
-    preset_path = compose_path.with_name(".env.go-all")
-    assert preset_path.is_file()
-    preset = {
-        key: value
-        for line in preset_path.read_text(encoding="utf-8").splitlines()
-        if line and not line.startswith("#")
-        for key, value in (line.split("=", maxsplit=1),)
-    }
-    assert preset == {
-        "COMPOSE_PROFILES": "go",
-        "DEV_HEALTH_ENV": "local",
-        "GO_PROVIDER_ROUTES": "all",
-    }
 
 
 def test_platform_compose_applies_sync_routes_before_readiness() -> None:
@@ -1372,73 +1333,64 @@ def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
     )
 
 
-def test_provider_route_switch_inventory_matches_go_config() -> None:
-    """The packaging census must move with the typed Go configuration surface."""
-    # Scan the whole platform config package rather than one file in it.
-    # CHAOS-4020 moved the route switches out of config.go into their own
-    # registry, and a census pinned to a single filename would have gone quietly
-    # empty instead of failing -- the same shape of silent drift this census
-    # exists to catch.
+def test_go_config_package_declares_no_route_switches() -> None:
+    """CHAOS-4054 step 3: the typed Go config surface must name zero
+    ``WORKER_*_ENABLED`` route switches. Capability is always on in the
+    binary now; there is nothing left for config.go (or any file in the
+    package) to gate."""
     configured = frozenset(
         name
         for source in sorted(_GO_CONFIG_PACKAGE.glob("*.go"))
         if not source.name.endswith("_test.go")
-        for name in re.findall(r'"(WORKER_[A-Z0-9_]+_ENABLED)"', source.read_text())
+        for name in _WORKER_ENABLED_SWITCH_PATTERN.findall(source.read_text())
     )
-    assert configured, "the route-switch census scanned no Go source at all"
-    assert configured == _PROVIDER_ROUTE_SWITCH_NAMES
+    assert not configured, (
+        f"Go typed config must declare no route switches, found: {sorted(configured)}"
+    )
 
 
-def test_route_switches_default_off_for_producer_gate() -> None:
-    """Every typed provider switch passes through both runtimes, default-off.
+def test_compose_declares_no_provider_route_switches() -> None:
+    """Ticket step-5 acceptance: the rendered compose config contains ZERO
+    ``WORKER_*_ENABLED`` keys anywhere -- not on the shared Celery env
+    anchor, not on worker/beat, not on the additive Go profile. The route
+    switch plane is deleted, not defaulted off.
 
-    The shared ``&env`` anchor feeds the Python producer processes and the Go
-    profile feeds the executor. A name missing on either side can route a unit
-    to a process with no matching handler; a true default would activate a
-    landed provider route merely by deploying this packaging change.
+    The GitHub work-item route's two file-path configs are NOT switches
+    (``WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH`` /
+    ``..._INVESTMENT_CONFIG_PATH``) and must still be present, unset by
+    default.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
 
     shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
-    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
-        assert shared_env[switch] == f"${{{switch}:-false}}", (
-            f"{switch} must default to false on the shared Celery env anchor"
-        )
-
-    # worker/worker-heavy/beat inherit the anchor via `<<: *env`/`<<: *worker-base`;
-    # confirm the merge actually carried the keys rather than being shadowed.
-    for name in ("worker", "worker-heavy", "beat"):
+    for name in ("api", "worker", "worker-heavy", "beat"):
         env = services[name]["environment"]
-        for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
-            assert env[switch] == f"${{{switch}:-false}}", (
-                f"{switch} must reach {name} through the shared env anchor"
-            )
+        matched = [key for key in env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)]
+        assert not matched, f"{name} still declares route switches: {sorted(matched)}"
 
-    # The GitHub work-item route rejects guessed filesystem defaults. These are
-    # deliberately explicit deployment inputs and stay empty until a reviewed
-    # activation supplies mounted/runtime paths.
     for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert shared_env[name] == f"${{{name}:-}}"
 
-    # The additive Go profile carries the exact same inactive switches and
-    # worker-only paths. This is configuration, not profile activation.
     go_worker_env = _load_yaml(_GO_WORKER_OVERLAY)["services"]["go-worker"][
         "environment"
     ]
-    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
-        assert go_worker_env[switch] == f"${{{switch}:-false}}"
+    matched = [
+        key for key in go_worker_env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)
+    ]
+    assert not matched, f"go-worker still declares route switches: {sorted(matched)}"
     for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert go_worker_env[name] == f"${{{name}:-}}"
 
 
-def test_provider_route_env_example_is_unset_and_default_off() -> None:
-    """The example inventories opt-ins without enabling a route or profile."""
+def test_provider_route_env_example_declares_no_route_switches() -> None:
+    """The example must not inventory a deleted switch plane, but must still
+    inventory the two file-path configs that remain real deployment inputs."""
     lines = _REPO_ROOT.joinpath(".env.example").read_text().splitlines()
     declared = set(lines)
 
-    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
-        assert f'# {switch}="false"' in declared
-        assert not any(line.startswith(f"{switch}=") for line in lines)
+    matched = [line for line in lines if _WORKER_ENABLED_SWITCH_PATTERN.search(line)]
+    assert not matched, f".env.example still mentions route switches: {matched}"
+
     for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert f'# {name}=""' in declared
         assert not any(line.startswith(f"{name}=") for line in lines)

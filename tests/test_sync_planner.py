@@ -509,17 +509,28 @@ def test_disabled_dataset_produces_zero_units_without_hydrating_credentials(
 
 
 @pytest.mark.parametrize(
-    ("existing_enabled", "expected_units"),
-    [(None, 1), (False, 0)],
+    "existing_enabled",
+    [None, False],
     ids=["missing-row-is-enabled", "disabled-row-stays-disabled"],
 )
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
-def test_requested_tests_dataset_reconciles_missing_row_without_overriding_disabled(
+def test_requested_tests_dataset_reconciles_intent_but_never_mints_a_unit(
     db_session,
     provider: str,
     existing_enabled: bool | None,
-    expected_units: int,
 ):
+    """``(github|gitlab, tests)`` is route-ready but not plannable: it is the
+    CI alias identity that folds into the canonical ``cicd`` writer
+    (CHAOS-4054). Requesting it directly still reconciles the persisted
+    ``is_enabled`` intent (a missing row becomes enabled; an explicit
+    disabled row stays disabled) -- intent and routability are independent
+    facts -- but the plan-time capability gate refuses to mint a unit for a
+    non-plannable identity regardless of that intent, exactly like any other
+    alias in the family. This is the CHAOS-4054 successor to the old
+    switch-driven expectation that a "missing row becomes enabled" case also
+    became a routed unit; readiness and plannability now come from the
+    checked-in matrix, not from intent alone.
+    """
     # Given: an existing code-host integration with a source and either no tests
     # row or an explicitly disabled tests row.
     integration = _create_integration(db_session, provider)
@@ -532,7 +543,7 @@ def test_requested_tests_dataset_reconciles_missing_row_without_overriding_disab
             is_enabled=existing_enabled,
         )
 
-    # When: the planner is asked to run the newly supported tests dataset.
+    # When: the planner is asked to run the "tests" alias dataset.
     plan = plan_sync_run(
         db_session,
         SyncPlanRequest(
@@ -544,8 +555,8 @@ def test_requested_tests_dataset_reconciles_missing_row_without_overriding_disab
         ),
     )
 
-    # Then: a missing row becomes enabled and executable, while an explicit
-    # disabled row remains disabled and produces no unit.
+    # Then: intent reconciles independently of routability, but no unit is
+    # ever minted for this non-plannable alias.
     dataset = (
         db_session.query(IntegrationDataset)
         .filter_by(integration_id=integration.id, dataset_key="tests")
@@ -553,10 +564,8 @@ def test_requested_tests_dataset_reconciles_missing_row_without_overriding_disab
     )
     assert dataset is not None
     assert dataset.is_enabled is (existing_enabled is not False)
-    assert plan.total_units == expected_units
-    assert {
-        unit.dataset_key for unit in _planned_units(db_session, plan.sync_run_id)
-    } == ({"tests"} if expected_units else set())
+    assert plan.total_units == 0
+    assert _planned_units(db_session, plan.sync_run_id) == []
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
@@ -1853,12 +1862,11 @@ def test_enabled_linear_go_family_claims_all_aliases_for_selected_backfill(
     """A selected backfill remains one bounded crawl but claims the full Go family.
 
     The native Linear handler owns one indivisible sixteen-destination write.
-    Once that route is enabled, the planner must encode all five family flags
-    even when the request selected only ``work-items``; otherwise dispatch
-    rejects the persisted unit before either runtime can execute it.
+    Capability is always on in the binary now (CHAOS-4054), so the planner
+    must encode all five family flags even when the request selected only
+    ``work-items``, unconditionally; otherwise dispatch rejects the persisted
+    unit before either runtime can execute it.
     """
-    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
-    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
 
     integration = _create_integration(db_session, provider="linear")
     _create_source(db_session, integration, external_id="linear", provider="linear")

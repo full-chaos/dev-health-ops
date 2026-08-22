@@ -1,33 +1,40 @@
-"""Planner/dispatcher routable-set parity (CHAOS-3941).
+"""Planner/dispatcher routable-set parity (CHAOS-3941, updated for CHAOS-4054).
 
 The planner decides which units to CREATE from ``IntegrationDataset.is_enabled``
-(per-org Postgres rows). The dispatcher decides where to SEND them from
-``ProviderUnitRouteSwitches`` (process ``WORKER_*_ENABLED`` env vars, default
-False). Nothing asserted the two agreed, so a dataset the customer enabled whose
-River switch was off was planned every cycle and published to a Celery broker
-with zero consumers: wedged in ``dispatching``, holding the whole DispatchGuard
-concurrency budget, never aged out because each pass re-stamped ``updated_at``.
+(per-org Postgres rows) AND the checked-in capability matrix
+(``contracts/provider-matrix/v1/matrix.json``): a unit is only ever minted for
+a pair the matrix marks BOTH ``route_ready`` and ``plannable``. The dispatcher
+decides where to SEND an already-planned unit, from the durable
+``sync.provider_unit`` route (``river_owns_units``) and, only when that route
+is not River, a live Celery consumer probe.
 
+CHAOS-4054 deleted the ``WORKER_*_ENABLED`` route-switch environment plane
+entirely. Capability is always on in the binary: there is no "switch on" /
+"switch off" runtime state left to sweep. What replaces it is a pure
+capability-matrix fact -- ``routes_to_river(provider, dataset)`` -- consulted
+unconditionally by the planner, regardless of the durable transport route.
 These tests assert the EFFECT, not the call:
 
   * ``test_planner_and_dispatcher_agree_on_routable_set`` sweeps every
-    ``route_ready`` pair in the real ``contracts/provider-matrix/v1/matrix.json``
-    with its real switch field, in both switch states, and asserts that with
-    Celery consumers absent the planner creates exactly the units the dispatcher
-    can hand to a live runtime -- zero Celery publishes, and no unit left
-    non-terminal that no runtime will execute.
+    ``route_ready`` pair in the real matrix, in both River-outbox states, and
+    asserts that with Celery consumers absent the planner creates exactly the
+    units the dispatcher can hand to a live runtime -- zero Celery publishes,
+    and no unit left non-terminal that no runtime will execute.
   * ``test_dispatch_refuses_to_publish_into_a_consumerless_broker`` asserts the
-    dispatch-time refusal on a unit that was planned BEFORE the switch flip.
-  * ``test_dispatch_still_uses_celery_when_consumers_are_present`` pins the
-    CUT-19 / mixed-run rollback path: a live Celery fallback profile still gets
-    its publish.
+    dispatch-time refusal on a unit that was planned before its pair lost
+    plannability (the CHAOS-4054 analog of "planned before a switch flip").
+  * A capability-matrix alias identity (never plannable) is never planned,
+    regardless of celery presence or durable transport -- the direct successor
+    to the old "disabled switch is never planned" family of tests.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -57,23 +64,43 @@ from dev_health_ops.sync.canonical_incident_gate import (
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.workers import celery_consumers, provider_unit_route
 from dev_health_ops.workers.celery_consumers import CeleryConsumerPresence
-from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
 from ._helpers import seed_sync_dispatch_transport_routes
 
-#: Every ``route_ready`` pair in the checked-in capability matrix, paired with
-#: the switch field name the dispatcher resolves for it. Derived, never
-#: hand-listed: a new matrix row is covered the moment it lands.
-MATRIX_PAIRS: tuple[tuple[str, str, str], ...] = tuple(
-    (provider, dataset, provider_unit_route._switch_field_name(provider, dataset))
-    for provider, dataset in sorted(provider_unit_route._route_ready_pairs())
+_MATRIX_CONTRACT = (
+    Path(__file__).resolve().parents[1]
+    / "contracts"
+    / "provider-matrix"
+    / "v1"
+    / "matrix.json"
+)
+_MATRIX = json.loads(_MATRIX_CONTRACT.read_text())
+
+#: Every ``route_ready`` pair in the checked-in capability matrix. Derived,
+#: never hand-listed: a new matrix row is covered the moment it lands.
+MATRIX_PAIRS: tuple[tuple[str, str], ...] = tuple(
+    sorted(
+        (pair["provider"], pair["dataset"])
+        for pair in _MATRIX["pairs"]
+        if pair["route_ready"]
+    )
 )
 
-#: ``WORKER_<PROVIDER>_<DATASET>_ENABLED`` for a switch field.
-_SWITCH_ENV = {
-    field: f"WORKER_{field.upper()}_ENABLED"
-    for field in ProviderUnitRouteSwitches.__dataclass_fields__
-}
+#: The subset of MATRIX_PAIRS the planner will actually mint a unit for.
+PLANNABLE_PAIRS: frozenset[tuple[str, str]] = frozenset(
+    (pair["provider"], pair["dataset"])
+    for pair in _MATRIX["pairs"]
+    if pair["route_ready"] and pair["plannable"]
+)
+
+#: Non-family alias identities (route_ready, never plannable, no collapse
+#: machinery of their own), used by the "an alias is never planned" tests
+#: below. Deliberately NOT a work-item-family alias: requesting one of those
+#: in isolation (with no sibling family dataset enabled) hits the family
+#: claim-completeness gate instead -- an orthogonal, pre-existing contract
+#: unrelated to CHAOS-4054 (see ``_dataset_keys_for``'s docstring).
+_GITHUB_PR_ALIAS = ("github", "pr-comments")
+_GITLAB_PR_ALIAS = ("gitlab", "pr-comments")
 
 _SOURCE_TYPES = {
     "github": "repo",
@@ -278,9 +305,8 @@ def _plan_and_dispatch(session, monkeypatch, *, provider: str, dataset: str) -> 
     import dev_health_ops.db as db
     from dev_health_ops.workers import sync_units
 
-    integration = _seed_integration(
-        session, provider, _dataset_keys_for(provider, dataset)
-    )
+    dataset_keys = _dataset_keys_for(provider, dataset)
+    integration = _seed_integration(session, provider, dataset_keys)
     plan = plan_sync_run(
         session,
         SyncPlanRequest(
@@ -288,6 +314,13 @@ def _plan_and_dispatch(session, monkeypatch, *, provider: str, dataset: str) -> 
             integration_id=str(integration.id),
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="parity-test",
+            # CHAOS-4054: with no runtime switch left to make every other
+            # provider dataset opt out on its own, a default-enabled sweep
+            # over one pair at a time must scope the request explicitly --
+            # PagerDuty's independent identities are ALL always-plannable, so
+            # an unfiltered request would plan every pagerduty pair at once
+            # regardless of which one this iteration means to exercise.
+            dataset_keys=dataset_keys,
         ),
     )
     planned = (
@@ -361,91 +394,119 @@ def _plan_and_dispatch(session, monkeypatch, *, provider: str, dataset: str) -> 
 
 
 @pytest.mark.parametrize(
-    ("provider", "dataset", "switch_field"),
+    ("provider", "dataset"),
     MATRIX_PAIRS,
-    ids=[f"{provider}-{dataset}" for provider, dataset, _ in MATRIX_PAIRS],
+    ids=[f"{provider}-{dataset}" for provider, dataset in MATRIX_PAIRS],
 )
-@pytest.mark.parametrize("switch_on", (True, False), ids=("switch-on", "switch-off"))
+@pytest.mark.parametrize(
+    "transport",
+    ("river_canary", "celery"),
+    ids=("river-owns-units", "celery-owns-units"),
+)
 def test_planner_and_dispatcher_agree_on_routable_set(
-    monkeypatch, provider: str, dataset: str, switch_field: str, switch_on: bool
+    monkeypatch, provider: str, dataset: str, transport: str
 ) -> None:
     """No unit is created that no runtime will execute.
 
     With Celery scaled to zero, the executable set is exactly the River-routable
-    set. The planner must produce that set and nothing else, in BOTH switch
-    states -- which is the property that failed in production.
+    set. The planner must produce that set and nothing else, whether or not the
+    durable ``sync.provider_unit`` route currently hands units to River -- the
+    capability-matrix admission the planner applies is unconditional.
     """
 
-    monkeypatch.setenv(_SWITCH_ENV[switch_field], "true" if switch_on else "false")
     _pin_presence(monkeypatch, CeleryConsumerPresence.ABSENT)
 
-    with _fresh_session() as session:
+    with _fresh_session(transport=transport) as session:
         outcome = _plan_and_dispatch(
             session, monkeypatch, provider=provider, dataset=dataset
         )
 
     assert outcome["celery_publishes"] == [], (
-        f"{provider}/{dataset} switch_on={switch_on}: a unit was published to a "
+        f"{provider}/{dataset} transport={transport}: a unit was published to a "
         "Celery queue with no consumer"
     )
     assert outcome["stranded_units"] == [], (
-        f"{provider}/{dataset} switch_on={switch_on}: units left non-terminal "
+        f"{provider}/{dataset} transport={transport}: units left non-terminal "
         "that no runtime will execute"
     )
     assert outcome["planned_pairs"] == sorted(
         outcome["river_pairs"] + outcome["terminal_pairs"]
     ), (
-        f"{provider}/{dataset} switch_on={switch_on}: planner planned "
+        f"{provider}/{dataset} transport={transport}: planner planned "
         f"{outcome['planned_pairs']}, but only {outcome['river_pairs']} reached a "
         f"live runtime and only {outcome['terminal_pairs']} were recorded as "
         "denied -- the remainder went nowhere and said nothing"
     )
+    # The plan-time capability gate is unconditional: a plannable pair is
+    # always planned (as one or more windowed units for that same pair), an
+    # alias pair never is, regardless of transport. Work-item-family aliases
+    # are the one exception: requesting one enables the whole family
+    # (``_dataset_keys_for``), so the family collapse plans the CANONICAL
+    # "work-items" claim instead of the alias pair itself -- that collapse is
+    # the alias's only route to a planned unit, and it is provider-neutral.
+    if dataset in planner_module._WORK_ITEM_FAMILY_DATASETS:
+        expected_pair = (provider, planner_module._FAMILY_CANONICAL_DATASET_KEY)
+        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
+        assert set(outcome["planned_pairs"]) == {expected_pair}
+    elif (provider, dataset) in PLANNABLE_PAIRS:
+        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
+        assert set(outcome["planned_pairs"]) == {(provider, dataset)}
+    else:
+        assert outcome["planned_pairs"] == []
 
 
 def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
-    """Guard the sweep itself: most pairs must really produce planned units.
+    """Guard the sweep itself: the plannable pairs must really produce units.
 
-    CHAOS-4047 (owner decision, 2026-08-21): planning now gates on the pair's
-    own River switch -- Celery fallback is retired, so a disabled switch
-    means "never planned," not "planned and handled by some other runtime."
-    Each pair's own switch is set ON here (never a blanket preset) so the
-    sweep also proves ``_SWITCH_ENV``/``MATRIX_PAIRS``' derived field names
-    actually enable their pair. Without this, a change that made
-    ``plan_sync_run`` return zero units for every ENABLED pair would turn the
-    parity sweep green while proving nothing.
+    CHAOS-4054: capability is always on in the binary, so every pair the
+    matrix marks both route_ready and plannable plans a unit unconditionally
+    -- there is no switch left to flip. This proves that, and that the
+    non-plannable alias pairs correctly plan nothing OF THEIR OWN, so a
+    change that made ``plan_sync_run`` return zero units for every pair (or
+    units for every pair including aliases) would turn this sweep red.
+
+    A work-item-family alias is the one pair whose request still plans a
+    unit indirectly: ``_dataset_keys_for`` enables the whole family, so the
+    family collapse plans the canonical "work-items" claim. That leaves
+    exactly six pairs producing nothing at all: github/gitlab's
+    pr-reviews/pr-comments/tests aliases, which fold into ``prs``/``cicd``
+    with no collapse machinery of their own.
     """
 
-    _disable_local_all_routes_preset(monkeypatch)
     planning_pairs = 0
-    for provider, dataset, field in MATRIX_PAIRS:
-        monkeypatch.setenv(_SWITCH_ENV[field], "true")
+    for provider, dataset in MATRIX_PAIRS:
         with _fresh_session() as session:
             outcome = _plan_and_dispatch(
                 session, monkeypatch, provider=provider, dataset=dataset
             )
-        monkeypatch.delenv(_SWITCH_ENV[field], raising=False)
         if outcome["planned_pairs"]:
             planning_pairs += 1
-    assert planning_pairs >= 40, (
-        f"only {planning_pairs}/{len(MATRIX_PAIRS)} matrix pairs produced planned "
-        "units; the parity sweep would be near-vacuous"
+    expected = len(MATRIX_PAIRS) - 6
+    assert planning_pairs == expected == 53, (
+        f"{planning_pairs}/{len(MATRIX_PAIRS)} matrix pairs produced planned "
+        f"units; expected exactly {expected} (every pair except the six "
+        "standalone pr/cicd aliases with no family collapse)"
     )
 
 
 def test_dispatch_refuses_to_publish_into_a_consumerless_broker(
-    monkeypatch,
+    monkeypatch, tmp_path
 ) -> None:
-    """A unit planned before a switch flip must terminalize, not be published.
+    """A unit planned before its pair lost plannability must terminalize, not
+    be published.
 
-    This is the residual case the plan-time gate cannot cover, and it is the
-    exact production shape: the unit exists, its pair is not River-routable, and
-    the Celery queue has no consumer.
+    CHAOS-4054 successor to the switch-flip scenario: there is no runtime
+    switch left to flip mid-flight, but the checked-in matrix is still a
+    reloadable contract (production reads it once per process; this test
+    repoints the seam to simulate a pair that was plannable at plan time and
+    is not by dispatch time). This is the residual case the plan-time gate
+    cannot cover, and it is the exact production shape: the unit exists, its
+    pair is not River-routable, and the Celery queue has no consumer.
     """
 
     import dev_health_ops.db as db
     from dev_health_ops.workers import sync_units
 
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
     _pin_presence(monkeypatch, CeleryConsumerPresence.ABSENT)
 
     with _fresh_session() as session:
@@ -458,62 +519,74 @@ def test_dispatch_refuses_to_publish_into_a_consumerless_broker(
         assert outcome["river_pairs"] == [("launchdarkly", "feature-flags")]
         run_id = str(session.query(SyncRun).one().id)
 
-        # The operator now turns the switch off; the planned-and-claimed unit
-        # from the next pass has no runtime at all.
-        monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
-        stranded = session.query(SyncRunUnit).one()
-        stranded.status = SyncRunUnitStatus.PLANNED.value
-        stranded.updated_at = datetime.now(timezone.utc)
-        session.query(SyncRun).filter(SyncRun.id == uuid.UUID(run_id)).update(
-            {SyncRun.status: SyncRunStatus.PLANNED.value}
+        # The matrix now says this pair is no longer plannable; the
+        # planned-and-claimed unit from the next pass has no runtime at all.
+        fixture = tmp_path / "matrix.json"
+        fixture.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "pairs": [
+                        {
+                            "provider": "launchdarkly",
+                            "dataset": "feature-flags",
+                            "route_ready": True,
+                            "plannable": False,
+                        }
+                    ],
+                }
+            )
         )
-        session.query(WorkerJobOutbox).delete()
-        session.flush()
+        provider_unit_route._MATRIX_CONTRACT_PATH = fixture
+        provider_unit_route.clear_matrix_cache()
+        try:
+            stranded = session.query(SyncRunUnit).one()
+            stranded.status = SyncRunUnitStatus.PLANNED.value
+            stranded.updated_at = datetime.now(timezone.utc)
+            session.query(SyncRun).filter(SyncRun.id == uuid.UUID(run_id)).update(
+                {SyncRun.status: SyncRunStatus.PLANNED.value}
+            )
+            session.query(WorkerJobOutbox).delete()
+            session.flush()
 
-        published = _capture_celery_publishes(monkeypatch)
-        monkeypatch.setattr(
-            db, "get_postgres_session_sync", lambda: _session_ctx(session)
-        )
-        session.commit()
+            published = _capture_celery_publishes(monkeypatch)
+            monkeypatch.setattr(
+                db, "get_postgres_session_sync", lambda: _session_ctx(session)
+            )
+            session.commit()
 
-        sync_units.dispatch_sync_run(run_id)
+            sync_units.dispatch_sync_run(run_id)
 
-        session.expire_all()
-        unit = session.query(SyncRunUnit).one()
-        assert published == [], "unit was published to a broker with no consumer"
-        assert unit.status == SyncRunUnitStatus.FAILED.value
-        assert unit.error == "feature_disabled"
-        # CHAOS-3990 widened this payload with an operator-facing reason and
-        # the refused pair. The machine-readable category every downstream
-        # reader keys on is unchanged, which is what this test pins.
-        assert unit.result["error_category"] == "feature_disabled"
-        assert unit.result["provider"] == "launchdarkly"
-        assert unit.result["dataset_key"] == "feature-flags"
-        assert unit.last_retry_reason
+            session.expire_all()
+            unit = session.query(SyncRunUnit).one()
+            assert published == [], "unit was published to a broker with no consumer"
+            assert unit.status == SyncRunUnitStatus.FAILED.value
+            assert unit.error == "feature_disabled"
+            # CHAOS-3990 widened this payload with an operator-facing reason and
+            # the refused pair. The machine-readable category every downstream
+            # reader keys on is unchanged, which is what this test pins.
+            assert unit.result["error_category"] == "feature_disabled"
+            assert unit.result["provider"] == "launchdarkly"
+            assert unit.result["dataset_key"] == "feature-flags"
+            assert unit.last_retry_reason
+        finally:
+            provider_unit_route._MATRIX_CONTRACT_PATH = (
+                provider_unit_route._DEFAULT_MATRIX_CONTRACT_PATH
+            )
+            provider_unit_route.clear_matrix_cache()
 
 
-def test_route_disabled_pair_is_never_planned_regardless_of_celery_presence(
-    monkeypatch,
+@pytest.mark.parametrize(("provider", "dataset"), (_GITHUB_PR_ALIAS, _GITLAB_PR_ALIAS))
+def test_alias_pair_is_never_planned_regardless_of_celery_presence(
+    monkeypatch, provider: str, dataset: str
 ) -> None:
-    """CHAOS-4047 (owner decision, 2026-08-21): Celery fallback is retired.
-
-    Formerly ``test_dispatch_still_uses_celery_when_consumers_are_present``,
-    pinning the CUT-19 mixed-run rollback rehearsal: a disabled switch still
-    planned a unit, and a live Celery fallback profile picked it up. The
-    owner decommissioned that fallback outright ("why bother saving any
-    celery work at all ... I literally made the call to get rid of it") --
-    ``plan_sync_run`` now excludes a route-disabled pair at plan time no
-    matter what a Celery consumer probe would say, because there is no
-    longer any runtime the switch-off pair could reach. The dispatcher's
-    CELERY/DEFER machinery is deliberately left in place (a separate ticket
-    owns removing it) but this proves it is now unreachable from planning.
+    """CHAOS-4054 successor to the switch-off family of tests: a matrix alias
+    identity is never plannable, so no celery-presence state can make it plan
+    a unit -- there is no runtime left that could ever execute it standalone.
     """
 
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
-
     with _fresh_session() as session:
-        integration = _seed_integration(session, "launchdarkly", ("feature-flags",))
+        integration = _seed_integration(session, provider, (dataset,))
         for presence in (
             CeleryConsumerPresence.PRESENT,
             CeleryConsumerPresence.ABSENT,
@@ -527,128 +600,21 @@ def test_route_disabled_pair_is_never_planned_regardless_of_celery_presence(
                     integration_id=str(integration.id),
                     mode=SyncRunMode.INCREMENTAL.value,
                     triggered_by="parity-test",
+                    # Scope to the alias under test -- with no switch left to
+                    # keep every other provider dataset opted out by default,
+                    # an unfiltered request would also plan this provider's
+                    # other, unrelated plannable pairs (missing rows default
+                    # to enabled) and defeat the assertion below.
+                    dataset_keys=(dataset,),
                 ),
             )
             assert plan.total_units == 0, (
-                f"presence={presence}: a route-disabled pair must never be "
-                "planned now that the Celery fallback is retired"
+                f"presence={presence}: a non-plannable alias must never be planned"
             )
 
 
-# ---------------------------------------------------------------------------
-# CHAOS-3941 review finding (caught by CI, not by the local gate): the
-# transport gate's "fail open" only fails open if it owns a SAVEPOINT.
-#
-# Formerly ``test_undecidable_consumer_state_neither_publishes_nor_terminalizes``,
-# pinning that a reachable-but-undecidable broker (pidbox control plane
-# failing) neither publishes nor terminalizes a planned unit. Retired by
-# owner decision, 2026-08-21: Celery is not a transport anymore, so a probe
-# of "is Celery listening" no longer has a live broker on the other end to
-# be undecidable about. The premise this test exercised (a switch-off unit
-# still gets planned, and dispatch alone must sort out its transport) no
-# longer holds -- ``test_route_disabled_pair_is_never_planned_regardless_of_celery_presence``
-# above already proves presence (including UNKNOWN) has zero bearing on
-# planning, which is the property that matters now. The dispatcher's DEFER
-# branch itself is untouched and stays wired (a separate ticket owns
-# removing the Celery machinery); this just stops asserting a scenario the
-# ratified topology no longer produces.
-# ---------------------------------------------------------------------------
-# CHAOS-4047: the plan-time route-switch gate. Fixtures throughout are real
-# ``IntegrationDataset``/``IntegrationSource`` rows via ``_seed_integration``,
-# never a hand-authored dataset vocabulary.
-# ---------------------------------------------------------------------------
-
-
-def _disable_local_all_routes_preset(monkeypatch) -> None:
-    """Deny the ``GO_PROVIDER_ROUTES=all`` local-only preset explicitly.
-
-    Without this, a developer's own shell (``DEV_HEALTH_ENV=local``,
-    ``GO_PROVIDER_ROUTES=all`` -- a common local setup) makes
-    ``ProviderUnitRouteSwitches.from_environment()`` treat every alias of an
-    explicitly-enabled canonical writer as also enabled
-    (``_LOCAL_ALL_ALIAS_CANONICAL``), which defeats exactly the switch-off
-    assertions these tests make. Explicit switches otherwise win over the
-    preset's *defaults*, but the alias-canonicalization fallback inside
-    ``_switch_enabled`` is not a default -- it re-checks the canonical field
-    whenever the alias's own explicit value is False. CI has neither var set;
-    this makes the tests deterministic regardless of the runner's shell.
-    """
-
-    monkeypatch.delenv("GO_PROVIDER_ROUTES", raising=False)
-    monkeypatch.delenv("DEV_HEALTH_ENV", raising=False)
-
-
-def test_route_disabled_alias_with_sibling_enabled_is_never_planned(
-    monkeypatch,
-) -> None:
-    """Regression: the exact production failure shape from CHAOS-4047/4048.
-
-    github pr-comments, pr-reviews, and tests are mutually exclusive alias
-    identities of the prs/cicd shared writers (config.go:337/:350 reject
-    enabling both). With prs enabled and pr-comments left off -- the actual
-    prod switch profile -- a pre-CHAOS-4047 planner still minted a
-    pr-comments unit that terminalized instantly as
-    ``status=failed, error=feature_disabled, attempts=0`` (200 such units in
-    one window), burying real failures in the same run.
-
-    POSITIVE CONTROL (verified manually, not asserted here): reverting the
-    ``route_switches`` gate in ``_build_planned_units`` back to
-    pre-CHAOS-4047 (drop the ``route_switches`` parameter and its exclusion
-    check) makes this test FAIL with ``total_units == 1``.
-    """
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_PRS_ENABLED", "true")
-    monkeypatch.setenv("WORKER_GITHUB_PR_COMMENTS_ENABLED", "false")
-
-    with _fresh_session() as session:
-        integration = _seed_integration(session, "github", ("pr-comments",))
-        plan = plan_sync_run(
-            session,
-            SyncPlanRequest(
-                org_id=str(integration.org_id),
-                integration_id=str(integration.id),
-                mode=SyncRunMode.INCREMENTAL.value,
-                triggered_by="parity-test",
-            ),
-        )
-
-    assert plan.total_units == 0, (
-        "a disabled alias whose sibling is enabled must never be planned; it "
-        "would terminalize instantly as feature_disabled and bury real failures"
-    )
-
-
-def test_route_disabled_pair_with_no_sibling_is_never_planned(monkeypatch) -> None:
-    """Input symmetry: exclusion is a general 'switch is off' rule.
-
-    github security has no alias sibling at all -- proving the gate is not
-    secretly alias-specific, only "is this pair's own switch on."
-    """
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "false")
-
-    with _fresh_session() as session:
-        integration = _seed_integration(session, "github", ("security",))
-        plan = plan_sync_run(
-            session,
-            SyncPlanRequest(
-                org_id=str(integration.org_id),
-                integration_id=str(integration.id),
-                mode=SyncRunMode.INCREMENTAL.value,
-                triggered_by="parity-test",
-            ),
-        )
-
-    assert plan.total_units == 0
-
-
 def test_route_enabled_pair_is_still_planned(monkeypatch) -> None:
-    """Input symmetry: the gate excludes only disabled pairs, not everything."""
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "true")
+    """Input symmetry: a plannable pair is planned with no switch to flip."""
 
     with _fresh_session() as session:
         integration = _seed_integration(session, "github", ("security",))
@@ -665,83 +631,55 @@ def test_route_enabled_pair_is_still_planned(monkeypatch) -> None:
     assert plan.total_units == 1
 
 
-def test_route_switches_are_not_consulted_off_the_river_outbox_route(
+def test_capability_gate_applies_regardless_of_durable_transport(
     monkeypatch,
 ) -> None:
-    """Input symmetry: a non-River ``sync.provider_unit`` route plans
-    unfiltered, exactly like before CHAOS-4047.
+    """CHAOS-4054 successor to the old
+    ``test_route_switches_are_not_consulted_off_the_river_outbox_route``.
 
-    ``PROVIDER_UNIT_OUTBOX_ROUTES`` and the Celery transport machinery stay in
-    place by owner decision (a separate ticket owns removing them); this pins
-    that the plan-time gate only ever engages when the durable route says
-    River owns the kind.
+    Pre-CHAOS-4054, a switch-off pair planned unfiltered off the River outbox
+    route (switches only governed River eligibility). CHAOS-4054 deleted that
+    exception outright: ``_build_planned_units`` now calls
+    ``routes_to_river(...)`` unconditionally, so the capability gate applies
+    the same way no matter which runtime the durable route currently hands
+    units to. This is a deliberate behavior change from the switch era, not
+    an oversight -- see ``.remember/chaos-4054-context.md``.
     """
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_SECURITY_ENABLED", "false")
 
     with _fresh_session(transport="celery") as session:
-        integration = _seed_integration(session, "github", ("security",))
+        plannable = _seed_integration(session, "github", ("security",))
         plan = plan_sync_run(
             session,
             SyncPlanRequest(
-                org_id=str(integration.org_id),
-                integration_id=str(integration.id),
+                org_id=str(plannable.org_id),
+                integration_id=str(plannable.id),
                 mode=SyncRunMode.INCREMENTAL.value,
                 triggered_by="parity-test",
             ),
         )
+        assert plan.total_units == 1, (
+            "a plannable pair must still be planned off the River outbox route"
+        )
 
-    assert plan.total_units == 1, (
-        "off the River outbox route, every enabled dataset must still be "
-        "planned unfiltered -- route switches govern River eligibility only"
-    )
-
-
-def test_route_disabled_work_item_family_canonical_claim_is_never_planned(
-    monkeypatch,
-) -> None:
-    """Codex review finding: family ALIASES are deliberately unchecked (their
-    admission is the atomic-family collapse's business), but the CANONICAL
-    claim the collapse emits ("work-items") is an ordinary routable pair with
-    its own switch (WORKER_GITHUB_WORK_ITEMS_ENABLED) that must still gate
-    it -- skipping the whole family branch must not also skip that.
-
-    POSITIVE CONTROL (verified manually, not asserted here): dropping the
-    post-collapse ``route_switches`` filter in ``_build_planned_units``
-    (the ``family_units = [... for unit in family_units ...]`` block) makes
-    this test FAIL with ``total_units == 1``.
-    """
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "false")
-
-    with _fresh_session() as session:
-        integration = _seed_integration(session, "github", ("work-items",))
-        plan = plan_sync_run(
+        alias = _seed_integration(session, "github", (_GITHUB_PR_ALIAS[1],))
+        alias_plan = plan_sync_run(
             session,
             SyncPlanRequest(
-                org_id=str(integration.org_id),
-                integration_id=str(integration.id),
+                org_id=str(alias.org_id),
+                integration_id=str(alias.id),
                 mode=SyncRunMode.INCREMENTAL.value,
                 triggered_by="parity-test",
             ),
         )
-
-    assert plan.total_units == 0, (
-        "the canonical work-items claim's own switch is off; it must never "
-        "be planned regardless of the alias-collapse machinery"
-    )
+        assert alias_plan.total_units == 0, (
+            "an alias pair must still be excluded off the River outbox route"
+        )
 
 
 def test_route_enabled_work_item_family_canonical_claim_is_still_planned(
     monkeypatch,
 ) -> None:
-    """Input symmetry: the family canonical-claim gate excludes only a
-    disabled switch, not everything."""
-
-    _disable_local_all_routes_preset(monkeypatch)
-    monkeypatch.setenv("WORKER_GITHUB_WORK_ITEMS_ENABLED", "true")
+    """Input symmetry: the canonical work-items claim is always plannable."""
 
     with _fresh_session() as session:
         integration = _seed_integration(session, "github", ("work-items",))
@@ -758,12 +696,10 @@ def test_route_enabled_work_item_family_canonical_claim_is_still_planned(
     assert plan.total_units == 1
 
 
-def test_route_unknown_pair_fails_closed_not_open(monkeypatch) -> None:
+def test_route_unknown_pair_fails_closed_not_open() -> None:
     """Input symmetry: a pair the checked-in matrix does not recognize at all
-    is excluded exactly like an explicit switch-off pair -- fail closed by
-    construction (``getattr(..., False)``/matrix membership), never an
-    exception or an accidental route.
+    is excluded exactly like an alias pair -- fail closed by construction
+    (matrix membership), never an exception or an accidental route.
     """
 
-    switches = ProviderUnitRouteSwitches.from_environment(environment={})
-    assert switches.routes_to_river("acme-corp", "widgets") is False
+    assert provider_unit_route.routes_to_river("acme-corp", "widgets") is False

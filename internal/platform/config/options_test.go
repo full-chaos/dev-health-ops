@@ -33,10 +33,14 @@ func TestEveryNonSecretSettingIsReachableFromHelp(t *testing.T) {
 			t.Errorf("option %s does not document its %s fallback", option.Flag, option.Env)
 		}
 	}
-	// The forty provider route switches are environment-only and have no flag,
-	// so --help must NOT advertise them as options; it says where they live.
-	if !strings.Contains(help, "PROVIDER ROUTE SWITCHES:") {
-		t.Error("--help must say where the environment-only route switches are documented")
+	// There is no route enablement surface to advertise (CHAOS-4054). --help
+	// says so explicitly and points at the two planes that do decide, rather
+	// than leaving an operator to look for a switch that no longer exists.
+	if !strings.Contains(help, "PROVIDER ROUTES:") {
+		t.Error("--help must state that provider routes are not switch-selected")
+	}
+	if strings.Contains(help, "_ENABLED") {
+		t.Error("--help still advertises a route enablement variable")
 	}
 }
 

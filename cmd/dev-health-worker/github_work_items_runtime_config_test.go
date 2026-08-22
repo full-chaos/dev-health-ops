@@ -24,7 +24,6 @@ func validGitHubWorkItemsRuntimeConfig(t *testing.T) config.Config {
 	t.Helper()
 	root := githubWorkItemsConfigRepoRoot(t)
 	return config.Config{
-		WorkerGithubWorkItemsEnabled: true,
 		WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 			root, "src", "dev_health_ops", "config", "status_mapping.yaml",
 		),
@@ -50,33 +49,27 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 	root := githubWorkItemsConfigRepoRoot(t)
 	for name, cfg := range map[string]config.Config{
 		"missing status path": {
-			WorkerGithubWorkItemsEnabled:              true,
 			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
 		},
 		"blank investment path": {
-			WorkerGithubWorkItemsEnabled:              true,
 			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
 			WorkerGithubWorkItemsInvestmentConfigPath: " ",
 		},
 		"missing status file": {
-			WorkerGithubWorkItemsEnabled:              true,
 			WorkerGithubWorkItemsStatusMappingPath:    filepath.Join(root, "missing-status.yaml"),
 			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
 		},
 		"malformed status file": {
-			WorkerGithubWorkItemsEnabled: true,
 			WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 				root, "internal", "providersync", "testdata", "status_mapping_configs", "structural_root_list.yaml",
 			),
 			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
 		},
 		"missing investment file": {
-			WorkerGithubWorkItemsEnabled:              true,
 			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
 			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(root, "missing-investment.yaml"),
 		},
 		"malformed investment file": {
-			WorkerGithubWorkItemsEnabled:           true,
 			WorkerGithubWorkItemsStatusMappingPath: valid.WorkerGithubWorkItemsStatusMappingPath,
 			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(
 				root, "internal", "providersync", "testdata", "investment_configs", "raises_empty.yaml",
@@ -94,36 +87,6 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 	disabled, err := githubWorkItemsRuntimeConfigFrom(config.Config{})
 	if err != nil || disabled.configured() {
 		t.Fatalf("disabled config = %+v, error = %v", disabled, err)
-	}
-}
-
-func TestWorkItemsRuntimeConfigLoadsSharedArtifactsForEveryEnabledFamily(t *testing.T) {
-	t.Setenv("STATUS_MAPPING_PATH", "")
-	valid := validGitHubWorkItemsRuntimeConfig(t)
-	valid.WorkerGithubWorkItemsEnabled = false
-
-	for _, test := range []struct {
-		name   string
-		enable func(*config.Config)
-	}{
-		{"github", func(cfg *config.Config) { cfg.WorkerGithubWorkItemsEnabled = true }},
-		{"gitlab", func(cfg *config.Config) { cfg.WorkerGitlabWorkItemsEnabled = true }},
-		{"jira", func(cfg *config.Config) { cfg.WorkerJiraWorkItemsEnabled = true }},
-		{"linear", func(cfg *config.Config) { cfg.WorkerLinearWorkItemsEnabled = true }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			cfg := valid
-			test.enable(&cfg)
-			runtimeConfig, err := workItemsRuntimeConfigFrom(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !runtimeConfig.configured() || runtimeConfig.statusMapping == nil ||
-				runtimeConfig.statusMappingPath != cfg.WorkerGithubWorkItemsStatusMappingPath ||
-				runtimeConfig.investmentConfigPath != cfg.WorkerGithubWorkItemsInvestmentConfigPath {
-				t.Fatalf("%s runtime config = %+v", test.name, runtimeConfig)
-			}
-		})
 	}
 }
 

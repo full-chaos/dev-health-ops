@@ -181,28 +181,17 @@ services:
   # The provider-unit River handler, running the registered sync queue group
   # from ops/deploy/go-workers/deployment.json.
   #
-  # IMPORTANT — this service fails closed at startup unless at least one route
-  # switch is enabled, and will crash-loop until you enable one. That is
-  # intentional, not a wiring bug: the sync queue group constructs the
-  # sync.team_autoimport handler whenever sync_provider is selected and a domain
-  # DSN is present, then requires an exact match between what it constructed
-  # and the full job_kinds set the sync worker group declares — which includes
-  # sync.provider_unit. With every route switch off, that match fails. To watch the
-  # path actually execute, set this in the ROOT .env (next to this file) or in
-  # your shell — not ops/.env, which loses to the `environment:` interpolation
-  # below:
+  # CHAOS-4054: this service has no route switches. Every one of the 59
+  # provider/dataset pairs the capability matrix marks route-ready is
+  # executable here, unconditionally. What this process actually serves is the
+  # queue set it is started with (--queues, from deployment.json); what should
+  # run at all is the user's own sync config. If a route is not running, it is
+  # visible in one of those two places and nowhere else.
   #
-  #   WORKER_GITHUB_REPO_METADATA_ENABLED=true
-  #
-  # The matrix now records 59 of 59 provider/dataset pairs as route-ready, but
-  # EVERY switch remains false here on purpose. Each must be flipped only with
-  # a reviewed route release; this does not activate a worker group or
-  # change cutover ownership. The SAME switch names are read by the Python
-  # producer gate (ops/src/dev_health_ops/workers/provider_unit_route.py) and
-  # by this Go worker, so one override moves both halves coherently — a unit
-  # the producer routes to River while the Go switch is off finds no handler.
-  # GitHub work-items additionally needs the two explicit config-file paths
-  # below; no ambient STATUS_MAPPING_PATH override is accepted.
+  # The canonical work-items route additionally needs the two explicit
+  # config-file paths below; no ambient STATUS_MAPPING_PATH override is
+  # accepted. A deployment that supplies neither cannot serve the work-item
+  # family and reports that on every such claim.
   go-worker:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
@@ -247,48 +236,8 @@ services:
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
       WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
-      WORKER_LINEAR_WORK_ITEMS_ENABLED: ${WORKER_LINEAR_WORK_ITEMS_ENABLED:-false}
-      WORKER_JIRA_WORK_ITEMS_ENABLED: ${WORKER_JIRA_WORK_ITEMS_ENABLED:-false}
-      WORKER_JIRA_INCIDENTS_ENABLED: ${WORKER_JIRA_INCIDENTS_ENABLED:-false}
-      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
-      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
-      WORKER_GITHUB_PRS_ENABLED: ${WORKER_GITHUB_PRS_ENABLED:-false}
-      WORKER_GITHUB_PR_REVIEWS_ENABLED: ${WORKER_GITHUB_PR_REVIEWS_ENABLED:-false}
-      WORKER_GITHUB_PR_COMMENTS_ENABLED: ${WORKER_GITHUB_PR_COMMENTS_ENABLED:-false}
-      WORKER_GITHUB_CICD_ENABLED: ${WORKER_GITHUB_CICD_ENABLED:-false}
-      WORKER_GITHUB_COMMITS_ENABLED: ${WORKER_GITHUB_COMMITS_ENABLED:-false}
-      WORKER_GITHUB_DEPLOYMENTS_ENABLED: ${WORKER_GITHUB_DEPLOYMENTS_ENABLED:-false}
-      WORKER_GITHUB_SECURITY_ENABLED: ${WORKER_GITHUB_SECURITY_ENABLED:-false}
-      WORKER_GITHUB_FILES_ENABLED: ${WORKER_GITHUB_FILES_ENABLED:-false}
-      WORKER_GITHUB_COMMIT_STATS_ENABLED: ${WORKER_GITHUB_COMMIT_STATS_ENABLED:-false}
-      WORKER_GITHUB_BLAME_ENABLED: ${WORKER_GITHUB_BLAME_ENABLED:-false}
-      WORKER_GITHUB_TESTS_ENABLED: ${WORKER_GITHUB_TESTS_ENABLED:-false}
-      WORKER_GITHUB_WORK_ITEMS_ENABLED: ${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}
       WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
       WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
-      WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
-      WORKER_GITLAB_COMMITS_ENABLED: ${WORKER_GITLAB_COMMITS_ENABLED:-false}
-      WORKER_GITLAB_COMMIT_STATS_ENABLED: ${WORKER_GITLAB_COMMIT_STATS_ENABLED:-false}
-      WORKER_GITLAB_CICD_ENABLED: ${WORKER_GITLAB_CICD_ENABLED:-false}
-      WORKER_GITLAB_TESTS_ENABLED: ${WORKER_GITLAB_TESTS_ENABLED:-false}
-      WORKER_GITLAB_INCIDENTS_ENABLED: ${WORKER_GITLAB_INCIDENTS_ENABLED:-false}
-      WORKER_GITLAB_DEPLOYMENTS_ENABLED: ${WORKER_GITLAB_DEPLOYMENTS_ENABLED:-false}
-      WORKER_GITLAB_FEATURE_FLAGS_ENABLED: ${WORKER_GITLAB_FEATURE_FLAGS_ENABLED:-false}
-      WORKER_GITLAB_FILES_ENABLED: ${WORKER_GITLAB_FILES_ENABLED:-false}
-      WORKER_GITLAB_BLAME_ENABLED: ${WORKER_GITLAB_BLAME_ENABLED:-false}
-      WORKER_GITLAB_PRS_ENABLED: ${WORKER_GITLAB_PRS_ENABLED:-false}
-      WORKER_GITLAB_PR_REVIEWS_ENABLED: ${WORKER_GITLAB_PR_REVIEWS_ENABLED:-false}
-      WORKER_GITLAB_PR_COMMENTS_ENABLED: ${WORKER_GITLAB_PR_COMMENTS_ENABLED:-false}
-      WORKER_GITLAB_SECURITY_ENABLED: ${WORKER_GITLAB_SECURITY_ENABLED:-false}
-      WORKER_GITLAB_WORK_ITEMS_ENABLED: ${WORKER_GITLAB_WORK_ITEMS_ENABLED:-false}
-      WORKER_PAGERDUTY_SERVICES_ENABLED: ${WORKER_PAGERDUTY_SERVICES_ENABLED:-false}
-      WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED: ${WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED:-false}
-      WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED: ${WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED:-false}
-      WORKER_PAGERDUTY_SCHEDULES_ENABLED: ${WORKER_PAGERDUTY_SCHEDULES_ENABLED:-false}
-      WORKER_PAGERDUTY_ON_CALLS_ENABLED: ${WORKER_PAGERDUTY_ON_CALLS_ENABLED:-false}
-      WORKER_PAGERDUTY_USERS_ENABLED: ${WORKER_PAGERDUTY_USERS_ENABLED:-false}
-      WORKER_PAGERDUTY_TEAMS_ENABLED: ${WORKER_PAGERDUTY_TEAMS_ENABLED:-false}
-      WORKER_PAGERDUTY_INCIDENTS_ENABLED: ${WORKER_PAGERDUTY_INCIDENTS_ENABLED:-false}
       # sync.team_autoimport's post-sync bridge is constructed unconditionally
       # for the sync worker group, and the HTTP bridge fails closed on an empty
       # base URL or token, so both are required for this service to start even

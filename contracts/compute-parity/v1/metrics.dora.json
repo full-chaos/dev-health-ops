@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "kind": "metrics.dora",
+  "description": "DORA daily metrics (R1 pilot). Smallest deterministic compute kind: one output table, six columns, one volatile column, no JSON, no generated identifiers. Reads deployments plus the canonical incident projection from ClickHouse and writes one row per (org, repo, day, metric).",
+  "migrations": {
+    "clickhouse": "src/dev_health_ops/migrations/clickhouse",
+    "postgres": null
+  },
+  "fixture": {
+    "source": "scripts/worker/compute_parity_fixtures.py:seed_metrics_dora",
+    "command": [
+      "scripts/worker/compute_parity_fixtures.py",
+      "seed",
+      "--kind",
+      "metrics.dora",
+      "--days",
+      "14"
+    ],
+    "clone_command": [
+      "scripts/worker/compute_parity_fixtures.py",
+      "clone",
+      "--kind",
+      "metrics.dora"
+    ],
+    "seed": 20260822,
+    "digest_algorithm": "sha256",
+    "digest": null
+  },
+  "determinism": {
+    "clock": {
+      "policy": "pinned_run_day",
+      "notes": "The producer's day window comes from PARITY_AS_OF, not from the host clock. Two remaining now() reads are handled explicitly: dora_metrics_daily.computed_at is stamped at job start and is declared volatile:drop; the canonical incident projection binds now() as {as_of} against operational_service_repository_mappings.valid_from/valid_to, which the fixture seeds as an open-ended validity window so no mapping can expire between two runs."
+    },
+    "seed": {
+      "policy": "fixed",
+      "value": 20260822,
+      "notes": "SyntheticDataGenerator seeds the process RNG. Both destinations receive the same rows by cloning the seeded tables, so parity does not rest on the generator being reproducible across processes."
+    },
+    "id_source": {
+      "policy": "derived_from_fixture",
+      "notes": "The producer generates no identifiers. repo_id is the generator's uuid5 of the repo name; deployment and incident identities come from the seeded input rows."
+    }
+  },
+  "producers": {
+    "python": {
+      "status": "reference",
+      "entrypoint": "dev_health_ops.metrics.job_dora:run_dora_metrics_job",
+      "command": [
+        "scripts/worker/compute_parity_fixtures.py",
+        "produce",
+        "--kind",
+        "metrics.dora",
+        "--days",
+        "14"
+      ]
+    },
+    "go": {
+      "status": "not_ported",
+      "notes": "CUT-20 slice R1. Add a `command` here that runs the native Go executor against PARITY_DSN; nothing else in this manifest changes."
+    }
+  },
+  "inputs": [
+    {
+      "table": "repos",
+      "store": "clickhouse",
+      "select": "SELECT org_id, id, repo, provider FROM repos ORDER BY org_id, id"
+    },
+    {
+      "table": "deployments",
+      "store": "clickhouse",
+      "select": "SELECT org_id, repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number FROM deployments ORDER BY org_id, deployment_id"
+    },
+    {
+      "table": "operational_services",
+      "store": "clickhouse",
+      "select": "SELECT org_id, id, name, is_deleted FROM operational_services ORDER BY org_id, id"
+    },
+    {
+      "table": "operational_service_repository_mappings",
+      "store": "clickhouse",
+      "select": "SELECT org_id, id, service_id, repo_id, is_active, valid_from, valid_to FROM operational_service_repository_mappings ORDER BY org_id, id"
+    },
+    {
+      "table": "operational_incidents",
+      "store": "clickhouse",
+      "select": "SELECT org_id, id, service_id, normalized_status, started_at, resolved_at, is_deleted FROM operational_incidents ORDER BY org_id, id"
+    }
+  ],
+  "outputs": [
+    {
+      "table": "dora_metrics_daily",
+      "store": "clickhouse",
+      "select": "SELECT org_id, repo_id, day, metric_name, value, computed_at FROM dora_metrics_daily ORDER BY org_id, repo_id, day, metric_name",
+      "semantic_key": ["org_id", "repo_id", "day", "metric_name"],
+      "repeat_policy": "append_duplicates",
+      "fields": {
+        "org_id": {"type": "string"},
+        "repo_id": {"type": "uuid"},
+        "day": {"type": "date"},
+        "metric_name": {"type": "string"},
+        "value": {
+          "type": "float",
+          "numeric": {"policy": "exact"},
+          "notes": "Float64 column. Exact is the correct posture for a port that performs the same arithmetic in the same order; a lane that finds a genuine representation difference must declare a per-field tolerance here with a written reason, not relax the comparison globally."
+        },
+        "computed_at": {
+          "type": "datetime",
+          "volatile": "drop",
+          "notes": "job_dora stamps datetime.now(UTC) once per job run. It carries no product meaning and differs on every execution."
+        }
+      }
+    }
+  ]
+}

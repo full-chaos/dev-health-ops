@@ -66,6 +66,21 @@ CLICKHOUSE_URI=… dev-hops metrics daily
 - **Do not let worker lanes delegate to sub-agents.** One port lane blocked on a delegated result and was killed after 30 minutes of inactivity without producing anything. Two sibling lanes completed the same task without delegating. A “30 minutes of inactivity” timeout is itself a fallback masquerade: an outstanding call made the lane look alive until the clock showed it was dead.
 - **A cited constructor is not proof of capability.** The constructor must be reachable with only its own switch enabled. A port satisfied the `file:line` acceptance bar while `cmd/dev-health-worker/provider_sync.go` returned an empty worker family because its config switch was missing from the activation condition. Registry ownership did not make the binary construct it. Strengthen the bar: cite the constructor and prove reachability with a table-driven test that enables only each pair's switch.
 
+## Compute-port parity (CUT-20)
+
+Every compute-port slice proves parity with the SHARED comparator, not with a
+per-lane claim: `scripts/worker/compare_compute_outputs.py` plus a per-kind
+manifest in `contracts/compute-parity/v1/`. How-to for a new kind (fixtures,
+determinism declarations, semantic keys, volatile canonicalization, per-field
+numeric policy, repeat policy):
+[`contracts/compute-parity/v1/README.md`](contracts/compute-parity/v1/README.md).
+
+Two claims, never merged into one report: `rows` is algorithm row parity between
+two isolated scratch destinations; `runtime` is operational health against the
+pinned `v0`/`v3` evidence. A float tolerance is per-field and needs a written
+reason — there is no global tolerance, and the manifest schema has no place for
+one.
+
 ## PR and CI conventions
 
 - The `governance` check requires `TEST-EVIDENCE` and `RISK-NOTES` markers in the PR body when a change touches `src/dev_health_ops/workers/provider_unit_route.py`. This is a PR-body requirement, not a code requirement. Missing markers cost two lanes a CI round.

@@ -70,3 +70,27 @@ func TestSameJSONDistinguishesLargeIntegersAboveFloat64Precision(t *testing.T) {
 		t.Fatal("identical large integer, differently spaced, was rejected as a mutated duplicate")
 	}
 }
+
+// TestSameJSONAcceptsEquivalentNumberSpellings guards the second-round
+// codex-review finding: UseNumber preserves a JSON number's original text,
+// but Postgres jsonb does not preserve a number's original spelling any
+// more than it preserves key order or whitespace -- "1", "1.0", and "1e0"
+// are the same jsonb value. Comparing json.Number by raw text (instead of
+// by exact rational value) would reopen the same class of false-negative
+// this ticket exists to close. A genuinely different value must still be
+// rejected.
+func TestSameJSONAcceptsEquivalentNumberSpellings(t *testing.T) {
+	t.Parallel()
+	if !sameJSON([]byte(`{"n":1}`), []byte(`{"n":1.0}`)) {
+		t.Fatal("integer and equivalent decimal spelling were rejected as a mutated duplicate")
+	}
+	if !sameJSON([]byte(`{"n":1}`), []byte(`{"n":1e0}`)) {
+		t.Fatal("integer and equivalent exponent spelling were rejected as a mutated duplicate")
+	}
+	if !sameJSON([]byte(`{"n":150}`), []byte(`{"n":1.5e2}`)) {
+		t.Fatal("equivalent exponent-form decimal was rejected as a mutated duplicate")
+	}
+	if sameJSON([]byte(`{"n":1}`), []byte(`{"n":2}`)) {
+		t.Fatal("a genuinely different number was accepted as identical")
+	}
+}

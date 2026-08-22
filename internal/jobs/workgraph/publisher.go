@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"reflect"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -138,14 +139,21 @@ func sameRequest(existing, expected Request, scope []byte) bool {
 // which silently rounds integers above 2^53 (9007199254740992 and
 // 9007199254740993 both decode to the same float64), so two genuinely
 // different large-integer scopes would compare equal. UseNumber keeps
-// numbers as their original json.Number text instead.
+// numbers as their original json.Number text instead, and equalJSONValue
+// compares those numbers by exact rational value rather than by literal
+// text: Postgres jsonb does not preserve a number's original spelling any
+// more than it preserves key order, so "1", "1.0", and "1e0" can all read
+// back differently from how the caller marshaled them, and a naive
+// reflect.DeepEqual over json.Number text would reject that as a mutated
+// duplicate the same way the pre-fix byte comparison rejected reordered
+// keys.
 func sameJSON(left, right []byte) bool {
 	leftValue, leftErr := decodeJSONPreservingNumbers(left)
 	rightValue, rightErr := decodeJSONPreservingNumbers(right)
 	if leftErr != nil || rightErr != nil {
 		return false
 	}
-	return reflect.DeepEqual(leftValue, rightValue)
+	return equalJSONValue(leftValue, rightValue)
 }
 
 func decodeJSONPreservingNumbers(data []byte) (any, error) {
@@ -156,6 +164,55 @@ func decodeJSONPreservingNumbers(data []byte) (any, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// equalJSONValue compares two values decoded by decodeJSONPreservingNumbers.
+// It recurses through maps and slices like reflect.DeepEqual, but gives
+// json.Number its own rule: two numbers are equal when they denote the same
+// exact rational value, regardless of spelling (integer vs. decimal vs.
+// exponent form). big.Rat parses the decimal text exactly -- unlike
+// json.Number.Float64, it never rounds, so this does not reopen the
+// large-integer precision gap UseNumber exists to close.
+func equalJSONValue(left, right any) bool {
+	switch leftTyped := left.(type) {
+	case json.Number:
+		rightTyped, ok := right.(json.Number)
+		return ok && sameJSONNumber(leftTyped, rightTyped)
+	case map[string]any:
+		rightTyped, ok := right.(map[string]any)
+		if !ok || len(leftTyped) != len(rightTyped) {
+			return false
+		}
+		for key, leftElement := range leftTyped {
+			rightElement, exists := rightTyped[key]
+			if !exists || !equalJSONValue(leftElement, rightElement) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		rightTyped, ok := right.([]any)
+		if !ok || len(leftTyped) != len(rightTyped) {
+			return false
+		}
+		for index, leftElement := range leftTyped {
+			if !equalJSONValue(leftElement, rightTyped[index]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(left, right)
+	}
+}
+
+func sameJSONNumber(left, right json.Number) bool {
+	if left == right {
+		return true
+	}
+	leftRat, leftOK := new(big.Rat).SetString(string(left))
+	rightRat, rightOK := new(big.Rat).SetString(string(right))
+	return leftOK && rightOK && leftRat.Cmp(rightRat) == 0
 }
 
 func envelopeFor(request Request) jobcontract.Envelope {

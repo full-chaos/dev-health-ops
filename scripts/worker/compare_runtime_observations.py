@@ -144,6 +144,17 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
             findings.append({"check": "series_missing_in_baseline", "family": family})
             continue
         _require_counts(observed, family)
+        # An observation where nothing ran is not evidence of health. Only
+        # failure+discard were compared below, so an all-zero family produced
+        # no findings at all and -- once thresholds are approved -- would have
+        # read as WITHIN_ENVELOPE for a worker that processed no jobs. The
+        # absence of failures is not the presence of work.
+        processed = sum(
+            int(observed["counts"][key])
+            for key in ("success", "retry", "failure", "discard")
+        )
+        if processed == 0:
+            findings.append({"check": "family_processed_no_work", "family": family})
         baseline_errors = int(recorded["counts"]["failure"]) + int(
             recorded["counts"]["discard"]
         )

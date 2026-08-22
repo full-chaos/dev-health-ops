@@ -190,6 +190,20 @@ blacklist:
    cannot be there by mistake.
 4. **Intent** — dropping an existing database still needs an explicit `--reset`.
 
+## Known limitations
+
+**The port-proof guard checks paths, not provenance.** It resolves symlinks, so
+aliases collapse, and it catches the realistic mistake — forgetting to point
+one side at the native executor, which leaves both sides running the same
+command. It does **not** hash executable contents, record the child process
+tree, or detect a wrapper that re-execs the reference producer under a
+different name. Two deliberately distinct wrappers around the same Python
+reference would satisfy it. Closing that needs execution-provenance
+infrastructure this repo does not have; it is the same class of gap as the
+self-declared runtime attestation below, and it belongs with that work rather
+than with a single slice. Adversarial review raised it three rounds running and
+the boundary is recorded here deliberately, not by omission.
+
 ## Known limitation
 
 Runtime observations are **self-declared**. Scope digests and build identity

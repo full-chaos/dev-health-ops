@@ -291,3 +291,33 @@ def test_a_well_formed_observation_still_reaches_the_measurement_stage(tmp_path)
 # --------------------------------------------------------------------------
 # The manifest is a contract, not a suggestion (fifth adversarial-review round)
 # --------------------------------------------------------------------------
+
+
+def test_a_family_that_processed_nothing_is_a_finding(tmp_path):
+    """The absence of failures is not the presence of work.
+
+    Only failure+discard were compared, so an all-zero family produced no
+    findings at all -- and once the v3 thresholds are approved that would have
+    read as WITHIN_ENVELOPE for a worker that handled no jobs.
+    """
+    observation = go_observation()
+    observation["families"]["metrics"]["counts"] = {
+        "success": 0,
+        "retry": 0,
+        "failure": 0,
+        "discard": 0,
+    }
+    report = comparator.compare_runtime(write_observation(tmp_path, observation))
+    assert {"check": "family_processed_no_work", "family": "metrics"} in report[
+        "findings"
+    ]
+
+
+def test_a_family_that_processed_work_is_not_flagged(tmp_path):
+    report = comparator.compare_runtime(write_observation(tmp_path, go_observation()))
+    assert not [
+        finding
+        for finding in report["findings"]
+        if finding["check"] == "family_processed_no_work"
+        and finding.get("family") == "metrics"
+    ]

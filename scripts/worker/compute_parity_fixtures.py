@@ -45,9 +45,15 @@ if str(REPO_ROOT / "src") not in sys.path:
 
 # The gate applies migrations under ordering contract 2; a fixture database
 # written under a different contract would not match the schema the rest of the
-# platform is validated against.
-os.environ.setdefault("OPERATIONAL_ORDERING_CONTRACT", "2")
-os.environ.setdefault("OTEL_ENABLED", "false")
+# platform is validated against. Applied in main() and NOT at import: setting
+# it at import time leaks into every test sharing the interpreter, and
+# `guard_operational_writer_tables` then fails unrelated ClickHouseStore tests
+# with `stale_state ... configured=2 stored=None`. Only the FULL unit suite
+# shows that -- the polluted tests live in other files.
+PROCESS_ENVIRONMENT = {
+    "OPERATIONAL_ORDERING_CONTRACT": "2",
+    "OTEL_ENABLED": "false",
+}
 
 FORBIDDEN_DATABASES = ("default",)
 # A ClickHouse database name this script is willing to put into DDL. Anything
@@ -266,9 +272,8 @@ def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
     finally:
         client.close()
     environment = dict(os.environ)
-    environment.update(
-        {"CLICKHOUSE_URI": dsn, "DATABASE_URI": dsn, "OTEL_ENABLED": "false"}
-    )
+    environment.update(PROCESS_ENVIRONMENT)
+    environment.update({"CLICKHOUSE_URI": dsn, "DATABASE_URI": dsn})
     for arguments in (["upgrade"], ["status", "--check"]):
         completed = subprocess.run(  # noqa: S603 -- fixed checked-in CLI
             [_dev_hops(), "migrate", "clickhouse", *arguments],
@@ -369,6 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     import json
 
     args = build_parser().parse_args(argv)
+    for name, value in PROCESS_ENVIRONMENT.items():
+        os.environ.setdefault(name, value)
     try:
         result: dict[str, Any]
         if args.step == "provision":

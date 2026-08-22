@@ -117,6 +117,34 @@ def exact_rational(value: Any) -> Fraction:
     raise ComparisonError(f"not an exactly-decoded number: {type(value).__name__}")
 
 
+def as_exact(value: Any) -> Fraction | None:
+    """Convert a persisted numeric value to its exact rational value.
+
+    ``Fraction(float)`` is exact for the binary value the database returned --
+    it does not re-round -- and ``Fraction(str(...))`` reads a decimal string
+    at its written precision. ``None`` for anything arithmetic cannot be
+    trusted on, so callers fail closed rather than compare garbage.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return Fraction(value)
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, Decimal):
+        return None if not value.is_finite() else Fraction(value)
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return Fraction(value)
+    if isinstance(value, str):
+        try:
+            return Fraction(Decimal(value.strip()))
+        except (ValueError, ArithmeticError):
+            return None
+    return None
+
+
 def decode_json_preserving_numbers(raw: str) -> Any:
     """Decode JSON text without converting numbers through float64.
 
@@ -252,16 +280,30 @@ class NumericPolicy:
         return self.policy == "exact"
 
     def within(self, left: Any, right: Any) -> bool:
+        """Compare two persisted values under this field's declared policy.
+
+        The arithmetic is exact rational, never binary float. Coercing both
+        operands with ``float()`` first would make 9007199254740992 and
+        9007199254740993 -- the pair this module's JSON handling exists to keep
+        apart -- compare equal even at a tolerance of zero, so a declared
+        numeric policy could be satisfied by values that genuinely differ.
+        """
         if left is None or right is None:
             return left is None and right is None
-        left_value = float(left)
-        right_value = float(right)
+        left_value = as_exact(left)
+        right_value = as_exact(right)
+        if left_value is None or right_value is None:
+            # A value arithmetic cannot be trusted on (NaN, an infinity, an
+            # undecodable string) is never "within" anything.
+            return False
+        tolerance = Fraction(str(self.tolerance if self.tolerance is not None else 0))
+        difference = abs(left_value - right_value)
         if self.policy == "absolute_tolerance":
-            return abs(left_value - right_value) <= float(self.tolerance or 0.0)
+            return difference <= tolerance
         scale = max(abs(left_value), abs(right_value))
-        if scale == 0.0:
+        if scale == 0:
             return left_value == right_value
-        return abs(left_value - right_value) / scale <= float(self.tolerance or 0.0)
+        return difference / scale <= tolerance
 
 
 @dataclass(frozen=True)
@@ -1382,11 +1424,21 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
         for name, recorded in measurements["task_outcome_rates_by_family"].items()
         if isinstance(recorded, Mapping) and "counts" in recorded
     }
-    baseline_profiles = {
-        name
-        for name, recorded in measurements["worker_cpu_cores_by_profile"].items()
-        if _baseline_scalar(recorded) is not None
-    }
+    # The union of every profile series the baseline actually recorded, not
+    # just the CPU one: v0 carries queue-age profiles (external_ingest,
+    # monitoring) that are not CPU profiles, and deriving coverage from CPU
+    # alone let those disappear from an observation without a finding.
+    baseline_profiles: set[str] = set()
+    for series, scalar_key in (
+        ("worker_cpu_cores_by_profile", "p50"),
+        ("worker_memory_bytes_by_profile", "p50"),
+        ("oldest_queue_age_seconds_by_profile", "p95"),
+    ):
+        baseline_profiles |= {
+            name
+            for name, recorded in measurements[series].items()
+            if _baseline_scalar(recorded, scalar_key) is not None
+        }
     for name in sorted(baseline_families - set(observed_families)):
         findings.append({"check": "baseline_family_not_observed", "family": name})
         comparisons.append({"scope": "family", "name": name, "status": "not_observed"})
@@ -1477,6 +1529,9 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
             )
         if baseline_lag is None or observed_lag is None:
             entry["lag_seconds"] = {"status": "missing"}
+            # Same rule as the CPU and memory budgets: queue health that was
+            # not measured has not been shown to be inside the envelope.
+            findings.append({"check": "lag_seconds_not_measurable", "profile": profile})
         else:
             lag_delta = float(observed_lag) - float(baseline_lag)
             entry["lag_seconds"] = {

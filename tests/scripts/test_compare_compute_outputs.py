@@ -854,3 +854,72 @@ def test_a_non_finite_baseline_is_treated_as_no_baseline():
     for value in (float("nan"), float("inf"), -1.0):
         assert comparator._baseline_scalar({"p50": value}) is None
     assert comparator._baseline_scalar({"p50": 2.0}) == 2.0
+
+
+def test_tolerance_comparison_does_not_lose_exactness_through_float(tmp_path):
+    """A zero tolerance must not equate the 2^53 neighbours.
+
+    `float()`-coercing both operands before the comparison made the pair this
+    module's JSON handling exists to keep apart compare equal at any tolerance,
+    including zero -- so a declared numeric policy could pass on values that
+    genuinely differ.
+    """
+    document = base_manifest()
+    document["outputs"][0]["fields"]["value"] = {
+        "type": "int",
+        "numeric": {
+            "policy": "absolute_tolerance",
+            "tolerance": 0,
+            "reason": "declared to exercise the boundary; no slack is intended",
+        },
+    }
+    spec = spec_of(tmp_path, document)
+    policy = spec.field("value").numeric
+    assert float(9007199254740992) == float(9007199254740993)
+    assert not policy.within(9007199254740992, 9007199254740993)
+    assert policy.within(9007199254740993, 9007199254740993)
+
+
+def test_tolerance_comparison_refuses_a_non_finite_operand(tmp_path):
+    document = base_manifest()
+    document["outputs"][0]["fields"]["value"]["numeric"] = {
+        "policy": "absolute_tolerance",
+        "tolerance": 1.0,
+        "reason": "Float32 column",
+    }
+    policy = spec_of(tmp_path, document).field("value").numeric
+    assert not policy.within(float("nan"), float("nan"))
+    assert not policy.within(float("inf"), float("inf"))
+    assert policy.within(1.0, 1.5)
+
+
+def test_tolerance_honours_the_decimal_spelling_of_the_declared_tolerance(tmp_path):
+    document = base_manifest()
+    document["outputs"][0]["fields"]["value"]["numeric"] = {
+        "policy": "absolute_tolerance",
+        "tolerance": 0.1,
+        "reason": "Float32 column",
+    }
+    policy = spec_of(tmp_path, document).field("value").numeric
+    assert policy.within("1.0", "1.1")
+    assert not policy.within("1.0", "1.100000001")
+
+
+def test_runtime_coverage_includes_queue_age_only_baseline_profiles(tmp_path):
+    """v0 carries profiles that exist in the queue-age series but not in CPU.
+
+    Deriving required coverage from the CPU series alone let those disappear
+    from an observation without a finding.
+    """
+    proof = comparator._load_proof_module()
+    measurements = proof.load_pinned_documents()["baseline"].value["measurements"]
+    queue_only = set(measurements["oldest_queue_age_seconds_by_profile"]) - set(
+        measurements["worker_cpu_cores_by_profile"]
+    )
+    assert queue_only, "v0 is expected to carry queue-age-only profiles"
+
+    report = comparator.compare_runtime(write_observation(tmp_path, go_observation()))
+    checks = [
+        f for f in report["findings"] if f["check"] == "lag_seconds_not_measurable"
+    ]
+    assert checks, "an unmeasured queue age is not a satisfied queue-age budget"

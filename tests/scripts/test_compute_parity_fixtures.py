@@ -84,3 +84,39 @@ def test_provision_requires_reset_before_it_will_drop_anything(monkeypatch):
     ):
         fixtures.provision("clickhouse://ch:ch@localhost:8123/parity_left")
     assert commands == [], "no DDL may run before the caller has opted into the drop"
+
+
+def test_importing_the_module_has_no_environment_side_effect():
+    """Import-time env mutation broke unrelated tests sharing the interpreter.
+
+    An earlier revision ran `os.environ.setdefault("OPERATIONAL_ORDERING_CONTRACT",
+    "2")` at module scope. Importing this file anywhere in a pytest worker then
+    made `guard_operational_writer_tables` treat the contract as explicitly
+    configured, and four ClickHouseStore tests in other files failed with
+    `stale_state ... configured=2 stored=None`. Only the FULL unit suite showed
+    it -- running this file alone passed either way.
+    """
+    import os
+    import subprocess
+    import sys as _sys
+
+    target = str(ROOT / "scripts/worker/compute_parity_fixtures.py")
+    probe = (
+        "import importlib.util, os, sys;"
+        f"spec = importlib.util.spec_from_file_location('m', {target!r});"
+        "m = importlib.util.module_from_spec(spec);"
+        "sys.modules['m'] = m;"
+        "spec.loader.exec_module(m);"
+        "print(os.environ.get('OPERATIONAL_ORDERING_CONTRACT', '<unset>'))"
+    )
+    environment = {k: v for k, v in os.environ.items()}
+    environment.pop("OPERATIONAL_ORDERING_CONTRACT", None)
+    completed = subprocess.run(
+        [_sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=environment,
+        cwd=ROOT,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "<unset>"

@@ -46,8 +46,8 @@ generated identifiers.
 L=clickhouse://ch:ch@localhost:8123/parity_left
 R=clickhouse://ch:ch@localhost:8123/parity_right
 
-.venv/bin/python scripts/worker/compute_parity_fixtures.py provision --dsn "$L"
-.venv/bin/python scripts/worker/compute_parity_fixtures.py provision --dsn "$R"
+.venv/bin/python scripts/worker/compute_parity_fixtures.py provision --dsn "$L" --reset
+.venv/bin/python scripts/worker/compute_parity_fixtures.py provision --dsn "$R" --reset
 .venv/bin/python scripts/worker/compute_parity_fixtures.py seed  --kind metrics.dora --dsn "$L"
 .venv/bin/python scripts/worker/compute_parity_fixtures.py clone --kind metrics.dora \
   --from-dsn "$L" --to-dsn "$R"
@@ -149,12 +149,23 @@ That is the kind's real behaviour, and a port that quietly became idempotent
 would be reported as a repeat-policy violation rather than passing because it
 "looks cleaner".
 
+`--repeat N` validates **every** replay against the run before it, not only the
+second run against the first, so a producer that honours its policy once and
+drifts on the third replay is still caught. Each entry in the report's `repeat`
+list names the `run` it came from.
+
 ## Safety
 
 Both sides must be scratch databases. The comparator refuses `default`
 outright — it holds real dev data (see `ops/AGENTS.md`, "Safety rule") and
 `--left-exec`/`--right-exec` write to whatever they are pointed at. It also
 refuses two sides that resolve to the same database.
+
+`provision` runs `DROP DATABASE`, so it is guarded twice. A DSN whose database
+is not a plain identifier is refused outright rather than quoted and executed,
+and an identifier that reaches DDL is backtick-quoted as a second layer.
+Dropping an existing database needs an explicit `--reset`: a DSN typo that
+lands on a real database must not cost that database.
 
 ## Packaging
 

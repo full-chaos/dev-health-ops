@@ -1191,8 +1191,12 @@ def compare_rows(
             report["reason"] = "input_fixture_mismatch"
             return report
 
-        first_stats: dict[str, dict[str, SnapshotStats]] = {}
-        first_tombstones: dict[str, dict[str, int | None]] = {}
+        # Keyed by table: the PREVIOUS run's stats per side. Every replay is
+        # checked against the run before it, not only run 2 against run 1 --
+        # a producer can honour its declared policy on the first replay and
+        # drift on the third, and `--repeat 4` must be able to see that.
+        previous_stats: dict[str, dict[str, SnapshotStats]] = {}
+        previous_tombstones: dict[str, dict[str, int | None]] = {}
         for run_index in range(1, max(1, repeat) + 1):
             if left_command:
                 run_producer(left_command, left_dsn, left_label, run_index, as_of)
@@ -1252,21 +1256,19 @@ def compare_rows(
                     left_label: snapshot_stats(output_spec, left_snapshot),
                     right_label: snapshot_stats(output_spec, right_snapshot),
                 }
-                if run_index == 1:
-                    first_tombstones[output_spec.table] = tombstones
-                    first_stats[output_spec.table] = stats
-                elif run_index == 2:
-                    for side, second in stats.items():
+                if run_index > 1:
+                    for side, current in stats.items():
                         repeat_entry = evaluate_repeat(
                             output_spec,
                             side,
-                            first_stats[output_spec.table][side],
-                            second,
-                            tombstones_first=first_tombstones.get(
+                            previous_stats[output_spec.table][side],
+                            current,
+                            tombstones_first=previous_tombstones.get(
                                 output_spec.table, {}
                             ).get(side),
                             tombstones_second=tombstones[side],
                         )
+                        repeat_entry["run"] = run_index
                         report["repeat"].append(repeat_entry)
                         if not repeat_entry["matches_declared_policy"]:
                             report["differences"].append(
@@ -1279,6 +1281,8 @@ def compare_rows(
                                     "observed": repeat_entry["observed"],
                                 }
                             )
+                previous_stats[output_spec.table] = stats
+                previous_tombstones[output_spec.table] = tombstones
             report["runs"].append(run_entry)
 
     report["verdict"] = (
@@ -1443,6 +1447,8 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
             recorded = measurements[baseline_key].get(profile)
             baseline_value = _baseline_scalar(recorded)
             observed_value = observed.get(key)
+            if observed_value is not None:
+                observed_value = _require_measure(observed_value, f"{profile}.{key}")
             if baseline_value is None or observed_value is None:
                 entry[key] = {"status": "missing"}
                 # An unmeasurable budget is not a satisfied budget.
@@ -1465,6 +1471,10 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
         lag_recorded = measurements["oldest_queue_age_seconds_by_profile"].get(profile)
         baseline_lag = _baseline_scalar(lag_recorded, "p95")
         observed_lag = observed.get("oldest_queue_age_seconds_p95")
+        if observed_lag is not None:
+            observed_lag = _require_measure(
+                observed_lag, f"{profile}.oldest_queue_age_seconds_p95"
+            )
         if baseline_lag is None or observed_lag is None:
             entry["lag_seconds"] = {"status": "missing"}
         else:
@@ -1520,6 +1530,24 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
     }
 
 
+def _require_measure(value: Any, name: str) -> float:
+    """Refuse a runtime measurement that arithmetic cannot be trusted on.
+
+    Python's JSON decoder accepts ``NaN`` and ``Infinity``, and nothing in the
+    thresholds rejects a negative. Any of the three makes every ``>`` check
+    below return False, so a malformed observation would produce no findings at
+    all -- the shape of a pass. Reject before comparing, not after.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ComparisonError(f"observation_measure_not_a_number:{name}")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ComparisonError(f"observation_measure_not_finite:{name}")
+    if number < 0:
+        raise ComparisonError(f"observation_measure_negative:{name}")
+    return number
+
+
 def _require_counts(observed: Any, name: str) -> None:
     """Refuse an observation series whose counts are absent or not integers."""
     if not isinstance(observed, Mapping):
@@ -1542,9 +1570,14 @@ def _baseline_scalar(recorded: Any, key: str = "p50") -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    # A non-finite or negative baseline is unusable as a denominator or a
+    # reference point; treat it as no baseline rather than compare against it.
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        return None
+    return number
 
 
 # --------------------------------------------------------------------------

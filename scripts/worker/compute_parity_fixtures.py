@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -49,6 +50,11 @@ os.environ.setdefault("OPERATIONAL_ORDERING_CONTRACT", "2")
 os.environ.setdefault("OTEL_ENABLED", "false")
 
 FORBIDDEN_DATABASES = ("default",)
+# A ClickHouse database name this script is willing to put into DDL. Anything
+# else -- an unexpanded `${VAR}`, a quote, a semicolon, whitespace -- is refused
+# rather than quoted-and-hoped: `provision` runs DROP DATABASE, and the safe
+# handling of an unrecognisable identifier is not to execute it.
+DATABASE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 PARITY_ORG_ID = "8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a10"
 PARITY_REPO_NAME = "compute-parity/dora-pilot"
 PROVIDER = "synthetic"
@@ -64,10 +70,25 @@ def database_of(dsn: str) -> str:
 
 
 def guard(dsn: str) -> str:
+    """Return the DSN's database after proving it is safe to name in DDL."""
     database = database_of(dsn)
     if not database or database in FORBIDDEN_DATABASES:
         raise FixtureError(f"refusing_scratch_database:{database or '<none>'}")
+    if not DATABASE_NAME.match(database):
+        raise FixtureError(f"refusing_unrecognised_database_name:{database!r}")
     return database
+
+
+def quoted(database: str) -> str:
+    """Backtick-quote an already-validated identifier.
+
+    Validation is the real defence; quoting is the second layer, so a future
+    caller that reaches this without going through :func:`guard` still cannot
+    terminate the identifier.
+    """
+    if not DATABASE_NAME.match(database):
+        raise FixtureError(f"refusing_unrecognised_database_name:{database!r}")
+    return f"`{database}`"
 
 
 def clickhouse_client(dsn: str) -> Any:
@@ -219,12 +240,29 @@ def _as_of_date(as_of: str) -> date:
 # --------------------------------------------------------------------------
 
 
-def provision(dsn: str) -> dict[str, Any]:
+def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
+    """Create and migrate a scratch database.
+
+    Dropping is an explicit caller decision (``--reset``), never a default. A
+    DSN typo that lands on a real database must not cost that database: the
+    unconditional DROP this replaced would have obliged, and `default` was the
+    only name it refused.
+    """
     database = guard(dsn)
+    identifier = quoted(database)
     client = server_client(dsn)
     try:
-        client.command(f"DROP DATABASE IF EXISTS {database}")
-        client.command(f"CREATE DATABASE {database}")
+        exists = bool(
+            client.query(
+                "SELECT count() FROM system.databases WHERE name = {name:String}",
+                parameters={"name": database},
+            ).result_rows[0][0]
+        )
+        if exists and not reset:
+            raise FixtureError(f"database_exists_pass_reset_to_drop:{database}")
+        if exists:
+            client.command(f"DROP DATABASE {identifier}")
+        client.command(f"CREATE DATABASE {identifier}")
     finally:
         client.close()
     environment = dict(os.environ)
@@ -243,7 +281,7 @@ def provision(dsn: str) -> dict[str, Any]:
             raise FixtureError(
                 f"migrate_failed:{' '.join(arguments)}:{tail[-1][:200] if tail else ''}"
             )
-    return {"database": database, "migrated": True}
+    return {"database": database, "migrated": True, "reset": reset}
 
 
 def _dev_hops() -> str:
@@ -257,14 +295,19 @@ def clone(kind: str, from_dsn: str, to_dsn: str) -> dict[str, Any]:
     if source == destination:
         raise FixtureError("clone_source_and_destination_are_one_database")
     tables = kind_entry(kind)["input_tables"]
+    source_identifier = quoted(source)
+    destination_identifier = quoted(destination)
     client = clickhouse_client(to_dsn)
     copied: dict[str, int] = {}
     try:
         for table in tables:
             client.command(
-                f"INSERT INTO {destination}.{table} SELECT * FROM {source}.{table}"
+                f"INSERT INTO {destination_identifier}.{table} "
+                f"SELECT * FROM {source_identifier}.{table}"
             )
-            result = client.query(f"SELECT count() FROM {destination}.{table}")
+            result = client.query(
+                f"SELECT count() FROM {destination_identifier}.{table}"
+            )
             copied[table] = int(result.result_rows[0][0]) if result.result_rows else 0
     finally:
         client.close()
@@ -292,6 +335,11 @@ def build_parser() -> argparse.ArgumentParser:
         "provision", help="Create + migrate a scratch db."
     )
     provision_step.add_argument("--dsn")
+    provision_step.add_argument(
+        "--reset",
+        action="store_true",
+        help="Drop the database first if it already exists. Required to overwrite one.",
+    )
 
     seed_step = steps.add_parser("seed", help="Seed producer-derived input rows.")
     seed_step.add_argument("--kind", required=True)
@@ -324,7 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result: dict[str, Any]
         if args.step == "provision":
-            result = provision(_dsn(args.dsn))
+            result = provision(_dsn(args.dsn), reset=args.reset)
         elif args.step == "seed":
             handler: Callable[..., dict[str, Any]] = kind_entry(args.kind)["seed"]
             result = handler(_dsn(args.dsn), seed=args.seed, days=args.days)

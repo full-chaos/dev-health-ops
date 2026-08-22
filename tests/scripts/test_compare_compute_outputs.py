@@ -816,3 +816,41 @@ def test_runtime_mode_treats_an_unmeasurable_budget_as_a_finding(tmp_path):
     assert {"check": "cpu_cores_not_measurable", "profile": "general"} in report[
         "findings"
     ]
+
+
+# --------------------------------------------------------------------------
+# Fail-closed numerics and identifiers (second adversarial-review round)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "-1"])
+def test_runtime_mode_refuses_a_non_finite_or_negative_measurement(tmp_path, bad):
+    """`>` is False for NaN, for Infinity on the wrong side, and for negatives.
+
+    A malformed observation would therefore produce no findings at all, which
+    is indistinguishable from a clean one. json.loads accepts NaN/Infinity, so
+    this is reachable from a file on disk.
+    """
+    observation = go_observation()
+    path = tmp_path / "observation.json"
+    path.write_text(
+        json.dumps(observation).replace('"cpu_cores": 0.001', f'"cpu_cores": {bad}'),
+        encoding="utf-8",
+    )
+    with pytest.raises(comparator.ComparisonError, match="observation_measure_"):
+        comparator.compare_runtime(path)
+
+
+def test_runtime_mode_refuses_a_non_numeric_measurement(tmp_path):
+    observation = go_observation()
+    observation["profiles"]["general"]["memory_bytes"] = "lots"
+    with pytest.raises(
+        comparator.ComparisonError, match="observation_measure_not_a_number"
+    ):
+        comparator.compare_runtime(write_observation(tmp_path, observation))
+
+
+def test_a_non_finite_baseline_is_treated_as_no_baseline():
+    for value in (float("nan"), float("inf"), -1.0):
+        assert comparator._baseline_scalar({"p50": value}) is None
+    assert comparator._baseline_scalar({"p50": 2.0}) == 2.0

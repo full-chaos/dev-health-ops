@@ -150,8 +150,8 @@ def destinations() -> Any:
     base = _base_dsn()
     left = _sibling(base, "pl")
     right = _sibling(base, "pr")
-    _run([str(FIXTURES), "provision", "--dsn", left])
-    _run([str(FIXTURES), "provision", "--dsn", right])
+    _run([str(FIXTURES), "provision", "--dsn", left, "--reset"])
+    _run([str(FIXTURES), "provision", "--dsn", right, "--reset"])
     seeded = _run([str(FIXTURES), "seed", "--kind", "metrics.dora", "--dsn", left])
     assert seeded["deployments"] > 0 and seeded["incidents"] > 0
     cloned = _run(
@@ -222,6 +222,7 @@ def test_same_implementation_twice_reports_equal_and_the_declared_repeat_policy(
     # dora_metrics_daily is a plain MergeTree and job_dora never deletes, so a
     # replay appends. Both sides must show it, and the manifest must say so.
     assert {entry["side"] for entry in report["repeat"]} == {"python", "python_replica"}
+    assert {entry["run"] for entry in report["repeat"]} == {2}
     for entry in report["repeat"]:
         assert entry["observed"] == "append_duplicates"
         assert entry["matches_declared_policy"]

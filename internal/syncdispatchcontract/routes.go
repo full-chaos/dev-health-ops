@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 	"unicode/utf8"
 )
 
@@ -47,6 +48,21 @@ const (
 	RouteCelery = "celery"
 	RouteRiver  = "river"
 )
+
+// DefaultDispatchStaleAge is how long a DISPATCHING sync_run_units row stays
+// evidence of live work before it is treated as orphaned instead. It mirrors
+// the Python dispatch-layer guard's SYNC_UNIT_DISPATCH_STALE_SECONDS default
+// (sync/guard.py, sync/budget_guard.py._stale_dispatch_cutoff): a row younger
+// than this may still be an unclaimed Celery message; a row older than this
+// with no claim never will be.
+//
+// Declared once here, the same fix as RiverQueue above (CHAOS-3938): before
+// CHAOS-3929 this was a private 15-minute literal in the reconciler's mutation
+// pipeline (internal/syncreconciler) with nothing tying it to the quiescer
+// that also needs to know whether a DISPATCHING row is still live
+// (internal/jobroute's PostgresCelerySyncProviderQuiescer). Two copies of the
+// same number drift; both now read this one.
+const DefaultDispatchStaleAge = 15 * time.Minute
 
 // Descriptor is a single immutable-by-value sync-dispatch route descriptor.
 // No reference values are exposed from Registry.

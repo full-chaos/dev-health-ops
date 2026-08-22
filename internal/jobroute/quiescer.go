@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -31,17 +32,6 @@ type PostgresCelerySyncProviderQuiescer struct {
 const syncProviderUnitKind = "sync.provider_unit"
 
 const celerySyncProviderProbeTimeout = 5 * time.Second
-
-// celerySyncProviderDispatchStaleThreshold mirrors the dispatch-layer guard's
-// SYNC_UNIT_DISPATCH_STALE_SECONDS default (see sync/guard.py and
-// sync/budget_guard.py._stale_dispatch_cutoff): a DISPATCHING row younger than
-// this is still a fresh Celery claim; older than this and no worker ever
-// picked it up, so it cannot be evidence Celery is still working the kind.
-// CHAOS-3929: a Celery-replicas-0 window produces exactly this shape --
-// dispatching rows with zero lease owner, zero attempts, null heartbeat --
-// and treating any such row as live deadlocks the route move that would
-// drain it.
-const celerySyncProviderDispatchStaleThreshold = 15 * time.Minute
 
 func NewPostgresCelerySyncProviderQuiescer(pool *pgxpool.Pool) (*PostgresCelerySyncProviderQuiescer, error) {
 	if pool == nil {
@@ -93,10 +83,16 @@ var _ Quiescer = (*PostgresRiverQuiescer)(nil)
 // ahead of a drained or never-started Celery consumer (e.g. workers scaled to
 // zero mid-cutover) and leave DISPATCHING rows no one will ever claim. So each
 // status is checked against the same liveness signal the dispatch-layer guard
-// already uses for capacity accounting:
+// already uses for capacity accounting -- this is the SAME invariant, not a
+// parallel one: quiescer liveness == dispatch-layer capacity-consumer rule
+// (sync/guard.py's "fresh DISPATCHING" / "live RUNNING" split):
 //   - DISPATCHING is live only while fresh: updated_at within
-//     celerySyncProviderDispatchStaleThreshold of now. A row this old with no
-//     claim has definitionally been orphaned, not just slow.
+//     syncdispatchcontract.DefaultDispatchStaleAge of now, the same constant
+//     the reconciler's mutation pipeline uses for its own stale-dispatch
+//     reclaim (internal/syncreconciler). A row this old with no claim has
+//     definitionally been orphaned, not just slow. Reading the shared
+//     constant instead of a second literal here means the two can't drift
+//     apart (CHAOS-3929).
 //   - RUNNING is live unless its lease has explicitly expired. A NULL lease is
 //     unknown/pre-migration and stays live; only an explicit expiry proves the
 //     worker is gone (mirrors sync/guard.py's capacity-consumer set).
@@ -106,7 +102,7 @@ func (quiescer *PostgresCelerySyncProviderQuiescer) Quiesce(ctx context.Context,
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, celerySyncProviderProbeTimeout)
 	defer cancel()
-	dispatchStaleCutoff := time.Now().UTC().Add(-celerySyncProviderDispatchStaleThreshold)
+	dispatchStaleCutoff := time.Now().UTC().Add(-syncdispatchcontract.DefaultDispatchStaleAge)
 	var active bool
 	err := quiescer.pool.QueryRow(probeCtx, `
 		SELECT EXISTS (

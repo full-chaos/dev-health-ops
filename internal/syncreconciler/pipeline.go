@@ -5,10 +5,17 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 )
 
 const (
-	defaultMutationStaleDispatchAge = 15 * time.Minute
+	// defaultMutationStaleDispatchAge is the same value the Celery
+	// sync-provider quiescer uses to decide whether a DISPATCHING row is
+	// still live (internal/jobroute's PostgresCelerySyncProviderQuiescer) --
+	// both read syncdispatchcontract.DefaultDispatchStaleAge so the two never
+	// drift apart (CHAOS-3929).
+	defaultMutationStaleDispatchAge = syncdispatchcontract.DefaultDispatchStaleAge
 	defaultMutationLeaseDuration    = 5 * time.Minute
 	maximumMutationStaleDispatchAge = 24 * time.Hour
 )

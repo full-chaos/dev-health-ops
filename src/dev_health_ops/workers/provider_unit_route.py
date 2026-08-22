@@ -167,9 +167,13 @@ def canonical_identity(provider: str, dataset: str) -> str | None:
     so the alias-fold work in CHAOS-4078 has one authority to plan from rather
     than a second hand-maintained alias table. It is deliberately NOT consulted
     by the planners yet: folding an alias-only selection onto its canonical
-    writer also requires normalising watermark loading, sync-coverage scope
-    matching, and the Celery fallback's processor flags, and doing it at the
-    planner alone silently breaks all three.
+    writer also requires normalising watermark loading and sync-coverage scope
+    matching, and doing it at the planner alone silently breaks both.
+
+    A third surface used to be on that list -- the Celery fallback's processor
+    flags -- but CHAOS-4054 step 4 deleted the fallback, so an alias-only
+    selection can no longer diverge there. The remaining two are what CHAOS-4078
+    still has to normalise.
     """
 
     key = (provider.strip().lower(), dataset.strip().lower())

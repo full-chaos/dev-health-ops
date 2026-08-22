@@ -490,14 +490,19 @@ is not one of them.
 **Capability is always-on.** A route that shipped — code merged, reviewed,
 registered — is executable; there is no third, invisible plane that hides
 shipped functionality behind an environment flag. The ~40
-`WORKER_*_ENABLED` provider-route switches described below are being
-deleted, not migrated to a database table or kept as a break-glass switch —
-that deletion is in-flight, sequenced in
-[the decision record](https://linear.app/fullchaos/document/chaos-4054-two-plane-route-architecture-decision-record-7e5da955f899),
-and this page does not treat those switches as the current model. Do not
-add new documentation that describes `WORKER_*_ENABLED` as a durable
-enablement lever — it is scaffolding on its way out. The durable lever,
-today and after that program lands, is `-Q`.
+`WORKER_*_ENABLED` provider-route switches are **deleted** — not migrated to
+a database table, not kept as a break-glass switch. They no longer exist on
+any surface: not in the Go binary's config, not in the Python producer, not
+in `compose.yml`, `.env.example`, the go-workers overlay, or Helm. Two Go
+tests enforce that and will fail CI if any of it comes back:
+`TestNoRouteEnablementVariableIsReadAnywhere` walks `internal/`, `cmd/` and
+`src/dev_health_ops/` for a `WORKER_*_ENABLED` read, and
+`TestNoRouteEnablementSurfaceExists` proves the names are inert.
+
+**The durable lever is `-Q`, and it is the only one.** A route that is not
+running has exactly two visible explanations — the user disabled the dataset
+in their own sync config, or no deployed worker consumes that route's queue
+in a tracked service file. Do not document any third.
 
 ## Queue topology
 
@@ -548,15 +553,18 @@ Queue names are validated as a character set, not as a shape, so dotted
 subpath names such as `sync.github.heavy` already parse. That is deliberate
 forward-compatibility; a future tightening to flat names would break it.
 
-Queue selection and concurrency are per-process flags. What a worker *executes*
-follows from the queues it consumes. The 40 `WORKER_*_ENABLED` provider route
-switches are a separate, environment-only surface, because the Python planner
-reads the identical names to decide what to **plan** — and a planner emitting
-units for a route no executor serves is precisely the wedge described above.
-Producer and consumer read one mapping, `providersync.RouteSwitchesFromConfig`;
-two hand-maintained copies is what stranded 54 units in production. Per the
-two-plane decision above, this switch surface is being retired in favor of
-`-Q` topology alone — see the decision record for the deletion sequence.
+Queue selection and concurrency are per-process flags. What a worker
+*executes* follows from the queues it consumes, and nothing else. There is no
+longer a second, environment-only surface alongside it: the 40
+`WORKER_*_ENABLED` provider route switches — which the Python planner also
+read, so that producer and consumer could disagree about what to plan versus
+what to serve — are deleted (CHAOS-4054). Two hand-maintained copies of that
+mapping is what stranded 54 units in production; the replacement is not a
+better-shared mapping but the removal of the second plane entirely. What a
+pair is *capable* of is the checked-in capability matrix
+(`contracts/provider-matrix/v1/matrix.json`, `route_ready` and `plannable`);
+what *should* run is `IntegrationDataset.is_enabled`; where it *can* run is
+`-Q`.
 
 ### The Celery-to-River queue mapping (generated)
 
@@ -597,7 +605,7 @@ changing any of the source files.
 | `stream-ingest` (`dev-health-stream-runner`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-pagerduty` (`dev-health-stream-runner`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `sync` (`dev-health-worker`) | `sync` | `sync.team_autoimport` | 900 | 3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.team_autoimport`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
-| `sync-provider` (`dev-health-worker`) | `sync_provider` | `sync.provider_unit` | 900 | 5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026). This queue's one kind is still `canary` per-kind (see below) -- do not read the fleet-wide Celery retirement as proof this specific route has cleared rollout. Enablement today is provider/dataset WORKER_*_ENABLED switches (dying -- CHAOS-4054 two-plane decision) plus -Q topology.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`canary` ⚠, route=`river_canary`, rollback_route=`celery` (migration-state.json) |
+| `sync-provider` (`dev-health-worker`) | `sync_provider` | `sync.provider_unit` | 900 | 5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026). This queue's one kind is still `canary` per-kind (see below) -- do not read the fleet-wide Celery retirement as proof this specific route has cleared rollout. Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`canary` ⚠, route=`river_canary`, rollback_route=`celery` (migration-state.json) |
 
 Celery queues carrying no work reachable through a Go queue at all (telemetry, not routed work):
 
@@ -750,6 +758,12 @@ a new contract version; adding an optional field does not.
 - CHAOS-4044 — worker-group semantics and the Celery-to-River queue mapping
   documented for the first time; see [Worker-group semantics](#worker-group-semantics-identity-only-never-routing)
   and [the generated queue mapping](#the-celery-to-river-queue-mapping-generated)
-- CHAOS-4054 — two-plane route architecture ratified: intent (sync config)
-  and serving (`-Q` topology) are the only two planes; the `WORKER_*_ENABLED`
-  route env-var surface is being retired, not enshrined
+- CHAOS-4054 — two-plane route architecture ratified and implemented: intent
+  (sync config) and serving (`-Q` topology) are the only two planes. Steps 1-3
+  deleted the `WORKER_*_ENABLED` route env-var surface end to end and made
+  capability always-on; step 4 deleted the Celery-presence dispatch plane that
+  sat underneath it (`provider_unit_transport.py`, `celery_consumers.py`, and
+  the `UnitTransport.{CELERY,UNROUTABLE,DEFER}` vocabulary), so a provider unit
+  is either staged in the durable `sync.provider_unit` outbox for River or
+  terminalized as `feature_disabled` — there is no second runtime to fall
+  through to. See [Two planes, not a route-flag plane](#two-planes-not-a-route-flag-plane-what-runs-vs-where-its-served)

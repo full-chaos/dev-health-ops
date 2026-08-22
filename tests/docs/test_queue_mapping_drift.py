@@ -81,19 +81,35 @@ def test_go_worker_runtime_generated_block_matches_producers() -> None:
 
 
 def test_go_worker_runtime_does_not_enshrine_worker_enabled_switches() -> None:
-    """CHAOS-4054 ratified that WORKER_*_ENABLED is being retired, not the model.
+    """CHAOS-4054 deleted WORKER_*_ENABLED; the page must say so, in past tense.
 
-    The page must not describe the route-switch surface as a durable/current
-    enablement mechanism -- only as a dying surface being replaced by -Q
-    topology. This is a cheap guard against re-introducing the framing this
-    ticket was explicitly told not to ship.
+    This guard predates the deletion, when the only thing that could be
+    asserted was that the page called the switch surface dying rather than
+    current. Steps 1-3 shipped, so "being retired" is now itself the wrong
+    framing -- a reader arriving at an in-flight description would still go
+    looking for a switch to flip. The assertion is tightened accordingly: the
+    page must state the surface is deleted, and must name the two planes that
+    replaced it.
+
+    Tightened, not relaxed: "being retired" no longer satisfies this test.
     """
     doc = CANONICAL_DOC.read_text(encoding="utf-8")
     assert "CHAOS-4054" in doc, (
         "go-worker-runtime.md must reference the CHAOS-4054 two-plane decision "
         "record when discussing WORKER_*_ENABLED route switches"
     )
-    assert "dying" in doc or "being retired" in doc or "retired, not migrated" in doc, (
-        "go-worker-runtime.md must state that WORKER_*_ENABLED is being retired, "
-        "not present it as the current enablement model"
+    assert "are **deleted**" in doc or "surface is deleted" in doc, (
+        "go-worker-runtime.md must state that the WORKER_*_ENABLED surface is "
+        "deleted -- not that it is being retired, and never as the current "
+        "enablement model"
+    )
+    for phrase in ("being retired", "is dying", "on its way out"):
+        assert phrase not in doc, (
+            f"go-worker-runtime.md still describes the route-switch surface as "
+            f"in-flight ({phrase!r}). CHAOS-4054 steps 1-3 deleted it; the page "
+            "must describe the finished state."
+        )
+    assert "IntegrationDataset.is_enabled" in doc and "-Q" in doc, (
+        "go-worker-runtime.md must name both replacement planes: intent "
+        "(IntegrationDataset.is_enabled) and serving (-Q topology)"
     )

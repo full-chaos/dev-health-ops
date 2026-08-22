@@ -144,7 +144,7 @@ CELERY_CORRESPONDENCE: dict[str, dict[str, dict[str, Any]]] = {
                 "sync.linear.medium",
             ],
             "celery_consumers": ["worker", "worker-heavy"],
-            "plane": "Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026). This queue's one kind is still `canary` per-kind (see below) -- do not read the fleet-wide Celery retirement as proof this specific route has cleared rollout. Enablement today is provider/dataset WORKER_*_ENABLED switches (dying -- CHAOS-4054 two-plane decision) plus -Q topology.",
+            "plane": "Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026). This queue's one kind is still `canary` per-kind (see below) -- do not read the fleet-wide Celery retirement as proof this specific route has cleared rollout. Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.",
             "note": (
                 "The per-provider cost-class split (light/medium/heavy) has no Go "
                 "equivalent yet -- CHAOS-4027, parked. All cost classes collapse "

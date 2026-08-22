@@ -1228,69 +1228,50 @@ def _select_unreclaimable_dispatching_units(
         # after the limit would let a page of CELERY/RIVER/DEFER rows mask a
         # genuine strand behind them on every pass -- the same deterministic
         # loser this ticket is about, one layer down (hunt finding).
-        selected.extend(_only_unroutable(session, unpublished))
+        selected.extend(_only_unroutable(unpublished))
         if len(page) < page_size:
             break
     return selected[:wanted]
 
 
-def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit]:
+def _only_unroutable(units: list[SyncRunUnit]) -> list[SyncRunUnit]:
     """Keep only units NO runtime can execute (CHAOS-3990, rollback hazard).
 
     Age plus "never leased, never attempted, no outbox row" is NOT sufficient
-    on its own. During a CUT-19 Celery rollback the fallback consumers are
-    live and a backlogged Celery unit looks identical to a strand: the Celery
-    path writes no outbox row by design, takes no lease until a consumer
-    starts it, and a deep backlog easily exceeds the age bound. Sweeping on
-    age alone would destroy valid work in precisely the scenario the Celery
-    fallthrough exists to protect.
+    on its own, so the disposition is re-resolved through the SAME shipped
+    predicate the dispatcher uses: the capability matrix. Only a pair the
+    matrix does not mark route-ready and plannable is swept, which is what
+    makes ``feature_disabled`` the honest category -- the sweep only ever
+    fires on units that genuinely have no runtime.
 
-    So the disposition is re-resolved through the SAME shipped resolver the
-    dispatcher uses. Only ``UNROUTABLE`` -- River declines the pair AND the
-    broker confirms nothing consumes the queue it would land in -- is swept.
-    With consumers present the resolver returns CELERY and the unit is left
-    alone; if the probe cannot tell, it returns DEFER and the unit is also
-    left alone. This also makes ``feature_disabled`` the honest category:
-    the sweep only ever fires on units that genuinely have no runtime.
+    Before CHAOS-4054 step 4 this also had to defend against a CUT-19 Celery
+    rollback, where a backlogged Celery unit looked identical to a strand and
+    sweeping on age alone would have destroyed valid work. That scenario is
+    gone with the Celery fallthrough: River is the only runtime, so "the
+    matrix does not route this pair" is the whole question.
     """
 
     if not units:
         return []
 
-    from dev_health_ops.workers.job_routes import resolve_worker_job_route
-    from dev_health_ops.workers.provider_unit_transport import (
-        PROVIDER_UNIT_OUTBOX_ROUTES,
-        UnitTransport,
-        resolve_celery_presence,
-        resolve_unit_transport,
-    )
+    from dev_health_ops.workers.provider_unit_route import routes_to_river
 
     # This sweep is a safety net running inside reconcile_sync_dispatch,
-    # which also repairs leases and materializes wakeups. A paused/drifted
-    # route or an unreadable broker must degrade to "sweep nothing this
-    # pass", never abort the whole reconcile and take those repairs with it
-    # (hunt finding).
+    # which also repairs leases and materializes wakeups. An unreadable
+    # capability matrix must degrade to "sweep nothing this pass", never
+    # abort the whole reconcile and take those repairs with it (hunt finding).
     try:
-        route = resolve_worker_job_route(session, "sync.provider_unit")
-        river_owns_units = route in PROVIDER_UNIT_OUTBOX_ROUTES
-        presence = resolve_celery_presence(units, river_owns_units=river_owns_units)
+        return [
+            unit
+            for unit in units
+            if not routes_to_river(str(unit.provider), str(unit.dataset_key))
+        ]
     except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
         logger.warning(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
             exc_info=True,
         )
         return []
-    return [
-        unit
-        for unit in units
-        if resolve_unit_transport(
-            str(unit.provider),
-            str(unit.dataset_key),
-            river_owns_units=river_owns_units,
-            celery_presence=presence,
-        )
-        is UnitTransport.UNROUTABLE
-    ]
 
 
 def _terminalize_unreclaimable_dispatching_units(

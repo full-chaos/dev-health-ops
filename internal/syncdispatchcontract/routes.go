@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -49,20 +50,50 @@ const (
 	RouteRiver  = "river"
 )
 
-// DefaultDispatchStaleAge is how long a DISPATCHING sync_run_units row stays
-// evidence of live work before it is treated as orphaned instead. It mirrors
-// the Python dispatch-layer guard's SYNC_UNIT_DISPATCH_STALE_SECONDS default
-// (sync/guard.py, sync/budget_guard.py._stale_dispatch_cutoff): a row younger
-// than this may still be an unclaimed Celery message; a row older than this
-// with no claim never will be.
+// dispatchStaleSecondsEnv and defaultDispatchStaleSeconds are the same
+// env var and default the Python side reads: sync/guard.py's
+// _stale_dispatch_seconds_guard, sync/budget_guard.py._stale_dispatch_cutoff,
+// and workers/sync_units.py._stale_dispatch_seconds all resolve
+// SYNC_UNIT_DISPATCH_STALE_SECONDS with a 900-second (15-minute) fallback; the
+// checked-in deploy manifests (docker-compose, helm, kubernetes) all pin it
+// to that same 900.
+const (
+	dispatchStaleSecondsEnv     = "SYNC_UNIT_DISPATCH_STALE_SECONDS"
+	defaultDispatchStaleSeconds = 900
+)
+
+// DispatchStaleAge is how long a DISPATCHING sync_run_units row stays
+// evidence of live work before it is treated as orphaned instead. A row
+// younger than this may still be an unclaimed Celery message; a row older
+// than this with no claim never will be.
+//
+// It reads SYNC_UNIT_DISPATCH_STALE_SECONDS at call time -- the same
+// operator-facing knob the Python dispatch-layer guard, budget guard, and
+// stale reaper already read -- so a production override actually reaches
+// both language planes instead of only one. Parse failures and an unset var
+// fall back to the checked-in default, exactly like Python's _env_int; a
+// parsed negative value clamps to zero, never negative.
 //
 // Declared once here, the same fix as RiverQueue above (CHAOS-3938): before
 // CHAOS-3929 this was a private 15-minute literal in the reconciler's mutation
 // pipeline (internal/syncreconciler) with nothing tying it to the quiescer
 // that also needs to know whether a DISPATCHING row is still live
-// (internal/jobroute's PostgresCelerySyncProviderQuiescer). Two copies of the
-// same number drift; both now read this one.
-const DefaultDispatchStaleAge = 15 * time.Minute
+// (internal/jobroute's PostgresCelerySyncProviderQuiescer), and neither read
+// the env var Python operators actually tune. Two copies of the same number
+// drift, and a Go-only-hardcoded copy silently ignores an operator override;
+// both now go through this one function.
+func DispatchStaleAge() time.Duration {
+	seconds := defaultDispatchStaleSeconds
+	if raw := os.Getenv(dispatchStaleSecondsEnv); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			seconds = parsed
+			if seconds < 0 {
+				seconds = 0
+			}
+		}
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // Descriptor is a single immutable-by-value sync-dispatch route descriptor.
 // No reference values are exposed from Registry.

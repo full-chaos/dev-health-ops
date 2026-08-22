@@ -10,12 +10,6 @@ import (
 )
 
 const (
-	// defaultMutationStaleDispatchAge is the same value the Celery
-	// sync-provider quiescer uses to decide whether a DISPATCHING row is
-	// still live (internal/jobroute's PostgresCelerySyncProviderQuiescer) --
-	// both read syncdispatchcontract.DefaultDispatchStaleAge so the two never
-	// drift apart (CHAOS-3929).
-	defaultMutationStaleDispatchAge = syncdispatchcontract.DefaultDispatchStaleAge
 	defaultMutationLeaseDuration    = 5 * time.Minute
 	maximumMutationStaleDispatchAge = 24 * time.Hour
 )
@@ -61,7 +55,13 @@ type MutationPipelineConfig struct {
 
 func DefaultMutationPipelineConfig() MutationPipelineConfig {
 	return MutationPipelineConfig{
-		StaleDispatchAge: defaultMutationStaleDispatchAge,
+		// StaleDispatchAge is the same value the Celery sync-provider
+		// quiescer uses to decide whether a DISPATCHING row is still live
+		// (internal/jobroute's PostgresCelerySyncProviderQuiescer) -- both
+		// call syncdispatchcontract.DispatchStaleAge so the two never drift
+		// apart, and both pick up an operator's SYNC_UNIT_DISPATCH_STALE_SECONDS
+		// override the same way Python does (CHAOS-3929).
+		StaleDispatchAge: syncdispatchcontract.DispatchStaleAge(),
 		LeaseDuration:    defaultMutationLeaseDuration,
 	}
 }

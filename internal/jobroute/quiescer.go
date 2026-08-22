@@ -87,12 +87,13 @@ var _ Quiescer = (*PostgresRiverQuiescer)(nil)
 // parallel one: quiescer liveness == dispatch-layer capacity-consumer rule
 // (sync/guard.py's "fresh DISPATCHING" / "live RUNNING" split):
 //   - DISPATCHING is live only while fresh: updated_at within
-//     syncdispatchcontract.DefaultDispatchStaleAge of now, the same constant
-//     the reconciler's mutation pipeline uses for its own stale-dispatch
-//     reclaim (internal/syncreconciler). A row this old with no claim has
-//     definitionally been orphaned, not just slow. Reading the shared
-//     constant instead of a second literal here means the two can't drift
-//     apart (CHAOS-3929).
+//     syncdispatchcontract.DispatchStaleAge() of now, the same call the
+//     reconciler's mutation pipeline uses for its own stale-dispatch reclaim
+//     (internal/syncreconciler) -- both resolve the operator-tunable
+//     SYNC_UNIT_DISPATCH_STALE_SECONDS the same way Python does, instead of a
+//     second hardcoded literal that could silently ignore an override. A row
+//     this old with no claim has definitionally been orphaned, not just slow
+//     (CHAOS-3929).
 //   - RUNNING is live unless its lease has explicitly expired. A NULL lease is
 //     unknown/pre-migration and stays live; only an explicit expiry proves the
 //     worker is gone (mirrors sync/guard.py's capacity-consumer set).
@@ -102,7 +103,7 @@ func (quiescer *PostgresCelerySyncProviderQuiescer) Quiesce(ctx context.Context,
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, celerySyncProviderProbeTimeout)
 	defer cancel()
-	dispatchStaleCutoff := time.Now().UTC().Add(-syncdispatchcontract.DefaultDispatchStaleAge)
+	dispatchStaleCutoff := time.Now().UTC().Add(-syncdispatchcontract.DispatchStaleAge())
 	var active bool
 	err := quiescer.pool.QueryRow(probeCtx, `
 		SELECT EXISTS (

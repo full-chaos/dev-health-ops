@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckedInArtifactIsFrozenAndLookupIsImmutable(t *testing.T) {
@@ -193,5 +194,49 @@ func TestRiverQueueIsPinnedToItsWireValue(t *testing.T) {
 		t.Fatalf("RiverQueue = %q, want \"sync\": this is a persisted wire value; "+
 			"changing it strands in-flight river_job rows and splits old and new "+
 			"binaries during a rolling deploy", RiverQueue)
+	}
+}
+
+// TestDispatchStaleAgeReadsTheSameEnvVarAsPython pins DispatchStaleAge's
+// contract against SYNC_UNIT_DISPATCH_STALE_SECONDS: unset falls back to the
+// checked-in 900-second default (CHAOS-3929's negative control -- the
+// callers relying on this default must not silently regress to zero), a
+// valid override is honored so an operator's SYNC_UNIT_DISPATCH_STALE_SECONDS
+// change actually reaches Go, and Python's _env_int fallback-on-error /
+// clamp-on-negative behavior (sync/budget_guard.py._env_int) is mirrored
+// exactly rather than approximately.
+func TestDispatchStaleAgeReadsTheSameEnvVarAsPython(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		set  bool
+		want time.Duration
+	}{
+		{name: "unset falls back to checked-in default", set: false, want: 900 * time.Second},
+		{name: "empty falls back to checked-in default", env: "", set: true, want: 900 * time.Second},
+		{name: "valid override is honored", env: "60", set: true, want: 60 * time.Second},
+		{name: "zero is honored, not treated as unset", env: "0", set: true, want: 0},
+		{name: "unparseable falls back to default, mirrors Python's except ValueError", env: "not-a-number", set: true, want: 900 * time.Second},
+		{name: "negative clamps to zero, mirrors Python's max(0, value)", env: "-30", set: true, want: 0},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			original, wasSet := os.LookupEnv(dispatchStaleSecondsEnv)
+			t.Cleanup(func() {
+				if wasSet {
+					os.Setenv(dispatchStaleSecondsEnv, original)
+				} else {
+					os.Unsetenv(dispatchStaleSecondsEnv)
+				}
+			})
+			if test.set {
+				os.Setenv(dispatchStaleSecondsEnv, test.env)
+			} else {
+				os.Unsetenv(dispatchStaleSecondsEnv)
+			}
+			if got := DispatchStaleAge(); got != test.want {
+				t.Fatalf("DispatchStaleAge() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }

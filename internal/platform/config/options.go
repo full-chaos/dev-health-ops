@@ -252,13 +252,14 @@ var optionRegistry = []Option{
 	},
 	// CHAOS-4092: reconciler-only, matching the unreclaimable-sweep flag's
 	// scoping precedent above. This widens the sync-dispatch observer's
-	// per-step budget in place; it does not fix a slow step, it only changes
-	// when readiness gives up waiting for one.
+	// per-step budget in place; exceeding it is still fatal to the whole
+	// process (unchanged from the hardcoded 2s), so this only moves the
+	// threshold -- it does not make a slow step survivable.
 	{
 		Flag: "sync-observation-timeout", Env: "SYNC_OBSERVATION_TIMEOUT", Kind: KindDuration,
 		Default:  defaultSyncObservationTimeout.String(),
 		Services: []string{"dev-health-reconciler"}, Group: GroupRuntime,
-		Usage: "sync-dispatch observer per-step timeout (10ms-30s, liveness only)",
+		Usage: "sync-dispatch observer per-step timeout (10ms-30s); exceeding it still exits the process",
 	},
 
 	// Provider routes.

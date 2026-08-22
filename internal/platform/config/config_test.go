@@ -589,6 +589,37 @@ func TestSyncObservationTimeoutDefaultAndOverride(t *testing.T) {
 			}
 		})
 	}
+
+	// CHAOS-4092 / Codex adversarial review (round 1): the reconciler-only
+	// option must not be parsed for every service. Every Go binary reads
+	// from the same shared compose environment
+	// (deploy/docker-compose/compose.go-workers.yml's go-worker-env-base),
+	// so a value scoped to the reconciler's own deployment must not be able
+	// to fail Load for the worker or scheduler -- a malformed value meant
+	// only for the reconciler must not be able to break every OTHER Go
+	// service's startup.
+	for _, service := range []string{"dev-health-worker", "dev-health-scheduler"} {
+		service := service
+		t.Run("out-of-bounds value is inert for "+service, func(t *testing.T) {
+			t.Parallel()
+			for _, out := range []string{"5ms", "31s", "not-a-duration"} {
+				spec := Spec{
+					Service:   service,
+					LookupEnv: lookup(map[string]string{"SYNC_OBSERVATION_TIMEOUT": out}),
+				}
+				cfg, err := Load(spec)
+				if err != nil {
+					t.Fatalf("SYNC_OBSERVATION_TIMEOUT=%q failed Load for %s: %v", out, service, err)
+				}
+				if cfg.SyncObservationTimeout != 2*time.Second {
+					t.Fatalf(
+						"SyncObservationTimeout = %s for %s with SYNC_OBSERVATION_TIMEOUT=%q, want the 2s default ignored",
+						cfg.SyncObservationTimeout, service, out,
+					)
+				}
+			}
+		})
+	}
 }
 
 // TestBlankValuesAreTreatedAsUnsetOnBothSurfaces pins the edge the removed

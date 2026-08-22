@@ -452,33 +452,57 @@ func TestTerminalDeliveryRepairJoinUsesJobPrimaryKey(t *testing.T) {
 	if actualLoops == 0 {
 		actualLoops = 1
 	}
-	rowsTouched := actualRows * actualLoops
+	// "Actual Rows" is what the node RETURNED after evaluating its own
+	// Filter, not what it examined before filtering -- for a Seq Scan (or
+	// any node with a Filter clause) that undercounts by exactly the rows
+	// the Filter rejected. Codex adversarial review (round 1) caught that
+	// this test computed rowsRemoved but never asserted it, so a plan
+	// shape where the join predicate is evaluated as a per-node Filter
+	// (rather than surfacing as a Hash Cond, the shape this test happened
+	// to observe first) could report a misleadingly low "rows touched" and
+	// pass despite retaining an O(N) scan. Both actual and removed rows are
+	// per-loop averages when Loops > 1, so both are scaled by loops before
+	// summing.
+	rowsTouched := (actualRows + rowsRemoved) * actualLoops
 	t.Logf(
 		"river_job scan: node=%q index=%q actual-rows=%.0f actual-loops=%.0f "+
-			"rows-touched=%.0f rows-removed-by-filter=%.0f decoys=%d",
-		nodeType, indexName, actualRows, actualLoops, rowsTouched, rowsRemoved, decoyCount,
+			"rows-removed-by-filter=%.0f rows-touched=%.0f decoys=%d",
+		nodeType, indexName, actualRows, actualLoops, rowsRemoved, rowsTouched, decoyCount,
 	)
 
-	// The row-touch bound is the authoritative assertion: it holds regardless
-	// of which plan shape the optimizer picks (Nested Loop + Index Scan,
-	// Hash Join + Seq Scan, ...), whereas "Rows Removed by Filter" is only
-	// meaningful for a Filter evaluated at THIS node -- a Hash Join can push
-	// the id equality into its Hash Cond instead, which reports 0 rows
-	// removed at the scan node while still having built or probed the hash
-	// table from every one of the 20,000 decoys. Decoys satisfy every other
-	// predicate (kind, state, finalized_at, exhausted attempts, a non-empty
-	// error history), so only the job.id linkage distinguishes them; the
-	// fixed join resolves through the primary key and touches exactly the 1
-	// matching row. This bound is far below decoyCount but leaves headroom
-	// for planner/version variance without masking an O(N) scan of 20,000
-	// decoys.
+	// The row-touch bound (rows returned + rows the node's own Filter
+	// rejected, scaled by loops) is the primary assertion: it holds
+	// regardless of which plan shape the optimizer picks (Nested Loop +
+	// Index Scan, Hash Join + Seq Scan, Nested Loop + Seq Scan with a
+	// correlated Filter, ...) because it captures every row the node
+	// touched, not just the ones it returned. A Hash Join can still push
+	// the id equality into its Hash Cond instead of a Filter on this node,
+	// which is why the Seq Scan rejection below is a second, independent
+	// guard: neither alone is airtight against every plan shape, but a
+	// primary-key equality lookup at LIMIT 10 never legitimately needs a
+	// full sequential scan of river_job regardless of how the optimizer
+	// phrases its Filter/Hash Cond split. Decoys satisfy every other
+	// predicate (kind, state, finalized_at, exhausted attempts, a
+	// non-empty error history), so only the job.id linkage distinguishes
+	// them; the fixed join resolves through the primary key and touches
+	// exactly the 1 matching row. The bound is far below decoyCount but
+	// leaves headroom for planner/version variance without masking an
+	// O(N) scan of 20,000 decoys.
 	const maxRowsTouched = 5
 	if rowsTouched > maxRowsTouched {
 		t.Fatalf(
-			"job scan touched %.0f rows with %d same-kind, same-state decoys present: "+
-				"join is not resolving through the primary key (node type=%q index=%q "+
-				"rows-removed-by-filter=%.0f); full plan:\n%s",
-			rowsTouched, decoyCount, nodeType, indexName, rowsRemoved, explainJSON,
+			"job scan touched %.0f rows (actual=%.0f removed=%.0f loops=%.0f) with %d "+
+				"same-kind, same-state decoys present: join is not resolving through the "+
+				"primary key (node type=%q index=%q); full plan:\n%s",
+			rowsTouched, actualRows, rowsRemoved, actualLoops, decoyCount, nodeType, indexName, explainJSON,
+		)
+	}
+	if nodeType == "Seq Scan" {
+		t.Fatalf(
+			"job scan used a Seq Scan over river_job with %d decoys present: an equality "+
+				"lookup for at most 10 candidates never needs a full sequential scan; "+
+				"full plan:\n%s",
+			decoyCount, explainJSON,
 		)
 	}
 	if strings.Contains(indexName, "kind") {

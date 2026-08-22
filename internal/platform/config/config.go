@@ -162,13 +162,18 @@ type Config struct {
 	DiscardedJobRetention       time.Duration
 	RiverJobCleanerTimeout      time.Duration
 	// SyncObservationTimeout bounds one sync-dispatch observer step
-	// (reconciler-only). CHAOS-4092: a stage that runs slow under load must
-	// fail readiness, not the whole process -- this override exists so an
-	// operator can widen the budget in place of a redeploy while the
-	// structural fix (an index-friendly terminal-repair join) is what
-	// actually keeps steps fast. It is a liveness knob, not a correctness
-	// one: syncreconciler.LoopConfig.validate bounds it to [10ms, 30s]
-	// regardless of what is configured here.
+	// (reconciler-only). CHAOS-4092: exceeding it is STILL fatal to the
+	// whole process today, exactly as the hardcoded 2s was -- syncreconciler
+	// Loop.step's deadline-exceeded error is unconditionally fatal, and its
+	// owner tears the whole service down on that error (the incident
+	// mechanism). This override does not change that failure mode; it only
+	// moves the threshold, so an operator can widen the budget in place of a
+	// redeploy while the structural fix (an index-friendly terminal-repair
+	// join) is what actually keeps steps fast. A repair stage failing only
+	// ITS OWN stage loudly instead of killing the process is a proposed
+	// follow-up, not implemented here. It is a liveness knob, not a
+	// correctness one: syncreconciler.LoopConfig.validate bounds it to
+	// [10ms, 30s] regardless of what is configured here.
 	SyncObservationTimeout         time.Duration
 	OperationalBridgeURL           string
 	OperationalBridgeToken         secrets.Value
@@ -490,19 +495,30 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Bounds match syncreconciler's own minObservationTimeout/
-	// maxObservationTimeout (CHAOS-4092); LoopConfig.validate re-checks them,
-	// so this is belt-and-suspenders against the two constant sets drifting,
-	// not the only enforcement.
-	cfg.SyncObservationTimeout, err = durationEnv(
-		lookup,
-		"SYNC_OBSERVATION_TIMEOUT",
-		defaultSyncObservationTimeout,
-		10*time.Millisecond,
-		30*time.Second,
-	)
-	if err != nil {
-		return Config{}, err
+	// Reconciler-only (CHAOS-4092), gated on cfg.Service rather than parsed
+	// unconditionally: durationEnv VALIDATES and can fail Load, unlike (say)
+	// UnreclaimableSweepMode's bare envOrDefault. Every Go service reads its
+	// configuration from the same shared environment/compose base (see
+	// deploy/docker-compose/compose.go-workers.yml's go-worker-env-base), so
+	// an unconditional parse here would let a malformed
+	// SYNC_OBSERVATION_TIMEOUT meant only for the reconciler fail startup for
+	// the scheduler and every worker group too. Bounds match syncreconciler's
+	// own minObservationTimeout/maxObservationTimeout; LoopConfig.validate
+	// re-checks them, so this is belt-and-suspenders against the two
+	// constant sets drifting, not the only enforcement.
+	if cfg.Service == "dev-health-reconciler" {
+		cfg.SyncObservationTimeout, err = durationEnv(
+			lookup,
+			"SYNC_OBSERVATION_TIMEOUT",
+			defaultSyncObservationTimeout,
+			10*time.Millisecond,
+			30*time.Second,
+		)
+		if err != nil {
+			return Config{}, err
+		}
+	} else {
+		cfg.SyncObservationTimeout = defaultSyncObservationTimeout
 	}
 	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
 		lookup,

@@ -34,6 +34,7 @@ live org), and picking the wrong row when several generations exist.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Iterator
@@ -217,6 +218,22 @@ def _ready(org_id: str = _ORG, day: date = _DAY) -> bool:
     from dev_health_ops.workers.recommendations_tasks import _daily_metrics_ready
 
     return _daily_metrics_ready(org_id, day)
+
+
+def _fail_open_metric_total() -> float:
+    """Sum every label combination of the CHAOS-4073 item 2 fail-open
+    counter, so the assertion doesn't need to predict the exact
+    ``exception_type`` label a given driver/environment raises."""
+    from dev_health_ops.metrics.prometheus import (
+        RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL,
+    )
+
+    total = 0.0
+    for metric in RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_total"):
+                total += sample.value
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +530,28 @@ def test_default_sentinel_proceeds_without_a_query(
     session_factory.assert_not_called()
 
 
-def test_unreadable_database_fails_open(
-    daily_metrics_runs: Engine, monkeypatch: pytest.MonkeyPatch
+def test_unreadable_database_fails_open_loudly(
+    daily_metrics_runs: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A read error must never permanently wedge the pipeline."""
+    """A read error must never permanently wedge the pipeline -- fail-open
+    stays (CHAOS-4073 item 2 owner ruling) -- but it must never again be
+    silent either.
+
+    This inverts what used to bless a bare ``True`` here: the gate must also
+    log at ERROR (not merely INFO/WARNING) with the error AND increment the
+    dedicated, alertable counter. ERROR specifically, not just "some log
+    line": this codebase's Sentry LoggingIntegration only turns ERROR+
+    records into events (event_level=logging.ERROR, src/dev_health_ops/
+    sentry.py), and nothing here calls capture_exception directly, so a
+    WARNING-level record would be invisible to Sentry with no other
+    automatic path to see it -- log-level IS the alerting mechanism for
+    Sentry visibility in this codebase. A gate that returns ``True`` while
+    staying silent (or merely warning below Sentry's threshold) is exactly
+    the measurement-fails-toward-fine shape that let CHAOS-4066 sit vacuous
+    for weeks with nothing to notice.
+    """
     from dev_health_ops import db as db_module
 
     monkeypatch.setenv(
@@ -525,7 +560,40 @@ def test_unreadable_database_fails_open(
     )
     monkeypatch.setattr(db_module, "_postgres_sync_engine", None, raising=False)
 
-    assert _ready() is True
+    before = _fail_open_metric_total()
+
+    with caplog.at_level(
+        logging.ERROR, logger="dev_health_ops.workers.recommendations_tasks"
+    ):
+        result = _ready()
+
+    assert result is True, "fail-open behaviour itself must be unchanged"
+
+    loud_records = [
+        record
+        for record in caplog.records
+        if record.name == "dev_health_ops.workers.recommendations_tasks"
+        and record.levelno == logging.ERROR
+    ]
+    assert loud_records, (
+        "a database read failure must log at ERROR so Sentry's "
+        "event_level=ERROR LoggingIntegration actually captures it -- "
+        "silence (or a level below Sentry's threshold) is the exact defect "
+        "CHAOS-4073 item 2 rules against"
+    )
+    assert any(_ORG in record.getMessage() for record in loud_records), (
+        "the ERROR record must identify which org/day fell open"
+    )
+    assert any(record.exc_info for record in loud_records), (
+        "logger.exception must attach exc_info so the traceback reaches Sentry"
+    )
+
+    after = _fail_open_metric_total()
+    assert after == before + 1, (
+        "a database read failure must increment "
+        "RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL exactly once, so a "
+        "sustained outage is alertable and not merely a log line"
+    )
 
 
 # ---------------------------------------------------------------------------

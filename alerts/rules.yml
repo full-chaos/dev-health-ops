@@ -410,3 +410,32 @@ groups:
           description: |
             GitHub API is returning {{ $value | humanizePercentage }} server errors
             for endpoint {{ $labels.endpoint }}.
+
+  # ---------------------------------------------------------------------------
+  # Recommendations readiness gate (CHAOS-4073)
+  # ---------------------------------------------------------------------------
+  - name: recommendations_readiness
+    interval: 60s
+    rules:
+      # OWNER RULING (CHAOS-4073 item 2): the gate stays fail-open on a
+      # daily_metrics_runs read error, but that path must be alertable, not
+      # merely logged. This job runs per-organization and not continuously,
+      # so a single rejected read is a real signal, not noise -- `for` is
+      # deliberately shorter than the rate() window (matching
+      # GitHubAPIRateLimited above) so one increment can sustain a positive
+      # rate long enough to fire, instead of the window and the pending
+      # period racing each other to expire the same sample first.
+      - alert: RecommendationsReadinessGateFailingOpen
+        expr: |
+          sum(rate(devhealth_recommendations_readiness_gate_fail_open_total[15m])) by (exception_type) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Recommendations readiness gate is failing open ({{ $labels.exception_type }})"
+          description: |
+            _daily_metrics_ready is raising {{ $labels.exception_type }} and proceeding
+            without confirmed-complete daily metrics (CHAOS-4073). Check PostgreSQL
+            connectivity/schema for daily_metrics_runs and worker logs for the WARNING
+            this counter accompanies.

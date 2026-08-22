@@ -669,8 +669,12 @@ func readProviderUnitRoute(
 	return fences[0], true, nil
 }
 
-// unroutable mirrors Python's resolve_unit_transport: a pair is sweepable only
-// when River declines it AND nothing else can run it.
+// unroutable mirrors Python's routes_to_river (workers/provider_unit_route.py):
+// a pair is sweepable only when the capability matrix declines it. Before
+// CHAOS-4054 step 4 the Python twin was resolve_unit_transport, which had to
+// additionally prove the Celery fallthrough had no consumer; that plane is
+// deleted, so "the matrix declines it" is now the whole predicate on both
+// sides.
 func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bool {
 	descriptor, known := providersync.Descriptor(
 		candidate.provider, candidate.datasetKey,

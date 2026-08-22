@@ -95,7 +95,6 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_STATUS_PENDING,
     upsert_outbox_wakeup,
 )
-from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.feature_denial import (
     FeatureDisabledRunTransition,
@@ -110,6 +109,7 @@ from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.job_contracts import ProviderUnitPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
+    PROVIDER_UNIT_OUTBOX_ROUTES,
     WorkerJobRouteError,
     resolve_worker_job_route,
 )
@@ -119,16 +119,8 @@ from dev_health_ops.workers.provider_family_contract import (
 )
 from dev_health_ops.workers.provider_unit_route import (
     is_atomic_provider_family_direct_alias,
+    routes_to_river,
 )
-from dev_health_ops.workers.provider_unit_transport import (
-    PROVIDER_UNIT_OUTBOX_ROUTES,
-    UNROUTABLE_ERROR_CATEGORY,
-    CeleryConsumerPresence,
-    UnitTransport,
-    resolve_celery_presence,
-    resolve_unit_transport,
-)
-from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
     plan_rate_limit_deferral,
@@ -147,18 +139,6 @@ _TERMINAL_RUN_STATUSES = {
     SyncRunStatus.PARTIAL_FAILED.value,
     SyncRunStatus.FAILED.value,
 }
-# The sync.provider_unit outbox path is reachable under either transitional
-# durable route: river_canary (bounded scope, still comparable to Celery) and
-# river (post-canary, no comparison). Celery and shadow never queue an
-# individual unit here -- shadow's dual-dispatch semantics are not
-# implemented for this producer, and celery is the rollback route every
-# per-pair decision below falls back to. Per-pair routability is decided
-# independently per unit (provider_unit_route.routes_to_river), so a run whose
-# units span both a routable pair and pairs that are not is expected to
-# dispatch a mix of river and celery units in the same pass.
-# Defined once in workers.provider_unit_transport, which is also what the
-# planner consults -- the two must never drift (CHAOS-3941).
-_PROVIDER_UNIT_OUTBOX_ROUTES = PROVIDER_UNIT_OUTBOX_ROUTES
 _WORK_ITEM_RESULT_OBSERVATION_FIELDS = (
     "linear_page_count",
     "linear_batch_count",
@@ -785,7 +765,6 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
     )
 
     river_queued = 0
-    undecidable_units = 0
     with get_postgres_session_sync() as session:
         # The provider-unit outbox row and DISPATCHING claim must share one
         # explicit transaction. A process death therefore commits both or
@@ -992,24 +971,32 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         ):
             next_deferred_at = reconfirm_result.next_deferred_at
 
-        # The durable route row, not a process-local capability flag, owns the
-        # transport decision. This FOR SHARE lock remains held through the
-        # unit claim and outbox commit, serializing an operator FOR UPDATE
-        # transition with every producer, including a non-canary batch during
-        # a paused or drifted control-plane state.
+        # CHAOS-4054 step 4 deleted the Celery dispatch plane, but NOT the
+        # durable route control plane -- that is CHAOS-4082, still open. So
+        # this producer still resolves the route, and still holds the FOR
+        # SHARE lock it returns through the claim and the outbox commit.
+        #
+        # The lock is not ceremony. An operator rollback takes FOR UPDATE on
+        # this same row, so holding it here is what stops the rollback
+        # reporting quiescence while a producer that observed the OLD route is
+        # still staging work (see resolve_worker_job_route's own docstring,
+        # and the sync-provider quiescer hardened under CHAOS-3929).
+        #
+        # What DID change is the answer when River does not own the route.
+        # There is no second runtime left to fall through to, so a non-River
+        # route is a fail-closed route fault rather than a Celery dispatch.
+        # Staging anyway would be worse than either: the Go relay resolves
+        # this row every step and RELEASES the claim for a Celery route, so
+        # the unit would sit in `dispatching` behind an outbox row nothing
+        # delivers, holding a DispatchGuard slot with no lease to expire --
+        # the exact wedge class CHAOS-3990 exists to prevent.
         provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
-        river_owns_units = provider_unit_route in _PROVIDER_UNIT_OUTBOX_ROUTES
+        if provider_unit_route not in PROVIDER_UNIT_OUTBOX_ROUTES:
+            raise WorkerJobRouteError(
+                "sync.provider_unit route does not select the River outbox"
+            )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
-        # CHAOS-3941: resolve Celery consumer presence ONCE per pass, and only
-        # if some claimed pair would actually need the Celery fallthrough. In
-        # the fully cut-over steady state no probe runs at all.
-        celery_presence = _celery_consumer_presence(
-            units,
-            river_owns_units=river_owns_units,
-        )
-        signatures = []
         unroutable_units: list[SyncRunUnit] = []
-        deferred_units: list[SyncRunUnit] = []
         for unit in units:
             unit_provider = str(unit.provider)
             unit_dataset = str(unit.dataset_key)
@@ -1028,29 +1015,14 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 raise WorkerJobRouteError(
                     "provider-unit claim requires the complete canonical family"
                 )
-            # Routability is decided per pair, not per run: the capability
-            # matrix is the only source of which pairs are candidates, so a run
-            # mixing routable pairs with pairs the matrix does not mark
-            # route-ready and plannable dispatches a mix of river and celery
-            # units in the same pass, by design.
-            # ONE resolver, shared verbatim with the planner
-            # (workers.provider_unit_transport). The planner refuses to CREATE
-            # a unit this call would mark UNROUTABLE; anything that still
-            # reaches here -- planned before a switch flip, or planned while
-            # the plan-time gate was unavailable -- is terminalized below
-            # rather than published to a broker with no consumer.
-            transport = resolve_unit_transport(
-                unit_provider,
-                unit_dataset,
-                river_owns_units=river_owns_units,
-                celery_presence=celery_presence,
-            )
-            if transport is UnitTransport.RIVER:
-                # The durable route and the pair's own routability must both
-                # select River.
+            # Routability is decided per pair, not per run, and the capability
+            # matrix is its only source: a pair is executable when the matrix
+            # marks it route-ready AND plannable (the canonical writer identity
+            # of its family). There is no second runtime and no environment
+            # switch left to consult -- CHAOS-4054 deleted both planes.
+            if routes_to_river(unit_provider, unit_dataset):
                 # The `continue` is the one-writer fence: an admitted unit is
-                # staged in the durable outbox and never receives a Celery
-                # signature.
+                # staged in the durable outbox, and nothing else may claim it.
                 enqueue_worker_job(
                     session,
                     ProviderUnitPayload(unit_id=str(unit.id)),
@@ -1061,60 +1033,21 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 )
                 river_queued += 1
                 continue
-            if transport is UnitTransport.UNROUTABLE:
-                # River declines the pair, and the broker confirmed nothing
-                # consumes the queue this unit would land in. Publishing here is what
-                # wedged 27 units for 90 minutes in production; refuse instead.
-                unroutable_units.append(unit)
-                continue
-            if transport is UnitTransport.DEFER:
-                # We could not see the consumers. Neither publish (it may be a
-                # void) nor terminalize (it may be healthy): release the claim
-                # and look again next pass.
-                deferred_units.append(unit)
-                continue
-            # A pair the matrix does not route falls through to the existing
-            # Python writer, preserving mixed-run rollback and CUT-19's Celery
-            # fallback profile -- both of which have live consumers.
-            dispatch_route = route(
-                org_id=str(unit.org_id),
-                provider=str(unit.provider),
-                cost_class=str(unit.cost_class),
-                cost_class_queues_enabled=_cost_class_queues_enabled(),
-            )
-            signatures.append(
-                getattr(run_sync_unit, "s")(str(unit.id)).set(
-                    queue=dispatch_route.queue
-                )
-            )
-
-        if deferred_units:
-            released = _release_undecidable_units(session, deferred_units)
-            undecidable_units = released
-            logger.warning(
-                "dispatch_sync_run.celery_consumers_undecidable",
-                extra={
-                    "sync_run_id": sync_run_id,
-                    "deferred_units": released,
-                    "pairs": sorted(
-                        {
-                            f"{unit.provider}/{unit.dataset_key}"
-                            for unit in deferred_units
-                        }
-                    ),
-                },
-            )
+            # The matrix does not route this pair and there is no fallback
+            # runtime to publish it to. Publishing into a queue with no
+            # consumer is what wedged 27 units for 90 minutes in production;
+            # terminalize instead, so finalize can aggregate the run and the
+            # DispatchGuard budget is released rather than held forever.
+            unroutable_units.append(unit)
 
         if unroutable_units:
-            terminalized = _terminalize_unroutable_units(
-                session, unroutable_units, river_owns_units=river_owns_units
-            )
+            terminalized = _terminalize_unroutable_units(session, unroutable_units)
             logger.warning(
                 "dispatch_sync_run.unroutable_units_terminalized",
                 extra={
                     "sync_run_id": sync_run_id,
                     "unroutable_units": terminalized,
-                    "error_category": UNROUTABLE_ERROR_CATEGORY,
+                    "error_category": FEATURE_DISABLED_ERROR_CATEGORY,
                     "pairs": sorted(
                         {
                             f"{unit.provider}/{unit.dataset_key}"
@@ -1124,7 +1057,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 },
             )
 
-        if signatures or river_queued:
+        if river_queued:
             now = datetime.now(timezone.utc)
             run.status = SyncRunStatus.DISPATCHING.value
             run.started_at = run.started_at or now
@@ -1132,44 +1065,10 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         else:
             session.flush()
 
-    if signatures:
-        logger.info(
-            "dispatch_sync_run.dispatched",
-            extra={
-                "sync_run_id": sync_run_id,
-                "queued_units": len(signatures) + river_queued,
-                "celery_units": len(signatures),
-                "river_units": river_queued,
-            },
-        )
-        try:
-            # Unit terminal writes materialize the durable finalize wakeup.
-            # Do not use a Celery chord/result backend as a coordinator: a
-            # retry or partial publish remains recoverable through the same
-            # SyncDispatchOutbox materializer that covers worker loss.
-            for signature in signatures:
-                getattr(signature, "apply_async")()
-            if next_deferred_at is not None:
-                _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
-            elif capped_ids or undecidable_units:
-                # Released units are PLANNED again; without this they would
-                # wait for the next scheduled tick instead of the next pass.
-                _schedule_redispatch(sync_run_id)
-        except Exception as exc:
-            logger.exception(
-                "dispatch_sync_run.publish_failed",
-                extra={"sync_run_id": sync_run_id, "error": str(exc)},
-            )
-            raise
-        return {
-            "status": "dispatched",
-            "queued_units": len(signatures) + river_queued,
-        }
-
     if river_queued:
         if next_deferred_at is not None:
             _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
-        elif capped_ids or undecidable_units:
+        elif capped_ids:
             _schedule_redispatch(sync_run_id)
         logger.info(
             "dispatch_sync_run.dispatched",
@@ -2558,61 +2457,9 @@ def _fail_stale_dispatching_units(session, run_uuid: uuid.UUID, error: str) -> i
     return int(result.rowcount or 0)
 
 
-def _celery_consumer_presence(
-    units: Sequence[SyncRunUnit],
-    *,
-    river_owns_units: bool,
-) -> CeleryConsumerPresence:
-    """Module-level seam over the broker probe (CHAOS-3941).
-
-    Indirection on purpose: the probe is real network I/O, so tests replace
-    THIS function (or ``celery_consumers.probe_celery_consumers``) to pin a
-    deterministic consumer state instead of depending on whatever happens to
-    be listening on the developer's broker.
-    """
-
-    return resolve_celery_presence(units, river_owns_units=river_owns_units)
-
-
-def _release_undecidable_units(
-    session,
-    units: Sequence[SyncRunUnit],
-) -> int:
-    """Put claimed units back to PLANNED when consumer state is unknowable.
-
-    The claim moved them to DISPATCHING, which is what holds a DispatchGuard
-    slot; leaving them there is exactly the wedge this ticket is about. PLANNED
-    units hold nothing and are re-claimed by the next pass, so an unreadable
-    control plane costs a cycle of latency rather than a lost or wedged unit.
-
-    Same write-time CAS as the terminal path: a unit a concurrent worker has
-    already claimed to RUNNING is excluded by the predicate.
-    """
-
-    unit_ids = [unit.id for unit in units]
-    if not unit_ids:
-        return 0
-    now = datetime.now(timezone.utc)
-    result = session.execute(
-        update(SyncRunUnit)
-        .where(
-            SyncRunUnit.id.in_(unit_ids),
-            SyncRunUnit.status == SyncRunUnitStatus.DISPATCHING.value,
-        )
-        .values(
-            status=SyncRunUnitStatus.PLANNED.value,
-            updated_at=now,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    return int(result.rowcount or 0)
-
-
 def _terminalize_unroutable_units(
     session,
     units: Sequence[SyncRunUnit],
-    *,
-    river_owns_units: bool = False,
 ) -> int:
     """Fail claimed units that no runtime can execute (CHAOS-3941).
 
@@ -2638,9 +2485,7 @@ def _terminalize_unroutable_units(
 
     terminalized = 0
     for (provider, dataset_key), unit_ids in sorted(units_by_pair.items()):
-        reason = _unroutable_reason(
-            provider, dataset_key, river_owns_units=river_owns_units
-        )
+        reason = _unroutable_reason(provider, dataset_key)
         result = session.execute(
             update(SyncRunUnit)
             .where(
@@ -2650,13 +2495,13 @@ def _terminalize_unroutable_units(
             .values(
                 status=SyncRunUnitStatus.FAILED.value,
                 available_at=None,
-                error=UNROUTABLE_ERROR_CATEGORY,
+                error=FEATURE_DISABLED_ERROR_CATEGORY,
                 # The durable record an operator actually reads. ``error``
                 # stays the stable machine category every downstream reader
                 # already keys on; the prose reason goes here beside it.
                 last_retry_reason=reason,
                 result={
-                    "error_category": UNROUTABLE_ERROR_CATEGORY,
+                    "error_category": FEATURE_DISABLED_ERROR_CATEGORY,
                     "reason": reason,
                     "provider": provider,
                     "dataset_key": dataset_key,
@@ -2671,46 +2516,33 @@ def _terminalize_unroutable_units(
     return terminalized
 
 
-def _unroutable_reason(
-    provider: str,
-    dataset_key: str,
-    *,
-    river_owns_units: bool = False,
-) -> str:
+def _unroutable_reason(provider: str, dataset_key: str) -> str:
     """The operator-facing sentence for a pair no runtime will execute.
 
-    ``UNROUTABLE`` has three distinct causes and they need three different
-    actions, so the reason must not assert the wrong one (review finding):
+    Two distinct causes remain, and they need different actions, so the reason
+    must not assert the wrong one (review finding):
 
-      * the durable ``sync.provider_unit`` route is not a River route at all,
-        so River was never asked about this pair;
       * the pair is a non-canonical member of an atomic provider family, served
         only through its canonical claim; or
       * the capability matrix does not mark the pair route-ready and plannable,
         so no shipped writer owns it.
 
-    None of them is ever "a switch is off" -- CHAOS-4054 deleted that plane, so
-    an operator is never sent to flip a variable. Every branch also implies the
-    Celery fallback had no consumer, since that is what turns "not River" into
-    UNROUTABLE rather than a Celery publish.
+    Neither is ever "a switch is off" -- CHAOS-4054 deleted that plane, so an
+    operator is never sent to flip a variable. Nor is either one "the fallback
+    runtime was down": step 4 deleted the Celery fallthrough, so River is the
+    only runtime and a pair it does not route has nowhere else to go.
     """
 
     prefix = f"no worker can execute {provider}/{dataset_key}"
-    suffix = "and the Celery fallback queue has no consumer"
-    if not river_owns_units:
-        return (
-            f"{prefix}: the durable sync.provider_unit route is not a River "
-            f"route, so River never owned this unit, {suffix}"
-        )
     if is_atomic_provider_family_direct_alias(provider, dataset_key):
         return (
             f"{prefix}: it is a non-canonical member of an atomic provider "
             f"family, which is never routed on its own (the family is served "
-            f"by its canonical work-items claim), {suffix}"
+            f"by its canonical work-items claim)"
         )
     return (
         f"{prefix}: the provider capability matrix does not mark it "
-        f"route-ready and plannable, so no shipped writer owns it, {suffix}"
+        f"route-ready and plannable, so no shipped writer owns it"
     )
 
 

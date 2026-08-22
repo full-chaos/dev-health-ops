@@ -35,7 +35,32 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
-from tests._helpers import seed_sync_dispatch_transport_routes
+from tests._helpers import (
+    pin_provider_unit_routability,
+    provider_unit_outbox_keys,
+    seed_sync_dispatch_transport_routes,
+)
+
+
+@pytest.fixture(autouse=True)
+def _routable_synthetic_pairs(monkeypatch):
+    """Pin provider-unit routability for this module (CHAOS-4054 step 4).
+
+    Every unit in this file uses a synthetic dataset key -- a bucket label,
+    not a capability-matrix identity. Before step 4 those keys still reached a
+    dispatcher, because a pair the matrix declined fell through to the Celery
+    writer. Step 4 deleted that fallthrough: River is the only runtime, so an
+    unrouted pair is now terminalized as ``feature_disabled`` and never
+    dispatched at all.
+
+    Without this pin every test below would observe a terminalized unit
+    instead of the budget/guard/invariant behaviour it exists to assert. No
+    test in this module is about routability; see
+    ``tests/_helpers.pin_provider_unit_routability`` for why pinning beats
+    renaming the keys to real datasets.
+    """
+
+    pin_provider_unit_routability(monkeypatch)
 
 
 @pytest.fixture
@@ -221,20 +246,17 @@ def _patch_reconciler_enqueues(
     return dispatches, finalizers, post_sync
 
 
-def _patch_unit_publish(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    from dev_health_ops.workers import sync_units
+def _dispatched_units(session: Session) -> set[str]:
+    """Provider units staged for execution, by durable outbox dedupe key.
 
-    publishes: list[str] = []
+    Replaces a ``run_sync_unit.s(...).apply_async()`` spy. CHAOS-4054 step 4
+    deleted that publish -- an admitted unit's dispatch IS its outbox row now,
+    so "was this unit dispatched" is a database question. It is also a
+    stronger one: the spy counted publishes without being able to say WHICH
+    unit each belonged to.
+    """
 
-    class FakeSignature:
-        def set(self, *, queue: str) -> FakeSignature:
-            return self
-
-        def apply_async(self) -> None:
-            publishes.append("apply_async")
-
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda _unit_id: FakeSignature())
-    return publishes
+    return provider_unit_outbox_keys(session)
 
 
 def _mark_units_success(session: Session, run: SyncRun) -> None:
@@ -303,7 +325,6 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     run, units = _seed_run(db_session, unit_count=3, status=SyncRunStatus.PLANNED.value)
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
-    publish_calls = _patch_unit_publish(monkeypatch)
 
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -313,7 +334,7 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     ]
     dispatch_row = _outbox(db_session, run, OUTBOX_KIND_DISPATCH)
     assert dispatch_result == {"status": "dispatched", "queued_units": 1}
-    assert len(publish_calls) == 1
+    assert len(_dispatched_units(db_session)) == 1
     assert len(planned_after_cap) == 2
     assert run.status == SyncRunStatus.DISPATCHING.value
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
@@ -615,7 +636,6 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     dispatches, _finalizers, post_sync = _patch_reconciler_enqueues(monkeypatch)
-    publish_calls = _patch_unit_publish(monkeypatch)
 
     first = sync_reconciler.reconcile_sync_dispatch(limit=10)
     sync_units.dispatch_sync_run(str(dispatch_run.id))
@@ -628,7 +648,14 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     assert first["relayed_dispatch"] == 1
     assert second["relayed_dispatch"] == 0
     assert dispatches == [((str(dispatch_run.id),), "sync")]
-    assert publish_calls == ["apply_async"]
+    # The idempotency claim this test exists for: TWO dispatch_sync_run calls
+    # across two reconciler passes stage exactly ONE provider-unit row, and it
+    # is that unit's. Naming the key is stronger than the old publish counter,
+    # which could not distinguish "published once" from "published a different
+    # unit once".
+    assert _dispatched_units(db_session) == {
+        f"sync.provider_unit:{dispatch_units[0].id}"
+    }
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
     assert dispatch_units[0].attempts == 0
@@ -790,8 +817,6 @@ def test_a3_over_cap_backfill_queues_overflow_rearm_and_reconciler_drains(
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
 
-    _patch_unit_publish(monkeypatch)
-
     result = sync_units.dispatch_sync_run(str(run.id))
 
     _refresh_all(db_session, run, *units)
@@ -865,11 +890,15 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
 
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
-    publish_calls = _patch_unit_publish(monkeypatch)
+    staged_before = _dispatched_units(db_session)
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(units[1])
     assert units[1].status == SyncRunUnitStatus.DISPATCHING.value
-    assert publish_calls == ["apply_async"]
+    # Exactly one NEW unit staged by this pass, and it is units[1] -- a delta,
+    # because the earlier pass in this test already staged its own row.
+    assert _dispatched_units(db_session) - staged_before == {
+        f"sync.provider_unit:{units[1].id}"
+    }
     units[1].status = SyncRunUnitStatus.SUCCESS.value
     units[1].lease_owner = None
     units[1].lease_expires_at = None

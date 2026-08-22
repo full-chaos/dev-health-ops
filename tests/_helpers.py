@@ -103,7 +103,25 @@ def closing_coroutine_runner(
 
 
 def seed_sync_dispatch_transport_routes(session: Session) -> None:
-    """Seed the migration-default Celery routes for isolated outbox tests."""
+    """Seed the durable transport routes for isolated outbox tests.
+
+    The ``sync_dispatch_transport_routes`` rows keep the migration-default
+    ``celery`` value that alembic 0049 seeds, because the Python outbox claim
+    path still selects on it.
+
+    ``worker_job_routes['sync.provider_unit']`` deliberately does NOT. Alembic
+    0061 seeds it ``celery`` on a fresh database and 0066 excludes it, but a
+    production dump taken for CHAOS-4082 shows the deployed row is
+    ``river_canary`` -- an operator applied it, which is the state every
+    provider unit has actually dispatched under for months. Seeding ``celery``
+    here made the fixture disagree with production in the one field the
+    dispatcher fails closed on, so every dispatch test had to override it by
+    hand and a test that forgot got a fail-closed refusal that looked like a
+    routing bug.
+
+    A test that wants a route FAULT sets the row itself; see
+    ``test_dispatch_sync_run_route_faults_fail_closed``.
+    """
     from dev_health_ops.models import SyncDispatchTransportRoute, WorkerJobRoute
 
     session.add_all(
@@ -127,9 +145,60 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
     session.add(
         WorkerJobRoute(
             job_kind="sync.provider_unit",
-            transport="celery",
+            transport="river_canary",
             paused=False,
             generation=1,
         )
     )
     session.flush()
+
+
+def pin_provider_unit_routability(monkeypatch: Any) -> None:
+    """Treat every ``(provider, dataset)`` as matrix-routable for one test.
+
+    CHAOS-4054 step 4 left the provider-unit dispatcher with exactly one
+    question: does the checked-in capability matrix route this pair? A pair it
+    does not route is terminalized as ``feature_disabled`` rather than
+    published, because there is no second runtime left to publish to.
+
+    The suites that call this helper are about something else entirely -- the
+    DispatchGuard concurrency cap, budget-surplus admission, the CHAOS-2581
+    invariants, the orchestration baseline -- and their dataset keys are
+    deliberately SYNTHETIC bucket labels (``commits-active``, ``commits-0``,
+    ``commits-stale``), chosen so they never collide with a real matrix
+    identity and never pick up a real budget estimate. They reached a
+    dispatcher before step 4 only because the Celery fallthrough accepted any
+    pair. With that gone, an unpinned synthetic key terminalizes and the
+    guard's decision -- the actual subject -- is never observed.
+
+    Pinning routability changes exactly one thing. The alternative, renaming
+    the synthetic keys to real matrix datasets, would ALSO change each unit's
+    budget estimate and therefore which units fit the cap, silently altering
+    what these tests prove.
+
+    Routability itself is covered directly by
+    ``tests/workers/test_provider_unit_route.py`` and end to end by
+    ``tests/test_provider_unit_planner_dispatcher_parity.py``; this helper
+    must never be used to paper over a routability assertion.
+    """
+
+    from dev_health_ops.workers import sync_units
+
+    monkeypatch.setattr(sync_units, "routes_to_river", lambda *_args, **_kwargs: True)
+
+
+def provider_unit_outbox_keys(session: Session) -> set[str]:
+    """Every provider-unit dedupe key staged in the durable outbox.
+
+    The post-step-4 replacement for spying on ``run_sync_unit.s(...)``: the
+    outbox row IS the dispatch now, so "which units were dispatched" is a
+    database question rather than a mock-call question.
+    """
+
+    from dev_health_ops.models import WorkerJobOutbox
+
+    return {
+        row.dedupe_key
+        for row in session.query(WorkerJobOutbox).all()
+        if row.job_kind == "sync.provider_unit"
+    }

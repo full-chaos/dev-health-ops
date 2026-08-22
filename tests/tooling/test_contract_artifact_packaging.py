@@ -139,7 +139,7 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
     ``importlib.reload`` it -- and reload installs a NEW module object while
     every earlier ``from ... import`` in the session keeps binding the old one.
     That divergence is not hypothetical: the reload version of this test made
-    tests/test_sync_units.py::test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently
+    tests/test_sync_units.py::test_dispatch_sync_run_routes_every_matrix_ready_pair_independently
     fail whenever it ran first in the same process, and passed cleanly on its
     own -- a full-suite-only failure that reads as someone else's flake. A fresh
     interpreter proves the same property and mutates nothing.

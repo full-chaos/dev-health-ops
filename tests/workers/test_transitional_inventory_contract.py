@@ -71,8 +71,13 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # celery_task, and work_graph_tasks.py's celery_canvas_import) were
     # re-anchored to their still-live target (system.heartbeat's registry_kind
     # primary row, and the surviving chord-only call site) rather than
-    # deleted, since their underlying task/import still exists.
-    assert inventory["row_count"] == 103
+    # deleted, since their underlying task/import still exists,
+    # - 1 removed under CHAOS-4054 step 4: dispatch_sync_run's
+    # `getattr(signature, "apply_async")()` call site, the publish that drove
+    # the Celery fallthrough for provider units. The fallthrough is deleted,
+    # so a claimed unit is either staged in the durable sync.provider_unit
+    # outbox or terminalized -- there is no second runtime to publish to.
+    assert inventory["row_count"] == 102
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

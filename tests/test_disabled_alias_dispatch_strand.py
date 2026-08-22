@@ -1,11 +1,11 @@
-"""Runtime-disabled dataset aliases must never strand in ``dispatching``.
+"""Unroutable dataset aliases must never strand in ``dispatching``.
 
 CHAOS-3990. CHAOS-3941 taught the dispatch loop to terminalize a unit no
 runtime can execute (``_terminalize_unroutable_units``, ``feature_disabled``).
 That fix lives INSIDE the per-unit loop, so it only ever sees units that
 ``_claim_units`` actually returned. This module pins the hole underneath it:
 a unit that the concurrency cap excludes from the claim never enters the loop,
-so it is never transport-resolved and never terminalized.
+so it is never re-decided and never terminalized.
 
 The exclusion is deterministic, not probabilistic, which is why the operator's
 00:48 UTC manual drain did not hold:
@@ -16,8 +16,8 @@ The exclusion is deterministic, not probabilistic, which is why the operator's
   * ``_claim_units`` then subtracts every capped id from its stale-reclaim
     ``WHERE`` clause.
 
-A capped reclaim is therefore never re-claimed, never transport-resolved and
-never terminalized. Unit ids are stable and the bucket stays saturated, so the
+A capped reclaim is therefore never re-claimed, never re-decided and never
+terminalized. Unit ids are stable and the bucket stays saturated, so the
 same unit is capped on every subsequent pass: it holds a concurrency slot it
 can never release, with no lease to expire, no outbox row, no River job and
 zero attempts -- unreachable by every recovery mechanism in the system.
@@ -26,6 +26,15 @@ The fix is the invariant that the cap governs admitting NEW work only: a unit
 already occupying the bucket is always re-decided, because re-deciding it is
 the only thing that can ever free the slot. Reclaims still count against the
 cap for admitting planned work, so total in-flight stays bounded.
+
+CHAOS-4054 step 4 deleted the Celery dispatch plane, so the lever these tests
+pull is now one-dimensional. There is no consumer probe and no durable
+``sync.provider_unit`` transport row to pin: River is the only runtime, and
+``routes_to_river(provider, dataset)`` -- the checked-in capability matrix
+marking a pair BOTH ``route_ready`` and ``plannable`` -- is the whole question
+both the dispatcher and the reconciler's sweep ask. A unit is forced down the
+terminalize branch by choosing a pair the matrix does not route (an alias
+identity such as ``github/tests``), not by scaling a broker to zero.
 """
 
 from __future__ import annotations
@@ -45,8 +54,6 @@ from dev_health_ops.models import (
     WorkerJobRoute,
 )
 from dev_health_ops.sync.canonical_incident_gate import FEATURE_DISABLED_ERROR_CATEGORY
-from dev_health_ops.workers import celery_consumers
-from dev_health_ops.workers.celery_consumers import CeleryConsumerPresence
 
 from ._helpers import seed_sync_dispatch_transport_routes
 from .test_sync_units import (
@@ -68,8 +75,9 @@ def db_session():
 
 #: The three github aliases disabled at the 2026-08-19 20:00 UTC cutover --
 #: originally by their per-pair env switches, now unconditionally by the
-#: checked-in capability matrix (route_ready, never plannable; CHAOS-4054
-#: deleted the switch plane outright) -- and the exact set found stranded in
+#: checked-in capability matrix (``route_ready: true``, ``plannable: false``,
+#: so ``routes_to_river`` is False; CHAOS-4054 deleted the switch plane and
+#: then the Celery fallthrough) -- and the exact set found stranded in
 #: production.
 DISABLED_ALIASES = ("tests", "pr-reviews", "pr-comments")
 
@@ -79,24 +87,6 @@ _STRANDED_ID = uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")
 
 def _filler_id(index: int) -> uuid.UUID:
     return uuid.UUID(f"00000000-0000-4000-8000-{index:012d}")
-
-
-def _pin_celery_absent(monkeypatch) -> None:
-    """Undo conftest's suite-wide PRESENT pin.
-
-    ``tests/conftest.py`` pins ``probe_celery_consumers`` to PRESENT for every
-    test, which is the opposite of the post-cutover deployment: the Python
-    provider-unit consumers are scaled to zero. With PRESENT the dispatcher
-    takes the Celery fallthrough and the strand is invisible, which is part of
-    why this class of defect survived review.
-    """
-
-    celery_consumers.reset_celery_consumer_probe_cache()
-    monkeypatch.setattr(
-        celery_consumers,
-        "probe_celery_consumers",
-        lambda *_args, **_kwargs: CeleryConsumerPresence.ABSENT,
-    )
 
 
 def _seed_capped_bucket(db_session, monkeypatch, *, dataset_key: str):
@@ -155,11 +145,7 @@ def _seed_capped_bucket(db_session, monkeypatch, *, dataset_key: str):
     db_session.flush()
 
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
     db_session.commit()
     return run, stranded
 
@@ -408,7 +394,7 @@ def test_reason_names_the_matrix_for_a_non_family_alias(
 
     from dev_health_ops.workers.sync_units import _unroutable_reason
 
-    reason = _unroutable_reason(provider, dataset_key, river_owns_units=True)
+    reason = _unroutable_reason(provider, dataset_key)
     assert "route-ready and plannable" in reason
     assert "WORKER_" not in reason
     assert "_ENABLED" not in reason
@@ -429,24 +415,33 @@ def test_reason_names_the_atomic_family_for_a_work_item_alias(
 
     from dev_health_ops.workers.sync_units import _unroutable_reason
 
-    reason = _unroutable_reason(provider, dataset_key, river_owns_units=True)
+    reason = _unroutable_reason(provider, dataset_key)
     assert "atomic provider family" in reason
     assert "canonical work-items claim" in reason
     assert "WORKER_" not in reason
     assert "_ENABLED" not in reason
 
 
-def test_reason_names_the_non_river_route_when_river_does_not_own_units() -> None:
-    """Off the River outbox route, the reason is about the route, not the
-    pair -- River never even considered this pair, so a per-pair explanation
-    would be actively misleading."""
+def test_reason_never_blames_a_missing_celery_consumer() -> None:
+    """CHAOS-4054 step 4: River is the only runtime, so the reason must not
+    send an operator looking for a fallback queue or its consumers.
+
+    The pre-step-4 reason ended with ", and the Celery fallback queue has no
+    consumer" -- advice that now points at a plane that does not exist. Both
+    surviving branches are asserted here so neither can quietly grow it back.
+    """
 
     from dev_health_ops.workers.sync_units import _unroutable_reason
 
-    reason = _unroutable_reason("github", "tests", river_owns_units=False)
-    assert "not a River" in reason or "not a River route" in reason
-    assert "WORKER_" not in reason
-    assert "_ENABLED" not in reason
+    for provider, dataset_key in (
+        ("github", "tests"),
+        ("github", "work-item-labels"),
+    ):
+        reason = _unroutable_reason(provider, dataset_key)
+        assert "Celery" not in reason
+        assert "celery" not in reason
+        assert "consumer" not in reason
+        assert "fallback" not in reason
 
 
 def test_reclaims_do_not_raise_total_in_flight_above_the_cap(
@@ -672,7 +667,6 @@ def test_reconciler_drains_an_already_stranded_unit(
     from dev_health_ops.workers import sync_reconciler
 
     run, stranded = _seed_already_stranded_unit(db_session, dataset_key=dataset_key)
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -693,8 +687,9 @@ def test_reconciler_does_not_touch_a_freshly_dispatching_unit(
 ) -> None:
     """Input symmetry: a unit still inside its window must survive.
 
-    A Celery-published unit legitimately sits in ``dispatching`` with zero
-    attempts until a consumer claims it. The sweep must not destroy live work.
+    A just-claimed unit legitimately sits in ``dispatching`` with zero
+    attempts until the relay hands it to River and a worker starts it. The
+    sweep must not destroy live work.
     """
 
     from dev_health_ops.workers import sync_reconciler
@@ -702,7 +697,6 @@ def test_reconciler_does_not_touch_a_freshly_dispatching_unit(
     run, fresh = _seed_already_stranded_unit(
         db_session, dataset_key="tests", age_minutes=0
     )
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -726,7 +720,6 @@ def test_reconciler_does_not_touch_a_unit_that_reached_the_river_relay(
     from dev_health_ops.workers import sync_reconciler
 
     run, published = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     db_session.add(
         WorkerJobOutbox(
             dedupe_key=f"sync.provider_unit:{published.id}",
@@ -764,7 +757,6 @@ def test_reconciler_does_not_touch_a_leased_running_unit(
     from dev_health_ops.workers import sync_reconciler
 
     run, working = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     working.status = SyncRunUnitStatus.RUNNING.value
     working.lease_owner = "worker-1"
     working.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -803,7 +795,6 @@ def test_sweep_still_reaches_a_unit_the_dispatcher_keeps_re_stamping(
     from dev_health_ops.workers import sync_reconciler
 
     run, stranded = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     # Long-lived, but touched recently enough that an ``updated_at``-based age
     # bound would exempt it -- while still past the ordinary stale window.
     stranded.created_at = datetime.now(timezone.utc) - timedelta(hours=16)
@@ -830,7 +821,6 @@ def test_sweep_spares_a_long_lived_unit_the_dispatcher_just_published(
     from dev_health_ops.workers import sync_reconciler
 
     run, fresh = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     fresh.created_at = datetime.now(timezone.utc) - timedelta(hours=16)
     fresh.updated_at = datetime.now(timezone.utc)
     db_session.commit()
@@ -860,7 +850,6 @@ def test_sweep_yields_to_a_concurrent_dispatcher_touch(db_session, monkeypatch) 
     from dev_health_ops.workers import sync_reconciler
 
     run, stranded = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     now = datetime.now(timezone.utc)
 
     selected = sync_reconciler._select_unreclaimable_dispatching_units(
@@ -899,7 +888,6 @@ def test_sweep_writes_when_nothing_moved(db_session, monkeypatch) -> None:
     from dev_health_ops.workers import sync_reconciler
 
     run, stranded = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     now = datetime.now(timezone.utc)
 
     selected = sync_reconciler._select_unreclaimable_dispatching_units(
@@ -927,7 +915,6 @@ def test_sweep_sees_a_strand_hidden_behind_a_page_of_published_units(
     from dev_health_ops.workers import sync_reconciler
 
     run, older = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     # Three OLDER units that all reached the River relay, so they fill the
     # first page and are then filtered out.
     for index in range(3):
@@ -976,58 +963,17 @@ def test_sweep_sees_a_strand_hidden_behind_a_page_of_published_units(
     assert [unit.id for unit in selected] == [older.id]
 
 
-def _pin_celery_present(monkeypatch) -> None:
-    celery_consumers.reset_celery_consumer_probe_cache()
-    monkeypatch.setattr(
-        celery_consumers,
-        "probe_celery_consumers",
-        lambda *_args, **_kwargs: CeleryConsumerPresence.PRESENT,
-    )
+def test_sweep_spares_a_plannable_pair(db_session, monkeypatch) -> None:
+    """Routability, not age, is the gate: a plannable pair routes to River.
 
-
-def test_sweep_spares_backlogged_celery_work_during_a_cut19_rollback(
-    db_session, monkeypatch
-) -> None:
-    """THE rollback hazard: live Celery consumers must not be swept.
-
-    During a CUT-19 Celery rollback the fallback consumers are live, and a
-    backlogged Celery unit is indistinguishable from a strand on age alone:
-    the Celery path writes no outbox row by design, holds no lease until a
-    consumer starts it, and a deep backlog easily exceeds the age bound.
-    Sweeping on age alone would destroy valid work in exactly the scenario
-    the Celery fallthrough exists to protect.
+    Input symmetry for the sweep. The strand-shaped row here is identical to
+    the one the sweep drains above in every respect except its pair, so the
+    matrix verdict is the only thing that can spare it.
     """
 
     from dev_health_ops.workers import sync_reconciler
 
-    run, backlogged = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_present(monkeypatch)
-    _patch_db_session(monkeypatch, db_session)
-
-    sync_reconciler.reconcile_sync_dispatch(limit=100)
-
-    db_session.expire_all()
-    survivor = (
-        db_session.query(SyncRunUnit).filter(SyncRunUnit.id == backlogged.id).one()
-    )
-    assert survivor.status == SyncRunUnitStatus.DISPATCHING.value
-    assert survivor.error is None
-
-
-def test_sweep_spares_work_when_consumer_presence_is_unknown(
-    db_session, monkeypatch
-) -> None:
-    """An unreadable broker must not be treated as an absent one."""
-
-    from dev_health_ops.workers import sync_reconciler
-
-    run, unit = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    celery_consumers.reset_celery_consumer_probe_cache()
-    monkeypatch.setattr(
-        celery_consumers,
-        "probe_celery_consumers",
-        lambda *_args, **_kwargs: CeleryConsumerPresence.UNKNOWN,
-    )
+    run, unit = _seed_already_stranded_unit(db_session, dataset_key="repo-metadata")
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -1038,20 +984,38 @@ def test_sweep_spares_work_when_consumer_presence_is_unknown(
     assert survivor.error is None
 
 
-def test_sweep_spares_a_plannable_pair_even_with_no_consumers(
-    db_session, monkeypatch
+@pytest.mark.parametrize("state", ("rolled-back", "paused"))
+def test_sweep_declines_when_river_does_not_own_provider_units(
+    db_session, monkeypatch, state: str
 ) -> None:
-    """Routability, not age, is the gate: a plannable pair routes to River."""
+    """The sweep must not destroy work another owner may still be holding.
+
+    The other half of the gate, and the destructive half. The unit here is the
+    SAME non-plannable, strand-shaped row the sweep terminalizes above -- the
+    only difference is that the durable ``sync.provider_unit`` route no longer
+    selects the River outbox. That alone must spare it.
+
+    This is the twin of the Go sweep's ``riverOwns()`` fence, which declines on
+    a paused or non-River route for exactly this reason. CHAOS-4054 step 4
+    removed the Celery-presence probe that used to supply the Python half, and
+    an adversarial review caught that nothing replaced it: during a rollback,
+    the Python sweep was terminalizing aged units its Go counterpart spares.
+    A unit waiting on another owner is indistinguishable from a strand when
+    viewed through the capability matrix alone, so the matrix must not be
+    asked until River ownership is established.
+    """
 
     from dev_health_ops.workers import sync_reconciler
 
-    run, unit = _seed_already_stranded_unit(db_session, dataset_key="repo-metadata")
-    # A River route must actually be in effect for the matrix to apply.
-    db_session.query(WorkerJobRoute).filter(
+    run, unit = _seed_already_stranded_unit(db_session, dataset_key="pr-comments")
+    route_row = db_session.query(WorkerJobRoute).filter(
         WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
+    )
+    if state == "paused":
+        route_row.update({WorkerJobRoute.paused: True})
+    else:
+        route_row.update({WorkerJobRoute.transport: "celery"})
     db_session.commit()
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -1132,11 +1096,7 @@ def _seed_production_wedge(db_session, monkeypatch):
     run.total_units = 1 + len(stranded_ids) + len(planned_ids)
     db_session.flush()
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
     db_session.commit()
     return run, stranded_ids, planned_ids
 
@@ -1274,16 +1234,17 @@ def test_sweep_reaches_a_strand_behind_a_page_of_routable_units(
 ) -> None:
     """Routability must be applied per page, not to a fixed prefix.
 
-    A page of units that resolve CELERY/RIVER/DEFER would otherwise mask a
-    genuine strand behind them on every pass -- the deterministic-loser
-    failure again, one layer down (hunt finding).
+    A page of River-routable units would otherwise mask a genuine strand
+    behind them on every pass -- the deterministic-loser failure again, one
+    layer down (hunt finding).
     """
 
     from dev_health_ops.workers import sync_reconciler
 
     run, strand = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    # Three OLDER units on an ENABLED pair: routable, so filtered by
-    # _only_unroutable, and old enough to sort ahead of the real strand.
+    # Three OLDER units on a route-ready, plannable pair: routable, so
+    # filtered by _only_unroutable, and old enough to sort ahead of the real
+    # strand.
     for index in range(3):
         db_session.add(
             SyncRunUnit(
@@ -1303,11 +1264,7 @@ def test_sweep_reaches_a_strand_behind_a_page_of_routable_units(
                 updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
             )
         )
-    db_session.query(WorkerJobRoute).filter(
-        WorkerJobRoute.job_kind == "sync.provider_unit"
-    ).update({WorkerJobRoute.transport: "river_canary"})
     db_session.commit()
-    _pin_celery_absent(monkeypatch)
 
     selected = sync_reconciler._select_unreclaimable_dispatching_units(
         db_session, datetime.now(timezone.utc), 1
@@ -1344,7 +1301,6 @@ def test_sweep_reaches_a_strand_that_was_ever_budget_deferred(
         .execution_options(synchronize_session=False)
     )
     db_session.commit()
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -1372,7 +1328,6 @@ def test_sweep_spares_a_unit_with_a_live_heartbeat(db_session, monkeypatch) -> N
         .execution_options(synchronize_session=False)
     )
     db_session.commit()
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)
@@ -1382,27 +1337,28 @@ def test_sweep_spares_a_unit_with_a_live_heartbeat(db_session, monkeypatch) -> N
     assert survivor.status == SyncRunUnitStatus.DISPATCHING.value
 
 
-def test_route_resolution_failure_does_not_abort_the_reconcile_pass(
+def test_routability_failure_does_not_abort_the_reconcile_pass(
     db_session, monkeypatch
 ) -> None:
-    """A drifted route must degrade to 'sweep nothing', not kill reconcile.
+    """An unreadable contract must degrade to 'sweep nothing', not kill
+    reconcile.
 
     The sweep shares a pass with lease repair and wakeup materialization; an
-    exception here would take those down with it (hunt finding).
+    exception here would take those down with it (hunt finding). CHAOS-4054
+    moved the failing seam -- the sweep no longer resolves a durable route, it
+    asks the capability matrix -- but the fail-safe is the same one, and it
+    must still spare the unit rather than terminalize on a guess.
     """
 
-    from dev_health_ops.workers import sync_reconciler
+    from dev_health_ops.workers import provider_unit_route, sync_reconciler
 
     run, unit = _seed_already_stranded_unit(db_session, dataset_key="tests")
-    _pin_celery_absent(monkeypatch)
     _patch_db_session(monkeypatch, db_session)
 
-    import dev_health_ops.workers.job_routes as job_routes
-
     def _boom(*_args, **_kwargs):
-        raise RuntimeError("route contract drifted")
+        raise RuntimeError("capability matrix contract drifted")
 
-    monkeypatch.setattr(job_routes, "resolve_worker_job_route", _boom)
+    monkeypatch.setattr(provider_unit_route, "routes_to_river", _boom)
 
     # Must not raise.
     result = sync_reconciler.reconcile_sync_dispatch(limit=100)

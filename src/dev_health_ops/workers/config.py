@@ -151,11 +151,12 @@ task_queues: dict[str, dict[str, Any]] = {
 #   * dispatch-scheduled-syncs, reconcile-sync-dispatch -- each has a very
 #     large test surface (canonical-incident-feature gating, outbox relay,
 #     backfill-orphan cleanup, unreclaimable-dispatching sweep) beyond what
-#     CHAOS-4056's inventory sweep verified 1:1 Go parity for, and
-#     reconcile-sync-dispatch additionally calls into the still-live
-#     Celery-transport fallback (provider_unit_transport.py, explicitly
-#     CHAOS-4054 step 4's territory, sequenced after this ticket). Removing
+#     CHAOS-4056's inventory sweep verified 1:1 Go parity for. Removing
 #     either needs its own reviewed pass, not a drive-by deletion here.
+#     (CHAOS-4054 step 4 has since deleted the Celery-transport fallback
+#     these two used to reach -- provider_unit_transport.py is gone -- so
+#     that particular reason for keeping them no longer applies; the test
+#     surface one still does.)
 #   * dispatch-go-external-ingest-recompute-bridge -- CHAOS-4057: the Go
 #     inventory's "OwnerRemoved" claim for this entry is false (no Go
 #     consumer of bridge_pending rows exists); retire only when CHAOS-4057

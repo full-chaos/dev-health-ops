@@ -1237,60 +1237,62 @@ def _select_unreclaimable_dispatching_units(
 def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit]:
     """Keep only units NO runtime can execute (CHAOS-3990, rollback hazard).
 
-    Age plus "never leased, never attempted, no outbox row" is NOT sufficient
-    on its own. During a CUT-19 Celery rollback the fallback consumers are
-    live and a backlogged Celery unit looks identical to a strand: the Celery
-    path writes no outbox row by design, takes no lease until a consumer
-    starts it, and a deep backlog easily exceeds the age bound. Sweeping on
-    age alone would destroy valid work in precisely the scenario the Celery
-    fallthrough exists to protect.
+    TWO conditions, and the order matters. This function destroys work, so it
+    must answer "does River own provider units at all?" BEFORE it asks "does
+    the matrix route this pair?".
 
-    So the disposition is re-resolved through the SAME shipped resolver the
-    dispatcher uses. Only ``UNROUTABLE`` -- River declines the pair AND the
-    broker confirms nothing consumes the queue it would land in -- is swept.
-    With consumers present the resolver returns CELERY and the unit is left
-    alone; if the probe cannot tell, it returns DEFER and the unit is also
-    left alone. This also makes ``feature_disabled`` the honest category:
-    the sweep only ever fires on units that genuinely have no runtime.
+    1. The durable ``sync.provider_unit`` route must select the River outbox.
+       If it is paused, or rolled back to ``celery``, River does not own these
+       units and their disposition is not this sweep's to decide -- a unit
+       that another owner is holding looks exactly like a strand from here.
+    2. Only then does the capability matrix decide: a pair it does not mark
+       route-ready and plannable has no shipped writer, which is what makes
+       ``feature_disabled`` the honest category.
+
+    Condition 1 is the twin of the Go sweep's own route fence
+    (``internal/syncreconciler/unreclaimable_sweep.go``: ``riverOwns()``
+    declines on paused or non-River). An adversarial review caught this half
+    missing after CHAOS-4054 step 4 removed the Celery-presence probe that
+    used to supply it: with the probe gone and no fence, this twin was
+    terminalizing aged units during a rollback that Go would have spared --
+    Python destroying work its Go counterpart protects.
+
+    The route fence replaces the probe rather than restoring it. If River does
+    not own the route, decline regardless of who is consuming; if River does
+    own it, no Celery consumer is being handed provider units to begin with.
     """
 
     if not units:
         return []
 
-    from dev_health_ops.workers.job_routes import resolve_worker_job_route
-    from dev_health_ops.workers.provider_unit_transport import (
+    from dev_health_ops.workers.job_routes import (
         PROVIDER_UNIT_OUTBOX_ROUTES,
-        UnitTransport,
-        resolve_celery_presence,
-        resolve_unit_transport,
+        resolve_worker_job_route,
     )
+    from dev_health_ops.workers.provider_unit_route import routes_to_river
 
     # This sweep is a safety net running inside reconcile_sync_dispatch,
     # which also repairs leases and materializes wakeups. A paused/drifted
-    # route or an unreadable broker must degrade to "sweep nothing this
-    # pass", never abort the whole reconcile and take those repairs with it
-    # (hunt finding).
+    # route or an unreadable capability matrix must degrade to "sweep nothing
+    # this pass", never abort the whole reconcile and take those repairs with
+    # it (hunt finding).
     try:
-        route = resolve_worker_job_route(session, "sync.provider_unit")
-        river_owns_units = route in PROVIDER_UNIT_OUTBOX_ROUTES
-        presence = resolve_celery_presence(units, river_owns_units=river_owns_units)
+        if (
+            resolve_worker_job_route(session, "sync.provider_unit")
+            not in PROVIDER_UNIT_OUTBOX_ROUTES
+        ):
+            return []
+        return [
+            unit
+            for unit in units
+            if not routes_to_river(str(unit.provider), str(unit.dataset_key))
+        ]
     except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
         logger.warning(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
             exc_info=True,
         )
         return []
-    return [
-        unit
-        for unit in units
-        if resolve_unit_transport(
-            str(unit.provider),
-            str(unit.dataset_key),
-            river_owns_units=river_owns_units,
-            celery_presence=presence,
-        )
-        is UnitTransport.UNROUTABLE
-    ]
 
 
 def _terminalize_unreclaimable_dispatching_units(

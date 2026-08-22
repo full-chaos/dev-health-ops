@@ -29,7 +29,13 @@ drive-by deletion of a flagged-not-deleted entry also fails CI.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 from pathlib import Path
+
+import pytest
+
+from dev_health_ops.workers import sync_units
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKERS_SRC = _REPO_ROOT / "src" / "dev_health_ops" / "workers"
@@ -258,15 +264,55 @@ def test_orphaned_recompute_bridge_task_is_untouched() -> None:
     )
 
 
-def test_celery_transport_dispatch_plane_is_untouched() -> None:
-    """CHAOS-4054 step 4 territory: not this ticket's to delete.
+def test_celery_presence_dispatch_plane_is_deleted() -> None:
+    """CHAOS-4054 step 4 acceptance: no code path can select a Celery transport.
 
-    provider_unit_transport.py's Celery-presence resolution and the
-    worker_job_routes/sync_dispatch_transport_routes tables are explicitly
-    sequenced AFTER CHAOS-4026 closes (CHAOS-4054's own decision doc).
+    The decision record's acceptance for step 4 is literal -- "no code path can
+    construct ``UnitTransport.CELERY`` or ``UNROUTABLE``". The strongest form of
+    that is that neither the enum nor the modules that resolved it exist at all,
+    so this asserts on importability rather than on an attribute of a module
+    that could be reintroduced with the branches quietly restored.
+
+    This test replaces ``test_celery_transport_dispatch_plane_is_untouched``,
+    which pinned the opposite invariant while step 4 was sequenced behind
+    CHAOS-4026. CHAOS-4026 is Done; this is the inversion it gated.
     """
-    from dev_health_ops.workers import provider_unit_transport
 
-    assert hasattr(provider_unit_transport, "resolve_unit_transport")
-    assert hasattr(provider_unit_transport, "resolve_celery_presence")
-    assert hasattr(provider_unit_transport, "UnitTransport")
+    for module in (
+        "dev_health_ops.workers.provider_unit_transport",
+        "dev_health_ops.workers.celery_consumers",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module)
+
+
+def test_provider_unit_dispatch_has_no_celery_fallthrough() -> None:
+    """The dispatcher stages River outbox rows or terminalizes -- never publishes.
+
+    A negative control on the test above: deleting the resolver modules proves
+    the vocabulary is gone, but not that the caller stopped reaching for a
+    second runtime. ``dispatch_sync_run`` is the only producer of provider
+    units, so its source is where a reintroduced Celery fallthrough would show
+    up first.
+    """
+
+    source = inspect.getsource(sync_units)
+
+    for banned in (
+        "resolve_unit_transport",
+        "resolve_celery_presence",
+        "UnitTransport",
+        "celery_presence",
+        "river_owns_units",
+    ):
+        assert banned not in source, (
+            f"{banned!r} is back in sync_units.py -- CHAOS-4054 step 4 deleted "
+            "the Celery-presence transport plane; a provider unit is either "
+            "staged in the durable outbox or terminalized."
+        )
+
+    dispatch = inspect.getsource(sync_units.dispatch_sync_run)
+    assert "run_sync_unit" not in dispatch, (
+        "dispatch_sync_run publishes run_sync_unit again -- the Celery "
+        "fallthrough this dispatcher had is deleted (CHAOS-4054 step 4)."
+    )

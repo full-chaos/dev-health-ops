@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,9 +18,9 @@ type PostgresRiverQuiescer struct {
 
 // PostgresCelerySyncProviderQuiescer proves that the legacy Celery-owned
 // sync.provider_unit workload has drained before its checked-in route can move
-// to River. SyncRunUnit is the durable source of truth for those unit tasks:
-// a dispatching or running row in the approved canary scope still represents
-// an active or already-published Celery task.
+// to River. SyncRunUnit is the durable source of truth for those unit tasks,
+// but a dispatching or running row is only trusted as evidence of live work
+// when it also looks live: see Quiesce for the liveness test.
 //
 // This is deliberately narrower than a generic Celery probe. No other job
 // kind has the same durable unit ledger, so accepting it here would turn an
@@ -77,12 +78,32 @@ var _ Quiescer = (*PostgresRiverQuiescer)(nil)
 // task; planned and retrying work remains eligible for the post-cutover
 // producer route decision. A bounded child context prevents an operator route
 // lock from being held indefinitely when the semantic database is unhealthy.
+//
+// A row's status alone is not proof of life (CHAOS-3929): a producer can run
+// ahead of a drained or never-started Celery consumer (e.g. workers scaled to
+// zero mid-cutover) and leave DISPATCHING rows no one will ever claim. So each
+// status is checked against the same liveness signal the dispatch-layer guard
+// already uses for capacity accounting -- this is the SAME invariant, not a
+// parallel one: quiescer liveness == dispatch-layer capacity-consumer rule
+// (sync/guard.py's "fresh DISPATCHING" / "live RUNNING" split):
+//   - DISPATCHING is live only while fresh: updated_at within
+//     syncdispatchcontract.DispatchStaleAge() of now, the same call the
+//     reconciler's mutation pipeline uses for its own stale-dispatch reclaim
+//     (internal/syncreconciler) -- both resolve the operator-tunable
+//     SYNC_UNIT_DISPATCH_STALE_SECONDS the same way Python does, instead of a
+//     second hardcoded literal that could silently ignore an override. A row
+//     this old with no claim has definitionally been orphaned, not just slow
+//     (CHAOS-3929).
+//   - RUNNING is live unless its lease has explicitly expired. A NULL lease is
+//     unknown/pre-migration and stays live; only an explicit expiry proves the
+//     worker is gone (mirrors sync/guard.py's capacity-consumer set).
 func (quiescer *PostgresCelerySyncProviderQuiescer) Quiesce(ctx context.Context, kind string) error {
 	if quiescer == nil || quiescer.pool == nil || kind != syncProviderUnitKind {
 		return ErrInvalidConfiguration
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, celerySyncProviderProbeTimeout)
 	defer cancel()
+	dispatchStaleCutoff := time.Now().UTC().Add(-syncdispatchcontract.DispatchStaleAge())
 	var active bool
 	err := quiescer.pool.QueryRow(probeCtx, `
 		SELECT EXISTS (
@@ -90,7 +111,11 @@ func (quiescer *PostgresCelerySyncProviderQuiescer) Quiesce(ctx context.Context,
 			WHERE provider = 'launchdarkly'
 			  AND dataset_key = 'feature-flags'
 			  AND status IN ('dispatching', 'running')
-		)`).Scan(&active)
+			  AND (
+				(status = 'dispatching' AND updated_at > $1)
+				OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at > now()))
+			  )
+		)`, dispatchStaleCutoff).Scan(&active)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}

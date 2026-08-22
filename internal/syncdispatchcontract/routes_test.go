@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckedInArtifactIsFrozenAndLookupIsImmutable(t *testing.T) {
@@ -193,5 +194,55 @@ func TestRiverQueueIsPinnedToItsWireValue(t *testing.T) {
 		t.Fatalf("RiverQueue = %q, want \"sync\": this is a persisted wire value; "+
 			"changing it strands in-flight river_job rows and splits old and new "+
 			"binaries during a rolling deploy", RiverQueue)
+	}
+}
+
+// TestDispatchStaleAgeReadsTheSameEnvVarAsPython pins DispatchStaleAge's
+// contract against SYNC_UNIT_DISPATCH_STALE_SECONDS: unset falls back to the
+// checked-in 900-second default (CHAOS-3929's negative control -- the
+// callers relying on this default must not silently regress to zero), a
+// valid override is honored so an operator's SYNC_UNIT_DISPATCH_STALE_SECONDS
+// change actually reaches Go, and the SAME min-1-second floor as
+// sync/guard.py's _stale_dispatch_seconds_guard and workers/sync_units.py's
+// _stale_dispatch_seconds -- both `max(1, int(getenv(..., "900")))` -- is
+// enforced, not the codebase's separate max(0, ...) `_env_int` used
+// elsewhere for unrelated settings. A zero-second window is unsafe here: it
+// makes every DISPATCHING row look orphaned immediately, and
+// MutationPipelineConfig.valid() requires StaleDispatchAge > 0 (CHAOS-3929
+// review round 2 caught this — the first cut of this function clamped to
+// zero instead of one).
+func TestDispatchStaleAgeReadsTheSameEnvVarAsPython(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		set  bool
+		want time.Duration
+	}{
+		{name: "unset falls back to checked-in default", set: false, want: 900 * time.Second},
+		{name: "empty falls back to checked-in default", env: "", set: true, want: 900 * time.Second},
+		{name: "valid override is honored", env: "60", set: true, want: 60 * time.Second},
+		{name: "zero clamps to a one-second floor, mirrors Python's max(1, value)", env: "0", set: true, want: 1 * time.Second},
+		{name: "unparseable falls back to default, mirrors Python's except ValueError", env: "not-a-number", set: true, want: 900 * time.Second},
+		{name: "negative clamps to a one-second floor, mirrors Python's max(1, value)", env: "-30", set: true, want: 1 * time.Second},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			original, wasSet := os.LookupEnv(dispatchStaleSecondsEnv)
+			t.Cleanup(func() {
+				if wasSet {
+					os.Setenv(dispatchStaleSecondsEnv, original)
+				} else {
+					os.Unsetenv(dispatchStaleSecondsEnv)
+				}
+			})
+			if test.set {
+				os.Setenv(dispatchStaleSecondsEnv, test.env)
+			} else {
+				os.Unsetenv(dispatchStaleSecondsEnv)
+			}
+			if got := DispatchStaleAge(); got != test.want {
+				t.Fatalf("DispatchStaleAge() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }

@@ -266,8 +266,24 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 	// shutdown branch below. Counting them only on the success path would drop
 	// exactly the reclaims that happened during a degraded step, which is when
 	// a cycling delivery is most likely to be what is degrading it.
+	//
+	// The measured gauges are carried here for the same reason and on the same
+	// principle, and this is ALSO the deadline path (review finding). A
+	// pipeline can commit sweep and materializer work and then have the
+	// bounded context expire on its way out; returning before this merge threw
+	// away evidence of work that already happened, leaving Prometheus at the
+	// prior value while the pass was already unhealthy.
+	//
+	// Doing it once, ahead of every return below, is deliberate. The per-
+	// branch version of this accounting has now been under-applied three
+	// times -- error path only, then success path, then deadline -- and each
+	// fix patched the branch in front of it. One merge point cannot be missed
+	// by a branch added later.
 	loop.mu.Lock()
 	loop.accumulateRecoveriesLocked(observation)
+	if !loop.stopping {
+		loop.observation = loop.carryUnmeasuredGaugesLocked(observation, false)
+	}
 	loop.mu.Unlock()
 	if contextErr := stepCtx.Err(); contextErr != nil {
 		return contextErr
@@ -295,11 +311,9 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		// from dropping the evidence, and just as bad. An unmeasured pass
 		// leaves the last measured value standing; the failure counters above
 		// and readiness below are what mark it stale.
-		loop.mu.Lock()
-		if !loop.stopping {
-			loop.observation = loop.carryUnmeasuredGaugesLocked(observation, false)
-		}
-		loop.mu.Unlock()
+		// The measured-gauge merge already happened above, ahead of every
+		// return, so this branch has nothing left to do for it.
+		//
 		// Unknown stored kinds are a failed observation, but their bounded total
 		// is still valuable operator evidence. Keep it as a gauge while the
 		// readiness failure prevents this process from being considered healthy.

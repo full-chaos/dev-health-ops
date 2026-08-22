@@ -151,7 +151,7 @@ func (pipeline *MutationPipeline) Step(
 	ctx context.Context,
 	now time.Time,
 	limit int,
-) (Observation, error) {
+) (observation Observation, err error) {
 	if pipeline == nil || ctx == nil || now.IsZero() ||
 		limit < minimumStepLimit || limit > maximumStepLimit ||
 		!pipeline.config.valid() {
@@ -161,6 +161,37 @@ func (pipeline *MutationPipeline) Step(
 		return Observation{}, err
 	}
 	now = now.UTC()
+
+	// ONE ACCOUNTING POINT FOR "THE REPORT DID NOT RUN", not one per return.
+	//
+	// This is a class fix, and it is written this way because the per-site
+	// version failed three times. Each round of review found another exit that
+	// prevented the report while leaving the counter at zero -- first the
+	// materializer's own error, then the swallowed non-fatal failures, then
+	// repair failure, sweep cancellation and terminal-repair failure. Every
+	// one was the same bug, and every fix patched the site in front of me
+	// rather than the reason there were sites at all.
+	//
+	// A deferred accounting on the NAMED return covers every path that exists
+	// and every path added later, including ones whose author never reads this
+	// file. The invariant it enforces is exactly what the counter's HELP text
+	// promises: if this pass did not deliver a report, it says so.
+	//
+	// It is installed AFTER the validation returns above on purpose. A call
+	// rejected for a bad limit never began a pass, so counting it as a
+	// detector outage would be its own kind of false signal.
+	reportStep := runawayReportStepUpstream
+	reportDelivered := false
+	defer func() {
+		if reportDelivered {
+			return
+		}
+		observation.WakeupReportFailures = 1
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_report_unavailable",
+			"step", reportStep,
+		)
+	}()
 	// swept carries the sweep and materializer figures out through EVERY
 	// return below, not just the happy one. The existing
 	// ExhaustedDeliveriesRecovered comment states the rule and the reason: a
@@ -328,28 +359,16 @@ func (pipeline *MutationPipeline) Step(
 	// report was added to end. ERROR for the same reason the report itself is
 	// ERROR: the measurement layer failing is not a degraded state, it is a
 	// blind one.
-	// THE COUNTER MEANS "THE REPORT DID NOT RUN", NOT "THE REPORT FAILED"
-	// (review finding). Those differ, and the difference was a blind spot:
-	// a transaction that could not begin, an earlier materialization
-	// statement that faulted, or a failed commit all return an empty
-	// MaterializerResult with RunawayReportStep unset. The detector
-	// demonstrably did not look, and the counter advertised as separating
-	// "nothing found" from "nothing looked" would have said it did.
+	// The one place that can say the report DID arrive. Everything else is the
+	// deferred accounting above, which assumes it did not.
 	//
-	// So every path that prevents the report counts, and the log names which
-	// one it was.
-	if materialized.RunawayReportStep != "" || err != nil {
-		step := materialized.RunawayReportStep
-		if step == "" {
-			step = runawayReportStepUpstream
-		}
-		slog.Error(
-			"syncreconciler.dispatch_wakeup_report_unavailable",
-			"step", step,
-		)
-		// One per affected pass, so the counter's rate IS the blind rate.
-		recovered.WakeupReportFailures = 1
+	// The distinction the log preserves: a named step means the report itself
+	// faulted, the upstream code means the pass never reached it. Those want
+	// different first questions even though the counter merges them.
+	if materialized.RunawayReportStep != "" {
+		reportStep = materialized.RunawayReportStep
 	}
+	reportDelivered = materialized.RunawayReportStep == "" && err == nil
 	// THE EXACT TOTAL, never len(Runaway) (review finding). Runaway is a
 	// sample capped at runawayDispatchScan; CHAOS-4093 held 83 stuck runs, so
 	// a gauge fed from the sample would have reported 20 for an incident more
@@ -364,7 +383,7 @@ func (pipeline *MutationPipeline) Step(
 	// Measured only when the report actually delivered. Anything else leaves
 	// the previous value standing rather than overwriting a real count with a
 	// zero nobody took (review finding).
-	recovered.RunawayMeasured = materialized.RunawayReportStep == "" && err == nil
+	recovered.RunawayMeasured = reportDelivered
 	if err != nil {
 		return recovered, err
 	}
@@ -378,7 +397,7 @@ func (pipeline *MutationPipeline) Step(
 	); err != nil {
 		return recovered, err
 	}
-	observation, err := pipeline.observer.Step(ctx, now, limit)
+	observation, err = pipeline.observer.Step(ctx, now, limit)
 	// The read-only Observer leaves every pipeline-authored field zero, so
 	// they are copied across rather than merged. One assignment per field,
 	// spelled out: a struct-level copy would silently drop the observer's own
@@ -386,7 +405,6 @@ func (pipeline *MutationPipeline) Step(
 	// somebody forgets to carry.
 	observation.ExhaustedDeliveriesRecovered = recovered.ExhaustedDeliveriesRecovered
 	observation.RunawayDispatchWakeups = recovered.RunawayDispatchWakeups
-	observation.WakeupReportFailures = recovered.WakeupReportFailures
 	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
 	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
 	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures

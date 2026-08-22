@@ -1363,3 +1363,52 @@ func TestShadowSelectionMovesTheCandidateGaugeWithoutTheTerminalizedCounter(t *t
 	// the silence this series replaces.
 	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 0")
 }
+
+// THE DEADLINE PATH ALSO CARRIES COMMITTED EVIDENCE (adversarial review).
+//
+// A pipeline can commit sweep and materializer work and then have the bounded
+// observation context expire on its way out. The deadline return used to sit
+// ahead of the gauge merge, so that evidence was discarded and Prometheus held
+// the prior value — possibly zero — while the pass was already unhealthy.
+//
+// The merge now happens once, ahead of every return, which is why this passes
+// without a branch of its own.
+func TestADeadlinePassStillCarriesItsMeasuredGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	loop, registry := newTestLoopWithTimeout(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (Observation, error) {
+		// Work committed, then the bounded context expires on the way out.
+		observation := Observation{
+			RunawayDispatchWakeups:  83,
+			UnreclaimableCandidates: 12,
+			RunawayMeasured:         true,
+			UnreclaimableMeasured:   true,
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("the step context carried no deadline, so this proves nothing")
+		}
+		for !time.Now().After(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		return observation, nil
+	}), clock, 10*time.Millisecond)
+	openReadinessGate(t, registry)
+
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the deadline error")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("a deadline discarded evidence of work that already committed, "+
+				"missing %q:\n%s", want, metrics.String())
+		}
+	}
+}

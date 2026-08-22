@@ -962,3 +962,107 @@ func TestPipelineStepLeavesTheSweepFailureCounterAloneOnAHealthyPass(t *testing.
 		t.Fatalf("a successful sweep was counted as a failure: %+v", observation)
 	}
 }
+
+// EVERY EXIT THAT PREVENTS THE REPORT MUST COUNT (adversarial review, third
+// time this class appeared).
+//
+// The counter's contract is "this pass did not deliver a report". Three
+// successive rounds each found another exit satisfying that description while
+// leaving it at zero — the materializer's own error, then the swallowed
+// non-fatal failures, then repair failure and terminal-repair failure. Every
+// one was the same bug; every fix patched the site in front of it.
+//
+// The accounting is now deferred on the named return, so it covers paths this
+// table does not list and paths added later. This table exists to prove the
+// ones that already exist, and to fail loudly if someone replaces the defer
+// with per-site assignments again.
+func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
+	failure := errors.New("scripted stage failure")
+	okRepair := func(contextT, time.Time, int) (LeaseRepairResult, error) {
+		return LeaseRepairResult{}, nil
+	}
+	okTerminal := func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+		return TerminalDeliveryRepairResult{}, nil
+	}
+	for _, testCase := range []struct {
+		name     string
+		repair   func(contextT, time.Time, int) (LeaseRepairResult, error)
+		terminal func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error)
+	}{
+		{
+			name: "lease repair fails before anything else runs",
+			repair: func(contextT, time.Time, int) (LeaseRepairResult, error) {
+				return LeaseRepairResult{}, failure
+			},
+			terminal: okTerminal,
+		},
+		{
+			name:   "terminal-delivery repair fails before the materializer",
+			repair: okRepair,
+			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, failure
+			},
+		},
+		{
+			name:   "the repair returns counts it cannot stand behind",
+			repair: okRepair,
+			// Recovered is out of range against its own subtotals, which the
+			// pipeline treats as a failed step returning ErrUnavailable.
+			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{Recovered: 1, ExhaustedRecovered: 5}, nil
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			pipeline, err := NewMutationPipeline(
+				pipelineLeaseRepairFunc(testCase.repair),
+				pipelineTerminalDeliveryRepairFunc(testCase.terminal),
+				pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+					t.Fatal("the materializer must not run on this path")
+					return MaterializerResult{}, nil
+				}),
+				pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+					return KernelResult{}, nil
+				}),
+				pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+					return Observation{}, nil
+				}),
+				AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+				PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+				nil,
+				DefaultMutationPipelineConfig(),
+			)
+			if err != nil {
+				t.Fatalf("construct pipeline: %v", err)
+			}
+			observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+			if stepErr == nil {
+				t.Fatal("Step() = nil, want the scripted failure")
+			}
+			if observation.WakeupReportFailures != 1 {
+				t.Fatalf("WakeupReportFailures = %d on a pass that never reached the "+
+					"report: the detector reads as continuously healthy through a "+
+					"real upstream outage", observation.WakeupReportFailures)
+			}
+			// ...and the gauge must not claim to have measured anything.
+			if observation.RunawayMeasured {
+				t.Fatalf("a pass that never ran the report claimed to have measured it: %+v",
+					observation)
+			}
+		})
+	}
+}
+
+// NON-VACUITY for the defer: a pass that DID deliver a report must leave the
+// counter alone, or it increments on every healthy tick and distinguishes
+// nothing. This is the case the deferred accounting has to actively suppress.
+func TestPipelineStepLeavesTheReportCounterAloneWhenTheReportRan(t *testing.T) {
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeShadow}})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.WakeupReportFailures != 0 || !observation.RunawayMeasured {
+		t.Fatalf("a delivered report was counted as a failure: %+v", observation)
+	}
+}

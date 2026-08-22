@@ -640,3 +640,70 @@ func (handler *capturingHandler) Handle(_ contextT, record slog.Record) error {
 func (handler *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return handler }
 
 func (handler *capturingHandler) WithGroup(string) slog.Handler { return handler }
+
+// The pipeline must SAY the detector broke. The materializer carrying the step
+// out on its result is only half the fix -- a field nobody reads is the same
+// silence in a different place.
+func TestPipelineStepReportsAnUnavailableRunawayReport(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			// A pass that materialized fine and could not take the report.
+			// The empty Runaway is the point: without the step field this is
+			// byte-identical to a healthy, quiet system.
+			return MaterializerResult{
+				Dispatch:          1,
+				RunawayReportStep: runawayReportStepQuery,
+			}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("a broken report took the pass down with it: %v", err)
+	}
+
+	record, found := findSlogRecord(*captured, "syncreconciler.dispatch_wakeup_report_unavailable")
+	if !found {
+		t.Fatal("the runaway detector failed and the pass reported nothing; " +
+			"an empty report that does not admit it failed is indistinguishable " +
+			"from a healthy one, which is the silence this report exists to end")
+	}
+	if record["step"] != runawayReportStepQuery {
+		t.Fatalf("record step = %v, want the failing statement named", record["step"])
+	}
+}
+
+// NON-VACUITY: a working detector must not emit the broken-detector line, or
+// it fires on every tick and stops meaning anything.
+func TestPipelineStepStaysSilentWhenTheRunawayReportWorked(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeShadow}})
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := findSlogRecord(*captured, "syncreconciler.dispatch_wakeup_report_unavailable"); found {
+		t.Fatal("a healthy pass claimed the runaway detector was unavailable")
+	}
+}

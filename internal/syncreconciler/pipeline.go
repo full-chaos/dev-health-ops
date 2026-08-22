@@ -300,6 +300,20 @@ func (pipeline *MutationPipeline) Step(
 			"truncated", materialized.RunawayTruncated,
 		)
 	}
+	// A BROKEN DETECTOR MUST NOT READ AS A CLEAN ONE (adversarial review
+	// finding). An empty Runaway above means one of two opposite things: no
+	// run is looping, or the statement that would have said so did not run.
+	// Without this line the second is indistinguishable from the first, and a
+	// permission or schema fault would reproduce exactly the silence this
+	// report was added to end. ERROR for the same reason the report itself is
+	// ERROR: the measurement layer failing is not a degraded state, it is a
+	// blind one.
+	if materialized.RunawayReportStep != "" {
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_report_unavailable",
+			"step", materialized.RunawayReportStep,
+		)
+	}
 	if err != nil {
 		return recovered, err
 	}

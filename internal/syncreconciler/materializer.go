@@ -42,6 +42,15 @@ const runawayDispatchAttempts = 1000
 // lines. Truncation is not silent: the caller is told the report was capped.
 const runawayDispatchScan = 20
 
+// The report's steps, named the way the sweep names its own (CHAOS-4035's
+// lesson: a bare package-wide error told an operator nothing about which
+// statement stopped working).
+const (
+	runawayReportStepQuery = "runaway dispatch-wakeup report read of public.sync_dispatch_outbox"
+	runawayReportStepScan  = "runaway dispatch-wakeup report scan"
+	runawayReportStepRows  = "runaway dispatch-wakeup report iteration"
+)
+
 // RunawayDispatchWakeup is one dispatch outbox row whose attempt count has
 // crossed runawayDispatchAttempts while its run is still non-terminal. It
 // carries the run rather than the outbox id because the run is what an
@@ -67,6 +76,22 @@ type MaterializerResult struct {
 	// not say so would read as "these are all of them", which is the class of
 	// quiet under-reporting this whole ticket is about.
 	RunawayTruncated bool
+	// RunawayReportStep names the statement that failed if the report could
+	// not be taken at all, and is "" on every pass that took it.
+	//
+	// A DETECTOR THAT BREAKS MUST NOT READ AS CLEAN (adversarial review
+	// finding). An earlier cut swallowed this error so the materialization
+	// would survive it -- correct instinct, wrong trade. Not failing the step
+	// is right; discarding the fact is not, because an empty Runaway then
+	// means either "no run is looping" or "the thing that would have told you
+	// is broken", and those demand opposite responses. That is the same
+	// measurement-fails-toward-fine shape as the silence this whole report
+	// exists to end.
+	//
+	// It carries the STEP, not the driver error: a SQLSTATE-bearing string
+	// can hold row values, and the reason an operator needs is which
+	// statement stopped working.
+	RunawayReportStep string
 }
 
 type materializerBeginFunc func(context.Context) (pgx.Tx, error)
@@ -147,10 +172,16 @@ func (materializer *Materializer) Step(
 	}
 	// The report runs in the SAME transaction as the writes above, and after
 	// them, so what it reports is the state this pass leaves behind rather
-	// than the one it found. It reads only; a failure here must not lose the
-	// materialization, so it is not allowed to fail the step.
-	runaway, truncated, reportErr := readRunawayDispatchWakeups(ctx, tx)
-	if reportErr == nil {
+	// than the one it found.
+	//
+	// It reads only, so a failure here must not lose the materialization --
+	// but it must not vanish either. The step name is carried out on the
+	// result and the caller reports it; see RunawayReportStep for why a
+	// swallowed error would be the very failure this report exists to end.
+	runaway, truncated, failedStep := readRunawayDispatchWakeups(ctx, tx)
+	if failedStep != "" {
+		result.RunawayReportStep = failedStep
+	} else {
 		result.Runaway, result.RunawayTruncated = runaway, truncated
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -205,15 +236,18 @@ ORDER BY outbox.attempts DESC, outbox.sync_run_id
 LIMIT $2
 `
 
+// readRunawayDispatchWakeups returns the failing STEP rather than an error,
+// because every caller needs the same two things -- "did it work" and "which
+// statement" -- and no caller may see a driver string. "" means it worked.
 func readRunawayDispatchWakeups(
 	ctx context.Context, tx pgx.Tx,
-) ([]RunawayDispatchWakeup, bool, error) {
+) ([]RunawayDispatchWakeup, bool, string) {
 	rows, err := tx.Query(
 		ctx, selectRunawayDispatchWakeupsSQL,
 		int64(runawayDispatchAttempts), runawayDispatchScan+1,
 	)
 	if err != nil {
-		return nil, false, ErrUnavailable
+		return nil, false, runawayReportStepQuery
 	}
 	defer rows.Close()
 	report := make([]RunawayDispatchWakeup, 0, runawayDispatchScan)
@@ -221,7 +255,7 @@ func readRunawayDispatchWakeups(
 	for rows.Next() {
 		var wakeup RunawayDispatchWakeup
 		if err := rows.Scan(&wakeup.SyncRunID, &wakeup.Attempts); err != nil {
-			return nil, false, ErrUnavailable
+			return nil, false, runawayReportStepScan
 		}
 		// The window asks for one more row than it reports, so "there are
 		// more" is observed rather than inferred from a full page.
@@ -232,12 +266,12 @@ func readRunawayDispatchWakeups(
 		report = append(report, wakeup)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, ErrUnavailable
+		return nil, false, runawayReportStepRows
 	}
 	if len(report) == 0 {
-		return nil, false, nil
+		return nil, false, ""
 	}
-	return report, truncated, nil
+	return report, truncated, ""
 }
 
 // materializeDispatchSQL mirrors _dispatchable_run_ids followed by

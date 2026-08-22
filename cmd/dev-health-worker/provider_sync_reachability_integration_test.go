@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/riverqueue/river"
@@ -47,27 +46,21 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForTheSelectedQueue(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, configure := range map[string]func(*config.Config){
-		"default": func(*config.Config) {},
-		"github_work_items": func(cfg *config.Config) {
-			cfg.WorkerGithubWorkItemsStatusMappingPath = filepath.Join(
-				"src", "dev_health_ops", "config", "status_mapping.yaml",
-			)
-			cfg.WorkerGithubWorkItemsInvestmentConfigPath = filepath.Join(
-				"src", "dev_health_ops", "config", "investment_areas.yaml",
-			)
-		},
-	} {
+	// CHAOS-4054: there is no "default" case any more. A process that serves
+	// the provider-unit queue must be able to serve every RouteReady route,
+	// work-items included, so the artifacts are part of a valid provider-sync
+	// configuration rather than an opt-in extra. The old default/github_work_items
+	// split existed because a route switch could say "this deployment does not
+	// serve work-items"; nothing says that now.
+	for _, name := range []string{"work_items_artifacts_configured"} {
 		t.Run(name, func(t *testing.T) {
-			cfg := config.Config{
-				Queues:                 []string{"sync", "sync_provider"},
-				WorkerQueueConcurrency: map[string]int{"sync": 3, "sync_provider": 9},
-				RiverDatabaseSchema:    "river",
-				SettingsEncryptionKey:  secrets.NewValue("test-encryption-key"),
-				ClickHouseURI:          secrets.NewValue(clickhouse.URI),
-				ValkeyURI:              secrets.NewValue(valkey.URI),
-			}
-			configure(&cfg)
+			cfg := validGitHubWorkItemsRuntimeConfig(t)
+			cfg.Queues = []string{"sync", "sync_provider"}
+			cfg.WorkerQueueConcurrency = map[string]int{"sync": 3, "sync_provider": 9}
+			cfg.RiverDatabaseSchema = "river"
+			cfg.SettingsEncryptionKey = secrets.NewValue("test-encryption-key")
+			cfg.ClickHouseURI = secrets.NewValue(clickhouse.URI)
+			cfg.ValkeyURI = secrets.NewValue(valkey.URI)
 			family, err := buildProviderSyncWorker(
 				ctx, cfg, reportBuilderDatabase(t), registry, collector, slog.Default(), river.NewWorkers(),
 			)

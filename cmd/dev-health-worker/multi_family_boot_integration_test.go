@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -64,6 +63,16 @@ func TestEveryMultiFamilyQueueSelectionBoots(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = clickhouse.Close(context.Background()) })
 
+	// CHAOS-4054: a selection containing sync_provider now really constructs
+	// the provider-sync family — it used to short-circuit whenever every route
+	// switch was off, which was every run of this test. Booting it for real
+	// needs the dependencies it actually opens.
+	valkey, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = valkey.Close(context.Background()) })
+
 	bridge := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte(`{}`))
@@ -96,7 +105,9 @@ func TestEveryMultiFamilyQueueSelectionBoots(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			family, err := bootQueueSelection(t, ctx, postgres.URI, clickhouse.URI, bridge.URL, testCase.queues)
+			family, err := bootQueueSelection(
+				t, ctx, postgres.URI, clickhouse.URI, valkey.URI, bridge.URL, testCase.queues,
+			)
 			if err != nil {
 				t.Fatalf("queue selection %s did not compose: %v", strings.Join(testCase.queues, ","), err)
 			}
@@ -132,6 +143,7 @@ func bootQueueSelection(
 	ctx context.Context,
 	postgresURI string,
 	clickhouseURI string,
+	valkeyURI string,
 	bridgeURL string,
 	queues []string,
 ) (workerFamily, error) {
@@ -152,18 +164,23 @@ func bootQueueSelection(
 	for _, queue := range queues {
 		concurrency[queue] = 1
 	}
-	cfg := config.Config{
-		Service:                        "dev-health-worker",
-		Queues:                         append([]string(nil), queues...),
-		WorkerQueueConcurrency:         concurrency,
-		WorkerInstanceID:               uuid.NewString(),
-		RiverDatabaseSchema:            "river",
-		ClickHouseURI:                  secrets.NewValue(clickhouseURI),
-		OperationalBridgeURL:           bridgeURL,
-		OperationalBridgeToken:         secrets.NewValue("multi-family-token"),
-		OperationalBridgeTimeout:       20 * time.Second,
-		OperationalBridgeAllowInsecure: true,
-	}
+	// A selection that includes the provider-unit queue must carry the
+	// work-item artifacts, because capability is always on and that worker
+	// serves every RouteReady route (CHAOS-4054). Setting them for every
+	// selection keeps the boot matrix uniform.
+	cfg := validGitHubWorkItemsRuntimeConfig(t)
+	cfg.Service = "dev-health-worker"
+	cfg.Queues = append([]string(nil), queues...)
+	cfg.WorkerQueueConcurrency = concurrency
+	cfg.WorkerInstanceID = uuid.NewString()
+	cfg.RiverDatabaseSchema = "river"
+	cfg.ClickHouseURI = secrets.NewValue(clickhouseURI)
+	cfg.ValkeyURI = secrets.NewValue(valkeyURI)
+	cfg.SettingsEncryptionKey = secrets.NewValue("multi-family-encryption-key")
+	cfg.OperationalBridgeURL = bridgeURL
+	cfg.OperationalBridgeToken = secrets.NewValue("multi-family-token")
+	cfg.OperationalBridgeTimeout = 20 * time.Second
+	cfg.OperationalBridgeAllowInsecure = true
 	registryTree, err := jobruntime.Load(filepath.Join("contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)

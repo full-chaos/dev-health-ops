@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -769,5 +770,367 @@ func TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan(t *te
 	}
 	if units != 0 || credential != nil || auth != nil {
 		t.Fatalf("zero-unit plan hydrated auth: units=%d credential=%v auth=%v", units, credential, auth)
+	}
+}
+
+// suppressAutoSecurityDataset stops loadPlanDatasets from silently adding a
+// SECOND candidate (github/security auto-enables unconditionally for every
+// github/gitlab integration, CHAOS-3xxx pre-CHAOS-4060 behavior) to any test
+// that only means to reason about ONE dataset's executed-proof state. An
+// explicit, disabled integration_datasets row for "security" makes
+// securityExists true, which is all loadPlanDatasets checks before deciding
+// whether to append it -- is_enabled=false keeps it out of the plan the same
+// way it always would for an operator-disabled dataset.
+func suppressAutoSecurityDataset(t *testing.T, fixture materializerFixture) {
+	t.Helper()
+	if _, err := fixture.pool.Exec(context.Background(), `
+INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES (gen_random_uuid(), $1, (SELECT integration_id FROM sync_configurations LIMIT 1), 'security', FALSE, '{}'::jsonb)`,
+		fixture.occurrence.OrgID,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedPriorSyncRunUnit inserts one terminal sync_run_units row for the
+// fixture's sole integration/source, so a later RefreshExecutedProof call has
+// real evidence to find -- exercising the query this materializer actually
+// runs, not a hand-built evidence map.
+func seedPriorSyncRunUnit(t *testing.T, fixture materializerFixture, dataset, status, result string) {
+	t.Helper()
+	ctx := context.Background()
+	runID := "00000000-0000-4000-8000-000000002001"
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO sync_runs (
+	id, org_id, integration_id, triggered_by, mode, status,
+	total_units, completed_units, failed_units, created_at
+) VALUES (
+	$1::uuid, $2, (SELECT integration_id FROM sync_configurations LIMIT 1),
+	'scheduled', 'incremental', $3, 1, 1, 0, now()
+) ON CONFLICT (id) DO NOTHING`,
+		runID, fixture.occurrence.OrgID, status,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO sync_run_units (
+	id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+	cost_class, mode, status, attempts, result, created_at, updated_at
+) VALUES (
+	gen_random_uuid(), $1, $2::uuid,
+	(SELECT integration_id FROM sync_configurations LIMIT 1),
+	(SELECT id FROM integration_sources LIMIT 1),
+	'github', $3, 'medium', 'incremental', $4, 1, $5, now(), now()
+)`,
+		fixture.occurrence.OrgID, runID, dataset, status, result,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNativeMaterializerExecutedProofBootstrapConvergence is the CHAOS-4060
+// end-to-end control chris ruled on directly: a never-attempted pair must
+// bootstrap through its first plan (not deadlock forever waiting for proof
+// it can only earn by being planned), and from there the SAME durable state
+// the gate already reads must converge correctly on its own --
+// attempted-but-unproven blocks the next cycle, and a later genuine success
+// unblocks the cycle after that, permanently. This drives the real wiring
+// (RefreshExecutedProof -> materializer.executedProof -> Materialize ->
+// PlannerInput.ExecutedProof -> BuildScheduledPlan) through all three
+// states, not just the unit-level gate.
+func TestNativeMaterializerExecutedProofBootstrapConvergence(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	suppressAutoSecurityDataset(t, fixture)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		var units int
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+	// Materialize's replay contract deliberately rejects replanning a
+	// committed occurrence with a different result
+	// (TestNativeMaterializerRejectsReplayAcrossInitializedFieldFamilies),
+	// so each converging state below needs its own occurrence identity.
+	occurrenceN := func(n int) PendingOccurrence {
+		occurrence := fixture.occurrence
+		occurrence.ID = fmt.Sprintf("occurrence:v1:scheduled:convergence-%d", n)
+		occurrence.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Duration(n) * time.Hour)
+		return occurrence
+	}
+
+	// Step 1: zero sync_run_units history for github/commits anywhere.
+	// Never-attempted must bootstrap through.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrenceN(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf("total_units=%d, want 1: never-attempted must bootstrap through", got)
+	}
+
+	// Step 2: that bootstrap attempt resolved WITHOUT ever persisting a
+	// row (a failure, or an empty-but-successful window -- either way, no
+	// proof). The pair is now attempted-but-unproven and must block.
+	seedPriorSyncRunUnit(t, fixture, "commits", "failed", `{"error":"boom"}`)
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = materializeAndCommit(t, fixture, materializer, occurrenceN(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf("total_units=%d, want 0: attempted-and-unproven must block", got)
+	}
+
+	// Step 3: a later attempt genuinely persists rows. Proven, permanently.
+	seedPriorSyncRunUnit(t, fixture, "commits", "success",
+		`{"go_provider_route":{"records":4}}`)
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = materializeAndCommit(t, fixture, materializer, occurrenceN(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf("total_units=%d, want 1: github/commits now has live executed proof", got)
+	}
+}
+
+// TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError is the
+// codex adversarial-review finding this pins: a failed initial evidence load
+// must NOT silently restore full pre-CHAOS-4060 permissive behavior for the
+// rest of the process's lifetime. Before this test existed, a startup query
+// error left executedProof nil, and nil is the documented "gate not wired"
+// pass-through -- meaning a transient Postgres hiccup at boot would have
+// permitted every unproven route for as long as the process ran.
+func TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the first load to fail: an already-canceled context makes the
+	// underlying query return context.Canceled immediately, standing in for
+	// any real query failure (permission error, schema mismatch, connection
+	// refused -- QueryExecutedProofEvidence returns the same shape of error
+	// for all of them).
+	failCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	refreshErr := materializer.RefreshExecutedProof(failCtx)
+	if refreshErr == nil {
+		t.Fatal("RefreshExecutedProof against a canceled context unexpectedly succeeded")
+	}
+
+	snapshot := materializer.executedProof.Load()
+	if snapshot == nil {
+		t.Fatal("a failed FIRST load must still install a non-nil snapshot -- fail closed, not open")
+	}
+	if !snapshot.Degraded {
+		t.Fatalf(
+			"failed first load snapshot.Degraded=false, want true -- otherwise an "+
+				"empty Proven/Attempted shape reads as a healthy, never-attempted "+
+				"database and bootstraps every pair through: snapshot=%+v", snapshot,
+		)
+	}
+
+	// The gate is now enforced: github/commits carries no waiver and has no
+	// evidence, so it must not plan -- exactly the outcome that must survive
+	// a query failure, not the permissive nil-evidence pass-through.
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var units int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: a failed initial evidence load must fail the gate closed, not open",
+			units,
+		)
+	}
+}
+
+// TestNativeMaterializerRefreshExecutedProofDegradesAfterALaterFailureToo is
+// the codex round-4 finding this pins: my earlier fix only forced a
+// Degraded snapshot on the very FIRST failed load ("if executedProof.Load()
+// == nil"). A LATER refresh failure -- after a real, successful, but
+// legitimately EMPTY load -- left that stale empty snapshot in place
+// unchanged, and empty now means "never attempted, bootstrap through": an
+// outage starting AFTER a clean boot would have kept authorizing every
+// never-attempted pair on the strength of a reading that could no longer be
+// trusted. This drives a real success (empty, non-degraded) followed by a
+// real failure and asserts the pair that would have bootstrapped through is
+// blocked once the snapshot is degraded -- and that a genuinely PROVEN pair
+// keeps passing regardless, since that fact does not stop being true.
+func TestNativeMaterializerRefreshExecutedProofDegradesAfterALaterFailureToo(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	suppressAutoSecurityDataset(t, fixture)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		var units int
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+
+	// A real, healthy, but genuinely empty first load: github/commits has
+	// zero history, so it bootstraps through.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := materializer.executedProof.Load(); snapshot == nil || snapshot.Degraded {
+		t.Fatalf("first load snapshot = %+v, want a healthy (non-degraded) snapshot", snapshot)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf("total_units=%d, want 1: never-attempted must bootstrap through on a healthy snapshot", got)
+	}
+
+	// Now the query itself starts failing. The stale "empty" reading can no
+	// longer be trusted as a true "never attempted".
+	failCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := materializer.RefreshExecutedProof(failCtx); err == nil {
+		t.Fatal("RefreshExecutedProof against a canceled context unexpectedly succeeded")
+	}
+	snapshot := materializer.executedProof.Load()
+	if snapshot == nil || !snapshot.Degraded {
+		t.Fatalf(
+			"a LATER refresh failure (after a healthy load) must also degrade the snapshot: snapshot=%+v",
+			snapshot,
+		)
+	}
+	secondOccurrence := fixture.occurrence
+	secondOccurrence.ID = "occurrence:v1:scheduled:degraded-after-healthy"
+	secondOccurrence.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, secondOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: a degraded snapshot must not keep bootstrapping a "+
+				"never-attempted pair through on a reading it can no longer trust",
+			got,
+		)
+	}
+}
+
+// TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart is the
+// second codex adversarial-review finding this pins: a load-once-at-startup
+// snapshot alone can never observe evidence that appears after the process
+// booted, so a route earning its first live proof would stay gated for the
+// rest of the process's lifetime -- an operator would have to bounce the
+// scheduler to unstick it. maybeRefreshExecutedProof's bounded periodic
+// reload closes that gap; this drives it through Materialize with a fake
+// clock, asserting BOTH that it stays quiet inside the refresh window (no
+// thundering-herd query on every occurrence) and that it actually unblocks
+// once the window elapses, with no manual RefreshExecutedProof call at all.
+func TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	suppressAutoSecurityDataset(t, fixture)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer.executedProofRefreshInterval = time.Minute
+	clock := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	materializer.now = func() time.Time { return clock }
+
+	// Seed an ATTEMPTED-but-unproven row up front, so this pair starts
+	// genuinely blocked rather than bootstrapping through on its first
+	// occurrence -- that keeps this test about the refresh throttle, not
+	// about the separate bootstrap-convergence property
+	// (TestNativeMaterializerExecutedProofBootstrapConvergence covers that).
+	seedPriorSyncRunUnit(t, fixture, "commits", "failed", `{"error":"boom"}`)
+
+	// Opt into the gate the same way production does: one explicit initial
+	// load. At this instant github/commits is attempted but unproven.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var units int
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf("total_units=%d, want 0: attempted and not yet proven", got)
+	}
+
+	// Real evidence now exists, but the clock has not moved: a second
+	// occurrence inside the same refresh window must NOT see it yet --
+	// maybeRefreshExecutedProof is deliberately throttled, not called fresh
+	// on every occurrence.
+	seedPriorSyncRunUnit(t, fixture, "commits", "success",
+		`{"go_provider_route":{"records":7}}`)
+	stillWithinWindow := fixture.occurrence
+	stillWithinWindow.ID = "occurrence:v1:scheduled:within-window"
+	stillWithinWindow.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, stillWithinWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: still inside the refresh window, evidence must not be visible yet",
+			got,
+		)
+	}
+
+	// Advance the clock past the refresh interval and materialize a third
+	// occurrence with NO manual RefreshExecutedProof call -- this is the
+	// exact "unblocks without a restart" behavior the finding asked for.
+	clock = clock.Add(2 * time.Minute)
+	afterWindow := fixture.occurrence
+	afterWindow.ID = "occurrence:v1:scheduled:after-window"
+	afterWindow.ScheduledFor = fixture.occurrence.ScheduledFor.Add(2 * time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, afterWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf(
+			"total_units=%d, want 1: the refresh window elapsed, so Materialize should have "+
+				"picked up the new evidence on its own",
+			got,
+		)
 	}
 }

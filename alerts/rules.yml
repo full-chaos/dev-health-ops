@@ -439,3 +439,48 @@ groups:
             without confirmed-complete daily metrics (CHAOS-4073). Check PostgreSQL
             connectivity/schema for daily_metrics_runs and worker logs for the WARNING
             this counter accompanies.
+
+  # ---------------------------------------------------------------------------
+  # Executed-proof route-readiness gate (CHAOS-4060)
+  # ---------------------------------------------------------------------------
+  - name: scheduler_executed_proof_gate
+    interval: 60s
+    rules:
+      # Unlike CHAOS-4073's gate, a failed executed-proof refresh fails
+      # CLOSED (Degraded blocks every non-waived route, not the permissive
+      # fail-open CHAOS-4073 chose for its own gate) -- but "closed" is
+      # exactly why this needs to be just as loud: a degraded gate still
+      # lets Materialize complete a zero-unit occurrence successfully, so
+      # scheduler readiness alone cannot surface it. `for` is shorter than
+      # the rate() window for the same reason as GitHubAPIRateLimited /
+      # RecommendationsReadinessGateFailingOpen above: one increment must be
+      # able to sustain a positive rate long enough to fire.
+      - alert: SchedulerExecutedProofGateRefreshFailing
+        expr: |
+          sum(rate(devhealth_scheduler_executed_proof_refresh_failures_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Scheduler executed-proof evidence refresh is failing"
+          description: |
+            NativeMaterializer.RefreshExecutedProof is erroring against the domain
+            Postgres pool (CHAOS-4060). Every non-waived route stays blocked
+            (fail-closed) until a refresh succeeds; check PostgreSQL connectivity
+            and permissions for public.sync_run_units and worker logs for the
+            ERROR this counter accompanies.
+      - alert: SchedulerExecutedProofGateDegraded
+        expr: |
+          max(devhealth_scheduler_executed_proof_gate_degraded) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Scheduler executed-proof gate is running degraded"
+          description: |
+            The CHAOS-4060 executed-proof gate has never had a successful evidence
+            load, or its last refresh failed: every non-waived route is being
+            treated as unproven and blocked from planning new work until a refresh
+            succeeds.

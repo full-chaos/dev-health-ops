@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -281,6 +283,28 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		if err != nil {
 			return nil, err
 		}
+		// CHAOS-4060: load the executed-proof snapshot once at process
+		// startup, bounded so a blocked query cannot hang scheduler
+		// construction indefinitely. A failed load is not fatal to the
+		// PROCESS -- RefreshExecutedProof installs an empty, non-nil,
+		// enforced snapshot on the first failure (fail CLOSED, not open:
+		// every non-waived route is conservatively unproven rather than the
+		// gate going silently unenforced), and maybeRefreshExecutedProof
+		// keeps retrying on its normal bounded interval from inside
+		// Materialize. This must still be loud: an operator needs to know
+		// route planning is running proof-less, not just that the process
+		// came up "ready".
+		startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
+		refreshErr := materializer.RefreshExecutedProof(startupCtx)
+		cancelStartup()
+		if refreshErr != nil {
+			slog.Default().Error(
+				"executed-proof evidence load failed at scheduler startup; "+
+					"every non-waived route is being treated as UNPROVEN (fail "+
+					"closed) until a later refresh succeeds (CHAOS-4060)",
+				"error", refreshErr,
+			)
+		}
 		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
 }
@@ -402,6 +426,19 @@ func buildSchedulerLoopWithSources(
 	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
 	if err != nil || occurrences == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
+	}
+	// CHAOS-4060: expose the executed-proof gate's own health (refresh
+	// failures, degraded state) as a Prometheus source, separate from the
+	// scheduler's own readiness -- a degraded gate still completes
+	// zero-unit occurrences successfully, so readiness alone cannot surface
+	// it. *schedulersync.OccurrenceReconciler (the concrete type behind
+	// OccurrenceStepper in production) satisfies this only when its
+	// materializer does too (NativeMaterializer does); a test double simply
+	// does not match, so this is a no-op outside production composition.
+	if source, ok := occurrences.(interface{ WritePrometheus(io.Writer) error }); ok {
+		if err := registry.RegisterMetrics("scheduler_executed_proof_gate", source); err != nil {
+			return nil, err
+		}
 	}
 	loop, err := sources.newLoop(
 		repository,

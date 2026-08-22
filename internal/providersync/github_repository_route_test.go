@@ -340,10 +340,10 @@ func TestNormalizedProviderInstanceMirrorsPython(t *testing.T) {
 // staging and live-traffic parity are waived for this program (no production
 // users). Live parity against a real credentialed repository is still not
 // captured and is NOT required for RouteReady under the waiver, but remains
-// valuable operational evidence before the GithubRepoMetadata switch is ever
-// turned on. It is skipped until an operator points it at a real credentialed
-// repository; a skipped run is never parity evidence (plan §5 false-pass
-// rules).
+// valuable operational evidence before the descriptor's CHAOS-4060
+// ExecutedProofWaiver is ever retired. It is skipped until an operator points
+// it at a real credentialed repository; a skipped run is never parity
+// evidence (plan §5 false-pass rules).
 func TestGitHubRepositoryLiveParityHarness(t *testing.T) {
 	repository := os.Getenv("PROVIDER_LIVE_PARITY_GITHUB_REPO")
 	token := os.Getenv("PROVIDER_LIVE_PARITY_GITHUB_TOKEN")

@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +34,31 @@ type NativeMaterializer struct {
 	afterDomainCommit func() error
 	watermarkOverlap  time.Duration
 	defaultUnitCap    int
+	// executedProof is the CHAOS-4060 evidence snapshot consulted by every
+	// Materialize call. A nil pointer means the gate has never been wired by
+	// any caller -- Materialize falls back to nil ExecutedProofEvidence
+	// (pre-CHAOS-4060, gate-not-enforced pass-through), which is what every
+	// existing test that never calls RefreshExecutedProof still gets. The
+	// FIRST call to RefreshExecutedProof (successful or not -- see that
+	// method) always installs a non-nil pointer, which is also what turns on
+	// maybeRefreshExecutedProof's periodic reload below: a caller that has
+	// never opted in never pays for a query it didn't ask for.
+	executedProof atomic.Pointer[providersync.ExecutedProofEvidence]
+	// executedProofNextRefreshAt is a UnixNano deadline, CAS-guarded so
+	// concurrent Materialize calls (TestNativeMaterializerConcurrentReplayConverges
+	// is a real production shape) elect exactly one refresher instead of a
+	// thundering herd of identical queries.
+	executedProofNextRefreshAt   atomic.Int64
+	executedProofRefreshInterval time.Duration
+	now                          func() time.Time
+	// executedProofRefreshFailuresTotal and executedProofLastRefreshOK back
+	// WritePrometheus: a codex-review finding (round 3) was that a degraded
+	// gate is only visible as a log line, indistinguishable from a healthy
+	// scheduler at the readiness-endpoint level. This is the "cheap half"
+	// fix -- a counter plus a gauge, matching the CHAOS-4073 loud-failure
+	// pattern -- not readiness-endpoint surgery.
+	executedProofRefreshFailuresTotal atomic.Uint64
+	executedProofLastRefreshOK        atomic.Bool
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -40,7 +69,170 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	}
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
 	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
-	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
+	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
+	// boundedEnvInt only lower-bounds. Without an upper bound here too, a
+	// value shaped like a typo (or a deliberately huge one) multiplied by
+	// time.Second can overflow time.Duration's int64-nanosecond range and go
+	// negative -- which makes every future "is it time to refresh yet"
+	// comparison in maybeRefreshExecutedProof read as perpetually overdue,
+	// turning the throttle it was meant to configure into a query storm on
+	// every single Materialize call. Cap at 24h: nothing about "let a route
+	// unblock without a restart" needs a longer window, and 24h*time.Second
+	// is nowhere near time.Duration's ~292-year ceiling.
+	const maxExecutedProofRefreshSeconds = 24 * 60 * 60
+	if refreshSeconds > maxExecutedProofRefreshSeconds {
+		refreshSeconds = maxExecutedProofRefreshSeconds
+	}
+	return &NativeMaterializer{
+		domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second,
+		defaultUnitCap:               cap,
+		executedProofRefreshInterval: time.Duration(refreshSeconds) * time.Second,
+		now:                          time.Now,
+	}, nil
+}
+
+// RefreshExecutedProof loads the CHAOS-4060 executed-proof snapshot from the
+// domain pool and swaps it in for every subsequent Materialize call. The
+// caller decides when this first runs (typically once at process startup);
+// after that, Materialize itself keeps it fresh on a bounded interval (see
+// maybeRefreshExecutedProof) so a route that earns its first live proof
+// unblocks without a process restart.
+//
+// A query failure must not silently restore full pre-CHAOS-4060 permissive
+// behavior for the rest of this process's lifetime -- that would defeat the
+// gate this ticket exists to add. So EVERY failed refresh -- not just the
+// very first load -- marks the operative snapshot Degraded (codex round 4:
+// a snapshot that was healthy, then degraded by a LATER failure, must not
+// keep authorizing never-attempted pairs on the strength of what it last
+// successfully observed being "nothing yet" -- that reading cannot be
+// trusted once the query itself starts failing). Already-PROVEN pairs are
+// unaffected: Degraded only revokes the never-attempted pass-through
+// (ExecutedProofSatisfied checks Proven first), never a durable fact that
+// already existed, so this can never un-prove a route that already proved
+// itself. The error is always returned so the caller can log it loud; this
+// method never fails the whole scheduler pass over an evidence-query
+// failure (CHAOS-4073's precedent: a safety layer that cannot confirm its
+// own precondition fails loud, never takes the pass down -- but "loud" here
+// also means "closed", not "open").
+func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context) error {
+	if materializer == nil || materializer.domainPool == nil {
+		return ErrInvalidMaterializer
+	}
+	// Any refresh -- explicit (a caller's startup call, or a test) or
+	// automatic (maybeRefreshExecutedProof) -- resets the throttle window.
+	// Without this, an explicit call left executedProofNextRefreshAt at its
+	// zero value, so the very next Materialize call would see "now >= 0",
+	// consider a refresh immediately overdue, and fire a SECOND query right
+	// away regardless of the configured interval -- silently curing a
+	// just-installed Degraded snapshot with whatever the database happens to
+	// answer a moment later, before the interval the caller configured ever
+	// had a chance to matter.
+	if materializer.now != nil {
+		materializer.executedProofNextRefreshAt.Store(
+			materializer.now().Add(materializer.executedProofRefreshInterval).UnixNano(),
+		)
+	}
+	evidence, err := providersync.QueryExecutedProofEvidence(ctx, materializer.domainPool)
+	if err != nil {
+		materializer.executedProofRefreshFailuresTotal.Add(1)
+		materializer.executedProofLastRefreshOK.Store(false)
+		// Degraded, not merely empty: the query FAILED, so an empty
+		// Proven/Attempted shape here would be indistinguishable from a
+		// healthy database that has genuinely never attempted anything --
+		// which now legitimately bootstraps every pair through. That would
+		// turn an outage into full pre-CHAOS-4060 permissiveness for every
+		// pair this snapshot has not already proven. Already-known Proven
+		// facts carry forward unchanged (they are durable and do not stop
+		// being true because a later query failed); Attempted carries
+		// forward too, since it can only ever grow more conservative, never
+		// less.
+		degraded := &providersync.ExecutedProofEvidence{
+			Proven: make(map[string]bool), Attempted: make(map[string]bool),
+			Degraded: true,
+		}
+		if previous := materializer.executedProof.Load(); previous != nil {
+			degraded.Proven = previous.Proven
+			degraded.Attempted = previous.Attempted
+		}
+		materializer.executedProof.Store(degraded)
+		return err
+	}
+	materializer.executedProofLastRefreshOK.Store(true)
+	materializer.executedProof.Store(evidence)
+	return nil
+}
+
+// maybeRefreshExecutedProof reloads the executed-proof snapshot on a bounded
+// interval, but ONLY for a materializer some caller has already opted into the
+// gate via at least one explicit RefreshExecutedProof call (executedProof
+// still nil means nobody asked for this, so no query fires -- every
+// pre-CHAOS-4060 test that never touches this feature keeps costing zero
+// queries). This is what lets a route that just earned its first live
+// executed-proof row start planning again without an operator restarting the
+// scheduler process, which a load-once-at-startup snapshot alone cannot do.
+func (materializer *NativeMaterializer) maybeRefreshExecutedProof(ctx context.Context) {
+	if materializer.executedProof.Load() == nil {
+		return
+	}
+	now := materializer.now().UnixNano()
+	next := materializer.executedProofNextRefreshAt.Load()
+	if now < next {
+		return
+	}
+	if !materializer.executedProofNextRefreshAt.CompareAndSwap(
+		next, now+materializer.executedProofRefreshInterval.Nanoseconds(),
+	) {
+		// Another concurrent Materialize call already won the refresh race.
+		return
+	}
+	if err := materializer.RefreshExecutedProof(ctx); err != nil {
+		slog.Default().Error(
+			"executed-proof evidence refresh failed; route readiness gate "+
+				"keeps its last-known (or empty, conservative) snapshot until "+
+				"the next refresh window (CHAOS-4060)",
+			"error", err,
+		)
+	}
+}
+
+// WritePrometheus reports the CHAOS-4060 executed-proof gate's own health,
+// separately from whatever it decides about any given route: an operator
+// watching only scheduler readiness cannot tell a degraded gate (running on
+// a failed or never-succeeded evidence load, silently suppressing every
+// non-waived route) from a healthy one, because a degraded gate still lets
+// Materialize complete a zero-unit occurrence successfully. This is the
+// "cheap half" fix codex round 3 asked for: a counter and a gauge, not
+// readiness-endpoint surgery.
+func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error {
+	if materializer == nil || output == nil {
+		return errors.New("Prometheus output is required")
+	}
+	wired := materializer.executedProof.Load() != nil
+	failures := materializer.executedProofRefreshFailuresTotal.Load()
+	degraded := wired && !materializer.executedProofLastRefreshOK.Load()
+	var text strings.Builder
+	fmt.Fprintf(&text,
+		"# HELP devhealth_scheduler_executed_proof_refresh_failures_total "+
+			"CHAOS-4060 executed-proof evidence refresh failures (startup or periodic).\n"+
+			"# TYPE devhealth_scheduler_executed_proof_refresh_failures_total counter\n"+
+			"devhealth_scheduler_executed_proof_refresh_failures_total %d\n",
+		failures,
+	)
+	fmt.Fprint(&text,
+		"# HELP devhealth_scheduler_executed_proof_gate_degraded "+
+			"Whether the executed-proof gate is running on a failed or "+
+			"never-succeeded evidence load (1) or a healthy one (0); 0 when the "+
+			"gate has never been wired by this process.\n"+
+			"# TYPE devhealth_scheduler_executed_proof_gate_degraded gauge\n"+
+			"devhealth_scheduler_executed_proof_gate_degraded ",
+	)
+	if degraded {
+		text.WriteString("1\n")
+	} else {
+		text.WriteString("0\n")
+	}
+	_, err := io.WriteString(output, text.String())
+	return err
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -96,6 +288,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if !occurrence.ConfigActive || occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
 		return PlanResult{}, ErrOccurrenceIneligible
 	}
+	materializer.maybeRefreshExecutedProof(ctx)
 	ids, err := deterministicMaterializationIDs(occurrence.ID)
 	if err != nil {
 		return PlanResult{}, err
@@ -104,6 +297,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
 		units, err = BuildScheduledPlan(loaded.input)

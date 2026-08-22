@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -51,6 +52,102 @@ func TestNewNativeMaterializerPortsPythonEnvironmentBounds(t *testing.T) {
 	if materializer.watermarkOverlap != 0*time.Second || materializer.defaultUnitCap != 1000 {
 		t.Fatalf("fallback settings: overlap=%s cap=%d", materializer.watermarkOverlap, materializer.defaultUnitCap)
 	}
+}
+
+// TestNewNativeMaterializerCapsExecutedProofRefreshIntervalAgainstOverflow is
+// the codex-review regression case: boundedEnvInt only lower-bounds
+// SYNC_EXECUTED_PROOF_REFRESH_SECONDS, so an operator-supplied (or typo'd)
+// huge value multiplied by time.Second would overflow time.Duration's
+// int64-nanosecond range and go negative -- making maybeRefreshExecutedProof
+// treat every Materialize call as overdue for a refresh, the opposite of
+// what a refresh INTERVAL is for. The 24h cap must hold even for a value
+// that would otherwise genuinely overflow.
+func TestNewNativeMaterializerCapsExecutedProofRefreshIntervalAgainstOverflow(t *testing.T) {
+	t.Setenv("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", "9223372037")
+	materializer, err := NewNativeMaterializer(&pgxpool.Pool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 24 * time.Hour
+	if materializer.executedProofRefreshInterval != want {
+		t.Fatalf(
+			"executedProofRefreshInterval=%s, want %s (capped, not overflowed)",
+			materializer.executedProofRefreshInterval, want,
+		)
+	}
+	if materializer.executedProofRefreshInterval <= 0 {
+		t.Fatalf(
+			"executedProofRefreshInterval=%s must be positive: a zero or negative "+
+				"interval makes every refresh check read as immediately overdue",
+			materializer.executedProofRefreshInterval,
+		)
+	}
+
+	t.Setenv("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", "")
+	materializer, err = NewNativeMaterializer(&pgxpool.Pool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 300 * time.Second; materializer.executedProofRefreshInterval != want {
+		t.Fatalf("default executedProofRefreshInterval=%s, want %s", materializer.executedProofRefreshInterval, want)
+	}
+}
+
+// TestNativeMaterializerWritePrometheusReportsGateHealth is the codex round-3
+// "cheap half" fix: a degraded gate must be visible as more than a log line.
+// This pins the two health signals directly, without needing a real
+// Postgres: the refresh-failure counter and the degraded gauge both track
+// materializer state that WritePrometheus reports, and the gauge in
+// particular must read 0 (not degraded) until the gate has actually been
+// wired AND its last refresh failed -- never merely "unwired".
+func TestNativeMaterializerWritePrometheusReportsGateHealth(t *testing.T) {
+	materializer, err := NewNativeMaterializer(&pgxpool.Pool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Never wired: not degraded (there is nothing to be degraded about),
+	// zero failures.
+	assertGateMetrics := func(wantFailures uint64, wantDegraded bool) {
+		t.Helper()
+		var output bytes.Buffer
+		if err := materializer.WritePrometheus(&output); err != nil {
+			t.Fatal(err)
+		}
+		text := output.String()
+		wantFailureLine := "devhealth_scheduler_executed_proof_refresh_failures_total " +
+			strconv.FormatUint(wantFailures, 10)
+		if !strings.Contains(text, wantFailureLine) {
+			t.Fatalf("output missing %q: %s", wantFailureLine, text)
+		}
+		wantDegradedValue := "0"
+		if wantDegraded {
+			wantDegradedValue = "1"
+		}
+		wantDegradedLine := "devhealth_scheduler_executed_proof_gate_degraded " + wantDegradedValue
+		if !strings.Contains(text, wantDegradedLine) {
+			t.Fatalf("output missing %q: %s", wantDegradedLine, text)
+		}
+	}
+	assertGateMetrics(0, false)
+
+	// Simulate a failed FIRST load, exactly as RefreshExecutedProof would
+	// leave things: a Degraded snapshot, one failure recorded, last refresh
+	// not OK.
+	materializer.executedProofRefreshFailuresTotal.Add(1)
+	materializer.executedProofLastRefreshOK.Store(false)
+	materializer.executedProof.Store(&providersync.ExecutedProofEvidence{
+		Proven: map[string]bool{}, Attempted: map[string]bool{}, Degraded: true,
+	})
+	assertGateMetrics(1, true)
+
+	// A later successful refresh clears the degraded gauge but the failure
+	// counter -- a true "_total" counter -- never resets.
+	materializer.executedProofLastRefreshOK.Store(true)
+	materializer.executedProof.Store(&providersync.ExecutedProofEvidence{
+		Proven: map[string]bool{"github/prs": true}, Attempted: map[string]bool{"github/prs": true},
+	})
+	assertGateMetrics(1, false)
 }
 
 // TestNewNativeMaterializerMirrorsPythonIntWhitespaceGrammar pins the parse

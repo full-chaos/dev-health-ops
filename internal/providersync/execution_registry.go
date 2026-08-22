@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"strings"
+	"time"
 )
 
 // ExecutorKind names the fixed provider/dataset execution ownership required
@@ -162,6 +163,13 @@ type CompleteRouteDescriptor struct {
 	// where alias mutual-exclusivity lives now, as writer topology rather than
 	// as a pair of booleans nobody may set at once.
 	Plannable bool
+	// ExecutedProofWaiver, when non-nil, is an explicit, dated, reasoned
+	// operator waiver of the CHAOS-4060 executed-proof requirement: this
+	// identity may keep planning new work on fixture/golden proof alone even
+	// though no live unit has ever completed with a nonzero persisted-row
+	// count. It is a code fact recorded by a human, not a computed value —
+	// see ExecutedProofSatisfied.
+	ExecutedProofWaiver *ExecutedProofWaiver
 }
 
 // ShadowDescriptor is a fixture/parity-only projection of the canonical
@@ -278,10 +286,24 @@ func Descriptor(
 		// get_repo_uuid_from_repo / normalized_operational_provider_instance
 		// / processors/github.py's settings-dict construction) — canary
 		// staging and live-traffic parity are waived for this program (no
-		// production users yet; see plan).
+		// production users yet; see plan). CHAOS-4054 §5 risk 5 / §6 answer 1
+		// ratified this as an interim state PENDING CHAOS-4060 (the
+		// executed-proof gate this waiver satisfies): no org has this dataset
+		// enabled yet, so no sync_run_units evidence can exist for it by
+		// construction. Retire this waiver once a live unit reports
+		// a nonzero persisted-row count, at which point
+		// ExecutedProofSatisfied stops needing it.
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.ExecutedProofWaiver = &ExecutedProofWaiver{
+			Reason: "no production users yet; canary staging and live-traffic " +
+				"parity waived for this program per CHAOS-3123, interim state " +
+				"ratified PENDING CHAOS-4060 in the CHAOS-4054 decision record " +
+				"(§5 risk 5 / §6 answer 1)",
+			Ticket:     "CHAOS-4054",
+			RecordedAt: time.Date(2026, time.August, 21, 13, 14, 0, 0, time.FixedZone("PDT", -7*60*60)),
+		}
 	case provider == "gitlab" && dataset == "repo-metadata":
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true

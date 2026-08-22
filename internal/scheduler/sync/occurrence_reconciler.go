@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -164,6 +165,32 @@ func NewOccurrenceReconciler(pool *pgxpool.Pool, materializer Materializer) (*Oc
 		materializer: materializer,
 		limit:        occurrenceReconcileDefaultLimit,
 	}, nil
+}
+
+// prometheusWriter is the health.MetricsSource shape, restated locally so
+// this package does not need to import internal/platform/health just to
+// structurally satisfy it -- Go interface satisfaction is implicit.
+type prometheusWriter interface {
+	WritePrometheus(io.Writer) error
+}
+
+// WritePrometheus lets *OccurrenceReconciler (the concrete type behind the
+// OccurrenceStepper this package hands the scheduler loop) satisfy
+// health.MetricsSource by delegating to its materializer, if that
+// materializer exposes its own metrics (NativeMaterializer does, for the
+// CHAOS-4060 executed-proof gate). A materializer that does not -- any test
+// double, or a future alternate implementation -- makes this a harmless
+// no-op rather than a compile-time requirement on the narrow Materializer
+// interface.
+func (reconciler *OccurrenceReconciler) WritePrometheus(output io.Writer) error {
+	if reconciler == nil {
+		return nil
+	}
+	source, ok := reconciler.materializer.(prometheusWriter)
+	if !ok {
+		return nil
+	}
+	return source.WritePrometheus(output)
 }
 
 // Reconcile processes one bounded batch of due occurrences.

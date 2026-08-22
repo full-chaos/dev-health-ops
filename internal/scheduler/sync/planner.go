@@ -129,6 +129,15 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
+	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
+	// which provider/dataset pairs have at least one live sync_run_units row
+	// that completed with persisted-row evidence (proven), have been
+	// attempted at all (any status), or neither (never-attempted, which
+	// bootstraps through -- see providersync.ExecutedProofEvidence). A nil
+	// pointer means this caller has not wired the gate and planning behaves
+	// exactly as it did before CHAOS-4060. The production caller
+	// (NativeMaterializer) always supplies a real, non-nil snapshot.
+	ExecutedProof *providersync.ExecutedProofEvidence
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -245,7 +254,12 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			// from this check above: their admission is governed by the
 			// atomic-family collapse below.
 			descriptor, known := providersync.Descriptor(provider, dataset.Key)
-			if !known || !descriptor.RouteReady || !descriptor.Plannable {
+			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
+				// CHAOS-4060: fixture/golden proof no longer licenses new work
+				// on its own -- a route must also have a live executed run
+				// (or an explicit, dated operator waiver) before it plans
+				// again. See providersync.ExecutedProofSatisfied.
+				!descriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 				continue
 			}
 			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
@@ -269,7 +283,11 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		canonicalDescriptor, known := providersync.Descriptor(
 			provider, canonicalWorkItemsDataset,
 		)
-		if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable {
+		if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
+			// CHAOS-4060: same executed-proof requirement as the non-family
+			// gate above, applied to the canonical claim the family collapse
+			// emits.
+			!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 			continue
 		}
 		canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)

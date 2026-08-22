@@ -273,6 +273,29 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		return contextErr
 	}
 	if err != nil {
+		// The CHAOS-4097 gauges survive a failed pass, on the same principle
+		// the ErrUnknownKind branch below already established: a failed
+		// observation can still carry bounded operator evidence, and readiness
+		// is what says the process is unhealthy.
+		//
+		// It matters most in exactly the case that motivated it. The pipeline
+		// carries these figures through every return precisely because the
+		// sweep and the report commit before later stages run, so a kernel or
+		// observer fault after a pass measured 83 runaway runs must not leave
+		// the dashboard showing the last healthy snapshot. The degraded pass
+		// IS the incident (review finding).
+		//
+		// ONLY these two fields are merged, never the whole observation: the
+		// observer's own queue gauges are unreliable on a failed pass, and
+		// publishing them would trade one stale number for several wrong ones.
+		// A zero here is not a claim either -- the failure counters accumulated
+		// above are what say whether anything looked.
+		loop.mu.Lock()
+		if !loop.stopping {
+			loop.observation.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
+			loop.observation.UnreclaimableCandidates = observation.UnreclaimableCandidates
+		}
+		loop.mu.Unlock()
 		// Unknown stored kinds are a failed observation, but their bounded total
 		// is still valuable operator evidence. Keep it as a gauge while the
 		// readiness failure prevents this process from being considered healthy.

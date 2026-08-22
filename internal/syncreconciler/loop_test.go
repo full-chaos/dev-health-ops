@@ -1042,3 +1042,85 @@ func TestMetricsCarryTheSweepFailureCounter(t *testing.T) {
 		t.Fatalf("the candidate gauge does not name its staleness signal:\n%s", metrics.String())
 	}
 }
+
+// THE DEGRADED PASS IS THE INCIDENT (adversarial review finding).
+//
+// MutationPipeline carries the runaway and sweep figures through every return
+// because both components commit before later stages run. If Loop then only
+// stored observations from SUCCESSFUL passes, a kernel or observer fault
+// arriving just after a pass measured a runaway would leave Prometheus showing
+// the last healthy snapshot — hiding the incident during precisely the pass
+// where the system is already misbehaving.
+//
+// The principle is not new here: the ErrUnknownKind branch already keeps a
+// failed observation's bounded total "as valuable operator evidence" while
+// readiness carries the health signal. This applies it to the new gauges.
+func TestFailedPassStillPublishesTheRunawayAndSweepGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	failure := errors.New("scripted kernel failure after the report was taken")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		// Exactly the shape MutationPipeline returns from a late failure: the
+		// already-committed figures, plus the error.
+		return Observation{
+			RunawayDispatchWakeups:  83,
+			UnreclaimableCandidates: 12,
+		}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted failure")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("a degraded pass dropped its measured evidence, missing %q:\n%s",
+				want, metrics.String())
+		}
+	}
+	// ...and it must still say the process is unhealthy. Publishing the
+	// evidence must not launder a failed pass into a healthy one.
+	if !strings.Contains(metrics.String(), "sync_dispatch_observer_up 0") {
+		t.Fatalf("a failed pass reported the observer healthy:\n%s", metrics.String())
+	}
+}
+
+// NON-VACUITY for the merge: a failed pass must NOT publish the observer's own
+// queue gauges, which are unreliable when the pass did not complete. Trading
+// one stale number for several wrong ones is not an improvement.
+func TestFailedPassDoesNotPublishTheObserversOwnGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	failure := errors.New("scripted failure carrying junk queue figures")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		return Observation{
+			RunawayDispatchWakeups: 4,
+			// A half-built observation from an aborted pass.
+			CeleryDuePending:  999,
+			RiverDuePending:   999,
+			SampledCandidates: 999,
+		}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted failure")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "sync_dispatch_runaway_dispatch_wakeups 4") {
+		t.Fatalf("the merged gauge did not survive:\n%s", metrics.String())
+	}
+	if strings.Contains(metrics.String(), "999") {
+		t.Fatalf("a failed pass published the observer's unreliable queue figures:\n%s",
+			metrics.String())
+	}
+}

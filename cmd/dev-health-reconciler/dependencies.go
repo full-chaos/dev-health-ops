@@ -224,14 +224,18 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //
 //   - Materializer: COORDINATOR pool. It reads sync_run_reference_discoveries
 //     and sync_run_post_dispatches, both coordinator-exclusive.
-//   - UnreclaimableSweep: BOTH pools, and it is the only component here that
-//     spans two. Its durable route read of worker_job_routes is
+//   - UnreclaimableSweep: ALL THREE pools, and it is the only component here
+//     that spans three. Its durable route read of worker_job_routes is
 //     coordinator-exclusive, so that statement takes the coordinator pool and
 //     runs BEFORE the domain transaction opens; candidate selection and the
 //     terminalize write touch sync_run_units, which coordinatorPosture
-//     declares SELECT-only, so they stay in a domain-pool transaction. Neither
-//     role can run the whole sweep. See internal/syncreconciler/
-//     unreclaimable_sweep.go for the same-snapshot trade-off this costs.
+//     declares SELECT-only, so they stay in a domain-pool transaction; and
+//     CHAOS-4097's delivery-liveness read of river_job takes the QUEUE pool,
+//     because internal/storage/river/migrate.go grants USAGE on the River
+//     schema to the queue role alone -- neither of the other two can see the
+//     table at all. No role can run the whole sweep. See
+//     internal/syncreconciler/unreclaimable_sweep.go for the same-snapshot
+//     trade-off this costs and for why the liveness read needs no fence.
 //   - TerminalDeliveryRepair: QUEUE pool -- it works the River job tables.
 //   - Kernel: DOMAIN pool for the observe/claim side, QUEUE pool for the River
 //     delivery side. The second of the two components here that spans pools.
@@ -255,7 +259,7 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	sweep, err := buildUnreclaimableSweep(coordinatorPool, domainPool, cfg)
+	sweep, err := buildUnreclaimableSweep(coordinatorPool, domainPool, queuePool, riverSchema, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -883,12 +887,16 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 // so a CUT-19 rollback is covered by mechanism rather than by an operator
 // remembering to flip something back.
 //
-// That route row is COORDINATOR-exclusive, which is why this takes two pools
-// (CHAOS-4035). An earlier cut took only the domain pool, and the sweep spent
-// its entire production life answering 42501 on its first statement.
+// That route row is COORDINATOR-exclusive, which is why this takes more than
+// the domain pool (CHAOS-4035). An earlier cut took only the domain pool, and
+// the sweep spent its entire production life answering 42501 on its first
+// statement. CHAOS-4097 adds the third: proving a delivery is dead means
+// reading river_job, and the River schema is granted to the QUEUE role only.
 func buildUnreclaimableSweep(
 	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
+	queuePool *pgxpool.Pool,
+	riverSchema string,
 	cfg config.Config,
 ) (syncreconciler.UnreclaimableSweepStepper, error) {
 	mode, err := syncreconciler.ParseSweepMode(cfg.UnreclaimableSweepMode)
@@ -898,7 +906,7 @@ func buildUnreclaimableSweep(
 	if mode == syncreconciler.SweepModeOff {
 		return nil, nil
 	}
-	return syncreconciler.NewUnreclaimableSweep(coordinatorPool, domainPool, syncreconciler.UnreclaimableSweepConfig{
+	return syncreconciler.NewUnreclaimableSweep(coordinatorPool, domainPool, queuePool, riverSchema, syncreconciler.UnreclaimableSweepConfig{
 		Age:  syncreconciler.DefaultUnreclaimableAge,
 		Idle: syncreconciler.DefaultUnreclaimableIdle,
 		Mode: mode,

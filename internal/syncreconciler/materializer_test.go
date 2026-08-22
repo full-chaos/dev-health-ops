@@ -25,7 +25,49 @@ type fakeMaterializerTx struct {
 	execs     []materializerExec
 	committed bool
 	rolled    bool
+	// runaway is what the CHAOS-4097 report read returns. The embedded nil
+	// pgx.Tx would panic on Query, so the fake answers it explicitly: an
+	// empty result is the healthy pass every pre-existing case here asserts.
+	runaway      []RunawayDispatchWakeup
+	runawayQuery string
 }
+
+func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	tx.runawayQuery = sql
+	return &fakeRunawayRows{rows: tx.runaway}, nil
+}
+
+type fakeRunawayRows struct {
+	pgx.Rows
+	rows  []RunawayDispatchWakeup
+	index int
+}
+
+func (rows *fakeRunawayRows) Next() bool {
+	rows.index++
+	return rows.index <= len(rows.rows)
+}
+
+func (rows *fakeRunawayRows) Scan(dest ...any) error {
+	if len(dest) != 2 {
+		return errors.New("unexpected runaway projection")
+	}
+	current := rows.rows[rows.index-1]
+	id, ok := dest[0].(*string)
+	if !ok {
+		return errors.New("unexpected runaway sync_run_id target")
+	}
+	attempts, ok := dest[1].(*int64)
+	if !ok {
+		return errors.New("unexpected runaway attempts target")
+	}
+	*id, *attempts = current.SyncRunID, current.Attempts
+	return nil
+}
+
+func (rows *fakeRunawayRows) Err() error { return nil }
+
+func (rows *fakeRunawayRows) Close() {}
 
 func (tx *fakeMaterializerTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	tx.execs = append(tx.execs, materializerExec{sql: sql, args: append([]any(nil), args...)})
@@ -65,7 +107,7 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != (MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
+	if !reflect.DeepEqual(result, MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
 		t.Fatalf("Step() result = %#v", result)
 	}
 	if !tx.committed || !tx.rolled || len(tx.execs) != 4 {
@@ -137,7 +179,7 @@ func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 			if !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("Step() error = %v", err)
 			}
-			if result != (MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != failAt {
+			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != failAt {
 				t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
 					result, tx.committed, tx.rolled, len(tx.execs))
 			}

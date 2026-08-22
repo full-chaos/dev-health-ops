@@ -866,6 +866,8 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		explainQuery = strings.ReplaceAll(explainQuery, "$3", "'Stuck job rescued by JobRescuer'::text")
 		explainQuery = strings.ReplaceAll(explainQuery, "$4", "'river_unhandled_rescue'::text")
 		explainQuery = strings.ReplaceAll(explainQuery, "$5", "'river_delivery_exhausted'::text")
+		explainQuery = strings.ReplaceAll(explainQuery, "$6", "'"+riverRescueOnlyCancelError+"'::text")
+		explainQuery = strings.ReplaceAll(explainQuery, "$7", "'"+riverRescueOnlyCancelEvidence+"'::text")
 		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+explainQuery)
 		if err != nil {
 			t.Fatal(err)

@@ -8,6 +8,50 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// runawayDispatchAttempts is the ATTEMPT COUNT at which a dispatch wakeup
+// stops being ordinary and starts being a report (CHAOS-4097).
+//
+// It is derived from the production distribution, not chosen. Read on
+// 2026-08-22 across every dispatch_sync_run row in the outbox:
+//
+//	run_status       transport  rows   max     p99
+//	success          celery     3397   2472    72
+//	success          river        84     43    43
+//	partial_failed   celery      502    615   211
+//	partial_failed   river        81  72601 72601   <- CHAOS-4093
+//	failed           river        95   6499  6499   <- CHAOS-4093
+//
+// The p99 of every healthy population is two figures; the CHAOS-4093 rows are
+// four and five. 1000 sits an order of magnitude above the worst healthy row
+// and an order of magnitude below the cheapest sick one, so it separates the
+// two without sitting near either edge -- which is what a threshold has to do
+// to still be right when the traffic shape moves.
+//
+// IT DECIDES NOTHING. Crossing it emits a log line and changes no predicate,
+// no window and no write. That is deliberate: a number tuned from one
+// observation must never be load-bearing for correctness, and a ceiling that
+// SUPPRESSED re-arming would turn a visibility gap into a stalled run the
+// first time a legitimately long-lived run crossed it. The bound on the loop
+// itself belongs to the sweep (CHAOS-4097 item 1), which removes the stuck
+// units the re-arm predicate keeps matching; this only makes the loop
+// impossible to miss while it is happening. Nothing alerted on 72601.
+const runawayDispatchAttempts = 1000
+
+// runawayDispatchScan caps the report so a widespread degradation cannot turn
+// one reconcile pass into an unbounded read or an unbounded burst of log
+// lines. Truncation is not silent: the caller is told the report was capped.
+const runawayDispatchScan = 20
+
+// RunawayDispatchWakeup is one dispatch outbox row whose attempt count has
+// crossed runawayDispatchAttempts while its run is still non-terminal. It
+// carries the run rather than the outbox id because the run is what an
+// operator can act on, and it carries no error text or payload -- everything
+// here is an identifier or a count.
+type RunawayDispatchWakeup struct {
+	SyncRunID string
+	Attempts  int64
+}
+
 // MaterializerResult reports rows inserted or re-armed by one bounded
 // transaction. Existing pending rows are deliberately not counted because the
 // Python reconciler's materialization wrapper leaves them untouched.
@@ -16,6 +60,13 @@ type MaterializerResult struct {
 	Finalize  int64
 	Discovery int64
 	PostSync  int64
+	// Runaway is the CHAOS-4097 report. Empty on a healthy pass.
+	Runaway []RunawayDispatchWakeup
+	// RunawayTruncated says the report hit runawayDispatchScan and there are
+	// more rows over the threshold than are listed. A capped report that did
+	// not say so would read as "these are all of them", which is the class of
+	// quiet under-reporting this whole ticket is about.
+	RunawayTruncated bool
 }
 
 type materializerBeginFunc func(context.Context) (pgx.Tx, error)
@@ -94,10 +145,71 @@ func (materializer *Materializer) Step(
 		}
 		*step.count = affected
 	}
+	// The report runs in the SAME transaction as the writes above, and after
+	// them, so what it reports is the state this pass leaves behind rather
+	// than the one it found. It reads only; a failure here must not lose the
+	// materialization, so it is not allowed to fail the step.
+	runaway, truncated, reportErr := readRunawayDispatchWakeups(ctx, tx)
+	if reportErr == nil {
+		result.Runaway, result.RunawayTruncated = runaway, truncated
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return MaterializerResult{}, ErrUnavailable
 	}
 	return result, nil
+}
+
+// A run that is already terminal is excluded: its outbox row is inert, and a
+// historical high count on a finished run is an archaeology question, not an
+// operational one. The 3397 completed celery rows in production would
+// otherwise dominate every pass forever.
+//
+// ORDER BY attempts DESC puts the worst row first, so a capped report is
+// still the most useful twenty rows rather than an arbitrary twenty.
+const selectRunawayDispatchWakeupsSQL = `
+SELECT outbox.sync_run_id::text, outbox.attempts
+FROM public.sync_dispatch_outbox AS outbox
+JOIN public.sync_runs AS run ON run.id = outbox.sync_run_id
+WHERE outbox.kind = 'dispatch_sync_run'
+	AND outbox.attempts >= $1
+	AND run.status NOT IN ('success', 'partial_failed', 'failed')
+ORDER BY outbox.attempts DESC, outbox.sync_run_id
+LIMIT $2
+`
+
+func readRunawayDispatchWakeups(
+	ctx context.Context, tx pgx.Tx,
+) ([]RunawayDispatchWakeup, bool, error) {
+	rows, err := tx.Query(
+		ctx, selectRunawayDispatchWakeupsSQL,
+		int64(runawayDispatchAttempts), runawayDispatchScan+1,
+	)
+	if err != nil {
+		return nil, false, ErrUnavailable
+	}
+	defer rows.Close()
+	report := make([]RunawayDispatchWakeup, 0, runawayDispatchScan)
+	truncated := false
+	for rows.Next() {
+		var wakeup RunawayDispatchWakeup
+		if err := rows.Scan(&wakeup.SyncRunID, &wakeup.Attempts); err != nil {
+			return nil, false, ErrUnavailable
+		}
+		// The window asks for one more row than it reports, so "there are
+		// more" is observed rather than inferred from a full page.
+		if len(report) == runawayDispatchScan {
+			truncated = true
+			continue
+		}
+		report = append(report, wakeup)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, ErrUnavailable
+	}
+	if len(report) == 0 {
+		return nil, false, nil
+	}
+	return report, truncated, nil
 }
 
 // materializeDispatchSQL mirrors _dispatchable_run_ids followed by

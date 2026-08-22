@@ -57,11 +57,30 @@ func (routes failingRoutes) Begin(ctx contextT) (txT, error) {
 	return nil, routes.err
 }
 
+// unreadableJobs is the queue-control seam for a case that must never reach
+// the delivery-liveness read. It fails the test loudly rather than returning
+// an empty result, because an empty result would let a sweep that wrongly
+// consulted River still pass.
+type unreadableJobs struct {
+	t      *testing.T
+	reason string
+}
+
+func (jobs unreadableJobs) Query(
+	ctx contextT, sql string, args ...any,
+) (pgx.Rows, error) {
+	jobs.t.Helper()
+	jobs.t.Fatal(jobs.reason)
+	return nil, nil
+}
+
 func absentSweep(t *testing.T) *UnreclaimableSweep {
 	t.Helper()
 	sweep, err := newUnreclaimableSweep(
 		unreadableRoutes{t: t, reason: "this sweep must not read the durable route"},
 		func(ctx contextT) (txT, error) { return nil, nil },
+		unreadableJobs{t: t, reason: "this sweep must not read river_job"},
+		"river",
 		UnreclaimableSweepConfig{
 			Age: time.Hour, Idle: 15 * time.Minute, Mode: SweepModeActive,
 		},
@@ -217,6 +236,8 @@ func TestStepDefersWhenModeIsOff(t *testing.T) {
 			t.Fatal("mode=off must not open a transaction")
 			return nil, nil
 		},
+		unreadableJobs{t: t, reason: "mode=off must not read river_job"},
+		"river",
 		UnreclaimableSweepConfig{
 			Age: time.Hour, Idle: time.Minute, Mode: SweepModeOff,
 		},
@@ -331,6 +352,8 @@ func TestSweepRouteReadFailureNamesItselfAndStaysClassified(t *testing.T) {
 			t.Fatal("a failed route read must not open the domain transaction")
 			return nil, nil
 		},
+		unreadableJobs{t: t, reason: "a failed route read must not reach river_job"},
+		"river",
 		UnreclaimableSweepConfig{
 			Age: time.Hour, Idle: 15 * time.Minute, Mode: SweepModeActive,
 		},

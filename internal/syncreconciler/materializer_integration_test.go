@@ -5,6 +5,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -382,7 +383,7 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		}
 
 		result, err := materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
-		if !errors.Is(err, ErrUnavailable) || result != (MaterializerResult{}) {
+		if !errors.Is(err, ErrUnavailable) || !reflect.DeepEqual(result, MaterializerResult{}) {
 			t.Fatalf("failed Step() = %#v, %v", result, err)
 		}
 		var rows int
@@ -852,4 +853,144 @@ func assertMaterializerOutboxCount(
 
 func leftPadMaterializerID(value int) string {
 	return "00000000" + strconv.Itoa(value)
+}
+
+// seedMaterializerOutboxWithAttempts writes a dispatch wakeup that has already
+// been claimed and republished `attempts` times. That column is durable and
+// already persisted; nothing new is instrumented to read it.
+func seedMaterializerOutboxWithAttempts(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID string,
+	attempts int64,
+	at time.Time,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'dispatch_sync_run',
+			'pending', $3, $2, $3, $3
+		)`, runID, attempts, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// CHAOS-4097 item 2. One production sync_dispatch_outbox row reached
+// attempts = 72601, generating roughly 1500 no-op River jobs a minute for
+// twenty-two hours, and nothing anywhere said a word about it.
+//
+// The report is what makes that loud. It changes no predicate and no write --
+// the LOOP is bounded by the sweep removing the stuck units the re-arm
+// predicate keeps matching, not by this -- so every assertion here is about
+// visibility, and the negative cases matter as much as the positive one: a
+// threshold that fires on healthy rows would be turned off within a week and
+// then this would be exactly as silent as it was before.
+func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := NewMaterializer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	step := func() MaterializerResult {
+		t.Helper()
+		result, err := materializer.Step(ctx, now, now.Add(-15*time.Minute), 10)
+		if err != nil {
+			t.Fatalf("materializer step: %v", err)
+		}
+		return result
+	}
+
+	t.Run("a looping wakeup on a live run is reported", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		run := "00000000-0000-4000-8000-" + leftPadMaterializerID(9001)
+		seedRun(t, ctx, pool, run, "dispatching", now.Add(-24*time.Hour))
+		seedMaterializerOutboxWithAttempts(t, ctx, pool, run, 72601, now.Add(-time.Hour))
+
+		result := step()
+		if len(result.Runaway) != 1 || result.RunawayTruncated {
+			t.Fatalf("runaway report = %#v, want exactly the looping row", result.Runaway)
+		}
+		if result.Runaway[0].SyncRunID != run || result.Runaway[0].Attempts != 72601 {
+			t.Fatalf("runaway row = %#v, want the run and its durable attempt count",
+				result.Runaway[0])
+		}
+	})
+
+	// NON-VACUITY, and the reason the threshold is not lower. Every healthy
+	// dispatch_sync_run row in production sat at a p99 of 43-72 attempts; a
+	// report that fired there would be noise, and noise gets muted.
+	t.Run("an ordinary attempt count is not reported", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		run := "00000000-0000-4000-8000-" + leftPadMaterializerID(9002)
+		seedRun(t, ctx, pool, run, "dispatching", now.Add(-time.Hour))
+		seedMaterializerOutboxWithAttempts(t, ctx, pool, run,
+			runawayDispatchAttempts-1, now.Add(-time.Hour))
+
+		if result := step(); len(result.Runaway) != 0 {
+			t.Fatalf("runaway report = %#v, want a healthy row left unreported", result.Runaway)
+		}
+	})
+
+	// A finished run's row is inert: its count is archaeology, not an
+	// operational signal. Production holds 3397 completed rows that would
+	// otherwise be re-reported on every single pass, forever.
+	t.Run("a terminal run is not reported however high its count", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		run := "00000000-0000-4000-8000-" + leftPadMaterializerID(9003)
+		seedRun(t, ctx, pool, run, "success", now.Add(-48*time.Hour))
+		seedMaterializerOutboxWithAttempts(t, ctx, pool, run, 72601, now.Add(-time.Hour))
+
+		if result := step(); len(result.Runaway) != 0 {
+			t.Fatalf("runaway report = %#v, want a finished run left unreported", result.Runaway)
+		}
+	})
+
+	// A widespread degradation must not turn one pass into an unbounded burst
+	// of log lines -- and the cap must SAY it capped. A silently truncated
+	// report reads as "these are all of them", which is the same quiet
+	// under-reporting this whole ticket is about.
+	t.Run("the report is capped and says so", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		for index := 0; index < runawayDispatchScan+3; index++ {
+			run := "00000000-0000-4000-8000-" + leftPadMaterializerID(9100+index)
+			seedRun(t, ctx, pool, run, "dispatching", now.Add(-24*time.Hour))
+			seedMaterializerOutboxWithAttempts(t, ctx, pool, run,
+				int64(runawayDispatchAttempts+index), now.Add(-time.Hour))
+		}
+
+		result := step()
+		if len(result.Runaway) != runawayDispatchScan || !result.RunawayTruncated {
+			t.Fatalf("runaway report = %d rows truncated=%t, want %d and a truncation flag",
+				len(result.Runaway), result.RunawayTruncated, runawayDispatchScan)
+		}
+		// Worst first, so a capped report is still the most useful rows.
+		if result.Runaway[0].Attempts <= result.Runaway[len(result.Runaway)-1].Attempts {
+			t.Fatalf("runaway report is not ordered worst-first: %#v", result.Runaway)
+		}
+	})
 }

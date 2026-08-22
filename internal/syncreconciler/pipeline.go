@@ -196,6 +196,9 @@ func (pipeline *MutationPipeline) Step(
 	// an out-of-range count as a failed step keeps a miscounting repair from
 	// quietly inflating the recovery metric operators alert on.
 	if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
+		terminal.RescueOnlyCancelsRecovered < 0 ||
+		terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
+		terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
 		terminal.Recovered > limit {
 		// The count itself is untrustworthy here, so it is the one case that
 		// deliberately reports nothing rather than a number it cannot stand behind.
@@ -209,12 +212,44 @@ func (pipeline *MutationPipeline) Step(
 	recovered := Observation{
 		ExhaustedDeliveriesRecovered: int64(terminal.ExhaustedRecovered),
 	}
-	if _, err := pipeline.materializer.Step(
+	// A rescue-only cancel is a registry or queue-routing fault: the job was
+	// inserted onto a queue whose client does not execute that kind. Unlike
+	// the other two recoveries it will repeat deterministically until someone
+	// changes a deployment, so it is logged rather than only counted
+	// (CHAOS-4097).
+	if terminal.RescueOnlyCancelsRecovered > 0 {
+		slog.Warn(
+			"syncreconciler.rescue_only_cancel_recovered",
+			"recovered", terminal.RescueOnlyCancelsRecovered,
+		)
+	}
+	materialized, err := pipeline.materializer.Step(
 		ctx,
 		now,
 		now.Add(-pipeline.config.StaleDispatchAge),
 		limit,
-	); err != nil {
+	)
+	// CHAOS-4097: one sync_dispatch_outbox row reached attempts = 72601 in
+	// production, generating roughly 1500 no-op River jobs a minute for
+	// twenty-two hours, and nothing anywhere said a word. Counters do not
+	// export from this deployment (CHAOS-4094), so the durable column is read
+	// and reported directly. ERROR, not WARN: a run re-arming four figures of
+	// times is not degraded, it is looping, and it will not stop on its own.
+	//
+	// Reported even when the step failed, because the report is taken before
+	// the commit and a materialization failure does not make a looping run
+	// less true. It is emitted per row rather than as a total so the log line
+	// names something an operator can go and look at.
+	for _, wakeup := range materialized.Runaway {
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_attempts_exceeded",
+			"sync_run_id", wakeup.SyncRunID,
+			"attempts", wakeup.Attempts,
+			"threshold", runawayDispatchAttempts,
+			"truncated", materialized.RunawayTruncated,
+		)
+	}
+	if err != nil {
 		return recovered, err
 	}
 	if _, err := pipeline.kernel.Step(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,29 @@ const (
 	unreclaimableMaximumScan    = 1000
 	unreclaimableErrorCategory  = "feature_disabled"
 	unreclaimableProviderUnitID = "sync.provider_unit"
+	// unreclaimableTerminalDeliveryCategory is a SEPARATE durable category
+	// from unreclaimableErrorCategory, and deliberately so (CHAOS-4097).
+	//
+	// The two branches of this sweep terminalize for opposite reasons and an
+	// operator has to be able to tell them apart from the row alone:
+	//
+	//   - feature_disabled means the capability matrix declines the pair, so
+	//     nothing was ever going to run it. That string is load-bearing
+	//     elsewhere -- sync/canonical_incident_gate.py's
+	//     FEATURE_DISABLED_ERROR_CATEGORY and sync/dispatch_outbox.py's
+	//     _TERMINAL_DENIAL_ERROR are the same token -- and reusing it for a
+	//     dead delivery would file an infrastructure failure as a deliberate
+	//     feature denial, hiding it from exactly the reporting that should
+	//     surface it.
+	//   - terminal_river_delivery means the pair was routable, the unit WAS
+	//     published, and its River job then died terminally. That is an
+	//     incident, not a denial.
+	//
+	// The exact River state is carried in the reason string and in the result
+	// payload rather than being encoded into more category tokens, so a state
+	// River adds later widens the evidence without minting a new vocabulary
+	// entry every consumer has to learn.
+	unreclaimableTerminalDeliveryCategory = "terminal_river_delivery"
 )
 
 // PER-STEP ERROR IDENTITY (CHAOS-4035 AC4, the CHAOS-4036 masking class).
@@ -88,6 +112,9 @@ const (
 	sweepStepOutboxQuery        = "published-outbox filter on public.worker_job_outbox"
 	sweepStepOutboxScan         = "published-outbox scan"
 	sweepStepOutboxRows         = "published-outbox iteration"
+	sweepStepJobStateQuery      = "delivery liveness read of river_job on the queue-control pool"
+	sweepStepJobStateScan       = "delivery liveness scan"
+	sweepStepJobStateRows       = "delivery liveness iteration"
 	sweepStepTerminalizePayload = "terminalize payload encode"
 	sweepStepTerminalizeExec    = "terminalize write to public.sync_run_units"
 	sweepStepTerminalizeRows    = "terminalize affected-row count"
@@ -279,10 +306,25 @@ type unreclaimableRouteReader interface {
 // Neither pool alone can run the whole sweep. This is the same two-pool split
 // the Materializer already uses; cmd/dev-health-reconciler/dependencies.go
 // documents the composition.
+// unreclaimableJobReader is the QUEUE-CONTROL seam, and it is a third role
+// (CHAOS-4097). internal/storage/river/migrate.go grants USAGE on the River
+// schema to the queue role and to nobody else, so neither the domain
+// transaction below nor the coordinator route reader can see river_job at all:
+// this is not a stylistic split, it is the only role that can run the read.
+//
+// Only Query is needed. The sweep never writes, locks or deletes a River row;
+// proving a delivery is dead is a read, and the recovery it authorizes happens
+// entirely on the domain side.
+type unreclaimableJobReader interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 type UnreclaimableSweep struct {
-	begin  leaseRepairBeginFunc
-	routes unreclaimableRouteReader
-	config UnreclaimableSweepConfig
+	begin    leaseRepairBeginFunc
+	routes   unreclaimableRouteReader
+	jobs     unreclaimableJobReader
+	jobState string
+	config   UnreclaimableSweepConfig
 }
 
 // NewUnreclaimableSweep takes both pools because the sweep genuinely needs
@@ -293,25 +335,45 @@ type UnreclaimableSweep struct {
 func NewUnreclaimableSweep(
 	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
+	queueControlPool *pgxpool.Pool,
+	riverSchema string,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if coordinatorPool == nil || domainPool == nil || !config.valid() {
+	if coordinatorPool == nil || domainPool == nil || queueControlPool == nil ||
+		!riverSchemaPattern.MatchString(riverSchema) || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{
-		begin: domainPool.Begin, routes: coordinatorPool, config: config,
-	}, nil
+	return newUnreclaimableSweep(
+		coordinatorPool, domainPool.Begin, queueControlPool, riverSchema, config,
+	)
 }
 
 func newUnreclaimableSweep(
 	routes unreclaimableRouteReader,
 	begin leaseRepairBeginFunc,
+	jobs unreclaimableJobReader,
+	riverSchema string,
 	config UnreclaimableSweepConfig,
 ) (*UnreclaimableSweep, error) {
-	if routes == nil || begin == nil || !config.valid() {
+	if routes == nil || begin == nil || jobs == nil ||
+		!riverSchemaPattern.MatchString(riverSchema) || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &UnreclaimableSweep{begin: begin, routes: routes, config: config}, nil
+	return &UnreclaimableSweep{
+		begin:  begin,
+		routes: routes,
+		jobs:   jobs,
+		// The schema is interpolated ONCE, here, through pgx.Identifier's
+		// quoting, and riverSchemaPattern has already refused anything that is
+		// not a bare lower-case identifier. The statement itself is then a
+		// constant for the sweep's whole life, so no caller can reach the
+		// interpolation.
+		jobState: fmt.Sprintf(
+			selectTerminalDeliveryStatesSQL,
+			pgx.Identifier{riverSchema, "river_job"}.Sanitize(),
+		),
+		config: config,
+	}, nil
 }
 
 type unreclaimableCandidate struct {
@@ -323,6 +385,30 @@ type unreclaimableCandidate struct {
 	costClass  string
 	createdAt  time.Time
 	updatedAt  time.Time
+	// delivery is set ONLY on the CHAOS-4097 branch: the unit holds a
+	// 'delivered' outbox row whose River job was proven terminal and
+	// non-success. Its zero value means "never published", which is the
+	// original CHAOS-4005 branch and the one unroutable() gates.
+	delivery terminalDelivery
+}
+
+// terminalDelivery is the liveness PROOF, carried from the queue-control read
+// to the domain write so the write can re-assert it under the same CAS.
+//
+// jobID is what makes the proof re-checkable. Between the read and the commit
+// another component can rearm the outbox row and mint a REPLACEMENT delivery
+// (internal/joboutbox.TerminalDeliveryRepair does exactly that), and a unit
+// whose replacement is live must not be terminalized. Pinning the pair the
+// proof was taken on turns that into a CAS instead of a race -- the same ABA
+// lesson internal/joboutbox.StrandRepair's phase-3 lock records.
+type terminalDelivery struct {
+	dedupeKey string
+	jobID     int64
+	state     string
+}
+
+func (delivery terminalDelivery) proven() bool {
+	return delivery.jobID > 0 && delivery.state != "" && delivery.dedupeKey != ""
 }
 
 func (candidate unreclaimableCandidate) pair() string {
@@ -476,6 +562,29 @@ func (sweep *UnreclaimableSweep) Step(
 // loop. Applying either after the limit would let a page of ineligible rows
 // mask a genuine strand behind them on every pass -- the same deterministic
 // loser that CHAOS-3990 fixed one layer up.
+//
+// TWO SWEEPABLE POPULATIONS, and they need OPPOSITE proofs (CHAOS-4097).
+//
+//   - NEVER PUBLISHED: no outbox row at all. Nothing owns it, but nothing has
+//     tried to run it either, so destroying it is only safe when the
+//     capability matrix declines the pair -- unroutable() is that proof, and
+//     it stays mandatory on this branch.
+//   - PUBLISHED AND DEAD: a 'delivered' outbox row whose River job is in a
+//     terminal NON-SUCCESS state. Here routability is the wrong question and
+//     asking it is what left CHAOS-4093 stranded: every one of those 650 units
+//     was routable, which is precisely why they were published in the first
+//     place. The proof that matters is that the thing which took ownership has
+//     finished and did not do the work. A cancelled or discarded job is never
+//     run again by anyone, and a job cancelled before the idempotency claim
+//     (internal/jobruntime/adapter.go's validate/decode/drift block) wrote
+//     nothing back to the domain at all.
+//
+// The old code had only the first branch and treated the mere PRESENCE of an
+// outbox row as ownership -- "a unit holding an outbox row DID enter the River
+// relay. River owns its fate" -- with no liveness behind the claim. That is
+// true for available, running, retryable and completed jobs. It is false for
+// the two terminal failure states, and this is where that gets proven rather
+// than assumed.
 func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -502,7 +611,11 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 		scanned += len(page)
 		last := page[len(page)-1]
 		cursorCreatedAt, cursorID = last.createdAt, last.id
-		unpublished, err := dropPublishedUnits(ctx, tx, page)
+		unpublished, delivered, err := partitionPublishedUnits(ctx, tx, page)
+		if err != nil {
+			return nil, err
+		}
+		dead, err := sweep.deadDeliveries(ctx, delivered)
 		if err != nil {
 			return nil, err
 		}
@@ -514,6 +627,12 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 			if len(selected) == limit {
 				break
 			}
+		}
+		for _, candidate := range dead {
+			if len(selected) == limit {
+				break
+			}
+			selected = append(selected, candidate)
 		}
 		if len(page) < limit {
 			break
@@ -758,48 +877,156 @@ func scanUnreclaimablePage(
 	return page, nil
 }
 
-// A unit holding an outbox row DID enter the River relay. River owns its fate
-// and CHAOS-3951's reclaim covers it; terminalizing here would race that
-// recovery.
+// A unit holding an outbox row DID enter the River relay -- but "entered the
+// relay" is not "is owned by something that will run it", and the difference is
+// CHAOS-4097. river_job_id is selected alongside the key so the caller can ask
+// the queue-control role what actually became of that delivery.
+//
+// river_job_id is projected only for a 'delivered' row. The check constraint
+// ck_worker_job_outbox_delivery_state already makes it NOT NULL exactly then,
+// so the CASE is not defending against a shape this schema produces; it makes
+// the intent explicit and makes any other status fall through to "published,
+// no proof", which is dropped. A row rearmed back to 'pending' by
+// internal/joboutbox.TerminalDeliveryRepair is precisely that case: a
+// replacement delivery is on its way and the unit is not ours to destroy.
 const selectPublishedDedupeKeysSQL = `
-SELECT dedupe_key
+SELECT dedupe_key,
+	CASE WHEN status = 'delivered' THEN river_job_id END AS delivered_job_id
 FROM public.worker_job_outbox
 WHERE dedupe_key = ANY($1)
 `
 
-func dropPublishedUnits(
+// partitionPublishedUnits splits a page into the units nothing ever published
+// and the units whose delivery can still be asked about. It returns them as
+// two disjoint slices rather than filtering to one, because the two need
+// different proofs before either may be terminalized.
+//
+// A published row with no usable river_job_id belongs to NEITHER slice: it is
+// dropped outright. That is the fail-closed default the original filter had,
+// and it is kept -- absence of proof is not proof of death.
+func partitionPublishedUnits(
 	ctx context.Context,
 	tx pgx.Tx,
 	page []unreclaimableCandidate,
-) ([]unreclaimableCandidate, error) {
+) (unpublished []unreclaimableCandidate, delivered []unreclaimableCandidate, err error) {
 	keys := make([]string, 0, len(page))
 	for _, candidate := range page {
 		keys = append(keys, unreclaimableDedupeKey(candidate.id))
 	}
 	rows, err := tx.Query(ctx, selectPublishedDedupeKeysSQL, keys)
 	if err != nil {
-		return nil, sweepUnavailable(sweepStepOutboxQuery, err)
+		return nil, nil, sweepUnavailable(sweepStepOutboxQuery, err)
 	}
 	defer rows.Close()
-	published := make(map[string]struct{}, len(keys))
+	type publication struct {
+		jobID int64
+		known bool
+	}
+	published := make(map[string]publication, len(keys))
 	for rows.Next() {
 		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, sweepUnavailable(sweepStepOutboxScan, err)
+		var jobID *int64
+		if err := rows.Scan(&key, &jobID); err != nil {
+			return nil, nil, sweepUnavailable(sweepStepOutboxScan, err)
 		}
-		published[key] = struct{}{}
+		record := publication{}
+		if jobID != nil && *jobID > 0 {
+			record = publication{jobID: *jobID, known: true}
+		}
+		published[key] = record
 	}
 	if err := rows.Err(); err != nil {
-		return nil, sweepUnavailable(sweepStepOutboxRows, err)
+		return nil, nil, sweepUnavailable(sweepStepOutboxRows, err)
 	}
-	unpublished := make([]unreclaimableCandidate, 0, len(page))
+	unpublished = make([]unreclaimableCandidate, 0, len(page))
+	delivered = make([]unreclaimableCandidate, 0, len(page))
 	for _, candidate := range page {
-		if _, ok := published[unreclaimableDedupeKey(candidate.id)]; ok {
+		key := unreclaimableDedupeKey(candidate.id)
+		record, isPublished := published[key]
+		if !isPublished {
+			unpublished = append(unpublished, candidate)
 			continue
 		}
-		unpublished = append(unpublished, candidate)
+		if !record.known {
+			continue
+		}
+		candidate.delivery = terminalDelivery{dedupeKey: key, jobID: record.jobID}
+		delivered = append(delivered, candidate)
 	}
-	return unpublished, nil
+	return unpublished, delivered, nil
+}
+
+// The liveness read. state is compared as text so this file never has to
+// import River's enum, and the IN list is CLOSED: a state River adds later is
+// refused by default rather than silently treated as dead. 'completed' is
+// terminal too and is deliberately absent -- a completed job did the work.
+//
+// The join is on river_job.id, a bigint, against a bigint array. CHAOS-4092 is
+// the reason that is stated: casting River's primary key to text is not
+// sargable against river_job_pkey and turned a sibling repair into a 9.5h
+// crash loop. worker_job_outbox.river_job_id is already a real bigint, so no
+// cast is needed on either side and none is written.
+const selectTerminalDeliveryStatesSQL = `
+SELECT job.id, job.state::text
+FROM %s AS job
+WHERE job.id = ANY($1::bigint[])
+	AND job.state::text IN ('cancelled', 'discarded')
+	AND job.finalized_at IS NOT NULL
+`
+
+// deadDeliveries keeps only the candidates whose delivery is provably dead.
+//
+// THE POOL SPLIT, stated here rather than left to be rediscovered: this read
+// runs on the queue-control pool and therefore OUTSIDE the domain transaction,
+// for the same reason the route read does (CHAOS-4035) -- the River schema is
+// granted to the queue role alone, so no single transaction can hold both
+// this and the terminalize write. Do NOT "fix" that by moving it inside the
+// domain transaction; the domain role cannot even see the schema, and the
+// attempt is what produced a 42501-per-tick production life once already.
+//
+// Unlike the route read, this one needs no fence. cancelled and discarded are
+// TERMINAL: River never walks a job back out of them, so the answer cannot go
+// stale in the direction that matters. What CAN change underneath is the
+// outbox row -- a repair may rearm it and mint a replacement delivery -- and
+// that is re-checked as a CAS at write time, not here.
+func (sweep *UnreclaimableSweep) deadDeliveries(
+	ctx context.Context,
+	delivered []unreclaimableCandidate,
+) ([]unreclaimableCandidate, error) {
+	if len(delivered) == 0 {
+		return nil, nil
+	}
+	ids := make([]int64, 0, len(delivered))
+	for _, candidate := range delivered {
+		ids = append(ids, candidate.delivery.jobID)
+	}
+	rows, err := sweep.jobs.Query(ctx, sweep.jobState, ids)
+	if err != nil {
+		return nil, sweepUnavailable(sweepStepJobStateQuery, err)
+	}
+	defer rows.Close()
+	states := make(map[int64]string, len(ids))
+	for rows.Next() {
+		var id int64
+		var state string
+		if err := rows.Scan(&id, &state); err != nil {
+			return nil, sweepUnavailable(sweepStepJobStateScan, err)
+		}
+		states[id] = state
+	}
+	if err := rows.Err(); err != nil {
+		return nil, sweepUnavailable(sweepStepJobStateRows, err)
+	}
+	dead := make([]unreclaimableCandidate, 0, len(delivered))
+	for _, candidate := range delivered {
+		state, ok := states[candidate.delivery.jobID]
+		if !ok || state == "" {
+			continue
+		}
+		candidate.delivery.state = state
+		dead = append(dead, candidate)
+	}
+	return dead, nil
 }
 
 func unreclaimableDedupeKey(unitID string) string {
@@ -830,6 +1057,50 @@ WHERE id = $1::uuid
 	AND updated_at = $6
 `
 
+// The published-and-dead write carries ONE extra predicate, and it is the
+// whole safety of the CHAOS-4097 branch.
+//
+// The liveness proof was taken on the queue-control pool, outside this
+// transaction. Between that read and this commit, internal/joboutbox's
+// TerminalDeliveryRepair can rearm the outbox row -- river_job_id back to
+// NULL, status back to 'pending' -- and the relay can mint a REPLACEMENT
+// delivery for the same unit. Terminalizing then would destroy work that is
+// live again.
+//
+// So the row is required to STILL hold the exact delivery the proof was taken
+// on: same dedupe key, still 'delivered', still that river_job_id. Matching
+// the key alone would be an ABA hole, because a replacement delivery reuses
+// the key by construction; the PAIR is the delivery generation. This is the
+// same shape internal/joboutbox.StrandRepair's phase-3 lock uses, and it is
+// here for the same reason.
+//
+// The updated_at pin is kept alongside it, unchanged: the two guard different
+// races (a runtime touching the unit, versus the delivery being replaced) and
+// neither implies the other.
+const terminalizeTerminalDeliverySQL = `
+UPDATE public.sync_run_units
+SET status = 'failed',
+	available_at = NULL,
+	error = $2,
+	last_retry_reason = $3,
+	result = $4::jsonb,
+	lease_owner = NULL,
+	lease_expires_at = NULL,
+	updated_at = $5
+WHERE id = $1::uuid
+	AND status = 'dispatching'
+	AND lease_owner IS NULL
+	AND attempts = 0
+	AND updated_at = $6
+	AND EXISTS (
+		SELECT 1
+		FROM public.worker_job_outbox AS outbox
+		WHERE outbox.dedupe_key = $7
+			AND outbox.status = 'delivered'
+			AND outbox.river_job_id = $8
+	)
+`
+
 func (sweep *UnreclaimableSweep) terminalize(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -837,20 +1108,37 @@ func (sweep *UnreclaimableSweep) terminalize(
 	now time.Time,
 ) (int64, error) {
 	reason := unreclaimableReason(candidate)
-	payload, err := json.Marshal(map[string]string{
-		"error_category": unreclaimableErrorCategory,
+	category := unreclaimableErrorCategory
+	if candidate.delivery.proven() {
+		category = unreclaimableTerminalDeliveryCategory
+	}
+	fields := map[string]string{
+		"error_category": category,
 		"reason":         reason,
 		"provider":       candidate.provider,
 		"dataset_key":    candidate.datasetKey,
-	})
+	}
+	if candidate.delivery.proven() {
+		// The exact River state is durable evidence, not decoration: it is
+		// what lets an operator reading this row tell a job the runtime
+		// rejected from one someone cancelled, without needing access to the
+		// queue schema they may not hold.
+		fields["river_job_state"] = candidate.delivery.state
+		fields["river_job_id"] = strconv.FormatInt(candidate.delivery.jobID, 10)
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return 0, sweepUnavailable(sweepStepTerminalizePayload, err)
 	}
-	command, err := tx.Exec(
-		ctx, terminalizeUnreclaimableSQL,
-		candidate.id, unreclaimableErrorCategory, reason, string(payload),
-		now, candidate.updatedAt,
-	)
+	statement := terminalizeUnreclaimableSQL
+	args := []any{
+		candidate.id, category, reason, string(payload), now, candidate.updatedAt,
+	}
+	if candidate.delivery.proven() {
+		statement = terminalizeTerminalDeliverySQL
+		args = append(args, candidate.delivery.dedupeKey, candidate.delivery.jobID)
+	}
+	command, err := tx.Exec(ctx, statement, args...)
 	if err != nil {
 		return 0, sweepUnavailable(sweepStepTerminalizeExec, err)
 	}
@@ -860,7 +1148,21 @@ func (sweep *UnreclaimableSweep) terminalize(
 // unreclaimableReason is the durable record an operator reads off the row.
 // The bare category alone is what made a retry loop with thousands of attempts
 // unexplainable in production (CHAOS-3990).
+//
+// The two branches say different things because they ARE different findings,
+// and a shared sentence would make a dead delivery indistinguishable from a
+// declined capability in the one place an operator looks first. The dead-
+// delivery form names the River state explicitly, because "which terminal
+// state" is the question a reader asks next.
 func unreclaimableReason(candidate unreclaimableCandidate) string {
+	if candidate.delivery.proven() {
+		return fmt.Sprintf(
+			"unreclaimable dispatch for %s: its River delivery (job %d) is "+
+				"terminal in state %q, so nothing will execute it again and "+
+				"the cancellation wrote nothing back to this unit",
+			candidate.pair(), candidate.delivery.jobID, candidate.delivery.state,
+		)
+	}
 	return fmt.Sprintf(
 		"unreclaimable dispatch for %s: held 'dispatching' with no lease, no "+
 			"heartbeat, no attempt and no worker_job_outbox row, so no runtime "+

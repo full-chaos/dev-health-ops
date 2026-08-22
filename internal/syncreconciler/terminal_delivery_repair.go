@@ -20,6 +20,24 @@ const (
 	// reclaim-loop indistinguishable from an ordinary rescue in the durable
 	// record an operator reads.
 	riverDeliveryExhaustedEvidence = "river_delivery_exhausted"
+	// riverRescueOnlyCancelError is the ONE cancellation this repair accepts,
+	// and the constant is written out rather than imported so this package
+	// keeps no dependency on internal/jobrescue. The string is pinned against
+	// its source in TestRescueOnlyCancelSentinelMatchesJobRescue, so it cannot
+	// drift silently -- the drift would be invisible in production, because a
+	// sentinel that no longer matches simply stops recovering anything.
+	//
+	// The "JobCancelError: " prefix is River's, not ours: rivertype's
+	// JobCancelError.Error() prepends it, and the executor persists
+	// res.ErrorStr() -- that wrapped string -- into river_job.errors. Matching
+	// the inner message alone would never fire.
+	riverRescueOnlyCancelError = "JobCancelError: rescue-only River worker reached execution"
+	// riverRescueOnlyCancelEvidence is its own durable code for the reason the
+	// other two are: the three branches recover the same row into the same
+	// status, and a shared code would make a wrong-queue insert
+	// indistinguishable from a rescue or an exhausted budget in the record an
+	// operator reads.
+	riverRescueOnlyCancelEvidence = "river_rescue_only_cancel"
 )
 
 var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -31,16 +49,54 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 type TerminalDeliveryRepairResult struct {
 	Recovered          int
 	ExhaustedRecovered int
+	// RescueOnlyCancelsRecovered is the subset whose River job was CANCELLED
+	// by a rescue-only worker (CHAOS-4097). It is counted separately because
+	// it means something an operator must act on that the other two do not:
+	// a coordinator job was inserted onto a queue whose client does not
+	// execute that kind. That is a registry or routing fault, and it repeats
+	// deterministically until someone fixes it.
+	RescueOnlyCancelsRecovered int
 }
 
 // TerminalDeliveryRepair restores a durable dispatch intent when River itself
 // proves it retired the delivery without the authoritative domain work having
-// been re-armed. Two proofs qualify, and only two: the global JobRescuer
-// discarded a still-retryable job as unhandled, or the job spent its entire
-// attempt budget. Cancelled, completed, and still-live jobs stay excluded, as
-// does a discard that happened with attempts still on the clock for any other
-// reason -- that is a worker declaring the work permanently failed, and
-// reclaiming it would relitigate a decision the domain already made.
+// been re-armed. Three proofs qualify, and only three: the global JobRescuer
+// discarded a still-retryable job as unhandled, the job spent its entire
+// attempt budget, or a rescue-only worker cancelled it. Completed and
+// still-live jobs stay excluded, as does a discard that happened with attempts
+// still on the clock for any other reason -- that is a worker declaring the
+// work permanently failed, and reclaiming it would relitigate a decision the
+// domain already made.
+//
+// # Why 'cancelled' is admitted, and why only this one class of it
+//
+// CHAOS-4097 asked for cancelled terminal jobs. Simply adding the state would
+// have been wrong: 'cancelled' is not one outcome, it is several, and they do
+// not share recovery semantics. The four coordinator kinds enumerate cleanly,
+// because syncdispatchruntime's workers are plain river.WorkerDefaults that
+// never return river.JobCancel themselves -- they return whatever the bridge
+// returned. So exactly two things can cancel one of these jobs:
+//
+//  1. internal/jobrescue's rescueOnlyWorker. A kind was inserted onto a queue
+//     whose client registers it for maintenance type information only, so the
+//     worker cancels rather than executing a domain effect in the wrong worker
+//     family. NOTHING ran. This is the same failure the unhandled-rescue
+//     branch above recovers -- a registry/queue mismatch -- differing only in
+//     whether River's rescuer reached the job first or a producer did. It gets
+//     the same remedy for the same reason.
+//  2. internal/joboperator's Cancel verb: a person deliberately stopping this
+//     job. Republishing it would silently revert an operator decision, which
+//     is the one thing a repair must never do.
+//
+// The two are separated STRUCTURALLY, not by string alone. River's own
+// JobCancel query stamps metadata.cancel_attempted_at and appends nothing to
+// errors; a worker-returned cancel appends an errors entry and never sets that
+// key. Requiring the sentinel AND the absence of cancel_attempted_at means an
+// operator cancel cannot be mistaken for a rescue-only one even if a future
+// caller starts passing a matching message.
+//
+// A cancelled job is also, always, at attempt 1 with its budget unspent, so it
+// can never satisfy the exhausted branch: this had to be its own disjunct.
 //
 // The exhausted case is included for the coordinator kinds specifically
 // (CHAOS-3951). The original exclusion was written so that "domain retry
@@ -104,6 +160,8 @@ func (repair *TerminalDeliveryRepair) Step(
 		riverUnhandledRescueError,
 		riverUnhandledRescueEvidence,
 		riverDeliveryExhaustedEvidence,
+		riverRescueOnlyCancelError,
+		riverRescueOnlyCancelEvidence,
 	)
 	if err != nil || rows == nil {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
@@ -119,6 +177,8 @@ func (repair *TerminalDeliveryRepair) Step(
 		case riverUnhandledRescueEvidence:
 		case riverDeliveryExhaustedEvidence:
 			result.ExhaustedRecovered++
+		case riverRescueOnlyCancelEvidence:
+			result.RescueOnlyCancelsRecovered++
 		default:
 			// The evidence code is chosen by this statement, so an unknown one
 			// means the row was recovered under a branch this code does not
@@ -142,7 +202,7 @@ func (repair *TerminalDeliveryRepair) Step(
 // transport ownership. FOR UPDATE SKIP LOCKED makes replicas converge on at
 // most one replacement delivery.
 //
-// Two disjoint recovery branches share every other predicate, and each stamps
+// Three disjoint recovery branches share every other predicate, and each stamps
 // its own durable evidence code:
 //
 //   - remaining attempts AND the exact latest-error text identifies River
@@ -151,6 +211,18 @@ func (repair *TerminalDeliveryRepair) Step(
 //   - a spent attempt budget identifies exhaustion, whatever the last error
 //     said. The error text is deliberately NOT matched here: the whole point is
 //     that a coordinator bridge failure carries arbitrary transport text.
+//   - a CANCELLED job whose last error is the rescue-only sentinel AND whose
+//     metadata carries no cancel_attempted_at (CHAOS-4097). Both halves are
+//     required: the sentinel says a worker cancelled it, and the absent key
+//     says River's own cancel query did not, which is what keeps an operator's
+//     deliberate cancellation out of this branch. See the type doc above for
+//     the full enumeration of what can cancel a coordinator job.
+//
+// The state comparison moved OUT of the shared predicates and into the
+// branches. Leaving `state = 'discarded'` above them and adding 'cancelled'
+// alongside it would have let a cancelled job satisfy the exhausted branch by
+// its attempt count, which is exactly the operator-cancel case this must
+// refuse -- and it would have done so silently.
 //
 // The branches are written as an explicit disjunction rather than by relaxing
 // the attempt comparison, so that a discard with attempts remaining still
@@ -191,6 +263,7 @@ const repairTerminalRiverDeliverySQL = `
 WITH candidates AS (
 	SELECT outbox.id,
 		CASE
+			WHEN job.state::text = 'cancelled' THEN $7::text
 			WHEN job.attempt >= job.max_attempts THEN $5::text
 			ELSE $4::text
 		END AS recovery_code
@@ -211,12 +284,21 @@ WITH candidates AS (
 		AND outbox.dispatched_route_generation = route.generation
 		AND route.transport = 'river'
 		AND route.paused = FALSE
-		AND job.state::text = 'discarded'
 		AND job.finalized_at IS NOT NULL
 		AND cardinality(job.errors) > 0
 		AND (
-			job.attempt >= job.max_attempts
-			OR (job.errors[cardinality(job.errors)]->>'error') = $3
+			(
+				job.state::text = 'discarded'
+				AND (
+					job.attempt >= job.max_attempts
+					OR (job.errors[cardinality(job.errors)]->>'error') = $3
+				)
+			)
+			OR (
+				job.state::text = 'cancelled'
+				AND job.metadata ->> 'cancel_attempted_at' IS NULL
+				AND (job.errors[cardinality(job.errors)]->>'error') = $6
+			)
 		)
 	ORDER BY outbox.dispatched_at, outbox.id
 	FOR UPDATE OF outbox, job SKIP LOCKED

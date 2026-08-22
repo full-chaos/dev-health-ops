@@ -1276,21 +1276,54 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
     # route or an unreadable capability matrix must degrade to "sweep nothing
     # this pass", never abort the whole reconcile and take those repairs with
     # it (hunt finding).
+    #
+    # CHAOS-3957: a caught exception alone does NOT make this fail-open on
+    # PostgreSQL. A failed statement inside ``resolve_worker_job_route``
+    # aborts the whole transaction; catching the exception here does not
+    # undo that, and this session is the SAME one reconcile_sync_dispatch
+    # keeps using afterward for lease repair and outbox wakeup
+    # materialization, still uncommitted at this point. Without a savepoint,
+    # the caught exception is real but the fail-OPEN outcome is not -- the
+    # next statement on this session raises InFailedSqlTransaction, taking
+    # that unrelated work down with it. ``session.begin_nested()`` opens a
+    # SAVEPOINT around only the fallible read; its __exit__ rolls back to
+    # the savepoint on failure, leaving the outer transaction (and every
+    # write already staged on it) usable. Same fix shape as the CHAOS-3941
+    # planner-side gate and CHAOS-2580 before it.
     try:
-        if (
-            resolve_worker_job_route(session, "sync.provider_unit")
-            not in PROVIDER_UNIT_OUTBOX_ROUTES
-        ):
+        # Only the fallible DB read sits inside the savepoint. routes_to_river
+        # below is a pure in-memory capability-matrix lookup (no statement, no
+        # poisoning risk) -- it stays under the SAME outer except so a
+        # contract-drift exception there still degrades to "sweep nothing"
+        # exactly as before, without opening a savepoint it doesn't need.
+        with session.begin_nested():
+            route_selects_river = (
+                resolve_worker_job_route(session, "sync.provider_unit")
+                in PROVIDER_UNIT_OUTBOX_ROUTES
+            )
+        if not route_selects_river:
             return []
         return [
             unit
             for unit in units
             if not routes_to_river(str(unit.provider), str(unit.dataset_key))
         ]
-    except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
-        logger.warning(
+    except Exception as exc:  # noqa: BLE001 - fail safe: never destroy on a guess
+        from dev_health_ops.metrics.prometheus import (
+            SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL,
+        )
+
+        SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL.labels(
+            exception_type=type(exc).__name__
+        ).inc()
+        # ERROR, not WARNING (CHAOS-4073 precedent): this codebase's Sentry
+        # LoggingIntegration only turns ERROR+ records into events, and there
+        # are no manual capture_exception call sites to fall back on -- log
+        # level is the only automatic incident-surfacing path here. Skipping
+        # this pass is a policy choice about what the sweep DOES; it must not
+        # also decide how loudly the underlying read failure gets reported.
+        logger.exception(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
-            exc_info=True,
         )
         return []
 

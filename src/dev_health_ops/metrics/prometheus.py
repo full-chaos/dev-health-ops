@@ -324,6 +324,24 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # ---------------------------------------------------------------------------
+    # Sync reconciler unreclaimable sweep (CHAOS-3957)
+    # ---------------------------------------------------------------------------
+    SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_sync_reconciler_unreclaimable_routability_fail_open_total",
+            "_only_unroutable's resolve_worker_job_route read raised, so the "
+            "unreclaimable-dispatching sweep skipped this pass rather than "
+            "risk terminalizing a unit no runtime has actually abandoned. "
+            "Skip-and-signal is deliberate (a paused/drifted route or an "
+            "unreadable capability matrix must not abort reconcile_sync_dispatch "
+            "and take lease repair and wakeup materialization down with it, "
+            "hunt finding) -- but every occurrence must be alertable, not "
+            "merely a logger line, matching the CHAOS-4073 precedent.",
+            ["exception_type"],
+        )
+    )
+
+    # ---------------------------------------------------------------------------
     # Integration credentials (issue 3694)
     # ---------------------------------------------------------------------------
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _prometheus_client_module.Counter(
@@ -370,6 +388,7 @@ else:
     ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
+    SYNC_RECONCILER_UNRECLAIMABLE_ROUTABILITY_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
 
 

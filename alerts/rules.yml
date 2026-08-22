@@ -441,6 +441,34 @@ groups:
             this counter accompanies.
 
   # ---------------------------------------------------------------------------
+  # Sync reconciler unreclaimable sweep (CHAOS-3957)
+  # ---------------------------------------------------------------------------
+  - name: sync_reconciler_unreclaimable_sweep
+    interval: 60s
+    rules:
+      # _only_unroutable's durable route read failed and the sweep skipped
+      # this pass rather than terminalize on a guess (deliberate skip-open,
+      # see the sweep's own docstring) -- but every occurrence must be
+      # alertable, not merely a logger line, matching the CHAOS-4073
+      # precedent. `for` stays shorter than the rate() window for the same
+      # reason as RecommendationsReadinessGateFailingOpen above: one
+      # increment must sustain a positive rate long enough to fire.
+      - alert: SyncReconcilerUnreclaimableSweepFailingOpen
+        expr: |
+          sum(rate(devhealth_sync_reconciler_unreclaimable_routability_fail_open_total[15m])) by (exception_type) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Unreclaimable-dispatching sweep is failing open ({{ $labels.exception_type }})"
+          description: |
+            _only_unroutable is raising {{ $labels.exception_type }} while resolving
+            the sync.provider_unit route (CHAOS-3957) and skipping the pass. Check
+            PostgreSQL connectivity/schema for worker_job_routes and worker logs for
+            the ERROR this counter accompanies.
+
+  # ---------------------------------------------------------------------------
   # Executed-proof route-readiness gate (CHAOS-4060)
   # ---------------------------------------------------------------------------
   - name: scheduler_executed_proof_gate

@@ -396,13 +396,11 @@ func RunProducer(
 	if err != nil {
 		t.Fatalf("%s: resolve %q: %v", side, argv[0], err)
 	}
-	if resolved, err := filepath.Abs(program); err == nil {
-		program = resolved
-	}
+	program = canonicalPath(program)
 	entryPoint := argv[1]
 	if resolved, err := filepath.Abs(entryPoint); err == nil {
 		if _, statErr := os.Stat(resolved); statErr == nil {
-			entryPoint = resolved
+			entryPoint = canonicalPath(resolved)
 		}
 	}
 	command := exec.Command(program, argv[1:]...)
@@ -412,6 +410,27 @@ func RunProducer(
 		t.Fatalf("%s: %s failed: %v\n%s", side, strings.Join(argv, " "), err, output)
 	}
 	return Execution{Side: side, Program: program, EntryPoint: entryPoint}
+}
+
+// canonicalPath resolves symlinks so two names for the same file are one
+// identity. Without it, a symlink or a copied wrapper pointing at the
+// reference producer would read as a different implementation and could
+// satisfy the port-proof guard while running the reference on both sides.
+//
+// This closes the aliasing hole, and it is where the guard's ambition stops.
+// It does NOT hash executable contents, nor detect a wrapper that re-execs the
+// reference producer underneath a different name -- that needs execution
+// provenance this repo has no plane for, and it is a decoy someone would have
+// to build on purpose rather than the realistic mistake (forgetting to point
+// one side at the native executor), which this does catch.
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	return path
 }
 
 // RequirePortProof fails unless the two sides were produced by DIFFERENT

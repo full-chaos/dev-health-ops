@@ -463,16 +463,32 @@ def _scalar(client: Any, query: str) -> int:
 
 
 def _table_digest(client: Any, database: str, table: str) -> str:
-    """Order-independent checksum of every column of every row.
+    """Order-independent CRYPTOGRAPHIC digest of every column of every row.
 
-    groupBitXor over a per-row hash is commutative, so it does not depend on
-    read order, and `*` means a column added to the table is covered without
-    anyone remembering to list it here.
+    Not an XOR aggregate. ``groupBitXor`` is commutative but also linear and
+    self-cancelling: a pair of identical rows contributes zero, so a table
+    holding a duplicated row and a table holding neither copy produce the SAME
+    aggregate. As an equality proof for the fixture both producers consume,
+    that is a hole -- the whole point of this check is that a difference in
+    input cannot be mistaken for parity in output.
+
+    Instead: render every row to text, sort the multiset (so read order does
+    not matter while duplicates still count), join with a delimiter, and take
+    SHA256 over the result. `*` keeps a newly added column covered without
+    anyone remembering to list it.
+
+    This materializes the table in memory, which is fine for a parity fixture
+    (tens to low thousands of rows) and deliberately not offered as a
+    general-purpose tool for production-sized tables.
     """
     result = client.query(
-        f"SELECT toString(groupBitXor(cityHash64(*))) FROM {database}.{table}"
+        "SELECT lower(hex(SHA256(arrayStringConcat("
+        "arraySort(groupArray(toString(tuple(*)))), '\x1e'))))"
+        f" FROM {database}.{table}"
     )
-    return str(result.result_rows[0][0]) if result.result_rows else "0"
+    if not result.result_rows or result.result_rows[0][0] is None:
+        return "empty"
+    return str(result.result_rows[0][0])
 
 
 # --------------------------------------------------------------------------

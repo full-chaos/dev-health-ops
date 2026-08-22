@@ -111,9 +111,20 @@ confirms what the test itself declared.
 
 `seed` builds rows with the production fixture generators and writes them
 through the production writers, then rebases the generated window onto a
-declared anchor so the fixture is reproducible. `clone` copies the declared
-input tables to the other store, which is what makes "both sides consumed
-identical input" a fact rather than an assumption.
+declared anchor so the fixture is reproducible.
+
+`clone` copies the declared input tables to the other store and then **proves**
+the copy: it refuses a non-empty destination, and compares row counts plus an
+order-independent SHA256 over the sorted multiset of every row on both sides.
+That is what makes "both sides consumed identical input" a fact rather than an
+assumption — and the premise the entire parity claim rests on.
+
+An earlier version used `groupBitXor(cityHash64(*))`, which is commutative but
+also self-cancelling: a duplicated row contributes zero. Measured on this
+repo's ClickHouse, `('r1','r2','r2')` and `('r1','r3','r3')` produce the
+*identical* XOR aggregate — an equality proof that cannot see two completely
+different tables. The SHA256 form distinguishes them and stays
+order-independent.
 
 To add a kind, add a `seed_<kind>` function and register it in `KINDS` with the
 input tables it reads.
@@ -140,6 +151,13 @@ exists to prevent, re-entering through its own input. Calling a Python run
 `dora_table_parity_integration_test.go` is a comparator **self-test** and says
 so in its name: both sides run Python because the Go DORA executor is slice R1.
 It asserts the guard REFUSES that pair.
+
+Symlinks are resolved, so two names for the same file are one implementation.
+The guard stops there: it does **not** hash executable contents or detect a
+wrapper that re-execs the reference producer under another name. That needs
+execution provenance this repo has no plane for, and it is a decoy someone
+would have to build deliberately — the realistic mistake, forgetting to point
+one side at the native executor, is caught.
 
 ### 6. Prove it fails
 

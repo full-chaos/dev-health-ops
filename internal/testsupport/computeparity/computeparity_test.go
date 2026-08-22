@@ -2,6 +2,8 @@ package computeparity
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -391,5 +393,24 @@ func TestPortProofJudgesWhatRANNotWhatItWasCalled(t *testing.T) {
 				t.Fatalf("a real port proof must be accepted, got: %s", violation)
 			}
 		})
+	}
+}
+
+func TestSymlinkedPathsAreOneImplementation(t *testing.T) {
+	// A symlink or a copy pointing at the reference producer must not read as
+	// a different implementation and buy a passing port proof.
+	directory := t.TempDir()
+	real := filepath.Join(directory, "produce.py")
+	if err := os.WriteFile(real, []byte("print('x')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(directory, "alias.py")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	left := Execution{Side: "python", Program: "/usr/bin/python3", EntryPoint: canonicalPath(real)}
+	right := Execution{Side: "go", Program: "/usr/bin/python3", EntryPoint: canonicalPath(alias)}
+	if violation := PortProofViolation(left, right); violation == "" {
+		t.Fatal("a symlink to the reference producer must not qualify as a port proof")
 	}
 }

@@ -103,7 +103,25 @@ def closing_coroutine_runner(
 
 
 def seed_sync_dispatch_transport_routes(session: Session) -> None:
-    """Seed the migration-default Celery routes for isolated outbox tests."""
+    """Seed the durable transport routes for isolated outbox tests.
+
+    The ``sync_dispatch_transport_routes`` rows keep the migration-default
+    ``celery`` value that alembic 0049 seeds, because the Python outbox claim
+    path still selects on it.
+
+    ``worker_job_routes['sync.provider_unit']`` deliberately does NOT. Alembic
+    0061 seeds it ``celery`` on a fresh database and 0066 excludes it, but a
+    production dump taken for CHAOS-4082 shows the deployed row is
+    ``river_canary`` -- an operator applied it, which is the state every
+    provider unit has actually dispatched under for months. Seeding ``celery``
+    here made the fixture disagree with production in the one field the
+    dispatcher fails closed on, so every dispatch test had to override it by
+    hand and a test that forgot got a fail-closed refusal that looked like a
+    routing bug.
+
+    A test that wants a route FAULT sets the row itself; see
+    ``test_dispatch_sync_run_route_faults_fail_closed``.
+    """
     from dev_health_ops.models import SyncDispatchTransportRoute, WorkerJobRoute
 
     session.add_all(
@@ -127,7 +145,7 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
     session.add(
         WorkerJobRoute(
             job_kind="sync.provider_unit",
-            transport="celery",
+            transport="river_canary",
             paused=False,
             generation=1,
         )

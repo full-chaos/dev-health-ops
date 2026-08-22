@@ -41,6 +41,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
     SyncWatermark,
     WorkerJobOutbox,
+    WorkerJobRoute,
 )
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
@@ -3058,20 +3059,62 @@ def test_dispatch_sync_run_non_plannable_alias_pair_is_terminalized(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
-# NOTE: ``test_dispatch_sync_run_canary_scope_route_faults_fail_closed``
-# (missing / paused / drifted) and
-# ``test_dispatch_sync_run_noncanary_route_fault_fails_closed`` formerly here
-# asserted that a fault in the durable ``sync.provider_unit`` route row --
-# absent, paused, or naming an unexpected transport -- made a dispatch pass
-# raise instead of guessing a transport. CHAOS-4054 step 4 deleted the read
-# itself (``resolve_worker_job_route`` is no longer called from
-# ``dispatch_sync_run``), so that row can no longer be in a faulty state as
-# far as provider units are concerned and there is no fail-closed branch left
-# to exercise. Nothing replaces them: the routing input that remains is the
-# checked-in capability matrix, whose own unreadable/incomplete-contract
-# fail-closed behaviour is owned by
-# ``tests/workers/test_provider_unit_route.py``. The durable route row is
-# retired outright under CHAOS-4082.
+# These tests were deleted mid-review and then restored, which is worth
+# recording. CHAOS-4054 step 4 deletes the Celery DISPATCH plane; it does not
+# delete the durable route CONTROL plane, which CHAOS-4082 still owns. The
+# first cut of this change conflated the two, dropped
+# ``resolve_worker_job_route`` from ``dispatch_sync_run``, and deleted these
+# tests as having no subject left. An adversarial review caught the
+# consequence: with the read gone the producer stages outbox rows the Go relay
+# RELEASES for a Celery route, wedging units in ``dispatching`` behind a
+# DispatchGuard slot. The read -- and its FOR SHARE lock, which is what keeps
+# an operator rollback's quiescence claim honest -- is back, so these tests
+# have a subject again.
+#
+# What changed is the ``celery`` case. It used to mean "dispatch through the
+# Python writer"; it now means "fail closed", because step 4 removed the
+# runtime that made it a destination.
+@pytest.mark.parametrize("state", ("missing", "paused", "drifted", "rolled-back"))
+def test_dispatch_sync_run_route_faults_fail_closed(db_session, monkeypatch, state):
+    """A faulty or non-River durable route must refuse, never stage work.
+
+    Staging anyway is strictly worse than refusing: the relay resolves the same
+    row every step and releases the claim for a Celery route, so the unit sits
+    in ``dispatching`` behind an outbox row nothing will deliver, holding a
+    concurrency slot with no lease to expire and no sweep willing to reclaim it
+    (the Go sweep's own route fence declines for exactly the same reason).
+    """
+
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(db_session, provider="github", dataset_key="commits")
+    route_row = db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    )
+    if state == "missing":
+        route_row.delete()
+    elif state == "paused":
+        route_row.update({WorkerJobRoute.paused: True})
+    elif state == "drifted":
+        route_row.update({WorkerJobRoute.transport: "shadow"})
+    else:
+        # The declared rollback route. Legal for the row, and no longer a
+        # dispatch destination for provider units.
+        route_row.update({WorkerJobRoute.transport: "celery"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+
+    with pytest.raises(WorkerJobRouteError):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    # The negative control that makes this test about wedging rather than
+    # about raising: nothing was claimed and nothing was staged, so no
+    # DispatchGuard slot is held and the next pass can still make progress.
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert _outbox_unit_keys(db_session) == set()
 
 
 def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(

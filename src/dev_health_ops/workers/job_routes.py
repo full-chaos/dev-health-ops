@@ -15,6 +15,19 @@ RIVER_CANARY_ROUTE = "river_canary"
 RIVER_ROUTE = "river"
 _ROUTES = frozenset({CELERY_ROUTE, SHADOW_ROUTE, RIVER_CANARY_ROUTE, RIVER_ROUTE})
 
+#: The durable ``sync.provider_unit`` routes under which River owns provider
+#: units. Any other legal value -- in practice ``celery``, the declared
+#: rollback route -- means River does NOT own them.
+#:
+#: CHAOS-4054 step 4 deleted the Celery dispatch plane, so "River does not own
+#: them" no longer has a second runtime to mean. A producer that sees one of
+#: those routes must therefore fail closed rather than stage work: the Go
+#: outbox relay resolves this same row every step and RELEASES the claim for a
+#: Celery route (``internal/joboutbox/relay.go:253-263``), so staging anyway
+#: parks the unit in ``dispatching`` behind an outbox row nothing will ever
+#: deliver, holding a DispatchGuard slot with no lease to expire.
+PROVIDER_UNIT_OUTBOX_ROUTES = frozenset({RIVER_CANARY_ROUTE, RIVER_ROUTE})
+
 
 class WorkerJobRouteError(RuntimeError):
     """Value-free route rejection safe for provider-facing logs."""

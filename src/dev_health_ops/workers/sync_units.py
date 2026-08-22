@@ -109,7 +109,9 @@ from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.job_contracts import ProviderUnitPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
+    PROVIDER_UNIT_OUTBOX_ROUTES,
     WorkerJobRouteError,
+    resolve_worker_job_route,
 )
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.provider_family_contract import (
@@ -969,22 +971,30 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         ):
             next_deferred_at = reconfirm_result.next_deferred_at
 
-        # CHAOS-4054 step 4: there is no transport to choose. River is the
-        # only runtime that executes a provider unit, so the durable
-        # sync.provider_unit route row is no longer consulted here -- the
-        # capability matrix alone decides whether a claimed pair is
-        # executable, and a pair it does not route has no second runtime to
-        # fall through to.
+        # CHAOS-4054 step 4 deleted the Celery dispatch plane, but NOT the
+        # durable route control plane -- that is CHAOS-4082, still open. So
+        # this producer still resolves the route, and still holds the FOR
+        # SHARE lock it returns through the claim and the outbox commit.
         #
-        # This deliberately drops a lock, and that is the point. The removed
-        # read took FOR SHARE on the route row and held it through the claim
-        # and the outbox commit, so that an operator moving the row with FOR
-        # UPDATE serialized against every in-flight producer. That barrier
-        # existed to make a live Celery/River handoff safe. With one runtime
-        # there is no handoff to sequence: the matrix is a checked-in code
-        # fact, identical in every process, and it cannot change underneath a
-        # batch the way a durable row could. The durable row itself is retired
-        # under CHAOS-4082.
+        # The lock is not ceremony. An operator rollback takes FOR UPDATE on
+        # this same row, so holding it here is what stops the rollback
+        # reporting quiescence while a producer that observed the OLD route is
+        # still staging work (see resolve_worker_job_route's own docstring,
+        # and the sync-provider quiescer hardened under CHAOS-3929).
+        #
+        # What DID change is the answer when River does not own the route.
+        # There is no second runtime left to fall through to, so a non-River
+        # route is a fail-closed route fault rather than a Celery dispatch.
+        # Staging anyway would be worse than either: the Go relay resolves
+        # this row every step and RELEASES the claim for a Celery route, so
+        # the unit would sit in `dispatching` behind an outbox row nothing
+        # delivers, holding a DispatchGuard slot with no lease to expire --
+        # the exact wedge class CHAOS-3990 exists to prevent.
+        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+        if provider_unit_route not in PROVIDER_UNIT_OUTBOX_ROUTES:
+            raise WorkerJobRouteError(
+                "sync.provider_unit route does not select the River outbox"
+            )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         unroutable_units: list[SyncRunUnit] = []
         for unit in units:

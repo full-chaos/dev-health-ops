@@ -60,15 +60,16 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 		);
 		CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-			status text NOT NULL
+			status text NOT NULL, updated_at timestamptz NOT NULL,
+			lease_expires_at timestamptz
 		);
 		INSERT INTO public.worker_job_routes
 			(job_kind, transport, paused, generation, updated_at)
 		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp());
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status) VALUES
-			('00000000-0000-4000-8000-000000000001', 'launchdarkly', 'feature-flags', 'planned'),
-			('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'retrying'),
-			('00000000-0000-4000-8000-000000000003', 'github', 'commits', 'running')`); err != nil {
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
+			('00000000-0000-4000-8000-000000000001', 'launchdarkly', 'feature-flags', 'planned', statement_timestamp()),
+			('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'retrying', statement_timestamp()),
+			('00000000-0000-4000-8000-000000000003', 'github', 'commits', 'running', statement_timestamp())`); err != nil {
 		t.Fatal(err)
 	}
 	celeryQuiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
@@ -114,8 +115,8 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 		t.Fatalf("producer observed route %q", transport)
 	}
 	if _, err := producer.Exec(ctx, `
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status)
-		VALUES ('00000000-0000-4000-8000-000000000004', 'launchdarkly', 'feature-flags', 'dispatching')`); err != nil {
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at)
+		VALUES ('00000000-0000-4000-8000-000000000004', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp())`); err != nil {
 		t.Fatal(err)
 	}
 	applyResult := make(chan error, 1)
@@ -555,8 +556,36 @@ func TestRollbackSurfacesCelerySyncQuiesceProbeFailureAsUnavailableNotLiveClaims
 	}
 }
 
+// celerySyncQuiescenceSchema is shared by the liveness-boundary tests below:
+// TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition (fresh
+// DISPATCHING, live RUNNING lease -- must still block) and its CHAOS-3929
+// counterparts (stale orphaned DISPATCHING, expired RUNNING lease -- must not
+// block). All four share one schema so the only thing that differs between
+// them is the row shape under test.
+const celerySyncQuiescenceSchema = `
+	CREATE TABLE public.worker_job_routes (
+		job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
+		generation bigint NOT NULL, updated_at timestamptz NOT NULL
+	);
+	CREATE TABLE public.worker_job_outbox (
+		id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
+	);
+	CREATE TABLE public.worker_job_runs (
+		id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
+	);
+	CREATE TABLE public.sync_run_units (
+		id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
+		status text NOT NULL, updated_at timestamptz NOT NULL,
+		lease_expires_at timestamptz
+	);
+	INSERT INTO public.worker_job_routes
+		(job_kind, transport, paused, generation, updated_at)
+	VALUES ('sync.provider_unit', 'river_canary', FALSE, 1, statement_timestamp())`
+
 // TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition is the
-// negative control for the Celery sync-provider quiescer.
+// positive control for the Celery sync-provider quiescer: a fresh DISPATCHING
+// row (well inside the stale-dispatch threshold) must still block the route
+// move, because it can still be a live, unclaimed Celery message.
 func TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -576,26 +605,9 @@ func TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition(t *testin
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-			status text NOT NULL
-		);
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status) VALUES
-			('00000000-0000-4000-8000-000000000005', 'launchdarkly', 'feature-flags', 'dispatching');
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'river_canary', FALSE, 1, statement_timestamp())`); err != nil {
+	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
+			('00000000-0000-4000-8000-000000000005', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp())`); err != nil {
 		t.Fatal(err)
 	}
 	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
@@ -619,6 +631,172 @@ func TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition(t *testin
 	}
 	if !IsPrecondition(err) {
 		t.Fatalf("Rollback() genuine live-claims error not classified as a precondition: %v", err)
+	}
+}
+
+// TestRollbackStillReportsGenuineRunningCelerySyncLeaseAsPrecondition is a
+// second positive control: a RUNNING row with a lease that has not expired
+// yet must still block, mirroring the dispatch-layer guard's capacity-
+// consumer rule for RUNNING (sync/guard.py).
+func TestRollbackStillReportsGenuineRunningCelerySyncLeaseAsPrecondition(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at, lease_expires_at) VALUES
+			('00000000-0000-4000-8000-000000000006', 'launchdarkly', 'feature-flags', 'running', statement_timestamp() - interval '2 hours', statement_timestamp() + interval '10 minutes')`); err != nil {
+		t.Fatal(err)
+	}
+	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeErr := quiescer.Quiesce(ctx, "sync.provider_unit")
+	if !errors.Is(probeErr, ErrLiveClaims) {
+		t.Fatalf("Quiesce() error = %v, want %v", probeErr, ErrLiveClaims)
+	}
+
+	controller, err := NewController(pool, integrationRegistry{jobruntime.Descriptor{
+		Kind: "sync.provider_unit", Route: "river_canary", RollbackRoute: "celery",
+	}}, quiescer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = controller.Rollback(ctx, "sync.provider_unit")
+	if !errors.Is(err, ErrLiveClaims) {
+		t.Fatalf("Rollback() error = %v, want %v", err, ErrLiveClaims)
+	}
+	if !IsPrecondition(err) {
+		t.Fatalf("Rollback() genuine live-claims error not classified as a precondition: %v", err)
+	}
+}
+
+// TestRollbackDoesNotBlockOnStaleOrphanedDispatchingRow reproduces CHAOS-3929
+// directly: a DISPATCHING row that has sat untouched well past the
+// stale-dispatch threshold, exactly the shape production hit when Celery
+// workers were scaled to zero mid-cutover (zero lease owner, zero attempts,
+// null heartbeat -- the only signal the Go quiescer has, updated_at, is
+// stale). The route move it used to block must now succeed and actually
+// reach the rollback transport.
+func TestRollbackDoesNotBlockOnStaleOrphanedDispatchingRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
+			('00000000-0000-4000-8000-000000000007', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp() - interval '2 hours')`); err != nil {
+		t.Fatal(err)
+	}
+	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeErr := quiescer.Quiesce(ctx, "sync.provider_unit")
+	if probeErr != nil {
+		t.Fatalf("Quiesce() error = %v, want nil for a stale orphaned dispatching row", probeErr)
+	}
+
+	controller, err := NewController(pool, integrationRegistry{jobruntime.Descriptor{
+		Kind: "sync.provider_unit", Route: "river_canary", RollbackRoute: "celery",
+	}}, quiescer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.Rollback(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatalf("Rollback() error = %v, want nil", err)
+	}
+	if state.Transport != "celery" {
+		t.Fatalf("Rollback() left transport = %q, want %q", state.Transport, "celery")
+	}
+	inspected, err := controller.Inspect(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Transport != "celery" {
+		t.Fatalf("route did not actually move: %+v", inspected)
+	}
+}
+
+// TestRollbackDoesNotBlockOnExpiredRunningLease is the RUNNING-side sibling
+// of TestRollbackDoesNotBlockOnStaleOrphanedDispatchingRow: an explicitly
+// expired lease proves the worker holding it is gone (mirrors sync/guard.py's
+// capacity-consumer rule), so it must not block the route move either.
+func TestRollbackDoesNotBlockOnExpiredRunningLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at, lease_expires_at) VALUES
+			('00000000-0000-4000-8000-000000000008', 'launchdarkly', 'feature-flags', 'running', statement_timestamp() - interval '2 hours', statement_timestamp() - interval '10 minutes')`); err != nil {
+		t.Fatal(err)
+	}
+	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeErr := quiescer.Quiesce(ctx, "sync.provider_unit")
+	if probeErr != nil {
+		t.Fatalf("Quiesce() error = %v, want nil for an expired running lease", probeErr)
+	}
+
+	controller, err := NewController(pool, integrationRegistry{jobruntime.Descriptor{
+		Kind: "sync.provider_unit", Route: "river_canary", RollbackRoute: "celery",
+	}}, quiescer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.Rollback(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatalf("Rollback() error = %v, want nil", err)
+	}
+	if state.Transport != "celery" {
+		t.Fatalf("Rollback() left transport = %q, want %q", state.Transport, "celery")
 	}
 }
 

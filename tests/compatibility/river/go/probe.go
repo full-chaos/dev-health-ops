@@ -23,12 +23,12 @@ import (
 
 const (
 	PgxVersion         = "v5.10.0"
-	RiverDriverVersion = "v0.40.0"
-	RiverVersion       = "v0.40.0"
+	RiverDriverVersion = "v0.44.0"
+	RiverVersion       = "v0.44.0"
 )
 
 // CHAOS-4011: the "inserter" river.Client (Queues unset, so it never
-// starts elector/notifier/maintenance services — see river@v0.40.0
+// starts elector/notifier/maintenance services — see river@v0.44.0
 // client.go's willExecuteJobs() gate) is a synchronous insert/JobCancel-only
 // client. Two concurrent slots comfortably cover its own Insert/JobCancel
 // calls plus the brief overlap window when a scheduled-job insert is
@@ -37,20 +37,22 @@ const InserterPoolMaxConns = 2
 
 // WorkerPoolMaxConns is the derived (not arbitrary) ceiling for the
 // "client"/worker river.Client's pool. It runs every background service
-// river@v0.40.0's client.go registers under willExecuteJobs() (verified by
-// reading that file directly, not guessed): 1 notifier (a single
-// persistent LISTEN connection multiplexing all pub/sub subscribers,
-// including the elector and the producer's control-channel listener —
-// client.go:919-926), 1 elector (client.go:931-935), 6 independent
-// maintenance services bundled under one queueMaintainer — jobCleaner,
-// jobRescuer, jobScheduler, periodicJobEnqueuer, queueCleaner, reindexer
-// (client.go:956-1043) — each on its own ticker and each able to
-// transiently check out a connection, 1 completer batching job-completion
-// writes (client.go:915), and 1 producer fetch/execute loop (MaxWorkers: 1
-// in this harness). Only the notifier's connection is held continuously;
-// everything else is checkout-query-release, but under load those releases
-// can overlap. This was previously a flat, undocumented 6 — CHAOS-4011's
-// pool-exhaustion catch (a plain job insert timing out acquiring a
+// river@v0.44.0's client.go registers under willExecuteJobs() (verified by
+// reading that file directly, not guessed, and re-verified against v0.44.0
+// under CHAOS-4064 — the same six maintenance services still exist, only
+// the line numbers moved): 1 notifier (a single persistent LISTEN
+// connection multiplexing all pub/sub subscribers, including the elector
+// and the producer's control-channel listener — client.go:916), 1 elector
+// (client.go:923-927), 6 independent maintenance services bundled under one
+// queueMaintainer — jobCleaner, jobRescuer, jobScheduler,
+// periodicJobEnqueuer, queueCleaner, reindexer (client.go:949-1035) — each
+// on its own ticker and each able to transiently check out a connection, 1
+// completer batching job-completion writes (client.go:907), and 1 producer
+// fetch/execute loop (MaxWorkers: 1 in this harness). Only the notifier's
+// connection is held continuously; everything else is
+// checkout-query-release, but under load those releases can overlap. This
+// was previously a flat, undocumented 6 — CHAOS-4011's pool-exhaustion catch
+// (a plain job insert timing out acquiring a
 // connection under CPU contention, all six slots already claimed by this
 // client's own standing services) showed 6 wasn't enough even before
 // accounting for InserterPoolMaxConns' separate budget. Kept as one named
@@ -892,19 +894,22 @@ func waitForEvent(ctx context.Context, events <-chan *river.Event, jobID int64, 
 
 // waitForCancelledRow rekeys cancellation confirmation onto the job's
 // persisted row instead of a specific emitted event kind (CHAOS-4011).
-// River v0.40 has a documented event-routing gap (upstream PR #1350):
-// a remotely-cancelled job whose worker races the cancellation can persist
-// state=cancelled but emit job_failed rather than job_cancelled — so a
-// strict wait on EventKindJobCancelled can hang even though the job
-// already reached its correct terminal state. The committed row is the
-// source of truth here; the event stream stays a fast path (used
-// immediately when it does arrive with the expected kind) with the row
-// poll as the deterministic fallback, on the same interval
-// (opts.FetchPollInterval) River's own poll-only fetch fallback already
-// uses elsewhere in this file for the identical class of purpose — not a
-// new timing knob, and not a wait-longer masking of the underlying gap:
-// convergence happens on whichever check (event or row) sees the true
-// state first, not after some elapsed duration.
+// River v0.40 had a documented event-routing gap (upstream PR #1350,
+// fixed in v0.44 — see CHAOS-4064): a remotely-cancelled job whose worker
+// races the cancellation could persist state=cancelled but emit job_failed
+// rather than job_cancelled, so a strict wait on EventKindJobCancelled
+// could hang even though the job already reached its correct terminal
+// state. Kept as defense-in-depth after the v0.44 bump rather than reverted
+// to a plain waitForEvent: the committed row is the durable source of
+// truth regardless of which River version emits which event, so this is
+// strictly more robust, not version-specific scaffolding. The event stream
+// stays a fast path (used immediately when it does arrive with the
+// expected kind) with the row poll as the deterministic fallback, on the
+// same interval (opts.FetchPollInterval) River's own poll-only fetch
+// fallback already uses elsewhere in this file for the identical class of
+// purpose — not a new timing knob, and not a wait-longer masking of the
+// underlying gap: convergence happens on whichever check (event or row)
+// sees the true state first, not after some elapsed duration.
 func waitForCancelledRow(ctx context.Context, client *river.Client[pgx.Tx], events <-chan *river.Event, jobID int64, pollInterval time.Duration) (*rivertype.JobRow, *river.Event, error) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

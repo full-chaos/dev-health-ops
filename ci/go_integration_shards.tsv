@@ -38,4 +38,5 @@ internal/syncdispatchruntime	6
 internal/syncreconciler	16
 internal/synccoverage	13
 internal/syncroute	3
+internal/testsupport/computeparity	50
 internal/testsupport/containers	13

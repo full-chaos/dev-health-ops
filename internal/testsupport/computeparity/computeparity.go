@@ -396,11 +396,17 @@ func RunProducer(
 	if err != nil {
 		t.Fatalf("%s: resolve %q: %v", side, argv[0], err)
 	}
-	program = canonicalPath(program)
+	// EXECUTE the path as given, IDENTIFY by its canonical form. These must
+	// stay separate: a virtualenv interpreter is a symlink to a system one and
+	// works only when invoked through its OWN path -- running the symlink
+	// target directly gets the system interpreter and none of the venv's
+	// packages. Canonicalizing before exec silently did that, and every
+	// producer failed with ModuleNotFoundError.
 	entryPoint := argv[1]
+	identityEntryPoint := entryPoint
 	if resolved, err := filepath.Abs(entryPoint); err == nil {
 		if _, statErr := os.Stat(resolved); statErr == nil {
-			entryPoint = canonicalPath(resolved)
+			identityEntryPoint = canonicalPath(resolved)
 		}
 	}
 	command := exec.Command(program, argv[1:]...)
@@ -409,11 +415,16 @@ func RunProducer(
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("%s: %s failed: %v\n%s", side, strings.Join(argv, " "), err, output)
 	}
-	return Execution{Side: side, Program: program, EntryPoint: entryPoint}
+	return Execution{
+		Side:       side,
+		Program:    canonicalPath(program),
+		EntryPoint: identityEntryPoint,
+	}
 }
 
 // canonicalPath resolves symlinks so two names for the same file are one
-// identity. Without it, a symlink or a copied wrapper pointing at the
+// identity. It is used ONLY to compute identity, never to choose what to
+// execute -- see RunProducer for why that distinction is load-bearing. Without it, a symlink or a copied wrapper pointing at the
 // reference producer would read as a different implementation and could
 // satisfy the port-proof guard while running the reference on both sides.
 //

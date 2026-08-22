@@ -414,3 +414,37 @@ func TestSymlinkedPathsAreOneImplementation(t *testing.T) {
 		t.Fatal("a symlink to the reference producer must not qualify as a port proof")
 	}
 }
+
+func TestRunProducerExecutesTheGivenPathNotItsSymlinkTarget(t *testing.T) {
+	// A virtualenv interpreter is a symlink to a system one and works only
+	// when invoked through its OWN path: running the target directly gets the
+	// system interpreter and none of the venv's packages. Canonicalizing
+	// before exec did exactly that and broke every producer with
+	// ModuleNotFoundError, while identity-canonicalization is still wanted.
+	directory := t.TempDir()
+	marker := filepath.Join(directory, "invoked-as")
+	script := filepath.Join(directory, "real.sh")
+	body := "#!/bin/sh\nprintf '%s' \"$0\" > " + marker + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(directory, "alias.sh")
+	if err := os.Symlink(script, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	execution := RunProducer(t, "side", directory, os.Environ(), alias, "ignored-arg")
+
+	invokedAs, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("the producer did not run: %v", err)
+	}
+	if string(invokedAs) != alias {
+		t.Fatalf("executed %q, want the path as given (%q)", invokedAs, alias)
+	}
+	// Identity still collapses the alias onto the real file.
+	if execution.Program != canonicalPath(script) {
+		t.Fatalf("identity Program = %q, want the canonical target %q",
+			execution.Program, canonicalPath(script))
+	}
+}

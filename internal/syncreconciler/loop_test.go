@@ -1236,3 +1236,81 @@ func TestAMeasuredZeroClearsTheGauge(t *testing.T) {
 	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 0")
 	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 0")
 }
+
+// THE FAILURES THAT MATTER MOST HERE ARE NOT ERRORS (adversarial review
+// finding, and the gap left by gating only the error path).
+//
+// The pipeline deliberately swallows a sweep failure — taking lease repair
+// down with the safety net would trade a bounded strand for an unbounded one —
+// and a failed runaway report likewise returns a SUCCESSFUL step. Both
+// therefore arrive on the success path carrying zero gauges with Measured
+// false, where the wholesale snapshot store clobbered a measured 83 with them
+// while sync_dispatch_observer_up still read 1.
+//
+// That is the worst of the three variants: the alert clears on missing data,
+// and nothing anywhere claims to be degraded.
+func TestASwallowedFailureOnASuccessfulPassDoesNotClearTheGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		if steps.Add(1) == 1 {
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+			observation.RunawayMeasured = true
+			observation.UnreclaimableMeasured = true
+			return observation, nil
+		}
+		// Exactly what MutationPipeline returns when the sweep errors and the
+		// report cannot run: a NIL error, zero gauges, nothing measured.
+		observation.WakeupReportFailures = 1
+		observation.UnreclaimableSweepFailures = 1
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("a swallowed failure on a SUCCESSFUL pass cleared a live "+
+				"incident, missing %q — and observer_up stays 1, so nothing "+
+				"even claims the value is stale:\n%s", want, metrics.String())
+		}
+	}
+	// The failure counters are the only staleness signal on this path, which
+	// is exactly why they must move.
+	for _, want := range []string{
+		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_unreclaimable_sweep_failures_total 1",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("the held gauge has no staleness signal at all, missing %q:\n%s",
+				want, metrics.String())
+		}
+	}
+	// The observer's OWN figures must still update on a successful pass —
+	// holding those would be the opposite bug.
+	if !strings.Contains(metrics.String(), "sync_dispatch_observer_up 1") {
+		t.Fatalf("a successful pass reported the observer unhealthy:\n%s", metrics.String())
+	}
+}

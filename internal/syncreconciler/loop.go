@@ -297,12 +297,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		// and readiness below are what mark it stale.
 		loop.mu.Lock()
 		if !loop.stopping {
-			if observation.RunawayMeasured {
-				loop.observation.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
-			}
-			if observation.UnreclaimableMeasured {
-				loop.observation.UnreclaimableCandidates = observation.UnreclaimableCandidates
-			}
+			loop.observation = loop.carryUnmeasuredGaugesLocked(observation, false)
 		}
 		loop.mu.Unlock()
 		// Unknown stored kinds are a failed observation, but their bounded total
@@ -334,7 +329,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		loop.mu.Unlock()
 		return err
 	}
-	loop.observation = copyObservation(observation)
+	loop.observation = copyObservation(loop.carryUnmeasuredGaugesLocked(observation, true))
 	loop.lastOK = now
 	loop.up = true
 	loop.ready.Store(true)
@@ -404,6 +399,51 @@ func (loop *Loop) isStopping() bool {
 
 func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// carryUnmeasuredGaugesLocked applies ONE rule on EVERY path: a gauge whose
+// Measured bit is false keeps its previous value.
+//
+// It is one function rather than two branches because the first cut of this
+// gated only the error path, and the failures that matter most here are NOT
+// errors (review finding). The pipeline deliberately swallows a sweep failure
+// -- taking lease repair down with the safety net would trade a bounded strand
+// for an unbounded one -- and a failed runaway report likewise returns a
+// successful step. Both then arrived on the success path with zero gauges and
+// Measured false, and the wholesale snapshot store clobbered a measured 83
+// with them, while observer_up still read 1. That is the alert clearing on
+// missing data with nothing even claiming to be degraded.
+//
+// keepObserverFields distinguishes the two callers, and only that:
+//
+//   - true (successful pass): the observer's own queue figures are good, so
+//     the new observation is stored and only the unmeasured gauges are
+//     inherited.
+//   - false (failed pass): the observer's figures are unreliable, so the
+//     RETAINED snapshot is kept and only the measured gauges are written over
+//     it. Publishing the rest would trade one stale number for several wrong
+//     ones.
+func (loop *Loop) carryUnmeasuredGaugesLocked(
+	observation Observation, keepObserverFields bool,
+) Observation {
+	merged := observation
+	if !keepObserverFields {
+		merged = loop.observation
+		if observation.RunawayMeasured {
+			merged.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
+		}
+		if observation.UnreclaimableMeasured {
+			merged.UnreclaimableCandidates = observation.UnreclaimableCandidates
+		}
+		return merged
+	}
+	if !observation.RunawayMeasured {
+		merged.RunawayDispatchWakeups = loop.observation.RunawayDispatchWakeups
+	}
+	if !observation.UnreclaimableMeasured {
+		merged.UnreclaimableCandidates = loop.observation.UnreclaimableCandidates
+	}
+	return merged
 }
 
 func copyObservation(observation Observation) Observation {

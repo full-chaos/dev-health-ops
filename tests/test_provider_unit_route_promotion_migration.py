@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -124,13 +125,79 @@ def test_0107_lands_a_fresh_install_where_production_already_is() -> None:
         engine.dispose()
 
 
-def test_0107_is_idempotent_and_never_overwrites_an_operator_decision() -> None:
-    """Re-running must not bump the fence, and a promoted row must not move.
+def _seed_route(
+    connection: sa.Connection, transport: str, generation: int, paused: bool
+) -> None:
+    connection.execute(
+        sa.text("DELETE FROM worker_job_routes WHERE job_kind = :kind"),
+        {"kind": _KIND},
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO worker_job_routes "
+            "(job_kind, transport, paused, generation, updated_at) "
+            "VALUES (:kind, :transport, :paused, :generation, '2026-01-01')"
+        ),
+        {
+            "kind": _KIND,
+            "transport": transport,
+            "paused": paused,
+            "generation": generation,
+        },
+    )
 
-    The negative control on the predicate. A migration that matched on kind
-    alone would pass the test above and still clobber an environment an
-    operator had deliberately moved -- including one sitting in a rollback at
-    the moment the migration runs.
+
+#: Every row shape this migration must NOT touch, and why. Generation is the
+#: provenance test: an operator mutation always bumps it
+#: (``jobroute.Controller.ApplyCheckedIn``/``.Rollback``), so anything at a
+#: generation above the 0061 seed carries somebody's decision.
+_OPERATOR_OWNED = (
+    # Production's own shape, set by an operator long before this migration.
+    ("river_canary", 2, False),
+    # Promoted further, to full River ownership.
+    ("river", 3, False),
+    # A deliberate rollback. Legal for the row; not this migration's to undo.
+    ("celery", 3, False),
+    # Paused: the control-plane stop. Promoting would silently override it.
+    ("celery", 2, True),
+    # Paused at the seed generation -- pause alone is an operator act.
+    ("celery", 1, True),
+)
+
+
+@pytest.mark.parametrize(("transport", "generation", "paused"), _OPERATOR_OWNED)
+def test_0107_never_overwrites_an_operator_decision(
+    transport: str, generation: int, paused: bool
+) -> None:
+    """The predicate is exactly as narrow as the docstring's claim.
+
+    An earlier cut of this migration matched on ``transport`` alone and claimed
+    this property without testing it. It was false in three of these five
+    shapes -- which is why every one of them is enumerated here rather than
+    represented by a single example.
+    """
+
+    promote = _load("0107_promote_sync_provider_unit_route_to_river_canary")
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            _create_pre_0061_schema(connection)
+            _seed_route(connection, transport, generation, paused)
+            before = _route(connection)
+
+            _run(promote, connection)
+
+            assert _route(connection) == before
+    finally:
+        engine.dispose()
+
+
+def test_0107_is_idempotent() -> None:
+    """Re-running must not bump the operator fence a second time.
+
+    After the first run the row sits at generation 2, which no longer matches
+    the seed fingerprint -- so idempotency falls out of the predicate rather
+    than being a separate guard.
     """
 
     seed = _load("0061_seed_sync_provider_canary_route")
@@ -145,47 +212,37 @@ def test_0107_is_idempotent_and_never_overwrites_an_operator_decision() -> None:
 
             _run(promote, connection)
             assert _route(connection) == settled
-
-            # An operator who has since promoted to full River ownership.
-            connection.execute(
-                sa.text(
-                    "UPDATE worker_job_routes SET transport = 'river' "
-                    "WHERE job_kind = :kind"
-                ),
-                {"kind": _KIND},
-            )
-            promoted = _route(connection)
-
-            _run(promote, connection)
-            assert _route(connection) == promoted
     finally:
         engine.dispose()
 
 
-def test_0107_downgrade_reverses_only_what_it_moved() -> None:
-    seed = _load("0061_seed_sync_provider_canary_route")
+@pytest.mark.parametrize(
+    ("transport", "generation", "paused"),
+    (("river_canary", 2, False), *_OPERATOR_OWNED),
+)
+def test_0107_downgrade_is_a_no_op(
+    transport: str, generation: int, paused: bool
+) -> None:
+    """A deliberate exception to the reversible-downgrade rule, pinned here.
+
+    No predicate can tell a row this migration promoted from one an operator
+    promoted -- both are ``river_canary`` at the same generation, and
+    production is the operator case. The only place a downgrade could reverse
+    to is ``celery``, which has no executor. So it does nothing, and this test
+    exists so that "does nothing" stays a decision rather than decaying into a
+    forgotten stub someone later "fixes".
+    """
+
     promote = _load("0107_promote_sync_provider_unit_route_to_river_canary")
     engine = sa.create_engine("sqlite:///:memory:")
     try:
         with engine.begin() as connection:
             _create_pre_0061_schema(connection)
-            _run(seed, connection)
-            _run(promote, connection)
+            _seed_route(connection, transport, generation, paused)
+            before = _route(connection)
 
             _run(promote, connection, "downgrade")
-            assert _route(connection)[0] == "celery"
 
-            # A row an operator moved to full River ownership is NOT dragged
-            # back to a transport this downgrade did not put it on.
-            _run(promote, connection)
-            connection.execute(
-                sa.text(
-                    "UPDATE worker_job_routes SET transport = 'river' "
-                    "WHERE job_kind = :kind"
-                ),
-                {"kind": _KIND},
-            )
-            _run(promote, connection, "downgrade")
-            assert _route(connection)[0] == "river"
+            assert _route(connection) == before
     finally:
         engine.dispose()

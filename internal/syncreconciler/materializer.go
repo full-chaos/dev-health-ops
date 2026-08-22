@@ -219,12 +219,24 @@ func (materializer *Materializer) Step(
 // instants. SQL evaluates window functions over the whole filtered set before
 // LIMIT applies, so the value is the true count even on a capped page.
 //
-// It does cost the short-circuit: the planner must see every matching row
-// rather than stopping at twenty-one. That is affordable BECAUSE of what the
-// predicate selects -- zero rows on a healthy system, and tens on a sick one
+// In principle it costs the short-circuit: the planner must see every matching
+// row rather than stopping at twenty-one. MEASURED, on production, that costs
+// nothing, because the matching set is what the predicate makes it:
+//
+//	without count(*) OVER ()   Execution Time: 1.351 ms
+//	with    count(*) OVER ()   Execution Time: 1.221 ms
+//
+// Same plan both times -- a Nested Loop driven by sync_runs, probing the
+// outbox through uq_sync_dispatch_outbox_run_kind -- with WindowAgg adding no
+// measurable work over 0-83 rows. This is affordable BECAUSE of what the
+// predicate selects: zero rows on a healthy system, tens on a sick one
 // (CHAOS-4093's worst hour was 83). It would not be affordable on a predicate
-// that matched a large fraction of the table, and this one never can:
+// matching a large fraction of the table, and this one never can:
 // attempts >= 1000 is four figures above the healthy p99.
+//
+// The cost that IS worth watching is the other side of that join and predates
+// this window function entirely -- the sync_runs scan is proportional to all
+// history. That is CHAOS-4107, unchanged by the count.
 //
 // # Measured plan, so the next reader does not have to guess (CHAOS-4097)
 //

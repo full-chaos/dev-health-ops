@@ -5,13 +5,17 @@ VERSION_ID ?=
 DOCS_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 DOCS_TAG := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
-.PHONY: docs\:check docs\:check-fast docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy go\:fmt go\:vet go\:test go\:race go\:build go\:contract go\:integration go\:container-smoke go\:container-reproducible go\:container go\:verify go\:check-fast go\:check install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
+.PHONY: docs\:check docs\:check-fast docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:generate-queue-map docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy go\:fmt go\:vet go\:test go\:race go\:build go\:contract go\:integration go\:container-smoke go\:container-reproducible go\:container go\:verify go\:check-fast go\:check install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
 
 docs\:generate-taxonomy:
 	$(PYTHON) scripts/gen_taxonomy_docs.py
 
+docs\:generate-queue-map:
+	$(PYTHON) scripts/gen_queue_mapping_docs.py
+
 docs\:check-drift:
 	$(PYTHON) scripts/check_investment_docs_drift.py
+	$(PYTHON) scripts/check_queue_mapping_docs_drift.py
 
 docs\:check-links:
 	$(PYTHON) scripts/check_docs_links.py
@@ -43,6 +47,7 @@ docs\:check:
 # pushing.
 docs\:check-fast:
 	$(PYTHON) scripts/check_investment_docs_drift.py
+	$(PYTHON) scripts/check_queue_mapping_docs_drift.py
 	$(PYTHON) scripts/check_ask_dev_copy_drift.py
 	$(PYTHON) scripts/check_docs_links.py
 

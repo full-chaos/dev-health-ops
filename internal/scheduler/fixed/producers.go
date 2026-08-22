@@ -545,19 +545,8 @@ func NewRemainingMetricsFanoutProducer(
 			},
 			"recommendations_daily_fanout": {
 				Family: "recommendations",
-				// as_of pins the evaluation to the OCCURRENCE's day. Without it
-				// the Python bridge falls back to wall-clock now.date()
-				// (src/dev_health_ops/api/internal/worker_metrics.py:979-981),
-				// so a catch-up occurrence for a missed day would both evaluate
-				// the wrong day AND look up the wrong day's daily_metrics_runs
-				// row in the readiness gate, which reads
-				// (org_id, target_day) -- and target_day for the 01:00
-				// daily_metrics_fanout run is that same occurrence day
-				// (CHAOS-4066).
-				Scope: func(day string) (json.RawMessage, error) {
-					return json.Marshal(map[string]any{
-						"version": 1, "window": 14, "as_of": day,
-					})
+				Scope: func(string) (json.RawMessage, error) {
+					return json.Marshal(map[string]any{"version": 1, "window": 14})
 				},
 			},
 			"membership_backfill_daily_fanout": {

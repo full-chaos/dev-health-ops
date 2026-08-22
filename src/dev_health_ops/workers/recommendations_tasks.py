@@ -56,34 +56,65 @@ class RecommendationsTeamFailure(Exception):
 #   the finalize job, so this converges; until it does, the metric tables are
 #   demonstrably incomplete.
 #
-# "Latest generation for the org/day" is ordered by ``created_at``, NOT by the
-# ``generation`` string. ``generation`` is an opaque ``varchar(64)`` written by
-# two disjoint, non-comparable producers:
+# WHICH run is authoritative for a day is the whole difficulty, and getting it
+# wrong fails in one of two directions -- always-passing (the bug being fixed)
+# or always-blocking (a live org wedged behind an abandoned row).
+#
+# Two disjoint producers write ``generation`` for the same (org, target_day):
 #
 #   * the nightly fan-out writes
 #     ``"fixed-schedule:daily_metrics_fanout:" + <occurrence RFC3339 UTC>``
-#     (internal/scheduler/fixed/producers.go:433-434), and
+#     (internal/scheduler/fixed/producers.go:433-434, prefix constant
+#     ``scheduledFanoutGenerationPrefix`` at
+#     internal/jobs/metrics/daily/postgres.go:25). It is the ORG-WIDE run: the
+#     heavy worker discovers every repository for the organization from
+#     ClickHouse (``RepositoryIDs``, internal/jobs/metrics/daily/clickhouse.go:28-40,
+#     dispatched at daily.go:188-194) and materializes the partitions from that
+#     snapshot (postgres.go:402-470).
 #   * every post-sync dispatch writes ``"post-sync:" + <sync run id>``
-#     (cmd/dev-health-worker/sync_dispatch.go:38).
+#     (cmd/dev-health-worker/sync_dispatch.go:36-41) with
+#     ``RepositoryIDs: plan.RepositoryIDs`` -- only the repositories that sync
+#     actually touched (internal/syncdispatchruntime/native_post_sync.go:403-410).
+#     Its Python partitions recompute exactly those repo ids
+#     (src/dev_health_ops/api/internal/worker_metrics.py:870-881).
 #
-# Both land on the same ``target_day`` -- the fan-out uses the occurrence's
-# scheduled day (producers.go:433, 486) and post-sync uses the sync's
-# ``to``/now day (internal/syncdispatchruntime/native_post_sync.go:389-393, 409-410) --
-# so several generations per (org, day) are ordinary, and ordering them
-# lexicographically by ``generation`` would compare ``"fixed-schedule:..."``
-# against ``"post-sync:..."``, which means nothing. ``created_at`` is stamped
-# by the Go store at insert (``store.now().UTC()``, postgres.go:109 and :176),
-# so the newest row is the authoritative run for that day. Gating on the
-# newest one only -- rather than on "any run not yet finalized" -- is also
-# what keeps the gate from wedging: a superseded generation abandoned in
-# ``'pending'``/``'running'`` (CHAOS-3997 strands are real) cannot block a day
-# whose newer run has finalized. ``generation`` is a tiebreaker for
-# determinism only, never a semantic order.
+# Only the fan-out establishes that the day is complete for the whole
+# organization, so only fan-out generations are authoritative here. Ranking
+# both families together by recency would let a one-repository post-sync run
+# that finalized at 01:20 mask the org-wide 01:00 fan-out still writing
+# partitions at 02:00 -- the exact partial read this gate exists to prevent.
+# A post-sync run is therefore not authoritative in EITHER direction: it can
+# neither certify the day nor block it. That is not lost coverage; the dead
+# checkpoint this replaces was never written by a post-sync run either, and
+# blocking on one would skip recommendations for any org that happened to be
+# syncing at 02:00.
+#
+# Among fan-out generations the newest by ``created_at`` wins. ``created_at``
+# is stamped by the Go store at insert (``store.now().UTC()``, postgres.go:176),
+# so it is durable insertion order rather than intended-schedule order -- a
+# catch-up occurrence is created long after the time embedded in its
+# generation string. Taking only the newest is what stops a superseded
+# generation abandoned in ``'pending'``/``'running'`` (CHAOS-3997 strands are
+# real) from wedging a day whose newer fan-out finalized. ``generation`` is a
+# tiebreaker for determinism only, never a semantic order.
+#
+# Runs whose own ``status`` is terminal-without-success are excluded rather
+# than treated as in-flight. ``'canceled'`` is permitted by
+# ``ck_daily_metrics_run_status`` (alembic 0057, widened by 0095) and Go's
+# store refuses to claim dispatch or finalize for a run that is not
+# ``'running'`` (postgres.go:377-379, :750-752), so such a row can NEVER reach
+# ``finalization_status='succeeded'``; counting it as in-flight would block its
+# target day forever. Neither value has a production writer for daily runs
+# today -- excluding them is a wedge that cannot form, not a behaviour change.
+_SCHEDULED_FANOUT_GENERATION_PREFIX = "fixed-schedule:daily_metrics_fanout:"
+
 _LATEST_DAILY_METRICS_RUN_SQL = """
     SELECT finalization_status
     FROM daily_metrics_runs
     WHERE org_id = CAST(:org_id AS uuid)
       AND target_day = CAST(:target_day AS date)
+      AND starts_with(generation, :fanout_prefix)
+      AND status NOT IN ('canceled', 'failed')
     ORDER BY created_at DESC, generation DESC
     LIMIT 1
 """
@@ -106,19 +137,20 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
     Semantics (see the ``_LATEST_DAILY_METRICS_RUN_SQL`` comment above for the
     Go-side citation of every status value):
 
-    * The authoritative (most recently created) ``daily_metrics_runs`` row for
-      ``(org_id, day)`` has ``finalization_status = 'succeeded'`` -> the day's
-      metrics are durably complete -> **proceed**.
-    * That row exists with any other ``finalization_status`` -> the run is
+    * The authoritative run for ``(org_id, day)`` -- the most recently created
+      non-abandoned *fan-out* generation -- has
+      ``finalization_status = 'succeeded'`` -> the day is durably complete for
+      the whole organization -> **proceed**.
+    * It exists with any other ``finalization_status`` -> the org-wide run is
       demonstrably unfinished -> **skip** (return ``False``). The fence is
       per-day, so a day that never finalizes cannot wedge later days: the next
       occurrence keys on its own ``target_day``.
-    * No row at all -> **proceed**. Absence means Go recorded no run for this
-      org/day; there is no positive evidence of partial data, and the daily run
-      self-corrects via tombstones. (This is the one branch that behaves like
-      the dead checkpoint read did -- deliberately, because turning absence
-      into a block would stop recommendations for every org whose day Go never
-      dispatched.)
+    * No such row -> **proceed**. Absence means Go recorded no org-wide run for
+      this org/day; there is no positive evidence of partial data, and the
+      daily run self-corrects via tombstones. (This is the one branch that
+      behaves like the dead checkpoint read did -- deliberately, because
+      turning absence into a block would stop recommendations for every org
+      whose day Go never dispatched.)
     * The ``"default"`` sentinel -> **proceed**. ``daily_metrics_runs.org_id``
       is typed ``uuid``, so the single-tenant sentinel is unrepresentable in
       this table by construction (the same reason Go's fan-out refuses to
@@ -138,7 +170,11 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
         with get_postgres_session_sync() as session:
             finalization_status = session.execute(
                 text(_LATEST_DAILY_METRICS_RUN_SQL),
-                {"org_id": str(org_id), "target_day": target_day.isoformat()},
+                {
+                    "org_id": str(org_id),
+                    "target_day": target_day.isoformat(),
+                    "fanout_prefix": _SCHEDULED_FANOUT_GENERATION_PREFIX,
+                },
             ).scalar_one_or_none()
     except Exception:
         logger.exception(
@@ -151,7 +187,7 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
     if finalization_status is None or finalization_status == _FINALIZATION_SUCCEEDED:
         return True
     logger.info(
-        "Daily metrics run for org=%s day=%s has finalization_status=%s; "
+        "Daily metrics fan-out run for org=%s day=%s has finalization_status=%s; "
         "metrics are not final",
         org_id,
         day,

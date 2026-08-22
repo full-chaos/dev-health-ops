@@ -14,17 +14,22 @@ never by hand-written DDL -- the CHAOS-3997/#1836 lesson: an invented test
 schema let a query referencing a nonexistent column pass the gate and crash
 production.
 
-Coverage that matters here is the *ordering* predicate. ``generation`` is an
-opaque ``varchar(64)`` written by two disjoint producers -- the nightly
-``fixed-schedule:daily_metrics_fanout:<RFC3339>`` fan-out
-(internal/scheduler/fixed/producers.go:433) and every
-``post-sync:<sync run id>`` dispatch (cmd/dev-health-worker/sync_dispatch.go:38)
--- and both land on the same ``target_day``, so several generations per
-(org, day) are ordinary. Two tests below seed generations whose ``created_at``
-order and lexicographic ``generation`` order DISAGREE, which is what separates
-"authoritative run" from "alphabetically last run", and what separates this
-gate from the two ways of getting it wrong: always-passing (the bug being
-fixed) and always-blocking (a superseded strand wedging a live org).
+What matters most here is WHICH run the gate treats as authoritative.
+``generation`` is an opaque ``varchar(64)`` written by two disjoint producers
+that both land on the same ``target_day``:
+
+* ``fixed-schedule:daily_metrics_fanout:<RFC3339>`` -- the nightly ORG-WIDE run
+  (internal/scheduler/fixed/producers.go:433; repositories discovered for the
+  whole org at internal/jobs/metrics/daily/clickhouse.go:28-40);
+* ``post-sync:<sync run id>`` -- a SUBSET run over only the repositories one
+  sync touched (cmd/dev-health-worker/sync_dispatch.go:36-41,
+  internal/syncdispatchruntime/native_post_sync.go:403-410).
+
+So the tests below pin all three ways this can be got wrong:
+always-passing (a finished subset post-sync masking an unfinished org-wide
+fan-out, or an unfinished run ignored outright -- the bug being fixed),
+always-blocking (a superseded strand or a terminally canceled run wedging a
+live org), and picking the wrong row when several generations exist.
 """
 
 from __future__ import annotations
@@ -52,10 +57,9 @@ _ORG = "00000000-0000-4000-8000-00000000a001"
 _OTHER_ORG = "00000000-0000-4000-8000-00000000a002"
 _DAY = date(2026, 8, 21)
 
-# 'f' < 'p', so a fixed-schedule generation sorts BEFORE a post-sync one.
-# Every test that seeds both relies on this to make created_at order and
-# generation order disagree.
 _FANOUT_GENERATION = "fixed-schedule:daily_metrics_fanout:2026-08-21T01:00:00Z"
+# A second nightly generation for the same day, as a schedule replay produces.
+_LATER_FANOUT_GENERATION = "fixed-schedule:daily_metrics_fanout:2026-08-21T01:30:00Z"
 _POST_SYNC_GENERATION = "post-sync:2f1c9b0e-6a4d-4f2a-9c3b-7e5d8a1b2c3d"
 
 _BASE_TIME = datetime(2026, 8, 21, 1, 0, tzinfo=UTC)
@@ -273,24 +277,18 @@ def test_absent_run_proceeds(daily_metrics_runs: Engine) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_newer_unfinished_generation_blocks_despite_an_earlier_success(
+def test_finished_subset_post_sync_cannot_mask_an_unfinished_fanout(
     daily_metrics_runs: Engine,
 ) -> None:
-    """The always-passes failure mode.
+    """The always-passes failure mode, and the subtle one.
 
-    A post-sync run finished at 00:30; the 01:00 nightly fan-out for the same
-    day is still pending. The authoritative run is the newest one, so the gate
-    must block. Note the two orders disagree: ordering by ``generation``
-    instead of ``created_at`` would pick ``post-sync:...`` ('p' > 'f'), read
-    ``succeeded``, and wave a half-computed day through.
+    The 01:00 org-wide fan-out is still pending at evaluation time. A post-sync
+    run created at 01:20 -- covering only the repositories one sync touched --
+    has already finalized. Ranking the two families together by recency would
+    pick the post-sync row, read ``succeeded``, and wave through a day whose
+    other repositories are still being written. Only a fan-out generation can
+    certify the day.
     """
-    _insert_run(
-        daily_metrics_runs,
-        generation=_POST_SYNC_GENERATION,
-        status="succeeded",
-        finalization_status="succeeded",
-        created_at=_BASE_TIME - timedelta(minutes=30),
-    )
     _insert_run(
         daily_metrics_runs,
         generation=_FANOUT_GENERATION,
@@ -298,20 +296,47 @@ def test_newer_unfinished_generation_blocks_despite_an_earlier_success(
         finalization_status="pending",
         created_at=_BASE_TIME,
     )
+    _insert_run(
+        daily_metrics_runs,
+        generation=_POST_SYNC_GENERATION,
+        status="succeeded",
+        finalization_status="succeeded",
+        created_at=_BASE_TIME + timedelta(minutes=20),
+    )
 
     assert _ready() is False
 
 
-def test_superseded_strand_does_not_wedge_a_finalized_day(
+def test_post_sync_run_alone_does_not_certify_the_day(
+    daily_metrics_runs: Engine,
+) -> None:
+    """A post-sync run is authoritative in neither direction.
+
+    With no fan-out generation at all the gate is in its documented
+    absence branch and proceeds -- a subset run neither certifies the day nor
+    blocks it, exactly as the dead checkpoint (which no post-sync path ever
+    wrote) behaved.
+    """
+    _insert_run(
+        daily_metrics_runs,
+        generation=_POST_SYNC_GENERATION,
+        status="running",
+        finalization_status="pending",
+    )
+
+    assert _ready() is True
+
+
+def test_superseded_fanout_strand_does_not_wedge_a_finalized_day(
     daily_metrics_runs: Engine,
 ) -> None:
     """The always-blocks failure mode.
 
-    The 01:00 fan-out run stranded in 'running' with no live job (the class of
-    failure CHAOS-3997 exists to reclaim). A later post-sync run for the same
-    day finalized. The day's metrics ARE complete, so the gate must proceed:
-    a rule of "any unfinished run blocks" would stop recommendations for this
-    org until the strand were repaired by hand.
+    The first fan-out generation stranded in 'running' with no live job (the
+    class CHAOS-3997 exists to reclaim); a later fan-out generation for the
+    same day finalized. The day IS complete, so the gate must proceed -- a rule
+    of "any unfinished run blocks" would stop recommendations for this org
+    until the strand were repaired by hand.
     """
     _insert_run(
         daily_metrics_runs,
@@ -322,10 +347,39 @@ def test_superseded_strand_does_not_wedge_a_finalized_day(
     )
     _insert_run(
         daily_metrics_runs,
-        generation=_POST_SYNC_GENERATION,
+        generation=_LATER_FANOUT_GENERATION,
         status="succeeded",
         finalization_status="succeeded",
-        created_at=_BASE_TIME + timedelta(hours=1),
+        created_at=_BASE_TIME + timedelta(minutes=30),
+    )
+
+    assert _ready() is True
+
+
+def test_canceled_run_is_abandoned_rather_than_in_flight(
+    daily_metrics_runs: Engine,
+) -> None:
+    """A canceled run can never reach 'succeeded', so it must not block.
+
+    Go's store refuses to claim dispatch or finalize unless the run status is
+    'running' (internal/jobs/metrics/daily/postgres.go:377-379, :750-752), so a
+    canceled row's finalization_status is frozen wherever it stopped. Treating
+    it as in-flight would block its target day forever. It is excluded, and the
+    gate falls back to the previous eligible generation.
+    """
+    _insert_run(
+        daily_metrics_runs,
+        generation=_FANOUT_GENERATION,
+        status="succeeded",
+        finalization_status="succeeded",
+        created_at=_BASE_TIME,
+    )
+    _insert_run(
+        daily_metrics_runs,
+        generation=_LATER_FANOUT_GENERATION,
+        status="canceled",
+        finalization_status="pending",
+        created_at=_BASE_TIME + timedelta(minutes=30),
     )
 
     assert _ready() is True
@@ -405,3 +459,49 @@ def test_unreadable_database_fails_open(
     monkeypatch.setattr(db_module, "_postgres_sync_engine", None, raising=False)
 
     assert _ready() is True
+
+
+# ---------------------------------------------------------------------------
+# Cross-language drift guard (no database required -- runs in every tier)
+# ---------------------------------------------------------------------------
+
+
+_REPO_ROOT = Path(__file__).parents[1]
+
+
+def test_fanout_generation_prefix_matches_the_go_writer() -> None:
+    """The gate is only as live as the string Go actually writes.
+
+    This whole ticket exists because a Python gate read a key nothing wrote any
+    more, and nothing failed. The gate is now keyed on a literal generation
+    prefix owned by Go, so a rename there would silently make it vacuous again
+    -- every fan-out row would stop matching and the gate would fall into its
+    "no run recorded -> proceed" branch. Pin both ends: the constant Go
+    declares, and the expression the scheduler composes it into.
+    """
+    from dev_health_ops.workers.recommendations_tasks import (
+        _SCHEDULED_FANOUT_GENERATION_PREFIX,
+    )
+
+    store = (_REPO_ROOT / "internal/jobs/metrics/daily/postgres.go").read_text()
+    assert (
+        f'scheduledFanoutGenerationPrefix = "{_SCHEDULED_FANOUT_GENERATION_PREFIX}"'
+        in store
+    ), (
+        "internal/jobs/metrics/daily/postgres.go no longer declares "
+        f"{_SCHEDULED_FANOUT_GENERATION_PREFIX!r}; _daily_metrics_ready would "
+        "match no fan-out run and silently stop gating (CHAOS-4066)"
+    )
+
+    # producers.go builds the generation as
+    #   "fixed-schedule:" + schedule.ID + ":" + <RFC3339>
+    # so the prefix is only correct while the schedule keeps this ID.
+    producers = (_REPO_ROOT / "internal/scheduler/fixed/producers.go").read_text()
+    schedule_id = _SCHEDULED_FANOUT_GENERATION_PREFIX.removeprefix(
+        "fixed-schedule:"
+    ).removesuffix(":")
+    assert 'generation := "fixed-schedule:" + schedule.ID + ":"' in producers
+    assert f'schedule.ID != "{schedule_id}"' in producers, (
+        f"the daily fan-out schedule is no longer {schedule_id!r}; the "
+        "readiness gate's generation prefix is stale (CHAOS-4066)"
+    )

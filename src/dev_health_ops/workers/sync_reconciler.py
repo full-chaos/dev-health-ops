@@ -1228,39 +1228,60 @@ def _select_unreclaimable_dispatching_units(
         # after the limit would let a page of CELERY/RIVER/DEFER rows mask a
         # genuine strand behind them on every pass -- the same deterministic
         # loser this ticket is about, one layer down (hunt finding).
-        selected.extend(_only_unroutable(unpublished))
+        selected.extend(_only_unroutable(session, unpublished))
         if len(page) < page_size:
             break
     return selected[:wanted]
 
 
-def _only_unroutable(units: list[SyncRunUnit]) -> list[SyncRunUnit]:
+def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit]:
     """Keep only units NO runtime can execute (CHAOS-3990, rollback hazard).
 
-    Age plus "never leased, never attempted, no outbox row" is NOT sufficient
-    on its own, so the disposition is re-resolved through the SAME shipped
-    predicate the dispatcher uses: the capability matrix. Only a pair the
-    matrix does not mark route-ready and plannable is swept, which is what
-    makes ``feature_disabled`` the honest category -- the sweep only ever
-    fires on units that genuinely have no runtime.
+    TWO conditions, and the order matters. This function destroys work, so it
+    must answer "does River own provider units at all?" BEFORE it asks "does
+    the matrix route this pair?".
 
-    Before CHAOS-4054 step 4 this also had to defend against a CUT-19 Celery
-    rollback, where a backlogged Celery unit looked identical to a strand and
-    sweeping on age alone would have destroyed valid work. That scenario is
-    gone with the Celery fallthrough: River is the only runtime, so "the
-    matrix does not route this pair" is the whole question.
+    1. The durable ``sync.provider_unit`` route must select the River outbox.
+       If it is paused, or rolled back to ``celery``, River does not own these
+       units and their disposition is not this sweep's to decide -- a unit
+       that another owner is holding looks exactly like a strand from here.
+    2. Only then does the capability matrix decide: a pair it does not mark
+       route-ready and plannable has no shipped writer, which is what makes
+       ``feature_disabled`` the honest category.
+
+    Condition 1 is the twin of the Go sweep's own route fence
+    (``internal/syncreconciler/unreclaimable_sweep.go``: ``riverOwns()``
+    declines on paused or non-River). An adversarial review caught this half
+    missing after CHAOS-4054 step 4 removed the Celery-presence probe that
+    used to supply it: with the probe gone and no fence, this twin was
+    terminalizing aged units during a rollback that Go would have spared --
+    Python destroying work its Go counterpart protects.
+
+    The route fence replaces the probe rather than restoring it. If River does
+    not own the route, decline regardless of who is consuming; if River does
+    own it, no Celery consumer is being handed provider units to begin with.
     """
 
     if not units:
         return []
 
+    from dev_health_ops.workers.job_routes import (
+        PROVIDER_UNIT_OUTBOX_ROUTES,
+        resolve_worker_job_route,
+    )
     from dev_health_ops.workers.provider_unit_route import routes_to_river
 
     # This sweep is a safety net running inside reconcile_sync_dispatch,
-    # which also repairs leases and materializes wakeups. An unreadable
-    # capability matrix must degrade to "sweep nothing this pass", never
-    # abort the whole reconcile and take those repairs with it (hunt finding).
+    # which also repairs leases and materializes wakeups. A paused/drifted
+    # route or an unreadable capability matrix must degrade to "sweep nothing
+    # this pass", never abort the whole reconcile and take those repairs with
+    # it (hunt finding).
     try:
+        if (
+            resolve_worker_job_route(session, "sync.provider_unit")
+            not in PROVIDER_UNIT_OUTBOX_ROUTES
+        ):
+            return []
         return [
             unit
             for unit in units

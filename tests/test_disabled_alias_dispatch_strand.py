@@ -51,6 +51,7 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
     WorkerJobOutbox,
+    WorkerJobRoute,
 )
 from dev_health_ops.sync.canonical_incident_gate import FEATURE_DISABLED_ERROR_CATEGORY
 
@@ -973,6 +974,48 @@ def test_sweep_spares_a_plannable_pair(db_session, monkeypatch) -> None:
     from dev_health_ops.workers import sync_reconciler
 
     run, unit = _seed_already_stranded_unit(db_session, dataset_key="repo-metadata")
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_reconciler.reconcile_sync_dispatch(limit=100)
+
+    db_session.expire_all()
+    survivor = db_session.query(SyncRunUnit).filter(SyncRunUnit.id == unit.id).one()
+    assert survivor.status == SyncRunUnitStatus.DISPATCHING.value
+    assert survivor.error is None
+
+
+@pytest.mark.parametrize("state", ("rolled-back", "paused"))
+def test_sweep_declines_when_river_does_not_own_provider_units(
+    db_session, monkeypatch, state: str
+) -> None:
+    """The sweep must not destroy work another owner may still be holding.
+
+    The other half of the gate, and the destructive half. The unit here is the
+    SAME non-plannable, strand-shaped row the sweep terminalizes above -- the
+    only difference is that the durable ``sync.provider_unit`` route no longer
+    selects the River outbox. That alone must spare it.
+
+    This is the twin of the Go sweep's ``riverOwns()`` fence, which declines on
+    a paused or non-River route for exactly this reason. CHAOS-4054 step 4
+    removed the Celery-presence probe that used to supply the Python half, and
+    an adversarial review caught that nothing replaced it: during a rollback,
+    the Python sweep was terminalizing aged units its Go counterpart spares.
+    A unit waiting on another owner is indistinguishable from a strand when
+    viewed through the capability matrix alone, so the matrix must not be
+    asked until River ownership is established.
+    """
+
+    from dev_health_ops.workers import sync_reconciler
+
+    run, unit = _seed_already_stranded_unit(db_session, dataset_key="pr-comments")
+    route_row = db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    )
+    if state == "paused":
+        route_row.update({WorkerJobRoute.paused: True})
+    else:
+        route_row.update({WorkerJobRoute.transport: "celery"})
+    db_session.commit()
     _patch_db_session(monkeypatch, db_session)
 
     sync_reconciler.reconcile_sync_dispatch(limit=100)

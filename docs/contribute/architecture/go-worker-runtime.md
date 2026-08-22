@@ -8,6 +8,9 @@ source_of_truth:
   - contracts/jobs/v1/ (job kinds, timeouts, attempts)
   - internal/storage/river/migrate.go (authoritative grants)
   - internal/storage/postgres/domain_authorization.go (role postures)
+  - internal/platform/config/config.go (WorkerGroup contract)
+  - compose.yml (dormant Celery -Q service definitions)
+  - internal/jobs/metrics/remaining/families.json (per-kind route/rollback_route)
 applicability: current
 lifecycle: active
 ---
@@ -435,19 +438,84 @@ The general rule: **a recovery loop can only reach work that left a durable
 trace it knows how to read.** When adding a state transition, check which seam
 would find a process that died immediately after it.
 
+## Worker-group semantics: identity only, never routing
+
+`WorkerGroup` (`internal/platform/config/config.go:112-114`) is the whole
+contract, verbatim: "WorkerGroup is an observability identity only. It never
+selects queues or changes handler construction." A worker's `--worker-group`
+flag is a label. A worker's `--queues`/`-Q` flags are what it executes.
+Nothing else reads `--worker-group` to decide behavior — routing is queues,
+full stop.
+
+That distinction has exactly four consumers, and none of them route:
+
+| Consumer | What it does with the group label |
+| --- | --- |
+| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | `deploy/kubernetes/go-workers.yaml`'s `EXPECTED_WORKER_GROUPS` ConfigMap key (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`cmd/dev-health-reconciler/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
+| `workerctl workers status` grouping | `cmd/dev-health-workerctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
+| `joboperator` drain-and-mutation targeting | `internal/joboperator/service.go`'s `Queues`, `Drain`, and `Undrain` all take a `group string` and validate it with `isValidWorkerGroup` before acting. An operator drains *a group* (a named, deployed set of replicas) — the group answers "which replicas do I signal," never "which queue does this job kind go to." |
+| Log labels | `Config.LogAttrs` (`internal/platform/config/config.go:764-767`) emits `worker_group` as a `slog` attribute alongside `queue_workers`, purely so a log line can be filtered to one deployed group. |
+
+A worker-group name (`heavy`, `ops`, `sync`, `sync-provider`, and the
+non-queued `reconciler`/`scheduler`/`stream-*` roles) is therefore a
+deployment-chosen label with no effect on what code runs. The compose
+invariant this rests on is stated once and enforced at startup: **the
+selected queue set must equal the constructed handler set**
+(`Registry.ValidateStartup`, also stated above under
+[Process roles](#process-roles)) — naming a queue the binary cannot serve
+fails readiness rather than starting a process that silently consumes
+nothing, and the reverse (a binary that could serve a kind but wasn't given
+its queue) simply never sees that work. Group names could be renamed,
+merged, or split without touching a single handler; only a `--queues` change
+does that.
+
+This is the exact confusion CHAOS-4044 exists to close: a worker-group name
+carries no routing information whatsoever, in either direction. If you need
+to know what a group *runs*, read its `--queues`/`--queue-concurrency` flags
+(`deploy/go-workers/deployment.json`, or the rendered `args:` in
+`deploy/kubernetes/go-workers.yaml` / `compose.go-workers.yml` / the Helm
+template), never its name.
+
+## Two planes, not a route-flag plane: what runs vs. where it's served
+
+**RATIFIED 2026-08-21** (CHAOS-4054 decision record, *Go Worker Runtime
+Migration* project): there are exactly two planes, and a route env-var plane
+is not one of them.
+
+| Plane | Answers | Authority |
+| --- | --- | --- |
+| Intent ("what should run") | Did the user turn this dataset on? | `IntegrationDataset.is_enabled` — the sync config, and nothing else |
+| Serving ("where/whether it can run") | Does any deployed worker consume this queue? | `-Q`/`--queues` topology in tracked service definitions (compose/k8s/Helm) |
+
+**Capability is always-on.** A route that shipped — code merged, reviewed,
+registered — is executable; there is no third, invisible plane that hides
+shipped functionality behind an environment flag. The ~40
+`WORKER_*_ENABLED` provider-route switches described below are being
+deleted, not migrated to a database table or kept as a break-glass switch —
+that deletion is in-flight, sequenced in
+[the decision record](https://linear.app/fullchaos/document/chaos-4054-two-plane-route-architecture-decision-record-7e5da955f899),
+and this page does not treat those switches as the current model. Do not
+add new documentation that describes `WORKER_*_ENABLED` as a durable
+enablement lever — it is scaffolding on its way out. The durable lever,
+today and after that program lands, is `-Q`.
+
 ## Queue topology
 
-The Go fleet serves **10** River queues, listed in the process table above. The
-Celery fleet declares **23**. They share only four names — `metrics`,
-`reports`, `sync`, `webhooks` — and the overlap is coincidental, not a contract.
+The Go fleet serves **10** River queues, listed in the process table above.
+The Celery fleet declared **23** — Redis lists, not PostgreSQL rows, a
+different transport entirely. **Every Python celery worker service has been
+stopped in production since 2026-08-19** (CHAOS-4026); the definitions below
+survive only in `compose.yml` as dormant/historical service definitions, kept
+for local dev parity and for the `rollback_route` values still recorded in
+`internal/jobs/metrics/remaining/families.json`. Nothing in this section
+describes a currently-running Celery consumer. The Go/River plane is the
+live system.
 
-These are different transports: Celery queues are Redis lists, River queues are
-PostgreSQL rows. `-Q` on a Go binary names **Go River queue names**. Passing a
-Celery-only name such as `backfill` fails startup validation, because the
-selected queue set must equal the constructed handler set. Aligning the two
-vocabularies is a River queue migration — deployment manifest, four deploy
-surfaces, autoscaler metric selectors, in-flight jobs, and a drain plan — not a
-rename.
+The two vocabularies share only four names — `metrics`, `reports`, `sync`,
+`webhooks` — and the overlap is coincidental, not a contract. `-Q` on a Go
+binary names **Go River queue names only**; passing a Celery-only name such
+as `backfill` fails startup validation, because the selected queue set must
+equal the constructed handler set.
 
 Queue names are validated as a character set, not as a shape, so dotted
 subpath names such as `sync.github.heavy` already parse. That is deliberate
@@ -459,7 +527,53 @@ switches are a separate, environment-only surface, because the Python planner
 reads the identical names to decide what to **plan** — and a planner emitting
 units for a route no executor serves is precisely the wedge described above.
 Producer and consumer read one mapping, `providersync.RouteSwitchesFromConfig`;
-two hand-maintained copies is what stranded 54 units in production.
+two hand-maintained copies is what stranded 54 units in production. Per the
+two-plane decision above, this switch surface is being retired in favor of
+`-Q` topology alone — see the decision record for the deletion sequence.
+
+### The Celery-to-River queue mapping (generated)
+
+**Source of truth:** `deploy/go-workers/deployment.json` (Go process/queue
+manifest) and `contracts/jobs/v1/registry.json` (kind → queue, timeout,
+attempts) are the live producers; `compose.yml`'s dormant `-Q` service
+definitions are the historical Celery producer. The table below is rendered
+by `scripts/gen_queue_mapping_docs.py` from those three files plus the
+per-kind `route`/`rollback_route` fields in
+`internal/jobs/metrics/remaining/families.json`; the only hand-curated part
+is the Celery-queue-to-Go-successor correspondence itself (cited inline),
+because that correspondence predates any single machine-readable file and
+isn't otherwise derivable. The generator asserts every Go process and every
+Celery `-Q` queue name it finds is accounted for, and fails the build rather
+than silently dropping a row when a producer changes. `docs:check-fast` /
+`tests/docs/test_queue_mapping_drift.py` fail if this block is stale — run
+`python scripts/gen_queue_mapping_docs.py` and commit the result after
+changing any of the source files.
+
+<!-- BEGIN GENERATED QUEUE MAP -->
+| Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `heavy` (`dev-health-worker`) | `investment` | `investment.chunk`<br>`investment.dispatch`<br>`investment.finalize`<br>`investment.materialize` | 900-7200 | 3 | — | — | Go-native -- no Celery predecessor |
+| `heavy` (`dev-health-worker`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.extra_metrics`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.team_metrics` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.remaining.capacity`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.complexity`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.dora`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.extra_metrics`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.membership_backfill`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.recommendations`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.release_impact`: route=`river`, rollback_route=`celery` (families.json)<br>`metrics.remaining.team_metrics`: route=`river`, rollback_route=`celery` (families.json) |
+| `heavy` (`dev-health-worker`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live |
+| `heavy` (`dev-health-worker`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue. |
+| `ops` (`dev-health-worker`) | `coverage` | `system.sync_coverage_refresh` | 900 | 3 | — | — | Go-native -- no Celery predecessor |
+| `ops` (`dev-health-worker`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue. |
+| `ops` (`dev-health-worker`) | `retention` | `system.retention_cleanup` | 300 | 3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep) |
+| `ops` (`dev-health-worker`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live |
+| `reconciler` (`dev-health-reconciler`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
+| `scheduler` (`dev-health-scheduler`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
+| `stream-external` (`dev-health-stream-runner`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-ingest` (`dev-health-stream-runner`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-pagerduty` (`dev-health-stream-runner`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `sync` (`dev-health-worker`) | `sync` | `sync.team_autoimport` | 900 | 3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off. |
+| `sync-provider` (`dev-health-worker`) | `sync_provider` | `sync.provider_unit` | 900 | 5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Enablement today is provider/dataset WORKER_*_ENABLED switches (dying -- CHAOS-4054 two-plane decision) plus -Q topology.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go. |
+
+Celery queues carrying no work reachable through a Go queue at all (telemetry, not routed work):
+
+| Celery queue | Why it has no Go queue |
+| --- | --- |
+| `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
+<!-- END GENERATED QUEUE MAP -->
 
 ## Deployment couplings
 
@@ -599,3 +713,12 @@ a new contract version; adding an optional field does not.
 - CHAOS-4036 — one package-wide error string hiding the actual SQLSTATE
 - CHAOS-4041 / PR #1836 — the strand repair queried a partitions column that
   exists only in its hand-written test schema, not in production
+- CHAOS-4026 (2026-08-21) — Celery retired fleet-wide; every Python celery
+  worker/beat service stopped in production, Go-owned cadences proven to be
+  the sole executor
+- CHAOS-4044 — worker-group semantics and the Celery-to-River queue mapping
+  documented for the first time; see [Worker-group semantics](#worker-group-semantics-identity-only-never-routing)
+  and [the generated queue mapping](#the-celery-to-river-queue-mapping-generated)
+- CHAOS-4054 — two-plane route architecture ratified: intent (sync config)
+  and serving (`-Q` topology) are the only two planes; the `WORKER_*_ENABLED`
+  route env-var surface is being retired, not enshrined

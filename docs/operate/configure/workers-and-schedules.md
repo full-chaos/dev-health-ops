@@ -1,6 +1,6 @@
 ---
 page_id: op-workers-config
-summary: Configure Celery queues and schedules plus deployment-selected Go worker groups, River routes, database roles, and rollback controls.
+summary: Configure the live Go/River worker groups, queues, and schedules; the Celery/Beat surface is dormant history kept for context and rollback semantics.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
@@ -10,22 +10,31 @@ source_of_truth:
   - src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py
   - src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py
   - current worker and synchronization settings
+  - docs/contribute/architecture/go-worker-runtime.md
 applicability: current
 lifecycle: active
 ---
 
 # Workers, schedules, and queues
 
-Celery remains the production owner of every current background job. The Go
-worker, scheduler, reconciler, and stream-runner binaries are separate
-coexistence roles: they may build, start, expose health, and produce shadow
-evidence, but no job moves to River until its checked-in route, handler
-coverage, parity, canary, and rollback gates explicitly change.
+**Go/River is the production owner of every current background job and every
+current production schedule.** Every Python Celery worker and Beat service has
+been stopped in production since 2026-08-19 (CHAOS-4026): they remain defined
+in `compose.yml` for local-dev parity and as historical evidence of the
+pre-cutover vocabulary, but nothing in production consumes them. Configure and
+operate the Go worker groups and the Go scheduler described below; read the
+Celery section only to understand a queue name you find in an old issue,
+runbook, or `rollback_route` value.
 {: .fc-page-lede }
 
-## Active Celery topology
+For worker-group semantics (identity vs. routing), the two-plane
+intent/serving model, and the full generated Celery→River queue mapping, see
+[Go worker runtime architecture](../../contribute/architecture/go-worker-runtime.md) —
+this page does not repeat that content.
 
-Configure together:
+## Historical Celery topology (dormant)
+
+Kept for context, not for operation. Before 2026-08-19 these were configured together:
 
 - broker and result backend;
 - worker queue lists;
@@ -36,7 +45,14 @@ Configure together:
 - Beat or scheduler ownership;
 - shutdown grace periods for long-running work.
 
-A routing flag is safe only when the deployed workers consume every queue it can emit. Confirm queue names in the checked-in deployment artifact rather than assuming defaults from an older issue or runbook.
+None of this is live. The queue names, the `worker`/`worker-heavy`/`worker-ingest`/`worker-external-ingest`/`beat`
+service split, and the `WORKER_*_ENABLED` provider switches referenced by older
+issues and runbooks are documented as historical vocabulary — with their Go
+successors — in the
+[generated queue mapping](../../contribute/architecture/go-worker-runtime.md#the-celery-to-river-queue-mapping-generated).
+Do not bring a Celery service back up to diagnose a live incident; it has no
+consumers wired to current queues and no operator has kept its routing
+current since the cutover.
 
 ## Go worker groups
 
@@ -44,7 +60,11 @@ The deployment manifest is `deploy/go-workers/deployment.json`. Its River entrie
 describe deployment groups, not application worker types. Each group selects a
 non-empty set of registered queues and owns its replicas, resources, autoscaling
 policy, shutdown budget, and per-queue concurrency. A group name is an
-observability label only.
+observability label only — it never selects queues or changes handler
+construction. See
+[Worker-group semantics](../../contribute/architecture/go-worker-runtime.md#worker-group-semantics-identity-only-never-routing)
+for the four consumers of that label (presence/health, `workerctl status`,
+`joboperator` drain targeting, log labels) and why none of them route.
 
 For example, these groups are valid and independently scalable:
 
@@ -64,10 +84,17 @@ Do not add a queue to a group unless it is registered. The process rejects an
 empty, unknown, duplicate, malformed, or conflicting selection before
 readiness, and it does not support runtime queue reconfiguration.
 
-Do not treat a healthy container as a route change. A route change must identify
-the job kind and contract version, move through shadow and canary states,
-preserve Celery rollback, and prove that no duplicate or missing domain effect
-occurs.
+Do not treat a healthy container as a route change. Today, "what should run"
+is decided by the sync config (`IntegrationDataset.is_enabled`) and "where
+it's served" is decided by `-Q` topology — the two-plane model ratified in
+the [CHAOS-4054 decision record](https://linear.app/fullchaos/document/chaos-4054-two-plane-route-architecture-decision-record-7e5da955f899).
+The ~40 `WORKER_*_ENABLED` provider-route switches still exist in code as of
+this writing but are being deleted, not kept as a durable third plane or a
+break-glass switch — do not build new operational process around them.
+A route change must still identify the job kind and contract version and
+prove that no duplicate or missing domain effect occurs; it no longer needs
+to preserve a Celery rollback path, because there is no live Celery consumer
+left to roll back to.
 
 ## PostgreSQL requirements
 
@@ -88,15 +115,20 @@ entries, capability reports, deployment groups, and migration state. Sync
 dispatch routes under `contracts/sync-dispatch/v1/` freeze the transport
 ownership used by the scheduler and reconciler foundations.
 
-Before changing a route:
+Before changing a route (adding a job kind, moving a kind to a different
+queue, or changing a queue's consumer group):
 
 1. update and validate the versioned contract;
 2. compile the matching handler;
 3. prove payload and result compatibility;
-4. run shadow/parity evidence without mutating the Celery baseline;
-5. define canary admission and rollback;
-6. update the selected queue group and its connection budget;
-7. verify operator, health, metrics, and audit behavior.
+4. update the selected queue group and its connection budget so the
+   **selected** queue set still equals the **constructed** handler set
+   (`Registry.ValidateStartup` — see
+   [Process roles](../../contribute/architecture/go-worker-runtime.md#process-roles));
+5. verify operator, health, metrics, and audit behavior.
+
+Celery shadow/parity evidence and canary admission applied while both fleets
+ran side by side; there is no live Celery baseline left to shadow against.
 
 ### Recover a discarded provider delivery
 
@@ -124,7 +156,13 @@ is not a substitute for repairing a recoverable transport delivery.
 
 ## Schedules
 
-Celery Beat remains required for current production schedules. The Go scheduler foundation can evaluate bounded schedule timing for comparison, but it does not currently own organization entitlement, mutation, lease repair, or production publication.
+**The Go scheduler (`dev-health-scheduler`) is the sole production owner of
+current schedules.** Celery Beat is stopped in production (CHAOS-4026,
+2026-08-21) and no longer evaluates, mutates, or publishes anything; every
+Beat cadence has either been proven redundant and deleted (for example the
+`ask-dev-retention-sweep` entry retired below) or reimplemented natively on
+the Go scheduler with organization entitlement, mutation, lease repair, and
+production publication all owned there.
 
 Run exactly one active production scheduler unless the deployment contract explicitly provides leader election or another duplicate-prevention mechanism. Verify that recurring work cannot overlap beyond provider, worker, and store capacity.
 
@@ -247,4 +285,6 @@ obligations.
 - scheduler ownership is singular and observable;
 - queue depth and oldest age advance under a bounded job;
 - retries preserve idempotency and provider budgets;
-- rollback restores Celery routing before Go processes are drained or stopped.
+- a queue/topology rollback restores the previous `-Q` selection on the
+  affected groups before the changed processes are drained or stopped —
+  there is no Celery routing left to fall back to.

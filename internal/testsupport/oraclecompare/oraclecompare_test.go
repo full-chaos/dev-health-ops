@@ -392,6 +392,36 @@ func TestTypedValuesEqualRejectsCrossTagAndNonFinite(t *testing.T) {
 			wantEqual: false,
 		},
 		{
+			// An infinity parses fine and equals itself, so this used to
+			// compare EQUAL -- hiding the broken computation that produced
+			// it behind a clean match.
+			name:      "positive infinity is not a match",
+			python:    map[string]any{"t": "float", "v": "+Inf"},
+			goal:      map[string]any{"t": "float", "v": "+Inf"},
+			wantEqual: false,
+		},
+		{
+			name:      "negative infinity is not a match",
+			python:    map[string]any{"t": "float", "v": "-Inf"},
+			goal:      map[string]any{"t": "float", "v": "-Inf"},
+			wantEqual: false,
+		},
+		{
+			// A parse failure used to fall through to reflect.DeepEqual on
+			// the {"t","v"} envelope, so identical malformed text compared
+			// equal: a corrupted producer or fixture reporting as a pass.
+			name:      "identical malformed float text is not a match",
+			python:    map[string]any{"t": "float", "v": "not-a-number"},
+			goal:      map[string]any{"t": "float", "v": "not-a-number"},
+			wantEqual: false,
+		},
+		{
+			name:      "a malformed float never matches a well-formed one",
+			python:    map[string]any{"t": "float", "v": "1.5"},
+			goal:      map[string]any{"t": "float", "v": "1.5x"},
+			wantEqual: false,
+		},
+		{
 			name:      "differing float text for the same double still matches",
 			python:    map[string]any{"t": "float", "v": "5.0"},
 			goal:      map[string]any{"t": "float", "v": "5"},

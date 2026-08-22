@@ -251,7 +251,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # and TestExecutedProofEvidenceHasBeenAttempted (ordinary), plus
     # TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess
     # (integration-tagged).
-    assert len(expected_provider_tests) == 935
+    #
+    # CHAOS-3092 P0a then removed 3 ordinary top-level tests (935 -> 932):
+    # TestDiffRowsClauseCoverage, TestCheckExclusionIntegrityClauseCoverage and
+    # TestTypedValuesEqualCanonicalizesFloatAndDatetimeText moved to
+    # internal/testsupport/oraclecompare with the pure comparison functions
+    # they cover. They still run, in that package, on the same `go test` tier
+    # -- they are no longer PROVIDERSYNC tests, which is all this count
+    # measures. The integration-tagged count is unchanged because all three
+    # were ordinary.
+    assert len(expected_provider_tests) == 932
     assert len(expected_integration_tests) == 110
     assert expected_integration_tests < expected_provider_tests
 
@@ -268,7 +277,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 935
+    assert len(provider_flattened) == len(set(provider_flattened)) == 932
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -329,7 +338,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 935
+    assert len(selected_tests) == len(set(selected_tests)) == 932
     assert set(selected_tests) == expected_tests
 
 

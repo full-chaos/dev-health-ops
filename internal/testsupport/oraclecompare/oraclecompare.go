@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -415,11 +416,24 @@ func TypedValuesEqual(pythonValue, goValue any) bool {
 	if pythonOK && goOK && pythonTagged.tag == goTagged.tag {
 		switch pythonTagged.tag {
 		case "float":
+			// Fail closed on both halves of "this is not a comparable
+			// number". A parse failure used to fall through to
+			// reflect.DeepEqual on the envelope, so two sides carrying the
+			// SAME malformed text compared equal -- a corrupted producer or
+			// fixture reporting as a clean match. And an infinity parses
+			// fine, so +Inf on both sides also compared equal, which hides
+			// the broken computation that produced it rather than surfacing
+			// it. A value arithmetic cannot be trusted on is never a match.
 			pythonFloat, pythonErr := strconv.ParseFloat(pythonTagged.value, 64)
 			goFloat, goErr := strconv.ParseFloat(goTagged.value, 64)
-			if pythonErr == nil && goErr == nil {
-				return pythonFloat == goFloat
+			if pythonErr != nil || goErr != nil {
+				return false
 			}
+			if math.IsNaN(pythonFloat) || math.IsNaN(goFloat) ||
+				math.IsInf(pythonFloat, 0) || math.IsInf(goFloat, 0) {
+				return false
+			}
+			return pythonFloat == goFloat
 		case "datetime":
 			pythonTime, pythonErr := time.Parse(time.RFC3339Nano, pythonTagged.value)
 			goTime, goErr := time.Parse(time.RFC3339Nano, goTagged.value)

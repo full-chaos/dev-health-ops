@@ -707,3 +707,362 @@ func TestPipelineStepStaysSilentWhenTheRunawayReportWorked(t *testing.T) {
 		t.Fatal("a healthy pass claimed the runaway detector was unavailable")
 	}
 }
+
+// The metric is only real if the number reaches the loop. A field the pipeline
+// populates but never carries out is the same silence in a different place --
+// the exact shape of the shadow-mode gap this ticket already had to fix once.
+func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			// Sample deliberately SMALLER than the true total, so a
+			// regression to len(Runaway) cannot pass here either.
+			return MaterializerResult{
+				Runaway: []RunawayDispatchWakeup{
+					{SyncRunID: "run-a", Attempts: 5000},
+					{SyncRunID: "run-b", Attempts: 4000},
+				},
+				RunawayTotal:      9,
+				RunawayReportStep: "",
+			}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		// The read-only Observer authors none of these fields, so a non-empty
+		// observation here proves the pipeline copied rather than got lucky.
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{CeleryDuePending: 42}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{
+			Mode: SweepModeActive, Candidates: 6, Terminalized: 4,
+		}},
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.UnreclaimableCandidates != 6 || observation.UnreclaimableTerminalized != 4 {
+		t.Fatalf("sweep figures did not reach the observation: %+v", observation)
+	}
+	if observation.RunawayDispatchWakeups != 9 {
+		t.Fatalf("runaway gauge = %d, want the exact 9 over the threshold rather "+
+			"than the 2-row sample", observation.RunawayDispatchWakeups)
+	}
+	if observation.WakeupReportFailures != 0 {
+		t.Fatalf("a working report was counted as a failure: %+v", observation)
+	}
+	// The observer's own snapshot must survive the copy: a struct-level
+	// assignment would have silently erased it.
+	if observation.CeleryDuePending != 42 {
+		t.Fatalf("the observer's own fields were clobbered: %+v", observation)
+	}
+}
+
+// A broken detector must reach the counter, and it must NOT publish a
+// reassuring zero gauge on the same pass -- "nothing looked" and "nothing
+// found" are the two readings this whole series exists to separate.
+func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{RunawayReportStep: runawayReportStepQuery}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.WakeupReportFailures != 1 {
+		t.Fatalf("WakeupReportFailures = %d, want exactly one per failed pass",
+			observation.WakeupReportFailures)
+	}
+}
+
+// THE DURABLE-WORK RULE, extended to the sweep (the ExhaustedDeliveriesRecovered
+// comment states it for the repair). The sweep commits before the stages after
+// it run, so a later failure does not un-destroy the units it already
+// terminalized. An observation reporting zero after a real terminalization
+// would put destroyed work under its own alert threshold -- and the sweep is
+// the one component here whose mistakes are unrecoverable.
+func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
+	failure := errors.New("scripted terminal-delivery repair failure")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, failure
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			t.Fatal("the materializer must not run after the repair failed")
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{
+			Mode: SweepModeActive, Candidates: 3, Terminalized: 3,
+		}},
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if !errors.Is(stepErr, failure) {
+		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	}
+	if observation.UnreclaimableTerminalized != 3 || observation.UnreclaimableCandidates != 3 {
+		t.Fatalf("a failed pass dropped the sweep's already-committed work: %+v", observation)
+	}
+}
+
+// "THE REPORT DID NOT RUN" IS WIDER THAN "THE REPORT FAILED" (adversarial
+// review finding), and the gap was a blind spot in the very counter added to
+// remove blind spots.
+//
+// A transaction that will not begin, an earlier materialization statement that
+// faults, a failed commit — all return an empty MaterializerResult with
+// RunawayReportStep unset. The detector demonstrably did not look, and the
+// counter advertised as separating "nothing found" from "nothing looked" would
+// have said it did, publishing a reassuring zero gauge beside it.
+//
+// This drives the upstream shape specifically: the materializer errors WITHOUT
+// naming a report step.
+func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	failure := errors.New("scripted materializer transaction failure")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			// Exactly what a begin/commit/earlier-SQL failure produces: an
+			// empty result and an error, with no report step named because
+			// the report never executed.
+			return MaterializerResult{}, failure
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			t.Fatal("the kernel must not run after the materializer failed")
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if !errors.Is(stepErr, failure) {
+		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	}
+	if observation.WakeupReportFailures != 1 {
+		t.Fatalf("WakeupReportFailures = %d: the detector did not look, and the "+
+			"counter that exists to say so stayed silent — the gauge's zero on "+
+			"this pass is then indistinguishable from a real measurement",
+			observation.WakeupReportFailures)
+	}
+	record, found := findSlogRecord(*captured, "syncreconciler.dispatch_wakeup_report_unavailable")
+	if !found {
+		t.Fatal("a pass that never reached the detector logged nothing about it")
+	}
+	// The two causes want different first questions from an operator, so the
+	// log distinguishes them even though the counter merges them.
+	if record["step"] != runawayReportStepUpstream {
+		t.Fatalf("record step = %v, want the upstream cause named rather than a "+
+			"report-statement failure it was not", record["step"])
+	}
+}
+
+// A FAILING SWEEP MUST REACH THE COUNTER (adversarial review finding).
+//
+// TestPipelineStepSurvivesSweepFailure above pins that a sweep failure does
+// not fail the pass, and that is correct: taking lease repair down with the
+// safety net would trade a bounded strand for an unbounded one. But the
+// consequence is that a sweep which has stopped working entirely leaves a
+// healthy pass behind it and a candidate gauge of zero — indistinguishable
+// from a system with nothing to sweep.
+//
+// CHAOS-4035 is what that looks like in production: this component answered
+// 42501 once a second from its first deploy, and survived because nothing but
+// a log line could see it.
+func TestPipelineStepCountsASweepFailureOntoTheObservation(t *testing.T) {
+	pipeline := pipelineWithSweep(t, failingSweep{err: ErrUnavailable})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("a sweep failure took the pass down with it: %v", err)
+	}
+	if observation.UnreclaimableSweepFailures != 1 {
+		t.Fatalf("UnreclaimableSweepFailures = %d: the safety net failed and the "+
+			"only metric that could say so stayed at zero, which is what a "+
+			"healthy idle system reports", observation.UnreclaimableSweepFailures)
+	}
+	// ...and the gauges must not fabricate a selection for a pass that failed.
+	if observation.UnreclaimableCandidates != 0 || observation.UnreclaimableTerminalized != 0 {
+		t.Fatalf("a failed sweep pass published figures it never measured: %+v", observation)
+	}
+}
+
+// NON-VACUITY: a working sweep must leave the failure counter alone, or it
+// climbs on every tick and stops distinguishing anything.
+func TestPipelineStepLeavesTheSweepFailureCounterAloneOnAHealthyPass(t *testing.T) {
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{
+		Mode: SweepModeActive, Candidates: 2, Terminalized: 2,
+	}})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.UnreclaimableSweepFailures != 0 {
+		t.Fatalf("a successful sweep was counted as a failure: %+v", observation)
+	}
+}
+
+// EVERY EXIT THAT PREVENTS THE REPORT MUST COUNT (adversarial review, third
+// time this class appeared).
+//
+// The counter's contract is "this pass did not deliver a report". Three
+// successive rounds each found another exit satisfying that description while
+// leaving it at zero — the materializer's own error, then the swallowed
+// non-fatal failures, then repair failure and terminal-repair failure. Every
+// one was the same bug; every fix patched the site in front of it.
+//
+// The accounting is now deferred on the named return, so it covers paths this
+// table does not list and paths added later. This table exists to prove the
+// ones that already exist, and to fail loudly if someone replaces the defer
+// with per-site assignments again.
+func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
+	failure := errors.New("scripted stage failure")
+	okRepair := func(contextT, time.Time, int) (LeaseRepairResult, error) {
+		return LeaseRepairResult{}, nil
+	}
+	okTerminal := func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+		return TerminalDeliveryRepairResult{}, nil
+	}
+	for _, testCase := range []struct {
+		name     string
+		repair   func(contextT, time.Time, int) (LeaseRepairResult, error)
+		terminal func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error)
+	}{
+		{
+			name: "lease repair fails before anything else runs",
+			repair: func(contextT, time.Time, int) (LeaseRepairResult, error) {
+				return LeaseRepairResult{}, failure
+			},
+			terminal: okTerminal,
+		},
+		{
+			name:   "terminal-delivery repair fails before the materializer",
+			repair: okRepair,
+			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, failure
+			},
+		},
+		{
+			name:   "the repair returns counts it cannot stand behind",
+			repair: okRepair,
+			// Recovered is out of range against its own subtotals, which the
+			// pipeline treats as a failed step returning ErrUnavailable.
+			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{Recovered: 1, ExhaustedRecovered: 5}, nil
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			pipeline, err := NewMutationPipeline(
+				pipelineLeaseRepairFunc(testCase.repair),
+				pipelineTerminalDeliveryRepairFunc(testCase.terminal),
+				pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+					t.Fatal("the materializer must not run on this path")
+					return MaterializerResult{}, nil
+				}),
+				pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+					return KernelResult{}, nil
+				}),
+				pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+					return Observation{}, nil
+				}),
+				AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+				PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+				nil,
+				DefaultMutationPipelineConfig(),
+			)
+			if err != nil {
+				t.Fatalf("construct pipeline: %v", err)
+			}
+			observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+			if stepErr == nil {
+				t.Fatal("Step() = nil, want the scripted failure")
+			}
+			if observation.WakeupReportFailures != 1 {
+				t.Fatalf("WakeupReportFailures = %d on a pass that never reached the "+
+					"report: the detector reads as continuously healthy through a "+
+					"real upstream outage", observation.WakeupReportFailures)
+			}
+			// ...and the gauge must not claim to have measured anything.
+			if observation.RunawayMeasured {
+				t.Fatalf("a pass that never ran the report claimed to have measured it: %+v",
+					observation)
+			}
+		})
+	}
+}
+
+// NON-VACUITY for the defer: a pass that DID deliver a report must leave the
+// counter alone, or it increments on every healthy tick and distinguishes
+// nothing. This is the case the deferred accounting has to actively suppress.
+func TestPipelineStepLeavesTheReportCounterAloneWhenTheReportRan(t *testing.T) {
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeShadow}})
+	observation, err := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.WakeupReportFailures != 0 || !observation.RunawayMeasured {
+		t.Fatalf("a delivered report was counted as a failure: %+v", observation)
+	}
+}

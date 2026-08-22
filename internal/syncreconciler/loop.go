@@ -120,10 +120,20 @@ type Loop struct {
 	// so a snapshot is what would misreport it -- the next step's zero would
 	// erase the only evidence that a delivery had to be reclaimed at all.
 	exhaustedRecoveries uint64
-	lastOK              time.Time
-	up                  bool
-	errors              chan error
-	recorderBusy        chan struct{}
+	// wakeupReportFailures and unreclaimableTerminalized accumulate for the
+	// same reason exhaustedRecoveries does: both are EVENTS that already
+	// happened, so the next step's zero would erase the only evidence they
+	// occurred. The two gauge quantities beside them (runaway wakeups over
+	// the threshold, sweep candidates) stay in the observation snapshot,
+	// because for those a total that kept climbing after the condition
+	// cleared is precisely what an operator must not be shown.
+	wakeupReportFailures       uint64
+	unreclaimableTerminalized  uint64
+	unreclaimableSweepFailures uint64
+	lastOK                     time.Time
+	up                         bool
+	errors                     chan error
+	recorderBusy               chan struct{}
 }
 
 func NewLoop(stepper Stepper, config LoopConfig) (*Loop, error) {
@@ -256,13 +266,54 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 	// shutdown branch below. Counting them only on the success path would drop
 	// exactly the reclaims that happened during a degraded step, which is when
 	// a cycling delivery is most likely to be what is degrading it.
+	//
+	// The measured gauges are carried here for the same reason and on the same
+	// principle, and this is ALSO the deadline path (review finding). A
+	// pipeline can commit sweep and materializer work and then have the
+	// bounded context expire on its way out; returning before this merge threw
+	// away evidence of work that already happened, leaving Prometheus at the
+	// prior value while the pass was already unhealthy.
+	//
+	// Doing it once, ahead of every return below, is deliberate. The per-
+	// branch version of this accounting has now been under-applied three
+	// times -- error path only, then success path, then deadline -- and each
+	// fix patched the branch in front of it. One merge point cannot be missed
+	// by a branch added later.
 	loop.mu.Lock()
 	loop.accumulateRecoveriesLocked(observation)
+	if !loop.stopping {
+		loop.observation = loop.carryUnmeasuredGaugesLocked(observation, false)
+	}
 	loop.mu.Unlock()
 	if contextErr := stepCtx.Err(); contextErr != nil {
 		return contextErr
 	}
 	if err != nil {
+		// The CHAOS-4097 gauges survive a failed pass, on the same principle
+		// the ErrUnknownKind branch below already established: a failed
+		// observation can still carry bounded operator evidence, and readiness
+		// is what says the process is unhealthy.
+		//
+		// It matters most in exactly the case that motivated it. The pipeline
+		// carries these figures through every return precisely because the
+		// sweep and the report commit before later stages run, so a kernel or
+		// observer fault after a pass measured 83 runaway runs must not leave
+		// the dashboard showing the last healthy snapshot. The degraded pass
+		// IS the incident (review finding).
+		//
+		// ONLY these two fields are merged, never the whole observation: the
+		// observer's own queue gauges are unreliable on a failed pass, and
+		// publishing them would trade one stale number for several wrong ones.
+		//
+		// And only when the pass MEASURED them. Overwriting a real 83 with a
+		// zero the pass never took would clear a gauge-based alert at exactly
+		// the moment measurement became unavailable -- the opposite failure
+		// from dropping the evidence, and just as bad. An unmeasured pass
+		// leaves the last measured value standing; the failure counters above
+		// and readiness below are what mark it stale.
+		// The measured-gauge merge already happened above, ahead of every
+		// return, so this branch has nothing left to do for it.
+		//
 		// Unknown stored kinds are a failed observation, but their bounded total
 		// is still valuable operator evidence. Keep it as a gauge while the
 		// readiness failure prevents this process from being considered healthy.
@@ -292,7 +343,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		loop.mu.Unlock()
 		return err
 	}
-	loop.observation = copyObservation(observation)
+	loop.observation = copyObservation(loop.carryUnmeasuredGaugesLocked(observation, true))
 	loop.lastOK = now
 	loop.up = true
 	loop.ready.Store(true)
@@ -305,14 +356,34 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 // the process total. A negative count cannot be represented in the metric and a
 // wrapped total would read as a drop, so both are refused rather than exported.
 func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
-	recovered := observation.ExhaustedDeliveriesRecovered
-	if recovered <= 0 {
-		return
+	loop.exhaustedRecoveries = accumulateCount(
+		loop.exhaustedRecoveries, observation.ExhaustedDeliveriesRecovered,
+	)
+	loop.wakeupReportFailures = accumulateCount(
+		loop.wakeupReportFailures, observation.WakeupReportFailures,
+	)
+	loop.unreclaimableTerminalized = accumulateCount(
+		loop.unreclaimableTerminalized, observation.UnreclaimableTerminalized,
+	)
+	loop.unreclaimableSweepFailures = accumulateCount(
+		loop.unreclaimableSweepFailures, observation.UnreclaimableSweepFailures,
+	)
+}
+
+// accumulateCount adds one step's events to a process total, refusing both a
+// negative count -- which the metric cannot represent -- and an overflow,
+// which would wrap and read as a DROP. A counter that goes backwards is worse
+// than one that stops: every rate() over it reports a spike that never
+// happened. Refusing leaves the total flat, which is at least honest about
+// having stopped counting.
+func accumulateCount(total uint64, delta int64) uint64 {
+	if delta <= 0 {
+		return total
 	}
-	if loop.exhaustedRecoveries > math.MaxUint64-uint64(recovered) {
-		return
+	if total > math.MaxUint64-uint64(delta) {
+		return total
 	}
-	loop.exhaustedRecoveries += uint64(recovered)
+	return total + uint64(delta)
 }
 
 func (loop *Loop) offerObservation(observation Observation) {
@@ -342,6 +413,51 @@ func (loop *Loop) isStopping() bool {
 
 func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// carryUnmeasuredGaugesLocked applies ONE rule on EVERY path: a gauge whose
+// Measured bit is false keeps its previous value.
+//
+// It is one function rather than two branches because the first cut of this
+// gated only the error path, and the failures that matter most here are NOT
+// errors (review finding). The pipeline deliberately swallows a sweep failure
+// -- taking lease repair down with the safety net would trade a bounded strand
+// for an unbounded one -- and a failed runaway report likewise returns a
+// successful step. Both then arrived on the success path with zero gauges and
+// Measured false, and the wholesale snapshot store clobbered a measured 83
+// with them, while observer_up still read 1. That is the alert clearing on
+// missing data with nothing even claiming to be degraded.
+//
+// keepObserverFields distinguishes the two callers, and only that:
+//
+//   - true (successful pass): the observer's own queue figures are good, so
+//     the new observation is stored and only the unmeasured gauges are
+//     inherited.
+//   - false (failed pass): the observer's figures are unreliable, so the
+//     RETAINED snapshot is kept and only the measured gauges are written over
+//     it. Publishing the rest would trade one stale number for several wrong
+//     ones.
+func (loop *Loop) carryUnmeasuredGaugesLocked(
+	observation Observation, keepObserverFields bool,
+) Observation {
+	merged := observation
+	if !keepObserverFields {
+		merged = loop.observation
+		if observation.RunawayMeasured {
+			merged.RunawayDispatchWakeups = observation.RunawayDispatchWakeups
+		}
+		if observation.UnreclaimableMeasured {
+			merged.UnreclaimableCandidates = observation.UnreclaimableCandidates
+		}
+		return merged
+	}
+	if !observation.RunawayMeasured {
+		merged.RunawayDispatchWakeups = loop.observation.RunawayDispatchWakeups
+	}
+	if !observation.UnreclaimableMeasured {
+		merged.UnreclaimableCandidates = loop.observation.UnreclaimableCandidates
+	}
+	return merged
 }
 
 func copyObservation(observation Observation) Observation {
@@ -419,6 +535,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	loop.mu.Lock()
 	observation := copyObservation(loop.observation)
 	exhaustedRecoveries := loop.exhaustedRecoveries
+	wakeupReportFailures := loop.wakeupReportFailures
+	unreclaimableTerminalized := loop.unreclaimableTerminalized
+	unreclaimableSweepFailures := loop.unreclaimableSweepFailures
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -444,6 +563,23 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 		text.WriteString("0\n")
 	}
 	fmt.Fprintf(&text, "# HELP sync_dispatch_exhausted_delivery_recoveries_total Coordinator deliveries reclaimed after River spent their whole attempt budget.\n# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter\nsync_dispatch_exhausted_delivery_recoveries_total %d\n", exhaustedRecoveries)
+	// CHAOS-4097. The two gauges are the alertable pair: a runaway count above
+	// zero says a run is looping, and a failure counter that climbs says the
+	// thing which would have told you is broken. Reading either one alone can
+	// mislead -- a quiet gauge is meaningless while the detector is down --
+	// which is why both are exported rather than only the interesting one.
+	//
+	// The runaway threshold is stated in the HELP text rather than left in the
+	// Go source, because the number is what an operator needs to interpret the
+	// series and they are not reading materializer.go at 3am. It is derived
+	// from the production distribution (healthy p99 43-211 attempts against
+	// 6499 and 72601 for the CHAOS-4093 rows), and it decides nothing: it
+	// selects what is reported, never what is written.
+	fmt.Fprintf(&text, "# HELP sync_dispatch_runaway_dispatch_wakeups Non-terminal runs whose dispatch wakeup has exceeded %d attempts. Exact, not sampled. Unproven while sync_dispatch_wakeup_report_failures_total is climbing: read the pair, never this alone.\n# TYPE sync_dispatch_runaway_dispatch_wakeups gauge\nsync_dispatch_runaway_dispatch_wakeups %d\n", runawayDispatchAttempts, observation.RunawayDispatchWakeups)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_wakeup_report_failures_total Passes on which the runaway dispatch-wakeup report did not run at all -- whether the report faulted or the pass ended before reaching it. While this climbs, the gauge above is a stale zero rather than a measurement.\n# TYPE sync_dispatch_wakeup_report_failures_total counter\nsync_dispatch_wakeup_report_failures_total %d\n", wakeupReportFailures)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_candidates Units the unreclaimable sweep selected on its last pass. Non-zero in shadow mode means work it WOULD have terminalized. Unproven while sync_dispatch_unreclaimable_sweep_failures_total is climbing.\n# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n", observation.UnreclaimableCandidates)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_terminalized_total Units the unreclaimable sweep destroyed. Always zero in shadow mode; a persistent gap against the candidate gauge means writes are being refused.\n# TYPE sync_dispatch_unreclaimable_terminalized_total counter\nsync_dispatch_unreclaimable_terminalized_total %d\n", unreclaimableTerminalized)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_unreclaimable_sweep_failures_total Passes on which the unreclaimable sweep could not run. The candidate gauge above reads zero on those passes, identically to a healthy idle system, so read the pair.\n# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter\nsync_dispatch_unreclaimable_sweep_failures_total %d\n", unreclaimableSweepFailures)
 	text.WriteString("# HELP sync_dispatch_observer_up Whether the observer loop is currently healthy.\n# TYPE sync_dispatch_observer_up gauge\nsync_dispatch_observer_up ")
 	if up {
 		text.WriteString("1\n")

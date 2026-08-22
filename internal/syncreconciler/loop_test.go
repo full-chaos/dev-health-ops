@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,6 +155,14 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 		"sync_dispatch_observer_sampled_candidates 6",
 		"sync_dispatch_observer_truncated 0",
 		"sync_dispatch_observer_up 1",
+		// CHAOS-4097. A healthy pass must publish an explicit zero for both
+		// gauges rather than omitting them: an absent series and a quiet one
+		// are indistinguishable to a scraper, and "no data" is exactly the
+		// state an alert on this cannot afford to confuse with "no problem".
+		"sync_dispatch_runaway_dispatch_wakeups 0",
+		"sync_dispatch_unreclaimable_candidates 0",
+		"# TYPE sync_dispatch_runaway_dispatch_wakeups gauge",
+		"# TYPE sync_dispatch_unreclaimable_candidates gauge",
 		"bounded Python claim-order window",
 	} {
 		if !strings.Contains(metrics.String(), want) {
@@ -174,12 +183,45 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 	// it counts events that already happened, where a gauge would instead
 	// erase the evidence on the next step (CHAOS-3951) -- so it is pinned by
 	// name here rather than blanket-permitting counters.
+	//
+	// CHAOS-4097 adds two more deliberate exceptions, and they are ENUMERATED
+	// rather than pattern-matched so that adding a third is a decision someone
+	// makes in this list instead of a name that happens to slip through:
+	//
+	//   - wakeup_report_failures_total counts passes on which the runaway
+	//     detector could not run. A gauge would clear on the next pass and
+	//     erase the only evidence the measurement layer was ever blind.
+	//   - unreclaimable_terminalized_total counts units the sweep destroyed.
+	//     Destruction is an event; a gauge would report "0 destroyed" one tick
+	//     after it destroyed 100.
+	//
+	// The two CHAOS-4097 GAUGES (runaway_dispatch_wakeups,
+	// unreclaimable_candidates) are deliberately not here: both describe a
+	// current condition that must fall back to zero when it clears.
+	permittedCounters := map[string]bool{
+		"# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter": true,
+		"# TYPE sync_dispatch_wakeup_report_failures_total counter":        true,
+		"# TYPE sync_dispatch_unreclaimable_terminalized_total counter":    true,
+		// The sweep-failure counter is an event count for the same reason:
+		// CHAOS-4035's 42501-per-second sweep was survivable for its whole
+		// production life precisely because nothing outside a log could see
+		// it, and a gauge would clear the evidence on the next pass.
+		"# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter": true,
+	}
 	for _, line := range strings.Split(metrics.String(), "\n") {
 		if !strings.HasSuffix(line, " counter") {
 			continue
 		}
-		if line != "# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter" {
+		if !permittedCounters[line] {
 			t.Fatalf("unexpected counter metric %q:\n%s", line, metrics.String())
+		}
+	}
+	// Every permitted counter must actually be EMITTED, not merely allowed. A
+	// permit list is only a guard while the thing it permits exists; without
+	// this, deleting a series would silently pass.
+	for permitted := range permittedCounters {
+		if !strings.Contains(metrics.String(), permitted) {
+			t.Fatalf("permitted counter %q was never emitted:\n%s", permitted, metrics.String())
 		}
 	}
 	if strings.Contains(metrics.String(), PredicateVersion) ||
@@ -796,4 +838,590 @@ func TestLoopCountsExhaustedDeliveryRecoveriesFromAFailedStep(t *testing.T) {
 		t.Fatal("loop never reported the failed step")
 	}
 	assertRecoveryTotal(t, loop, 4)
+}
+
+// CHAOS-4097 shipped its reporting as log lines only, justified by "counters
+// do not export from this deployment (CHAOS-4094)". That is true of the OTel
+// pipeline and false of this one: WritePrometheus is a scrape endpoint and has
+// been serving sync_dispatch_exhausted_delivery_recoveries_total all along. A
+// signal only an operator reading logs can find is not one an alert can fire
+// on, and CHAOS-4093 was precisely a condition nobody was told about for
+// twenty-two hours.
+//
+// The two instrument choices are asserted, not just the values, because the
+// choice is the design: a counter that keeps climbing after a runaway clears
+// would page forever, and a gauge that resets would erase the evidence a
+// destructive sweep ever ran.
+func TestMetricsCarryTheRunawayAndSweepSeries(t *testing.T) {
+	loop := &Loop{clock: systemClock{}}
+	loop.observation = Observation{
+		RunawayDispatchWakeups:  7,
+		UnreclaimableCandidates: 4,
+	}
+	loop.wakeupReportFailures = 3
+	loop.unreclaimableTerminalized = 11
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE sync_dispatch_runaway_dispatch_wakeups gauge",
+		"sync_dispatch_runaway_dispatch_wakeups 7",
+		"# TYPE sync_dispatch_wakeup_report_failures_total counter",
+		"sync_dispatch_wakeup_report_failures_total 3",
+		"# TYPE sync_dispatch_unreclaimable_candidates gauge",
+		"sync_dispatch_unreclaimable_candidates 4",
+		"# TYPE sync_dispatch_unreclaimable_terminalized_total counter",
+		"sync_dispatch_unreclaimable_terminalized_total 11",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		}
+	}
+	// The threshold belongs in the HELP text: it is what an operator needs to
+	// interpret the gauge, and they are not reading materializer.go at 3am.
+	if !strings.Contains(metrics.String(), fmt.Sprintf("exceeded %d attempts", runawayDispatchAttempts)) {
+		t.Fatalf("the runaway gauge does not state its threshold:\n%s", metrics.String())
+	}
+}
+
+// The gauges must FALL BACK to zero when the condition clears. A runaway that
+// stayed latched at its worst value would keep an alert firing after the
+// incident ended, which is how a real signal becomes one people mute.
+func TestRunawayAndCandidateGaugesClearWithTheCondition(t *testing.T) {
+	loop := &Loop{clock: systemClock{}}
+	loop.observation = Observation{RunawayDispatchWakeups: 9, UnreclaimableCandidates: 5}
+	var latched bytes.Buffer
+	if err := loop.WritePrometheus(&latched); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(latched.String(), "sync_dispatch_runaway_dispatch_wakeups 9") {
+		t.Fatalf("gauge never reported the condition:\n%s", latched.String())
+	}
+
+	loop.observation = Observation{}
+	var cleared bytes.Buffer
+	if err := loop.WritePrometheus(&cleared); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 0",
+		"sync_dispatch_unreclaimable_candidates 0",
+	} {
+		if !strings.Contains(cleared.String(), want) {
+			t.Fatalf("gauge stayed latched after the condition cleared, missing %q:\n%s",
+				want, cleared.String())
+		}
+	}
+}
+
+// accumulateCount is the shared arithmetic behind all three counters, and both
+// refusals it makes are safety properties rather than tidiness: a counter that
+// goes BACKWARDS makes every rate() over it report a spike that never
+// happened, which is worse than one that stops moving.
+func TestAccumulateCountRefusesNegativesAndOverflow(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		total uint64
+		delta int64
+		want  uint64
+	}{
+		{"ordinary add", 5, 3, 8},
+		{"zero is a no-op", 5, 0, 5},
+		{"a negative count cannot be represented and is refused", 5, -2, 5},
+		{"overflow would wrap and read as a drop, so it is refused", math.MaxUint64 - 1, 5, math.MaxUint64 - 1},
+		{"an exact fit still lands", math.MaxUint64 - 5, 5, math.MaxUint64},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := accumulateCount(testCase.total, testCase.delta); got != testCase.want {
+				t.Fatalf("accumulateCount(%d, %d) = %d, want %d",
+					testCase.total, testCase.delta, got, testCase.want)
+			}
+		})
+	}
+}
+
+// The counters must accumulate through the LOOP, not merely be printable when
+// set by hand. A red control caught this gap: mutating
+// accumulateRecoveriesLocked to drop the new counters left every other test in
+// this file green, because they all wrote the field directly. A metric whose
+// only proven path is the test's own assignment is not instrumented at all.
+//
+// Both new counters are driven together, and both are asserted to ADD rather
+// than replace across steps -- the same property CHAOS-3951 needed from the
+// exhausted-delivery total, for the same reason: a scrape that does not land
+// inside the step that saw the event would otherwise report zero.
+func TestLoopAccumulatesTheRunawayAndSweepCountersAcrossSteps(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	calls := make(chan struct{}, 4)
+	var index atomic.Int64
+	// A middle step with nothing to add proves the total is not simply the
+	// last step's value wearing a counter's name.
+	failures := []int64{1, 0, 1}
+	terminalized := []int64{4, 0, 3}
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		observation := testObservation()
+		position := int(index.Add(1)) - 1
+		if position < len(failures) {
+			observation.WakeupReportFailures = failures[position]
+			observation.UnreclaimableTerminalized = terminalized[position]
+			observation.UnreclaimableSweepFailures = failures[position]
+		}
+		calls <- struct{}{}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := loop.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_wakeup_report_failures_total 1")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 4")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_sweep_failures_total 1")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	for step := 1; step < len(failures); step++ {
+		ticker.ticks <- clock.Now().Add(time.Duration(step) * time.Second)
+		<-calls
+	}
+	assertMetricLine(t, loop, "sync_dispatch_wakeup_report_failures_total 2")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_terminalized_total 7")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_sweep_failures_total 2")
+}
+
+// assertMetricLine waits for the scrape to show a line rather than sampling it
+// once, and the difference is a race I shipped into CI.
+//
+// The loop-driven tests signal from INSIDE the stepper, so the test resumes
+// while the loop goroutine is still between "stepper returned" and
+// "observation stored". Reading the scrape at that instant samples whichever
+// side of the store the scheduler happened to be on. It passed locally and
+// failed on CI, which is the signature of the whole class.
+//
+// Polling the exported state is a wait on the thing itself, not on a proxy
+// for it. The deadline is a test-harness bound, not a correctness knob: a
+// value that is going to appear appears in microseconds, and one that never
+// appears fails with the same message it always did.
+func assertMetricLine(t *testing.T, loop *Loop, want string) {
+	t.Helper()
+	var metrics bytes.Buffer
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		metrics.Reset()
+		if err := loop.WritePrometheus(&metrics); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(metrics.String(), want+"\n") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("metrics never showed %q:\n%s", want, metrics.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// assertMetricLineStable is for the opposite claim -- that a value did NOT
+// change. Polling cannot express that on its own, because the value being
+// asserted is already present, so the caller must first wait for evidence the
+// pass under test has been processed. Both are stored under one lock, so a
+// counter that has moved proves the gauge merge beside it has run too.
+func assertMetricLineStable(t *testing.T, loop *Loop, processed, want string) {
+	t.Helper()
+	assertMetricLine(t, loop, processed)
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), want+"\n") {
+		t.Fatalf("the pass was processed and %q did not survive it:\n%s", want, metrics.String())
+	}
+}
+
+// A SWEEP THAT HAS STOPPED WORKING MUST BE VISIBLE TO A DASHBOARD
+// (adversarial review finding).
+//
+// The pipeline deliberately does not fail a pass when the sweep errors --
+// taking lease repair down with the safety net would trade a bounded strand
+// for an unbounded one -- so a persistent permission, schema or connection
+// fault leaves the observer healthy and the candidate gauge at zero, which is
+// exactly what a system with nothing to sweep reports.
+//
+// This is not a hypothetical failure mode. CHAOS-4035 was this component
+// answering 42501 once a second from its first production deploy, and what
+// let that survive was that nothing but a log line could see it.
+func TestMetricsCarryTheSweepFailureCounter(t *testing.T) {
+	loop := &Loop{clock: systemClock{}}
+	loop.unreclaimableSweepFailures = 5
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter",
+		"sync_dispatch_unreclaimable_sweep_failures_total 5",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		}
+	}
+	// The pairing has to be discoverable from the metric itself: a zero
+	// candidate gauge means nothing while this counter is moving.
+	if !strings.Contains(metrics.String(), "Unproven while sync_dispatch_unreclaimable_sweep_failures_total is climbing") {
+		t.Fatalf("the candidate gauge does not name its staleness signal:\n%s", metrics.String())
+	}
+}
+
+// THE DEGRADED PASS IS THE INCIDENT (adversarial review finding).
+//
+// MutationPipeline carries the runaway and sweep figures through every return
+// because both components commit before later stages run. If Loop then only
+// stored observations from SUCCESSFUL passes, a kernel or observer fault
+// arriving just after a pass measured a runaway would leave Prometheus showing
+// the last healthy snapshot — hiding the incident during precisely the pass
+// where the system is already misbehaving.
+//
+// The principle is not new here: the ErrUnknownKind branch already keeps a
+// failed observation's bounded total "as valuable operator evidence" while
+// readiness carries the health signal. This applies it to the new gauges.
+func TestFailedPassStillPublishesTheRunawayAndSweepGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	failure := errors.New("scripted kernel failure after the report was taken")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		// Exactly the shape MutationPipeline returns from a late failure: the
+		// already-committed figures, plus the error.
+		return Observation{
+			RunawayDispatchWakeups:  83,
+			UnreclaimableCandidates: 12,
+			// Both were genuinely taken before the later stage faulted, which
+			// is what makes them publishable.
+			RunawayMeasured:       true,
+			UnreclaimableMeasured: true,
+		}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted failure")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("a degraded pass dropped its measured evidence, missing %q:\n%s",
+				want, metrics.String())
+		}
+	}
+	// ...and it must still say the process is unhealthy. Publishing the
+	// evidence must not launder a failed pass into a healthy one.
+	if !strings.Contains(metrics.String(), "sync_dispatch_observer_up 0") {
+		t.Fatalf("a failed pass reported the observer healthy:\n%s", metrics.String())
+	}
+}
+
+// NON-VACUITY for the merge: a failed pass must NOT publish the observer's own
+// queue gauges, which are unreliable when the pass did not complete. Trading
+// one stale number for several wrong ones is not an improvement.
+func TestFailedPassDoesNotPublishTheObserversOwnGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	failure := errors.New("scripted failure carrying junk queue figures")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		return Observation{
+			RunawayDispatchWakeups: 4,
+			RunawayMeasured:        true,
+			// A half-built observation from an aborted pass.
+			CeleryDuePending:  999,
+			RiverDuePending:   999,
+			SampledCandidates: 999,
+		}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the scripted failure")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "sync_dispatch_runaway_dispatch_wakeups 4") {
+		t.Fatalf("the merged gauge did not survive:\n%s", metrics.String())
+	}
+	if strings.Contains(metrics.String(), "999") {
+		t.Fatalf("a failed pass published the observer's unreliable queue figures:\n%s",
+			metrics.String())
+	}
+}
+
+// AN UNMEASURED PASS MUST NOT CLEAR A REAL INCIDENT (adversarial review
+// finding, and the inverse of the one before it).
+//
+// Two rounds argued opposite sides of this single field: one that a failed
+// pass must publish its gauges because the degraded pass is where the incident
+// is, the next that a failed pass must not, because overwriting 83 with an
+// unmeasured zero clears a gauge-based alert exactly while measurement is
+// unavailable. Both are right, and the conflict only exists while one number
+// is asked to mean two things — "I looked and found none" versus "I did not
+// look".
+//
+// The measured bit settles both. This test is the second half; the pair above
+// is the first, and neither passes without the other under the wrong design.
+func TestAnUnmeasuredPassLeavesTheLastMeasuredGaugeStanding(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	failure := errors.New("scripted detector outage")
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		if steps.Add(1) == 1 {
+			// A healthy pass that measured a real incident.
+			observation := testObservation()
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+			observation.RunawayMeasured = true
+			observation.UnreclaimableMeasured = true
+			return observation, nil
+		}
+		// The detector then goes down: zero values, and nothing measured them.
+		return Observation{WakeupReportFailures: 1, UnreclaimableSweepFailures: 1}, failure
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	// The failure counter moving is the proof the unmeasured pass was
+	// processed; it and the gauge merge are stored under one lock, so once it
+	// reads 1 the merge has already run or been declined.
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_runaway_dispatch_wakeups 83")
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_unreclaimable_sweep_failures_total 1",
+		"sync_dispatch_unreclaimable_candidates 12")
+	// The staleness is declared, so nobody mistakes the held value for a
+	// fresh one.
+	assertMetricLine(t, loop, "sync_dispatch_observer_up 0")
+}
+
+// ...and a MEASURED zero must still clear it, or the gauge latches forever and
+// a resolved incident never resolves on the dashboard.
+func TestAMeasuredZeroClearsTheGauge(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		observation.RunawayMeasured = true
+		observation.UnreclaimableMeasured = true
+		if steps.Add(1) == 1 {
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+		}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 0")
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 0")
+}
+
+// THE FAILURES THAT MATTER MOST HERE ARE NOT ERRORS (adversarial review
+// finding, and the gap left by gating only the error path).
+//
+// The pipeline deliberately swallows a sweep failure — taking lease repair
+// down with the safety net would trade a bounded strand for an unbounded one —
+// and a failed runaway report likewise returns a SUCCESSFUL step. Both
+// therefore arrive on the success path carrying zero gauges with Measured
+// false, where the wholesale snapshot store clobbered a measured 83 with them
+// while sync_dispatch_observer_up still read 1.
+//
+// That is the worst of the three variants: the alert clears on missing data,
+// and nothing anywhere claims to be degraded.
+func TestASwallowedFailureOnASuccessfulPassDoesNotClearTheGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		if steps.Add(1) == 1 {
+			observation.RunawayDispatchWakeups = 83
+			observation.UnreclaimableCandidates = 12
+			observation.RunawayMeasured = true
+			observation.UnreclaimableMeasured = true
+			return observation, nil
+		}
+		// Exactly what MutationPipeline returns when the sweep errors and the
+		// report cannot run: a NIL error, zero gauges, nothing measured.
+		observation.WakeupReportFailures = 1
+		observation.UnreclaimableSweepFailures = 1
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	assertMetricLine(t, loop, "sync_dispatch_runaway_dispatch_wakeups 83")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	// The failure counters are the only staleness signal on this path, which
+	// is exactly why they must move -- and why they are the processed-proof.
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_wakeup_report_failures_total 1",
+		"sync_dispatch_runaway_dispatch_wakeups 83")
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_unreclaimable_sweep_failures_total 1",
+		"sync_dispatch_unreclaimable_candidates 12")
+	// The observer's OWN figures must still update on a successful pass --
+	// holding those would be the opposite bug.
+	assertMetricLine(t, loop, "sync_dispatch_observer_up 1")
+}
+
+// SHADOW MODE'S SIGNAL, end to end, because shadow is the DEFAULT and it
+// writes nothing at all: the candidate gauge is the only durable trace a
+// shadow deployment leaves. If it never moves, a shadow sweep selecting the
+// same strand on every tick is invisible to every dashboard, which is the
+// state CHAOS-4097 already had to fix once at the log layer.
+//
+// The gauge must MOVE under a synthesized selection, not merely be present in
+// the scrape, and the terminalized counter must stay flat — shadow selects
+// without destroying, and a counter that moved here would report work that
+// never happened.
+func TestShadowSelectionMovesTheCandidateGaugeWithoutTheTerminalizedCounter(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	var steps atomic.Int64
+	calls := make(chan struct{}, 3)
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		defer func() { calls <- struct{}{} }()
+		observation := testObservation()
+		observation.UnreclaimableMeasured = true
+		observation.RunawayMeasured = true
+		if steps.Add(1) > 1 {
+			// A shadow pass that WOULD have terminalized seven units.
+			observation.UnreclaimableCandidates = 7
+			observation.UnreclaimableTerminalized = 0
+		}
+		return observation, nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	<-calls
+	// Baseline: nothing selected yet. Without this the assertion below could
+	// pass against a gauge that was always 7.
+	assertMetricLine(t, loop, "sync_dispatch_unreclaimable_candidates 0")
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls
+
+	// Shadow destroys nothing, so the counter must not have moved. The gauge
+	// reaching 7 is the proof the selecting pass was processed.
+	assertMetricLineStable(t, loop,
+		"sync_dispatch_unreclaimable_candidates 7",
+		"sync_dispatch_unreclaimable_terminalized_total 0")
+}
+
+// THE DEADLINE PATH ALSO CARRIES COMMITTED EVIDENCE (adversarial review).
+//
+// A pipeline can commit sweep and materializer work and then have the bounded
+// observation context expire on its way out. The deadline return used to sit
+// ahead of the gauge merge, so that evidence was discarded and Prometheus held
+// the prior value — possibly zero — while the pass was already unhealthy.
+//
+// The merge now happens once, ahead of every return, which is why this passes
+// without a branch of its own.
+func TestADeadlinePassStillCarriesItsMeasuredGauges(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)}
+	loop, registry := newTestLoopWithTimeout(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (Observation, error) {
+		// Work committed, then the bounded context expires on the way out.
+		observation := Observation{
+			RunawayDispatchWakeups:  83,
+			UnreclaimableCandidates: 12,
+			RunawayMeasured:         true,
+			UnreclaimableMeasured:   true,
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("the step context carried no deadline, so this proves nothing")
+		}
+		// Wait on the CONTEXT, never on the wall clock. The first cut of this
+		// slept until time.Now() passed ctx.Deadline(), which is a proxy for
+		// the state it actually needed: cancellation is delivered by a timer,
+		// so the wall clock can pass the deadline a hair before ctx.Err()
+		// becomes non-nil. The loop then saw a nil error and the test failed
+		// on CI roughly one run in three while passing locally every time.
+		//
+		// ctx.Done() closes exactly when cancellation is observable, so
+		// ctx.Err() is guaranteed non-nil after it and there is no race left
+		// to lose.
+		<-ctx.Done()
+		return observation, nil
+	}), clock, 10*time.Millisecond)
+	openReadinessGate(t, registry)
+
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("Start() = nil, want the deadline error")
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_dispatch_runaway_dispatch_wakeups 83",
+		"sync_dispatch_unreclaimable_candidates 12",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Fatalf("a deadline discarded evidence of work that already committed, "+
+				"missing %q:\n%s", want, metrics.String())
+		}
+	}
 }

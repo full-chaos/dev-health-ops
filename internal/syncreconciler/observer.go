@@ -95,15 +95,86 @@ type Observation struct {
 	// progressing -- the reclaimed row is otherwise indistinguishable from a
 	// healthy one.
 	ExhaustedDeliveriesRecovered int64
-	CeleryDuePending             int64
-	RiverDuePending              int64
-	SampledCandidates            int64
-	Truncated                    bool
-	ObservedAt                   time.Time
-	Limit                        int
-	PredicateVersion             string
-	DigestVersion                string
-	CandidateDigest              string
+	// The CHAOS-4097 series. Like ExhaustedDeliveriesRecovered above, these
+	// describe what the MUTATION pipeline did or saw, not outbox state, so the
+	// read-only Observer always leaves them zero; they live here because Loop
+	// is the only component holding the metrics registration.
+	//
+	// They exist because CHAOS-4097 shipped its reporting as log lines only,
+	// on the reasoning that "counters do not export from this deployment
+	// (CHAOS-4094)". That is true of the OTel pipeline and false of this one:
+	// Loop.WritePrometheus is a scrape endpoint and has been serving
+	// sync_dispatch_exhausted_delivery_recoveries_total all along. A signal
+	// that only an operator reading logs can find is not the same as one an
+	// alert can fire on, and the whole of CHAOS-4093 was a condition nobody
+	// was told about for twenty-two hours.
+	//
+	// RunawayDispatchWakeups is a GAUGE quantity: non-terminal runs whose
+	// dispatch wakeup is over the threshold right now. A counter would keep
+	// climbing after the condition cleared, which is the opposite of what an
+	// operator needs to know.
+	RunawayDispatchWakeups int64
+	// WakeupReportFailures counts passes on which the runaway report could not
+	// run at all. It is the "is the detector alive" signal: without it, a
+	// RunawayDispatchWakeups of zero means either "nothing is looping" or
+	// "nothing looked", and those demand opposite responses.
+	WakeupReportFailures int64
+	// UnreclaimableCandidates is what the sweep SELECTED this pass, gauge-wise.
+	// It is the signal shadow mode otherwise lacks entirely: shadow writes
+	// nothing, so without this the only trace a shadow deployment leaves is a
+	// log line.
+	UnreclaimableCandidates int64
+	// UnreclaimableTerminalized is what the sweep actually destroyed, and is
+	// always zero in shadow mode. Kept separate from the candidate count on
+	// purpose: the two diverging is exactly how a fenced decline or a lost CAS
+	// becomes visible.
+	UnreclaimableTerminalized int64
+	// UnreclaimableSweepFailures counts passes on which the sweep could not
+	// run. It is the counterpart of WakeupReportFailures for the other new
+	// signal, and it exists because this repository has already been burned by
+	// exactly its absence: CHAOS-4035 was the sweep answering 42501 once a
+	// second for its entire production life, and what made that survivable for
+	// so long was that nothing outside a log line could see it.
+	//
+	// Without this, a persistent permission, schema or connection fault leaves
+	// the observer reporting healthy with a candidate gauge of zero — which is
+	// indistinguishable from a system with nothing to sweep. The pipeline
+	// deliberately does NOT fail the pass on a sweep error (taking lease
+	// repair down with the safety net would trade a bounded strand for an
+	// unbounded one), so a counter is the only thing that can carry it.
+	UnreclaimableSweepFailures int64
+	// RunawayMeasured and UnreclaimableMeasured say whether this pass actually
+	// TOOK each measurement, as opposed to reporting a zero it never made.
+	//
+	// These exist because two review rounds argued opposite sides of the same
+	// field, which is the signature of a missing primitive rather than a
+	// missing patch. One round: a failed pass must still publish the gauges,
+	// because the degraded pass is where the incident is. The next: a failed
+	// pass must NOT publish them, because overwriting 83 with an unmeasured 0
+	// makes an alert clear exactly while measurement is unavailable. Both are
+	// right, and they only conflict while a single number is being asked to
+	// mean two things -- "I looked and found none" and "I did not look".
+	//
+	// Splitting the bit out settles both at once. A measured zero overwrites,
+	// because that is a real recovery. An unmeasured pass leaves the last
+	// measured value standing, so no alert clears on missing data, while the
+	// failure counters and readiness say the value is stale.
+	//
+	// They are NOT derivable from the failure counters. A pass that died
+	// before reaching the sweep at all increments nothing, yet measured
+	// nothing either -- inferring "measured" from "did not fail" would call
+	// that a zero.
+	RunawayMeasured       bool
+	UnreclaimableMeasured bool
+	CeleryDuePending      int64
+	RiverDuePending       int64
+	SampledCandidates     int64
+	Truncated             bool
+	ObservedAt            time.Time
+	Limit                 int
+	PredicateVersion      string
+	DigestVersion         string
+	CandidateDigest       string
 }
 
 type candidateRow struct {

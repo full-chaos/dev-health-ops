@@ -932,8 +932,9 @@ func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
 		seedMaterializerOutboxWithAttempts(t, ctx, pool, run, 72601, now.Add(-time.Hour))
 
 		result := step()
-		if len(result.Runaway) != 1 || result.RunawayTruncated {
-			t.Fatalf("runaway report = %#v, want exactly the looping row", result.Runaway)
+		if len(result.Runaway) != 1 || result.RunawayTruncated || result.RunawayTotal != 1 {
+			t.Fatalf("runaway report = %#v total=%d, want exactly the looping row",
+				result.Runaway, result.RunawayTotal)
 		}
 		if result.Runaway[0].SyncRunID != run || result.Runaway[0].Attempts != 72601 {
 			t.Fatalf("runaway row = %#v, want the run and its durable attempt count",
@@ -951,8 +952,9 @@ func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
 		seedMaterializerOutboxWithAttempts(t, ctx, pool, run,
 			runawayDispatchAttempts-1, now.Add(-time.Hour))
 
-		if result := step(); len(result.Runaway) != 0 {
-			t.Fatalf("runaway report = %#v, want a healthy row left unreported", result.Runaway)
+		if result := step(); len(result.Runaway) != 0 || result.RunawayTotal != 0 {
+			t.Fatalf("runaway report = %#v total=%d, want a healthy row left unreported",
+				result.Runaway, result.RunawayTotal)
 		}
 	})
 
@@ -965,8 +967,9 @@ func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
 		seedRun(t, ctx, pool, run, "success", now.Add(-48*time.Hour))
 		seedMaterializerOutboxWithAttempts(t, ctx, pool, run, 72601, now.Add(-time.Hour))
 
-		if result := step(); len(result.Runaway) != 0 {
-			t.Fatalf("runaway report = %#v, want a finished run left unreported", result.Runaway)
+		if result := step(); len(result.Runaway) != 0 || result.RunawayTotal != 0 {
+			t.Fatalf("runaway report = %#v total=%d, want a finished run left unreported",
+				result.Runaway, result.RunawayTotal)
 		}
 	})
 
@@ -987,6 +990,15 @@ func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
 		if len(result.Runaway) != runawayDispatchScan || !result.RunawayTruncated {
 			t.Fatalf("runaway report = %d rows truncated=%t, want %d and a truncation flag",
 				len(result.Runaway), result.RunawayTruncated, runawayDispatchScan)
+		}
+		// THE EXACT TOTAL, against real SQL. The sample is capped; the metric
+		// is not, and count(*) OVER () is what makes that true. A unit test
+		// with a fake cannot prove the window function sees the whole filtered
+		// set rather than the LIMITed page -- only Postgres can.
+		if result.RunawayTotal != int64(runawayDispatchScan+3) {
+			t.Fatalf("RunawayTotal = %d, want the exact %d seeded rows; a gauge fed "+
+				"from the capped sample would report %d and understate the incident",
+				result.RunawayTotal, runawayDispatchScan+3, len(result.Runaway))
 		}
 		// Worst first, so a capped report is still the most useful rows.
 		if result.Runaway[0].Attempts <= result.Runaway[len(result.Runaway)-1].Attempts {

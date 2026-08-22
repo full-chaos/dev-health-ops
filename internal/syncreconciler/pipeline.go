@@ -151,7 +151,7 @@ func (pipeline *MutationPipeline) Step(
 	ctx context.Context,
 	now time.Time,
 	limit int,
-) (Observation, error) {
+) (observation Observation, err error) {
 	if pipeline == nil || ctx == nil || now.IsZero() ||
 		limit < minimumStepLimit || limit > maximumStepLimit ||
 		!pipeline.config.valid() {
@@ -161,8 +161,46 @@ func (pipeline *MutationPipeline) Step(
 		return Observation{}, err
 	}
 	now = now.UTC()
+
+	// ONE ACCOUNTING POINT FOR "THE REPORT DID NOT RUN", not one per return.
+	//
+	// This is a class fix, and it is written this way because the per-site
+	// version failed three times. Each round of review found another exit that
+	// prevented the report while leaving the counter at zero -- first the
+	// materializer's own error, then the swallowed non-fatal failures, then
+	// repair failure, sweep cancellation and terminal-repair failure. Every
+	// one was the same bug, and every fix patched the site in front of me
+	// rather than the reason there were sites at all.
+	//
+	// A deferred accounting on the NAMED return covers every path that exists
+	// and every path added later, including ones whose author never reads this
+	// file. The invariant it enforces is exactly what the counter's HELP text
+	// promises: if this pass did not deliver a report, it says so.
+	//
+	// It is installed AFTER the validation returns above on purpose. A call
+	// rejected for a bad limit never began a pass, so counting it as a
+	// detector outage would be its own kind of false signal.
+	reportStep := runawayReportStepUpstream
+	reportDelivered := false
+	defer func() {
+		if reportDelivered {
+			return
+		}
+		observation.WakeupReportFailures = 1
+		slog.Error(
+			"syncreconciler.dispatch_wakeup_report_unavailable",
+			"step", reportStep,
+		)
+	}()
+	// swept carries the sweep and materializer figures out through EVERY
+	// return below, not just the happy one. The existing
+	// ExhaustedDeliveriesRecovered comment states the rule and the reason: a
+	// later stage failing does not un-happen what an earlier one already
+	// committed, and an observation reporting zero after the sweep destroyed
+	// work would put a real terminalization under its own alert threshold.
+	swept := Observation{}
 	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
-		return Observation{}, err
+		return swept, err
 	}
 	// CHAOS-4005: the never-leased strand. Lease repair above reaches only a
 	// RUNNING unit whose lease expired; a unit stuck in 'dispatching' holds no
@@ -222,12 +260,19 @@ func (pipeline *MutationPipeline) Step(
 				"unit_id_sample_truncated", len(sweepResult.UnitIDs) > sweepReportSample,
 			)
 		}
+		if sweepErr == nil {
+			swept.UnreclaimableCandidates = int64(sweepResult.Candidates)
+			swept.UnreclaimableTerminalized = int64(sweepResult.Terminalized)
+			// The sweep ran and answered, so its zero -- if it is a zero -- is
+			// a finding rather than an absence.
+			swept.UnreclaimableMeasured = true
+		}
 		if sweepErr != nil {
 			// Cancellation belongs to the caller and must propagate; anything
 			// else is the safety net failing, which must not fail the pass.
 			if errors.Is(sweepErr, context.Canceled) ||
 				errors.Is(sweepErr, context.DeadlineExceeded) {
-				return Observation{}, sweepErr
+				return swept, sweepErr
 			}
 			// But it must never fail SILENTLY. Swallowing this without a word
 			// reports a healthy pass while the strand the sweep exists to
@@ -237,11 +282,18 @@ func (pipeline *MutationPipeline) Step(
 				"syncreconciler.unreclaimable_sweep_failed",
 				"error", sweepErr.Error(),
 			)
+			// ...and a log line is not an alertable signal. The candidate
+			// gauge reads zero on a failed pass, which is exactly what a
+			// healthy idle system reads, so without this counter a sweep that
+			// has stopped working entirely is invisible to every dashboard.
+			// That is not hypothetical: CHAOS-4035 was this component
+			// answering 42501 once a second from its first deploy.
+			swept.UnreclaimableSweepFailures = 1
 		}
 	}
 	terminal, err := pipeline.terminal.Step(ctx, now, limit)
 	if err != nil {
-		return Observation{}, err
+		return swept, err
 	}
 	// A repair cannot recover more rows than its own bounded window. Treating
 	// an out-of-range count as a failed step keeps a miscounting repair from
@@ -253,16 +305,15 @@ func (pipeline *MutationPipeline) Step(
 		terminal.Recovered > limit {
 		// The count itself is untrustworthy here, so it is the one case that
 		// deliberately reports nothing rather than a number it cannot stand behind.
-		return Observation{}, ErrUnavailable
+		return swept, ErrUnavailable
 	}
 	// The repair commits its own transaction before anything below runs, so its
 	// recoveries are already durable no matter how this step ends. Every return
 	// from here on carries the count: an observation reporting zero recoveries
 	// after rows were in fact reclaimed would let a cycling delivery stay under
 	// its own alert threshold, which is the failure the counter exists to catch.
-	recovered := Observation{
-		ExhaustedDeliveriesRecovered: int64(terminal.ExhaustedRecovered),
-	}
+	recovered := swept
+	recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
 	// A rescue-only cancel is a registry or queue-routing fault: the job was
 	// inserted onto a queue whose client does not execute that kind. Unlike
 	// the other two recoveries it will repeat deterministically until someone
@@ -308,12 +359,31 @@ func (pipeline *MutationPipeline) Step(
 	// report was added to end. ERROR for the same reason the report itself is
 	// ERROR: the measurement layer failing is not a degraded state, it is a
 	// blind one.
+	// The one place that can say the report DID arrive. Everything else is the
+	// deferred accounting above, which assumes it did not.
+	//
+	// The distinction the log preserves: a named step means the report itself
+	// faulted, the upstream code means the pass never reached it. Those want
+	// different first questions even though the counter merges them.
 	if materialized.RunawayReportStep != "" {
-		slog.Error(
-			"syncreconciler.dispatch_wakeup_report_unavailable",
-			"step", materialized.RunawayReportStep,
-		)
+		reportStep = materialized.RunawayReportStep
 	}
+	reportDelivered = materialized.RunawayReportStep == "" && err == nil
+	// THE EXACT TOTAL, never len(Runaway) (review finding). Runaway is a
+	// sample capped at runawayDispatchScan; CHAOS-4093 held 83 stuck runs, so
+	// a gauge fed from the sample would have reported 20 for an incident more
+	// than four times that size. Understating scope is the specific way a
+	// scope metric fails, and it fails silently.
+	//
+	// A pass where the report did not run publishes zero here, and that zero
+	// is NOT a claim -- it is unproven, and the failure counter above is what
+	// says so. The two are only meaningful read together, which is why the
+	// HELP text on both says so.
+	recovered.RunawayDispatchWakeups = materialized.RunawayTotal
+	// Measured only when the report actually delivered. Anything else leaves
+	// the previous value standing rather than overwriting a real count with a
+	// zero nobody took (review finding).
+	recovered.RunawayMeasured = reportDelivered
 	if err != nil {
 		return recovered, err
 	}
@@ -327,7 +397,18 @@ func (pipeline *MutationPipeline) Step(
 	); err != nil {
 		return recovered, err
 	}
-	observation, err := pipeline.observer.Step(ctx, now, limit)
+	observation, err = pipeline.observer.Step(ctx, now, limit)
+	// The read-only Observer leaves every pipeline-authored field zero, so
+	// they are copied across rather than merged. One assignment per field,
+	// spelled out: a struct-level copy would silently drop the observer's own
+	// queue snapshot, and a loop over reflection would hide the next field
+	// somebody forgets to carry.
 	observation.ExhaustedDeliveriesRecovered = recovered.ExhaustedDeliveriesRecovered
+	observation.RunawayDispatchWakeups = recovered.RunawayDispatchWakeups
+	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
+	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
+	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
+	observation.RunawayMeasured = recovered.RunawayMeasured
+	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
 	return observation, err
 }

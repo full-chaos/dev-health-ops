@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -28,7 +29,10 @@ type fakeMaterializerTx struct {
 	// runaway is what the CHAOS-4097 report read returns. The embedded nil
 	// pgx.Tx would panic on Query, so the fake answers it explicitly: an
 	// empty result is the healthy pass every pre-existing case here asserts.
-	runaway      []RunawayDispatchWakeup
+	runaway []RunawayDispatchWakeup
+	// runawayTotal lets a test make the SAMPLE smaller than the TRUE count,
+	// which is the only way to catch a gauge fed from len(sample).
+	runawayTotal int64
 	runawayQuery string
 	// Each of the three report statements gets its own injectable failure.
 	// One shared "make it fail" switch would let a fix that only handled the
@@ -44,14 +48,20 @@ func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pg
 	if tx.failQuery {
 		return nil, errors.New("injected runaway report query failure")
 	}
+	total := tx.runawayTotal
+	if total == 0 {
+		total = int64(len(tx.runaway))
+	}
 	return &fakeRunawayRows{
-		rows: tx.runaway, failScan: tx.failScan, failIter: tx.failRowsIter,
+		rows: tx.runaway, total: total,
+		failScan: tx.failScan, failIter: tx.failRowsIter,
 	}, nil
 }
 
 type fakeRunawayRows struct {
 	pgx.Rows
 	rows     []RunawayDispatchWakeup
+	total    int64
 	index    int
 	failScan bool
 	failIter bool
@@ -66,7 +76,7 @@ func (rows *fakeRunawayRows) Scan(dest ...any) error {
 	if rows.failScan {
 		return errors.New("injected runaway report scan failure")
 	}
-	if len(dest) != 2 {
+	if len(dest) != 3 {
 		return errors.New("unexpected runaway projection")
 	}
 	current := rows.rows[rows.index-1]
@@ -78,7 +88,15 @@ func (rows *fakeRunawayRows) Scan(dest ...any) error {
 	if !ok {
 		return errors.New("unexpected runaway attempts target")
 	}
+	total, ok := dest[2].(*int64)
+	if !ok {
+		return errors.New("unexpected runaway total target")
+	}
 	*id, *attempts = current.SyncRunID, current.Attempts
+	// The window function repeats the FULL matching count on every row, which
+	// is exactly the property the gauge depends on, so the fake reproduces it
+	// rather than echoing len(rows).
+	*total = rows.total
 	return nil
 }
 
@@ -323,5 +341,50 @@ func TestMaterializerLeavesTheReportStepEmptyOnAHealthyPass(t *testing.T) {
 	}
 	if result.RunawayReportStep != "" {
 		t.Fatalf("RunawayReportStep = %q on a healthy pass", result.RunawayReportStep)
+	}
+}
+
+// THE GAUGE MUST NOT BE THE SAMPLE SIZE (adversarial review finding).
+//
+// The report is deliberately capped at runawayDispatchScan rows so one pass
+// cannot emit an unbounded burst of log lines. Feeding the metric from that
+// capped slice would have reported 20 for CHAOS-4093's 83 stuck runs — an
+// incident more than four times the size the dashboard showed. Understating
+// scope is the specific way a scope metric fails, and it fails silently.
+//
+// The fake supplies a true count LARGER than the sample precisely so a
+// regression to len(Runaway) cannot pass.
+func TestMaterializerReportsTheExactRunawayTotalNotTheSampleSize(t *testing.T) {
+	now := time.Date(2026, time.August, 22, 18, 0, 0, 0, time.UTC)
+	sample := make([]RunawayDispatchWakeup, 0, runawayDispatchScan+1)
+	for index := 0; index < runawayDispatchScan+1; index++ {
+		sample = append(sample, RunawayDispatchWakeup{
+			SyncRunID: fmt.Sprintf("run-%02d", index),
+			Attempts:  int64(runawayDispatchAttempts + index),
+		})
+	}
+	tx := &fakeMaterializerTx{
+		affected: []int64{1, 0, 0, 0},
+		runaway:  sample,
+		// 83 is CHAOS-4093's real stuck-run count.
+		runawayTotal: 83,
+	}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) { return tx, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := materializer.Step(context.Background(), now, now.Add(-time.Minute), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RunawayTotal != 83 {
+		t.Fatalf("RunawayTotal = %d, want the exact 83 over the threshold; a gauge "+
+			"fed from the capped sample would report %d and understate the incident",
+			result.RunawayTotal, len(result.Runaway))
+	}
+	// The sample stays capped — the total is what grows, not the log line.
+	if len(result.Runaway) != runawayDispatchScan || !result.RunawayTruncated {
+		t.Fatalf("sample = %d rows truncated=%t, want %d and a truncation flag",
+			len(result.Runaway), result.RunawayTruncated, runawayDispatchScan)
 	}
 }

@@ -4,7 +4,8 @@
 Companion to ``scripts/check_investment_docs_drift.py``, same shape: this
 script recomputes the generated block from the current producers
 (``deploy/go-workers/deployment.json``, ``contracts/jobs/v1/registry.json``,
-``internal/jobs/metrics/remaining/families.json``, ``compose.yml``) via
+``contracts/jobs/v1/migration-state.json``, ``compose.yml``,
+``deploy/docker-compose/compose.production.yml``) via
 ``scripts/gen_queue_mapping_docs.py`` and fails if the published block in
 ``docs/contribute/architecture/go-worker-runtime.md`` disagrees. See
 CHAOS-4044.

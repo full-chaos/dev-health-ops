@@ -11,10 +11,15 @@ can't happen here:
 * ``deploy/go-workers/deployment.json`` -- the live Go process/queue manifest
   (source of truth per docs/contribute/architecture/go-worker-runtime.md).
 * ``contracts/jobs/v1/registry.json`` -- kind -> queue, timeout, max_attempts.
-* ``internal/jobs/metrics/remaining/families.json`` -- per-kind
-  ``route``/``rollback_route`` for the metrics.remaining.* family.
-* ``compose.yml`` -- the dormant Celery ``-Q`` lists, parsed from the actual
-  service definitions rather than retyped.
+* ``contracts/jobs/v1/migration-state.json`` -- per-kind rollout ``state``
+  (``go_default`` / ``canary`` / ``celery_removed``), ``route``, and
+  ``rollback_route``. This is what actually decides which plane is live for
+  a given kind -- a queue is not uniformly "live"; a specific kind on it can
+  still be `canary` (see ``sync.provider_unit`` below).
+* ``compose.yml`` and ``deploy/docker-compose/compose.production.yml`` -- the
+  dormant Celery ``-Q`` lists, parsed from the actual service definitions
+  rather than retyped, and cross-checked against each other so a
+  production-only queue change can't drift silently past the dev compose file.
 
 The historical Celery-queue <-> Go-successor *correspondence* is not
 mechanically derivable (the two vocabularies share only coincidental names --
@@ -24,6 +29,13 @@ honest, this script asserts every Go process and every Celery ``-Q`` queue
 name it discovers is accounted for, and fails loudly (rather than silently
 omitting a row) when a producer adds or removes one without a matching
 update here.
+
+CHAOS-4044 review note: an earlier version of this generator only looked at
+``internal/jobs/metrics/remaining/families.json`` for per-kind route status,
+which covers 7 of 21 kinds and rendered every other kind (including
+``sync.provider_unit``) with a blanket "Go/River live" plane label. That
+mislabeled a still-canary route as fully live. ``migration-state.json`` is
+the actual per-kind authority and is now used for every kind.
 """
 
 from __future__ import annotations
@@ -36,10 +48,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOYMENT_PATH = ROOT / "deploy" / "go-workers" / "deployment.json"
 REGISTRY_PATH = ROOT / "contracts" / "jobs" / "v1" / "registry.json"
-REMAINING_FAMILIES_PATH = (
-    ROOT / "internal" / "jobs" / "metrics" / "remaining" / "families.json"
-)
+MIGRATION_STATE_PATH = ROOT / "contracts" / "jobs" / "v1" / "migration-state.json"
 COMPOSE_PATH = ROOT / "compose.yml"
+COMPOSE_PRODUCTION_PATH = ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 DOC_PATH = ROOT / "docs" / "contribute" / "architecture" / "go-worker-runtime.md"
 
 BEGIN = "<!-- BEGIN GENERATED QUEUE MAP -->"
@@ -133,7 +144,7 @@ CELERY_CORRESPONDENCE: dict[str, dict[str, dict[str, Any]]] = {
                 "sync.linear.medium",
             ],
             "celery_consumers": ["worker", "worker-heavy"],
-            "plane": "Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Enablement today is provider/dataset WORKER_*_ENABLED switches (dying -- CHAOS-4054 two-plane decision) plus -Q topology.",
+            "plane": "Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026). This queue's one kind is still `canary` per-kind (see below) -- do not read the fleet-wide Celery retirement as proof this specific route has cleared rollout. Enablement today is provider/dataset WORKER_*_ENABLED switches (dying -- CHAOS-4054 two-plane decision) plus -Q topology.",
             "note": (
                 "The per-provider cost-class split (light/medium/heavy) has no Go "
                 "equivalent yet -- CHAOS-4027, parked. All cost classes collapse "
@@ -205,40 +216,56 @@ def load_registry() -> dict[str, dict]:
     return {job["kind"]: job for job in data["jobs"]}
 
 
-def load_remaining_routes() -> dict[str, dict]:
-    data = _load_json(REMAINING_FAMILIES_PATH)
-    return {
-        family["route_key"]: {
-            "route": family["route"],
-            "rollback_route": family["rollback_route"],
-        }
-        for family in data["families"]
-    }
+def load_migration_state() -> dict[str, dict]:
+    data = _load_json(MIGRATION_STATE_PATH)
+    return {job["kind"]: job for job in data["jobs"]}
 
 
 CELERY_Q_RE = re.compile(r"-Q\s+([A-Za-z0-9_.,-]+)")
 SERVICE_NAME_RE = re.compile(r"^  ([a-z][a-z0-9-]*):\s*$")
-CONTAINER_NAME_RE = re.compile(r"^\s*container_name:\s*(\S+)\s*$")
+LIST_ITEM_RE = re.compile(r"^\s*-\s*(.+?)\s*$")
 
 
-def load_compose_celery_queues() -> dict[str, list[str]]:
-    """Parse ``-Q`` lists per Celery service straight out of compose.yml.
+def load_compose_celery_queues(compose_path: Path) -> dict[str, list[str]]:
+    """Parse ``-Q`` lists per Celery service straight out of a compose file.
 
-    Line-based on purpose: compose.yml uses YAML anchors/merge keys
+    Line-based on purpose: these compose files use YAML anchors/merge keys
     (``<<: *worker-base``) that a naive ``yaml.safe_load`` round-trip would
-    have to re-resolve; the ``-Q`` argument is always on the same physical
-    `command:` line as everything else, so a direct scan is both simpler and
-    exactly as accurate as a full YAML parse for this one field.
+    have to re-resolve. Two ``command:`` shapes appear across the two files
+    this is called on:
+
+    * flow form (``compose.yml``): ``command: -A ... -Q <list> ...`` all on
+      one physical line;
+    * block-list form (``compose.production.yml``): one YAML list item per
+      argument, so ``-Q`` and its value are two consecutive ``- ...`` lines.
+
+    Both are handled so the dev and production queue lists can be
+    cross-checked against each other below.
     """
     current_service: str | None = None
     queues_by_service: dict[str, list[str]] = {}
-    for raw_line in COMPOSE_PATH.read_text(encoding="utf-8").splitlines():
+    pending_dash_q = False
+    for raw_line in compose_path.read_text(encoding="utf-8").splitlines():
         service_match = SERVICE_NAME_RE.match(raw_line)
         if service_match:
             current_service = service_match.group(1)
+            pending_dash_q = False
             continue
         if current_service is None:
             continue
+
+        if pending_dash_q:
+            list_item = LIST_ITEM_RE.match(raw_line)
+            pending_dash_q = False
+            if list_item:
+                queues_by_service[current_service] = list_item.group(1).split(",")
+            continue
+
+        stripped = raw_line.strip()
+        if stripped == "- -Q":
+            pending_dash_q = True
+            continue
+
         queue_match = CELERY_Q_RE.search(raw_line)
         if queue_match and "celery_app" in raw_line and "worker" in raw_line:
             queues_by_service[current_service] = queue_match.group(1).split(",")
@@ -248,8 +275,9 @@ def load_compose_celery_queues() -> dict[str, list[str]]:
 def render_block() -> str:
     deployment = load_deployment()
     registry = load_registry()
-    remaining_routes = load_remaining_routes()
-    compose_queues = load_compose_celery_queues()
+    migration_state = load_migration_state()
+    compose_queues = load_compose_celery_queues(COMPOSE_PATH)
+    compose_production_queues = load_compose_celery_queues(COMPOSE_PRODUCTION_PATH)
 
     # --- Consistency guards: fail loudly instead of silently omitting a row ---
     deployment_processes = set(deployment)
@@ -261,6 +289,36 @@ def render_block() -> str:
             f"CELERY_CORRESPONDENCE keys {sorted(curated_processes)} in "
             "scripts/gen_queue_mapping_docs.py -- update the curated map."
         )
+
+    registry_kinds = set(registry)
+    migration_state_kinds = set(migration_state)
+    if registry_kinds != migration_state_kinds:
+        raise SystemExit(
+            "gen_queue_mapping_docs: contracts/jobs/v1/registry.json kinds "
+            f"{sorted(registry_kinds)} do not match "
+            f"contracts/jobs/v1/migration-state.json kinds {sorted(migration_state_kinds)} "
+            "-- every registered kind must have a migration-state row."
+        )
+
+    compose_only_dev = set(compose_queues) - set(compose_production_queues)
+    compose_only_prod = set(compose_production_queues) - set(compose_queues)
+    if compose_only_dev or compose_only_prod:
+        raise SystemExit(
+            "gen_queue_mapping_docs: compose.yml and "
+            "deploy/docker-compose/compose.production.yml declare different Celery "
+            f"service sets -- dev-only: {sorted(compose_only_dev)}, "
+            f"production-only: {sorted(compose_only_prod)}."
+        )
+    for service, dev_queues in compose_queues.items():
+        prod_queues = compose_production_queues[service]
+        if set(dev_queues) != set(prod_queues):
+            raise SystemExit(
+                f"gen_queue_mapping_docs: Celery service '{service}' consumes "
+                f"{sorted(dev_queues)} in compose.yml but {sorted(prod_queues)} in "
+                "compose.production.yml -- the dormant Celery queue vocabulary has "
+                "diverged between dev and production; update the curated map to "
+                "match production before regenerating."
+            )
 
     all_curated_celery_queues: set[str] = set()
     for queue_map in CELERY_CORRESPONDENCE.values():
@@ -328,12 +386,14 @@ def render_block() -> str:
             if "note" in entry:
                 plane_cell = f"{plane_cell}<br>{entry['note']}"
             for kind in kinds:
-                if kind in remaining_routes:
-                    route = remaining_routes[kind]
-                    plane_cell = (
-                        f"{plane_cell}<br>`{kind}`: route=`{route['route']}`, "
-                        f"rollback_route=`{route['rollback_route']}` (families.json)"
-                    )
+                state = migration_state[kind]
+                flag = "" if state["state"] == "go_default" else " ⚠"
+                plane_cell = (
+                    f"{plane_cell}<br>`{kind}`: state=`{state['state']}`{flag}, "
+                    f"route=`{state['route']}`, "
+                    f"rollback_route=`{state['rollback_route']}` "
+                    "(migration-state.json)"
+                )
             lines.append(
                 f"| `{process_name}` (`{process['binary']}`) | `{go_queue}` | {kind_cell} | "
                 f"{timeout_cell} | {attempts_cell} | {celery_queues_cell} | "

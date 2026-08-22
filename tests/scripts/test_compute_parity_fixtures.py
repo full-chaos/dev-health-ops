@@ -32,7 +32,6 @@ fixtures = _load("compute_parity_fixtures", "scripts/worker/compute_parity_fixtu
 @pytest.mark.parametrize(
     "database",
     [
-        "default",
         "",
         "${CLICKHOUSE_DB:-default}",
         "scratch; DROP DATABASE devhealth",
@@ -48,8 +47,25 @@ def test_unusable_database_names_are_refused_before_any_ddl(database: str):
         fixtures.guard(dsn)
 
 
-@pytest.mark.parametrize("database", ["parity_left", "ci_local_validate_ab12_pl", "_x"])
-def test_plain_identifiers_are_accepted(database: str):
+@pytest.mark.parametrize(
+    "database", ["default", "devhealth", "analytics", "prod", "scratch", "test_db"]
+)
+def test_real_looking_databases_are_refused_by_the_allowlist(database: str):
+    """An allowlist, not a `default` blacklist.
+
+    Refusing only `default` still let a production DSN such as .../devhealth
+    through, and `--reset` would then have dropped it. A parity destination has
+    to positively identify itself as one.
+    """
+    dsn = f"clickhouse://ch:ch@localhost:8123/{database}"
+    with pytest.raises(fixtures.FixtureError, match="refusing_non_parity_database"):
+        fixtures.guard(dsn)
+
+
+@pytest.mark.parametrize(
+    "database", ["parity_left", "parity", "ci_local_validate_ab12_pl"]
+)
+def test_parity_scratch_names_are_accepted(database: str):
     dsn = f"clickhouse://ch:ch@localhost:8123/{database}"
     assert fixtures.guard(dsn) == database
     assert fixtures.quoted(database) == f"`{database}`"

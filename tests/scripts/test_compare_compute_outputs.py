@@ -615,16 +615,35 @@ def test_a_delimiter_inside_a_value_cannot_forge_a_field_boundary(tmp_path):
     assert comparator.row_key(spec, left[0]) != comparator.row_key(spec, right[0])
 
 
-def test_default_database_is_refused_as_a_comparison_side():
+@pytest.mark.parametrize(
+    "database", ["default", "devhealth", "analytics", "prod", "scratch"]
+)
+def test_a_non_parity_database_is_refused_as_a_comparison_side(database):
+    """`--left-exec`/`--right-exec` write to whatever they are pointed at.
+
+    So a production DSN reaching a side is a data-loss path, not merely a wrong
+    answer, and refusing only `default` was not a boundary.
+    """
     with pytest.raises(comparator.ComparisonError, match="destination_refused"):
         comparator.guard_destination(
-            "clickhouse://ch:ch@localhost:8123/default", "left"
+            f"clickhouse://ch:ch@localhost:8123/{database}", "left"
         )
 
 
-def test_scratch_database_is_accepted():
+@pytest.mark.parametrize("database", ["parity_left_abc", "ci_local_validate_ab12_pr"])
+def test_parity_scratch_database_is_accepted(database):
     comparator.guard_destination(
-        "clickhouse://ch:ch@localhost:8123/parity_left_abc", "left"
+        f"clickhouse://ch:ch@localhost:8123/{database}", "left"
+    )
+
+
+def test_both_tools_share_one_allowlist():
+    """Two boundaries that disagree are one boundary with a hole in it."""
+    fixtures_module = _load(
+        "compute_parity_fixtures", "scripts/worker/compute_parity_fixtures.py"
+    )
+    assert (
+        comparator.PARITY_DATABASE_PREFIXES == fixtures_module.PARITY_DATABASE_PREFIXES
     )
 
 

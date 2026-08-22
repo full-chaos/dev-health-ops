@@ -223,11 +223,28 @@ outright — it holds real dev data (see `ops/AGENTS.md`, "Safety rule") and
 `--left-exec`/`--right-exec` write to whatever they are pointed at. It also
 refuses two sides that resolve to the same database.
 
-`provision` runs `DROP DATABASE`, so it is guarded twice. A DSN whose database
-is not a plain identifier is refused outright rather than quoted and executed,
-and an identifier that reaches DDL is backtick-quoted as a second layer.
-Dropping an existing database needs an explicit `--reset`: a DSN typo that
-lands on a real database must not cost that database.
+`provision` runs `DROP DATABASE`, so it is guarded four ways, and none of them
+is a blacklist:
+
+1. **Shape.** A database name that is not a plain identifier — an unexpanded
+   `${VAR}`, a quote, a semicolon, whitespace — is refused before any statement
+   runs, not quoted and hoped.
+2. **Allowlist.** The name must start with `parity` or `ci_local_validate`
+   (`PARITY_DATABASE_PREFIXES`, kept identical in both tools and asserted by a
+   test). Refusing only `default` was never a boundary: a production DSN such
+   as `.../devhealth` passed it. Adding a prefix is a deliberate edit to a
+   checked-in constant, not a command-line decision.
+3. **Ownership.** Every database this tool creates gets a
+   `compute_parity_scratch_marker` table, written *before* the migrations run
+   so a database left behind by a failed migration is still reclaimable. No
+   existing database is ever dropped without that marker — a name can be typed
+   by mistake, the marker cannot be there by mistake — so a database this tool
+   did not create is not destroyable through this tool however it is named.
+4. **Intent.** Dropping an existing database still needs an explicit `--reset`.
+
+The comparator applies the same allowlist to both comparison sides, because
+`--left-exec`/`--right-exec` write to whatever they are pointed at: a
+production DSN reaching a side is a data-loss path, not merely a wrong answer.
 
 ## Packaging
 

@@ -55,12 +55,24 @@ PROCESS_ENVIRONMENT = {
     "OTEL_ENABLED": "false",
 }
 
-FORBIDDEN_DATABASES = ("default",)
 # A ClickHouse database name this script is willing to put into DDL. Anything
 # else -- an unexpanded `${VAR}`, a quote, a semicolon, whitespace -- is refused
 # rather than quoted-and-hoped: `provision` runs DROP DATABASE, and the safe
 # handling of an unrecognisable identifier is not to execute it.
 DATABASE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+# ALLOWLIST, not a blacklist. Refusing only `default` still let a production
+# DSN such as .../devhealth or .../analytics through, and `--reset` would have
+# dropped it. A parity destination must positively identify itself as one, and
+# adding a prefix here is a deliberate, reviewable change to a checked-in
+# constant rather than something a caller can decide at the command line.
+PARITY_DATABASE_PREFIXES = ("parity", "ci_local_validate")
+
+# Second, independent boundary: a table this tool writes into every database it
+# creates. A name can be typed by mistake; this cannot be there by mistake. No
+# existing database is ever dropped without it, so a database this tool did not
+# create is not destroyable through this tool however it is named.
+OWNERSHIP_MARKER = "compute_parity_scratch_marker"
 PARITY_ORG_ID = "8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a10"
 PARITY_REPO_NAME = "compute-parity/dora-pilot"
 PROVIDER = "synthetic"
@@ -76,12 +88,18 @@ def database_of(dsn: str) -> str:
 
 
 def guard(dsn: str) -> str:
-    """Return the DSN's database after proving it is safe to name in DDL."""
+    """Return the DSN's database after proving it is a parity scratch database."""
     database = database_of(dsn)
-    if not database or database in FORBIDDEN_DATABASES:
-        raise FixtureError(f"refusing_scratch_database:{database or '<none>'}")
+    if not database:
+        raise FixtureError("refusing_scratch_database:<none>")
     if not DATABASE_NAME.match(database):
         raise FixtureError(f"refusing_unrecognised_database_name:{database!r}")
+    if not any(database.startswith(prefix) for prefix in PARITY_DATABASE_PREFIXES):
+        raise FixtureError(
+            f"refusing_non_parity_database:{database}:"
+            + "expected_prefix_"
+            + "_or_".join(PARITY_DATABASE_PREFIXES)
+        )
     return database
 
 
@@ -331,8 +349,31 @@ def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
         if exists and not reset:
             raise FixtureError(f"database_exists_pass_reset_to_drop:{database}")
         if exists:
+            owned = bool(
+                client.query(
+                    "SELECT count() FROM system.tables "
+                    "WHERE database = {name:String} AND name = {marker:String}",
+                    parameters={"name": database, "marker": OWNERSHIP_MARKER},
+                ).result_rows[0][0]
+            )
+            if not owned:
+                raise FixtureError(
+                    f"refusing_to_drop_unowned_database:{database}:"
+                    f"no_{OWNERSHIP_MARKER}"
+                )
             client.command(f"DROP DATABASE {identifier}")
         client.command(f"CREATE DATABASE {identifier}")
+        # Written before the migrations, so a database left behind by a failed
+        # migration is still reclaimable by the next run instead of becoming
+        # permanently undroppable through this tool.
+        client.command(
+            f"CREATE TABLE {identifier}.{OWNERSHIP_MARKER} (created_by String) "
+            "ENGINE = MergeTree ORDER BY created_by"
+        )
+        client.command(
+            f"INSERT INTO {identifier}.{OWNERSHIP_MARKER} VALUES "
+            "('scripts/worker/compute_parity_fixtures.py')"
+        )
     finally:
         client.close()
     environment = dict(os.environ)

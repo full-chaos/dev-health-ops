@@ -83,11 +83,12 @@ VOLATILE_ACTIONS = ("drop", "placeholder", "utc_normalize", "ordinal")
 REPEAT_POLICIES = ("idempotent", "append_duplicates", "replace_window", "tombstone")
 NUMERIC_POLICIES = ("exact", "absolute_tolerance", "relative_tolerance")
 
-# A parity destination is a scratch database by definition. `default` on the
-# shared local ClickHouse container holds real dev data (ops/AGENTS.md safety
-# contract), so it is refused as a side outright rather than trusted to be
-# read-only: `--left-exec`/`--right-exec` write to whatever they are pointed at.
-FORBIDDEN_DATABASES = ("default",)
+# A parity destination is a scratch database by definition, and it must say so
+# in its name. An allowlist rather than a `default` blacklist: `--left-exec` and
+# `--right-exec` write to whatever they are pointed at, so a production DSN such
+# as .../devhealth reaching a side is a data-loss path, not just a wrong answer.
+# Kept in step with PARITY_DATABASE_PREFIXES in compute_parity_fixtures.py.
+PARITY_DATABASE_PREFIXES = ("parity", "ci_local_validate")
 
 
 class ComparisonError(RuntimeError):
@@ -1028,12 +1029,12 @@ def _database_of(dsn: str) -> str:
 
 def guard_destination(dsn: str, label: str) -> None:
     database = _database_of(dsn)
-    if database in FORBIDDEN_DATABASES:
-        raise ComparisonError(
-            f"destination_refused:{label}:database_{database}_holds_real_data"
-        )
     if not database:
         raise ComparisonError(f"destination_refused:{label}:no_database_in_dsn")
+    if not any(database.startswith(prefix) for prefix in PARITY_DATABASE_PREFIXES):
+        raise ComparisonError(
+            f"destination_refused:{label}:{database}_is_not_a_parity_scratch_database"
+        )
 
 
 class Reader:

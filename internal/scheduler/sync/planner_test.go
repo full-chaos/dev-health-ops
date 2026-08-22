@@ -135,41 +135,25 @@ func TestResolveInitialSyncDepthMatchesOverridePrecedenceAndFloor(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// CHAOS-4047: the plan-time route-switch gate. Owner decision, 2026-08-21:
-// the Celery fallback is retired, so this gates on the switch alone -- no
-// consumer-presence signal is consulted, symmetric with the Python planner.
+// CHAOS-4054: capability is always on in the binary. BuildScheduledPlan now
+// filters unconditionally on the execution registry
+// (providersync.Descriptor -> RouteReady && Plannable); there is no
+// plan-time route-switch gate, and no "unfiltered" mode, left.
 // ---------------------------------------------------------------------------
 
-func TestBuildScheduledPlanExcludesRouteDisabledWorkItemFamilyCanonicalClaim(t *testing.T) {
-	// Codex review finding: family ALIASES are deliberately unchecked (their
-	// admission is the atomic-family collapse's business), but the CANONICAL
-	// claim the collapse emits ("work-items") is an ordinary routable pair
-	// with its own switch (WORKER_GITHUB_WORK_ITEMS_ENABLED) that must still
-	// gate it -- skipping the whole family branch must not also skip that.
+func TestBuildScheduledPlanAlwaysPlansTheWorkItemFamilyCanonicalClaim(t *testing.T) {
+	// The canonical work-items claim the family collapse emits is
+	// RouteReady && Plannable unconditionally now -- there is no switch left
+	// that could exclude it (successor to the deleted
+	// TestBuildScheduledPlanExcludesRouteDisabledWorkItemFamilyCanonicalClaim /
+	// TestBuildScheduledPlanPlansRouteEnabledWorkItemFamilyCanonicalClaim
+	// pair, whose "switch off excludes it" half is now structurally
+	// impossible).
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	switches := providersync.CompleteRouteSwitches{GithubWorkItems: false}
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "work-items"}},
-		RouteSwitches: &switches,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want none: the canonical work-items claim's own switch is off", units)
-	}
-}
-
-func TestBuildScheduledPlanPlansRouteEnabledWorkItemFamilyCanonicalClaim(t *testing.T) {
-	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	switches := providersync.CompleteRouteSwitches{GithubWorkItems: true}
-	units, err := BuildScheduledPlan(PlannerInput{
-		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "work-items"}},
-		RouteSwitches: &switches,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "work-items"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,70 +163,41 @@ func TestBuildScheduledPlanPlansRouteEnabledWorkItemFamilyCanonicalClaim(t *test
 	}
 }
 
-func TestBuildScheduledPlanExcludesRouteDisabledAliasWithSiblingEnabled(t *testing.T) {
+func TestBuildScheduledPlanNeverPlansAnAliasIdentityEvenWithACanonicalSibling(t *testing.T) {
 	// Regression: the exact production failure shape from CHAOS-4047/4048.
-	// github pr-comments is a mutually exclusive alias of the prs writer
-	// (config.go:337 rejects enabling both). With prs enabled and
-	// pr-comments left off -- the actual prod switch profile -- a pre-fix
-	// planner still minted a pr-comments unit that terminalized instantly as
-	// feature_disabled (200 such units in one window).
+	// github pr-comments aliases onto the canonical `prs` writer -- RouteReady
+	// but never independently Plannable -- so it must never be minted as its
+	// own unit, whether or not the sibling prs dataset is also requested.
+	// Successor to
+	// TestBuildScheduledPlanExcludesRouteDisabledAliasWithSiblingEnabled: the
+	// exclusion no longer depends on any switch profile, it is unconditional.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	switches := providersync.CompleteRouteSwitches{GithubPRs: true, GithubPRComments: false}
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "pr-comments"}},
-		RouteSwitches: &switches,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "pr-comments"}, {Key: "prs"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want none: pr-comments is a disabled alias of the enabled prs writer", units)
+	if len(units) != 1 || units[0].Dataset != "prs" {
+		t.Fatalf(
+			"units=%+v, want only the canonical prs writer: pr-comments is never independently plannable",
+			units,
+		)
 	}
 }
 
-func TestBuildScheduledPlanExcludesRouteDisabledPairWithNoSibling(t *testing.T) {
-	// Input symmetry: exclusion is a general "switch is off" rule. github
-	// security has no alias sibling at all -- proving the gate is not
-	// secretly alias-specific.
-	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	switches := providersync.CompleteRouteSwitches{GithubSecurity: false}
-	units, err := BuildScheduledPlan(PlannerInput{
-		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "security"}},
-		RouteSwitches: &switches,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want none: security's own switch is off, no alias sibling involved", units)
-	}
-}
-
-func TestBuildScheduledPlanPlansRouteEnabledPair(t *testing.T) {
-	// Input symmetry: the gate excludes only disabled pairs, not everything.
-	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	switches := providersync.CompleteRouteSwitches{GithubSecurity: true}
-	units, err := BuildScheduledPlan(PlannerInput{
-		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:       []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets:      []PlanDataset{{Key: "security"}},
-		RouteSwitches: &switches,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(units) != 1 {
-		t.Fatalf("units=%+v, want exactly one enabled pair", units)
-	}
-}
-
-func TestBuildScheduledPlanPlansUnfilteredWhenRouteSwitchesIsNil(t *testing.T) {
-	// Input symmetry: nil RouteSwitches (sync.provider_unit not a River
-	// outbox route) plans unfiltered, exactly like before CHAOS-4047.
+func TestBuildScheduledPlanPlansAKnownRoutablePairUnconditionally(t *testing.T) {
+	// Input symmetry: a pair the matrix knows and marks RouteReady &&
+	// Plannable is planned regardless of any input -- there is no
+	// configuration knob left that could exclude it. Successor to the
+	// TestBuildScheduledPlanExcludesRouteDisabledPairWithNoSibling /
+	// TestBuildScheduledPlanPlansRouteEnabledPair /
+	// TestBuildScheduledPlanPlansUnfilteredWhenRouteSwitchesIsNil trio: the
+	// "switch off excludes it" and "nil switches plans unfiltered" framings
+	// are both gone now that filtering is unconditional, so all three
+	// collapse onto this one assertion.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
@@ -253,16 +208,18 @@ func TestBuildScheduledPlanPlansUnfilteredWhenRouteSwitchesIsNil(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(units) != 1 {
-		t.Fatalf("units=%+v, want exactly one: nil RouteSwitches must plan unfiltered", units)
+		t.Fatalf("units=%+v, want exactly one: security is RouteReady && Plannable unconditionally", units)
 	}
 }
 
-func TestCompleteRouteSwitchesFailsClosedForUnknownPair(t *testing.T) {
+func TestScheduledPlannerDescriptorFailsClosedForUnknownPair(t *testing.T) {
 	// Input symmetry: a pair the checked-in matrix does not recognize at all
 	// fails closed (ok=false), never an accidental route -- the fail-closed
-	// guarantee BuildScheduledPlan's exclusion check relies on.
-	switches := providersync.CompleteRouteSwitches{}
-	if _, ok := switches.Descriptor("acme-corp", "widgets"); ok {
+	// guarantee BuildScheduledPlan's filtering relies on. Successor to
+	// TestCompleteRouteSwitchesFailsClosedForUnknownPair, which called the
+	// now-deleted CompleteRouteSwitches.Descriptor method; the package-level
+	// providersync.Descriptor function is the sole entry point now.
+	if _, ok := providersync.Descriptor("acme-corp", "widgets"); ok {
 		t.Fatal("Descriptor() ok=true for an unrecognized pair, want fail-closed")
 	}
 }

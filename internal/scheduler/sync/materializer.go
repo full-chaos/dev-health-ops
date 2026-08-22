@@ -15,8 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 var (
@@ -32,7 +30,6 @@ type NativeMaterializer struct {
 	afterDomainCommit func() error
 	watermarkOverlap  time.Duration
 	defaultUnitCap    int
-	routeSwitches     *providersync.CompleteRouteSwitches
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -44,20 +41,6 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
 	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
 	return &NativeMaterializer{domainPool: domainPool, watermarkOverlap: time.Duration(overlap) * time.Second, defaultUnitCap: cap}, nil
-}
-
-// WithRouteSwitches attaches the effective provider/dataset route switch
-// state (providersync.RouteSwitchesFromConfig) BuildScheduledPlan consults to
-// exclude a dataset the switch topology forbids (CHAOS-4047) -- the same
-// mapping the Go worker itself reads, never a second hand-maintained copy.
-// Nil (the zero value from NewNativeMaterializer) preserves pre-CHAOS-4047
-// behaviour: every enabled dataset is planned unfiltered. Returns the
-// receiver so a caller can chain it onto construction.
-func (materializer *NativeMaterializer) WithRouteSwitches(
-	routeSwitches *providersync.CompleteRouteSwitches,
-) *NativeMaterializer {
-	materializer.routeSwitches = routeSwitches
-	return materializer
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -121,7 +104,6 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	loaded.input.RouteSwitches = materializer.routeSwitches
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
 		units, err = BuildScheduledPlan(loaded.input)

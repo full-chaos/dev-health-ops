@@ -129,18 +129,6 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
-	// RouteSwitches, when non-nil, is the same effective switch state the Go
-	// worker consults (providersync.RouteSwitchesFromConfig, CHAOS-3941). A
-	// dataset whose pair does not resolve to River under it is never planned
-	// (CHAOS-4047): the switch topology forbids it (a mutually exclusive
-	// complete-unit alias, or a pair not yet rolled out). Owner decision,
-	// 2026-08-21: the Celery fallback is retired, so this gates on the
-	// switch alone -- no consumer-presence signal is consulted, symmetric
-	// with the Python planner. Nil preserves pre-CHAOS-4047 behaviour,
-	// planning every enabled dataset unfiltered (the durable
-	// sync.provider_unit route is not a River outbox route there, so Celery
-	// still owns everything).
-	RouteSwitches *providersync.CompleteRouteSwitches
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -248,17 +236,17 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				family = append(family, dataset)
 				continue
 			}
-			// CHAOS-4047: a unit is never minted for a pair the switch
-			// topology forbids -- mutually exclusive complete-unit aliases
-			// (e.g. github pr-comments while prs is enabled) and pairs not
-			// yet rolled out. Family datasets are deliberately excluded from
-			// this check above: their admission is governed by the
-			// atomic-family switch collapse, not a per-alias route switch.
-			if input.RouteSwitches != nil {
-				descriptor, ok := input.RouteSwitches.Descriptor(provider, dataset.Key)
-				if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-					continue
-				}
+			// CHAOS-4054: plan only identities the execution registry says are
+			// independently plannable. An alias identity (github pr-comments,
+			// gitlab tests, ...) folds into its canonical writer and is never
+			// minted as its own unit; a pair that is not RouteReady is not
+			// shipped. This reads the registry alone -- there is no route
+			// enablement env plane to consult. Family datasets are excluded
+			// from this check above: their admission is governed by the
+			// atomic-family collapse below.
+			descriptor, known := providersync.Descriptor(provider, dataset.Key)
+			if !known || !descriptor.RouteReady || !descriptor.Plannable {
+				continue
 			}
 			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
 			if !ok {
@@ -273,19 +261,16 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		if len(family) == 0 {
 			continue
 		}
-		// CHAOS-4047: individual family ALIASES are deliberately unchecked
-		// above -- their admission is the atomic-family collapse's business,
-		// not a per-alias route switch. But the CANONICAL claim this
-		// collapse emits (e.g. "work-items") is itself an ordinary routable
-		// pair with its own switch (WORKER_GITHUB_WORK_ITEMS_ENABLED), and
-		// skipping the whole family branch skipped that canonical check too.
-		// Route-gate it here, after collapse, the same way every non-family
-		// dataset already is above (codex review finding).
-		if input.RouteSwitches != nil {
-			descriptor, ok := input.RouteSwitches.Descriptor(provider, canonicalWorkItemsDataset)
-			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-				continue
-			}
+		// Individual family ALIASES are deliberately unchecked above -- their
+		// admission is the atomic-family collapse's business. The CANONICAL
+		// claim this collapse emits ("work-items") is an ordinary plannable
+		// identity, so gate it here, after collapse, the same way every
+		// non-family dataset already is above.
+		canonicalDescriptor, known := providersync.Descriptor(
+			provider, canonicalWorkItemsDataset,
+		)
+		if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable {
+			continue
 		}
 		canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
 		if !ok {
@@ -333,21 +318,25 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			earliest = nil
 		}
 		flags := cloneFlags(canonical.ProcessorFlags)
+		// CHAOS-3606: the native work-item route has one indivisible all-five
+		// writer. A sibling with an empty/caught-up window still has no
+		// independent owner while this canonical unit executes, so its literal
+		// flag records route ownership rather than contribution to the merged
+		// window above.
+		//
+		// CHAOS-4054: unconditional for every atomic family, matching
+		// _build_work_item_family_units and the now-unconditional strict
+		// admission in providerunit.validateProviderFamilyExecutionClaim.
+		// Stamping only the contributing aliases for gitlab/jira/linear would
+		// mint a canonical claim the executor must reject as incomplete — a
+		// self-inflicted route-fault loop the moment one sibling is caught up.
+		for _, dataset := range familyDatasets {
+			flags[familyDatasetFlag(dataset)] = true
+		}
 		if provider == "github" {
-			// CHAOS-3606: GitHub's activated route has one indivisible all-five
-			// work-item writer. A sibling with an empty/caught-up window still has
-			// no independent owner while this canonical unit executes, so its
-			// literal flag records route ownership rather than contribution to the
-			// merged window above. Non-GitHub families retain their historical
-			// contributing-alias flags.
-			for _, dataset := range familyDatasets {
-				flags[familyDatasetFlag(dataset)] = true
-			}
+			// CHAOS-646: thread the PRS-as-work-items signal onto the composite
+			// so _work_item_kwargs sets include_pull_requests correctly.
 			flags["sync_prs"] = prsEnabled
-		} else {
-			for _, dataset := range contributing {
-				flags[familyDatasetFlag(dataset.Key)] = true
-			}
 		}
 		unit := newPlannedUnit(input, source, canonicalWorkItemsDataset, canonical, earliest, latest)
 		unit.ProcessorFlags = flags

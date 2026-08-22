@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -500,3 +501,142 @@ func TestPipelineDoesNotReportADeclineOnAnOrdinaryPass(t *testing.T) {
 		t.Fatalf("a clean pass reported a route-change decline: %q", captured.String())
 	}
 }
+
+// staticSweep returns one fixed result, so a test can assert what the pipeline
+// does with a selection rather than only that it made the call.
+type staticSweep struct{ result UnreclaimableSweepResult }
+
+func (sweep staticSweep) Step(
+	ctx contextT, now time.Time, limit int,
+) (UnreclaimableSweepResult, error) {
+	return sweep.result, nil
+}
+
+// SHADOW MODE MUST PRODUCE A RECORD (adversarial review finding).
+//
+// Shadow is the default, and the sweep justifies that default by claiming it
+// gives "would-terminalize observability at zero write risk". Nothing
+// implemented the observability half: the pipeline consumed only
+// DeclinedRouteChange, so a shadow deployment could select the same strand on
+// every tick forever and emit not one line. In shadow mode that log line is
+// the ONLY record that exists -- there is no row to read afterwards -- which
+// is why this asserts on the emitted record rather than on the result value.
+func TestPipelineStepReportsWhatTheShadowSweepSelected(t *testing.T) {
+	units := make([]string, 0, sweepReportSample+5)
+	for index := 0; index < sweepReportSample+5; index++ {
+		units = append(units, fmt.Sprintf("unit-%02d", index))
+	}
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{
+		Mode:       SweepModeShadow,
+		Candidates: len(units),
+		RunIDs:     []string{"run-a", "run-b"},
+		Pairs:      []string{"github/repo-metadata"},
+		UnitIDs:    units,
+	}})
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("pipeline step: %v", err)
+	}
+
+	record, found := findSlogRecord(*captured, "syncreconciler.unreclaimable_sweep_selected")
+	if !found {
+		t.Fatalf("a shadow pass selected %d units and emitted no selection record; "+
+			"shadow mode is the default, so this is the whole of its output", len(units))
+	}
+	if record["mode"] != string(SweepModeShadow) {
+		t.Fatalf("record mode = %v, want the shadow mode named", record["mode"])
+	}
+	// The COUNT is the truth and must never be the sampled length. slog
+	// widens an int attribute to int64, so the comparison is numeric rather
+	// than an interface equality that would silently never match.
+	if countedInt(t, record, "candidates") != int64(len(units)) {
+		t.Fatalf("record candidates = %v, want the exact %d selected", record["candidates"], len(units))
+	}
+	if countedInt(t, record, "terminalized") != 0 {
+		t.Fatalf("record terminalized = %v, want zero: shadow writes nothing", record["terminalized"])
+	}
+	sample, ok := record["unit_id_sample"].([]string)
+	if !ok || len(sample) != sweepReportSample {
+		t.Fatalf("record unit_id_sample = %#v, want %d entries", record["unit_id_sample"], sweepReportSample)
+	}
+	// A capped sample that does not say it was capped reads as "these are all
+	// of them", which is the under-reporting this ticket is about.
+	if record["unit_id_sample_truncated"] != true {
+		t.Fatalf("record did not declare the sample truncated: %#v", record)
+	}
+}
+
+// NON-VACUITY. A pass that selected nothing must stay silent, or the line
+// becomes noise on every tick of a healthy deployment and gets muted -- which
+// would leave shadow mode exactly as invisible as it was before.
+func TestPipelineStepStaysSilentWhenTheSweepSelectedNothing(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	pipeline := pipelineWithSweep(t, staticSweep{result: UnreclaimableSweepResult{
+		Mode: SweepModeShadow,
+	}})
+	if _, err := pipeline.Step(testContext(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("pipeline step: %v", err)
+	}
+	if _, found := findSlogRecord(*captured, "syncreconciler.unreclaimable_sweep_selected"); found {
+		t.Fatal("an empty pass emitted a selection record")
+	}
+}
+
+// countedInt reads a numeric attribute without caring which width slog chose
+// for it. An interface comparison against an untyped constant is the trap
+// here: it compiles, always fails, and looks like a real assertion.
+func countedInt(t *testing.T, record map[string]any, key string) int64 {
+	t.Helper()
+	switch value := record[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	default:
+		t.Fatalf("record %q = %#v, want a numeric attribute", key, record[key])
+		return 0
+	}
+}
+
+// captureSlogRecords swaps the default slog handler for one that keeps every
+// record's attributes, and restores it. The pipeline logs through the package
+// default, so this is the seam that exists rather than one invented for the
+// test.
+func captureSlogRecords(t *testing.T) (*[]map[string]any, func()) {
+	t.Helper()
+	records := make([]map[string]any, 0, 4)
+	previous := slog.Default()
+	slog.SetDefault(slog.New(&capturingHandler{records: &records}))
+	return &records, func() { slog.SetDefault(previous) }
+}
+
+func findSlogRecord(records []map[string]any, message string) (map[string]any, bool) {
+	for _, record := range records {
+		if record["msg"] == message {
+			return record, true
+		}
+	}
+	return nil, false
+}
+
+type capturingHandler struct{ records *[]map[string]any }
+
+func (handler *capturingHandler) Enabled(contextT, slog.Level) bool { return true }
+
+func (handler *capturingHandler) Handle(_ contextT, record slog.Record) error {
+	captured := map[string]any{"msg": record.Message}
+	record.Attrs(func(attr slog.Attr) bool {
+		captured[attr.Key] = attr.Value.Any()
+		return true
+	})
+	*handler.records = append(*handler.records, captured)
+	return nil
+}
+
+func (handler *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return handler }
+
+func (handler *capturingHandler) WithGroup(string) slog.Handler { return handler }

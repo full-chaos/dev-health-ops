@@ -166,6 +166,34 @@ func (materializer *Materializer) Step(
 //
 // ORDER BY attempts DESC puts the worst row first, so a capped report is
 // still the most useful twenty rows rather than an arbitrary twenty.
+//
+// # Measured plan, so the next reader does not have to guess (CHAOS-4097)
+//
+// An adversarial review raised this as a possible full scan and sort of the
+// dispatch outbox on every pass. It is not, and the measurement is recorded
+// here rather than the reasoning, because the reasoning was wrong in both
+// directions. EXPLAIN (ANALYZE, BUFFERS) against production, 2026-08-22:
+//
+//	Limit … actual time=1.257..1.259 rows=11  Buffers: shared hit=224
+//	  Sort  Sort Method: quicksort  Memory: 26kB
+//	    Nested Loop
+//	      Seq Scan on sync_runs  rows=13, Rows Removed by Filter: 4187
+//	      Index Scan using uq_sync_dispatch_outbox_run_kind  loops=13
+//	Execution Time: 1.351 ms
+//
+// The planner drives from sync_runs and probes the outbox through the unique
+// (sync_run_id, kind) index, so the outbox is never scanned or sorted whole:
+// the sort is over the eleven rows that survive.
+//
+// The residual cost is the OTHER side, and it is real: the sync_runs scan is
+// proportional to all history rather than to the active set, because
+// `NOT IN (three terminal statuses)` is not selective enough for the planner
+// to reach for ix_sync_runs_status_id. At today's 4200 rows that is 1.35 ms.
+// The fix is an indexed access path, not a rewrite of this predicate --
+// flipping to a positive `IN` list would be sargable but fail CLOSED, and a
+// run status added later would then go unreported, which is the exact
+// silence this report exists to end. Tracked as CHAOS-4107 rather than folded
+// here: a migration is a different blast radius from a read.
 const selectRunawayDispatchWakeupsSQL = `
 SELECT outbox.sync_run_id::text, outbox.attempts
 FROM public.sync_dispatch_outbox AS outbox

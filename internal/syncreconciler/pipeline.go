@@ -14,6 +14,23 @@ const (
 	maximumMutationStaleDispatchAge = 24 * time.Hour
 )
 
+// sweepReportSample bounds the identifier list on the selection log line. A
+// pass can select up to `limit` units, and a log line carrying a hundred UUIDs
+// every tick is a different kind of unreadable from a log line carrying none.
+// The COUNT is always exact; only the sample is cut, and the line says when it
+// was.
+const sweepReportSample = 10
+
+// sampleIdentifiers returns at most sweepReportSample entries. It never sorts
+// or dedupes: the caller's order is selection order, which is the order an
+// operator would page through.
+func sampleIdentifiers(identifiers []string) []string {
+	if len(identifiers) <= sweepReportSample {
+		return identifiers
+	}
+	return identifiers[:sweepReportSample]
+}
+
 // LeaseRepairStepper is the bounded expired-lease repair seam used by the
 // command-owned mutation pipeline.
 type LeaseRepairStepper interface {
@@ -169,6 +186,40 @@ func (pipeline *MutationPipeline) Step(
 			slog.Warn(
 				"syncreconciler.unreclaimable_sweep_declined_route_change",
 				"candidates", sweepResult.Candidates,
+			)
+		}
+		// SHADOW MODE HAD NO OUTPUT AT ALL (adversarial review finding).
+		//
+		// Shadow is the DEFAULT, and the sweep's own documentation justifies
+		// that default by saying "every deployment gets would-terminalize
+		// observability at zero write risk". Nothing implemented the
+		// observability half: this pipeline consumed only DeclinedRouteChange
+		// and threw Candidates, UnitIDs and Pairs away, so a shadow deployment
+		// could identify the same strand on every tick for weeks and emit not
+		// one line. That is the same unimplemented-claim shape the sweep file
+		// already records twice, and CHAOS-4097 widens what shadow selects, so
+		// leaving it silent would have made a new population invisible too.
+		//
+		// Logged for BOTH modes. In active mode the terminalized rows carry
+		// their own durable reason, so the line is a convenience; in shadow
+		// mode it is the only record that exists, which is why it is emitted
+		// on selection rather than on write.
+		if sweepErr == nil && sweepResult.Candidates > 0 {
+			slog.Warn(
+				"syncreconciler.unreclaimable_sweep_selected",
+				"mode", string(sweepResult.Mode),
+				"candidates", sweepResult.Candidates,
+				"terminalized", sweepResult.Terminalized,
+				"runs", len(sweepResult.RunIDs),
+				// Pairs are few by construction -- production carried 23
+				// across the whole CHAOS-4093 population -- and they are the
+				// field an operator groups by first, so they are not sampled.
+				"pairs", sweepResult.Pairs,
+				// Unit ids are up to `limit` per pass, so they ARE sampled.
+				// The count above is the truth; this is a handle for going
+				// and looking at one.
+				"unit_id_sample", sampleIdentifiers(sweepResult.UnitIDs),
+				"unit_id_sample_truncated", len(sweepResult.UnitIDs) > sweepReportSample,
 			)
 		}
 		if sweepErr != nil {

@@ -307,6 +307,23 @@ if _PROMETHEUS_AVAILABLE:
     # (CHAOS-3481, producer_version 3 active).
 
     # ---------------------------------------------------------------------------
+    # Recommendations readiness gate (CHAOS-4073)
+    # ---------------------------------------------------------------------------
+    RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_recommendations_readiness_gate_fail_open_total",
+        "_daily_metrics_ready reads (daily_metrics_runs / "
+        "fixed_schedule_occurrences) that raised, so the gate fell open and "
+        "let recommendations proceed with no positive completion evidence "
+        "for the day. OWNER RULING (CHAOS-4073 item 2): fail-open stays -- "
+        "fail-closed would wire an unknown gate-error rate directly to an "
+        "org-wide recommendations wedge with no tombstones (CHAOS-2373) -- "
+        "but every occurrence must be loud and alertable here, not merely a "
+        "logger line, so a sustained outage or schema drift cannot sit "
+        "silently vacuous the way the CHAOS-4066 dead checkpoint did.",
+        ["exception_type"],
+    )
+
+    # ---------------------------------------------------------------------------
     # Integration credentials (issue 3694)
     # ---------------------------------------------------------------------------
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _prometheus_client_module.Counter(
@@ -352,6 +369,7 @@ else:
     ASK_DEV_RETENTION_SWEEP_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
+    RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
 
 

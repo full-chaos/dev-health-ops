@@ -106,6 +106,53 @@ class RecommendationsTeamFailure(Exception):
 # ``finalization_status='succeeded'``; counting it as in-flight would block its
 # target day forever. Neither value has a production writer for daily runs
 # today -- excluding them is a wedge that cannot form, not a behaviour change.
+#
+# CHAOS-4073 item 1 -- investigated, deliberately NOT acted on here. Absence
+# can also mean "the org-wide dispatch was REJECTED", not just "nothing to
+# do": ``DailyMetricsFanoutProducer.Produce``
+# (internal/scheduler/fixed/producers.go:415-459) wraps every organization's
+# dispatch in its own savepoint (``startOrganization``, :461-495), and a
+# permanent per-organization error (``permanentForOrganization``, :674-680)
+# rolls that org's savepoint back and leaves NO ``daily_metrics_runs`` row
+# for it -- indistinguishable, to the query below, from an org Go never
+# dispatched at all.
+#
+# Two gaps stack, and either alone is enough to leave this branch unfixed
+# for now (both filed as CHAOS-4074):
+#
+# 1. No PER-ORGANIZATION durable trace exists. The fan-out only counts
+#    rejections (``rejected++``, producers.go:453) and records the fact in
+#    AGGREGATE, on the occurrence as a whole, via
+#    ``Outcome.Degraded = DegradedRejectedOrganizations``
+#    ("organizations_rejected", producers.go:36,456,653) ->
+#    ``fixed_schedule_occurrences.degraded_reason`` (alembic
+#    0100_add_fixed_schedule_degraded_reason.py). That says "some org was
+#    rejected tonight", never which one.
+# 2. Even that aggregate signal is NOT READABLE from here. This gate runs as
+#    the Python semantic-DB session (``get_postgres_session_sync``, bound to
+#    ``POSTGRES_URI``), which production scopes to the ``devhealth_domain``
+#    role (docs/operate/install/production.md:98,
+#    deploy/go-workers/compose-go-workers.yml:234,337). Under the
+#    domain/coordinator Postgres role split,
+#    ``fixed_schedule_occurrences`` is coordinator-EXCLUSIVE by design
+#    (internal/storage/postgres/domain_authorization.go's coordinatorPosture
+#    doc: "adding fixed_schedule_occurrences to the domain role would
+#    destroy" the boundary that keeps provider-sync/domain code out of
+#    control-plane tables). A query against it from this process would not
+#    return a coarser answer -- it would raise ``permission denied`` on
+#    every call that reaches it, which is every ordinary "no row yet"
+#    evaluation, converting the common case into constant, alert-drowning
+#    noise on the very fail-open path CHAOS-4073 item 2 just made loud.
+#
+# Widening the domain role's grant, or querying with different credentials
+# this process does not have, are both off the table -- one weakens a
+# deliberate security boundary, the other doesn't exist in production today.
+# Manufacturing a heuristic in its place is exactly what the ticket warns
+# against. So this section stays a comment, not code: the gate's absence
+# branch is unchanged, and CHAOS-4074 now tracks BOTH the missing
+# per-organization grain and the missing domain-readable surface a real fix
+# needs (e.g. Go persisting the rejection fact somewhere the domain role can
+# already read, such as ``daily_metrics_runs`` itself).
 _SCHEDULED_FANOUT_GENERATION_PREFIX = "fixed-schedule:daily_metrics_fanout:"
 
 _LATEST_DAILY_METRICS_RUN_SQL = """
@@ -145,22 +192,45 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
       demonstrably unfinished -> **skip** (return ``False``). The fence is
       per-day, so a day that never finalizes cannot wedge later days: the next
       occurrence keys on its own ``target_day``.
-    * No such row -> **proceed**. Absence means Go recorded no org-wide run for
-      this org/day; there is no positive evidence of partial data, and the
-      daily run self-corrects via tombstones. (This is the one branch that
-      behaves like the dead checkpoint read did -- deliberately, because
-      turning absence into a block would stop recommendations for every org
-      whose day Go never dispatched.)
+    * No such row -> **proceed**. Absence means Go recorded no org-wide run
+      for this org/day; there is no positive evidence of partial data, and
+      the daily run self-corrects via tombstones. (This is the one branch
+      that behaves like the dead checkpoint read did -- deliberately,
+      because turning absence into a block would stop recommendations for
+      every org whose day Go never dispatched. CHAOS-4073 item 1 investigated
+      whether a rejected dispatch (see the comment above
+      ``_SCHEDULED_FANOUT_GENERATION_PREFIX``) could be told apart from
+      legitimate absence here; it deliberately stays unresolved -- see that
+      comment for why acting on it would need either a security-boundary
+      change or upstream Go work, both tracked in CHAOS-4074, rather than
+      anything this function alone can safely do.)
     * The ``"default"`` sentinel -> **proceed**. ``daily_metrics_runs.org_id``
       is typed ``uuid``, so the single-tenant sentinel is unrepresentable in
       this table by construction (the same reason Go's fan-out refuses to
       invent one, internal/scheduler/fixed/producers.go:607-616).
-    * Any read error -> **proceed** (fail open; a database glitch must never
-      permanently wedge the pipeline).
+    * Any read error -> **proceed, loudly** (CHAOS-4073 item 2 owner ruling).
+      Fail-open stays -- fail-closed would wire an unknown gate-error rate
+      directly to an org-wide recommendations wedge with no tombstones
+      (CHAOS-2373) -- but the exception path now also increments
+      ``RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL`` (alertable, see
+      ``alerts/rules.yml``'s ``RecommendationsReadinessGateFailingOpen``) and
+      stays at ``logger.exception`` (ERROR) rather than being downgraded:
+      this codebase's Sentry `LoggingIntegration` only turns ERROR+ records
+      into events (``event_level=logging.ERROR``, src/dev_health_ops/sentry.py),
+      and there are zero manual ``capture_exception`` call sites anywhere in
+      this codebase to fall back on -- log-level IS the only automatic
+      incident-surfacing path here. Choosing to proceed anyway is a policy
+      decision, not a reclassification of the failure as benign, so the log
+      stays ERROR-shaped while the *behaviour* stays fail-open. The same
+      measurement-fails-toward-fine failure mode that let CHAOS-4066 sit
+      vacuous is exactly what this guards against.
     """
     from sqlalchemy import text
 
     from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.metrics.prometheus import (
+        RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL,
+    )
 
     if org_id == "default":
         return True
@@ -176,11 +246,24 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
                     "fanout_prefix": _SCHEDULED_FANOUT_GENERATION_PREFIX,
                 },
             ).scalar_one_or_none()
-    except Exception:
+    except Exception as exc:
+        RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL.labels(
+            exception_type=type(exc).__name__
+        ).inc()
+        # ERROR, not WARNING: this codebase's Sentry LoggingIntegration only
+        # turns ERROR+ records into events (event_level=logging.ERROR,
+        # src/dev_health_ops/sentry.py), and nothing here calls
+        # capture_exception directly -- downgrading the level would silently
+        # drop this failure from Sentry with no other automatic path to see
+        # it. Proceeding anyway (fail-open, CHAOS-4073 item 2 owner ruling)
+        # is a policy choice about what the gate DOES, not about how loudly
+        # the underlying read failure gets reported.
         logger.exception(
-            "Failed to read daily_metrics_runs for org=%s day=%s; treating as ready",
+            "Failed to read daily metrics readiness state for org=%s day=%s: "
+            "%s; treating as ready (fail-open, CHAOS-4073 item 2)",
             org_id,
             day,
+            exc,
         )
         return True
 

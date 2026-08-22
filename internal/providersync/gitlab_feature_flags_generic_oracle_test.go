@@ -44,7 +44,7 @@ type gitLabFeatureFlagsOracleEvent struct {
 
 type gitLabFeatureFlagsOracleDate string
 
-func (value gitLabFeatureFlagsOracleDate) oracleDate() string { return string(value) }
+func (value gitLabFeatureFlagsOracleDate) OracleDate() string { return string(value) }
 
 type gitLabFeatureFlagsOracleEdge struct {
 	EdgeID       string                       `json:"edge_id"`

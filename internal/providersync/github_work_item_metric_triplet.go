@@ -28,9 +28,9 @@ func (day githubWorkItemMetricDay) time() (time.Time, error) {
 	return time.ParseInLocation(time.DateOnly, string(day), time.UTC)
 }
 
-// oracleDate is consumed by the generic differential oracle's typed encoder.
+// OracleDate is consumed by the generic differential oracle's typed encoder.
 // It keeps Python date and Go Date leaves type-distinct from strings/datetimes.
-func (day githubWorkItemMetricDay) oracleDate() string { return string(day) }
+func (day githubWorkItemMetricDay) OracleDate() string { return string(day) }
 
 type githubWorkItemMetricsDailyRow struct {
 	Day                      githubWorkItemMetricDay `json:"day"`

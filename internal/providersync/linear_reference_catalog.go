@@ -166,7 +166,7 @@ type linearReferenceProjectRow struct {
 // giving the ClickHouse adapter a single canonical YYYY-MM-DD value.
 type linearReferenceDate string
 
-func (value linearReferenceDate) oracleDate() string { return string(value) }
+func (value linearReferenceDate) OracleDate() string { return string(value) }
 
 func (value linearReferenceDate) Format(layout string) string {
 	if layout == "2006-01-02" {

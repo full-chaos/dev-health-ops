@@ -285,6 +285,236 @@ PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE = """(
 )""".rstrip()
 
 
+# CHAOS-2416: the Investment team bridge. A work unit reaches a team only
+# through the work-item refs recorded in structural_evidence_json. Before this
+# change the ONLY bridge was the `issues` array, so a unit whose PR work item
+# ALREADY carried a resolved team still landed in TEAM:unassigned whenever the
+# unit had no issue ref of its own (49.6% of the unassigned effort in the
+# 2026-08-22 prod probe -- e.g. work unit 9626aea0... with `issues: []` whose PR
+# `ghpr:full-chaos/dev-health-ops#1726` was attributed to Fullchaos via
+# linked_issue). The `prs` array holds work_graph/ids.py `generate_pr_id`
+# refs -- "{repo_uuid}#pr{number}" -- which live in a DIFFERENT id space from
+# work_items.work_item_id ("ghpr:{owner}/{repo}#{number}" for GitHub,
+# "gitlab:{group}/{project}!{number}" for GitLab MRs, minted by
+# providers/github/normalize.py and external_ingest/ids.py). Resolving that ref
+# through the repos table lets the SAME primary-WITA source answer for PRs.
+#
+# This invents NO new attribution: it reuses the team the CHAOS-2600 resolver
+# already computed for the PR work item, with that resolver's own precedence
+# and provenance. A PR whose work item has no primary attribution row still
+# contributes nothing, so a unit with no teamed evidence stays unassigned.
+#
+# Tenant scoping, the same dual-layer shape as LATEST_WORK_UNIT_AUTHORS_CTE
+# above: `repos` is a ReplacingMergeTree whose dedup key is `(org_id, id)`
+# (migration 027 rewrote it from the `(id)` declared in migration 000 -- read
+# 027, not the CREATE TABLE, for the live key). So one repo UUID can hold a
+# DISTINCT row per org, and it routinely does: `repos.id` is derived from the
+# repo slug alone (`external_ingest/ids.py:derive_repo_uuid` ->
+# `get_repo_uuid_from_repo`, no org in the seed), so two tenants syncing the
+# same repo mint the SAME UUID and each keep their own row. A `GROUP BY id`
+# without an org predicate would argMax ACROSS tenants and hand this org the
+# other tenant's slug/provider, rewriting the evidence ref into a work-item id
+# from the wrong namespace. Both layers below are required: the WHERE filters
+# before aggregating, and the join carries org_id so the grouped row cannot
+# migrate between tenants. argMax by last_synced then collapses the
+# un-merged ReplacingMergeTree versions WITHIN one org so a re-synced repo
+# cannot fan a unit's evidence out and skew the argMax(team, cnt) vote.
+#
+# Provider ambiguity, and why this FAILS CLOSED. The UUID seed is the slug
+# without the provider, so a github `owner/repo` and a gitlab `owner/repo`
+# inside ONE org collide on the same UUID. Picking a provider by argMax there
+# would be arbitrary, and if BOTH the `ghpr:` and the `gitlab:` work item
+# carry an attribution row the arbitrary winner can attach the unit to the
+# OTHER provider's team -- a wrong team, not merely a missing one. So a UUID
+# that resolves to more than one provider within the org yields an empty
+# provider, and `RESOLVED_EVIDENCE_WORK_ITEM_ID` then bridges nothing: the
+# unit stays `unassigned` rather than being attributed on a coin flip.
+# (`provider` is never legitimately empty here -- migration 028 defaults it to
+# 'unknown' -- so '' is unambiguous as an ambiguity sentinel.) Fixing the id
+# seed itself is a data-model change, out of scope for this ticket; the
+# sibling `LEFT JOIN repos AS r` joins share the same seed limitation.
+WORK_UNIT_EVIDENCE_REPO_SOURCE = """(
+    SELECT
+        org_id,
+        toString(id) AS repo_uuid,
+        argMax(repo, last_synced) AS repo,
+        -- Fail closed on a provider-ambiguous UUID: '' bridges nothing.
+        if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
+    FROM repos
+    WHERE org_id = %(org_id)s
+    GROUP BY org_id, id
+)""".rstrip()
+
+
+# Every work-item ref a unit's structural evidence can reach a team through.
+# CHAOS-2416 removed a third term, `[work_unit_investments.work_unit_id]`: a
+# work_unit_id is a content hash (work_graph/investment materialization), never
+# a work_item_id, so that arm could not match a single attribution row -- dead
+# code that read as a real fallback.
+WORK_UNIT_EVIDENCE_WORK_ITEM_REFS = """arrayDistinct(arrayConcat(
+                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
+                    JSONExtract(structural_evidence_json, 'prs', 'Array(String)')
+                ))""".rstrip()
+
+
+# Maps one evidence ref into the work_items id space.
+#
+# The three arms are keyed on the SHAPE of the ref, never on whether a join
+# happened to succeed. An `issues` ref is already a work_item_id and passes
+# through untouched. A `prs` ref matches `generate_pr_id`'s
+# "{repo_uuid}#pr{number}" exactly and is rewritten to the provider's
+# work-item id via the repos lookup. A `prs` ref whose repo UUID is NOT in
+# `repos` resolves to '' -- deliberately matching no attribution row.
+#
+# That empty third arm matters: passing an unresolvable PR ref THROUGH as a
+# literal join key would make the raw work-graph node id a live lookup key in
+# a table that is only ever keyed by namespaced work_item_ids. That is the
+# same shape as the `[work_unit_id]` term this ticket deleted -- an arm that
+# can only ever match something that should not be there -- and a live
+# negative control (`test_unknown_repo_uuid_stays_unassigned`) pins it.
+#
+# splitByString returns the whole string when the separator is absent and
+# index [2] yields '' rather than raising, so every arm is safe to evaluate
+# on every row; ClickHouse's multiIf is not short-circuiting.
+RESOLVED_EVIDENCE_WORK_ITEM_ID = """multiIf(
+                        NOT match(evidence_ref, '^[0-9a-fA-F-]{36}#pr[0-9]+$'),
+                        evidence_ref,
+                        evidence_repo.repo = '' OR evidence_repo.provider = '',
+                        '',
+                        concat(
+                            if(evidence_repo.provider = 'gitlab', 'gitlab:', 'ghpr:'),
+                            evidence_repo.repo,
+                            if(evidence_repo.provider = 'gitlab', '!', '#'),
+                            splitByString('#pr', evidence_ref)[2]
+                        )
+                    )""".rstrip()
+
+
+def build_unit_team_subquery(
+    *,
+    source: str,
+    where: str = "",
+    inner_team_alias: str = "team",
+    outer_team_alias: str | None = None,
+    include_team_id: bool = False,
+) -> str:
+    """Build the shared per-work-unit team-resolution subquery.
+
+    CHAOS-2416: this body used to be copy-pasted into eight call sites (five
+    fetchers here, ``fetch_investment_quality_stats``' team-scope join, the
+    GraphQL SQL compiler's team join and the analytics coverage resolver).
+    A partial edit made those views disagree about which units have a team,
+    so the body now has exactly one definition and every site renders it.
+
+    TENANT SCOPING -- read before adding a call site. This subquery groups by
+    ``work_unit_id`` alone and two of its callers (the GraphQL compiler and
+    the analytics coverage resolver) pass no ``where`` at all, which reads
+    like a cross-tenant leak given that ``work_unit_investments``' dedup
+    identity is ``(org_id, work_unit_id)``. It is not one, because the
+    invariant lives in ``source``: every caller passes either
+    ``latest_work_unit_investments`` -- which applies
+    ``WHERE org_id = %(org_id)s`` and groups by ``(org_id, work_unit_id)``
+    before anything here sees a row -- or
+    ``REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE``, which is built from that
+    same CTE. The relation handed in is therefore already single-tenant, and
+    ``PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`` is org-filtered
+    independently. **A new call site MUST pass an already-org-scoped
+    source.** The property is pinned by
+    ``test_shared_team_subquery_is_tenant_isolated`` (two orgs sharing one
+    work_unit_id with conflicting PR evidence), not left to this comment.
+
+    The ``repos`` lookup carries its own ``org_id`` filter and join column --
+    see ``WORK_UNIT_EVIDENCE_REPO_SOURCE``; one repo UUID can hold a distinct
+    row per tenant, so it must not be resolved by UUID alone.
+
+    Args:
+        source: the FROM clause -- ``latest_work_unit_investments AS
+            work_unit_investments`` or the repo-allocated source, which must
+            expose that same alias.
+        where: an already-indented WHERE block, or "" for callers that filter
+            in the enclosing query instead.
+        inner_team_alias: deprecated spelling of ``team_alias``, kept so the
+            existing call sites read unchanged.
+        outer_team_alias: name the resolved team column is PROJECTED as.
+            Defaults to inner_team_alias.
+        include_team_id: also project the raw ``team_id``, for callers that
+            filter on team id as well as label.
+    """
+    outer_team_alias = outer_team_alias or inner_team_alias
+    team_expr = "ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, ''))"
+    # The inner column name is FIXED and deliberately unlike any outer alias.
+    # ClickHouse resolves an aggregate's arguments against the SELECT aliases
+    # of the same scope, so `argMax(team_label, (cnt, team_label)) AS
+    # team_label` reads as an aggregate nested inside itself and fails with
+    # ILLEGAL_AGGREGATION (184) -- the same shadowing trap documented on
+    # LATEST_WORK_UNIT_INVESTMENTS_CTE's `latest_computed_at` alias. Keeping
+    # the vote column distinct from the projected name avoids it for every
+    # caller, whatever they ask the output to be called.
+    vote = "resolved_team"
+    # ONE canonical aggregation key, shared with
+    # `api/services/work_units.py:_majority_team_for_issues`: votes are
+    # counted per TEAM ID, never per rendered label. Counting by label splits
+    # one team into two candidates whenever two attribution rows spell the
+    # same team_id with different team_names (names drift per work item), and
+    # the drilldown -- which counts by id -- would then name a different team
+    # for the same unit. The label is derived from the winning id as
+    # ``max(label)`` so it is a deterministic function of the id, not of row
+    # order, on both paths.
+    #
+    # Tie-break: highest vote count, then the lexicographically largest
+    # team_id. `argMax(x, cnt)` alone is order-dependent when two teams tie,
+    # and the PR bridge makes ties ordinary (one attributed issue for team A,
+    # one attributed PR for team B). Ordering the id and the label by the SAME
+    # key keeps them coming from one winning row rather than splicing two.
+    # The vote counts DISTINCT RESOLVED work-item ids, not raw evidence refs.
+    # `arrayDistinct` above only collapses identical ref STRINGS, and a PR
+    # reachable both as a resolved `issues` entry (`ghpr:owner/repo#N`) and as
+    # a `prs` ref (`{repo_uuid}#prN`) is two different strings that translate
+    # to ONE work item. Counting refs would let that single item vote twice
+    # here while the drilldown -- which de-duplicates after translation --
+    # counted it once, and the two surfaces would disagree.
+    vote_id = "resolved_team_id"
+    tie_break = f"(cnt, {vote_id})"
+    outer_id = (
+        f"                argMax({vote_id}, {tie_break}) AS team_id,\n"
+        if include_team_id
+        else ""
+    )
+    return f"""
+            SELECT
+                work_unit_id,
+{outer_id}                argMax({vote}, {tie_break}) AS {outer_team_alias}
+            FROM (
+                SELECT
+                    work_unit_investments.work_unit_id AS work_unit_id,
+                    ifNull(nullIf(t.team_id, ''), '') AS {vote_id},
+                    max({team_expr}) AS {vote},
+                    uniqExactIf({RESOLVED_EVIDENCE_WORK_ITEM_ID}, {team_expr} IS NOT NULL) AS cnt
+                FROM {source}
+                ARRAY JOIN {WORK_UNIT_EVIDENCE_WORK_ITEM_REFS} AS evidence_ref
+                LEFT JOIN {WORK_UNIT_EVIDENCE_REPO_SOURCE} AS evidence_repo
+                    ON evidence_repo.org_id = work_unit_investments.org_id
+                    AND evidence_repo.repo_uuid = splitByString('#pr', evidence_ref)[1]
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+                    ON t.work_item_id = {RESOLVED_EVIDENCE_WORK_ITEM_ID}
+{where}
+                GROUP BY work_unit_id, {vote_id}
+            )
+            GROUP BY work_unit_id
+"""
+
+
+def unit_team_window_filter(scope_filter: str, category_filter: str = "") -> str:
+    """The window/tenant/scope WHERE block the investment fetchers push into
+    ``build_unit_team_subquery``. Kept beside the builder so the five fetchers
+    cannot drift apart on which rows the team vote is taken over."""
+    return f"""                WHERE work_unit_investments.from_ts < %(end_ts)s
+                  AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
+                {scope_filter}
+                {category_filter}"""
+
+
 async def fetch_investment_breakdown(
     sink: BaseMetricsSink,
     *,
@@ -475,31 +705,13 @@ async def fetch_investment_team_edges(
         filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    unit_team_cte = build_unit_team_subquery(
+        source="latest_work_unit_investments AS work_unit_investments",
+        where=unit_team_window_filter(scope_filter),
+    )
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
-        unit_team AS (
-            SELECT
-                work_unit_id,
-                argMax(team, cnt) AS team
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                {scope_filter}
-                GROUP BY work_unit_id, team
-            )
-            GROUP BY work_unit_id
-        )
+        unit_team AS ({unit_team_cte}        )
         SELECT
             subcategory_kv.1 AS source,
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS target,
@@ -540,32 +752,14 @@ async def fetch_investment_repo_team_edges(
         filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    unit_team_cte = build_unit_team_subquery(
+        source=REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE,
+        where=unit_team_window_filter(scope_filter),
+    )
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
         {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
-        unit_team AS (
-            SELECT
-                work_unit_id,
-                argMax(team, cnt) AS team
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                {scope_filter}
-                GROUP BY work_unit_id, team
-            )
-            GROUP BY work_unit_id
-        )
+        unit_team AS ({unit_team_cte}        )
         SELECT
             subcategory_kv.1 AS subcategory,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
@@ -608,32 +802,14 @@ async def fetch_investment_team_category_repo_edges(
         filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    unit_team_cte = build_unit_team_subquery(
+        source=REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE,
+        where=unit_team_window_filter(scope_filter),
+    )
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
         {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
-        unit_team AS (
-            SELECT
-                work_unit_id,
-                argMax(team, cnt) AS team
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                {scope_filter}
-                GROUP BY work_unit_id, team
-            )
-            GROUP BY work_unit_id
-        )
+        unit_team AS ({unit_team_cte}        )
         SELECT
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             splitByChar('.', subcategory_kv.1)[1] AS category,
@@ -676,32 +852,14 @@ async def fetch_investment_team_subcategory_repo_edges(
         filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    unit_team_cte = build_unit_team_subquery(
+        source=REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE,
+        where=unit_team_window_filter(scope_filter),
+    )
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
         {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
-        unit_team AS (
-            SELECT
-                work_unit_id,
-                argMax(team, cnt) AS team
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                {scope_filter}
-                GROUP BY work_unit_id, team
-            )
-            GROUP BY work_unit_id
-        )
+        unit_team AS ({unit_team_cte}        )
         SELECT
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             subcategory_kv.1 AS subcategory,
@@ -748,33 +906,14 @@ async def fetch_investment_unassigned_counts(
         )
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    unit_team_cte = build_unit_team_subquery(
+        source=REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE,
+        where=unit_team_window_filter(scope_filter, category_filter),
+    )
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
         {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
-        unit_team AS (
-            SELECT
-                work_unit_id,
-                argMax(team, cnt) AS team
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                {scope_filter}
-                {category_filter}
-                GROUP BY work_unit_id, team
-            )
-            GROUP BY work_unit_id
-        )
+        unit_team AS ({unit_team_cte}        )
         SELECT
             -- CHAOS-2777: a unit is only "missing repo" when it has a NULL scalar
             -- repo_id AND no per-repo allocation row at all. Multi-repo units carry
@@ -892,31 +1031,14 @@ async def fetch_investment_quality_stats(
     team_filter = ""
     if team_scope_ids:
         params["team_scope_ids"] = team_scope_ids
+        unit_team_cte = build_unit_team_subquery(
+            source="latest_work_unit_investments AS work_unit_investments",
+            where=unit_team_window_filter(""),
+            inner_team_alias="team_label",
+            include_team_id=True,
+        )
         team_join = f"""
-        LEFT JOIN (
-            SELECT
-                work_unit_id,
-                argMax(team_id, cnt) AS team_id,
-                argMax(team_label, cnt) AS team_label
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    t.team_id AS team_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team_label,
-                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
-                ARRAY JOIN arrayDistinct(arrayConcat(
-                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                    [work_unit_investments.work_unit_id]
-                )) AS issue_id
-                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
-                  AND work_unit_investments.org_id = %(org_id)s
-                GROUP BY work_unit_id, team_id, team_label
-            )
-            GROUP BY work_unit_id
-        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
+        LEFT JOIN ({unit_team_cte}        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         """
         team_filter = """
           AND (

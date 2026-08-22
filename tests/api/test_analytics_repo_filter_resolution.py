@@ -85,7 +85,12 @@ async def test_analytics_resolves_repo_name_filters_to_repo_ids(
 
     async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
         captured_params.append(dict(params))
-        if "FROM repos" in sql:
+        # CHAOS-2416: route on the repo-NAME lookup's own predicate, not on a
+        # bare "FROM repos". The investment team bridge resolves `prs` evidence
+        # refs through the repos table too, so "FROM repos" no longer picks out
+        # exactly one query and this stub silently answered the coverage query
+        # with a repo row.
+        if "lower(repo) IN %(repo_names)s" in sql:
             assert params["repo_names"] == [REPO_FULL_NAME]
             return [{"repo_id": REPO_UUID, "repo": REPO_FULL_NAME}]
         if "countIf(evidence_quality_band" in sql:
@@ -132,7 +137,12 @@ async def test_sankey_coverage_respects_resolved_repo_name_filter(
     captured_coverage_params: list[dict[str, Any]] = []
 
     async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
-        if "FROM repos" in sql:
+        # CHAOS-2416: route on the repo-NAME lookup's own predicate, not on a
+        # bare "FROM repos". The investment team bridge resolves `prs` evidence
+        # refs through the repos table too, so "FROM repos" no longer picks out
+        # exactly one query and this stub silently answered the coverage query
+        # with a repo row.
+        if "lower(repo) IN %(repo_names)s" in sql:
             assert params["repo_names"] == [REPO_FULL_NAME]
             return [{"repo_id": REPO_UUID, "repo": REPO_FULL_NAME}]
         if "assigned_team" in sql:

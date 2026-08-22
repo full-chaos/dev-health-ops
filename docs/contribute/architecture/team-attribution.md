@@ -309,7 +309,28 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `work_item_team_attributions` snapshot before rolling up or displaying team
   identity. Cycle-time rows can still provide activity windows, durations,
   work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
-  owning team identity. Person cohort selection reads ClickHouse `identities`
+  owning team identity.
+- **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
+  Investment `unit_team` resolution reads **both** the `issues` **and** the
+  `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`
+  entry is a work-graph node id (`{repo_uuid}#pr{number}`, minted by
+  `work_graph/ids.py:generate_pr_id`), a different id space from
+  `work_items.work_item_id`; it is resolved through the `repos` table into the
+  provider's work-item namespace (`ghpr:{owner}/{repo}#{n}` for GitHub,
+  `gitlab:{group}/{project}!{n}` for GitLab MRs) and then joined against the
+  same primary `work_item_team_attributions` snapshot. This adds no attribution
+  logic of its own — it reuses the team the resolver already computed for the
+  PR/MR work item, with that resolver's precedence and provenance — so a unit
+  whose PR has no primary attribution row still resolves `unassigned`. Before
+  this, `issues` was the only bridge and a unit with an empty `issues` array
+  collapsed to a false `TEAM:unassigned` even when its PR was already
+  attributed (49.6% of the unassigned effort in the 2026-08-22 prod probe).
+  The CTE has exactly one definition —
+  `api/queries/investment.py:build_unit_team_subquery` — rendered by the five
+  investment fetchers, `fetch_investment_quality_stats`' team-scope join, the
+  GraphQL Sankey compiler and the analytics coverage resolver; it was
+  previously copy-pasted into all eight, where a partial edit made the views
+  disagree about which units have a team. Person cohort selection reads ClickHouse `identities`
   membership (`team_ids`) instead of metric rollup team snapshots so a person's
   current team comparison does not lag behind admin/team-autoimport membership.
 - **Why it matters:** the team/project/member **dimension** is populated by the per-provider
@@ -837,8 +858,9 @@ flowchart TD
    (#923), so `--org` is optional.
 3. **Work-graph build**, then
 4. **Investment materialize (`--force`)** — these rebuild `work_unit_investments`
-   + its `structural_evidence_json.issues` (the coverage join keys); the backfill
-   does not trigger them.
+   + its `structural_evidence_json` `issues` **and** `prs` arrays (the coverage
+   join keys — see the CHAOS-2416 bullet in §0); the backfill does not trigger
+   them.
 5. **Verify & recover** — the coverage %, chord, team Cycle Time × Throughput
    quadrant, and work-unit investment evidence recover automatically via the
    query-time join to primary attribution. Confirm the links were captured:

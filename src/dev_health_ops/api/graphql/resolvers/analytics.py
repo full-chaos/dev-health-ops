@@ -13,7 +13,7 @@ from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
     LATEST_WORK_UNIT_REPO_EFFORT_CTE,
-    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+    build_unit_team_subquery,
     fetch_investment_quality_stats,
 )
 from dev_health_ops.api.queries.investment_membership_scope import (
@@ -681,28 +681,14 @@ async def resolve_analytics(
                         "work_unit_investments.from_ts < %(end_date)s "
                         "AND work_unit_investments.to_ts >= %(start_date)s"
                     )
+                    unit_team_cte = build_unit_team_subquery(
+                        source="latest_work_unit_investments AS work_unit_investments",
+                        inner_team_alias="team",
+                        outer_team_alias="team_label",
+                        include_team_id=True,
+                    )
                     joins = f"""
-                        LEFT JOIN (
-                            SELECT
-                                work_unit_id,
-                                argMax(team, cnt) AS team_label,
-                                argMax(team_id, cnt) AS team_id
-                            FROM (
-                                SELECT
-                                    work_unit_investments.work_unit_id AS work_unit_id,
-                                    t.team_id AS team_id,
-                                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                                FROM latest_work_unit_investments AS work_unit_investments
-                                ARRAY JOIN arrayDistinct(arrayConcat(
-                                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                                    [work_unit_investments.work_unit_id]
-                                )) AS issue_id
-                                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                                GROUP BY work_unit_id, team_id, team
-                            )
-                            GROUP BY work_unit_id
-                        ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
+                        LEFT JOIN ({unit_team_cte}                        ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
                         LEFT JOIN latest_work_unit_repo_effort AS wure
                             ON wure.org_id = work_unit_investments.org_id
                             AND wure.work_unit_id = work_unit_investments.work_unit_id

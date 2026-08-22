@@ -4,7 +4,9 @@ package syncreconciler
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -312,6 +314,231 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 		}
 		assertOutboxDelivery(t, ctx, adminPool, "dispatched", "", true)
 	})
+}
+
+// TestTerminalDeliveryRepairJoinUsesJobPrimaryKey pins CHAOS-4092: the job
+// join must resolve through river_job_pkey, never by scanning every row of
+// the kind. `job.id::text = outbox.transport_job_id` is not sargable against
+// the primary key (a cast on the indexed column), so Postgres fell back to
+// the river_job_kind index and filtered every row of that kind per
+// candidate -- the exact O(candidates x jobs-of-kind) blowup that produced
+// prod's 9.5h crash loop (EXPLAIN ANALYZE there: 97 loops x 18,730 rows
+// filtered, ~1.8M rows touched, 140k buffers).
+//
+// This seeds one legitimate candidate alongside thousands of decoy
+// river_job rows of the SAME kind, none of which the candidate's
+// transport_job_id points at, and reads a real EXPLAIN ANALYZE plan for the
+// production repair SQL. The bound below is a row-touch bound, not a string
+// match on an index name, so it survives a planner/version change: it fails
+// against the old `job.id::text = outbox.transport_job_id` shape (which
+// scales with decoyCount) and passes against the guarded
+// `job.id = <cast outbox.transport_job_id>` shape (which does not). Verified
+// by hand against the pre-fix join before this test was committed.
+func TestTerminalDeliveryRepairJoinUsesJobPrimaryKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+
+	adminPool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminPool.Close()
+	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema:     "river",
+		DomainRole: kernelDomainRole,
+		QueueRole:  kernelQueueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	queuePool, err := pgxpool.New(
+		ctx,
+		kernelRoleURI(t, instance.URI, kernelQueueRole, kernelQueuePassword),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queuePool.Close()
+	if err := postgresstore.CheckQueueAuthorization(ctx, queuePool, kernelQueueRole, "river"); err != nil {
+		t.Fatalf("queue authorization: %v", err)
+	}
+	riverClient, err := river.NewClient(
+		riverpgxv5.New(adminPool),
+		&river.Config{Schema: "river"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)
+
+	resetKernelIntegrationTables(t, ctx, adminPool)
+	jobID := seedExhaustionDelivery(t, ctx, adminPool, riverClient, now, "running")
+	discardRiverJob(t, ctx, adminPool, jobID, now, 5, 5, exhaustionBridgeError)
+
+	// Decoys match every OTHER predicate the candidates CTE evaluates --
+	// same kind, discarded, finalized, an exhausted attempt budget, a
+	// non-empty error history -- so neither river_job_kind nor
+	// river_job_state_and_finalized_at_index can shortcut the plan on its
+	// own. The only predicate that excludes a decoy is the job.id linkage
+	// itself, which is exactly the predicate this test exists to pin.
+	const decoyCount = 20000
+	if _, err := adminPool.Exec(
+		ctx,
+		`INSERT INTO river.river_job (kind, max_attempts, state, attempt, finalized_at, errors, args)
+		 SELECT $1, 5, 'discarded', 5, now(),
+			ARRAY[jsonb_build_object('error', 'decoy', 'attempt', 5)], '{}'::jsonb
+		 FROM generate_series(1, $2)`,
+		syncdispatchcontract.KindDispatchSyncRun,
+		decoyCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adminPool.Exec(ctx, `ANALYZE river.river_job`); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := queuePool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var explainJSON string
+	if err := tx.QueryRow(
+		ctx,
+		"EXPLAIN (ANALYZE, VERBOSE, BUFFERS, FORMAT JSON) "+repair.query,
+		now.UTC(),
+		10,
+		riverUnhandledRescueError,
+		riverUnhandledRescueEvidence,
+		riverDeliveryExhaustedEvidence,
+	).Scan(&explainJSON); err != nil {
+		t.Fatalf("EXPLAIN the repair statement: %v", err)
+	}
+
+	var document []map[string]any
+	if err := json.Unmarshal([]byte(explainJSON), &document); err != nil {
+		t.Fatalf("parse EXPLAIN JSON: %v\n%s", err, explainJSON)
+	}
+	if len(document) != 1 {
+		t.Fatalf("EXPLAIN returned %d plans, want 1:\n%s", len(document), explainJSON)
+	}
+	plan, _ := document[0]["Plan"].(map[string]any)
+	jobNode := findExplainNodeByRelation(plan, "river_job")
+	if jobNode == nil {
+		t.Fatalf("no plan node scanned river_job:\n%s", explainJSON)
+	}
+	nodeType, _ := jobNode["Node Type"].(string)
+	indexName, _ := jobNode["Index Name"].(string)
+	rowsRemoved, _ := jobNode["Rows Removed by Filter"].(float64)
+	actualRows, _ := jobNode["Actual Rows"].(float64)
+	actualLoops, _ := jobNode["Actual Loops"].(float64)
+	if actualLoops == 0 {
+		actualLoops = 1
+	}
+	// "Actual Rows" is what the node RETURNED after evaluating its own
+	// Filter, not what it examined before filtering -- for a Seq Scan (or
+	// any node with a Filter clause) that undercounts by exactly the rows
+	// the Filter rejected. Codex adversarial review (round 1) caught that
+	// this test computed rowsRemoved but never asserted it, so a plan
+	// shape where the join predicate is evaluated as a per-node Filter
+	// (rather than surfacing as a Hash Cond, the shape this test happened
+	// to observe first) could report a misleadingly low "rows touched" and
+	// pass despite retaining an O(N) scan. Both actual and removed rows are
+	// per-loop averages when Loops > 1, so both are scaled by loops before
+	// summing.
+	rowsTouched := (actualRows + rowsRemoved) * actualLoops
+	t.Logf(
+		"river_job scan: node=%q index=%q actual-rows=%.0f actual-loops=%.0f "+
+			"rows-removed-by-filter=%.0f rows-touched=%.0f decoys=%d",
+		nodeType, indexName, actualRows, actualLoops, rowsRemoved, rowsTouched, decoyCount,
+	)
+
+	// The row-touch bound (rows returned + rows the node's own Filter
+	// rejected, scaled by loops) is the primary assertion: it holds
+	// regardless of which plan shape the optimizer picks (Nested Loop +
+	// Index Scan, Hash Join + Seq Scan, Nested Loop + Seq Scan with a
+	// correlated Filter, ...) because it captures every row the node
+	// touched, not just the ones it returned. A Hash Join can still push
+	// the id equality into its Hash Cond instead of a Filter on this node,
+	// which is why the Seq Scan rejection below is a second, independent
+	// guard: neither alone is airtight against every plan shape, but a
+	// primary-key equality lookup at LIMIT 10 never legitimately needs a
+	// full sequential scan of river_job regardless of how the optimizer
+	// phrases its Filter/Hash Cond split. Decoys satisfy every other
+	// predicate (kind, state, finalized_at, exhausted attempts, a
+	// non-empty error history), so only the job.id linkage distinguishes
+	// them; the fixed join resolves through the primary key and touches
+	// exactly the 1 matching row. The bound is far below decoyCount but
+	// leaves headroom for planner/version variance without masking an
+	// O(N) scan of 20,000 decoys.
+	const maxRowsTouched = 5
+	if rowsTouched > maxRowsTouched {
+		t.Fatalf(
+			"job scan touched %.0f rows (actual=%.0f removed=%.0f loops=%.0f) with %d "+
+				"same-kind, same-state decoys present: join is not resolving through the "+
+				"primary key (node type=%q index=%q); full plan:\n%s",
+			rowsTouched, actualRows, rowsRemoved, actualLoops, decoyCount, nodeType, indexName, explainJSON,
+		)
+	}
+	if nodeType == "Seq Scan" {
+		t.Fatalf(
+			"job scan used a Seq Scan over river_job with %d decoys present: an equality "+
+				"lookup for at most 10 candidates never needs a full sequential scan; "+
+				"full plan:\n%s",
+			decoyCount, explainJSON,
+		)
+	}
+	if strings.Contains(indexName, "kind") {
+		t.Fatalf(
+			"job scan used index %q, a kind-only index that still visits every row of the "+
+				"kind; want a primary-key lookup",
+			indexName,
+		)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	assertOutboxDelivery(t, ctx, adminPool, "pending", riverDeliveryExhaustedEvidence, false)
+}
+
+// findExplainNodeByRelation searches a parsed EXPLAIN (FORMAT JSON) plan tree
+// depth-first for the first node scanning the named relation.
+func findExplainNodeByRelation(node map[string]any, relation string) map[string]any {
+	if node == nil {
+		return nil
+	}
+	if name, _ := node["Relation Name"].(string); name == relation {
+		return node
+	}
+	children, _ := node["Plans"].([]any)
+	for _, child := range children {
+		childNode, ok := child.(map[string]any)
+		if !ok {
+			continue
+		}
+		if found := findExplainNodeByRelation(childNode, relation); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 // seedExhaustionDelivery reproduces the state a coordinator delivery is left in

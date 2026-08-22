@@ -36,9 +36,13 @@ const (
 	defaultCancelledRetention  = 30 * 24 * time.Hour
 	defaultDiscardedRetention  = 30 * 24 * time.Hour
 	defaultJobCleanerTimeout   = 30 * time.Second
-	defaultRiverDatabaseSchema = "river"
-	defaultDomainDatabaseRole  = "devhealth_domain"
-	defaultQueueDatabaseRole   = "devhealth_queue"
+	// defaultSyncObservationTimeout mirrors syncreconciler's own unconfigured
+	// default (CHAOS-4092) so a deployment that never sets the override sees
+	// no behavior change from this option's introduction.
+	defaultSyncObservationTimeout = 2 * time.Second
+	defaultRiverDatabaseSchema    = "river"
+	defaultDomainDatabaseRole     = "devhealth_domain"
+	defaultQueueDatabaseRole      = "devhealth_queue"
 	// The coordinator role of the CHAOS-3033 Option B split. Provisioned
 	// alongside the other two by docker/init-extra-dbs.sh (local dev) and
 	// scripts/worker/provision_river_roles.sql (deployed environments).
@@ -143,20 +147,34 @@ type Config struct {
 	PagerDutyOAuthClientID secrets.Value
 	PagerDutyOAuthSecret   secrets.Value
 
-	QueueDatabaseMode              QueueControlMode
-	CoordinatorDatabaseMode        QueueControlMode
-	RiverDatabaseSchema            string
-	DomainDatabaseRole             string
-	QueueDatabaseRole              string
-	CoordinatorDatabaseRole        string
-	DomainTransactionPooler        bool
-	DomainDatabaseMaxConns         int32
-	QueueDatabaseMaxConns          int32
-	CoordinatorDatabaseMaxConns    int32
-	CompletedJobRetention          time.Duration
-	CancelledJobRetention          time.Duration
-	DiscardedJobRetention          time.Duration
-	RiverJobCleanerTimeout         time.Duration
+	QueueDatabaseMode           QueueControlMode
+	CoordinatorDatabaseMode     QueueControlMode
+	RiverDatabaseSchema         string
+	DomainDatabaseRole          string
+	QueueDatabaseRole           string
+	CoordinatorDatabaseRole     string
+	DomainTransactionPooler     bool
+	DomainDatabaseMaxConns      int32
+	QueueDatabaseMaxConns       int32
+	CoordinatorDatabaseMaxConns int32
+	CompletedJobRetention       time.Duration
+	CancelledJobRetention       time.Duration
+	DiscardedJobRetention       time.Duration
+	RiverJobCleanerTimeout      time.Duration
+	// SyncObservationTimeout bounds one sync-dispatch observer step
+	// (reconciler-only). CHAOS-4092: exceeding it is STILL fatal to the
+	// whole process today, exactly as the hardcoded 2s was -- syncreconciler
+	// Loop.step's deadline-exceeded error is unconditionally fatal, and its
+	// owner tears the whole service down on that error (the incident
+	// mechanism). This override does not change that failure mode; it only
+	// moves the threshold, so an operator can widen the budget in place of a
+	// redeploy while the structural fix (an index-friendly terminal-repair
+	// join) is what actually keeps steps fast. A repair stage failing only
+	// ITS OWN stage loudly instead of killing the process is a proposed
+	// follow-up, not implemented here. It is a liveness knob, not a
+	// correctness one: syncreconciler.LoopConfig.validate bounds it to
+	// [10ms, 30s] regardless of what is configured here.
+	SyncObservationTimeout         time.Duration
 	OperationalBridgeURL           string
 	OperationalBridgeToken         secrets.Value
 	OperationalBridgeTimeout       time.Duration
@@ -477,6 +495,31 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// Reconciler-only (CHAOS-4092), gated on cfg.Service rather than parsed
+	// unconditionally: durationEnv VALIDATES and can fail Load, unlike (say)
+	// UnreclaimableSweepMode's bare envOrDefault. Every Go service reads its
+	// configuration from the same shared environment/compose base (see
+	// deploy/docker-compose/compose.go-workers.yml's go-worker-env-base), so
+	// an unconditional parse here would let a malformed
+	// SYNC_OBSERVATION_TIMEOUT meant only for the reconciler fail startup for
+	// the scheduler and every worker group too. Bounds match syncreconciler's
+	// own minObservationTimeout/maxObservationTimeout; LoopConfig.validate
+	// re-checks them, so this is belt-and-suspenders against the two
+	// constant sets drifting, not the only enforcement.
+	if cfg.Service == "dev-health-reconciler" {
+		cfg.SyncObservationTimeout, err = durationEnv(
+			lookup,
+			"SYNC_OBSERVATION_TIMEOUT",
+			defaultSyncObservationTimeout,
+			10*time.Millisecond,
+			30*time.Second,
+		)
+		if err != nil {
+			return Config{}, err
+		}
+	} else {
+		cfg.SyncObservationTimeout = defaultSyncObservationTimeout
+	}
 	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
 		lookup,
 		"DEV_HEALTH_STREAM_REPLICAS",
@@ -517,6 +560,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_cancelled_job_retention", c.CancelledJobRetention),
 		slog.Duration("river_discarded_job_retention", c.DiscardedJobRetention),
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
+		slog.Duration("sync_observation_timeout", c.SyncObservationTimeout),
 		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
 		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),
 		slog.Bool(

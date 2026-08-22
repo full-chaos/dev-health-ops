@@ -157,6 +157,36 @@ func (repair *TerminalDeliveryRepair) Step(
 // requires the rescue sentinel. Republishing does not collide with the retired
 // job's unique key: the publisher includes the outbox attempt counter in its
 // args and the claim increments it, so each redelivery has distinct args.
+//
+// CHAOS-4092: the job join is on job.id, River's bigint primary key, never on
+// job.id::text. Casting the PK to text (the original shape) is not sargable
+// against river_job_pkey, so Postgres fell back to river_job_kind and filtered
+// every row of that kind per candidate -- O(candidates x jobs-of-kind), which
+// is what turned a 106k-row river_job into a 9.5h crash loop. The comparison
+// instead casts outbox.transport_job_id the other way, to bigint, restoring an
+// index-friendly job.id = <value> predicate that a nested-loop Index Scan on
+// river_job_pkey can use per candidate: O(candidates) regardless of table
+// size.
+//
+// The cast is guarded by a CASE, not a separate `transport_job_id ~ regex`
+// AND-ed alongside it: Postgres's `~` and `::bigint` are both immutable, so
+// the planner is free to reorder or fold two independent boolean quals and
+// could evaluate the cast before the regex guards it, and a non-numeric
+// transport_job_id would fault the whole step with a driver error (a worse
+// failure than the join it replaces -- a poison row instead of a slow one).
+// A CASE's THEN branch is evaluated only when its WHEN is true by the SQL
+// standard's short-circuit semantics, which SQL does guarantee regardless of
+// planning, so the cast never runs against a non-numeric value. A NULL or
+// non-numeric transport_job_id makes the CASE evaluate to NULL, and
+// `job.id = NULL` is never true, so those rows are excluded exactly as they
+// were under the old join (a NULL transport_job_id was never a text match
+// either). transport_job_id is always either NULL or
+// strconv.FormatInt(riverJobID, 10) -- see syncdispatchruntime.Publisher.Publish
+// and markRiverDispatchedSQL's NULLIF of an empty string into $5 -- so the
+// guard is defensive against any row this schema does not currently produce,
+// not a documented alternate shape. The digit
+// count is capped at 18 so the guarded value can never overflow int64 (max
+// 9223372036854775807, 19 digits) and fault the cast that way either.
 const repairTerminalRiverDeliverySQL = `
 WITH candidates AS (
 	SELECT outbox.id,
@@ -171,7 +201,10 @@ WITH candidates AS (
 	JOIN public.sync_dispatch_transport_routes AS route
 		ON route.kind = outbox.kind
 	JOIN %s AS job
-		ON job.id::text = outbox.transport_job_id
+		ON job.id = CASE
+				WHEN outbox.transport_job_id ~ '^[0-9]{1,18}$'
+				THEN outbox.transport_job_id::bigint
+			END
 		AND job.kind = outbox.kind
 	WHERE outbox.status = 'dispatched'
 		AND outbox.dispatched_transport = 'river'

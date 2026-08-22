@@ -1316,21 +1316,30 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
         # sweep DOES; it must not also decide how loudly the underlying read
         # failure gets reported.
         #
-        # NO counter here (adversarial review finding, CHAOS-4073's pattern
-        # does NOT apply as-is): reconcile_sync_dispatch is Celery-scheduled,
-        # and CHAOS-4026 retired Celery -- zero Python celery services run in
-        # prod since the 2026-08-19 stop (workers/config.py's beat_schedule
-        # comment; docs/operate/run/workers-and-jobs.md). This task is one of
-        # a small set kept checked-in and test-covered only because its
-        # removal needs its own reviewed pass
-        # (tests/workers/test_celery_dead_code_contract.py's
-        # _FLAGGED_SURVIVING_TASK_NAMES), not because anything executes it
-        # today -- not prod, and not the ask-dev-acceptance fleet's real
-        # Celery worker/beat either (that fleet exercises monitor-queue-depths
-        # and the prune tasks, not this one). A Prometheus counter+alert for a
-        # code path with no live execution path would assert an operational
-        # signal that cannot exist; adding one back is only correct once this
-        # task either runs somewhere again or gains a real metrics export.
+        # NO counter here (adversarial review finding). Two independent
+        # reasons stack:
+        #   1. reconcile_sync_dispatch is Celery-scheduled, and CHAOS-4026
+        #      retired Celery -- zero Python celery services run in prod
+        #      since the 2026-08-19 stop (workers/config.py's beat_schedule
+        #      comment). It is one of a small set kept checked-in and
+        #      test-covered only because its removal needs its own reviewed
+        #      pass (tests/workers/test_celery_dead_code_contract.py's
+        #      _FLAGGED_SURVIVING_TASK_NAMES), not because anything executes
+        #      it today.
+        #   2. Even where a Python code path DOES execute live (e.g. the
+        #      worker_metrics.py operational bridge), a Prometheus counter
+        #      here is unreachable regardless: prod's OTel collector runs
+        #      pull-model receivers for NOTHING app-level (otel.prod.yml's
+        #      metrics pipeline is otlp+docker_stats+hostmetrics only -- a
+        #      deliberate push-model posture), so no scraper exists for any
+        #      app-defined Counter, in any process, API included. Tracked as
+        #      CHAOS-4094 (which also covers an open, separate SigNoz
+        #      pushed-metrics drop). A counter/alert here would assert an
+        #      operational signal that cannot exist until CHAOS-4094 lands.
+        # The working loud signal today is this log line: stdout ERROR logs
+        # flow through the OTel logs pipeline to SigNoz (proven working,
+        # unlike the metrics pipeline), and Sentry's LoggingIntegration
+        # captures it independently of either.
         logger.exception(
             "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
         )

@@ -52,3 +52,21 @@ func TestSameJSONRejectsNestedValueMutation(t *testing.T) {
 		t.Fatal("a mutated nested array element was accepted as identical")
 	}
 }
+
+// TestSameJSONDistinguishesLargeIntegersAboveFloat64Precision guards the
+// codex-review finding on this fix: decoding JSON numbers into a plain
+// `any` converts them to float64, which loses precision above 2^53 and
+// would make two different large integers compare equal. sameJSON must use
+// UseNumber (or equivalent) so a genuinely mutated large-integer scope is
+// still rejected.
+func TestSameJSONDistinguishesLargeIntegersAboveFloat64Precision(t *testing.T) {
+	t.Parallel()
+	left := []byte(`{"limit":9007199254740992}`)
+	right := []byte(`{"limit":9007199254740993}`)
+	if sameJSON(left, right) {
+		t.Fatal("distinct large integers above float64 precision were accepted as identical")
+	}
+	if !sameJSON(left, []byte(`{"limit": 9007199254740992}`)) {
+		t.Fatal("identical large integer, differently spaced, was rejected as a mutated duplicate")
+	}
+}

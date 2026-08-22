@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -131,12 +132,30 @@ func sameRequest(existing, expected Request, scope []byte) bool {
 // own internal schedule on the way back out, independent of what was
 // written -- the mismatch is introduced by the storage round-trip, not by
 // the writer, so only a semantic comparison at the check site closes it.
+//
+// decodeJSONPreservingNumbers is used instead of a plain json.Unmarshal
+// into `any`: the default decoder converts every JSON number to float64,
+// which silently rounds integers above 2^53 (9007199254740992 and
+// 9007199254740993 both decode to the same float64), so two genuinely
+// different large-integer scopes would compare equal. UseNumber keeps
+// numbers as their original json.Number text instead.
 func sameJSON(left, right []byte) bool {
-	var leftValue, rightValue any
-	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+	leftValue, leftErr := decodeJSONPreservingNumbers(left)
+	rightValue, rightErr := decodeJSONPreservingNumbers(right)
+	if leftErr != nil || rightErr != nil {
 		return false
 	}
 	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func decodeJSONPreservingNumbers(data []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 func envelopeFor(request Request) jobcontract.Envelope {

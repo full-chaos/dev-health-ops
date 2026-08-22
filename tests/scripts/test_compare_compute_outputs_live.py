@@ -221,9 +221,12 @@ def test_same_implementation_twice_reports_equal_and_the_declared_repeat_policy(
 
     # dora_metrics_daily is a plain MergeTree and job_dora never deletes, so a
     # replay appends. Both sides must show it, and the manifest must say so.
-    assert {entry["side"] for entry in report["repeat"]} == {"python", "python_replica"}
-    assert {entry["run"] for entry in report["repeat"]} == {2}
-    for entry in report["repeat"]:
+    assert report["repeat"]["status"] == "evaluated"
+    assert "repeat_policy" in report["proves"]
+    entries = report["repeat"]["entries"]
+    assert {entry["side"] for entry in entries} == {"python", "python_replica"}
+    assert {entry["run"] for entry in entries} == {2}
+    for entry in entries:
         assert entry["observed"] == "append_duplicates"
         assert entry["matches_declared_policy"]
         assert entry["key_set_stable"]
@@ -269,6 +272,20 @@ def perturbable(destinations) -> Any:
         "or the control proves nothing"
     )
     yield left, right
+
+
+def test_no_exec_reports_row_parity_only_and_says_the_replay_was_not_run(perturbable):
+    """An empty repeat section must not read as "nothing was violated"."""
+    left, right = perturbable
+    code, report = _compare(left, right, ["--no-exec"])
+    assert code == 0
+    assert report["verdict"] == comparator.VERDICT_EQUAL
+    assert report["proves"] == ["row_parity"]
+    assert report["repeat"] == {
+        "status": "not_run",
+        "reason": "no_producer_executed",
+        "entries": [],
+    }
 
 
 def test_negative_control_mutated_row(perturbable):

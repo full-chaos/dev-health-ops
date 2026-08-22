@@ -675,6 +675,8 @@ def go_observation(**overrides: Any) -> dict[str, Any]:
             "end": "2026-08-22T18:00:00Z",
             "timezone": "UTC",
         },
+        "dataset_scope": "a" * 64,
+        "run_scope": "b" * 64,
         "build": {"revision": "f4839e3d1", "image_digest": "sha256:" + "0" * 64},
         "families": {
             "metrics": {
@@ -923,3 +925,90 @@ def test_runtime_coverage_includes_queue_age_only_baseline_profiles(tmp_path):
         f for f in report["findings"] if f["check"] == "lag_seconds_not_measurable"
     ]
     assert checks, "an unmeasured queue age is not a satisfied queue-age budget"
+
+
+# --------------------------------------------------------------------------
+# Execution and attestation must be proven, not assumed
+# --------------------------------------------------------------------------
+
+
+def test_a_side_with_no_producer_command_is_refused(tmp_path):
+    """`go` ships as `not_ported`, so it resolves to no command.
+
+    Skipping that side's execution would compare the reference against whatever
+    was already sitting in the destination and report EQUAL for an
+    implementation that never ran.
+    """
+    manifest = write_manifest(tmp_path, base_manifest())
+    with pytest.raises(
+        comparator.ComparisonError, match="producer_command_unresolved:go"
+    ):
+        comparator.compare_rows(
+            manifest,
+            left_dsn="clickhouse://ch:ch@localhost:8123/parity_a",
+            right_dsn="clickhouse://ch:ch@localhost:8123/parity_b",
+            left_label="python",
+            right_label="go",
+            left_command=["/bin/true"],
+            right_command=None,
+            no_exec=False,
+            repeat=2,
+            sample=10,
+            as_of="2026-08-22T00:00:00Z",
+        )
+
+
+def test_the_checked_in_manifest_leaves_go_without_a_command():
+    """The premise of the test above, asserted against the real manifest."""
+    manifest = comparator.load_manifest(MANIFEST_DIR / "metrics.dora.json")
+    assert manifest.producers["go"]["status"] == "not_ported"
+    assert comparator.resolve_command(manifest, "go", None) is None
+    assert comparator.resolve_command(manifest, "python", None) is not None
+
+
+@pytest.mark.parametrize(
+    "mutate,expected",
+    [
+        (lambda o: o.pop("dataset_scope"), "observation_missing_fields"),
+        (lambda o: o.update(extra=1), "observation_unknown_fields"),
+        (
+            lambda o: o.update(schema_version=2),
+            "observation_schema_version_unsupported",
+        ),
+        (lambda o: o.update(dataset_scope="nope"), "observation_scope_digest_invalid"),
+        (
+            lambda o: o.update(
+                build={"revision": "zz", "image_digest": "sha256:" + "0" * 64}
+            ),
+            "observation_build_revision_invalid",
+        ),
+        (
+            lambda o: o.update(build={"revision": "abc1234", "image_digest": "nope"}),
+            "observation_build_image_digest_invalid",
+        ),
+        (
+            lambda o: o["window"].update(timezone="America/New_York"),
+            "observation_window_not_utc",
+        ),
+        (
+            lambda o: o["window"].update(start="2026-08-22T19:00:00Z"),
+            "observation_window_order_invalid",
+        ),
+    ],
+)
+def test_runtime_mode_enforces_the_observation_attestation(tmp_path, mutate, expected):
+    """A set of in-envelope numbers is not an observation.
+
+    Without this, a forged or truncated file could be handed to the gate with no
+    statement of which build, dataset, run, or window produced it.
+    """
+    observation = go_observation()
+    mutate(observation)
+    with pytest.raises(comparator.ComparisonError, match=expected):
+        comparator.compare_runtime(write_observation(tmp_path, observation))
+
+
+def test_a_well_formed_observation_still_reaches_the_measurement_stage(tmp_path):
+    report = comparator.compare_runtime(write_observation(tmp_path, go_observation()))
+    assert report["claim"] == comparator.CLAIM_RUNTIME
+    assert report["comparisons"]

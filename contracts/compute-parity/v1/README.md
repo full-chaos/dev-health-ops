@@ -19,6 +19,14 @@ vocabularies are disjoint (`EQUAL`/`DIFFERENT`/`INDETERMINATE` versus
 `WITHIN_ENVELOPE`/`OUTSIDE_ENVELOPE`/`UNPROVEN`), so a reader cannot mistake one
 for the other and a reviewer cannot be handed one when they asked for the other.
 
+`runtime` takes a normalized Go observation, not the v3 canary artifact: that
+artifact pairs a Celery observation with a Go one and carries a route
+transport, a route-generation step, and rollback evidence, none of which exist
+post-cutover. It does carry the same attestation rigour — schema version,
+window, build revision and image digest, dataset and run scope digests, all
+enforced — because a set of in-envelope numbers with no statement of what
+produced them is not evidence. See `runtime-observation.schema.json`.
+
 `runtime` currently returns `UNPROVEN` for every input, because
 `v3-canary-release-proof/parity-thresholds.json` carries `review.approved:
 false`. That is the correct answer, not a defect: the thresholds have never been
@@ -32,6 +40,7 @@ rather than re-deciding them.
 | Comparator | `scripts/worker/compare_compute_outputs.py` |
 | Fixture seeding / reference execution | `scripts/worker/compute_parity_fixtures.py` |
 | Manifest schema | `contracts/compute-parity/v1/manifest.schema.json` |
+| Runtime-observation schema | `contracts/compute-parity/v1/runtime-observation.schema.json` |
 | Manifests | `contracts/compute-parity/v1/<kind>.json` |
 | Unit coverage (runs in the standard gate) | `tests/scripts/test_compare_compute_outputs.py` |
 | Live end-to-end proof (`-m clickhouse`, opt-in) | `tests/scripts/test_compare_compute_outputs_live.py` |
@@ -69,8 +78,18 @@ pinned one and a producer is being run: without it the producer silently takes
 the host clock, and the two sides can land on different days.
 
 Producers receive `PARITY_DSN`, `PARITY_SIDE`, `PARITY_RUN_INDEX` and
-`PARITY_AS_OF` in the environment. `--no-exec` compares two destinations exactly
-as they stand.
+`PARITY_AS_OF` in the environment. **Both sides must resolve a producer
+command**: a side that resolves none — which is exactly the checked-in state of
+a not-yet-ported implementation — would otherwise be compared against whatever
+was already in its destination and reported EQUAL without ever running. Reading
+pre-populated destinations is legitimate, but only as an explicit caller
+decision: `--no-exec`.
+
+Every report carries a `proves` list naming what it actually established:
+`["row_parity"]`, or `["row_parity", "repeat_policy"]` when a replay was
+executed and checked. `--repeat` defaults to 2 for that reason; `--repeat 1` and
+`--no-exec` record `repeat: {"status": "not_run", ...}` rather than an empty
+section that reads like "nothing was violated".
 
 ## Adding a kind
 

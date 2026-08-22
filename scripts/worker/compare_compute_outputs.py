@@ -1142,6 +1142,7 @@ def compare_rows(
     right_label: str,
     left_command: Sequence[str] | None,
     right_command: Sequence[str] | None,
+    no_exec: bool,
     repeat: int,
     sample: int,
     as_of: str,
@@ -1161,6 +1162,24 @@ def compare_rows(
         # PARITY_AS_OF silently hands it the host clock, and the two sides can
         # then land on different days. Refuse rather than compare.
         raise ComparisonError(f"as_of_required_for_clock_policy:{clock_policy}")
+
+    # An unexecuted side is not a side. `resolve_command` returns None for a
+    # producer with no command -- which is exactly the checked-in state of a
+    # not-yet-ported implementation -- and skipping its execution would compare
+    # the reference against whatever happened to be sitting in the destination
+    # and call it EQUAL. Reading pre-populated destinations is legitimate, but
+    # only as an explicit caller decision.
+    unexecuted = [
+        label
+        for label, command in ((left_label, left_command), (right_label, right_command))
+        if command is None
+    ]
+    if unexecuted and not no_exec:
+        raise ComparisonError(
+            "producer_command_unresolved:"
+            + ",".join(unexecuted)
+            + ":pass --no-exec to compare destinations as they stand"
+        )
 
     stores = {spec.store for spec in manifest.outputs} | {
         spec.store for spec in manifest.inputs
@@ -1194,9 +1213,21 @@ def compare_rows(
         },
         "runs": [],
         "inputs": {},
-        "repeat": [],
+        "repeat": {"status": "not_run", "reason": None, "entries": []},
+        "proves": ["row_parity"],
         "differences": [],
     }
+    if no_exec or repeat < 2:
+        # Replay behaviour cannot be observed without re-executing a producer,
+        # and an empty repeat section must not read as "nothing was violated".
+        # `proves` names what this report actually established.
+        repeat = 1
+        report["repeat"]["reason"] = (
+            "no_producer_executed" if no_exec else "repeat_below_2"
+        )
+    else:
+        report["repeat"]["status"] = "evaluated"
+        report["proves"].append("repeat_policy")
 
     with (
         Reader(store, left_dsn) as left_reader,
@@ -1311,7 +1342,7 @@ def compare_rows(
                             tombstones_second=tombstones[side],
                         )
                         repeat_entry["run"] = run_index
-                        report["repeat"].append(repeat_entry)
+                        report["repeat"]["entries"].append(repeat_entry)
                         if not repeat_entry["matches_declared_policy"]:
                             report["differences"].append(
                                 {
@@ -1400,6 +1431,7 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
     if observation.get("runtime") != "go":
         raise ComparisonError("observation_runtime_not_go")
     proof.reject_sensitive_keys(observation)
+    _validate_runtime_observation(observation, proof)
 
     baseline = documents["baseline"].value
     thresholds = documents["thresholds"].value["thresholds"]
@@ -1585,6 +1617,66 @@ def compare_runtime(observation_path: Path) -> dict[str, Any]:
     }
 
 
+RUNTIME_OBSERVATION_KEYS = {
+    "schema_version",
+    "runtime",
+    "captured_at",
+    "window",
+    "build",
+    "dataset_scope",
+    "run_scope",
+    "families",
+    "profiles",
+}
+
+
+def _validate_runtime_observation(observation: Mapping[str, Any], proof: Any) -> None:
+    """Enforce the attestation contract for a normalized runtime observation.
+
+    ``canary_release_proof.validate_observation`` is deliberately NOT reused
+    wholesale: it validates the v3 *canary* artifact, which pairs a Celery
+    observation with a Go one and requires a route transport, a route
+    generation step, and rollback evidence. Post-cutover there is no Celery
+    side and no route flip, so that schema does not describe this input.
+
+    What is reused is its attestation rigour and its primitives -- the digest
+    and revision patterns, the timestamp parser, the sensitive-key refusal --
+    so that a set of in-envelope numbers cannot be accepted without saying
+    which build, which dataset, and which window produced them.
+    """
+    unknown = sorted(set(observation) - RUNTIME_OBSERVATION_KEYS)
+    if unknown:
+        raise ComparisonError(f"observation_unknown_fields:{','.join(unknown)}")
+    missing = sorted(RUNTIME_OBSERVATION_KEYS - set(observation))
+    if missing:
+        raise ComparisonError(f"observation_missing_fields:{','.join(missing)}")
+    if observation["schema_version"] != 1:
+        raise ComparisonError("observation_schema_version_unsupported")
+    for key in ("dataset_scope", "run_scope"):
+        if not proof.valid_digest(observation[key]):
+            raise ComparisonError(f"observation_scope_digest_invalid:{key}")
+
+    build = observation["build"]
+    if not isinstance(build, Mapping) or set(build) != {"revision", "image_digest"}:
+        raise ComparisonError("observation_build_invalid")
+    if not proof.REVISION.match(str(build["revision"])):
+        raise ComparisonError("observation_build_revision_invalid")
+    digest = str(build["image_digest"])
+    if not digest.startswith("sha256:") or not proof.valid_digest(digest[7:]):
+        raise ComparisonError("observation_build_image_digest_invalid")
+
+    window = observation["window"]
+    if not isinstance(window, Mapping) or set(window) != {"start", "end", "timezone"}:
+        raise ComparisonError("observation_window_invalid")
+    if window["timezone"] != "UTC":
+        raise ComparisonError("observation_window_not_utc")
+    start = proof.parse_utc_timestamp(window["start"])
+    end = proof.parse_utc_timestamp(window["end"])
+    captured = proof.parse_utc_timestamp(observation["captured_at"])
+    if not (start and end and captured) or not (start < end <= captured):
+        raise ComparisonError("observation_window_order_invalid")
+
+
 def _require_measure(value: Any, name: str) -> float:
     """Refuse a runtime measurement that arithmetic cannot be trusted on.
 
@@ -1676,8 +1768,11 @@ def build_parser() -> argparse.ArgumentParser:
     rows.add_argument(
         "--repeat",
         type=int,
-        default=1,
-        help="Executions per side. 2 exercises the declared repeat policy.",
+        default=2,
+        help=(
+            "Executions per side. Defaults to 2 so the declared repeat policy is "
+            "actually exercised; 1 reports row parity only and says so."
+        ),
     )
     rows.add_argument("--sample", type=int, default=10)
     rows.add_argument(
@@ -1714,6 +1809,7 @@ def main(argv: list[str] | None = None) -> int:
                 right_command=None
                 if args.no_exec
                 else resolve_command(manifest, args.right_label, args.right_exec),
+                no_exec=bool(args.no_exec),
                 repeat=args.repeat,
                 sample=args.sample,
                 as_of=args.as_of,

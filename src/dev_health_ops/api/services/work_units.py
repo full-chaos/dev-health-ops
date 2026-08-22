@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable
 from datetime import datetime, time, timezone
-from typing import Literal
+from typing import Any, Literal
+
+from dev_health_ops.external_ingest.ids import derive_work_item_id
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -17,6 +20,7 @@ from ..models.schemas import (
 )
 from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.work_unit_investments import (
+    fetch_repo_identities,
     fetch_repo_scopes,
     fetch_work_item_team_assignments,
     fetch_work_unit_investment_quotes,
@@ -93,9 +97,9 @@ def _parse_distribution(value: object) -> dict[str, float]:
     return {}
 
 
-def _extract_issue_ids(structural_payload: object) -> list[str]:
+def _parse_structural_payload(structural_payload: object) -> dict[str, Any] | None:
     if not structural_payload:
-        return []
+        return None
     try:
         parsed = (
             json.loads(structural_payload)
@@ -103,8 +107,13 @@ def _extract_issue_ids(structural_payload: object) -> list[str]:
             else structural_payload
         )
     except Exception:
-        return []
-    if not isinstance(parsed, dict):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_issue_ids(structural_payload: object) -> list[str]:
+    parsed = _parse_structural_payload(structural_payload)
+    if parsed is None:
         return []
     issues = parsed.get("issues")
     if not isinstance(issues, list):
@@ -112,25 +121,93 @@ def _extract_issue_ids(structural_payload: object) -> list[str]:
     return [str(item) for item in issues if item]
 
 
+# `{repo_uuid}#pr{number}` -- work_graph/ids.py:generate_pr_id. Anchored so an
+# `issues` entry can never be mistaken for a PR ref.
+_PR_EVIDENCE_REF_RE = re.compile(r"^([0-9a-fA-F-]{36})#pr(\d+)$")
+
+
+def _extract_pr_refs(structural_payload: object) -> list[str]:
+    """CHAOS-2416: the `prs` array is the second bridge from a work unit to a
+    team, alongside `issues`. This mirrors the `unit_team` SQL CTE in
+    `api/queries/investment.py`; the Sankey and this drilldown must agree on
+    which units have a team, so the two must be changed together."""
+    parsed = _parse_structural_payload(structural_payload)
+    if parsed is None:
+        return []
+    prs = parsed.get("prs")
+    if not isinstance(prs, list):
+        return []
+    return [str(item) for item in prs if item]
+
+
+def _pr_ref_work_item_id(
+    pr_ref: str, repo_identities: dict[str, tuple[str, str]]
+) -> str | None:
+    """Resolve a `prs` evidence ref into the work_items id space.
+
+    Returns None when the ref is not PR-shaped or its repo is unknown -- the
+    drilldown must not guess a work-item id the resolver never minted. Mirrors
+    the `multiIf` arms of `RESOLVED_EVIDENCE_WORK_ITEM_ID`.
+    """
+    match = _PR_EVIDENCE_REF_RE.match(pr_ref)
+    if match is None:
+        return None
+    identity = repo_identities.get(match.group(1))
+    if identity is None:
+        return None
+    slug, provider = identity
+    if not slug:
+        return None
+    return derive_work_item_id(
+        system="gitlab" if provider == "gitlab" else "github",
+        instance=slug,
+        external_key=match.group(2),
+        work_item_type="merge_request" if provider == "gitlab" else "pr",
+    )
+
+
 def _majority_team_for_issues(
     issue_ids: Iterable[str],
     team_map: dict[str, dict[str, str]],
 ) -> tuple[str, str]:
+    """Pick a unit's team from its evidence: most-cited team wins.
+
+    CHAOS-2416: this MUST agree with `build_unit_team_subquery` for every
+    unit, or the Sankey and this drilldown name different teams for the same
+    work unit -- the divergence the PR bridge exists to close. Three rules are
+    shared verbatim with the SQL:
+
+    * votes are counted per TEAM ID, never per rendered label. Two attribution
+      rows can spell one team_id with different team_names, and counting by
+      label would split that single team into two candidates on one side only.
+    * the label is ``max(label)`` over the winning id's refs, so it is a
+      deterministic function of the id rather than of row order (the SQL takes
+      ``max()`` in the same place).
+    * ties break on (count, TEAM ID), matching
+      ``argMax(resolved_team, (cnt, resolved_team_id))``. Ties are ordinary
+      now that a unit can reach one team through an issue and another through
+      a PR.
+
+    Refs are de-duplicated first, mirroring the SQL's ``arrayDistinct`` over
+    the combined issues+prs array: a duplicated ref in persisted evidence must
+    not vote twice here and once there.
+    """
     counts: dict[str, int] = {}
-    names: dict[str, str] = {}
-    for issue_id in issue_ids:
-        assignment = team_map.get(str(issue_id)) or {}
+    labels: dict[str, str] = {}
+    for issue_id in dict.fromkeys(str(i) for i in issue_ids):
+        assignment = team_map.get(issue_id) or {}
         team_id = str(assignment.get("team_id") or "").strip()
         team_name = str(assignment.get("team_name") or "").strip()
         if not team_id:
             continue
         counts[team_id] = counts.get(team_id, 0) + 1
-        if team_name:
-            names.setdefault(team_id, team_name)
+        label = team_name or team_id
+        if label > labels.get(team_id, ""):
+            labels[team_id] = label
     if not counts:
         return "unassigned", "Unassigned"
     team_id = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
-    return team_id, names.get(team_id) or team_id
+    return team_id, labels.get(team_id) or team_id
 
 
 def _matches_category_filter(
@@ -169,6 +246,7 @@ async def build_work_unit_investments(
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
     repo_scopes: dict[str, str] = {}
+    repo_identities: dict[str, tuple[str, str]] = {}
     team_assignments: dict[str, dict[str, str]] = {}
 
     async with clickhouse_client(db_url) as sink:
@@ -230,11 +308,35 @@ async def build_work_unit_investments(
         )
 
         issue_ids: list[str] = []
+        pr_refs: list[str] = []
         for row in rows:
-            issue_ids.extend(_extract_issue_ids(row.get("structural_evidence_json")))
+            payload = row.get("structural_evidence_json")
+            issue_ids.extend(_extract_issue_ids(payload))
+            pr_refs.extend(_extract_pr_refs(payload))
+        # CHAOS-2416: a unit's PRs bridge to a team as well as its issues. The
+        # `prs` refs are work-graph node ids, so they are resolved through the
+        # repos table into the work-items id space before the attribution
+        # lookup -- the same translation the `unit_team` SQL CTE performs.
+        pr_repo_uuids = [
+            match.group(1)
+            for match in (_PR_EVIDENCE_REF_RE.match(ref) for ref in pr_refs)
+            if match is not None
+        ]
+        repo_identities = await fetch_repo_identities(
+            sink,
+            repo_ids=pr_repo_uuids,
+            org_id=org_id,
+        )
+        pr_work_item_ids = [
+            work_item_id
+            for work_item_id in (
+                _pr_ref_work_item_id(ref, repo_identities) for ref in pr_refs
+            )
+            if work_item_id
+        ]
         team_assignments = await fetch_work_item_team_assignments(
             sink,
-            work_item_ids=issue_ids,
+            work_item_ids=[*issue_ids, *pr_work_item_ids],
             org_id=org_id,
         )
 
@@ -301,7 +403,21 @@ async def build_work_unit_investments(
         contextual_evidence.append({"type": "repo_scope", "repo_ids": [repo_scope]})
 
         unit_issue_ids = _extract_issue_ids(structural_payload)
-        team_id, team_name = _majority_team_for_issues(unit_issue_ids, team_assignments)
+        unit_pr_work_item_ids = [
+            work_item_id
+            for work_item_id in (
+                _pr_ref_work_item_id(ref, repo_identities)
+                for ref in _extract_pr_refs(structural_payload)
+            )
+            if work_item_id
+        ]
+        # arrayDistinct parity: the SQL de-duplicates the combined
+        # issues+prs ref array before voting, so a ref reachable both
+        # directly and via a PR translation counts once on both paths.
+        team_id, team_name = _majority_team_for_issues(
+            dict.fromkeys([*unit_issue_ids, *unit_pr_work_item_ids]),
+            team_assignments,
+        )
         contextual_evidence.append(
             {
                 "type": "team_scope",

@@ -108,6 +108,70 @@ async def fetch_repo_scopes(
     }
 
 
+async def fetch_repo_identities(
+    sink: BaseMetricsSink,
+    *,
+    repo_ids: Iterable[str],
+    org_id: str = "",
+) -> dict[str, tuple[str, str]]:
+    """Map repo UUID -> (slug, provider), scoped to one org.
+
+    CHAOS-2416: the work-unit drilldown needs the provider as well as the slug
+    to rebuild a PR/MR work-item id from a ``{repo_uuid}#pr{number}`` evidence
+    ref, which `fetch_repo_scopes` (slug only) cannot supply.
+
+    This MUST resolve identically to ``WORK_UNIT_EVIDENCE_REPO_SOURCE`` in
+    `queries/investment.py`; the whole point of the drilldown fix is that the
+    Sankey and the drilldown agree about a unit's team, and they cannot agree
+    if they disagree about what repo a UUID names. Both deliberate choices
+    below mirror that constant exactly:
+
+    * ``org_id`` in the filter AND the GROUP BY. `repos` is a
+      ReplacingMergeTree keyed on ``(org_id, id)`` (migration 027 rewrote it
+      from the ``(id)`` that migration 000 still declares), and `repos.id` is
+      derived from the repo slug with no org in the seed
+      (`external_ingest/ids.py:derive_repo_uuid`), so two tenants syncing the
+      same repo mint the same UUID and each keep their own row. Resolving by
+      UUID alone would aggregate across tenants and could hand this org the
+      other tenant's slug/provider.
+    * a provider-ambiguous UUID yields an empty provider and bridges nothing.
+      The UUID seed omits the provider, so a github and a gitlab repo sharing
+      a slug collide; picking one by argMax could attribute the unit to the
+      other provider's team. Failing closed keeps it `unassigned`.
+    * ``argMax(..., last_synced)`` rather than raw rows. Several versions of
+      one id routinely coexist before a background merge; letting a dict
+      comprehension pick a winner is order-dependent, and taking each column
+      independently could splice a slug from one version onto a provider from
+      another.
+    """
+    ids = _unique_non_empty(repo_ids)
+    if not ids:
+        return {}
+    query = """
+        SELECT
+            toString(id) AS repo_id,
+            argMax(repo, last_synced) AS repo,
+            if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
+        FROM repos
+        WHERE id IN {repo_ids:Array(String)}
+          AND org_id = {org_id:String}
+        GROUP BY org_id, id
+    """
+    rows: list[dict[str, Any]] = []
+    for chunk in _chunks(ids):
+        rows.extend(
+            await query_dicts(sink, query, {"repo_ids": chunk, "org_id": org_id})
+        )
+    return {
+        str(row.get("repo_id")): (
+            str(row.get("repo") or ""),
+            str(row.get("provider") or ""),
+        )
+        for row in rows
+        if row.get("repo_id") and row.get("repo") and row.get("provider")
+    }
+
+
 async def fetch_work_item_team_assignments(
     sink: BaseMetricsSink,
     *,

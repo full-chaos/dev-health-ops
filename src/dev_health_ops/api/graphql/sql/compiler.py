@@ -13,7 +13,7 @@ from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
     LATEST_WORK_UNIT_REPO_EFFORT_CTE,
-    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+    build_unit_team_subquery,
 )
 from dev_health_ops.clickhouse_dedup import dedup_from
 
@@ -195,28 +195,13 @@ def _get_context_params(
 
         # Add team join if TEAM dimension is used or filters require it
         if Dimension.TEAM in dimensions or needs_team_join:
+            unit_team_cte = build_unit_team_subquery(
+                source="latest_work_unit_investments AS work_unit_investments",
+                inner_team_alias="team_label",
+                include_team_id=True,
+            )
             team_join = f"""
-            LEFT JOIN (
-                SELECT
-                    work_unit_id,
-                    argMax(team_label, cnt) AS team_label,
-                    argMax(team_id, cnt) AS team_id
-                FROM (
-                    SELECT
-                        work_unit_investments.work_unit_id AS work_unit_id,
-                        t.team_id AS team_id,
-                        ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team_label,
-                        countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                    FROM latest_work_unit_investments AS work_unit_investments
-                    ARRAY JOIN arrayDistinct(arrayConcat(
-                        JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
-                        [work_unit_investments.work_unit_id]
-                    )) AS issue_id
-                    LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
-                    GROUP BY work_unit_id, team_id, team_label
-                )
-                GROUP BY work_unit_id
-            ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
+            LEFT JOIN ({unit_team_cte}            ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
             """
             joins.append(team_join)
 

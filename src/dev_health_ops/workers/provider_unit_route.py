@@ -74,6 +74,9 @@ class ProviderUnitRouteError(ValueError):
 class _MatrixRoutes:
     ready: frozenset[tuple[str, str]]
     plannable: frozenset[tuple[str, str]]
+    #: Every route-ready pair mapped onto the canonical writer identity that
+    #: serves it. Read by CHAOS-4078, which owns folding an alias-only dataset
+    #: selection onto that writer; nothing plans from it yet.
     canonical: Mapping[tuple[str, str], str]
 
 
@@ -158,15 +161,15 @@ def is_plannable(provider: str, dataset: str) -> bool:
 
 
 def canonical_identity(provider: str, dataset: str) -> str | None:
-    """The one plannable identity that carries this pair's intent.
+    """The canonical writer identity that serves this pair, or ``None``.
 
-    This is the other half of the alias collapse. ``is_plannable`` says an
-    alias may not be minted as its own unit; this says which unit carries its
-    intent instead, so a user who enabled only ``pr-comments`` or only
-    ``tests`` gets the canonical writer rather than silence.
-
-    ``None`` means nothing serves the pair: it is not route-ready, or its
-    canonical identity is not itself plannable.
+    This is the registry's answer to "which writer owns this alias", published
+    so the alias-fold work in CHAOS-4078 has one authority to plan from rather
+    than a second hand-maintained alias table. It is deliberately NOT consulted
+    by the planners yet: folding an alias-only selection onto its canonical
+    writer also requires normalising watermark loading, sync-coverage scope
+    matching, and the Celery fallback's processor flags, and doing it at the
+    planner alone silently breaks all three.
     """
 
     key = (provider.strip().lower(), dataset.strip().lower())

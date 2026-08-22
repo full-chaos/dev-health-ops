@@ -10,6 +10,7 @@ from dev_health_ops.workers import provider_unit_route
 from dev_health_ops.workers.provider_family_contract import WORK_ITEM_DATASETS
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteError,
+    canonical_identity,
     is_atomic_provider_family_direct_alias,
     is_complete_github_work_item_family_claim,
     is_github_work_item_direct_alias,
@@ -458,3 +459,51 @@ def test_is_github_work_item_family_dataset(
     provider: str, dataset: str, expected: bool
 ) -> None:
     assert is_github_work_item_family_dataset(provider, dataset) is expected
+
+
+def test_canonical_identity_names_the_writer_that_serves_each_alias() -> None:
+    """The registry publishes which writer owns each alias identity.
+
+    Nothing plans from this yet — CHAOS-4078 owns the fold, because doing it
+    at the planner alone silently breaks watermark loading, sync-coverage
+    scope matching, and the Celery fallback's processor flags. Publishing the
+    mapping now means that work has one authority to read instead of a second
+    hand-maintained alias table, and this test is what keeps the two halves of
+    the collapse honest: every non-plannable identity must name a plannable
+    writer, and every plannable identity must be its own.
+    """
+
+    for provider, dataset, expected in (
+        ("github", "pr-reviews", "prs"),
+        ("github", "pr-comments", "prs"),
+        ("github", "tests", "cicd"),
+        ("gitlab", "pr-reviews", "prs"),
+        ("gitlab", "pr-comments", "prs"),
+        ("gitlab", "tests", "cicd"),
+        ("github", "work-item-labels", "work-items"),
+        ("linear", "work-item-comments", "work-items"),
+        ("github", "prs", "prs"),
+        ("github", "cicd", "cicd"),
+        ("pagerduty", "incident-alerts", "incident-alerts"),
+    ):
+        assert canonical_identity(provider, dataset) == expected, (
+            f"{provider}/{dataset} must be served by {expected}"
+        )
+
+    # An unknown pair has no writer at all, and never falls back to itself.
+    assert canonical_identity("acme", "widgets") is None
+
+    # Structural, not a fixed list: every route-ready identity resolves to a
+    # plannable writer, and a plannable identity is always its own.
+    matrix = json.loads(provider_unit_route._MATRIX_CONTRACT_PATH.read_text())
+    for pair in matrix["pairs"]:
+        if not pair["route_ready"]:
+            continue
+        provider, dataset = pair["provider"], pair["dataset"]
+        canonical = canonical_identity(provider, dataset)
+        assert canonical is not None
+        assert is_plannable(provider, canonical)
+        if pair["plannable"]:
+            assert canonical == dataset
+        else:
+            assert canonical != dataset

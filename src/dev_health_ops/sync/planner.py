@@ -136,10 +136,7 @@ from dev_health_ops.sync.watermarks import (
     get_watermark_with_overlap,
 )
 from dev_health_ops.tracing import current_trace_parent
-from dev_health_ops.workers.provider_unit_route import (
-    canonical_identity,
-    routes_to_river,
-)
+from dev_health_ops.workers.provider_unit_route import routes_to_river
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -707,22 +704,17 @@ def _build_planned_units(
         provider = source.provider
         prs_enabled = _prs_dataset_enabled(provider, datasets)
         family_specs: list[tuple[IntegrationDataset, DatasetSpec]] = []
-        # One unit per canonical writer identity per source, so two enabled
-        # aliases of the same writer collapse to one unit instead of two
-        # claims racing for the same rows.
-        canonical_claims: dict[str, IntegrationDataset] = {}
         for dataset in datasets:
             spec = get_dataset_spec(provider, dataset.dataset_key)
             if spec is None or not spec.supported:
                 continue
 
-            # CHAOS-4054: an alias identity (github pr-comments, gitlab
-            # tests, ...) is never minted as its own unit, but its intent is
-            # not discarded either -- it folds onto the canonical writer of
-            # its family, exactly as the work-item family collapses below.
-            # Dropping it instead would leave a user who enabled only the
-            # alias with no collection and no failure. A pair that is not
-            # route-ready is not shipped and plans nothing (CHAOS-4047).
+            # CHAOS-4054: a unit is only ever minted for an identity the
+            # capability matrix says is independently plannable. An alias
+            # identity (github pr-comments, gitlab tests, ...) folds into its
+            # canonical writer, and a pair that is not route-ready is not
+            # shipped -- either way no writer owns a unit of its own, so
+            # minting one guarantees an unserviceable unit (CHAOS-4047).
             #
             # This reads the checked-in matrix ONLY. The transitional
             # switch-consultation this replaces was correct while the
@@ -731,29 +723,10 @@ def _build_planned_units(
             # scheduler's BuildScheduledPlan. Work-item-family datasets are
             # deliberately excluded here: their admission is governed by the
             # atomic-family collapse below.
-            if dataset.dataset_key not in _WORK_ITEM_FAMILY_DATASETS:
-                canonical_key = canonical_identity(provider, dataset.dataset_key)
-                if canonical_key is None:
-                    continue
-                # The canonical row's own settings win when the user enabled
-                # it too; otherwise the first contributing alias supplies
-                # them. Datasets arrive in dataset_key order on both sides, so
-                # the choice is identical in Go and Python.
-                claimed = canonical_claims.get(canonical_key)
-                if claimed is not None and not (
-                    dataset.dataset_key == canonical_key
-                    and claimed.dataset_key != canonical_key
-                ):
-                    continue
-                canonical_spec = get_dataset_spec(provider, canonical_key)
-                if canonical_spec is None or not canonical_spec.supported:
-                    continue
-                canonical_claims[canonical_key] = dataset
-                # The unit is claimed under the canonical identity and takes
-                # the canonical spec, while the enabled row it came from still
-                # supplies the per-dataset settings (initial sync depth) the
-                # user actually configured.
-                claim_key, spec = canonical_key, canonical_spec
+            if dataset.dataset_key not in _WORK_ITEM_FAMILY_DATASETS and (
+                not routes_to_river(provider, dataset.dataset_key)
+            ):
+                continue
 
             # CHAOS-2721 (AD-3): work-item-family datasets are collapsed into a
             # single composite unit per (source, window) below, instead of one
@@ -772,7 +745,7 @@ def _build_planned_units(
                 org_id=integration.org_id,
                 source_provider=provider,
                 watermark_source_key=source.external_id,
-                dataset_key=claim_key,
+                dataset_key=dataset.dataset_key,
                 watermark_behavior=spec.watermark_behavior,
                 now=now,
                 integration=integration,
@@ -785,7 +758,7 @@ def _build_planned_units(
                         integration_id=str(integration.id),
                         source_id=str(source.id),
                         provider=provider,
-                        dataset_key=claim_key,
+                        dataset_key=dataset.dataset_key,
                         cost_class=spec.default_cost_class.value,
                         mode=mode,
                         window_start=window_start,

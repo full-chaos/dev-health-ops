@@ -86,21 +86,12 @@ MATRIX_PAIRS: tuple[tuple[str, str], ...] = tuple(
     )
 )
 
-#: The subset of MATRIX_PAIRS that is a canonical writer identity of its own.
+#: The subset of MATRIX_PAIRS the planner will actually mint a unit for.
 PLANNABLE_PAIRS: frozenset[tuple[str, str]] = frozenset(
     (pair["provider"], pair["dataset"])
     for pair in _MATRIX["pairs"]
     if pair["route_ready"] and pair["plannable"]
 )
-
-#: The canonical identity every route-ready pair's intent is served under.
-#: An alias maps to the writer it folds onto; a canonical pair maps to itself.
-#: Derived from the contract, never hand-listed.
-CANONICAL_IDENTITY: dict[tuple[str, str], str] = {
-    (pair["provider"], pair["dataset"]): pair["canonical_dataset"]
-    for pair in _MATRIX["pairs"]
-    if pair["route_ready"]
-}
 
 #: Non-family alias identities (route_ready, never plannable, no collapse
 #: machinery of their own), used by the "an alias is never planned" tests
@@ -308,15 +299,6 @@ def _capture_celery_publishes(monkeypatch) -> list[tuple[str, str | None]]:
     return published
 
 
-def _planned_dataset_keys(session, sync_run_id: str) -> list[str]:
-    return sorted(
-        str(unit.dataset_key)
-        for unit in session.query(SyncRunUnit)
-        .filter(SyncRunUnit.sync_run_id == uuid.UUID(sync_run_id))
-        .all()
-    )
-
-
 def _plan_and_dispatch(session, monkeypatch, *, provider: str, dataset: str) -> dict:
     """Plan a run for one pair, dispatch it, and report what each side did."""
 
@@ -455,26 +437,40 @@ def test_planner_and_dispatcher_agree_on_routable_set(
         f"live runtime and only {outcome['terminal_pairs']} were recorded as "
         "denied -- the remainder went nowhere and said nothing"
     )
-    # The plan-time capability gate is unconditional, and so is the alias
-    # fold: every route-ready pair is planned, as one or more windowed units
-    # claimed under the CANONICAL identity of its writer family. For a
-    # canonical pair that is the pair itself; for an alias it is the writer
-    # the alias folds onto (pr-reviews/pr-comments -> prs, tests -> cicd,
-    # work-item-* -> work-items). Nothing route-ready plans nothing.
-    expected_pair = (provider, CANONICAL_IDENTITY[(provider, dataset)])
-    assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
-    assert set(outcome["planned_pairs"]) == {expected_pair}
+    # The plan-time capability gate is unconditional: a plannable pair is
+    # always planned (as one or more windowed units for that same pair), an
+    # alias pair never is, regardless of transport. Work-item-family aliases
+    # are the one exception: requesting one enables the whole family
+    # (``_dataset_keys_for``), so the family collapse plans the CANONICAL
+    # "work-items" claim instead of the alias pair itself -- that collapse is
+    # the alias's only route to a planned unit, and it is provider-neutral.
+    if dataset in planner_module._WORK_ITEM_FAMILY_DATASETS:
+        expected_pair = (provider, planner_module._FAMILY_CANONICAL_DATASET_KEY)
+        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
+        assert set(outcome["planned_pairs"]) == {expected_pair}
+    elif (provider, dataset) in PLANNABLE_PAIRS:
+        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
+        assert set(outcome["planned_pairs"]) == {(provider, dataset)}
+    else:
+        assert outcome["planned_pairs"] == []
 
 
 def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
-    """Guard the sweep itself: every matrix pair must really produce units.
+    """Guard the sweep itself: the plannable pairs must really produce units.
 
-    CHAOS-4054: capability is always on in the binary, so every route-ready
-    pair is served -- there is no switch left to flip and no identity whose
-    intent is silently dropped. A canonical pair plans itself; an alias plans
-    the canonical writer it folds onto. This proves both, so a change that
-    made ``plan_sync_run`` return zero units for any pair, or that let an
-    alias mint a unit of its own, would turn this sweep red.
+    CHAOS-4054: capability is always on in the binary, so every pair the
+    matrix marks both route_ready and plannable plans a unit unconditionally
+    -- there is no switch left to flip. This proves that, and that the
+    non-plannable alias pairs correctly plan nothing OF THEIR OWN, so a
+    change that made ``plan_sync_run`` return zero units for every pair (or
+    units for every pair including aliases) would turn this sweep red.
+
+    A work-item-family alias is the one pair whose request still plans a
+    unit indirectly: ``_dataset_keys_for`` enables the whole family, so the
+    family collapse plans the canonical "work-items" claim. That leaves
+    exactly six pairs producing nothing at all: github/gitlab's
+    pr-reviews/pr-comments/tests aliases, which fold into ``prs``/``cicd``
+    with no collapse machinery of their own.
     """
 
     planning_pairs = 0
@@ -485,10 +481,11 @@ def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
             )
         if outcome["planned_pairs"]:
             planning_pairs += 1
-    assert planning_pairs == len(MATRIX_PAIRS) == 59, (
+    expected = len(MATRIX_PAIRS) - 6
+    assert planning_pairs == expected == 53, (
         f"{planning_pairs}/{len(MATRIX_PAIRS)} matrix pairs produced planned "
-        "units; every route-ready pair must be served, directly or through "
-        "the canonical writer it folds onto"
+        f"units; expected exactly {expected} (every pair except the six "
+        "standalone pr/cicd aliases with no family collapse)"
     )
 
 
@@ -584,10 +581,8 @@ def test_alias_pair_is_never_planned_regardless_of_celery_presence(
     monkeypatch, provider: str, dataset: str
 ) -> None:
     """CHAOS-4054 successor to the switch-off family of tests: a matrix alias
-    identity is never plannable AS ITSELF, so no celery-presence state can
-    make it mint a unit under its own identity. Its intent is still served --
-    the unit is claimed under the canonical writer it folds onto, because
-    there is no runtime that could execute the alias standalone.
+    identity is never plannable, so no celery-presence state can make it plan
+    a unit -- there is no runtime left that could ever execute it standalone.
     """
 
     with _fresh_session() as session:
@@ -613,9 +608,8 @@ def test_alias_pair_is_never_planned_regardless_of_celery_presence(
                     dataset_keys=(dataset,),
                 ),
             )
-            assert _planned_dataset_keys(session, plan.sync_run_id) == ["prs"], (
-                f"presence={presence}: an alias must fold onto its canonical "
-                "writer, never mint a unit under its own identity"
+            assert plan.total_units == 0, (
+                f"presence={presence}: a non-plannable alias must never be planned"
             )
 
 
@@ -677,9 +671,8 @@ def test_capability_gate_applies_regardless_of_durable_transport(
                 triggered_by="parity-test",
             ),
         )
-        assert _planned_dataset_keys(session, alias_plan.sync_run_id) == ["prs"], (
-            "an alias pair must still fold onto its canonical writer off the "
-            "River outbox route"
+        assert alias_plan.total_units == 0, (
+            "an alias pair must still be excluded off the River outbox route"
         )
 
 

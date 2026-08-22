@@ -514,21 +514,22 @@ def test_disabled_dataset_produces_zero_units_without_hydrating_credentials(
     ids=["missing-row-is-enabled", "disabled-row-stays-disabled"],
 )
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
-def test_requested_tests_dataset_folds_onto_the_canonical_cicd_writer(
+def test_requested_tests_dataset_reconciles_intent_but_never_mints_a_unit(
     db_session,
     provider: str,
     existing_enabled: bool | None,
 ):
     """``(github|gitlab, tests)`` is route-ready but not plannable: it is the
     CI alias identity that folds into the canonical ``cicd`` writer
-    (CHAOS-4054). Requesting it directly reconciles the persisted
-    ``is_enabled`` intent as before, and that intent is then served -- by one
-    unit claimed under ``cicd``, never under ``tests``.
-
-    Folding rather than dropping is the point. The alias is not independently
-    plannable because one writer owns the whole family, but the user asked for
-    CI data and must get it; a plan of zero units would be the silent
-    third-plane failure this ticket exists to remove.
+    (CHAOS-4054). Requesting it directly still reconciles the persisted
+    ``is_enabled`` intent (a missing row becomes enabled; an explicit
+    disabled row stays disabled) -- intent and routability are independent
+    facts -- but the plan-time capability gate refuses to mint a unit for a
+    non-plannable identity regardless of that intent, exactly like any other
+    alias in the family. This is the CHAOS-4054 successor to the old
+    switch-driven expectation that a "missing row becomes enabled" case also
+    became a routed unit; readiness and plannability now come from the
+    checked-in matrix, not from intent alone.
     """
     # Given: an existing code-host integration with a source and either no tests
     # row or an explicitly disabled tests row.
@@ -563,15 +564,8 @@ def test_requested_tests_dataset_folds_onto_the_canonical_cicd_writer(
     )
     assert dataset is not None
     assert dataset.is_enabled is (existing_enabled is not False)
-    planned = _planned_units(db_session, plan.sync_run_id)
-    if existing_enabled is False:
-        # Intent says no: nothing to fold.
-        assert plan.total_units == 0
-        assert planned == []
-    else:
-        # Intent says yes: exactly one unit, under the canonical identity.
-        assert plan.total_units == 1
-        assert [unit.dataset_key for unit in planned] == ["cicd"]
+    assert plan.total_units == 0
+    assert _planned_units(db_session, plan.sync_run_id) == []
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])

@@ -224,11 +224,6 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		prsEnabled := false
 		familyDatasets := workitemcontract.FamilyDatasets()
 		family := make([]PlanDataset, 0, len(familyDatasets))
-		// One unit per canonical writer identity per source, in first-seen
-		// order, so two enabled aliases of the same writer collapse to one
-		// unit instead of two claims racing for the same rows.
-		contributors := make(map[string]PlanDataset, len(input.Datasets))
-		canonicalOrder := make([]string, 0, len(input.Datasets))
 		for _, dataset := range input.Datasets {
 			spec, ok := datasetSpecification(provider, dataset.Key)
 			if !ok {
@@ -241,46 +236,19 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				family = append(family, dataset)
 				continue
 			}
-			// CHAOS-4054: an alias identity (github pr-comments, gitlab
-			// tests, ...) is never minted as its own unit, but its intent is
-			// not discarded either — it folds onto the canonical writer of
-			// its family, exactly as the work-item family collapses below.
-			// Dropping it instead would leave a user who enabled only the
-			// alias with no collection and no failure. A pair that is not
-			// RouteReady is not shipped and plans nothing. This reads the
-			// registry alone; there is no route enablement env plane left to
-			// consult. Family datasets are excluded here — their admission is
-			// the atomic-family collapse's business.
+			// CHAOS-4054: plan only identities the execution registry says are
+			// independently plannable. An alias identity (github pr-comments,
+			// gitlab tests, ...) folds into its canonical writer and is never
+			// minted as its own unit; a pair that is not RouteReady is not
+			// shipped. This reads the registry alone -- there is no route
+			// enablement env plane to consult. Family datasets are excluded
+			// from this check above: their admission is governed by the
+			// atomic-family collapse below.
 			descriptor, known := providersync.Descriptor(provider, dataset.Key)
-			if !known || !descriptor.RouteReady {
+			if !known || !descriptor.RouteReady || !descriptor.Plannable {
 				continue
 			}
-			canonicalKey := descriptor.CanonicalDataset
-			canonicalDescriptor, known := providersync.Descriptor(provider, canonicalKey)
-			if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable {
-				continue
-			}
-			// The canonical row's own settings win when the user enabled it
-			// too; otherwise the first contributing alias in the caller's
-			// order supplies them. Both planners resolve datasets in
-			// dataset_key order, so the choice is identical on both sides.
-			contributor, seen := contributors[canonicalKey]
-			if !seen || (dataset.Key == canonicalKey && contributor.Key != canonicalKey) {
-				contributor = dataset
-				contributor.Key = canonicalKey
-				contributors[canonicalKey] = contributor
-				if !seen {
-					canonicalOrder = append(canonicalOrder, canonicalKey)
-				}
-			}
-		}
-		for _, canonicalKey := range canonicalOrder {
-			claim := contributors[canonicalKey]
-			canonicalSpec, ok := datasetSpecification(provider, canonicalKey)
-			if !ok {
-				continue
-			}
-			start, end, ok := resolveWindow(input, source, claim, canonicalSpec, now, before)
+			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
 			if !ok {
 				// Already synced past the requested end (or a corrupt,
 				// unrecoverable window): plan NO unit for this dataset rather
@@ -288,7 +256,7 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				// fetched nothing. See normalizeStampingWindow.
 				continue
 			}
-			units = append(units, newPlannedUnit(input, source, canonicalKey, canonicalSpec, start, end))
+			units = append(units, newPlannedUnit(input, source, dataset.Key, spec, start, end))
 		}
 		if len(family) == 0 {
 			continue

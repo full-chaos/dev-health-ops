@@ -346,3 +346,55 @@ func sortedKeys(grouped map[string][]map[string]any) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// Producer names the implementation that filled one side of a comparison.
+//
+// It exists so a report can state WHICH implementations were compared, and so
+// the difference between a comparator self-test and a port proof is a checked
+// fact rather than a claim in a comment.
+type Producer struct {
+	// Side is the label used in divergence messages.
+	Side string
+	// Implementation is the thing that actually ran: "python" for the
+	// reference job, "go" for a native executor.
+	Implementation string
+}
+
+// RequirePortProof fails unless the two sides were produced by DIFFERENT
+// implementations.
+//
+// A port proof that runs the reference producer on both sides proves only that
+// the comparator detects injected mutations and that the reference is
+// reproducible. It says nothing about the port -- and it stays green when the
+// port is broken, missing, or wired to the wrong entry point, which is the
+// worst possible failure mode for a release gate. Every kind's port test must
+// call this; a comparator self-test deliberately must not, and should say so
+// in its name.
+func RequirePortProof(t *testing.T, left, right Producer) {
+	t.Helper()
+	if violation := PortProofViolation(left, right); violation != "" {
+		t.Fatal(violation)
+	}
+}
+
+// PortProofViolation returns why this pair does not constitute a port proof,
+// or "" if it does.
+//
+// Pure, for the same reason oraclecompare's DiffRows is pure: a guard's own
+// logic is exactly the code that must not be trusted on the strength of the
+// runs it reports passing, and it cannot be unit-tested through a t.Fatal.
+func PortProofViolation(left, right Producer) string {
+	if left.Implementation == "" || right.Implementation == "" {
+		return "a port proof must name both implementations"
+	}
+	if left.Implementation == right.Implementation {
+		return fmt.Sprintf(
+			"both sides ran the %q implementation, so this proves nothing about a "+
+				"port: it shows the comparator detects injected differences and that "+
+				"%q is reproducible. Point one side at the native executor, or name "+
+				"this test a comparator self-test",
+			left.Implementation, left.Implementation,
+		)
+	}
+	return ""
+}

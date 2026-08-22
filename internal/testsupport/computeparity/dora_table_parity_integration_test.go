@@ -31,12 +31,19 @@ import (
 // comparison vocabulary rather than a bespoke assertion list.
 //
 // The reference kind is metrics.dora: the smallest deterministic compute kind
-// in the R1 pilot's scope. Its Go port does not exist yet, so both sides run
-// the PYTHON producer. That is deliberate and is exactly the self-test the
-// slice is accepted on -- the same implementation on both sides must report
-// EQUAL, or the harness cannot be trusted to report a real port's differences.
-// When the Go executor lands, the right side's command changes and nothing
-// else does.
+// in the R1 pilot's scope. Its Go port DOES NOT EXIST YET -- that is slice R1,
+// downstream of this one -- so both sides here run the PYTHON producer.
+//
+// This is therefore a COMPARATOR SELF-TEST, not a port proof, and the test
+// name says so. It proves the harness reports EQUAL when the two sides really
+// are equal and reports each injected difference when they are not; a
+// comparator that has not been shown to do both cannot be trusted to judge a
+// real port. It proves nothing whatsoever about a Go implementation.
+//
+// R1 adds the port proof: same table declaration, same comparator, right side
+// pointed at the native executor, and computeparity.RequirePortProof asserting
+// the two sides really were different implementations -- so a port test cannot
+// silently degrade into another copy of this self-test.
 
 // doraMetricsDailyRow is the production shape of dora_metrics_daily.
 //
@@ -77,7 +84,7 @@ func doraTable() computeparity.Table {
 
 const parityAsOf = "2026-08-22T00:00:00+00:00"
 
-func TestDORATableParityAcrossTwoScratchStores(t *testing.T) {
+func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -137,6 +144,19 @@ func TestDORATableParityAcrossTwoScratchStores(t *testing.T) {
 			if !produced[metric] {
 				t.Errorf("metric %q is absent from the reference output", metric)
 			}
+		}
+	})
+
+	t.Run("this is a self-test, and is not mistakable for a port proof", func(t *testing.T) {
+		// If someone later points this at a native executor without renaming
+		// it, RequirePortProof is what makes that visible. Here it must
+		// REFUSE, because both sides are Python.
+		violation := computeparity.PortProofViolation(
+			computeparity.Producer{Side: "python", Implementation: "python"},
+			computeparity.Producer{Side: "python_replica", Implementation: "python"},
+		)
+		if violation == "" {
+			t.Fatal("two identical implementations must not qualify as a port proof")
 		}
 	})
 

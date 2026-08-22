@@ -332,3 +332,45 @@ func TestRepeatIsEvaluatedPerSideAndNamesTheSide(t *testing.T) {
 		t.Fatalf("a replay violation must name the side it belongs to: %v", messages)
 	}
 }
+
+func TestPortProofRequiresTwoDifferentImplementations(t *testing.T) {
+	// The failure this guards is the worst kind for a release gate: a port
+	// test that runs the reference producer on both sides stays GREEN while
+	// the port is broken, missing, or wired to the wrong entry point.
+	tests := []struct {
+		name          string
+		left, right   Producer
+		wantViolation bool
+	}{
+		{
+			name:          "two of the same implementation is a self-test, not a port proof",
+			left:          Producer{Side: "python", Implementation: "python"},
+			right:         Producer{Side: "python_replica", Implementation: "python"},
+			wantViolation: true,
+		},
+		{
+			name:          "an unnamed implementation proves nothing",
+			left:          Producer{Side: "python", Implementation: "python"},
+			right:         Producer{Side: "go", Implementation: ""},
+			wantViolation: true,
+		},
+		{
+			name:          "python against go is a real port proof",
+			left:          Producer{Side: "python", Implementation: "python"},
+			right:         Producer{Side: "go", Implementation: "go"},
+			wantViolation: false,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			violation := PortProofViolation(test.left, test.right)
+			if test.wantViolation && violation == "" {
+				t.Fatal("this pair must not qualify as a port proof")
+			}
+			if !test.wantViolation && violation != "" {
+				t.Fatalf("a real port proof must be accepted, got: %s", violation)
+			}
+		})
+	}
+}

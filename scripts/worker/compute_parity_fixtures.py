@@ -414,20 +414,65 @@ def clone(kind: str, from_dsn: str, to_dsn: str) -> dict[str, Any]:
     source_identifier = quoted(source)
     destination_identifier = quoted(destination)
     client = clickhouse_client(to_dsn)
-    copied: dict[str, int] = {}
+    copied: dict[str, dict[str, Any]] = {}
     try:
         for table in tables:
+            # A destination that already holds rows would MIX them into the
+            # fixture, and the two producers would then consume different
+            # input while every downstream comparison still reported a clean
+            # match. "Both sides consumed identical input" is the premise the
+            # whole parity claim rests on; it has to be checked, not assumed.
+            existing = _scalar(
+                client, f"SELECT count() FROM {destination_identifier}.{table}"
+            )
+            if existing:
+                raise FixtureError(
+                    f"clone_destination_not_empty:{table}:{existing}_rows:"
+                    "reprovision with --reset before cloning"
+                )
             client.command(
                 f"INSERT INTO {destination_identifier}.{table} "
                 f"SELECT * FROM {source_identifier}.{table}"
             )
-            result = client.query(
-                f"SELECT count() FROM {destination_identifier}.{table}"
+            # Verify the copy independently rather than trusting INSERT SELECT
+            # to have moved everything: compare the row count AND an
+            # order-independent checksum of the whole table on both sides.
+            source_count = _scalar(
+                client, f"SELECT count() FROM {source_identifier}.{table}"
             )
-            copied[table] = int(result.result_rows[0][0]) if result.result_rows else 0
+            destination_count = _scalar(
+                client, f"SELECT count() FROM {destination_identifier}.{table}"
+            )
+            source_digest = _table_digest(client, source_identifier, table)
+            destination_digest = _table_digest(client, destination_identifier, table)
+            if source_count != destination_count or source_digest != destination_digest:
+                raise FixtureError(
+                    f"clone_verification_failed:{table}:"
+                    f"rows {source_count}!={destination_count} "
+                    f"digest {source_digest}!={destination_digest}"
+                )
+            copied[table] = {"rows": destination_count, "digest": destination_digest}
     finally:
         client.close()
     return {"tables": copied}
+
+
+def _scalar(client: Any, query: str) -> int:
+    result = client.query(query)
+    return int(result.result_rows[0][0]) if result.result_rows else 0
+
+
+def _table_digest(client: Any, database: str, table: str) -> str:
+    """Order-independent checksum of every column of every row.
+
+    groupBitXor over a per-row hash is commutative, so it does not depend on
+    read order, and `*` means a column added to the table is covered without
+    anyone remembering to list it here.
+    """
+    result = client.query(
+        f"SELECT toString(groupBitXor(cityHash64(*))) FROM {database}.{table}"
+    )
+    return str(result.result_rows[0][0]) if result.result_rows else "0"
 
 
 # --------------------------------------------------------------------------

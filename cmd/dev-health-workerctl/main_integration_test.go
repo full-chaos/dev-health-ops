@@ -91,7 +91,8 @@ func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, str
 		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-			status text NOT NULL
+			status text NOT NULL, updated_at timestamptz NOT NULL,
+			lease_expires_at timestamptz
 		)`,
 	}
 	for _, statement := range setup {
@@ -186,8 +187,8 @@ func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
 		t.Fatalf("rollback: %v", err)
 	}
 	if _, err := admin.Exec(ctx, `
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status)
-		VALUES ('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'running')`); err != nil {
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at)
+		VALUES ('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'running', statement_timestamp())`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controller.ApplyCheckedIn(ctx, "sync.provider_unit"); !errors.Is(err, jobroute.ErrLiveClaims) {

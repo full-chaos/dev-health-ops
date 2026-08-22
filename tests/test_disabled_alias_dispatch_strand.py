@@ -39,6 +39,7 @@ identity such as ``github/tests``), not by scaling a broker to zero.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -1024,6 +1025,94 @@ def test_sweep_declines_when_river_does_not_own_provider_units(
     survivor = db_session.query(SyncRunUnit).filter(SyncRunUnit.id == unit.id).one()
     assert survivor.status == SyncRunUnitStatus.DISPATCHING.value
     assert survivor.error is None
+
+
+def test_sweep_logs_a_paused_route_at_warning_not_error(
+    db_session, monkeypatch, caplog
+) -> None:
+    """A deliberate route pause must not read as a Sentry-worthy incident.
+
+    Adversarial review finding: reconcile_sync_dispatch is scheduled every
+    60s and can revisit the same aged units on every pass. Logging a
+    deliberate operator pause (job_routes.py's "worker job route is paused"
+    branch of WorkerJobRouteError) at ERROR -- the same level CHAOS-3957's
+    savepoint fix uses for a genuine read failure -- would fire a Sentry
+    incident roughly once a minute for as long as the pause lasts, drowning
+    out a genuine one. Only "paused" is downgraded to WARNING; every other
+    WorkerJobRouteError reason (unavailable store, drift) stays at ERROR,
+    covered by test_sweep_declines_when_river_does_not_own_provider_units's
+    "rolled-back" case alongside the assertions below.
+    """
+
+    from dev_health_ops.workers import sync_reconciler
+
+    run, unit = _seed_already_stranded_unit(db_session, dataset_key="pr-comments")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.paused: True})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    caplog.set_level(logging.WARNING, logger="dev_health_ops.workers.sync_reconciler")
+
+    sync_reconciler.reconcile_sync_dispatch(limit=100)
+
+    paused_records = [
+        record
+        for record in caplog.records
+        if record.message == "reconcile_sync_dispatch.unreclaimable_routability_paused"
+    ]
+    assert len(paused_records) == 1
+    assert paused_records[0].levelno == logging.WARNING
+    assert not any(
+        record.message
+        == "reconcile_sync_dispatch.unreclaimable_routability_unavailable"
+        for record in caplog.records
+    )
+
+
+def test_sweep_logs_a_drifted_route_at_error_not_warning(
+    db_session, monkeypatch, caplog
+) -> None:
+    """Drift is a real fault, not an operator's deliberate choice -- stays loud.
+
+    Rolling the route back to ``celery`` (the rollback transport) doesn't
+    even reach the except block -- ``resolve_worker_job_route`` returns it
+    cleanly, and ``_only_unroutable``'s own "not in PROVIDER_UNIT_OUTBOX_ROUTES"
+    check handles it via ordinary control flow (see
+    ``test_sweep_declines_when_river_does_not_own_provider_units``'s
+    "rolled-back" case). Genuine drift needs a transport that is neither the
+    checked-in policy route nor the celery rollback -- ``shadow`` is exactly
+    that (job_routes.py's ``_ROUTES``/``resolve_worker_job_route``) -- which
+    is what actually raises WorkerJobRouteError("... drifts from checked-in
+    policy"). That is a real fault an operator did not choose through this
+    route's own pause switch, so it must not be silently downgraded
+    alongside a genuine pause.
+    """
+
+    from dev_health_ops.workers import sync_reconciler
+
+    run, unit = _seed_already_stranded_unit(db_session, dataset_key="pr-comments")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "shadow"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    caplog.set_level(logging.WARNING, logger="dev_health_ops.workers.sync_reconciler")
+
+    sync_reconciler.reconcile_sync_dispatch(limit=100)
+
+    unavailable_records = [
+        record
+        for record in caplog.records
+        if record.message
+        == "reconcile_sync_dispatch.unreclaimable_routability_unavailable"
+    ]
+    assert len(unavailable_records) == 1
+    assert unavailable_records[0].levelno == logging.ERROR
+    assert not any(
+        record.message == "reconcile_sync_dispatch.unreclaimable_routability_paused"
+        for record in caplog.records
+    )
 
 
 #: The production wedge as of 2026-08-20 ~15:03 UTC: units the Go runtime

@@ -1267,6 +1267,7 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
 
     from dev_health_ops.workers.job_routes import (
         PROVIDER_UNIT_OUTBOX_ROUTES,
+        WorkerJobRouteError,
         resolve_worker_job_route,
     )
     from dev_health_ops.workers.provider_unit_route import routes_to_river
@@ -1308,6 +1309,31 @@ def _only_unroutable(session: Any, units: list[SyncRunUnit]) -> list[SyncRunUnit
             for unit in units
             if not routes_to_river(str(unit.provider), str(unit.dataset_key))
         ]
+    except WorkerJobRouteError as exc:
+        # Adversarial review finding: a bare ``except Exception`` at ERROR
+        # conflated an operator PAUSING the route (routine, expected,
+        # resolve_worker_job_route's own designed behavior -- job_routes.py's
+        # "worker job route is paused" branch) with a genuine store/policy
+        # failure. reconcile_sync_dispatch is scheduled every 60s and can
+        # revisit the same aged units on every pass, so ERROR-logging a
+        # deliberate pause would fire a Sentry incident roughly once a minute
+        # for as long as an operator keeps the route paused -- exactly the
+        # alert-fatigue failure mode that obscures a genuine one. "paused" is
+        # the only one of WorkerJobRouteError's four raise sites
+        # (job_routes.py:53,61,63,69,71) that is not itself already a
+        # problem: a missing/duplicated policy row, an unreadable store, and
+        # policy drift are all real faults and stay at ERROR below; only the
+        # deliberate-pause message is downgraded.
+        if "paused" in str(exc):
+            logger.warning(
+                "reconcile_sync_dispatch.unreclaimable_routability_paused",
+                exc_info=True,
+            )
+        else:
+            logger.exception(
+                "reconcile_sync_dispatch.unreclaimable_routability_unavailable",
+            )
+        return []
     except Exception:  # noqa: BLE001 - fail safe: never destroy on a guess
         # ERROR, not WARNING (CHAOS-4073 precedent for the log-level choice):
         # this codebase's Sentry LoggingIntegration only turns ERROR+ records

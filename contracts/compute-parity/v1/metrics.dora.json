@@ -63,27 +63,133 @@
     {
       "table": "repos",
       "store": "clickhouse",
-      "select": "SELECT org_id, id, repo, provider FROM repos ORDER BY org_id, id"
+      "select": "SELECT org_id, id, repo, provider FROM repos ORDER BY org_id, id",
+      "fields": {
+        "org_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "uuid"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
     },
     {
       "table": "deployments",
       "store": "clickhouse",
-      "select": "SELECT org_id, repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number FROM deployments ORDER BY org_id, deployment_id"
+      "select": "SELECT org_id, repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number FROM deployments ORDER BY org_id, deployment_id",
+      "fields": {
+        "org_id": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "uuid"
+        },
+        "deployment_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "datetime"
+        },
+        "finished_at": {
+          "type": "datetime"
+        },
+        "deployed_at": {
+          "type": "datetime"
+        },
+        "merged_at": {
+          "type": "datetime"
+        },
+        "pull_request_number": {
+          "type": "int"
+        }
+      }
     },
     {
       "table": "operational_services",
       "store": "clickhouse",
-      "select": "SELECT org_id, id, name, is_deleted FROM operational_services ORDER BY org_id, id"
+      "select": "SELECT org_id, id, name, is_deleted FROM operational_services ORDER BY org_id, id",
+      "fields": {
+        "org_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "int"
+        }
+      }
     },
     {
       "table": "operational_service_repository_mappings",
       "store": "clickhouse",
-      "select": "SELECT org_id, id, service_id, repo_id, is_active, valid_from, valid_to FROM operational_service_repository_mappings ORDER BY org_id, id"
+      "select": "SELECT org_id, id, service_id, repo_id, is_active, valid_from, valid_to FROM operational_service_repository_mappings ORDER BY org_id, id",
+      "fields": {
+        "org_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "service_id": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "uuid"
+        },
+        "is_active": {
+          "type": "int"
+        },
+        "valid_from": {
+          "type": "datetime"
+        },
+        "valid_to": {
+          "type": "datetime"
+        }
+      }
     },
     {
       "table": "operational_incidents",
       "store": "clickhouse",
-      "select": "SELECT org_id, id, service_id, normalized_status, started_at, resolved_at, is_deleted FROM operational_incidents ORDER BY org_id, id"
+      "select": "SELECT org_id, id, service_id, normalized_status, started_at, resolved_at, is_deleted FROM operational_incidents ORDER BY org_id, id",
+      "fields": {
+        "org_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "service_id": {
+          "type": "string"
+        },
+        "normalized_status": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "datetime"
+        },
+        "resolved_at": {
+          "type": "datetime"
+        },
+        "is_deleted": {
+          "type": "int"
+        }
+      }
     }
   ],
   "outputs": [
@@ -91,16 +197,31 @@
       "table": "dora_metrics_daily",
       "store": "clickhouse",
       "select": "SELECT org_id, repo_id, day, metric_name, value, computed_at FROM dora_metrics_daily ORDER BY org_id, repo_id, day, metric_name",
-      "semantic_key": ["org_id", "repo_id", "day", "metric_name"],
+      "semantic_key": [
+        "org_id",
+        "repo_id",
+        "day",
+        "metric_name"
+      ],
       "repeat_policy": "append_duplicates",
       "fields": {
-        "org_id": {"type": "string"},
-        "repo_id": {"type": "uuid"},
-        "day": {"type": "date"},
-        "metric_name": {"type": "string"},
+        "org_id": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "uuid"
+        },
+        "day": {
+          "type": "date"
+        },
+        "metric_name": {
+          "type": "string"
+        },
         "value": {
           "type": "float",
-          "numeric": {"policy": "exact"},
+          "numeric": {
+            "policy": "exact"
+          },
           "notes": "Float64 column. Exact is the correct posture for a port that performs the same arithmetic in the same order; a lane that finds a genuine representation difference must declare a per-field tolerance here with a written reason, not relax the comparison globally."
         },
         "computed_at": {

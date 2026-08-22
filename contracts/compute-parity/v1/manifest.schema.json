@@ -161,14 +161,15 @@
     "inputs": {
       "type": "array",
       "minItems": 1,
-      "description": "Tables the kind reads. The comparator digests these on both sides before comparing any output; a mismatch makes the run INDETERMINATE, never DIFFERENT.",
+      "description": "Tables the kind reads. The comparator validates each side's projection against `fields` and digests the rows with the same type-aware, framed encoding it uses for outputs, then requires the two sides to match BEFORE comparing any output. A mismatch makes the run INDETERMINATE, never DIFFERENT: an output comparison over different inputs is not a parity claim, and an untyped digest would call integer 1 and string \"1\" the same fixture.",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "table",
           "store",
-          "select"
+          "select",
+          "fields"
         ],
         "properties": {
           "table": {
@@ -182,6 +183,14 @@
           },
           "select": {
             "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "$ref": "#/$defs/field"
+            },
+            "description": "Every column the input `select` returns, typed. Projection drift is refused."
           }
         }
       }

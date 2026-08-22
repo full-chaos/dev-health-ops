@@ -77,6 +77,11 @@ the comparison could not be made at all, `3` INDETERMINATE / UNPROVEN. `2` and
 pinned one and a producer is being run: without it the producer silently takes
 the host clock, and the two sides can land on different days.
 
+Producer execution is bounded by `--producer-timeout` (default 3600s). Each
+producer runs in its own session and the whole group is reaped on timeout, so a
+deadlocked producer fails the comparison instead of hanging the release gate
+with no verdict at all.
+
 Producers receive `PARITY_DSN`, `PARITY_SIDE`, `PARITY_RUN_INDEX` and
 `PARITY_AS_OF` in the environment. **Both sides must resolve a producer
 command**: a side that resolves none — which is exactly the checked-in state of
@@ -106,10 +111,14 @@ section that reads like "nothing was violated".
    entry needs a written `notes`; a guard test fails an empty one. Anything you
    do not declare here and do not canonicalize in `outputs[]` shows up as a
    false difference in every future run.
-4. **Declare the inputs.** The comparator digests them on both sides *before*
-   comparing any output. A mismatch makes the run `INDETERMINATE`, never
-   `DIFFERENT` — an output comparison over different inputs is not a parity
-   claim.
+4. **Declare the inputs, typed.** Each input needs `fields` exactly like an
+   output does. The comparator validates both sides' projections against them
+   and digests the rows with the same type-aware, framed encoding it uses for
+   outputs, *before* comparing any output. A mismatch makes the run
+   `INDETERMINATE`, never `DIFFERENT` — an output comparison over different
+   inputs is not a parity claim, and an untyped digest would compare a
+   timestamp by its repr and let a delimiter inside a value forge a field
+   boundary.
 5. **Declare the outputs.** For each table: the `select`, the `semantic_key`,
    every selected column under `fields`, and the `repeat_policy`. The
    comparator refuses a snapshot whose columns disagree with `fields`, so a
@@ -122,23 +131,28 @@ section that reads like "nothing was violated".
      values is meaningful even though the value is not.
    A key column may not be canonicalized away; the loader refuses it, because a
    collapsed key hides a missing row behind an extra one.
-7. **Set the numeric policy per field.** `exact` is the posture. A tolerance is
+7. **Expect the loader to be strict.** Manifest values are read at their
+   declared type and never coerced (`bool("false")` is `True`, which would have
+   turned a typo into permission for two empty outputs to report EQUAL), and an
+   unknown key anywhere in an input, output, field, or numeric block is
+   refused rather than ignored.
+8. **Set the numeric policy per field.** `exact` is the posture. A tolerance is
    declared on the one field that needs it and must carry a written `reason`
    naming the persisted column precision that forces it — the loader refuses a
    tolerance without one, and the schema has no place for a global tolerance.
    A tolerance-compared field is excluded from the canonical row digest and the
    report names it under `digest_excluded_fields`, so the reduction in what was
    proven is visible rather than implied.
-8. **Add the Go producer** under `producers.go` once the port exists. Nothing
+9. **Add the Go producer** under `producers.go` once the port exists. Nothing
    else in the manifest changes when a kind is ported — that is the point.
-9. **Decide whether an empty output is ever acceptable.** By default it is
+10. **Decide whether an empty output is ever acceptable.** By default it is
    not: two empty tables have equal counts and equal digests at every level, so
    the comparator returns `INDETERMINATE` rather than `EQUAL` when a table is
    empty on both sides. That is usually a fixture that produced nothing or a
    projection that matched nothing — an absence of evidence, not parity. Set
    `allow_empty: true` on a table a kind may legitimately leave empty, and say
    why in the manifest `description`.
-10. **Prove it.** Add the kind to the live test's coverage and run the
+11. **Prove it.** Add the kind to the live test's coverage and run the
    self-test (same implementation both sides → `EQUAL`) plus the three negative
    controls (mutate a row, drop a row, nudge a float past its policy → each
    reported precisely). A comparator that has not been shown to fail has not

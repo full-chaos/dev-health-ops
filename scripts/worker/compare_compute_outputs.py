@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import uuid
@@ -357,6 +358,7 @@ class InputSpec:
     table: str
     store: str
     select: str
+    fields: tuple[FieldSpec, ...]
 
 
 @dataclass(frozen=True)
@@ -383,6 +385,87 @@ def _require(mapping: Mapping[str, Any], key: str, where: str) -> Any:
     if key not in mapping:
         raise ComparisonError(f"manifest_missing_field:{where}.{key}")
     return mapping[key]
+
+
+def _typed(mapping: Mapping[str, Any], key: str, kind: type, where: str) -> Any:
+    """Read a manifest value of an exact type, never coercing it.
+
+    ``bool("false")`` is ``True``, ``str(1)`` is ``"1"``, and ``int(True)`` is
+    ``1``. A manifest is the contract that defines what parity means for a
+    kind; a value of the wrong type there must be rejected, not quietly
+    reinterpreted into something that changes the comparison.
+    """
+    value = _require(mapping, key, where)
+    if kind is bool:
+        if not isinstance(value, bool):
+            raise ComparisonError(
+                f"manifest_field_type_invalid:{where}.{key}:expected_bool"
+            )
+        return value
+    if isinstance(value, bool) or not isinstance(value, kind):
+        raise ComparisonError(
+            f"manifest_field_type_invalid:{where}.{key}:expected_{kind.__name__}"
+        )
+    return value
+
+
+def _optional_typed(
+    mapping: Mapping[str, Any], key: str, kind: type, where: str, default: Any
+) -> Any:
+    if key not in mapping:
+        return default
+    return _typed(mapping, key, kind, where)
+
+
+def _reject_unknown(mapping: Mapping[str, Any], allowed: set[str], where: str) -> None:
+    if not isinstance(mapping, Mapping):
+        raise ComparisonError(f"manifest_shape_invalid:{where}")
+    unknown = sorted(set(mapping) - allowed)
+    if unknown:
+        raise ComparisonError(f"manifest_unknown_field:{where}:{','.join(unknown)}")
+
+
+FIELD_KEYS = {"type", "volatile", "numeric", "notes"}
+NUMERIC_KEYS = {"policy", "tolerance", "reason"}
+INPUT_KEYS = {"table", "store", "select", "fields"}
+OUTPUT_KEYS = {
+    "table",
+    "store",
+    "select",
+    "semantic_key",
+    "fields",
+    "repeat_policy",
+    "tombstone_predicate",
+    "allow_empty",
+}
+
+
+def _field_specs(raw: Any, where: str) -> tuple[FieldSpec, ...]:
+    """Build the typed field declarations shared by inputs and outputs."""
+    if not isinstance(raw, Mapping) or not raw:
+        raise ComparisonError(f"manifest_fields_missing:{where}")
+    fields: list[FieldSpec] = []
+    for column, spec in raw.items():
+        site = f"{where}.{column}"
+        _reject_unknown(spec, FIELD_KEYS, site)
+        column_type = _typed(spec, "type", str, site)
+        if column_type not in SUPPORTED_TYPES:
+            raise ComparisonError(f"manifest_unknown_type:{site}")
+        volatile = _optional_typed(spec, "volatile", str, site, None)
+        if volatile is not None and volatile not in VOLATILE_ACTIONS:
+            raise ComparisonError(f"manifest_unknown_volatile_action:{site}")
+        numeric_raw = spec.get("numeric")
+        if numeric_raw is not None:
+            _reject_unknown(numeric_raw, NUMERIC_KEYS, f"{site}.numeric")
+        fields.append(
+            FieldSpec(
+                column=column,
+                type=column_type,
+                numeric=_numeric_policy(numeric_raw, f"{site}.numeric"),
+                volatile=volatile,
+            )
+        )
+    return tuple(fields)
 
 
 def _numeric_policy(raw: Mapping[str, Any] | None, where: str) -> NumericPolicy | None:
@@ -424,48 +507,45 @@ def load_manifest(path: Path) -> Manifest:
 
     inputs: list[InputSpec] = []
     for entry in _require(document, "inputs", "manifest"):
-        store = str(_require(entry, "store", "inputs[]"))
+        table = _typed(entry, "table", str, "inputs[]")
+        site = f"inputs[{table}]"
+        _reject_unknown(entry, INPUT_KEYS, site)
+        store = _typed(entry, "store", str, site)
         if store not in SUPPORTED_STORES:
             raise ComparisonError(f"manifest_unknown_store:{store}")
         inputs.append(
             InputSpec(
-                table=str(_require(entry, "table", "inputs[]")),
+                table=table,
                 store=store,
-                select=str(_require(entry, "select", "inputs[]")),
+                select=_typed(entry, "select", str, site),
+                # Inputs are typed like outputs. The fixture equality check is
+                # the PRECONDITION of the whole parity claim, so it cannot run
+                # on stringified values: `str(1)` and `str("1")` are the same
+                # text, and an untyped hash would call two different fixtures
+                # equal and license a false EQUAL downstream.
+                fields=_field_specs(_require(entry, "fields", site), f"{site}.fields"),
             )
         )
 
     outputs: list[OutputSpec] = []
     for entry in _require(document, "outputs", "manifest"):
-        table = str(_require(entry, "table", "outputs[]"))
-        store = str(_require(entry, "store", f"outputs[{table}]"))
+        table = _typed(entry, "table", str, "outputs[]")
+        site = f"outputs[{table}]"
+        _reject_unknown(entry, OUTPUT_KEYS, site)
+        store = _typed(entry, "store", str, site)
         if store not in SUPPORTED_STORES:
             raise ComparisonError(f"manifest_unknown_store:{store}")
-        repeat_policy = str(_require(entry, "repeat_policy", f"outputs[{table}]"))
+        repeat_policy = _typed(entry, "repeat_policy", str, site)
         if repeat_policy not in REPEAT_POLICIES:
             raise ComparisonError(f"manifest_unknown_repeat_policy:{repeat_policy}")
-        fields: list[FieldSpec] = []
-        for column, spec in _require(entry, "fields", f"outputs[{table}]").items():
-            column_type = str(_require(spec, "type", f"outputs[{table}].{column}"))
-            if column_type not in SUPPORTED_TYPES:
-                raise ComparisonError(f"manifest_unknown_type:{table}.{column}")
-            volatile = spec.get("volatile")
-            if volatile is not None and volatile not in VOLATILE_ACTIONS:
-                raise ComparisonError(
-                    f"manifest_unknown_volatile_action:{table}.{column}"
-                )
-            fields.append(
-                FieldSpec(
-                    column=column,
-                    type=column_type,
-                    numeric=_numeric_policy(
-                        spec.get("numeric"), f"outputs[{table}].{column}.numeric"
-                    ),
-                    volatile=volatile,
-                )
-            )
+        fields = list(_field_specs(_require(entry, "fields", site), f"{site}.fields"))
         declared = {f.column for f in fields}
-        semantic_key = tuple(_require(entry, "semantic_key", f"outputs[{table}]"))
+        raw_key = _require(entry, "semantic_key", site)
+        if not isinstance(raw_key, list) or any(
+            not isinstance(column, str) for column in raw_key
+        ):
+            raise ComparisonError(f"manifest_field_type_invalid:{site}.semantic_key")
+        semantic_key = tuple(raw_key)
         if not semantic_key:
             raise ComparisonError(f"manifest_empty_semantic_key:{table}")
         missing = [column for column in semantic_key if column not in declared]
@@ -487,7 +567,9 @@ def load_manifest(path: Path) -> Manifest:
             raise ComparisonError(
                 f"manifest_volatile_semantic_key:{table}:{','.join(volatile_key)}"
             )
-        tombstone_predicate = entry.get("tombstone_predicate")
+        tombstone_predicate = _optional_typed(
+            entry, "tombstone_predicate", str, site, None
+        )
         if repeat_policy == "tombstone" and not str(tombstone_predicate or "").strip():
             # Without a predicate there is nothing to check, and the policy
             # would be satisfied by a producer that deletes nothing and marks
@@ -499,12 +581,12 @@ def load_manifest(path: Path) -> Manifest:
             OutputSpec(
                 table=table,
                 store=store,
-                select=str(_require(entry, "select", f"outputs[{table}]")),
+                select=_typed(entry, "select", str, site),
                 semantic_key=semantic_key,
                 fields=tuple(fields),
                 repeat_policy=repeat_policy,
                 tombstone_predicate=tombstone_predicate,
-                allow_empty=bool(entry.get("allow_empty", False)),
+                allow_empty=_optional_typed(entry, "allow_empty", bool, site, False),
             )
         )
     if not outputs:
@@ -1042,6 +1124,20 @@ def snapshot(reader: Reader, table: str, select: str) -> Snapshot:
     return Snapshot(table=table, columns=tuple(columns), rows=tuple(rows))
 
 
+def canonical_typed_row(fields: Sequence[FieldSpec], row: Mapping[str, Any]) -> str:
+    """Type-aware, framed rendering of one row over declared fields.
+
+    Shared by the input-fixture digest and the output row digest so both are
+    proven to the same standard. The input side used to stringify every value,
+    which collapsed integer ``1`` and string ``"1"`` into one hash -- and the
+    input digests are the precondition the whole parity claim rests on.
+    """
+    return "\x1f".join(
+        _framed(f"{spec.column}={canonical_scalar(row.get(spec.column), spec.type)}")
+        for spec in sorted(fields, key=lambda f: f.column)
+    )
+
+
 def validate_columns(spec: OutputSpec, snap: Snapshot, side: str) -> None:
     """Refuse a snapshot whose columns disagree with the manifest.
 
@@ -1054,13 +1150,19 @@ def validate_columns(spec: OutputSpec, snap: Snapshot, side: str) -> None:
     query against the wrong projection that happens to return no rows would
     otherwise sail through as "equal zero rows".
     """
+    _validate_projection(spec.table, spec.fields, snap, side)
+
+
+def _validate_projection(
+    table: str, fields: Sequence[FieldSpec], snap: Snapshot, side: str
+) -> None:
     observed = set(snap.columns)
-    declared = {f.column for f in spec.fields}
+    declared = {f.column for f in fields}
     if observed != declared:
         missing = sorted(declared - observed)
         extra = sorted(observed - declared)
         raise ComparisonError(
-            f"manifest_column_drift:{spec.table}:{side}:"
+            f"manifest_column_drift:{table}:{side}:"
             f"undeclared={','.join(extra) or '-'}:unread={','.join(missing) or '-'}"
         )
 
@@ -1070,8 +1172,16 @@ def validate_columns(spec: OutputSpec, snap: Snapshot, side: str) -> None:
 # --------------------------------------------------------------------------
 
 
+DEFAULT_PRODUCER_TIMEOUT_SECONDS = 3600
+
+
 def run_producer(
-    command: Sequence[str], dsn: str, side: str, run_index: int, as_of: str
+    command: Sequence[str],
+    dsn: str,
+    side: str,
+    run_index: int,
+    as_of: str,
+    timeout_seconds: int = DEFAULT_PRODUCER_TIMEOUT_SECONDS,
 ) -> None:
     environment = dict(os.environ)
     environment.update(
@@ -1082,14 +1192,47 @@ def run_producer(
             "PARITY_AS_OF": as_of,
         }
     )
-    completed = subprocess.run(  # noqa: S603 -- caller-declared command from a checked-in manifest
-        list(command), env=environment, capture_output=True, text=True
+    # Bounded, and in its own session so a producer that spawns children
+    # cannot outlive the timeout. An unbounded wait turns a deadlocked producer
+    # or a hung database call into a parity job that never returns a verdict at
+    # all -- neither a pass nor a failure, just a stuck release gate.
+    process = subprocess.Popen(  # noqa: S603 -- caller-declared command from a checked-in manifest
+        list(command),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
-    if completed.returncode != 0:
+    try:
+        _, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _terminate_group(process)
         raise ComparisonError(
-            f"producer_failed:{side}:run{run_index}:exit{completed.returncode}:"
-            + (completed.stderr or "").strip().splitlines()[-1][:200]
+            f"producer_timeout:{side}:run{run_index}:after{timeout_seconds}s"
+        ) from None
+    if process.returncode != 0:
+        tail = (stderr or "").strip().splitlines()
+        raise ComparisonError(
+            f"producer_failed:{side}:run{run_index}:exit{process.returncode}:"
+            + (tail[-1][:200] if tail else "")
         )
+
+
+def _terminate_group(process: subprocess.Popen[str]) -> None:
+    """Reap a timed-out producer and anything it started."""
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        process.terminate()
+    try:
+        process.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            process.kill()
+        process.communicate()
 
 
 def normalize_command(command: Sequence[str]) -> list[str]:
@@ -1144,6 +1287,7 @@ def compare_rows(
     right_command: Sequence[str] | None,
     no_exec: bool,
     repeat: int,
+    producer_timeout: int = DEFAULT_PRODUCER_TIMEOUT_SECONDS,
     sample: int,
     as_of: str,
 ) -> dict[str, Any]:
@@ -1240,13 +1384,17 @@ def compare_rows(
         for input_spec in manifest.inputs:
             left_rows = snapshot(left_reader, input_spec.table, input_spec.select)
             right_rows = snapshot(right_reader, input_spec.table, input_spec.select)
+            _validate_projection(
+                input_spec.table, input_spec.fields, left_rows, left_label
+            )
+            _validate_projection(
+                input_spec.table, input_spec.fields, right_rows, right_label
+            )
             left_digest = digest_of_sorted(
-                "\x1f".join(f"{k}={_stable(v)}" for k, v in sorted(row.items()))
-                for row in left_rows.rows
+                canonical_typed_row(input_spec.fields, row) for row in left_rows.rows
             )
             right_digest = digest_of_sorted(
-                "\x1f".join(f"{k}={_stable(v)}" for k, v in sorted(row.items()))
-                for row in right_rows.rows
+                canonical_typed_row(input_spec.fields, row) for row in right_rows.rows
             )
             equal = left_digest == right_digest
             input_report["tables"][input_spec.table] = {
@@ -1272,9 +1420,23 @@ def compare_rows(
         previous_tombstones: dict[str, dict[str, int | None]] = {}
         for run_index in range(1, max(1, repeat) + 1):
             if left_command:
-                run_producer(left_command, left_dsn, left_label, run_index, as_of)
+                run_producer(
+                    left_command,
+                    left_dsn,
+                    left_label,
+                    run_index,
+                    as_of,
+                    producer_timeout,
+                )
             if right_command:
-                run_producer(right_command, right_dsn, right_label, run_index, as_of)
+                run_producer(
+                    right_command,
+                    right_dsn,
+                    right_label,
+                    run_index,
+                    as_of,
+                    producer_timeout,
+                )
 
             run_entry: dict[str, Any] = {"index": run_index, "tables": {}}
             for output_spec in manifest.outputs:
@@ -1776,6 +1938,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rows.add_argument("--sample", type=int, default=10)
     rows.add_argument(
+        "--producer-timeout",
+        type=int,
+        default=DEFAULT_PRODUCER_TIMEOUT_SECONDS,
+        help="Seconds a single producer execution may take before it is reaped.",
+    )
+    rows.add_argument(
         "--as-of",
         default="",
         help="Pinned UTC instant handed to producers as PARITY_AS_OF.",
@@ -1810,6 +1978,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.no_exec
                 else resolve_command(manifest, args.right_label, args.right_exec),
                 no_exec=bool(args.no_exec),
+                producer_timeout=args.producer_timeout,
                 repeat=args.repeat,
                 sample=args.sample,
                 as_of=args.as_of,

@@ -67,7 +67,15 @@ def base_manifest() -> dict[str, Any]:
         },
         "producers": {"python": {"status": "reference"}},
         "inputs": [
-            {"table": "deployments", "store": "clickhouse", "select": "SELECT 1"}
+            {
+                "table": "deployments",
+                "store": "clickhouse",
+                "select": "SELECT deployment_id, started_at FROM deployments",
+                "fields": {
+                    "deployment_id": {"type": "string"},
+                    "started_at": {"type": "datetime"},
+                },
+            }
         ],
         "outputs": [
             {
@@ -1012,3 +1020,116 @@ def test_a_well_formed_observation_still_reaches_the_measurement_stage(tmp_path)
     report = comparator.compare_runtime(write_observation(tmp_path, go_observation()))
     assert report["claim"] == comparator.CLAIM_RUNTIME
     assert report["comparisons"]
+
+
+# --------------------------------------------------------------------------
+# The manifest is a contract, not a suggestion (fifth adversarial-review round)
+# --------------------------------------------------------------------------
+
+
+def test_a_wrong_typed_allow_empty_is_refused_not_coerced(tmp_path):
+    """`bool("false")` is True.
+
+    Coercing that would have turned a manifest typo into permission for two
+    empty output tables to report EQUAL.
+    """
+    document = base_manifest()
+    document["outputs"][0]["allow_empty"] = "false"
+    with pytest.raises(
+        comparator.ComparisonError, match="manifest_field_type_invalid.*expected_bool"
+    ):
+        write_manifest(tmp_path, document)
+
+
+@pytest.mark.parametrize(
+    "mutate,expected",
+    [
+        (lambda d: d["outputs"][0].update(table=1), "expected_str"),
+        (lambda d: d["outputs"][0].update(select=["SELECT 1"]), "expected_str"),
+        (lambda d: d["outputs"][0].update(semantic_key="org_id"), "semantic_key"),
+        (lambda d: d["outputs"][0].update(surprise=True), "manifest_unknown_field"),
+        (lambda d: d["inputs"][0].update(surprise=True), "manifest_unknown_field"),
+        (
+            lambda d: d["outputs"][0]["fields"]["value"].update(surprise=1),
+            "manifest_unknown_field",
+        ),
+        (
+            lambda d: d["outputs"][0]["fields"]["value"]["numeric"].update(surprise=1),
+            "manifest_unknown_field",
+        ),
+    ],
+)
+def test_manifest_type_and_unknown_field_violations_are_refused(
+    tmp_path, mutate, expected
+):
+    document = base_manifest()
+    mutate(document)
+    with pytest.raises(comparator.ComparisonError, match=expected):
+        write_manifest(tmp_path, document)
+
+
+def test_input_digest_is_type_aware_and_framed(tmp_path):
+    """The input digests are the precondition of the whole parity claim.
+
+    They used to be built by stringifying every value and joining the pieces,
+    which is both untyped and unframed: a timestamp was compared by its repr
+    rather than as an instant, and a value containing the delimiter could forge
+    a field boundary so two different fixtures hashed the same. Either one
+    licenses an EQUAL verdict over implementations that consumed different data.
+    """
+    manifest = write_manifest(tmp_path, base_manifest())
+    spec = manifest.inputs[0]
+    instant = dt.datetime(2026, 8, 22, 12, 0, tzinfo=dt.timezone.utc)
+    same_instant_other_zone = dt.datetime(
+        2026, 8, 22, 8, 0, tzinfo=dt.timezone(dt.timedelta(hours=-4))
+    )
+    later = dt.datetime(2026, 8, 22, 12, 0, 1, tzinfo=dt.timezone.utc)
+
+    def encode(deployment_id: Any, started_at: Any) -> str:
+        return comparator.canonical_typed_row(
+            spec.fields, {"deployment_id": deployment_id, "started_at": started_at}
+        )
+
+    # Typed: one instant, two spellings -- the same fixture.
+    assert encode("d-1", instant) == encode("d-1", same_instant_other_zone)
+    assert encode("d-1", instant) != encode("d-1", later)
+
+    # Framed: a delimiter inside a value cannot forge the next field.
+    assert encode("d-1\x1fstarted_at=x", instant) != encode("d-1", instant)
+
+
+def test_input_projection_drift_is_refused(tmp_path):
+    manifest = write_manifest(tmp_path, base_manifest())
+    spec = manifest.inputs[0]
+    drifted = comparator.Snapshot(table=spec.table, columns=("deployment_id",), rows=())
+    with pytest.raises(comparator.ComparisonError, match="manifest_column_drift"):
+        comparator._validate_projection(spec.table, spec.fields, drifted, "python")
+
+
+def test_a_hanging_producer_is_reaped_and_reported(tmp_path):
+    """An unbounded wait turns a deadlocked producer into a stuck release gate."""
+    with pytest.raises(comparator.ComparisonError, match="producer_timeout:left:run1"):
+        comparator.run_producer(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            "clickhouse://ch:ch@localhost:8123/parity_x",
+            "left",
+            1,
+            "2026-08-22T00:00:00Z",
+            timeout_seconds=2,
+        )
+
+
+def test_a_failing_producer_reports_its_exit_code(tmp_path):
+    with pytest.raises(comparator.ComparisonError, match="producer_failed:left:run1"):
+        comparator.run_producer(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('boom\\n'); sys.exit(3)",
+            ],
+            "clickhouse://ch:ch@localhost:8123/parity_x",
+            "left",
+            1,
+            "2026-08-22T00:00:00Z",
+            timeout_seconds=30,
+        )

@@ -243,8 +243,21 @@ def render() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help=(
+            "Render to stdout instead of writing the checked-in file. The live "
+            "rot guard (internal/jobs/metrics/numerical) uses this to compare "
+            "what TODAY's production Python produces against the frozen file, "
+            "so a drift is reported as a diff rather than a bare exit code."
+        ),
+    )
     args = parser.parse_args()
     rendered = render()
+    if args.stdout:
+        print(rendered, end="")
+        return 0
     if args.check:
         return 0 if OUTPUT.read_text() == rendered else 1
     OUTPUT.write_text(rendered)

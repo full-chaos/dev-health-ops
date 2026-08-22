@@ -957,9 +957,43 @@ func partitionPublishedUnits(
 }
 
 // The liveness read. state is compared as text so this file never has to
-// import River's enum, and the IN list is CLOSED: a state River adds later is
-// refused by default rather than silently treated as dead. 'completed' is
-// terminal too and is deliberately absent -- a completed job did the work.
+// import River's enum, and the accepted states are CLOSED: a state River adds
+// later is refused by default rather than silently treated as dead.
+// 'completed' is terminal too and is deliberately absent -- a completed job
+// did the work.
+//
+// # "Terminal in River" is not the same as "nobody will revive it"
+//
+// This is the guard that keeps the sweep from destroying recoverable work, and
+// it is the reason the two states carry DIFFERENT conditions.
+//
+// internal/joboutbox/terminal_delivery_repair.go rearms a provider-unit outbox
+// row -- deleting the dead River job and minting a replacement delivery --
+// when its job was DISCARDED by River's unhandled-kind rescue with attempts
+// still on the clock (repairProviderUnitTerminalDeliverySQL, the
+// `candidate_job.attempt < candidate_job.max_attempts` predicate). Its recovery
+// requires the unit to still be 'dispatching'. So if this sweep terminalized
+// such a unit first, that repair could never run again and a transport failure
+// River was about to retry would become permanent domain failure instead.
+//
+// The two live in different reconcile loops, so ordering them is not something
+// this file can rely on -- and "the sweep's one-hour age gate makes the repair
+// win in practice" is a timing argument, which is exactly the kind of argument
+// that stops being true during an incident.
+//
+// The predicates are therefore made DISJOINT BY CONSTRUCTION instead:
+//
+//   - discarded requires `attempt >= max_attempts`, the exact complement of the
+//     repair's `attempt < max_attempts`. A spent budget means River has no
+//     retry left and the repair will not claim the row either.
+//   - cancelled needs no attempt condition, because the repair matches only
+//     'discarded' and can never claim a cancelled job whatever its budget says.
+//
+// A discarded job with attempts remaining but no rescue sentinel is neither
+// swept nor repaired. That is a knowingly narrower cut than "everything
+// terminal", and it is the correct one: it is not a regression (nothing
+// reached that row before this change either), and widening it would mean
+// racing the repair for rows the repair may legitimately want.
 //
 // The join is on river_job.id, a bigint, against a bigint array. CHAOS-4092 is
 // the reason that is stated: casting River's primary key to text is not
@@ -970,8 +1004,14 @@ const selectTerminalDeliveryStatesSQL = `
 SELECT job.id, job.state::text
 FROM %s AS job
 WHERE job.id = ANY($1::bigint[])
-	AND job.state::text IN ('cancelled', 'discarded')
 	AND job.finalized_at IS NOT NULL
+	AND (
+		job.state::text = 'cancelled'
+		OR (
+			job.state::text = 'discarded'
+			AND job.attempt >= job.max_attempts
+		)
+	)
 `
 
 // deadDeliveries keeps only the candidates whose delivery is provably dead.

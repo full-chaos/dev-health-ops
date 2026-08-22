@@ -713,6 +713,27 @@ func seedSweepDelivery(
 	jobError string,
 ) int64 {
 	t.Helper()
+	// A spent budget by default. For a discarded job that is what makes it
+	// unrecoverable and therefore sweepable; for every other state the column
+	// is not read at all.
+	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5)
+}
+
+// seedSweepDeliveryWithBudget exists so a test can put a discarded job on
+// EITHER side of the disjointness boundary with internal/joboutbox's
+// terminal-delivery repair. That boundary is the whole safety argument for
+// sweeping discarded jobs at all, so it has to be reachable from a fixture.
+func seedSweepDeliveryWithBudget(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	unitID string,
+	jobState string,
+	jobError string,
+	attempt int,
+	maxAttempts int,
+) int64 {
+	t.Helper()
 	var jobID int64
 	// finalized_at is set exactly when the state is terminal, matching River:
 	// a live job has none, and the sweep's liveness read requires it.
@@ -727,14 +748,14 @@ func seedSweepDelivery(
 	// of fixture bug that makes an assertion pass for the wrong reason.
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO river.river_job (state, attempt, max_attempts, kind, errors, finalized_at)
-		VALUES ($1::river.river_job_state, 1, 5, 'sync.provider_unit',
+		VALUES ($1::river.river_job_state, $4, $5, 'sync.provider_unit',
 			CASE
 				WHEN $2::text = '' THEN '{}'::jsonb[]
 				ELSE ARRAY[jsonb_build_object('attempt', 1, 'error', $2::text)]
 			END,
 			$3)
 		RETURNING id`,
-		jobState, jobError, finalized,
+		jobState, jobError, finalized, attempt, maxAttempts,
 	).Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
@@ -966,5 +987,77 @@ func TestTerminalizeTerminalDeliveryRefusesWhenTheDeliveryChanged(t *testing.T) 
 	}
 	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
 		t.Fatalf("unit status = %q, want it untouched by the refused write", status)
+	}
+}
+
+// THE DISJOINTNESS BOUNDARY with internal/joboutbox's terminal-delivery
+// repair, in both directions (adversarial review finding).
+//
+// That repair rearms a provider-unit outbox row -- deleting the dead River job
+// and minting a replacement delivery -- when the job was DISCARDED by River's
+// unhandled-kind rescue with attempts still on the clock, and its recovery
+// requires the unit to still be 'dispatching'. If this sweep terminalized such
+// a unit first, the repair could never run and a transport failure River was
+// about to retry would become permanent domain failure.
+//
+// The two live in different reconcile loops, so ordering cannot be relied on.
+// The predicates are disjoint by construction instead: the repair takes
+// `attempt < max_attempts`, this sweep takes `attempt >= max_attempts`. Both
+// halves are asserted here, because only the pair proves disjointness -- the
+// refusal alone would also pass if the sweep had simply stopped sweeping
+// discarded jobs altogether.
+func TestUnreclaimableSweepLeavesRecoverableDiscardedDeliveriesToTheOutboxRepair(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		attempt     int
+		maxAttempts int
+		wantSwept   bool
+		why         string
+	}{
+		{
+			name: "attempts remaining is the outbox repair's row", attempt: 2, maxAttempts: 5,
+			wantSwept: false,
+			why: "internal/joboutbox/terminal_delivery_repair.go can still delete this " +
+				"job and mint a replacement delivery, but only while the unit is " +
+				"'dispatching' -- terminalizing it here destroys a recoverable retry",
+		},
+		{
+			name: "a spent budget is nobody's row but this sweep's", attempt: 5, maxAttempts: 5,
+			wantSwept: true,
+			why: "River has no retry left and the outbox repair's " +
+				"`attempt < max_attempts` predicate excludes it, so refusing here " +
+				"would strand the unit exactly as CHAOS-4093 did",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			pool := startSweepPostgres(t, ctx)
+			now := time.Now().UTC()
+			seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+			unit := sweepUnitID(95)
+			seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+			// The exact error the outbox repair keys on, so the row is a genuine
+			// candidate for it rather than being excluded for some other reason.
+			seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts)
+
+			result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			swept := result.Terminalized == 1
+			if swept != testCase.wantSwept {
+				t.Fatalf("terminalized=%t, want %t: %s", swept, testCase.wantSwept, testCase.why)
+			}
+			status, _, _, _ := sweepUnitState(t, ctx, pool, unit)
+			wantStatus := "dispatching"
+			if testCase.wantSwept {
+				wantStatus = "failed"
+			}
+			if status != wantStatus {
+				t.Fatalf("unit status = %q, want %q: %s", status, wantStatus, testCase.why)
+			}
+		})
 	}
 }

@@ -968,6 +968,82 @@ func TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError(t *testin
 	}
 }
 
+// TestNativeMaterializerRefreshExecutedProofDegradesAfterALaterFailureToo is
+// the codex round-4 finding this pins: my earlier fix only forced a
+// Degraded snapshot on the very FIRST failed load ("if executedProof.Load()
+// == nil"). A LATER refresh failure -- after a real, successful, but
+// legitimately EMPTY load -- left that stale empty snapshot in place
+// unchanged, and empty now means "never attempted, bootstrap through": an
+// outage starting AFTER a clean boot would have kept authorizing every
+// never-attempted pair on the strength of a reading that could no longer be
+// trusted. This drives a real success (empty, non-degraded) followed by a
+// real failure and asserts the pair that would have bootstrapped through is
+// blocked once the snapshot is degraded -- and that a genuinely PROVEN pair
+// keeps passing regardless, since that fact does not stop being true.
+func TestNativeMaterializerRefreshExecutedProofDegradesAfterALaterFailureToo(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	suppressAutoSecurityDataset(t, fixture)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		var units int
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+
+	// A real, healthy, but genuinely empty first load: github/commits has
+	// zero history, so it bootstraps through.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := materializer.executedProof.Load(); snapshot == nil || snapshot.Degraded {
+		t.Fatalf("first load snapshot = %+v, want a healthy (non-degraded) snapshot", snapshot)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf("total_units=%d, want 1: never-attempted must bootstrap through on a healthy snapshot", got)
+	}
+
+	// Now the query itself starts failing. The stale "empty" reading can no
+	// longer be trusted as a true "never attempted".
+	failCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := materializer.RefreshExecutedProof(failCtx); err == nil {
+		t.Fatal("RefreshExecutedProof against a canceled context unexpectedly succeeded")
+	}
+	snapshot := materializer.executedProof.Load()
+	if snapshot == nil || !snapshot.Degraded {
+		t.Fatalf(
+			"a LATER refresh failure (after a healthy load) must also degrade the snapshot: snapshot=%+v",
+			snapshot,
+		)
+	}
+	secondOccurrence := fixture.occurrence
+	secondOccurrence.ID = "occurrence:v1:scheduled:degraded-after-healthy"
+	secondOccurrence.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Hour)
+	plan, err = materializeAndCommit(t, fixture, materializer, secondOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf(
+			"total_units=%d, want 0: a degraded snapshot must not keep bootstrapping a "+
+				"never-attempted pair through on a reading it can no longer trust",
+			got,
+		)
+	}
+}
+
 // TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart is the
 // second codex adversarial-review finding this pins: a load-once-at-startup
 // snapshot alone can never observe evidence that appears after the process

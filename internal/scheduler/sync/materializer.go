@@ -100,18 +100,20 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 //
 // A query failure must not silently restore full pre-CHAOS-4060 permissive
 // behavior for the rest of this process's lifetime -- that would defeat the
-// gate this ticket exists to add. So: if this is the very first load (no
-// snapshot installed yet), an error still installs a DEGRADED, non-nil
-// snapshot -- the gate becomes enforced and blocks every non-waived pair
-// outright, rather than silently disabled OR (worse, now that
-// never-attempted legitimately bootstraps through) misread as a fresh,
-// healthy, fully-permissive database. A later, unrelated transient error
-// leaves whatever snapshot is already loaded in place rather than wiping
-// it. Either way the error is always returned so
-// the caller can log it loud; this method never fails the whole scheduler
-// pass over an evidence-query failure (CHAOS-4073's precedent: a safety
-// layer that cannot confirm its own precondition fails loud, never takes the
-// pass down -- but "loud" here also means "closed", not "open").
+// gate this ticket exists to add. So EVERY failed refresh -- not just the
+// very first load -- marks the operative snapshot Degraded (codex round 4:
+// a snapshot that was healthy, then degraded by a LATER failure, must not
+// keep authorizing never-attempted pairs on the strength of what it last
+// successfully observed being "nothing yet" -- that reading cannot be
+// trusted once the query itself starts failing). Already-PROVEN pairs are
+// unaffected: Degraded only revokes the never-attempted pass-through
+// (ExecutedProofSatisfied checks Proven first), never a durable fact that
+// already existed, so this can never un-prove a route that already proved
+// itself. The error is always returned so the caller can log it loud; this
+// method never fails the whole scheduler pass over an evidence-query
+// failure (CHAOS-4073's precedent: a safety layer that cannot confirm its
+// own precondition fails loud, never takes the pass down -- but "loud" here
+// also means "closed", not "open").
 func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context) error {
 	if materializer == nil || materializer.domainPool == nil {
 		return ErrInvalidMaterializer
@@ -134,19 +136,25 @@ func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context
 	if err != nil {
 		materializer.executedProofRefreshFailuresTotal.Add(1)
 		materializer.executedProofLastRefreshOK.Store(false)
-		if materializer.executedProof.Load() == nil {
-			// Degraded, not merely empty: the query FAILED, so an empty
-			// Proven/Attempted shape here would be indistinguishable from a
-			// healthy database that has genuinely never attempted anything
-			// -- which now legitimately bootstraps every pair through. That
-			// would turn a startup outage into full pre-CHAOS-4060
-			// permissiveness. Degraded blocks every non-waived pair instead.
-			degraded := &providersync.ExecutedProofEvidence{
-				Proven: make(map[string]bool), Attempted: make(map[string]bool),
-				Degraded: true,
-			}
-			materializer.executedProof.Store(degraded)
+		// Degraded, not merely empty: the query FAILED, so an empty
+		// Proven/Attempted shape here would be indistinguishable from a
+		// healthy database that has genuinely never attempted anything --
+		// which now legitimately bootstraps every pair through. That would
+		// turn an outage into full pre-CHAOS-4060 permissiveness for every
+		// pair this snapshot has not already proven. Already-known Proven
+		// facts carry forward unchanged (they are durable and do not stop
+		// being true because a later query failed); Attempted carries
+		// forward too, since it can only ever grow more conservative, never
+		// less.
+		degraded := &providersync.ExecutedProofEvidence{
+			Proven: make(map[string]bool), Attempted: make(map[string]bool),
+			Degraded: true,
 		}
+		if previous := materializer.executedProof.Load(); previous != nil {
+			degraded.Proven = previous.Proven
+			degraded.Attempted = previous.Attempted
+		}
+		materializer.executedProof.Store(degraded)
 		return err
 	}
 	materializer.executedProofLastRefreshOK.Store(true)

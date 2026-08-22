@@ -101,9 +101,18 @@ func (evidence *ExecutedProofEvidence) HasBeenAttempted(provider, dataset string
 // evidence for the identity's canonical (plannable) dataset, the pair never
 // having been attempted at all (bootstrap convergence -- see
 // ExecutedProofEvidence), or the gate not being wired by this caller at all
-// (nil evidence). A Degraded snapshot blocks every non-waived pair
-// unconditionally: it means the evidence query itself failed, not that it
-// succeeded and found nothing, so "never attempted" cannot be trusted.
+// (nil evidence).
+//
+// Proven is checked BEFORE Degraded, deliberately: it is a durable, permanent
+// fact (a row that already exists and already proved itself does not stop
+// being true because a LATER query failed), so it survives a degraded
+// snapshot unchanged. What a Degraded snapshot revokes is only the
+// never-attempted pass-through -- once the evidence query itself is failing,
+// "this pair has no history" can no longer be trusted as a true negative, so
+// it stops being treated as a green light. This is the codex round-4 fix: a
+// snapshot that was healthy, then degraded by a LATER refresh failure (not
+// just the very first load), must not keep authorizing pairs on the strength
+// of what it last successfully observed being "nothing yet".
 //
 // Evidence is looked up under CanonicalDataset, not RequestedDataset: an
 // alias identity (pr-reviews, tests, ...) is never independently planned or
@@ -119,15 +128,15 @@ func (descriptor CompleteRouteDescriptor) ExecutedProofSatisfied(evidence *Execu
 	if evidence == nil {
 		return true
 	}
-	if evidence.Degraded {
-		return false
-	}
 	canonical := descriptor.CanonicalDataset
 	if canonical == "" {
 		canonical = descriptor.RequestedDataset
 	}
 	if evidence.HasExecutedProof(descriptor.Provider, canonical) {
 		return true
+	}
+	if evidence.Degraded {
+		return false
 	}
 	return !evidence.HasBeenAttempted(descriptor.Provider, canonical)
 }

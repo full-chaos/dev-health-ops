@@ -286,6 +286,61 @@ func TestCapacityFanoutSuppliesTheRequiredGenerationSeed(t *testing.T) {
 	}
 }
 
+// The Python recommendations readiness gate selects the authoritative daily
+// run with starts_with(generation, 'fixed-schedule:daily_metrics_fanout:')
+// (src/dev_health_ops/workers/recommendations_tasks.py). That prefix is a
+// literal owned by THIS producer, and a rename here would not break any Go
+// test -- it would silently make the Python gate match zero rows and fall into
+// its "no run recorded -> proceed" branch, which is exactly the vacuous-gate
+// failure CHAOS-4066 exists to fix.
+//
+// A source-text assertion on the Python side cannot carry this alone: a
+// refactor could route the live producer through a helper or append a suffix
+// while the old expression survives in a dead helper, and a substring check
+// would still pass. This runs the REAL producer against a recording store and
+// asserts the generation actually handed to StartScheduledFanoutRunTx.
+func TestDailyFanoutGenerationKeepsThePrefixThePythonGateMatches(t *testing.T) {
+	const pythonGatePrefix = "fixed-schedule:daily_metrics_fanout:"
+
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	store := &recordingDailyFanoutStore{}
+	producer, err := NewDailyMetricsFanoutProducer(
+		store, nopDailyRunPublisher{}, fixedOrganizationLister{identifiers: []string{testOrgA}},
+	)
+	if err != nil {
+		t.Fatalf("NewDailyMetricsFanoutProducer() = %v", err)
+	}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-07-24T01:00:00Z"), mustTime(t, "2026-07-24T01:00:05Z"),
+	)
+	if _, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence); err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("started %d daily runs", len(store.requests))
+	}
+	generation := store.requests[0].Generation
+	if !strings.HasPrefix(generation, pythonGatePrefix) {
+		t.Fatalf(
+			"generation %q lost the %q prefix; the Python readiness gate "+
+				"would match no fan-out run and silently stop gating (CHAOS-4066)",
+			generation, pythonGatePrefix,
+		)
+	}
+	// Pin the whole value, not just the prefix: the gate's ORDER BY leans on
+	// created_at rather than this string, but a format change here still
+	// deserves to be a deliberate edit. The store's matching guard is pinned
+	// where it lives, in TestScheduledFanoutPrefixIsThePythonGatePrefix.
+	if want := pythonGatePrefix + "2026-07-24T01:00:00Z"; generation != want {
+		t.Fatalf("generation = %q, want %q", generation, want)
+	}
+	// target_day is the other half of the gate's key: it reads
+	// (org_id, target_day) and must line up with the occurrence day.
+	if got := store.requests[0].TargetDay.UTC().Format("2006-01-02"); got != "2026-07-24" {
+		t.Fatalf("target day = %s, want the occurrence day 2026-07-24", got)
+	}
+}
+
 // Non-capacity families must NOT carry a seed: the store rejects one.
 func TestNonCapacityFanoutOmitsTheGenerationSeed(t *testing.T) {
 	for _, id := range []string{

@@ -330,9 +330,15 @@ PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE = """(
 # provider, and `RESOLVED_EVIDENCE_WORK_ITEM_ID` then bridges nothing: the
 # unit stays `unassigned` rather than being attributed on a coin flip.
 # (`provider` is never legitimately empty here -- migration 028 defaults it to
-# 'unknown' -- so '' is unambiguous as an ambiguity sentinel.) Fixing the id
-# seed itself is a data-model change, out of scope for this ticket; the
-# sibling `LEFT JOIN repos AS r` joins share the same seed limitation.
+# 'unknown' -- so '' is unambiguous as an ambiguity sentinel.)
+#
+# Fail-closed only covers the window in which BOTH provider rows are still
+# observable. `repos` dedups on (org_id, id), so once they merge the surviving
+# provider is simply whichever synced last and the ambiguity is no longer
+# detectable here. Repairing that means making the id seed provider-aware,
+# which is a data-model change tracked in **CHAOS-4122**, not something this
+# query layer can do; the sibling `LEFT JOIN repos AS r` joins share the same
+# seed limitation.
 WORK_UNIT_EVIDENCE_REPO_SOURCE = """(
     SELECT
         org_id,

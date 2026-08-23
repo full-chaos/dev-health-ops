@@ -256,6 +256,7 @@ type Metrics struct {
 	inventoryPageCap     map[string]uint64
 	perRunTruncation     map[string]uint64
 	artifactSkipped      map[string]uint64
+	resumeReanchor       map[string]uint64
 	unitTerminalWithRows map[string]uint64
 }
 
@@ -267,6 +268,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:     map[string]uint64{},
 		perRunTruncation:     map[string]uint64{},
 		artifactSkipped:      map[string]uint64{},
+		resumeReanchor:       map[string]uint64{},
 		unitTerminalWithRows: map[string]uint64{},
 	}
 }
@@ -449,6 +451,42 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 		":"+MetricArtifactSkipReasonLabel(reason)]++
 }
 
+// metricResumePhaseVocabulary is the closed set of paginated phases whose
+// resume cursor carries a positional index. An unknown phase collapses to
+// "other" so a route cannot open an unbounded label dimension (CHAOS-4177).
+var metricResumePhaseVocabulary = map[string]struct{}{
+	"runs": {}, "artifacts": {},
+}
+
+// MetricResumePhaseLabel bounds the resume phase label.
+func MetricResumePhaseLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricResumePhaseVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordResumeReanchor counts ONE re-fetched page whose contents had moved
+// past the index a resume cursor recorded against it, so the walk restarted at
+// the top of that page.
+//
+// This is the deploy-verification signal for CHAOS-4177: the same event used
+// to surface as a checkpoint conflict that cost the unit one of five attempts.
+// After the fix, a deploy should show re-anchors here and no conflicts. A
+// steadily rising count on one provider/dataset means pages are shifting
+// faster than the walk consumes them, which is the argument for moving that
+// route to a stable-identity cursor.
+func (m *Metrics) RecordResumeReanchor(provider, dataset, phase string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resumeReanchor[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricResumePhaseLabel(phase)]++
+}
+
 // RecordUnitTerminalWithRows counts a provider unit that was terminalized
 // while it already held committed rows. That combination is the signature
 // CHAOS-4130 ran on undetected for days: a unit destroyed mid-stream is
@@ -520,7 +558,7 @@ func writeProviderDatasetComponentCounter(
 // writeProviderDatasetCounter. Every key is built from bounded vocabularies,
 // so SplitN into exactly three parts is total.
 func writeProviderDatasetReasonCounter(
-	writer io.Writer, name, help string, values map[string]uint64,
+	writer io.Writer, name, help, third string, values map[string]uint64,
 ) error {
 	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
 		return err
@@ -536,8 +574,8 @@ func writeProviderDatasetReasonCounter(
 			continue
 		}
 		if _, err := fmt.Fprintf(
-			writer, "%s{provider=%q,dataset=%q,reason=%q} %d\n",
-			name, parts[0], parts[1], parts[2], values[key],
+			writer, "%s{provider=%q,dataset=%q,%s=%q} %d\n",
+			name, parts[0], parts[1], third, parts[2], values[key],
 		); err != nil {
 			return err
 		}
@@ -617,7 +655,14 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
-		m.artifactSkipped,
+		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_resume_reanchor_total",
+		"Re-fetched provider pages whose contents moved past the resume cursor's index, by bounded provider, dataset, and phase.",
+		"phase", m.resumeReanchor,
 	); err != nil {
 		return err
 	}

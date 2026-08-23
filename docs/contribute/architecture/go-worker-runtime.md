@@ -325,6 +325,69 @@ this short-circuit unless the `worker_job_runs` row is reconciled in the same
 work. The settled constraint, from CHAOS-3991, is one sentence: **success may
 never be recorded on a claim conflict.**
 
+## Chunked provider walks: continuations and resume cursors
+
+A provider unit too large for one attempt is walked in chunks. Each committed
+chunk advances a durable checkpoint (`sync_run_unit_chunk_checkpoints`), and
+the walk yields a **continuation** — `ChunkContinuationError`
+(`internal/providersync/chunked_persistence.go`), translated to River's snooze
+path so it is **attempt-neutral**: the domain row compensates with
+`attempts = GREATEST(attempts - 1, 0)`
+(`internal/providersync/repository_postgres.go`). A unit may continue any number
+of times without spending its bounded failure budget.
+
+That budget is the thing to protect. Attempts are counted **per unit**, while
+anything that consumes one is encountered **per chunk**, so a unit's exposure
+grows with the number of chunks — which is to say with the size of the
+repository. A defect that costs one attempt per resume is therefore invisible on
+small sources and fatal on large ones.
+
+### A resume cursor is a position, and positions move
+
+A resume cursor stores an **ordinal index into a provider-ordered page**,
+identified by that page's URL. On resume the page is re-fetched and the index is
+applied to whatever came back.
+
+Providers do not guarantee stable pagination. GitHub serves Actions runs
+newest-first, so every new run shifts the contents of every page. After any gap —
+and a deploy is a gap — the page a cursor named can come back holding fewer items
+than the index recorded against it.
+
+**A positional mismatch is a RE-ANCHOR, never corruption.** The unit's durable
+state is intact and every prepared chunk is still committed; only the provider
+moved. The walk restarts at the top of that page, attempt-neutral, and records
+`dev_health_provider_resume_reanchor_total{provider,dataset,phase}`.
+
+Re-walking is safe because every cicd destination is a `ReplacingMergeTree`
+keyed on the row's natural identity
+(`src/dev_health_ops/migrations/clickhouse/000_raw_tables.sql` for
+`ci_pipeline_runs`, `029_testops_tables.sql` for the testops tables), so
+re-processing an item replaces its row rather than duplicating it.
+
+Two alternatives are ruled out. **Clamping** the index to the end of the page
+silently drops whatever moved off it — data loss reported as progress.
+**Failing** costs the unit one of its five attempts, which is what made busy
+repositories terminalize after a deploy while quiet ones completed (CHAOS-4177).
+
+`ErrChunkCheckpointConflict` stays, and is reserved for state that really is
+corrupt or impossible: a cursor that does not decode, a checkpoint that fails
+its own validation, an inventory marked complete with no chunks. A provider
+whose pages moved is none of those.
+
+### Deploys must not cost units attempts
+
+This is the standing requirement the rule above serves. A deploy stops workers
+mid-walk and restarts them against checkpoints written by the previous binary.
+Every resume that follows is a normal, expected operation. Any behaviour that
+turns "the world moved while we were away" into a failure will burn attempts in
+proportion to how long the deploy took and how busy the source is, and will look
+like an ingestion fault rather than a deploy artifact.
+
+The end-state is a cursor anchored on the provider's own stable identity for an
+item — a workflow run id rather than its position — so a resume is exact whenever
+the anchor is still on the page, and degrades to the re-anchor above when it is
+not. Tracked as CHAOS-4182.
+
 ## Outbox rows and delivery generations
 
 `worker_job_outbox` is the transactional handoff between a domain write and a

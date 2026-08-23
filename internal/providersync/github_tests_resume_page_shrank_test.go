@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -21,6 +22,10 @@ import (
 type githubTestsShrinkingRunsDoer struct {
 	t     *testing.T
 	items int
+	// artifactPhaseURL records the URL the ARTIFACTS phase paginates, so a test
+	// can build a resume cursor anchored to the real page instead of guessing
+	// how the route composes that query.
+	artifactPhaseURL string
 }
 
 func (doer *githubTestsShrinkingRunsDoer) Do(request *http.Request) (*http.Response, error) {
@@ -31,6 +36,9 @@ func (doer *githubTestsShrinkingRunsDoer) Do(request *http.Request) (*http.Respo
 	case path == "/repos/acme/api":
 		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
 	case path == "/repos/acme/api/actions/runs":
+		if request.URL.Query().Get("branch") != "" {
+			doer.artifactPhaseURL = request.URL.String()
+		}
 		if doer.items == 0 {
 			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[]}`), nil
 		}
@@ -51,12 +59,12 @@ func githubTestsRunsResumeCursor(index int) string {
 }
 
 func githubTestsResumeCollect(
-	t *testing.T, doer providerfoundation.HTTPDoer, resume string,
+	t *testing.T, client *providerfoundation.HTTPClient, resume string,
 ) (emissions int, finals int, err error) {
 	t.Helper()
 	err = GitHubTestsRouteHandler{}.CollectChunks(
 		context.Background(), nativeTestClaim("github", "cicd"),
-		providerfoundation.Credential{}, githubTestsClient(t, doer),
+		providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume,
 		func(emission ChunkRouteEmission) error {
 			emissions++
@@ -75,7 +83,7 @@ func githubTestsResumeCollect(
 func TestGitHubTestsResumeWithinPageCompletes(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 5}
 
-	_, finals, err := githubTestsResumeCollect(t, doer, githubTestsRunsResumeCursor(2))
+	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, doer), githubTestsRunsResumeCursor(2))
 	if err != nil {
 		t.Fatalf("resume within the page returned err=%v, want completion", err)
 	}
@@ -125,7 +133,7 @@ func TestGitHubTestsResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
 	// unit resumes only 2 remain addressable on it.
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
 
-	_, finals, err := githubTestsResumeCollect(t, doer, githubTestsRunsResumeCursor(4))
+	_, finals, err := githubTestsResumeCollect(t, githubTestsClient(t, doer), githubTestsRunsResumeCursor(4))
 
 	if errors.Is(err, ErrChunkCheckpointConflict) {
 		t.Fatalf(
@@ -139,5 +147,101 @@ func TestGitHubTestsResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
 	}
 	if finals != 1 {
 		t.Fatalf("finals=%d, want exactly 1", finals)
+	}
+}
+
+// A re-anchor that nothing counts is invisible: the unit succeeds, the board
+// says success, and nobody can tell whether pages are shifting faster than the
+// walk consumes them. This is also the deploy-verification signal -- after the
+// fix a deploy should show re-anchors where it used to show conflicts -- so it
+// is asserted through the ROUTE rather than by calling the recorder.
+func TestGitHubTestsResumeReanchorIsCounted(t *testing.T) {
+	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
+	client := githubTestsClient(t, doer)
+	// The executors attach Metrics before handing the client to a route
+	// (chunked_stream_executor.go:147). githubTestsClient leaves it nil, so
+	// attach one or the assertion below would pass against a nil recorder.
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(4)); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	want := `dev_health_provider_resume_reanchor_total{provider="github",dataset="cicd",phase="runs"} 1`
+	if !strings.Contains(buffer.String(), want) {
+		t.Fatalf("metrics did not carry the re-anchor:\nwant line: %s\ngot:\n%s", want, buffer.String())
+	}
+}
+
+// A page that did NOT move must not be reported as a re-anchor, or the signal
+// becomes noise and the deploy check above means nothing.
+func TestGitHubTestsResumeWithinPageIsNotCountedAsReanchor(t *testing.T) {
+	doer := &githubTestsShrinkingRunsDoer{t: t, items: 5}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(2)); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	if strings.Contains(buffer.String(), `dev_health_provider_resume_reanchor_total{provider="github",dataset="cicd",phase="runs"} 1`) {
+		t.Fatal("a page that did not move was counted as a re-anchor")
+	}
+}
+
+// The artifacts phase carries the identical positional-index resume and the
+// identical failure. It has never fired in production only because no unit has
+// survived the runs phase to reach it, so it is fixed and pinned together with
+// its twin rather than left as a latent repeat.
+//
+// The resume cursor is built from the URL the route actually paginated in the
+// artifacts phase, captured on a first pass, so the test cannot pass merely
+// because a guessed URL failed to match the page.
+func TestGitHubTestsArtifactsPhaseResumeAfterPageShrankDoesNotBurnAnAttempt(t *testing.T) {
+	discover := &githubTestsShrinkingRunsDoer{t: t, items: 5}
+	if _, _, err := githubTestsResumeCollect(t, githubTestsClient(t, discover), ""); err != nil {
+		t.Fatalf("discovery pass: %v", err)
+	}
+	if discover.artifactPhaseURL == "" {
+		t.Fatal("discovery pass never reached the artifacts phase; the cursor below would be meaningless")
+	}
+
+	resume := `{"phase":"artifacts","next_url":` + strconv.Quote(discover.artifactPhaseURL) +
+		`,"index":4,"run_pages":1,"artifact_pages":1,"repo":"acme/api"}`
+
+	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	_, finals, err := githubTestsResumeCollect(t, client, resume)
+	if errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf(
+			"artifacts phase reported a moved page as a corrupt checkpoint: %v; "+
+				"want re-anchor and continue",
+			err,
+		)
+	}
+	if err != nil {
+		t.Fatalf("artifacts resume returned err=%v, want completion", err)
+	}
+	if finals != 1 {
+		t.Fatalf("finals=%d, want exactly 1", finals)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	want := `dev_health_provider_resume_reanchor_total{provider="github",dataset="cicd",phase="artifacts"} 1`
+	if !strings.Contains(buffer.String(), want) {
+		t.Fatalf("artifacts re-anchor not counted:\nwant line: %s\ngot:\n%s", want, buffer.String())
 	}
 }

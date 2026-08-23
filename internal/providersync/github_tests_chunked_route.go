@@ -207,6 +207,59 @@ func recordGitHubTestsUnreadableArchive(
 	return incomplete
 }
 
+// The two phases whose resume cursors carry a positional index. Closed set:
+// the phase reaches a metric label.
+const (
+	githubTestsRunsPhase      = "runs"
+	githubTestsArtifactsPhase = "artifacts"
+)
+
+// githubTestsResumeStart resolves where to resume inside a re-fetched page.
+//
+// A resume cursor stores an ORDINAL index into a page identified by its URL.
+// GitHub serves Actions runs newest-first, so between two attempts new runs
+// shift what any given page holds, and the page a cursor named can come back
+// shorter than the index recorded against it. That is the provider moving, not
+// a corrupt checkpoint: the unit's durable state is intact and every prepared
+// chunk is still committed.
+//
+// Such a mismatch therefore RE-ANCHORS -- walk the page again from the start --
+// rather than failing. Re-walking is safe because every cicd destination is a
+// ReplacingMergeTree keyed on the row's natural identity
+// (migrations/clickhouse/000_raw_tables.sql:97-106 for ci_pipeline_runs,
+// 029_testops_tables.sql:33-102 for the testops tables), so re-processing an
+// item replaces its row instead of duplicating it. Clamping to the end of the
+// page instead would silently drop whatever moved off it -- data loss reported
+// as progress.
+//
+// Failing here cost one of the unit's five attempts per occurrence, which is
+// why a deploy or any other gap used to burn attempts on exactly the busiest
+// repositories -- the ones whose pages shift most (CHAOS-4177).
+func githubTestsResumeStart(
+	cursor githubTestsChunkCursor,
+	page providerfoundation.PageVisit,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	phase string,
+) int {
+	if cursor.NextURL != page.CursorBefore {
+		return 0
+	}
+	if cursor.Index <= len(page.Items) {
+		return cursor.Index
+	}
+	if client != nil {
+		client.Metrics.RecordResumeReanchor(claim.Provider, claim.Dataset, phase)
+	}
+	slog.Warn(
+		"provider page moved under a resume; re-anchoring and re-walking the page",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "phase", phase,
+		"stored_index", cursor.Index, "page_items", len(page.Items),
+	)
+	return 0
+}
+
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	if strings.TrimSpace(raw) == "" {
 		return githubTestsChunkCursor{Phase: "runs"}, nil
@@ -390,13 +443,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 			cursor.RunPages++
 		}
-		start := 0
-		if cursor.NextURL == page.CursorBefore {
-			start = cursor.Index
-		}
-		if start > len(page.Items) {
-			return ErrChunkCheckpointConflict
-		}
+		start := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
 			before := cursor
 			var run gitHubWorkflowRunPayload
@@ -575,13 +622,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 				cursor.ArtifactPages++
 			}
-			start := 0
-			if cursor.NextURL == page.CursorBefore {
-				start = cursor.Index
-			}
-			if start > len(page.Items) {
-				return ErrChunkCheckpointConflict
-			}
+			start := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
 				var run gitHubWorkflowRunPayload

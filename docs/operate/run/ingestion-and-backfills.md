@@ -77,10 +77,22 @@ Consequences to expect when reading run state:
   full-depth incremental window.
 - A run requested with an upper bound already covered by the dataset's watermark
   plans no unit for that dataset. If that leaves the whole run with no units, the
-  run finalizes as failed with "No sync units planned". Read that as "the
-  requested window was already covered", not as an ingestion fault. Scheduled
-  runs do not request an upper bound and so never reach this state; only a
-  manually requested past upper bound can.
+  run finalizes as failed. Read that as "the requested window was already
+  covered", not as an ingestion fault. Scheduled runs do not request an upper
+  bound and so never reach this state; only a manually requested past upper
+  bound can.
+- A run with no planned units always finalizes as failed, whatever the cause.
+  That is deliberate: the alternative is a run that fetched nothing and reports
+  success, which is a false claim of coverage. What the run reports is the cause
+  the planner recorded on it — for example a PagerDuty integration whose
+  credential is missing keeps that message rather than a generic one. Only a run
+  whose planner recorded no cause at all falls back to "No sync units planned",
+  and that fallback should be read as "the reason was not captured", not as "the
+  plan was legitimately empty". The metric
+  `devhealth_sync_run_zero_unit_finalizations_total` breaks these runs down by
+  provider and by recorded cause; a series dominated by the generic fallback
+  means a planner path is discarding its own diagnosis and should be fixed
+  there, not by relaxing the failed status.
 
 A watermark is never recorded beyond what the run actually read. A synchronization
 timestamp reported by a provider is capped at the end of the unit's own window

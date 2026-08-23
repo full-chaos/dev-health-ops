@@ -61,6 +61,7 @@ from dev_health_ops.api.services.sync_coverage import (
 from dev_health_ops.exceptions import PaginationException, RateLimitException
 from dev_health_ops.models import (
     BackfillJob,
+    Integration,
     JobRun,
     JobRunStatus,
     ProviderRateLimitObservation,
@@ -108,6 +109,7 @@ from dev_health_ops.sync.trigger_routing import (
     stamp_sync_run_canonical_config,
 )
 from dev_health_ops.sync.watermarks import set_watermark
+from dev_health_ops.sync.zero_unit_telemetry import ZERO_UNIT_FINALIZATIONS_TOTAL
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.job_contracts import ProviderUnitPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
@@ -2109,8 +2111,38 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
                 None,
             )
         if total_count == 0:
-            run.error = "No sync units planned"
-            result_payload["reason"] = "no_sync_units_planned"
+            # CHAOS-4159. A zero-unit run still finalizes FAILED -- that trade is
+            # ratified (see
+            # tests/test_sync_units.py::
+            # test_fully_caught_up_plan_finalizes_failed_not_silently_successful:
+            # a loud, honest failure beats a quiet success that falsely claims
+            # coverage was refreshed). What is NOT ratified is finalizing it
+            # ANONYMOUSLY.
+            #
+            # Finalize cannot see why the plan was empty -- by definition it has
+            # no units to read a cause off. The planner can, and some planner
+            # paths already write one onto the run before dispatch (the
+            # PagerDuty terminalization writes `error` plus a
+            # `result.error_category`). Overwriting those unconditionally, as
+            # this branch used to, destroyed the only diagnosis that existed
+            # and left three different causes -- a missing PagerDuty
+            # credential, a disabled sync target, a genuinely empty plan --
+            # wearing one identical label. An operator reading
+            # `sync_runs.error` then has no way to tell "attach a credential"
+            # from "this is expected".
+            #
+            # So: the planner's recorded cause WINS, and the generic label is
+            # the residual for "nobody recorded one". The distinction is
+            # carried explicitly on the run row, never inferred from
+            # total_units.
+            planner_result = run.result if isinstance(run.result, dict) else {}
+            planner_category = planner_result.get("error_category")
+            if isinstance(planner_category, str) and planner_category:
+                result_payload.setdefault("error_category", planner_category)
+            zero_unit_reason = _zero_unit_reason(planner_result)
+            if run.error is None:
+                run.error = _ZERO_UNIT_GENERIC_ERROR
+            result_payload["reason"] = zero_unit_reason
         run.result = result_payload
         run_success = run.status == SyncRunStatus.SUCCESS.value
         # sanitize_error_text is applied here too, not just at the original
@@ -2177,6 +2209,20 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
                 now=completed_at,
             )
             nested.commit()
+            if total_count == 0:
+                # CHAOS-4159, standing telemetry order. Emitted from the
+                # once-only branch -- the IntegrityError arm above is a
+                # re-finalization of a run that already terminalized, and
+                # counting it again would turn retry pressure into what looks
+                # like more zero-unit runs. The `reason` label is the
+                # classification this finalization actually recorded, so a
+                # series dominated by the generic residual is itself the
+                # signal that an upstream planner path is still discarding
+                # its own diagnosis.
+                ZERO_UNIT_FINALIZATIONS_TOTAL.labels(
+                    provider=_run_provider(session, run),
+                    reason=str(result_payload.get("reason", _ZERO_UNIT_GENERIC_REASON)),
+                ).inc()
         post_sync_payload = build_post_sync_dispatch_payload(session, run_uuid)
         post_sync_targets = (
             post_sync_payload.sync_targets if post_sync_payload is not None else []
@@ -2852,6 +2898,47 @@ def _load_unit(session, unit_id: str) -> SyncRunUnit:
 
 def _nonterminal_run_ids_select():
     return select(SyncRun.id).where(SyncRun.status.not_in(_TERMINAL_RUN_STATUSES))
+
+
+# CHAOS-4159: the residual label for a zero-unit run whose planner recorded no
+# cause at all. It is deliberately NOT the label for every zero-unit run any
+# more -- see the total_count == 0 branch in finalize_sync_run.
+_ZERO_UNIT_GENERIC_ERROR = "No sync units planned"
+_ZERO_UNIT_GENERIC_REASON = "no_sync_units_planned"
+
+
+def _zero_unit_reason(planner_result: Mapping[str, Any]) -> str:
+    """Classify a zero-unit run from what the planner recorded on it.
+
+    Prefers an explicit ``reason``, falls back to the ``error_category`` the
+    terminalizing planner paths write, and only then to the generic residual.
+    A blank or non-string value is treated as absent rather than propagated:
+    an empty reason label is worse than the honest generic one because it
+    reads as a classification that happened and found nothing.
+    """
+    for key in ("reason", "error_category"):
+        value = planner_result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return _ZERO_UNIT_GENERIC_REASON
+
+
+def _run_provider(session: Session, run: SyncRun) -> str:
+    """Provider label for a run with no units to read one off.
+
+    A zero-unit run has no SyncRunUnit rows, and provider lives on the unit --
+    so the only remaining source is the integration. Falls back to "unknown"
+    rather than raising: telemetry must never be the thing that fails a
+    finalization.
+    """
+    provider = (
+        session.query(Integration.provider)
+        .filter(Integration.id == run.integration_id)
+        .scalar()
+    )
+    if isinstance(provider, str) and provider.strip():
+        return provider.strip().lower()
+    return "unknown"
 
 
 def _aggregate_run_status(

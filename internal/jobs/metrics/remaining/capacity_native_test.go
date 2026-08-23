@@ -4,13 +4,40 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestCapacityExecutorFailsClosedWithoutAConnection(t *testing.T) {
-	if _, err := NewCapacityExecutor(nil, nil); err == nil {
+	if _, err := NewCapacityExecutor(context.Background(), nil, nil); err == nil {
 		t.Fatal("a nil connection must refuse, not degrade to the bridge")
+	}
+}
+
+func TestEveryColumnTheExecutorTouchesIsRequiredAtStartup(t *testing.T) {
+	// The startup probe is only worth having if its required set actually
+	// covers what the code uses. These are the columns the queries and the
+	// insert in capacity_native_clickhouse.go name; a column added to either
+	// without being added here would pass startup and then fail on every
+	// partition, which is the retry storm the probe exists to prevent.
+	for table, columns := range capacityRequiredColumns {
+		if len(columns) == 0 {
+			t.Errorf("%s requires no columns, so its probe asserts nothing", table)
+		}
+	}
+	for _, column := range []string{"items_completed", "wip_count_end_of_day", "day"} {
+		if !slices.Contains(capacityRequiredColumns["work_item_metrics_daily"], column) {
+			t.Errorf("the throughput/backlog reads use %q but startup does not require it", column)
+		}
+	}
+	// The writer binds by POSITION, so every inserted column must be required.
+	for _, column := range []string{
+		"forecast_id", "p50_days", "p95_items", "throughput_stddev", "org_id",
+	} {
+		if !slices.Contains(capacityRequiredColumns["capacity_forecasts"], column) {
+			t.Errorf("the insert writes %q but startup does not require it", column)
+		}
 	}
 }
 

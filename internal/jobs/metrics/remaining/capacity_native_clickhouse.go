@@ -2,11 +2,13 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
@@ -272,4 +274,91 @@ func boolToUInt8(value bool) uint8 {
 		return 1
 	}
 	return 0
+}
+
+// ErrCapacitySchemaIncompatible reports a deployed schema this executor cannot
+// compute against.
+var ErrCapacitySchemaIncompatible = errors.New(
+	"capacity tables are missing columns this executor reads or writes")
+
+// capacityRequiredColumns is every column the executor touches, by table.
+//
+// Derived from the queries and the insert in this file rather than from the
+// migration: the question at startup is not "is the chain at head" but "can
+// THIS code run", and those differ whenever a migration is partially applied or
+// a column is renamed ahead of the code that uses it.
+var capacityRequiredColumns = map[string][]string{
+	"work_item_metrics_daily": {
+		"day", "org_id", "team_id", "work_scope_id",
+		"items_completed", "wip_count_end_of_day",
+	},
+	"capacity_forecasts": {
+		"forecast_id", "computed_at", "org_id", "team_id", "work_scope_id",
+		"backlog_size", "target_items", "target_date", "history_days",
+		"simulation_count", "p50_days", "p85_days", "p95_days",
+		"p50_date", "p85_date", "p95_date", "p50_items", "p85_items", "p95_items",
+		"throughput_mean", "throughput_stddev", "insufficient_history",
+		"high_variance",
+	},
+}
+
+// verifyCapacitySchema refuses a database this executor cannot compute against.
+//
+// Without it a worker with a reachable but stale database registers the kind,
+// claims partitions, fails the query or the insert, and retries -- turning
+// migration drift into a retry storm that burns attempts while capacity stays
+// unavailable. Refusing at construction turns the same drift into an unclaimed
+// backlog plus one loud, reason-labelled signal, which is the shape the rest of
+// this cutover already promises.
+//
+// It also makes the refusal telemetry honest: before this, the inspect_failed
+// reason could effectively never fire, because nothing inspected anything.
+func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
+	for _, table := range []string{"work_item_metrics_daily", "capacity_forecasts"} {
+		present, err := capacityTableColumns(ctx, conn, table)
+		if err != nil {
+			return err
+		}
+		if len(present) == 0 {
+			return fmt.Errorf("%w: table %s does not exist",
+				ErrCapacitySchemaIncompatible, table)
+		}
+		var missing []string
+		for _, column := range capacityRequiredColumns[table] {
+			if !present[column] {
+				missing = append(missing, column)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("%w: %s is missing %s",
+				ErrCapacitySchemaIncompatible, table, strings.Join(missing, ", "))
+		}
+	}
+	return nil
+}
+
+func capacityTableColumns(
+	ctx context.Context, conn driver.Conn, table string,
+) (map[string]bool, error) {
+	rows, err := conn.Query(ctx, `
+        SELECT name FROM system.columns
+        WHERE database = currentDatabase() AND table = {table:String}
+    `, clickhouse.Named("table", table))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	present := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan %s columns: %w", table, err)
+		}
+		present[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	return present, nil
 }

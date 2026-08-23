@@ -709,12 +709,18 @@ func (collector *MetricsCollector) ObserveDORARefused(reason string) error {
 
 // Capacity refusal reasons. Closed set, bounded label cardinality.
 const (
-	CapacityRefusedSeedMissing   = "seed_missing"
-	CapacityRefusedInspectFailed = "inspect_failed"
+	// Both of these are REACHABLE, which was not true of the set they replace.
+	// An earlier version declared a seed_missing reason that nothing ever
+	// emitted -- the seed is enforced when the run row is created and again per
+	// partition, neither of which is a refusal to BUILD -- so the exposition
+	// carried a series that could never move. A counter that cannot fire is
+	// worse than an absent one: it implies coverage that does not exist.
+	CapacityRefusedSchemaIncompatible = "schema_incompatible"
+	CapacityRefusedInspectFailed      = "inspect_failed"
 )
 
 var capacityRefusalReasons = []string{
-	CapacityRefusedSeedMissing,
+	CapacityRefusedSchemaIncompatible,
 	CapacityRefusedInspectFailed,
 }
 

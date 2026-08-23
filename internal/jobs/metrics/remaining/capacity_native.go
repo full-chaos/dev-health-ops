@@ -81,12 +81,19 @@ var errCapacityUnavailable = errors.New("capacity native executor unavailable")
 var ErrCapacitySeedMissing = errors.New(
 	"capacity run is missing its generation seed")
 
-// NewCapacityExecutor fails closed on a nil connection.
+// NewCapacityExecutor fails closed on a nil connection or an incompatible
+// schema.
 func NewCapacityExecutor(
-	conn driver.Conn, observer CapacityObserver,
+	ctx context.Context, conn driver.Conn, observer CapacityObserver,
 ) (*CapacityExecutor, error) {
 	if conn == nil {
 		return nil, errCapacityUnavailable
+	}
+	// Checked at CONSTRUCTION, so a database this code cannot compute against
+	// refuses the kind once and loudly, rather than letting the handler claim
+	// partitions and fail every one of them.
+	if err := verifyCapacitySchema(ctx, conn); err != nil {
+		return nil, err
 	}
 	return &CapacityExecutor{
 		conn:      conn,

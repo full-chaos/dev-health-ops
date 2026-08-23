@@ -280,7 +280,7 @@ func buildDailyWorker(
 				capacityObserver = candidate
 			}
 			executor, executorErr := remaining.NewCapacityExecutor(
-				metricsClickHouse, capacityObserver)
+				context.Background(), metricsClickHouse, capacityObserver)
 			if executorErr != nil {
 				logger.Error(
 					"capacity native executor refused; the capacity kind will "+
@@ -290,7 +290,7 @@ func buildDailyWorker(
 				)
 				if refusalObserver, ok := observer.(capacityRefusalObserver); ok {
 					_ = refusalObserver.ObserveCapacityRefused(
-						jobruntime.CapacityRefusedInspectFailed)
+						capacityRefusalReason(executorErr))
 				}
 			} else {
 				capacityExecutor = executor
@@ -467,4 +467,16 @@ func doraRefusalReason(err error) string {
 // log-only rather than failing the build.
 type capacityRefusalObserver interface {
 	ObserveCapacityRefused(reason string) error
+}
+
+// capacityRefusalReason maps a construction error onto the closed label set.
+//
+// The two are distinguished because they call for different actions: an
+// incompatible schema means finish or roll back a migration, while a failed
+// inspection means look at ClickHouse itself.
+func capacityRefusalReason(err error) string {
+	if errors.Is(err, remaining.ErrCapacitySchemaIncompatible) {
+		return jobruntime.CapacityRefusedSchemaIncompatible
+	}
+	return jobruntime.CapacityRefusedInspectFailed
 }

@@ -78,7 +78,7 @@ func run() error {
 	}
 	defer func() { _ = conn.Close() }()
 
-	executor, err := remaining.NewCapacityExecutor(conn, nil)
+	executor, err := remaining.NewCapacityExecutor(ctx, conn, nil)
 	if err != nil {
 		return err
 	}

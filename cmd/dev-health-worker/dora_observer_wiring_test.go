@@ -74,7 +74,7 @@ func TestTheRealCollectorSatisfiesTheCapacityObservers(t *testing.T) {
 			"refused executor would be invisible")
 	}
 	if err := refusal.ObserveCapacityRefused(
-		jobruntime.CapacityRefusedSeedMissing); err != nil {
+		jobruntime.CapacityRefusedSchemaIncompatible); err != nil {
 		t.Fatalf("refusal observation: %v", err)
 	}
 }

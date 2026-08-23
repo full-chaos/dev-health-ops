@@ -192,26 +192,46 @@ blacklist:
 
 ## Known limitations
 
-**The port-proof guard checks paths, not provenance.** It resolves symlinks, so
-aliases collapse, and it catches the realistic mistake — forgetting to point
-one side at the native executor, which leaves both sides running the same
-command. It does **not** hash executable contents, record the child process
-tree, or detect a wrapper that re-execs the reference producer under a
-different name. Two deliberately distinct wrappers around the same Python
-reference would satisfy it. Closing that needs execution-provenance
-infrastructure this repo does not have; it is the same class of gap as the
-self-declared runtime attestation below, and it belongs with that work rather
-than with a single slice. Adversarial review raised it three rounds running and
-the boundary is recorded here deliberately, not by omission.
+Three boundaries are recorded here deliberately, not by omission. Each was
+raised by adversarial review, argued, and **adjudicated by orchestrator
+ruling** as document-don't-fix — they are not the implementing lane's own
+verdict on its own work, which is exactly the thing a reader should be able to
+check. If you are about to "fix" one of these, read the rationale first: the
+cheap version of each was already considered and rejected for a reason.
 
-## Known limitation
+**1. The port-proof guard checks paths, not execution provenance.** It resolves
+symlinks, so aliases collapse, and it catches the realistic mistake —
+forgetting to point one side at the native executor, which leaves both sides
+running the same command. It does **not** hash executable contents, record the
+child process tree, or detect a wrapper that re-execs the reference producer
+under a different name; two deliberately distinct wrappers around the same
+Python reference would satisfy it. Closing that needs execution-provenance
+infrastructure this repo does not have, and it is the same family as (3).
+*Adversarial review raised it three rounds running; adjudicated by orchestrator
+ruling — path resolution covers the realistic miswiring class, provenance
+hashing is infrastructure work, not a slice.*
 
-Runtime observations are **self-declared**. Scope digests and build identity
+**2. The scratch-database ownership marker is forgeable.** `provision` accepts
+a `compute_parity_scratch_marker` table as proof the database is ours, and
+anyone able to create tables in a `parity*` database could create that name.
+But an actor with that access can drop databases directly, so the marker buys
+nothing against them; the realistic failure is a **typo**, which the shape
+check, the allowlist, the marker and the explicit `--reset` do cover. Unique
+per-run database names — the usual suggestion — would reverse
+`ci/local_validate.sh`'s **deliberate** deterministic-per-worktree scratch
+convention, whose own comments record why random names were rejected (a run
+that dies before its trap leaks a fresh orphan every time). *Adjudicated by
+orchestrator ruling.* Any scratch-database ownership protocol has to cover
+**the gate and the parity tools together** — it is a shared-convention
+decision, not a lane one.
+
+**3. Runtime observations are self-declared.** Scope digests and build identity
 are checked for shape and internal consistency; they are not recomputed from an
 independent source and the build is not resolved against an artifact registry,
 because no attestation plane exists in this repo. Every runtime report records
-`attestation: "self_declared"` for that reason. That gap belongs with the
-outstanding v3 threshold approval, not with a single slice.
+`attestation: "self_declared"` for that reason. *Adjudicated by orchestrator
+ruling* as program-level work belonging with the outstanding v3 threshold
+approval, not with a single slice.
 
 ## Related
 

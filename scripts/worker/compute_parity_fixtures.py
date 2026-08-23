@@ -295,12 +295,156 @@ def produce_metrics_dora(dsn: str, *, as_of: str, days: int) -> dict[str, Any]:
     return {"day": day.isoformat(), "backfill_days": days}
 
 
+# Capacity reads exactly one table, and its history LENGTH is load-bearing.
+CAPACITY_INPUT_TABLES = ("work_item_metrics_daily",)
+
+# The number of DAYS carrying rows becomes len(throughput_history), which is the
+# n that random.choice draws against. It is deliberately NOT a power of two:
+# _randbelow only rejects when n is not a power of two, so a fixture built on
+# 8/16/32 days would compare EQUAL against a port whose rejection loop is
+# broken or missing. 30 rejects. It is also > 1, because a single-day history
+# makes choice constant and stops the RNG mattering at all -- at which point the
+# comparison stops being evidence about the generator.
+CAPACITY_HISTORY_DAYS = 30
+CAPACITY_TEAM_ID = "team-parity"
+CAPACITY_WORK_SCOPE_ID = "scope-parity"
+
+
+def seed_metrics_capacity(
+    dsn: str, *, seed: int, days: int, as_of: str = FIXTURE_ANCHOR
+) -> dict[str, Any]:
+    """Seed capacity's throughput history.
+
+    Written directly rather than through a generator because the SHAPE is the
+    point: a fixed, non-power-of-two number of days, with varied item counts so
+    the sampled distribution is not constant.
+    """
+    import random as _random
+
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    anchor = _parse_anchor(as_of).date()
+    generator = _random.Random(seed)
+
+    rows = []
+    for offset in range(CAPACITY_HISTORY_DAYS):
+        day = anchor - timedelta(days=offset)
+        rows.append(
+            {
+                "day": day,
+                "provider": "parity",
+                "work_scope_id": CAPACITY_WORK_SCOPE_ID,
+                "team_id": CAPACITY_TEAM_ID,
+                "team_name": "Parity Team",
+                "items_started": generator.randint(1, 12),
+                "items_completed": generator.randint(1, 12),
+                "items_started_unassigned": 0,
+                "items_completed_unassigned": 0,
+                # The backlog is read from the LATEST day only, so this varies
+                # to make a wrong max(day) visible rather than coincidental.
+                "wip_count_end_of_day": 40 + offset,
+                "wip_unassigned_end_of_day": 0,
+                "cycle_time_p50_hours": None,
+                "cycle_time_p90_hours": None,
+                "lead_time_p50_hours": None,
+                "lead_time_p90_hours": None,
+                "wip_age_p50_hours": None,
+                "wip_age_p90_hours": None,
+                "bug_completed_ratio": 0.0,
+                "story_points_completed": 0.0,
+                "computed_at": _parse_anchor(as_of),
+            }
+        )
+
+    sink = ClickHouseMetricsSink(dsn=dsn)
+    try:
+        sink.org_id = PARITY_ORG_ID
+        sink.ensure_schema(force=True)
+        sink.client.insert(
+            "work_item_metrics_daily",
+            [[row[name] for name in rows[0]] + [PARITY_ORG_ID] for row in rows],
+            column_names=list(rows[0]) + ["org_id"],
+        )
+    finally:
+        sink.close()
+    return {"days": CAPACITY_HISTORY_DAYS, "rows": len(rows)}
+
+
+def produce_metrics_capacity(dsn: str, *, as_of: str, days: int) -> dict[str, Any]:
+    """Run the Python capacity producer against one destination."""
+    import asyncio
+
+    from dev_health_ops.metrics.job_capacity import run_capacity_forecast
+    from dev_health_ops.utils.datetime import utc_today
+
+    # A target date is supplied so the FIXED-DATE branch runs too, which means
+    # days_available -- and therefore the p*_items columns -- get
+    # cross-implementation coverage. Without it the comparison only ever
+    # exercised fixed-scope mode, and a date-vs-timestamp defect in
+    # days_available was reachable in production while both proof layers stayed
+    # green.
+    #
+    # Derived from each side's OWN today rather than pinned, because that is
+    # what production does; the harness refuses a run that crosses UTC midnight,
+    # which is what makes the two sides agree on it.
+    #
+    # target_items is left unset so it falls back to the backlog, so this single
+    # call runs BOTH modes -- which is also the only place the reseed-per-
+    # simulation behaviour is observable.
+    target_date = utc_today() + timedelta(days=CAPACITY_TARGET_DATE_OFFSET_DAYS)
+    asyncio.run(
+        run_capacity_forecast(
+            db_url=dsn,
+            org_id=PARITY_ORG_ID,
+            team_id=CAPACITY_TEAM_ID,
+            work_scope_id=CAPACITY_WORK_SCOPE_ID,
+            target_date=target_date,
+            history_days=90,
+            simulations=CAPACITY_SIMULATIONS,
+            seed=CAPACITY_SEED,
+        )
+    )
+    return {
+        "simulations": CAPACITY_SIMULATIONS,
+        "seed": CAPACITY_SEED,
+        "target_date": target_date.isoformat(),
+    }
+
+
+# Fixed so both producers draw the identical stream. The seed is mandatory for
+# this family on both sides (postgres.go:557, worker_metrics.py:892).
+CAPACITY_SEED = 20260823
+# 200, and the number is load-bearing rather than a convenience.
+#
+# The quantiles this family writes are statistics over the simulated draws, so
+# they CONVERGE: measured on this fixture's history, four different seeds give
+# four different (p50, p85, p95) triples at 20/100/200 simulations and the SAME
+# triple at 500, 2000 and 10,000. Above ~200 the output stops depending on which
+# stream was drawn at all, and a whole-table comparison then cannot tell a
+# correct CPython RNG port from an incorrect one -- it would report EQUAL either
+# way.
+#
+# Production runs 10,000, so row parity AT PRODUCTION SCALE is blind to the
+# generator. That is not a defect in the comparison, it is a property of taking
+# quantiles over many draws, and it is why the RNG is proven separately by
+# stream vectors rather than inferred from this table agreeing.
+CAPACITY_SIMULATIONS = 50
+
+# Far enough out that days_available is comfortably positive and the items
+# simulation does real work, close enough that the run stays quick.
+CAPACITY_TARGET_DATE_OFFSET_DAYS = 10
+
 KINDS: Mapping[str, Mapping[str, Any]] = {
     "metrics.dora": {
         "input_tables": DORA_INPUT_TABLES,
         "seed": seed_metrics_dora,
         "produce": produce_metrics_dora,
-    }
+    },
+    "metrics.capacity": {
+        "input_tables": CAPACITY_INPUT_TABLES,
+        "seed": seed_metrics_capacity,
+        "produce": produce_metrics_capacity,
+    },
 }
 
 

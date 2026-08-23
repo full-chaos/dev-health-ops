@@ -5,6 +5,7 @@ package numerical
 
 import (
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -151,12 +152,108 @@ func ThroughputStatistics(values []int) CapacityStatistics {
 	if len(values) == 1 {
 		return CapacityStatistics{Mean: mean}
 	}
-	var squared float64
+	return CapacityStatistics{Mean: mean, Stddev: populationStddev(values)}
+}
+
+// populationStddev reproduces statistics.pstdev for integer data.
+//
+// The obvious two-pass float accumulation -- sum the squared deviations in
+// float64 and take math.Sqrt -- is WRONG against Python, and wrong in a way
+// that is invisible on small inputs: for the throughput history
+// [3 8 1 5 13 2 9 4 7 2 9 1 6 3] it returns 3.4677817411252443 where CPython
+// returns 3.4677817411252447. Four ULP is not a rounding preference when the
+// value is compared for exact equality against Python's output.
+//
+// CPython does not compute sqrt(float(variance)). statistics.pstdev keeps the
+// sum of squared deviations as an EXACT Fraction and then takes a correctly
+// rounded square root of that rational (_float_sqrt_of_frac), which is closer
+// to the true value than converting to float first and rooting afterwards --
+// float(pvariance) then sqrt also gives ...443, so even exact-variance-then-
+// float-sqrt does not agree. The rounding has to happen once, at the end.
+//
+// For integer data the exact mean sum of squares reduces to
+//
+//	(count * Sum(x^2) - Sum(x)^2) / count^2
+//
+// which is computed here in big.Int and rooted through the same round-to-odd
+// construction CPython uses.
+func populationStddev(values []int) float64 {
+	count := int64(len(values))
+	sum := new(big.Int)
+	sumSquares := new(big.Int)
+	term := new(big.Int)
 	for _, value := range values {
-		difference := float64(value) - mean
-		squared += difference * difference
+		term.SetInt64(int64(value))
+		sum.Add(sum, term)
+		term.Mul(term, term)
+		sumSquares.Add(sumSquares, term)
 	}
-	return CapacityStatistics{Mean: mean, Stddev: math.Sqrt(squared / float64(len(values)))}
+	countBig := big.NewInt(count)
+	numerator := new(big.Int).Mul(countBig, sumSquares)
+	numerator.Sub(numerator, new(big.Int).Mul(sum, sum))
+	denominator := new(big.Int).Mul(countBig, countBig)
+	if numerator.Sign() <= 0 {
+		return 0
+	}
+	// Reduce first: CPython's Fraction is normalised before its numerator and
+	// denominator reach _float_sqrt_of_frac, and the bit lengths of the
+	// REDUCED pair drive the scaling exponent below.
+	divisor := new(big.Int).GCD(nil, nil, numerator, denominator)
+	numerator.Div(numerator, divisor)
+	denominator.Div(denominator, divisor)
+	return floatSqrtOfFraction(numerator, denominator)
+}
+
+// sqrtBitWidth mirrors statistics._sqrt_bit_width.
+const sqrtBitWidth = 109
+
+// floatSqrtOfFraction ports statistics._float_sqrt_of_frac: the square root of
+// n/m as a float64, correctly rounded.
+func floatSqrtOfFraction(n, m *big.Int) float64 {
+	// Python's // is FLOOR division, which differs from Go's truncation for
+	// negative values -- and this quotient is negative for every fraction
+	// below one, which is most of them. Truncating here shifts by one bit and
+	// silently returns a differently rounded answer.
+	q := floorDiv(int64(n.BitLen()-m.BitLen()-sqrtBitWidth), 2)
+
+	var numerator, denominator *big.Int
+	if q >= 0 {
+		scaled := new(big.Int).Lsh(m, uint(2*q))
+		numerator = new(big.Int).Lsh(integerSqrtOfFractionRoundToOdd(n, scaled), uint(q))
+		denominator = big.NewInt(1)
+	} else {
+		scaled := new(big.Int).Lsh(n, uint(-2*q))
+		numerator = integerSqrtOfFractionRoundToOdd(scaled, m)
+		denominator = new(big.Int).Lsh(big.NewInt(1), uint(-q))
+	}
+	value, _ := new(big.Rat).SetFrac(numerator, denominator).Float64()
+	return value
+}
+
+// integerSqrtOfFractionRoundToOdd ports _integer_sqrt_of_frac_rto:
+// floor(sqrt(n/m)), with the low bit forced set when the root is inexact.
+//
+// The round-to-odd step is what makes the final conversion correctly rounded
+// rather than merely close; dropping it loses the information that the true
+// root lies strictly above the floor, and the last conversion then rounds the
+// wrong way on ties.
+func integerSqrtOfFractionRoundToOdd(n, m *big.Int) *big.Int {
+	quotient := new(big.Int).Div(n, m)
+	root := new(big.Int).Sqrt(quotient)
+	exact := new(big.Int).Mul(root, root)
+	exact.Mul(exact, m)
+	if exact.Cmp(n) != 0 {
+		root.Or(root, big.NewInt(1))
+	}
+	return root
+}
+
+func floorDiv(numerator, denominator int64) int64 {
+	quotient := numerator / denominator
+	if (numerator%denominator != 0) && ((numerator < 0) != (denominator < 0)) {
+		quotient--
+	}
+	return quotient
 }
 
 // IntegerPercentiles matches compute_capacity._percentile, including its

@@ -1741,10 +1741,10 @@
         "value": "metrics.remaining.capacity"
       },
       "target_kind_id": "kind:metrics.remaining.capacity",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.capacity` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CUT-20 R2 replaced HTTPCompatibilityExecutor with the native remaining.CapacityExecutor for this kind only -- per kind, with no environment switch and no fallback: a worker that cannot build the native executor declines this kind alone and leaves its siblings registered.",
+      "deletion_evidence_requirement": "Remaining evidence for deleting the Python surface: the compatibility runner import is removed from the Python API. The kind resolves to a concrete non-HTTP-bridge handler (cmd/dev-health-worker/daily.go), and TestCapacityNativePortMatchesThePythonProducerAcrossTwoScratchStores compares product rows across two scratch stores. Note the scope of that proof: capacity's output is Monte Carlo, and its quantiles converge, so at production's simulation count row parity is blind to the generator. The comparison establishes IO, wiring, schema and statistics; CPython stream equivalence is established separately by the vectors in internal/jobs/metrics/numerical/cpyrandom.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": ""
     },

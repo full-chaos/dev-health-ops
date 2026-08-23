@@ -257,14 +257,61 @@ func buildDailyWorker(
 			}
 		}
 
+		// CUT-20 R2: the capacity kind computes natively too. Same per-kind
+		// discipline as dora -- a refusal takes THIS KIND out of service and
+		// leaves its siblings registered, with a positive signal rather than a
+		// metric that merely stops moving.
+		var capacityExecutor *remaining.CapacityExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingCapacity
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var capacityObserver remaining.CapacityObserver
+			if candidate, ok := observer.(remaining.CapacityObserver); ok {
+				capacityObserver = candidate
+			}
+			executor, executorErr := remaining.NewCapacityExecutor(
+				context.Background(), metricsClickHouse, capacityObserver)
+			if executorErr != nil {
+				logger.Error(
+					"capacity native executor refused; the capacity kind will "+
+						"not be served and its partitions will accumulate "+
+						"unclaimed. Every other remaining kind is unaffected.",
+					"error", executorErr,
+				)
+				if refusalObserver, ok := observer.(capacityRefusalObserver); ok {
+					_ = refusalObserver.ObserveCapacityRefused(
+						capacityRefusalReason(executorErr))
+				}
+			} else {
+				capacityExecutor = executor
+			}
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
 			var registrationErr error
 			switch spec.Kind {
 			case jobcontract.KindRemainingCapacity:
+				if capacityExecutor == nil {
+					// Refused above. Skip rather than register a handler around
+					// a nil executor, which would claim partitions and fail
+					// each one.
+					continue
+				}
+				// Native, not `compatibility` -- this is the R2 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingCapacityArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, capacityExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingComplexity:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingComplexityArgs](
@@ -413,4 +460,23 @@ func doraRefusalReason(err error) string {
 	default:
 		return jobruntime.DORARefusedInspectFailed
 	}
+}
+
+// capacityRefusalObserver is the narrow capability the capacity cutover needs
+// to make a refusal visible, kept local so a collector without it degrades to
+// log-only rather than failing the build.
+type capacityRefusalObserver interface {
+	ObserveCapacityRefused(reason string) error
+}
+
+// capacityRefusalReason maps a construction error onto the closed label set.
+//
+// The two are distinguished because they call for different actions: an
+// incompatible schema means finish or roll back a migration, while a failed
+// inspection means look at ClickHouse itself.
+func capacityRefusalReason(err error) string {
+	if errors.Is(err, remaining.ErrCapacitySchemaIncompatible) {
+		return jobruntime.CapacityRefusedSchemaIncompatible
+	}
+	return jobruntime.CapacityRefusedInspectFailed
 }

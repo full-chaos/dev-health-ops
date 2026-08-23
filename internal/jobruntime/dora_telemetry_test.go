@@ -93,3 +93,41 @@ func TestDORARefusalIsAPositiveSignal(t *testing.T) {
 		t.Error("an unknown reason must be refused, not given its own series")
 	}
 }
+
+func TestCapacityCountersReachTheExposition(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	if err := collector.ObserveCapacityPartition(5, 3, 2); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		"worker_capacity_native_partitions_total 1",
+		"worker_capacity_native_scopes_total 5",
+		"worker_capacity_native_rows_written_total 3",
+		// The skip counter is the point: Python tolerates a scope with no
+		// history by logging and continuing, so without this a run that
+		// forecast nothing looks like a run with nothing to forecast.
+		"worker_capacity_native_skipped_scopes_total 2",
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q", want)
+		}
+	}
+	// Every reason published at zero, so an alert rule exists before the first
+	// failure rather than appearing at the moment it was meant to catch.
+	for _, reason := range capacityRefusalReasons {
+		want := `worker_capacity_native_refused_total{reason="` + reason + `"} 0`
+		if !strings.Contains(exposition, want) {
+			t.Errorf("a never-refused collector must still publish %q", want)
+		}
+	}
+	if err := collector.ObserveCapacityRefused("invented"); err == nil {
+		t.Error("an unknown reason must be refused, not given its own series")
+	}
+	if err := collector.ObserveCapacityPartition(-1, 0, 0); err == nil {
+		t.Error("negative counts must be refused")
+	}
+}

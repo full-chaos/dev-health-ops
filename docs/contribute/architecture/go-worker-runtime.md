@@ -376,19 +376,24 @@ whose pages moved is none of those.
 
 ### Partial degradation is tolerated; total degradation is not
 
-The same judgement governs unreadable provider payloads, and it is doctrine
-rather than an implementation detail. **Partial** unreadability — one artifact
-whose archive will not open — is skipped and recorded, and withholds the
-watermark so the window is re-walked; the rest of the walk is real data and
-nothing is lost. **Total** unreadability — every artifact the walk downloaded
-failing to open — is a systematic route condition, such as a proxy or auth edge
-answering every request with an error document. It cannot improve on the next
-attempt, so it fails the unit with its own cause (`all_artifacts_unreadable`)
-rather than reporting a success that ingested nothing (CHAOS-4177).
+The same judgement governs unreadable provider payloads. **Partial**
+unreadability — one artifact whose archive will not open — is skipped and
+recorded, and withholds the watermark so the window is re-walked; the rest of
+the walk is real data and nothing is lost.
 
-The general rule: degrade quietly where the data still worth having outweighs
-what was lost, and fail loudly where it does not. A condition that cannot
-improve by being retried must never be reported as success.
+**Total** unreadability — every artifact the walk downloaded failing to open —
+is a systematic route condition, such as a proxy or auth edge answering every
+request with an error document. It cannot improve by being retried, so it
+should fail the unit with its own cause rather than report a success that
+ingested nothing. **That escalation is deliberately deferred and NOT yet
+implemented** (CHAOS-4185): today such a walk completes, and the only signals
+are `dev_health_provider_artifact_skipped_total`, the per-skip warning log, and
+a withheld watermark that keeps re-walking the window. Coverage never silently
+advances, which is why deferring it was safe.
+
+The general rule this expresses: degrade quietly where the data still worth
+having outweighs what was lost, and fail loudly where it does not. A condition
+that cannot improve by being retried should never be reported as success.
 
 ### Deploys must not cost units attempts
 

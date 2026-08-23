@@ -107,7 +107,7 @@
       "target_kind_id": "kind:metrics.remaining.dora",
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
+      "compatibility_dependency": "No longer invoked by the Go worker: CHAOS-3092 R1 cut registry kind metrics.remaining.dora over to the native executor. This row stays until the Python surface itself goes, which is not what the Go cutover decides.",
       "deletion_evidence_requirement": "Deleted once registry kind `metrics.remaining.dora` no longer routes through the HTTP compatibility bridge.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "NOT a Beat entry, no standalone TRD 6 line item; registry kind metrics.remaining.dora"
@@ -1789,10 +1789,10 @@
         "value": "metrics.remaining.dora"
       },
       "target_kind_id": "kind:metrics.remaining.dora",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.dora` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-3092 R1 replaced HTTPCompatibilityExecutor with the native remaining.DORAExecutor for this kind only -- per kind, with no environment switch and no fallback: a worker that cannot build the native executor refuses the family rather than reverting to the bridge.",
+      "deletion_evidence_requirement": "Remaining evidence for deleting the Python surface: the compatibility runner import is removed from the Python API. The other two conditions are met -- the kind resolves to a concrete non-HTTP-bridge handler (cmd/dev-health-worker/daily.go), and TestDORANativePortMatchesThePythonProducerAcrossTwoScratchStores compares a non-empty product-data table row by row against the Python producer across two scratch stores, rather than comparing job status.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "Orchestrator resolution: owner is the metrics.remaining family under the Go heavy worker (CUT-12). Confirmed chain-triggered, not scheduled: internal/syncdispatchruntime/native_post_sync.go Fanout() calls remaining.StartRunTx(ctx, tx, \"dora\", *plan, \"\") when plan.DORA is true, as part of the native post-sync fanout completed for CHAOS-2596/CHAOS-3051; there is no Beat entry or standalone cron for it."
     },

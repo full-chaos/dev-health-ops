@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -192,6 +193,44 @@ func buildDailyWorker(
 			Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
 			Budget: budget, Idempotency: idempotency,
 		}
+
+		// CHAOS-3092 R1: the dora kind computes natively instead of posting to
+		// the compatibility bridge. The swap is per KIND and wholesale -- there
+		// is no environment switch and no fallback, so a worker that cannot
+		// build the native executor refuses to serve the family rather than
+		// quietly reverting to Python. Every other kind keeps the bridge until
+		// it has its own parity proof.
+		var doraExecutor *remaining.DORAExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingDORA
+		}) {
+			// The daily block above opens this connection only when daily
+			// specs are present. A worker serving remaining kinds WITHOUT
+			// daily would otherwise reach the native executor with a nil
+			// connection and refuse the whole family -- a regression for a
+			// topology that works today.
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var doraObserver remaining.DORAObserver
+			if candidate, ok := observer.(remaining.DORAObserver); ok {
+				doraObserver = candidate
+			}
+			executor, executorErr := remaining.NewDORAExecutor(metricsClickHouse, doraObserver)
+			if executorErr != nil {
+				_ = metricsClickHouse.Close()
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			doraExecutor = executor
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
@@ -206,8 +245,9 @@ func buildDailyWorker(
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingDORA:
+				// Native, not `compatibility` -- this is the R1 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingDORAArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, doraExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingExtraMetrics:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingExtraMetricsArgs](

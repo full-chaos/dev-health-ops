@@ -525,44 +525,6 @@ groups:
             devhealth_scheduler_executed_proof_evidence_state first: a blocked
             gate is the known cause. Otherwise look at dataset enablement and
             the planner's window computation.
-      # CHAOS-4159. The alert above answers "is the scheduler planning
-      # anything"; this one answers "when it plans nothing, do we know WHY".
-      # They are different failures: the one above needs the whole fleet to go
-      # quiet, while a single misconfigured integration can produce hundreds of
-      # anonymous zero-unit runs without moving that ratio at all. The
-      # `no_sync_units_planned` reason is the residual finalize falls back to
-      # when the planner recorded no cause -- so a series dominated by it means
-      # a planner path is discarding its own diagnosis, not that the cause is
-      # unknowable. The known instance at the time of writing is the Go
-      # scheduler's pagerDutyCredentialUnavailable branch, which plans zero
-      # units deliberately and writes no reason onto the run.
-      - alert: ZeroUnitSyncRunsFinalizeWithoutACause
-        expr: |
-          sum(increase(
-            devhealth_sync_run_zero_unit_finalizations_total{reason="no_sync_units_planned"}[1h]
-          )) >= 20
-          and
-          sum(increase(
-            devhealth_sync_run_zero_unit_finalizations_total{reason="no_sync_units_planned"}[1h]
-          ))
-            >= 0.9 * sum(increase(devhealth_sync_run_zero_unit_finalizations_total[1h]))
-        for: 30m
-        labels:
-          severity: warning
-          team: platform
-        annotations:
-          summary: "Zero-unit sync runs are finalizing with no recorded cause"
-          description: |
-            Nearly every zero-unit sync run in the last hour finalized under the
-            generic `no_sync_units_planned` label, meaning the planner that
-            minted the empty plan recorded no reason on the run. These runs are
-            correctly FAILED, but an operator reading sync_runs.error cannot
-            tell a missing credential from a disabled target from a genuinely
-            empty plan, so the same red rows accumulate with no actionable
-            signal. Break the counter down by `provider` to find which route is
-            affected, then fix the planner path so it stamps its cause -- do not
-            silence this by relaxing the zero-unit FAILED rule, which is
-            deliberate.
       # CHAOS-4114 corrected this description. It previously said every
       # non-waived route was blocked whenever this gauge read 1, which is only
       # true of the never-loaded case. ExecutedProofSatisfied checks

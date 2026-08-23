@@ -23,6 +23,16 @@ type PostgresIdempotency struct {
 	pool          *pgxpool.Pool
 	leaseDuration time.Duration
 	now           func() time.Time
+	observer      IdempotencyRenewalObserver
+}
+
+// IdempotencyRenewalObserver is the narrow capability this store depends on
+// when a claim's lease renewal gives up, for the same reason the other narrow
+// lease observers exist: generic runtime middleware cannot infer this state
+// change. Only the renewal goroutine knows whether it stopped because it was
+// fenced out or because the database stayed unreachable for a whole lease.
+type IdempotencyRenewalObserver interface {
+	ObserveIdempotencyRenewalRetired(IdempotencyRenewalRetiredReason) error
 }
 
 const defaultIdempotencyLease = 10 * time.Minute
@@ -32,7 +42,10 @@ var errIdempotencyUnavailable = errors.New("job idempotency store is unavailable
 // NewPostgresIdempotency constructs the domain-state idempotency adapter. It
 // uses the domain pool deliberately; the queue-control role must never be
 // granted access to execution state or external-effect evidence.
-func NewPostgresIdempotency(pool *pgxpool.Pool) (*PostgresIdempotency, error) {
+func NewPostgresIdempotency(
+	pool *pgxpool.Pool,
+	observer IdempotencyRenewalObserver,
+) (*PostgresIdempotency, error) {
 	if pool == nil {
 		return nil, errIdempotencyUnavailable
 	}
@@ -40,6 +53,7 @@ func NewPostgresIdempotency(pool *pgxpool.Pool) (*PostgresIdempotency, error) {
 		pool:          pool,
 		leaseDuration: defaultIdempotencyLease,
 		now:           time.Now,
+		observer:      observer,
 	}, nil
 }
 
@@ -158,6 +172,8 @@ type postgresClaim struct {
 	stopRenewal chan struct{}
 	renewalDone chan struct{}
 	stopOnce    sync.Once
+	lost        chan struct{}
+	lostOnce    sync.Once
 }
 
 // newProceedingClaim starts lease renewal alongside the claim.
@@ -167,6 +183,7 @@ func newProceedingClaim(
 	claim := &postgresClaim{
 		store: store, id: runID, token: token, state: ClaimProceed,
 		stopRenewal: make(chan struct{}), renewalDone: make(chan struct{}),
+		lost: make(chan struct{}),
 	}
 	go claim.renew(leasedAt)
 	return claim
@@ -181,7 +198,33 @@ func newProceedingClaim(
 // descriptor timeout would not.
 //
 // Renewal is token-fenced and retries transient failures until the lease could
-// actually have expired, matching the budget lease's semantics.
+// actually have expired, and gives up LOUDLY when it does -- markLost closes
+// the lost channel the adapter cancels the handler from, matching
+// postgresConcurrencyLease.
+//
+// ONE DELIBERATE DIVERGENCE from that sibling. Its renewal UPDATE also carries
+// `lease_expires_at > statement_timestamp()`, which enforces the invariant
+// recorded on its Release: "Renewal only extends a still-live row, so a
+// crashed worker's expired lease cannot be resurrected by a delayed renewal
+// attempt." This UPDATE has no such predicate, so a lease that genuinely
+// lapsed can be silently re-extended if the database recovers before any other
+// claimant arrives.
+//
+// That is accepted here, not overlooked. It cannot produce double execution:
+// Begin takes the row FOR UPDATE, so a real competitor is serialized ahead of
+// this UPDATE and rotates claim_token, which lands on the fenced arm below.
+// The residual is a window that went unprotected without being counted.
+//
+// Copying the predicate would cost more than it buys, because the two leases
+// do not keep time the same way. The sibling writes its expiry entirely in
+// database time (statement_timestamp() + interval), so its predicate compares
+// database time to database time. This lease's expiry is written from the Go
+// process clock, here and in Begin. Adding a statement_timestamp() predicate
+// would put a worker-clock-versus-database-clock comparison in the renewal hot
+// path, and skew in one direction would retire healthy claims as fenced --
+// cancelling live handlers, which is the CHAOS-3866 direction and a worse
+// trade than the visibility gap it closes. Converting this lease to database
+// time first, then adding the predicate, is CHAOS-4180.
 func (claim *postgresClaim) renew(leasedAt time.Time) {
 	defer close(claim.renewalDone)
 	interval := claim.store.leaseDuration / 3
@@ -210,14 +253,44 @@ func (claim *postgresClaim) renew(leasedAt time.Time) {
 			case err == nil:
 				// The run is no longer ours: it finished, or another claim
 				// fenced us out. Nothing left to renew.
+				claim.markLost(IdempotencyRenewalFenced)
 				return
 			case attemptedAt.Before(expiry):
 				// Transient database failure with lease time still left.
 			default:
+				// Consecutive failures outlasted the lease itself, so the row
+				// is claimable by a duplicate now. Retiring quietly here left
+				// the handler working under a lease it no longer held.
+				claim.markLost(IdempotencyRenewalTransientExhausted)
 				return
 			}
 		}
 	}
+}
+
+// Lost closes when this claim's lease can no longer be renewed. Consumers must
+// cancel the running handler context when this signal fires; a handler that
+// keeps working past it is running on a lease Begin will hand to a duplicate.
+// This mirrors postgresConcurrencyLease.Lost.
+func (claim *postgresClaim) Lost() <-chan struct{} {
+	if claim == nil {
+		return nil
+	}
+	return claim.lost
+}
+
+func (claim *postgresClaim) markLost(reason IdempotencyRenewalRetiredReason) {
+	if claim == nil || claim.lost == nil {
+		return
+	}
+	claim.lostOnce.Do(func() {
+		close(claim.lost)
+		if claim.store != nil && claim.store.observer != nil {
+			// Telemetry must never be able to fail a job, so the error is
+			// dropped exactly as the concurrency budget drops its own.
+			_ = claim.store.observer.ObserveIdempotencyRenewalRetired(reason)
+		}
+	})
 }
 
 func (claim *postgresClaim) stopRenewing() {

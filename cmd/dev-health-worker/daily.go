@@ -79,7 +79,7 @@ func buildDailyWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
-	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
+	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}

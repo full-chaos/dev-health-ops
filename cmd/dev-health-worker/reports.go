@@ -72,7 +72,7 @@ func buildReportWorker(
 	}
 	closeClickHouse := func() { _ = clickhouseConnection.Close() }
 
-	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
+	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable

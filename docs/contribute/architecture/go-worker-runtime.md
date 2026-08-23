@@ -261,6 +261,27 @@ Both renew every `lease/3`. Both are ten minutes. Both are driven by the same
 worker process. Those four facts once supported an inference that turned out to
 be false.
 
+### A renewer that gives up says so
+
+Neither renewer surrenders on a single failed tick -- cancelling a handler on
+the first database blip terminalized two-hour jobs (CHAOS-3866). But when
+renewal does stop for good, it must be loud, because a handler still working
+under a lapsed lease is exactly the window in which `Begin`'s
+running-with-expired-lease branch hands the same job to a duplicate.
+
+Both lease layers therefore close a `lost` channel when renewal retires, and
+the adapter cancels the handler context from it
+(`withBudgetLeaseLoss` and `withIdempotencyClaimLoss`, `internal/jobruntime/adapter.go`).
+Idempotency retirement is counted by `worker_idempotency_renewal_retired_total{reason}`:
+
+| `reason` | Means | Operator response |
+| --- | --- | --- |
+| `fenced` | The renewal UPDATE matched zero rows: another claimant owns the run. | Expected during takeover. Investigate only if the rate is unusual. |
+| `transient_exhausted` | Renewal failed for longer than a whole lease. | The domain database was unreachable for minutes. A handler was stopped mid-flight; check worker and database health. |
+
+Both series are pre-seeded to zero, so an alert can bind to them before the
+first retirement rather than after the incident starts.
+
 ### An expired domain lease does not imply an expired idempotency lease
 
 The two renewers have different cancellation semantics:

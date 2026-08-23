@@ -62,6 +62,13 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.ObserveWorkGraphLeaseReleaseLost(); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveIdempotencyRenewalRetired(IdempotencyRenewalTransientExhausted); err != nil {
+		t.Fatal(err)
+	}
+	// The fenced reason is deliberately left unobserved so its pre-seeded zero
+	// is proven. A retirement counter that only appears after the first
+	// retirement gives an alert nothing to bind to until the incident is
+	// already happening.
 	// RemainingMetricsLeaseReleaseLost is deliberately left unobserved so its
 	// pre-seeded zero (asserted below) is proven, not merely assumed.
 
@@ -111,6 +118,8 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_sync_lease_expired_total{provider="github",dataset_family="work_items",result="retrying"} 1`,
 		`worker_report_run_lease_expired_total{result="failed"} 0`,
 		`worker_report_run_lease_expired_total{result="retrying"} 1`,
+		`worker_idempotency_renewal_retired_total{reason="fenced"} 0`,
+		`worker_idempotency_renewal_retired_total{reason="transient_exhausted"} 1`,
 		`worker_daily_metrics_lease_total{stage="finalize",result="reclaimed"} 0`,
 		`worker_daily_metrics_lease_total{stage="finalize",result="release_lost"} 0`,
 		`worker_daily_metrics_lease_total{stage="finalize",result="snoozed"} 0`,
@@ -139,6 +148,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		"worker_jobs_running", "worker_execution_saturation_ratio", "worker_job_wait_seconds", "worker_job_duration_seconds",
 		"worker_job_attempts_total", "worker_job_panics_total", "worker_job_cancellations_total",
 		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
+		"worker_idempotency_renewal_retired_total",
 		"worker_daily_metrics_lease_total",
 		"worker_workgraph_lease_release_lost_total", "worker_remaining_metrics_lease_release_lost_total",
 		"worker_stream_lag", "worker_stream_pending",
@@ -406,5 +416,16 @@ func assertPrometheusTextShape(t *testing.T, text string) {
 		if !strings.Contains(line, " ") || strings.Count(line, "{") != strings.Count(line, "}") {
 			t.Fatalf("invalid Prometheus text line %d: %q", number+1, line)
 		}
+	}
+}
+
+func TestMetricsCollectorRejectsUnregisteredIdempotencyRenewalReason(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveIdempotencyRenewalRetired("database_was_slow"); err == nil {
+		t.Fatal("unbounded retirement reason was accepted into a metric label")
 	}
 }

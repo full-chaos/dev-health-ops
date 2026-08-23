@@ -106,7 +106,7 @@ func buildOperationalWorker(
 		jobcontract.RetentionExternalIngestBatches: externalIngestRetention,
 		jobcontract.RetentionAskDevConversations:   askDevRetention,
 	}
-	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
+	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -209,6 +209,16 @@ func (operationalTenantScope) Resolve(ctx context.Context, request jobruntime.Sc
 		}
 	}
 	return ctx, nil
+}
+
+// newOperationalIdempotency mirrors newOperationalBudget: the concrete store
+// takes the narrow renewal-observer capability when the process observer
+// happens to provide it, and stays fully functional when it does not.
+func newOperationalIdempotency(
+	pool *pgxpool.Pool, observer jobruntime.Observer,
+) (*jobruntime.PostgresIdempotency, error) {
+	metrics, _ := observer.(jobruntime.IdempotencyRenewalObserver)
+	return jobruntime.NewPostgresIdempotency(pool, metrics)
 }
 
 func newOperationalBudget(pool *pgxpool.Pool, observer jobruntime.Observer) jobruntime.Budget {

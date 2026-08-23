@@ -238,6 +238,17 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// Native capacity compute (CUT-20 R2). capacitySkippedScopes is the one
+	// that matters most: Python skips a scope with no history or no positive
+	// item target by logging and continuing, so without a counter a run that
+	// forecast nothing is indistinguishable from a run that had nothing to
+	// forecast.
+	capacityPartitions    uint64
+	capacityScopes        uint64
+	capacityRowsWritten   uint64
+	capacitySkippedScopes uint64
+	capacityRefusals      map[string]uint64
+
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
 	streamOldestPending       map[StreamLabels]float64
@@ -696,6 +707,49 @@ func (collector *MetricsCollector) ObserveDORARefused(reason string) error {
 	return nil
 }
 
+// Capacity refusal reasons. Closed set, bounded label cardinality.
+const (
+	CapacityRefusedSeedMissing   = "seed_missing"
+	CapacityRefusedInspectFailed = "inspect_failed"
+)
+
+var capacityRefusalReasons = []string{
+	CapacityRefusedSeedMissing,
+	CapacityRefusedInspectFailed,
+}
+
+// ObserveCapacityPartition records one completed native capacity partition.
+func (collector *MetricsCollector) ObserveCapacityPartition(
+	scopes, rowsWritten, skipped int,
+) error {
+	if scopes < 0 || rowsWritten < 0 || skipped < 0 {
+		return errors.New("capacity partition counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.capacityPartitions++
+	collector.capacityScopes += uint64(scopes)
+	collector.capacityRowsWritten += uint64(rowsWritten)
+	collector.capacitySkippedScopes += uint64(skipped)
+	return nil
+}
+
+// ObserveCapacityRefused records that the native capacity executor refused to
+// build, by reason -- the positive signal an alert can bind to, since a flat
+// partitions counter cannot be told apart from a quiet day.
+func (collector *MetricsCollector) ObserveCapacityRefused(reason string) error {
+	if !slices.Contains(capacityRefusalReasons, reason) {
+		return fmt.Errorf("unknown capacity refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.capacityRefusals == nil {
+		collector.capacityRefusals = map[string]uint64{}
+	}
+	collector.capacityRefusals[reason]++
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -1047,6 +1101,20 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, reason := range doraRefusalReasons {
 		writeUintSample(output, "worker_dora_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.doraRefusals[reason])
+	}
+
+	writeMetadata(output, "worker_capacity_native_partitions_total", "Partitions computed by the native Go capacity executor.", "counter")
+	writeUintSample(output, "worker_capacity_native_partitions_total", nil, collector.capacityPartitions)
+	writeMetadata(output, "worker_capacity_native_scopes_total", "Team/work-scope pairs the native capacity executor considered.", "counter")
+	writeUintSample(output, "worker_capacity_native_scopes_total", nil, collector.capacityScopes)
+	writeMetadata(output, "worker_capacity_native_rows_written_total", "Forecast rows written by the native Go capacity executor.", "counter")
+	writeUintSample(output, "worker_capacity_native_rows_written_total", nil, collector.capacityRowsWritten)
+	writeMetadata(output, "worker_capacity_native_skipped_scopes_total", "Scopes the native capacity executor tolerated and skipped, matching Python's disposition.", "counter")
+	writeUintSample(output, "worker_capacity_native_skipped_scopes_total", nil, collector.capacitySkippedScopes)
+	writeMetadata(output, "worker_capacity_native_refused_total", "Native capacity executor construction refusals, by reason.", "counter")
+	for _, reason := range capacityRefusalReasons {
+		writeUintSample(output, "worker_capacity_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.capacityRefusals[reason])
 	}
 }
 

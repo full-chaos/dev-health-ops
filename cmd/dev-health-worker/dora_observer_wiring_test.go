@@ -44,3 +44,37 @@ func TestTheRealCollectorSatisfiesTheDORAObserver(t *testing.T) {
 		t.Fatalf("the wired observer must accept a valid observation: %v", err)
 	}
 }
+
+// TestTheRealCollectorSatisfiesTheCapacityObservers guards the R2 wiring, for
+// the same reason as the DORA one: both assertions in daily.go are silent when
+// they fail, and a failure leaves the counters at zero forever with nothing to
+// say why.
+func TestTheRealCollectorSatisfiesTheCapacityObservers(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	// Through the STATIC type daily.go holds, not the concrete one.
+	var observer jobruntime.Observer = collector
+
+	candidate, ok := observer.(remaining.CapacityObserver)
+	if !ok {
+		t.Fatal(
+			"the worker's observer does NOT satisfy remaining.CapacityObserver, " +
+				"so daily.go passes nil and every native capacity counter stays " +
+				"at zero with nothing to indicate why")
+	}
+	if err := candidate.ObserveCapacityPartition(1, 1, 0); err != nil {
+		t.Fatalf("the wired observer must accept a valid observation: %v", err)
+	}
+
+	refusal, ok := observer.(interface{ ObserveCapacityRefused(string) error })
+	if !ok {
+		t.Fatal("the worker's observer cannot report a capacity refusal, so a " +
+			"refused executor would be invisible")
+	}
+	if err := refusal.ObserveCapacityRefused(
+		jobruntime.CapacityRefusedSeedMissing); err != nil {
+		t.Fatalf("refusal observation: %v", err)
+	}
+}

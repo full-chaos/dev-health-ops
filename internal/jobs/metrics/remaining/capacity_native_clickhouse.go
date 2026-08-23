@@ -145,16 +145,28 @@ func (executor *CapacityExecutor) loadBacklog(
 //
 // The mirror of narrowCapacityRow, which guards values going OUT. sum() over a
 // UInt32 column widens to UInt64, so these arrive as uint64 and the kernel
-// works in int; above MaxInt64 that conversion wraps NEGATIVE. A negative count
-// is worse than a large one: loadBacklog returning a negative backlog makes the
-// scope skip and the partition finish successfully having forecast nothing,
-// which is indistinguishable from a genuinely quiet day.
+// works in int; past what int can hold, that conversion wraps NEGATIVE. A
+// negative count is worse than a large one: loadBacklog returning a negative
+// backlog makes the scope skip and the partition finish successfully having
+// forecast nothing, which is indistinguishable from a genuinely quiet day.
+//
+// The bound is math.MaxInt, not math.MaxInt64: the limit that matters is the
+// one belonging to the type being converted TO. They are the same number on
+// every platform this ships to (linux/amd64 and linux/arm64), so writing
+// MaxInt64 was right by coincidence rather than by construction, and a guard
+// that is right by coincidence is one platform away from being a wrap it was
+// written to prevent.
 //
 // Guarding the write path and leaving this one unguarded was the actual defect
 // -- half of a symmetric boundary, which is the shape that survives review
 // precisely because the guarded half looks like the whole job.
+// capacityAggregateBound is the largest aggregate the kernel can represent.
+// Named so a test can assert WHICH limit is being enforced, rather than only
+// that some limit is.
+const capacityAggregateBound = math.MaxInt
+
 func capacityCountFromAggregate(field string, value uint64) (int, error) {
-	if value > math.MaxInt64 {
+	if value > capacityAggregateBound {
 		return 0, fmt.Errorf("%w: aggregate %s = %d does not fit int",
 			ErrCapacityValueOutOfRange, field, value)
 	}

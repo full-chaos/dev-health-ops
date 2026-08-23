@@ -340,7 +340,7 @@ func TestAggregateNarrowingRefusesValuesTheKernelCannotHold(t *testing.T) {
 	// a guarded write path ends up fed by an unguarded read path.
 	//
 	// sum() over a UInt32 column widens to UInt64, so these arrive as uint64
-	// and the kernel works in int. Above MaxInt64 that conversion wraps
+	// and the kernel works in int. Past int's own limit that conversion wraps
 	// NEGATIVE, and a negative count is not merely wrong: a negative backlog
 	// makes the scope skip and the partition return successfully having
 	// forecast nothing, which reads as a quiet day rather than as a fault.
@@ -350,12 +350,12 @@ func TestAggregateNarrowingRefusesValuesTheKernelCannotHold(t *testing.T) {
 		value uint64
 	}{
 		{
-			name:  "backlog above MaxInt64",
+			name:  "backlog above int's limit",
 			field: "wip_count_end_of_day",
-			value: uint64(math.MaxInt64) + 1,
+			value: uint64(math.MaxInt) + 1,
 		},
 		{
-			name:  "throughput above MaxInt64",
+			name:  "throughput at the top of uint64",
 			field: "items_completed",
 			value: math.MaxUint64,
 		},
@@ -382,11 +382,16 @@ func TestAggregateNarrowingRefusesValuesTheKernelCannotHold(t *testing.T) {
 func TestAggregateNarrowingAcceptsTheWidestRepresentableCount(t *testing.T) {
 	// Negative control: a guard that refused everything would pass the test
 	// above while breaking every real read.
-	got, err := capacityCountFromAggregate("items_completed", uint64(math.MaxInt64))
+	// The bound belongs to int, the type being converted to -- not to int64,
+	// which merely happens to be the same width on every platform we ship.
+	if capacityAggregateBound != math.MaxInt {
+		t.Fatalf("the guard's bound must be int's own limit, got %d", capacityAggregateBound)
+	}
+	got, err := capacityCountFromAggregate("items_completed", uint64(math.MaxInt))
 	if err != nil {
 		t.Fatalf("a representable aggregate must be accepted: %v", err)
 	}
-	if got != math.MaxInt64 {
+	if got != math.MaxInt {
 		t.Fatalf("value changed on the way through: got %d", got)
 	}
 	if zero, err := capacityCountFromAggregate("items_completed", 0); err != nil || zero != 0 {

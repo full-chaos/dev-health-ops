@@ -304,18 +304,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # through in-memory HTTP doers and touch no database -- so the
     # integration-tagged count stays 113, the way 4130's nine did.
     #
-    # CHAOS-4142 codex round 2 then added 4 more ordinary top-level tests
-    # (971 -> 975): two per provider, pinning the per-run PAGE BUDGET against
-    # the item cap at its exact equality boundary, and pinning the refutation of
+    # CHAOS-4142 codex round 2 then added 6 more ordinary top-level tests
+    # (971 -> 977): three per provider, pinning the per-run PAGE BUDGET against
+    # the item cap at its exact equality boundary, pinning the refutation of
     # codex's challenge-1 reading -- a combined item-cap + page-budget stop is
     # classified as the item cap and advances, because the committed prefix does
-    # not depend on the page budget.
+    # not depend on the page budget -- and the RED-FIRST pair asserting that a
+    # starved per-run page budget never finalizes a unit with a withheld
+    # watermark, which is the stall stated as an outcome rather than a
+    # mechanism.
     #
     # (The seven new providerfoundation tests -- two paginator stop-reason,
     # three per-run truncation metric, and two from round 2 pinning stop-reason
     # mutual exclusion and prefix independence -- live in
     # internal/providerfoundation and so do not move this providersync count.)
-    assert len(expected_provider_tests) == 975
+    assert len(expected_provider_tests) == 977
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -332,7 +335,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 975
+    assert len(provider_flattened) == len(set(provider_flattened)) == 977
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -393,7 +396,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 975
+    assert len(selected_tests) == len(set(selected_tests)) == 977
     assert set(selected_tests) == expected_tests
 
 

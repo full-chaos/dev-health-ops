@@ -672,3 +672,42 @@ func TestGitHubTestsArtifactPageBudgetStructurallyOutrunsItsCap(t *testing.T) {
 			artifactPageBudget*githubTestsPerRunPerPage, githubTestsMaxArtifacts)
 	}
 }
+
+// RED-FIRST ARTIFACT for codex round 2, challenge 3, github twin. On the
+// unfixed tree MaxJobPages=1 was a legal value inside its own validated range:
+// the walk fetched 100 of the run's 525 jobs, never reached the 501 item cap,
+// reported a page budget, withheld the watermark, and finalized -- so the unit
+// succeeded while the source stopped advancing, on every window, forever.
+//
+// Same outcome-level assertion as the gitlab twin, which is why one shared
+// helper serves both remedies.
+func TestGitHubTestsLowPageBudgetDoesNotSilentlyStallTheSource(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	// MULTI-PAGE on purpose, for the same reason as the gitlab twin: a
+	// single-page fixture starves no budget and passes on the broken tree.
+	doer := &githubTestsOversizedRunDoer{t: t, jobsPerPage: githubTestsPerRunPerPage, artifacts: 0}
+
+	const starvedBudget = 1
+	if doer.jobsPerPage == 0 {
+		t.Fatal("fixture is single-page, so no page budget can bind and the stall cannot occur")
+	}
+	if starvedBudget*doer.jobsPerPage > githubTestsMaxJobsPerRun {
+		t.Fatalf("budget of %d pages reaches %d, which already outruns the %d cap; "+
+			"this fixture cannot exercise the stall",
+			starvedBudget, starvedBudget*doer.jobsPerPage, githubTestsMaxJobsPerRun)
+	}
+
+	var final CompleteRouteBatch
+	err := (GitHubTestsRouteHandler{MaxJobPages: starvedBudget}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, doer),
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(emission ChunkRouteEmission) error {
+			if emission.Final {
+				final = emission.Batch
+			}
+			return nil
+		},
+	)
+	assertNoSilentPerRunStall(t, err, final)
+}

@@ -406,3 +406,69 @@ func TestGitLabTestsCombinedStopIsClassifiedAsTheItemCapAndAdvances(t *testing.T
 		t.Fatal("a combined item-cap + page-budget stop withheld the watermark; that is the stall CHAOS-4142 fixed")
 	}
 }
+
+// assertNoSilentPerRunStall states the CHAOS-4142 defect class as an outcome
+// rather than as a mechanism, so it holds whichever remedy a provider uses.
+//
+// A per-run page budget that cannot outrun the item cap must never produce a
+// unit that FINALIZES SUCCESSFULLY while withholding its watermark. That
+// combination is the permanent stall: the unit looks healthy, the run recurs in
+// every future window, and since_at never moves. Refusing the configuration
+// loudly is acceptable. Walking past it and advancing is acceptable. Quietly
+// finalizing with a withheld watermark is not.
+func assertNoSilentPerRunStall(t *testing.T, err error, final CompleteRouteBatch) {
+	t.Helper()
+	if err != nil {
+		if !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("err=%v, want either a loud ErrInvalidConfiguration or a finalized advancing unit", err)
+		}
+		return // refused loudly: the operator finds out at startup.
+	}
+	if final.Watermark == nil {
+		t.Fatal("unit finalized with a WITHHELD watermark on a per-run truncation that recurs " +
+			"identically every window; since_at is pinned forever and the source stops advancing")
+	}
+}
+
+// RED-FIRST ARTIFACT for codex round 2, challenge 3. This test was written to
+// FAIL on the unfixed tree and does: with the per-run jobs walk taking
+// handler.MaxPages, MaxPages=1 fetched 100 of the pipeline's 525 jobs, reported
+// a page budget rather than an item cap, withheld the watermark, and finalized
+// anyway -- a source that reports success forever while never advancing.
+//
+// It asserts the OUTCOME, not the remedy, so it stays honest under either fix.
+func TestGitLabTestsLowPageBudgetDoesNotSilentlyStallTheSource(t *testing.T) {
+	claim := nativeTestClaim("gitlab", "tests")
+	// MULTI-PAGE on purpose. A fixture that serves the whole job list on ONE
+	// page cannot starve any budget -- the walk simply ends, no page budget
+	// binds, and the test passes on the broken tree too. The first draft of
+	// this test did exactly that and was vacuous; it only went red once the
+	// fixture served full pages that always advertise another.
+	doer := &gitLabTestsOversizedRunDoer{t: t, jobsPerPage: nativePerPage}
+
+	// Anti-vacuity: the budget under test must be genuinely unable to reach
+	// the item cap, and the fixture must be able to keep feeding it pages.
+	const starvedBudget = 1
+	if doer.jobsPerPage == 0 {
+		t.Fatal("fixture is single-page, so no page budget can bind and the stall cannot occur")
+	}
+	if starvedBudget*doer.jobsPerPage > githubTestsMaxJobsPerRun {
+		t.Fatalf("budget of %d pages reaches %d, which already outruns the %d cap; "+
+			"this fixture cannot exercise the stall",
+			starvedBudget, starvedBudget*doer.jobsPerPage, githubTestsMaxJobsPerRun)
+	}
+
+	var final CompleteRouteBatch
+	err := (GitLabTestsRouteHandler{MaxPages: starvedBudget}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"),
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(emission ChunkRouteEmission) error {
+			if emission.Final {
+				final = emission.Batch
+			}
+			return nil
+		},
+	)
+	assertNoSilentPerRunStall(t, err, final)
+}

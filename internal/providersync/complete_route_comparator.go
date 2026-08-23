@@ -86,8 +86,7 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 	seen := map[string]bool{}
 	for _, observation := range incomplete {
 		key := observation.Component + "\x00" + observation.Cause
-		if observation.Component != "report_member" ||
-			(observation.Cause != "malformed" && observation.Cause != "unreadable") ||
+		if !githubTestsIncompleteInVocabulary(observation) ||
 			observation.Count < 1 || seen[key] {
 			return ErrInvalidConfiguration
 		}

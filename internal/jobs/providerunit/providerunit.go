@@ -216,6 +216,46 @@ type Handler struct {
 	// attempt to retrying (ReleaseForRetry) or failed (Fail). A nil value
 	// keeps behavior unchanged.
 	LeaseMetrics jobruntime.SyncLeaseObserver
+	// ProviderMetrics is the process-wide provider counter registry (the same
+	// instance BuildExecutor hands each claim's HTTP client). It is used here
+	// for exactly one signal: a unit terminalized while it already held
+	// committed rows. A nil value keeps behavior unchanged.
+	ProviderMetrics *providerfoundation.Metrics
+}
+
+// observeTerminalWithCommittedRows reports a unit that WAS terminalized while
+// durable rows for it already exist. Call it only after the durable transition
+// succeeded: an unrecorded failure leaves the unit retryable, and a counter
+// that fired anyway would report destruction that never happened.
+//
+// This is the alarm CHAOS-4130 lacked. A page-budget refusal cancelled units
+// holding ~9,500 committed rows, deleted their checkpoints, and let the run
+// re-plan the same window from page one -- a 17-minute, ~970-API-call cycle
+// that repeated for days while every individual signal looked ordinary. No
+// healthy route destroys a unit that has already paid for durable rows, so the
+// combination is the whole signal; neither half alerts on its own.
+func (handler *Handler) observeTerminalWithCommittedRows(
+	claim providersync.Claim,
+	result providersync.CompleteRouteExecutionResult,
+	category string,
+	cause error,
+) {
+	if handler == nil {
+		return
+	}
+	rows := result.CommittedRows
+	if written := int64(result.Effects.Written); written > rows {
+		rows = written
+	}
+	if rows <= 0 {
+		return
+	}
+	handler.ProviderMetrics.RecordUnitTerminalWithRows(claim.Provider, claim.Dataset)
+	slog.Warn(
+		"provider unit terminalized while holding committed rows",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"category", category, "committed_rows", rows, "error", cause,
+	)
 }
 
 // logLifecycle records the safe, authoritative identity of one provider-unit
@@ -428,9 +468,12 @@ func (handler *Handler) Work(
 		Claim:      claim, LeaseDuration: handler.LeaseDuration,
 		Deadline: execution.Deadline, Now: handler.Now,
 	}
+	// Declared outside the success block on purpose: the chunked executor
+	// reports CommittedRows on its FAILURE path too, and the terminalization
+	// alarm below needs it (CHAOS-4130).
+	var result providersync.CompleteRouteExecutionResult
 	executor, err := handler.BuildExecutor(session)
 	if err == nil {
-		var result providersync.CompleteRouteExecutionResult
 		result, err = executor.Execute(ctx, session, descriptor)
 		if err == nil {
 			payload := cloneResult(result.Result)
@@ -540,6 +583,12 @@ func (handler *Handler) Work(
 		); failErr != nil {
 			return jobruntime.Retryable(failErr)
 		}
+		// Only AFTER the durable transition, for the same reason
+		// observeLeaseRecovery is: a lost CAS leaves the unit retryable, and a
+		// counter that already claimed the unit was destroyed would page an
+		// operator about an incident that did not happen -- and inflate the
+		// exact series an operator would use to judge how bad CHAOS-4130 is.
+		handler.observeTerminalWithCommittedRows(session.Claim, result, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)
@@ -554,6 +603,9 @@ func (handler *Handler) Work(
 			startedAt, completedAt,
 		)
 		if failErr == nil {
+			handler.observeTerminalWithCommittedRows(
+				session.Claim, result, exhaustedFailureCategory(session.Claim), err,
+			)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		}

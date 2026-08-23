@@ -3,7 +3,9 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -29,10 +31,61 @@ type gitLabTestsChunkCursor struct {
 	// one invocation, so a continuation would otherwise renew the budget.
 	PipelinePages int `json:"pipeline_pages"`
 	ReportPages   int `json:"report_pages"`
+	// Truncated names the inventory phases that stopped at their cumulative
+	// page budget before the provider ran out of pages (CHAOS-4130). It is a
+	// bounded, closed vocabulary -- at most one entry per phase -- and its
+	// presence is what makes the unit finalize with lower-bound coverage
+	// instead of being cancelled.
+	Truncated []string `json:"truncated,omitempty"`
 	// Repo and ProjectID let the terminal `done` resume publish completion
 	// metadata without re-fetching the project object (CHAOS-3820).
 	Repo      string `json:"repo,omitempty"`
 	ProjectID int64  `json:"project_id,omitempty"`
+}
+
+const (
+	gitLabPipelineInventoryComponent = "pipeline_inventory"
+	gitLabReportInventoryComponent   = "report_inventory"
+)
+
+func gitLabTestsTruncationKnown(component string) bool {
+	return component == gitLabPipelineInventoryComponent ||
+		component == gitLabReportInventoryComponent
+}
+
+// recordGitLabTestsInventoryTruncation is the GitLab counterpart of
+// recordGitHubTestsInventoryTruncation: a budget stop finalizes the unit with
+// recorded lower-bound coverage instead of returning ErrPaginationCapExceeded,
+// which providerunit maps to a deterministic-terminal category that cancels
+// the unit and discards a checkpoint holding durable rows. GitLab lists
+// pipelines order_by=updated_at&sort=desc, so a truncated walk -- exactly like
+// GitHub's -- covers the NEW end of the window and must not advance the
+// watermark over the old one (CHAOS-2587).
+func recordGitLabTestsInventoryTruncation(
+	cursor gitLabTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	component string,
+	pagesSpent int,
+) gitLabTestsChunkCursor {
+	present := false
+	for _, existing := range cursor.Truncated {
+		if existing == component {
+			present = true
+		}
+	}
+	if !present {
+		cursor.Truncated = append(cursor.Truncated, component)
+	}
+	if client != nil {
+		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
+	}
+	slog.Warn(
+		"provider inventory page budget exhausted",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+	)
+	return cursor
 }
 
 // emitGitLabCursorPair publishes the terminal metadata emission, whose before
@@ -56,8 +109,16 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
 		(cursor.Phase != "pipelines" && cursor.Phase != "reports" && cursor.Phase != "done") ||
 		cursor.Page < 0 || cursor.Index < 0 ||
-		cursor.PipelinePages < 0 || cursor.ReportPages < 0 {
+		cursor.PipelinePages < 0 || cursor.ReportPages < 0 ||
+		len(cursor.Truncated) > 2 {
 		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
+	}
+	seen := map[string]bool{}
+	for _, component := range cursor.Truncated {
+		if !gitLabTestsTruncationKnown(component) || seen[component] {
+			return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
+		}
+		seen[component] = true
 	}
 	return cursor, nil
 }
@@ -122,13 +183,28 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				"acceptance_checks_synced": cursor.Acceptance, "test_suites_synced": cursor.Suites,
 				"test_cases_synced": cursor.Cases, "coverage_snapshots_synced": cursor.Coverage,
 				"repo": cursor.Repo, "project_id": cursor.ProjectID,
+				// NOT named inventory_complete: the chunk checkpoint already
+				// owns that name for "the route finished scanning". This is
+				// about COVERAGE -- whether what it scanned was the whole
+				// window (CHAOS-4130).
+				"coverage_complete": len(cursor.Truncated) == 0,
+				"inventory_truncated": append(
+					make([]string, 0, len(cursor.Truncated)), cursor.Truncated...),
 				"actual_route_family": gitLabTestsActualRouteFamily(claim.Dataset),
 				"observations": map[string]any{"provider_usage": []any{map[string]any{
 					"transport": "rest", "route_family": gitLabTestsActualRouteFamily(claim.Dataset),
 					"dimension": "rest_core", "request_count": cursor.Requests,
 				}}},
 			},
-			Watermark: claim.BeforeAt,
+			// A truncated walk covered only the newest part of the window.
+			// Advancing the watermark over the unreached old end would make
+			// the gap permanent, so the phase that stopped short refuses it.
+			Watermark: func() *time.Time {
+				if len(cursor.Truncated) > 0 {
+					return nil
+				}
+				return claim.BeforeAt
+			}(),
 			Evidence: FetchEvidence{
 				Provider: claim.Provider, Dataset: claim.Dataset,
 				Requests: cursor.Requests, Pages: cursor.Pages,
@@ -184,8 +260,17 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "pipelines" {
 		visit := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
-			cursor.PipelinePages++
 			pageNumber, _ := strconv.Atoi(page.CursorBefore)
+			// First-entry-only counting against the CUMULATIVE budget. This is
+			// the GitLab twin of the GitHub defect measured in CHAOS-4130: a
+			// continuation re-requests the page it stopped inside, and
+			// counting that re-visit shrank an N-page budget to N/visits-per-
+			// page real pages, cancelling every busy project. cursor.Page ==
+			// pageNumber is also true for a FRESH page entered at index 0, so
+			// cursor.Index > 0 is what identifies the re-entry.
+			if !(cursor.Page == pageNumber && cursor.Index > 0) {
+				cursor.PipelinePages++
+			}
 			start := 0
 			if cursor.Page == pageNumber {
 				start = cursor.Index
@@ -267,17 +352,23 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			return nil
 		}
 		allowance, budgetErr := remainingPageBudget(maxPages, cursor.PipelinePages)
-		if budgetErr != nil {
+		switch {
+		case errors.Is(budgetErr, ErrPaginationCapExceeded):
+			cursor = recordGitLabTestsInventoryTruncation(
+				cursor, client, claim, gitLabPipelineInventoryComponent, cursor.PipelinePages)
+		case budgetErr != nil:
 			return budgetErr
-		}
-		collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-			Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
-		}, visit)
-		if visitErr != nil {
-			return visitErr
-		}
-		if collection.CapReached {
-			return ErrPaginationCapExceeded
+		default:
+			collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
+				Path: root + "/pipelines", Query: query, PerPage: nativePerPage, MaxPages: allowance, InitialPage: cursor.Page,
+			}, visit)
+			if visitErr != nil {
+				return visitErr
+			}
+			if collection.CapReached {
+				cursor = recordGitLabTestsInventoryTruncation(
+					cursor, client, claim, gitLabPipelineInventoryComponent, cursor.PipelinePages)
+			}
 		}
 	}
 	if cursor.Phase != "reports" {
@@ -293,8 +384,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 	reportVisit := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
-		cursor.ReportPages++
 		pageNumber, _ := strconv.Atoi(page.CursorBefore)
+		// First-entry-only counting, exactly as in the pipelines visit above.
+		if !(cursor.Page == pageNumber && cursor.Index > 0) {
+			cursor.ReportPages++
+		}
 		start := 0
 		if cursor.Page == pageNumber {
 			start = cursor.Index
@@ -371,6 +465,15 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			if after.Index >= len(page.Items) {
 				nextPage, _ := strconv.Atoi(page.CursorAfter)
 				after.Page, after.Index = nextPage, 0
+				// Publish the terminal phase, exactly as the pipelines phase
+				// publishes "reports". A cursor at {phase:reports, page:0} is
+				// otherwise indistinguishable from a phase that has not
+				// started, so a continuation landing on the last item of the
+				// last page re-walked the WHOLE reports phase and spent fresh
+				// budget on every lap (the GitLab twin of CHAOS-4130).
+				if nextPage == 0 {
+					after.Phase = "done"
+				}
 			}
 			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
 				return err
@@ -380,21 +483,30 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		if len(page.Items) == 0 {
 			nextPage, _ := strconv.Atoi(page.CursorAfter)
 			cursor.Page, cursor.Index = nextPage, 0
+			if nextPage == 0 {
+				cursor.Phase = "done"
+			}
 		}
 		return nil
 	}
 	reportAllowance, reportBudgetErr := remainingPageBudget(maxPages, cursor.ReportPages)
-	if reportBudgetErr != nil {
+	switch {
+	case errors.Is(reportBudgetErr, ErrPaginationCapExceeded):
+		cursor = recordGitLabTestsInventoryTruncation(
+			cursor, client, claim, gitLabReportInventoryComponent, cursor.ReportPages)
+	case reportBudgetErr != nil:
 		return reportBudgetErr
-	}
-	collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
-		Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
-	}, reportVisit)
-	if visitErr != nil {
-		return visitErr
-	}
-	if collection.CapReached {
-		return ErrPaginationCapExceeded
+	default:
+		collection, visitErr := providerfoundation.VisitGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
+			Path: root + "/pipelines", Query: reportQuery, PerPage: nativePerPage, MaxPages: reportAllowance, InitialPage: cursor.Page,
+		}, reportVisit)
+		if visitErr != nil {
+			return visitErr
+		}
+		if collection.CapReached {
+			cursor = recordGitLabTestsInventoryTruncation(
+				cursor, client, claim, gitLabReportInventoryComponent, cursor.ReportPages)
+		}
 	}
 	cursor.Requests = requests
 	return emitFinalMetadata(cursor)

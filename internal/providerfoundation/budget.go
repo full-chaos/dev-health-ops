@@ -249,18 +249,55 @@ func (g ValkeyBackoffGate) Penalize(ctx context.Context, delay time.Duration) er
 }
 
 type Metrics struct {
-	mu                  sync.Mutex
-	requests            map[string]uint64
-	budgetDenied        map[string]uint64
-	budgetReleaseErrors map[string]uint64
+	mu                   sync.Mutex
+	requests             map[string]uint64
+	budgetDenied         map[string]uint64
+	budgetReleaseErrors  map[string]uint64
+	inventoryPageCap     map[string]uint64
+	unitTerminalWithRows map[string]uint64
 }
 
 func NewMetrics() *Metrics {
 	return &Metrics{
-		requests:            map[string]uint64{},
-		budgetDenied:        map[string]uint64{},
-		budgetReleaseErrors: map[string]uint64{},
+		requests:             map[string]uint64{},
+		budgetDenied:         map[string]uint64{},
+		budgetReleaseErrors:  map[string]uint64{},
+		inventoryPageCap:     map[string]uint64{},
+		unitTerminalWithRows: map[string]uint64{},
 	}
+}
+
+// metricDatasetVocabulary is the closed set of dataset labels, mirroring
+// providersync's checked-in dataset capability registry. providerfoundation
+// cannot import providersync (providersync imports it), so the list is
+// duplicated here and a drift guard in providersync asserts every registered
+// dataset is present -- a new dataset that silently reported as "other" would
+// be a metric that quietly stops distinguishing the thing it exists to
+// distinguish.
+var metricDatasetVocabulary = map[string]struct{}{
+	"repo-metadata": {}, "commits": {}, "commit-stats": {}, "files": {},
+	"blame": {}, "prs": {}, "pr-reviews": {}, "pr-comments": {},
+	"cicd": {}, "tests": {}, "deployments": {}, "security": {},
+	"work-items": {}, "work-item-labels": {}, "work-item-projects": {},
+	"work-item-history": {}, "work-item-comments": {},
+	"incidents": {}, "feature-flags": {},
+	"services": {}, "business-services": {}, "escalation-policies": {},
+	"schedules": {}, "on-calls": {}, "users": {}, "teams": {},
+	"incident-alerts": {}, "incident-log-entries": {}, "incident-notes": {},
+}
+
+// MetricDatasetLabel bounds the dataset label the same way metricProvider
+// bounds the provider one: by ALLOWLIST, not by syntax. A syntactic bound
+// still lets a faulty producer or a hostile tenant mint one series per
+// distinct well-formed string, which is unbounded metric-map growth wearing a
+// character-class disguise. Anything unregistered collapses to "other", so the
+// series count is fixed by this file rather than by whatever reaches a claim.
+func MetricDatasetLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricDatasetVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
 }
 func metricProvider(value string) string {
 	switch strings.ToLower(value) {
@@ -294,6 +331,60 @@ func (m *Metrics) RecordBudgetReleaseError(provider string) {
 	defer m.mu.Unlock()
 	m.budgetReleaseErrors[metricProvider(provider)]++
 }
+
+// RecordInventoryPageCap counts one inventory phase that stopped at its
+// cumulative page budget before the provider ran out of pages. Since
+// CHAOS-4130 this is a SUCCESSFUL unit with lower-bound coverage rather than a
+// cancellation, which means the log line it used to share with a failure is no
+// longer enough on its own -- nothing else in the pipeline reports that a
+// window was only partly walked.
+func (m *Metrics) RecordInventoryPageCap(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inventoryPageCap[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordUnitTerminalWithRows counts a provider unit that was terminalized
+// while it already held committed rows. That combination is the signature
+// CHAOS-4130 ran on undetected for days: a unit destroyed mid-stream is
+// throwing away cursor position for work it had already paid for, and no
+// healthy route does it. Any non-zero rate here deserves an operator.
+func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unitTerminalWithRows[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// writeProviderDatasetCounter renders one provider:dataset keyed counter
+// family in stable key order.
+func writeProviderDatasetCounter(
+	writer io.Writer, name, help string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, ":", 2)
+		if _, err := fmt.Fprintf(
+			writer, "%s{provider=%q,dataset=%q} %d\n", name, parts[0], parts[1], values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	if m == nil {
 		return nil
@@ -349,5 +440,16 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			return err
 		}
 	}
-	return nil
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_inventory_page_cap_total",
+		"Provider inventory phases that stopped at their cumulative page budget, by bounded provider and dataset.",
+		m.inventoryPageCap,
+	); err != nil {
+		return err
+	}
+	return writeProviderDatasetCounter(
+		writer, "dev_health_provider_unit_terminal_with_rows_total",
+		"Provider units terminalized while holding committed rows, by bounded provider and dataset.",
+		m.unitTerminalWithRows,
+	)
 }

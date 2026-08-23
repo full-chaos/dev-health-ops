@@ -3,7 +3,9 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -65,6 +67,43 @@ func remainingPageBudget(budget, spent int) (int, error) {
 		return 0, ErrPaginationCapExceeded
 	}
 	return budget - spent, nil
+}
+
+// recordGitHubTestsInventoryTruncation finalizes an inventory phase that hit
+// its cumulative page budget WITHOUT failing the unit.
+//
+// Before CHAOS-4130 a budget stop returned ErrPaginationCapExceeded, which
+// providerunit maps to the deterministic-terminal `pagination_incomplete`
+// category: the unit was permanently cancelled and its checkpoint discarded,
+// throwing away the cursor position of a unit that already held thousands of
+// durable rows. The Python precedent for a capped newest-first fetch is
+// providers/github/code_client.py:735-745 and :965-975 -- WARN, break, and
+// return the partial list, so the sync completes successfully with truncated
+// coverage. This adopts Python's disposition (never cancel) but not its
+// silence: the truncation is recorded as bounded evidence, which makes
+// githubTestsFinalMetadataBatch report reports_complete=false and, crucially,
+// a nil Watermark. Refusing to advance the watermark is what keeps GitHub's
+// newest-first ordering from turning the unreached OLD end of the window into
+// the permanent lower-bound hole CHAOS-2587 describes.
+func recordGitHubTestsInventoryTruncation(
+	cursor githubTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	component string,
+	pagesSpent int,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
+	}
+	slog.Warn(
+		"provider inventory page budget exhausted",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+	)
+	return cursor
 }
 
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
@@ -216,7 +255,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
-		cursor.RunPages++
+		// Count a page against the CUMULATIVE budget only on first entry.
+		// A continuation re-GETs the page it stopped inside and discards the
+		// already-consumed prefix, so at MaxChunksPerAttempt=8 a 100-item page
+		// is visited about 12.5 times. Counting visits turned a 100-page
+		// budget into ~7.6 real pages (~760 runs), which every busy repo
+		// exceeded (CHAOS-4130). cursor.Pages stays unconditional: it is fetch
+		// evidence, and a re-visit really is a page this route downloaded.
+		//
+		// SUBTLETY: cursor.NextURL == page.CursorBefore is also true for a
+		// FRESH page entered at index 0 -- it is simply the cursor we resumed
+		// from. cursor.Index > 0 is the half that identifies a re-entry into a
+		// partially consumed page; without it the budget would never advance
+		// and the cap would be disabled entirely.
+		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
+			cursor.RunPages++
+		}
 		start := 0
 		if cursor.NextURL == page.CursorBefore {
 			start = cursor.Index
@@ -331,16 +385,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages)
-		if budgetErr != nil {
+		switch {
+		case errors.Is(budgetErr, ErrPaginationCapExceeded):
+			cursor = recordGitHubTestsInventoryTruncation(
+				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
+		case budgetErr != nil:
 			return budgetErr
-		}
-		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
-		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
-		if visitErr != nil {
-			return visitErr
-		}
-		if collection.CapReached {
-			return ErrPaginationCapExceeded
+		default:
+			pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
+			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+			if visitErr != nil {
+				return visitErr
+			}
+			if collection.CapReached {
+				cursor = recordGitHubTestsInventoryTruncation(
+					cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
+			}
 		}
 	}
 
@@ -358,7 +418,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
-			cursor.ArtifactPages++
+			// First-entry-only counting, exactly as in emitRunPage above. This
+			// twin has never fired in production only because no unit has ever
+			// survived the runs phase to reach it (CHAOS-4130).
+			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
+				cursor.ArtifactPages++
+			}
 			start := 0
 			if cursor.NextURL == page.CursorBefore {
 				start = cursor.Index
@@ -441,6 +506,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if after.Index >= len(page.Items) {
 					after.Index = 0
 					after.NextURL = page.CursorAfter
+					// Publish the terminal phase the moment the last artifact
+					// page is consumed, exactly as the runs phase publishes
+					// "artifacts". Without it a cursor at {phase:artifacts,
+					// next_url:"", index:0} is indistinguishable from a phase
+					// that has not started, so a continuation landing on the
+					// last item of the last page re-walked the WHOLE artifacts
+					// phase -- spending two fresh pages of budget per lap
+					// until the cap stopped it (CHAOS-4130).
+					if after.NextURL == "" {
+						after.Phase = "done"
+					}
 				}
 				if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
 					return err
@@ -450,20 +526,29 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if len(page.Items) == 0 {
 				cursor.NextURL = page.CursorAfter
 				cursor.Index = 0
+				if cursor.NextURL == "" {
+					cursor.Phase = "done"
+				}
 			}
 			return nil
 		}
 		allowance, budgetErr := remainingPageBudget(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
-		if budgetErr != nil {
+		switch {
+		case errors.Is(budgetErr, ErrPaginationCapExceeded):
+			cursor = recordGitHubTestsInventoryTruncation(
+				cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
+		case budgetErr != nil:
 			return budgetErr
-		}
-		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
-		if visitErr != nil {
-			return visitErr
-		}
-		if collection.CapReached {
-			return ErrPaginationCapExceeded
+		default:
+			collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+			if visitErr != nil {
+				return visitErr
+			}
+			if collection.CapReached {
+				cursor = recordGitHubTestsInventoryTruncation(
+					cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
+			}
 		}
 	}
 

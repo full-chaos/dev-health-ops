@@ -265,12 +265,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # measures. The integration-tagged count is unchanged because all three
     # were ordinary.
     #
-    # CHAOS-4130 then added 8 ordinary top-level tests (932 -> 940): five in
+    # CHAOS-4130 then added 9 ordinary top-level tests (932 -> 941): six in
     # github_tests_page_budget_test.go and three in
-    # gitlab_tests_page_budget_test.go, covering first-entry page counting and
-    # the two independent budget-stop branches on both providers. All eight are
-    # ordinary, so the integration-tagged count is unchanged.
-    assert len(expected_provider_tests) == 940
+    # gitlab_tests_page_budget_test.go, covering first-entry page counting, the
+    # two independent budget-stop branches on both providers, and the drift
+    # guard tying the dataset registry to the metric label allowlist. All nine
+    # are ordinary, so the integration-tagged count is unchanged.
+    assert len(expected_provider_tests) == 941
     assert len(expected_integration_tests) == 110
     assert expected_integration_tests < expected_provider_tests
 
@@ -287,7 +288,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 940
+    assert len(provider_flattened) == len(set(provider_flattened)) == 941
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -348,7 +349,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 940
+    assert len(selected_tests) == len(set(selected_tests)) == 941
     assert set(selected_tests) == expected_tests
 
 

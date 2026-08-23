@@ -267,20 +267,35 @@ func NewMetrics() *Metrics {
 	}
 }
 
-// metricDataset bounds the dataset label the same way metricProvider bounds
-// the provider one. Dataset names come from the checked-in route descriptor
-// registry, so the real cardinality is small and fixed; this only guarantees
-// that a malformed claim can never mint an unbounded series.
-func metricDataset(value string) string {
+// metricDatasetVocabulary is the closed set of dataset labels, mirroring
+// providersync's checked-in dataset capability registry. providerfoundation
+// cannot import providersync (providersync imports it), so the list is
+// duplicated here and a drift guard in providersync asserts every registered
+// dataset is present -- a new dataset that silently reported as "other" would
+// be a metric that quietly stops distinguishing the thing it exists to
+// distinguish.
+var metricDatasetVocabulary = map[string]struct{}{
+	"repo-metadata": {}, "commits": {}, "commit-stats": {}, "files": {},
+	"blame": {}, "prs": {}, "pr-reviews": {}, "pr-comments": {},
+	"cicd": {}, "tests": {}, "deployments": {}, "security": {},
+	"work-items": {}, "work-item-labels": {}, "work-item-projects": {},
+	"work-item-history": {}, "work-item-comments": {},
+	"incidents": {}, "feature-flags": {},
+	"services": {}, "business-services": {}, "escalation-policies": {},
+	"schedules": {}, "on-calls": {}, "users": {}, "teams": {},
+	"incident-alerts": {}, "incident-log-entries": {}, "incident-notes": {},
+}
+
+// MetricDatasetLabel bounds the dataset label the same way metricProvider
+// bounds the provider one: by ALLOWLIST, not by syntax. A syntactic bound
+// still lets a faulty producer or a hostile tenant mint one series per
+// distinct well-formed string, which is unbounded metric-map growth wearing a
+// character-class disguise. Anything unregistered collapses to "other", so the
+// series count is fixed by this file rather than by whatever reaches a claim.
+func MetricDatasetLabel(value string) string {
 	lowered := strings.ToLower(strings.TrimSpace(value))
-	if lowered == "" || len(lowered) > 32 {
+	if _, known := metricDatasetVocabulary[lowered]; !known {
 		return "other"
-	}
-	for index := 0; index < len(lowered); index++ {
-		c := lowered[index]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-			return "other"
-		}
 	}
 	return lowered
 }
@@ -329,7 +344,7 @@ func (m *Metrics) RecordInventoryPageCap(provider, dataset string) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.inventoryPageCap[metricProvider(provider)+":"+metricDataset(dataset)]++
+	m.inventoryPageCap[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
 // RecordUnitTerminalWithRows counts a provider unit that was terminalized
@@ -343,7 +358,7 @@ func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.unitTerminalWithRows[metricProvider(provider)+":"+metricDataset(dataset)]++
+	m.unitTerminalWithRows[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
 // writeProviderDatasetCounter renders one provider:dataset keyed counter

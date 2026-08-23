@@ -403,3 +403,28 @@ func TestGitHubTestsChunkRouteSinglePassCapReachedFinalizes(t *testing.T) {
 		t.Fatalf("production comparator rejected a truncated completion: %v", err)
 	}
 }
+
+// The metric dataset label is bounded by an ALLOWLIST duplicated in
+// providerfoundation, which cannot import this package to read the registry
+// directly. A dataset added here and forgotten there would report as "other"
+// forever -- a metric that quietly stops distinguishing the thing it exists to
+// distinguish, which is the failure this whole ticket is about. This is the
+// only place both sides are visible at once, so the drift check lives here.
+func TestEveryRegisteredDatasetHasItsOwnMetricLabel(t *testing.T) {
+	seen := 0
+	for provider, datasets := range datasetCapabilities {
+		for dataset := range datasets {
+			seen++
+			if label := providerfoundation.MetricDatasetLabel(dataset); label != dataset {
+				t.Errorf(
+					"%s/%s reports as metric dataset %q; add it to "+
+						"providerfoundation.metricDatasetVocabulary",
+					provider, dataset, label,
+				)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("premise broken: the dataset capability registry is empty")
+	}
+}

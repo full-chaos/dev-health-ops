@@ -368,3 +368,75 @@ func TestEveryTableTheProjectionReadsIsGuarded(t *testing.T) {
 		}
 	}
 }
+
+func TestAnUnknownSortingKeyIsRefusedRatherThanGuessed(t *testing.T) {
+	// The earlier form asked whether the key CONTAINED "source_revision" and
+	// called everything else legacy. That is fail-open in the one direction
+	// that matters: an unrecognised key was read with FINAL and produced
+	// valid-looking wrong numbers. Python refuses instead
+	// (operational_table_contract, operational_ordering_guard.py:83, raises
+	// OperationalOrderingStaleStateError for any non-canonical shape).
+	tests := []struct {
+		name    string
+		key     string
+		want    OperationalOrderingContract
+		wantErr bool
+	}{
+		{name: "canonical legacy", key: "org_id, id", want: OperationalOrderingLegacy},
+		{
+			name: "canonical revision",
+			key:  "org_id, id, source_revision, source_conflict_key",
+			want: OperationalOrderingRevision,
+		},
+		{
+			name: "backticked and loosely spaced still matches",
+			key:  "`org_id`,   `id`",
+			want: OperationalOrderingLegacy,
+		},
+		{
+			// Same columns, different order. This is a DIFFERENT table: the
+			// sorting key's order decides what collapses. Sorting the columns
+			// before comparing would resurrect exactly the guess this refuses.
+			name: "reordered revision key is unknown, not revision",
+			key:  "org_id, id, source_conflict_key, source_revision", wantErr: true,
+		},
+		{
+			// Contains "source_revision", so the old substring test called it
+			// revision. It is not the canonical key.
+			name: "truncated revision key is unknown",
+			key:  "org_id, id, source_revision", wantErr: true,
+		},
+		{
+			name: "an extra column is unknown",
+			key:  "org_id, id, source_revision, source_conflict_key, tenant", wantErr: true,
+		},
+		{name: "an unrelated key is unknown, NOT legacy", key: "org_id", wantErr: true},
+		{name: "empty is unknown", key: "", wantErr: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			got, err := classifySortingKey("operational_incidents", test.key)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf(
+						"key %q resolved to contract %d instead of being "+
+							"refused -- guessing legacy here reads the table "+
+							"with FINAL and yields valid-looking wrong numbers",
+						test.key, got,
+					)
+				}
+				if !errors.Is(err, ErrOrderingContractUnknownSchema) {
+					t.Errorf("wrong error: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("got %d, want %d", got, test.want)
+			}
+		})
+	}
+}

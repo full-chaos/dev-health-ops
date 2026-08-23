@@ -59,3 +59,37 @@ func TestDORAPartitionRefusesNegativeCounts(t *testing.T) {
 		t.Error("a refused observation must not have been counted")
 	}
 }
+
+func TestDORARefusalIsAPositiveSignal(t *testing.T) {
+	// Absence is not a signal. worker_dora_native_partitions_total flat at
+	// zero means "unproven", not "healthy", and no alert can tell a refused
+	// executor from a quiet day. Every reason is therefore emitted even at
+	// zero, so a rate() rule exists BEFORE the first failure rather than
+	// springing into being at the moment it was meant to catch.
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+
+	fresh := collector.PrometheusText()
+	for _, reason := range doraRefusalReasons {
+		want := `worker_dora_native_refused_total{reason="` + reason + `"} 0`
+		if !strings.Contains(fresh, want) {
+			t.Errorf("a never-refused collector must still publish %q", want)
+		}
+	}
+
+	if err := collector.ObserveDORARefused(DORARefusedOrderingContractMismatch); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if !strings.Contains(collector.PrometheusText(),
+		`worker_dora_native_refused_total{reason="ordering_contract_mismatch"} 1`) {
+		t.Error("the refusal was not counted under its reason")
+	}
+
+	// The reason set is closed: an unbounded reason string would be unbounded
+	// label cardinality.
+	if err := collector.ObserveDORARefused("something-new"); err == nil {
+		t.Error("an unknown reason must be refused, not given its own series")
+	}
+}

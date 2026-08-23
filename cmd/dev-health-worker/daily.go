@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -197,9 +198,25 @@ func buildDailyWorker(
 		// CHAOS-3092 R1: the dora kind computes natively instead of posting to
 		// the compatibility bridge. The swap is per KIND and wholesale -- there
 		// is no environment switch and no fallback, so a worker that cannot
-		// build the native executor refuses to serve the family rather than
+		// build the native executor does not serve dora at all rather than
 		// quietly reverting to Python. Every other kind keeps the bridge until
 		// it has its own parity proof.
+		//
+		// THE REFUSAL IS SCOPED TO THIS KIND, NOT THE FAMILY. An earlier
+		// version returned from buildDailyWorker on this error, which left
+		// capacity, complexity, membership, recommendations and release-impact
+		// unregistered even though their own dependencies were healthy -- and
+		// made a transient ClickHouse inspection failure enough to down six
+		// working kinds. That is fail-closed aimed at the wrong target: the
+		// thing that must not happen is DORA computing wrong numbers, not the
+		// rest of the family going dark alongside it.
+		//
+		// Not registering dora is still fail-closed. Its partitions go
+		// unclaimed, which is a backlog rather than wrong data -- and because
+		// an unmoving metric is indistinguishable from a quiet day, the
+		// refusal emits a POSITIVE signal (worker_dora_native_refused_total,
+		// labelled by reason) next to an error log, so an alert has something
+		// to bind to.
 		var doraExecutor *remaining.DORAExecutor
 		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
 			return spec.Kind == jobcontract.KindRemainingDORA
@@ -225,10 +242,19 @@ func buildDailyWorker(
 			}
 			executor, executorErr := remaining.NewDORAExecutor(context.Background(), metricsClickHouse, doraObserver)
 			if executorErr != nil {
-				_ = metricsClickHouse.Close()
-				return workerFamily{}, errWorkerDependencyUnavailable
+				logger.Error(
+					"dora native executor refused; the dora kind will not be "+
+						"served and its partitions will accumulate unclaimed. "+
+						"Every other remaining kind is unaffected.",
+					"error", executorErr,
+					"reason", doraRefusalReason(executorErr),
+				)
+				if refusalObserver, ok := observer.(doraRefusalObserver); ok {
+					_ = refusalObserver.ObserveDORARefused(doraRefusalReason(executorErr))
+				}
+			} else {
+				doraExecutor = executor
 			}
-			doraExecutor = executor
 		}
 
 		for _, spec := range remainingSpecs {
@@ -245,6 +271,14 @@ func buildDailyWorker(
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingDORA:
+				if doraExecutor == nil {
+					// The native executor refused above. SKIP the kind rather
+					// than registering a handler around a nil executor, which
+					// would claim partitions and then fail each one -- turning
+					// a clean "not served" into a retry loop that looks like
+					// flapping. The refusal was already logged and counted.
+					continue
+				}
 				// Native, not `compatibility` -- this is the R1 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingDORAArgs](
 					workers, registry, spec, store, doraExecutor, dependencies, family.Name,
@@ -351,4 +385,32 @@ func addRemainingWorker[T jobruntime.ContractArgs](
 		return jobruntime.HandlerSpec{}, errWorkerDependencyUnavailable
 	}
 	return adapter.Spec(), nil
+}
+
+// doraRefusalObserver is the narrow capability the dora cutover needs to make
+// a refusal visible. Kept as a local interface so a collector that does not
+// implement it degrades to log-only rather than failing the build.
+type doraRefusalObserver interface {
+	ObserveDORARefused(reason string) error
+}
+
+// doraRefusalReason maps a construction error onto the closed label set.
+//
+// The reasons are distinguished because they call for different operator
+// actions: a mismatch means finish or roll back a migration, unparseable means
+// fix the environment variable, an unknown schema means something changed the
+// table outside the migration chain, and inspect_failed means look at
+// ClickHouse itself. Collapsing them into one counter would report that DORA is
+// down without saying which of those four to go and do.
+func doraRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, remaining.ErrOrderingContractMismatch):
+		return jobruntime.DORARefusedOrderingContractMismatch
+	case errors.Is(err, remaining.ErrOrderingContractUnparseable):
+		return jobruntime.DORARefusedContractUnparseable
+	case errors.Is(err, remaining.ErrOrderingContractUnknownSchema):
+		return jobruntime.DORARefusedUnknownSchema
+	default:
+		return jobruntime.DORARefusedInspectFailed
+	}
 }

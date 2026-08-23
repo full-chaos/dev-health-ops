@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -229,6 +230,13 @@ type MetricsCollector struct {
 	doraRowsWritten   uint64
 	doraSkippedRows   uint64
 	doraEmptyOutcomes uint64
+	// doraRefusals counts native DORA construction refusals BY REASON.
+	//
+	// It exists because absence is not a signal: worker_dora_native_partitions
+	// _total sitting at zero means "unproven", not "healthy", and an alert
+	// cannot distinguish a refused executor from a quiet day. This is the
+	// positive statement an alert can bind to.
+	doraRefusals map[string]uint64
 
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
@@ -651,6 +659,43 @@ func (collector *MetricsCollector) ObserveDORAPartition(
 	return nil
 }
 
+// DORA refusal reasons. A closed set, because an unbounded reason string
+// becomes an unbounded label cardinality.
+const (
+	DORARefusedOrderingContractMismatch = "ordering_contract_mismatch"
+	DORARefusedContractUnparseable      = "unparseable"
+	DORARefusedUnknownSchema            = "unknown_schema"
+	DORARefusedInspectFailed            = "inspect_failed"
+)
+
+var doraRefusalReasons = []string{
+	DORARefusedOrderingContractMismatch,
+	DORARefusedContractUnparseable,
+	DORARefusedUnknownSchema,
+	DORARefusedInspectFailed,
+}
+
+// ObserveDORARefused records that the native DORA executor refused to build.
+//
+// The dora kind is then not registered, while the other remaining kinds are.
+// That is deliberate (CHAOS-3092 R1) -- a DORA-only fault must not take down
+// six healthy siblings -- but it means the only outward sign would otherwise be
+// a metric that never moves. This counter is the positive signal, and the
+// reason label is what tells an operator whether to fix configuration, finish a
+// migration, or look at ClickHouse.
+func (collector *MetricsCollector) ObserveDORARefused(reason string) error {
+	if !slices.Contains(doraRefusalReasons, reason) {
+		return fmt.Errorf("unknown dora refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.doraRefusals == nil {
+		collector.doraRefusals = map[string]uint64{}
+	}
+	collector.doraRefusals[reason]++
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -994,6 +1039,15 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	writeUintSample(output, "worker_dora_native_skipped_rows_total", nil, collector.doraSkippedRows)
 	writeMetadata(output, "worker_dora_native_empty_partitions_total", "Native DORA partitions that completed having written no rows.", "counter")
 	writeUintSample(output, "worker_dora_native_empty_partitions_total", nil, collector.doraEmptyOutcomes)
+
+	// Emitted for EVERY reason, including zeros. A series that only appears
+	// once it fires cannot be alerted on with a rate() rule until after the
+	// first failure, which is the moment the alert was supposed to precede.
+	writeMetadata(output, "worker_dora_native_refused_total", "Native DORA executor construction refusals, by reason.", "counter")
+	for _, reason := range doraRefusalReasons {
+		writeUintSample(output, "worker_dora_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.doraRefusals[reason])
+	}
 }
 
 func (collector *MetricsCollector) writeBudgets(output *strings.Builder) {

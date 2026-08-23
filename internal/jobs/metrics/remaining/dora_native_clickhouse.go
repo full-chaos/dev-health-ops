@@ -425,6 +425,30 @@ var doraContractTables = []string{
 	"operational_service_repository_mappings",
 }
 
+// The canonical sorting keys, as migration 067 leaves them.
+//
+// These are compared EXACTLY rather than probed for a substring. An earlier
+// version asked whether the key contained "source_revision" and treated every
+// other shape as legacy, which is fail-OPEN in the one direction that matters:
+// a reordered, truncated or future key would have been classified legacy and
+// read with FINAL, producing valid-LOOKING numbers instead of a refusal. An
+// unknown schema is precisely the case where this code has no basis for a
+// guess.
+//
+// Python does not guess either. operational_table_contract
+// (operational_ordering_guard.py:83) requires an exact match to the legacy
+// shape or to the complete v2 marker set and raises
+// OperationalOrderingStaleStateError for anything else.
+const (
+	legacySortingKey   = "org_id, id"
+	revisionSortingKey = "org_id, id, source_revision, source_conflict_key"
+)
+
+// ErrOrderingContractUnknownSchema reports a sorting key that matches neither
+// canonical shape.
+var ErrOrderingContractUnknownSchema = errors.New(
+	"operational table sorting key matches no known ordering contract")
+
 // schemaOrderingContract reads the contract the TABLE was built for.
 //
 // The sorting key is the authoritative signal: migration 067 moves it to
@@ -442,10 +466,37 @@ func schemaOrderingContract(
     `, clickhouse.Named("table", table)).Scan(&sortingKey); err != nil {
 		return 0, fmt.Errorf("read %s sorting key: %w", table, err)
 	}
-	if strings.Contains(sortingKey, "source_revision") {
+	return classifySortingKey(table, sortingKey)
+}
+
+// classifySortingKey maps a sorting key onto a contract, or refuses.
+//
+// Whitespace is normalised because ClickHouse's own rendering of the key is not
+// something this code should depend on; nothing else is. Order is significant
+// and is NOT sorted away: (org_id, id, source_conflict_key, source_revision)
+// is a different table from the canonical one, and treating them as equal is
+// the same guess this function exists to stop making.
+func classifySortingKey(
+	table string, sortingKey string,
+) (OperationalOrderingContract, error) {
+	normalized := strings.Join(strings.Fields(
+		strings.ReplaceAll(sortingKey, "`", " ")), " ")
+	normalized = strings.ReplaceAll(normalized, " ,", ",")
+	switch normalized {
+	case legacySortingKey:
+		return OperationalOrderingLegacy, nil
+	case revisionSortingKey:
 		return OperationalOrderingRevision, nil
+	default:
+		return 0, fmt.Errorf(
+			"%w: %s is ordered by (%s), which is neither the legacy key (%s) "+
+				"nor the revision key (%s) -- refusing rather than guessing, "+
+				"because guessing legacy here reads the table with FINAL and "+
+				"produces valid-looking wrong numbers",
+			ErrOrderingContractUnknownSchema, table, normalized,
+			legacySortingKey, revisionSortingKey,
+		)
 	}
-	return OperationalOrderingLegacy, nil
 }
 
 // verifyOrderingContract fails closed when the configured contract and the

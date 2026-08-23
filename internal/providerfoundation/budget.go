@@ -426,13 +426,19 @@ func MetricArtifactSkipReasonLabel(value string) string {
 // and was skipped, by bounded provider, dataset, and reason.
 //
 // This is deliberately a SEPARATE series from RecordPerRunTruncation rather
-// than a new cause label on it. That series documents runs that were walked
-// completely and therefore ADVANCE the watermark; a skipped artifact leaves
-// its contents unobserved and WITHHOLDS it (report_member is absent from
-// githubTestsWatermarkAdvancingPairs). Folding the two together would mix a
-// self-limiting condition with a coverage-stalling one on a single series --
-// the exact confusion RecordPerRunTruncation's own comment was written to
-// prevent (CHAOS-4177).
+// than a new cause label on it. That series carries the per_run_cap cause,
+// which is the one bounded, self-limiting condition allowed to ADVANCE the
+// watermark: the walk saw the whole window and the boundary was positively
+// observed. (Its other cause, per_run_page_budget, withholds -- the series is
+// not uniformly advancing, which is precisely why its cause label matters.)
+//
+// A skipped artifact is neither: its contents were never observed, so it
+// always withholds -- report_member is absent from
+// githubTestsWatermarkAdvancingPairs entirely, at the component level rather
+// than per cause. Folding it in as a third cause on the truncation series
+// would put a permanently-withholding condition beside a
+// conditionally-advancing one, so an operator could no longer read the series
+// as "bounded truncation" at all (CHAOS-4177).
 func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	if m == nil {
 		return

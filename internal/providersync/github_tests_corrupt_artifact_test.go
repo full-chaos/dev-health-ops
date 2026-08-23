@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,8 +25,13 @@ type githubTestsCorruptArtifactDoer struct {
 	t         *testing.T
 	artifacts int
 	// corrupt holds the 1-based artifact ids that answer with a non-zip body.
-	corrupt         map[int]bool
-	archiveRequests int
+	corrupt map[int]bool
+	// oversizedReports serves an archive that OPENS cleanly and then holds more
+	// reports than githubTestsMaxReportsPerRun allows. That is a BLOCKING
+	// recordSkipped, a different disposition from an unreadable container, and
+	// it must still fail the batch closed.
+	oversizedReports bool
+	archiveRequests  int
 }
 
 const githubTestsBlobErrorDocument = `{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`
@@ -56,9 +62,14 @@ func (doer *githubTestsCorruptArtifactDoer) Do(request *http.Request) (*http.Res
 				Request:    request,
 			}, nil
 		}
-		archive := githubTestsZip(doer.t, map[string]string{
-			"junit.xml": githubTestsMultiSuiteJUnit(1),
-		})
+		members := map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)}
+		if doer.oversizedReports {
+			members = make(map[string]string, githubTestsMaxReportsPerRun+1)
+			for i := 0; i <= githubTestsMaxReportsPerRun; i++ {
+				members["report-"+strconv.Itoa(i)+".xml"] = githubTestsMultiSuiteJUnit(1)
+			}
+		}
+		archive := githubTestsZip(doer.t, members)
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/zip"}},
@@ -234,6 +245,13 @@ func TestGitHubTestsCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 			walk.final.Result["reports_complete"],
 		)
 	}
+	observation := githubTestsSkipObservation(t, walk.cursor.Incomplete, githubTestsReportMemberComponent)
+	if observation.Cause != githubTestsUnreadableArchiveCause || observation.Count != 1 {
+		t.Fatalf(
+			"durable observation=%+v, want cause=%s count=1",
+			observation, githubTestsUnreadableArchiveCause,
+		)
+	}
 	// The fail-closed gate the chunked executor runs before a completion
 	// becomes durable must accept this shape too.
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
@@ -275,6 +293,17 @@ func TestGitHubTestsRouteCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 			batch.Result["reports_complete"],
 		)
 	}
+	incomplete, ok := batch.Result["incomplete"].([]GitHubTestsIncomplete)
+	if !ok {
+		t.Fatalf("result carried no typed incomplete slice: %#v", batch.Result["incomplete"])
+	}
+	observation := githubTestsSkipObservation(t, incomplete, githubTestsReportMemberComponent)
+	if observation.Cause != githubTestsUnreadableArchiveCause || observation.Count != 1 {
+		t.Fatalf(
+			"durable observation=%+v, want cause=%s count=1",
+			observation, githubTestsUnreadableArchiveCause,
+		)
+	}
 }
 
 // A skipped artifact that nothing counts is a silent data loss: the unit
@@ -302,5 +331,49 @@ func TestGitHubTestsUnreadableArchiveIsCounted(t *testing.T) {
 	want := `dev_health_provider_artifact_skipped_total{provider="github",dataset="cicd",reason="unreadable_archive"} 1`
 	if !strings.Contains(buffer.String(), want) {
 		t.Fatalf("metrics did not carry the skip:\nwant line: %s\ngot:\n%s", want, buffer.String())
+	}
+}
+
+// githubTestsSkipObservation returns the durable observation recorded for a
+// component, or fails. Asserting the CAUSE matters: the durable observation is
+// what the production comparator validates and what an operator reads, and the
+// report_member vocabulary already contained "unreadable" for a member that
+// could not be parsed. Without this, recording the pre-existing cause for a
+// whole unreadable ARCHIVE would be indistinguishable from recording the new
+// one, and the two conditions are not the same.
+func githubTestsSkipObservation(
+	t *testing.T, incomplete []GitHubTestsIncomplete, component string,
+) GitHubTestsIncomplete {
+	t.Helper()
+	for _, observation := range incomplete {
+		if observation.Component == component {
+			return observation
+		}
+	}
+	t.Fatalf("no %s observation in %+v", component, incomplete)
+	return GitHubTestsIncomplete{}
+}
+
+// The chunked route is the one production executes. Its blocking-issue branch
+// -- an archive that OPENS and then breaches a bound -- must still fail the
+// batch closed, unchanged by the unreadable-container work. The retargeted
+// oracle test covers only the non-chunked twin, so without this the production
+// path's fail-closed behaviour is asserted nowhere.
+func TestGitHubTestsChunkedUnsafeArchiveBoundsStillFailsClosed(t *testing.T) {
+	doer := &githubTestsCorruptArtifactDoer{
+		t: t, artifacts: 1, corrupt: map[int]bool{}, oversizedReports: true,
+	}
+
+	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if !errors.Is(err, ErrGitHubTestsIncomplete) {
+		t.Fatalf("chunked route err=%v, want the batch to fail closed on a blocking issue", err)
+	}
+	if !strings.Contains(err.Error(), "unsafe archive bounds") {
+		t.Fatalf("err=%v, want the unsafe-archive-bounds refusal", err)
+	}
+	// Anti-vacuity: the archive must actually have been downloaded and opened,
+	// or this would pass on a route that failed earlier for another reason.
+	if doer.archiveRequests != 1 {
+		t.Fatalf("downloaded %d archives, want 1", doer.archiveRequests)
 	}
 }

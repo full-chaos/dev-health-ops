@@ -409,7 +409,6 @@ func RunProducer(
 			identityEntryPoint = canonicalPath(resolved)
 		}
 	}
-	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	// The argv is written by the test that calls this, in checked-in code --
 	// it is a producer this repo declares, not input from a request, a file,
 	// or an environment variable. Running a caller-declared producer IS the
@@ -418,6 +417,10 @@ func RunProducer(
 	// purpose. The path is resolved through exec.LookPath (no shell, so no
 	// word-splitting or metacharacter interpretation), and this package is
 	// importable only from _test.go files.
+	//
+	// The suppression must sit on the line DIRECTLY above the finding --
+	// Semgrep does not scan back through an intervening comment block.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	command := exec.Command(program, argv[1:]...)
 	command.Dir = workingDir
 	command.Env = environment

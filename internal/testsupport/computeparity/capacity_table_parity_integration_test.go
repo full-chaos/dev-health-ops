@@ -173,6 +173,12 @@ func TestCapacityNativePortMatchesThePythonProducerAcrossTwoScratchStores(t *tes
 		"--team-id", capacityParityTeamID,
 		"--work-scope-id", capacityParityWorkScopeID,
 		"--simulations", strconv.Itoa(capacityParitySimulations),
+		// Fixed-DATE mode as well as fixed-scope, so days_available gets
+		// cross-implementation coverage. Its absence is how a date-vs-timestamp
+		// defect stayed reachable in production while the vectors (midnight by
+		// construction) and this comparison (fixed-scope only) both stayed
+		// green.
+		"--target-date-offset-days", strconv.Itoa(capacityParityTargetOffsetDays),
 	)
 
 	// ---- Midnight guard, closing half -----------------------------------
@@ -213,16 +219,31 @@ func TestCapacityNativePortMatchesThePythonProducerAcrossTwoScratchStores(t *tes
 		// absent -- both sides writing NULL because no forecast ran -- the
 		// comparison would be EQUAL over nothing but scope identifiers, which
 		// is the shape a passing-but-vacuous parity run takes.
-		var withDays int
+		var withDays, withItems int
 		for _, row := range left.Rows {
-			if leaf(row["p50_days"]) != "<nil>" && leaf(row["p50_days"]) != "" {
+			if populated(row["p50_days"]) {
 				withDays++
+			}
+			if populated(row["p50_items"]) {
+				withItems++
 			}
 		}
 		if withDays == 0 {
-			t.Fatal(
+			t.Error(
 				"no compared row carries a p50_days value, so this run compared " +
-					"scope identifiers and nothing the simulation produced")
+					"scope identifiers and nothing the fixed-scope simulation " +
+					"produced")
+		}
+		// Both MODES, not just both columns. p*_items is the fixed-date branch,
+		// and it is the one whose days_available arithmetic went wrong while
+		// every other check stayed green. If the fixture ever stops supplying a
+		// target date these columns go NULL on both sides and compare EQUAL
+		// forever.
+		if withItems == 0 {
+			t.Error(
+				"no compared row carries a p50_items value: the fixed-date mode " +
+					"is not being exercised, so days_available has no " +
+					"cross-implementation coverage at all")
 		}
 	})
 }
@@ -232,6 +253,9 @@ const (
 	capacityParitySimulations = 50
 	capacityParityTeamID      = "team-parity"
 	capacityParityWorkScopeID = "scope-parity"
+	// Must match CAPACITY_TARGET_DATE_OFFSET_DAYS in the fixtures CLI, so both
+	// producers aim at the same day.
+	capacityParityTargetOffsetDays = 10
 )
 
 // distinctHistoryDays reads the fixture's actual day count from the STORE, so a
@@ -403,4 +427,12 @@ func readSeededHistory(ctx context.Context, t *testing.T, dsn string) []int {
 		history = append(history, int(completed))
 	}
 	return history
+}
+
+// populated reports whether a compared leaf holds a real value rather than a
+// NULL. Two NULLs compare equal, so a column that is absent on both sides is
+// indistinguishable from one that agrees.
+func populated(value any) bool {
+	text := leaf(value)
+	return text != "" && text != "<nil>"
 }

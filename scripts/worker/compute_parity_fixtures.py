@@ -375,19 +375,40 @@ def produce_metrics_capacity(dsn: str, *, as_of: str, days: int) -> dict[str, An
     import asyncio
 
     from dev_health_ops.metrics.job_capacity import run_capacity_forecast
+    from dev_health_ops.utils.datetime import utc_today
 
+    # A target date is supplied so the FIXED-DATE branch runs too, which means
+    # days_available -- and therefore the p*_items columns -- get
+    # cross-implementation coverage. Without it the comparison only ever
+    # exercised fixed-scope mode, and a date-vs-timestamp defect in
+    # days_available was reachable in production while both proof layers stayed
+    # green.
+    #
+    # Derived from each side's OWN today rather than pinned, because that is
+    # what production does; the harness refuses a run that crosses UTC midnight,
+    # which is what makes the two sides agree on it.
+    #
+    # target_items is left unset so it falls back to the backlog, so this single
+    # call runs BOTH modes -- which is also the only place the reseed-per-
+    # simulation behaviour is observable.
+    target_date = utc_today() + timedelta(days=CAPACITY_TARGET_DATE_OFFSET_DAYS)
     asyncio.run(
         run_capacity_forecast(
             db_url=dsn,
             org_id=PARITY_ORG_ID,
             team_id=CAPACITY_TEAM_ID,
             work_scope_id=CAPACITY_WORK_SCOPE_ID,
+            target_date=target_date,
             history_days=90,
             simulations=CAPACITY_SIMULATIONS,
             seed=CAPACITY_SEED,
         )
     )
-    return {"simulations": CAPACITY_SIMULATIONS, "seed": CAPACITY_SEED}
+    return {
+        "simulations": CAPACITY_SIMULATIONS,
+        "seed": CAPACITY_SEED,
+        "target_date": target_date.isoformat(),
+    }
 
 
 # Fixed so both producers draw the identical stream. The seed is mandatory for
@@ -408,6 +429,10 @@ CAPACITY_SEED = 20260823
 # quantiles over many draws, and it is why the RNG is proven separately by
 # stream vectors rather than inferred from this table agreeing.
 CAPACITY_SIMULATIONS = 50
+
+# Far enough out that days_available is comfortably positive and the items
+# simulation does real work, close enough that the run stays quick.
+CAPACITY_TARGET_DATE_OFFSET_DAYS = 10
 
 KINDS: Mapping[str, Mapping[str, Any]] = {
     "metrics.dora": {

@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
@@ -46,6 +47,13 @@ func run() error {
 	workScopeID := flags.String("work-scope-id", "", "work scope")
 	historyDays := flags.Int("history-days", 90, "throughput history window")
 	simulations := flags.Int("simulations", 10000, "Monte Carlo simulation count")
+	// Derived from this process's own today, exactly as the Python producer
+	// derives it from its own -- production supplies a target date in the
+	// scope, so pinning one here would test a configuration production never
+	// runs. The harness refuses a run that crosses UTC midnight, which is what
+	// makes the two sides agree on what today is.
+	targetDateOffset := flags.Int("target-date-offset-days", 0,
+		"target date as an offset from today; 0 leaves fixed-date mode unused")
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -75,14 +83,19 @@ func run() error {
 		return err
 	}
 
-	scope, err := json.Marshal(map[string]any{
+	scopeFields := map[string]any{
 		"version":       1,
 		"team_id":       *teamID,
 		"work_scope_id": *workScopeID,
 		"history_days":  *historyDays,
 		"simulations":   *simulations,
 		"all_teams":     false,
-	})
+	}
+	if *targetDateOffset != 0 {
+		target := time.Now().UTC().AddDate(0, 0, *targetDateOffset)
+		scopeFields["target_date"] = target.Format("2006-01-02")
+	}
+	scope, err := json.Marshal(scopeFields)
 	if err != nil {
 		return err
 	}

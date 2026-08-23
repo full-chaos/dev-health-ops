@@ -27,6 +27,15 @@ and its primitives, against the schema declared in
 Verdicts are disjoint from the row-parity vocabulary on purpose, so a reader
 cannot mistake one claim for the other: WITHIN_ENVELOPE / OUTSIDE_ENVELOPE /
 UNPROVEN here, never EQUAL / DIFFERENT.
+
+STATUS: this comparator is UNUSED BY RULING, not awaiting approval (chris,
+2026-08-23, recorded on CHAOS-3090). Go's runtime performance is known-better,
+so no threshold set will be approved and UNPROVEN is the permanent answer. It is
+kept because the fail-closed ``thresholds_unapproved`` path is the correct
+behaviour for an unapproved threshold set, and because deleting a comparator is
+harder to reverse than leaving one that refuses to claim anything. Do not build
+a readiness signal on it. Row parity -- the half that catches real port defects
+-- is unaffected and remains mandatory for every compute family.
 """
 
 from __future__ import annotations

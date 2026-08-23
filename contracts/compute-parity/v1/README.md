@@ -31,10 +31,18 @@ times the memory; it can behave impeccably at runtime and compute the wrong
 numbers. The vocabularies are disjoint so a reader cannot mistake one for the
 other, and nothing compares product rows in Python.
 
-`compare_runtime_observations.py` returns `UNPROVEN` for every input today,
-because `ci/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json`
-carries `review.approved: false`. That is the correct answer, not a defect —
-threshold approval is a deliberate decision that rides with the R1 pilot.
+`compare_runtime_observations.py` returns `UNPROVEN` for every input, because
+`ci/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json`
+carries `review.approved: false`.
+
+**Runtime mode is unused by ruling, not pending approval** (chris, 2026-08-23,
+recorded on CHAOS-3090). Go's runtime performance is known-better, so no
+thresholds will be approved and `UNPROVEN` is the permanent answer rather than a
+placeholder. Do not read this as work waiting to be finished, and do not build a
+readiness claim on runtime mode.
+
+Rows mode is unaffected and remains mandatory: it is the half that catches real
+port defects, and every compute family's cutover is gated on it.
 
 ## Adding a kind
 

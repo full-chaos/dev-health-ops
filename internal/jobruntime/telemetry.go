@@ -220,6 +220,16 @@ type MetricsCollector struct {
 	workGraphReleaseLost  uint64
 	remainingReleaseLost  uint64
 
+	// Native DORA compute (CHAOS-3092 R1). The HTTP compatibility bridge could
+	// only ever report a status code, so a partition that computed nothing and
+	// a partition that computed everything were indistinguishable from the
+	// outside. Going native is the moment the work itself becomes observable.
+	doraPartitions    uint64
+	doraDays          uint64
+	doraRowsWritten   uint64
+	doraSkippedRows   uint64
+	doraEmptyOutcomes uint64
+
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
 	streamOldestPending       map[StreamLabels]float64
@@ -605,6 +615,42 @@ func (collector *MetricsCollector) ObserveRemainingMetricsLeaseReleaseLost() err
 	return nil
 }
 
+// ObserveDORAPartition records one completed native DORA partition.
+//
+// skippedRows is the count of candidate rows the executor could not use --
+// today, rows whose repo_id is not a parseable UUID. Python TOLERATES those
+// (_has_valid_repo) and finalizes the partition anyway, and CHAOS-4130 ruled
+// that the port must preserve that disposition rather than convert a tolerated
+// partial into a retry or a failure. Telemetry is therefore the ONLY place the
+// partiality becomes visible: without this counter a run that silently dropped
+// most of its input is indistinguishable from a clean one, in both runtimes.
+//
+// doraEmptyOutcomes is tracked separately from doraPartitions because "ran and
+// wrote nothing" is the shape a broken cutover takes. A rate that is normally
+// near zero and jumps is a signal; a rows-written counter alone would just
+// flatten, which reads the same as low traffic.
+func (collector *MetricsCollector) ObserveDORAPartition(
+	days int, rowsWritten int, skippedRows int,
+) error {
+	// Negative counts mean the caller miscounted. Clamping would fold a
+	// reporting bug into a plausible-looking number; refusing keeps the
+	// counters trustworthy, and the executor already ignores this error so a
+	// telemetry fault cannot fail a partition whose work is durably written.
+	if days < 0 || rowsWritten < 0 || skippedRows < 0 {
+		return errors.New("dora partition counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.doraPartitions++
+	collector.doraDays += uint64(days)
+	collector.doraRowsWritten += uint64(rowsWritten)
+	collector.doraSkippedRows += uint64(skippedRows)
+	if rowsWritten == 0 {
+		collector.doraEmptyOutcomes++
+	}
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -937,6 +983,17 @@ func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) 
 func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Builder) {
 	writeMetadata(output, "worker_remaining_metrics_lease_release_lost_total", "Remaining-metrics releases that found their own lease already expired.", "counter")
 	writeUintSample(output, "worker_remaining_metrics_lease_release_lost_total", nil, collector.remainingReleaseLost)
+
+	writeMetadata(output, "worker_dora_native_partitions_total", "Partitions computed by the native Go DORA executor.", "counter")
+	writeUintSample(output, "worker_dora_native_partitions_total", nil, collector.doraPartitions)
+	writeMetadata(output, "worker_dora_native_days_total", "Days covered by native DORA partitions.", "counter")
+	writeUintSample(output, "worker_dora_native_days_total", nil, collector.doraDays)
+	writeMetadata(output, "worker_dora_native_rows_written_total", "Metric rows written by the native Go DORA executor.", "counter")
+	writeUintSample(output, "worker_dora_native_rows_written_total", nil, collector.doraRowsWritten)
+	writeMetadata(output, "worker_dora_native_skipped_rows_total", "Candidate rows the native DORA executor tolerated and skipped, matching Python's disposition.", "counter")
+	writeUintSample(output, "worker_dora_native_skipped_rows_total", nil, collector.doraSkippedRows)
+	writeMetadata(output, "worker_dora_native_empty_partitions_total", "Native DORA partitions that completed having written no rows.", "counter")
+	writeUintSample(output, "worker_dora_native_empty_partitions_total", nil, collector.doraEmptyOutcomes)
 }
 
 func (collector *MetricsCollector) writeBudgets(output *strings.Builder) {

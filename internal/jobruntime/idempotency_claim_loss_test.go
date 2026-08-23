@@ -54,3 +54,43 @@ func TestAdapterCancelsHandlerWhenIdempotencyClaimIsLost(t *testing.T) {
 	}
 	<-worked
 }
+
+// TestAdapterKeepsLostClaimRunRetryable guards the other half of the fix. Once
+// a lost lease cancels the handler, the run MUST stay retryable: stamping it
+// terminal would let a database blip permanently kill a job, which is the
+// CHAOS-3865 shape and strictly worse than the duplicate execution this change
+// set out to close. Cancellation and terminality are separate decisions, and
+// only this assertion keeps them separate.
+func TestAdapterKeepsLostClaimRunRetryable(t *testing.T) {
+	t.Parallel()
+	claim := &lostClaim{recordingClaim: recordingClaim{state: ClaimProceed}, lost: make(chan struct{})}
+	entered := make(chan struct{})
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](
+		func(ctx context.Context, _ *Execution[RetentionCleanupArgs]) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		}), &recordingObserver{}, claim, &recordingLease{}, &bytes.Buffer{})
+
+	job := retentionJob(t, 1)
+	worked := make(chan error, 1)
+	go func() { worked <- adapter.Work(context.Background(), job) }()
+	<-entered
+	close(claim.lost)
+	<-worked
+
+	if len(claim.completions) != 1 {
+		t.Fatalf("completions recorded = %d, want 1", len(claim.completions))
+	}
+	completion := claim.completions[0]
+	if completion.Terminal {
+		t.Fatal("a lost lease terminalized the run: a database blip would now kill the job permanently")
+	}
+	if completion.Result != ResultCancel || completion.Category != CategoryCancelled {
+		t.Fatalf("completion = %s/%s, want cancel/cancelled", completion.Result, completion.Category)
+	}
+	// finishClaim must survive the cancellation it is reporting.
+	if claim.finishContextErr != nil {
+		t.Fatalf("Finish ran on a canceled context: %v", claim.finishContextErr)
+	}
+}

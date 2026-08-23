@@ -249,6 +249,60 @@ func TestCapacityNativePortMatchesThePythonProducerAcrossTwoScratchStores(t *tes
 			}
 		}
 
+		// RETENTION, by identity. Everything else here is cardinality, and
+		// cardinality cannot tell appending from replacing: a replay that
+		// TRUNCATED the table and wrote two fresh rows carrying the same
+		// semantic key produces the same 1 -> 2 count, the same stable key
+		// set, and therefore the same append_duplicates classification, while
+		// the original row is gone. The distinguishing fact is whether the
+		// rows that were there BEFORE are still there AFTER, and forecast_id
+		// is what makes that answerable -- it is excluded from the comparison
+		// precisely because it is unique per row, which is exactly what makes
+		// it usable as an identity here.
+		for _, pair := range []struct {
+			side          string
+			before, after computeparity.Snapshot
+		}{
+			{"python", left, leftAfter}, {"go_native", right, rightAfter},
+		} {
+			// Rows are oraclecompare-encoded, so a field is a typed envelope
+			// ({"t":"str","v":...}) rather than a bare value. Rendered with
+			// fmt.Sprint on BOTH sides of the comparison, which is enough for
+			// identity and avoids a second decoding rule that could drift from
+			// the encoder.
+			identity := func(row map[string]any) (string, bool) {
+				value, present := row["forecast_id"]
+				if !present {
+					return "", false
+				}
+				return fmt.Sprint(value), true
+			}
+			survived := map[string]bool{}
+			for _, row := range pair.after.Rows {
+				if id, ok := identity(row); ok {
+					survived[id] = true
+				}
+			}
+			var lost []string
+			for _, row := range pair.before.Rows {
+				id, ok := identity(row)
+				if !ok {
+					t.Fatalf("%s: forecast_id absent from the snapshot, so "+
+						"retention cannot be judged at all", pair.side)
+				}
+				if !survived[id] {
+					lost = append(lost, id)
+				}
+			}
+			if len(lost) != 0 {
+				t.Errorf(
+					"%s: %d of %d pre-replay rows did not survive the replay (%s). "+
+						"The counts and the key set can look like an append while the "+
+						"original rows have actually been replaced",
+					pair.side, len(lost), len(pair.before.Rows), strings.Join(lost, ", "))
+			}
+		}
+
 		// Row counts asserted explicitly as well as through EvaluateRepeat.
 		// The policy check classifies the KIND of replay behaviour; these pin
 		// the magnitude, so a replay that appended a single row rather than a

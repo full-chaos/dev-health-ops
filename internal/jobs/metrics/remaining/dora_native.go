@@ -54,8 +54,13 @@ import (
 // tolerates it and the plan's own risk note warns that turning a tolerated
 // partial into an error is how a port becomes data loss.
 type DORAExecutor struct {
-	conn      driver.Conn
-	observer  DORAObserver
+	conn     driver.Conn
+	observer DORAObserver
+	// contract is resolved ONCE, at construction. Re-reading the environment
+	// per query would let a mid-flight change split one partition across two
+	// contracts, and would let an unparseable value appear after the guard had
+	// already passed.
+	contract  OperationalOrderingContract
 	nowUTC    func() time.Time
 	batchSize int
 }
@@ -116,12 +121,22 @@ func NewDORAExecutor(
 	// Python performs the equivalent check (guard_operational_writer_tables,
 	// called from ClickHouseStore.__aenter__); Go had none, and a port missing
 	// a guard the original has is a gap rather than restraint.
-	if err := verifyOrderingContract(ctx, conn); err != nil {
+	//
+	// The configured value is PARSED strictly first, mirroring Python: an
+	// unparseable value is a configuration error, never a silent fall back to
+	// legacy. Falling back would mean a typo selected the branch that counts
+	// one incident as several, with nothing to say so.
+	contract, err := configuredOperationalOrderingContract()
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyOrderingContract(ctx, conn, contract); err != nil {
 		return nil, err
 	}
 	return &DORAExecutor{
 		conn:      conn,
 		observer:  observer,
+		contract:  contract,
 		nowUTC:    func() time.Time { return time.Now().UTC() },
 		batchSize: doraDefaultBatchSize,
 	}, nil

@@ -176,46 +176,75 @@ func TestOrderingContractGuardMatchesTheDeployedSchema(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		configured string
-		schema     OperationalOrderingContract
-		wantBuild  bool
+		name      string
+		configure func(*testing.T)
+		schema    OperationalOrderingContract
+		wantBuild bool
+		wantErr   error
 	}{
 		{
-			// The reachable-by-omission path: nothing set, so the query
+			// The reachable-by-omission path: nothing set at all, so the query
 			// builder defaults to legacy while the table is v2.
-			name:       "unset against a v2 schema is refused",
-			configured: "", schema: OperationalOrderingRevision, wantBuild: false,
+			name:      "unset against a v2 schema is refused",
+			configure: unsetContract,
+			schema:    OperationalOrderingRevision,
+			wantErr:   ErrOrderingContractMismatch,
 		},
 		{
-			name:       "explicit legacy against a v2 schema is refused",
-			configured: "1", schema: OperationalOrderingRevision, wantBuild: false,
+			name:      "explicit legacy against a v2 schema is refused",
+			configure: setContract("1"),
+			schema:    OperationalOrderingRevision,
+			wantErr:   ErrOrderingContractMismatch,
 		},
 		{
-			name:       "contract 2 against a legacy schema is refused",
-			configured: "2", schema: OperationalOrderingLegacy, wantBuild: false,
+			name:      "contract 2 against a legacy schema is refused",
+			configure: setContract("2"),
+			schema:    OperationalOrderingLegacy,
+			wantErr:   ErrOrderingContractMismatch,
 		},
 		{
-			name:       "contract 2 against a v2 schema builds",
-			configured: "2", schema: OperationalOrderingRevision, wantBuild: true,
+			// Exported-but-empty is a CONFIGURATION error, not a silent
+			// fallback to legacy. It refuses on both schemas, and for a
+			// different reason than a mismatch -- which is why the expected
+			// error is asserted rather than just "some error".
+			name:      "an empty value is a configuration error, not legacy",
+			configure: setContract(""),
+			schema:    OperationalOrderingLegacy,
+			wantErr:   ErrOrderingContractUnparseable,
 		},
 		{
-			name:       "legacy against a legacy schema builds",
-			configured: "1", schema: OperationalOrderingLegacy, wantBuild: true,
+			name:      "a typo is refused rather than resolved to legacy",
+			configure: setContract("3"),
+			schema:    OperationalOrderingLegacy,
+			wantErr:   ErrOrderingContractUnparseable,
+		},
+		{
+			name:      "contract 2 against a v2 schema builds",
+			configure: setContract("2"),
+			schema:    OperationalOrderingRevision,
+			wantBuild: true,
+		},
+		{
+			name:      "legacy against a legacy schema builds",
+			configure: setContract("1"),
+			schema:    OperationalOrderingLegacy,
+			wantBuild: true,
 		},
 		{
 			// A deployment that has never set the variable and has never run
 			// 067 is CONSISTENT, not broken. The guard must not turn it into
 			// an outage.
-			name:       "unset against a legacy schema builds",
-			configured: "", schema: OperationalOrderingLegacy, wantBuild: true,
+			name:      "unset against a legacy schema builds",
+			configure: unsetContract,
+			schema:    OperationalOrderingLegacy,
+			wantBuild: true,
 		},
 	}
 
 	for _, test := range cases {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv(operationalOrderingContractEnv, test.configured)
+			test.configure(t)
 			_, err := NewDORAExecutor(ctx, stores[test.schema], nil)
 			switch {
 			case test.wantBuild && err != nil:
@@ -228,12 +257,37 @@ func TestOrderingContractGuardMatchesTheDeployedSchema(t *testing.T) {
 					"an inconsistent configuration must refuse at construction " +
 						"rather than compute wrong numbers job after job",
 				)
-			case !test.wantBuild &&
-				!errors.Is(err, ErrOrderingContractMismatch):
-				t.Fatalf("refusal must be the contract mismatch, got: %v", err)
+			case !test.wantBuild && !errors.Is(err, test.wantErr):
+				t.Fatalf("expected %v, got: %v", test.wantErr, err)
 			}
 		})
 	}
+}
+
+// setContract exports the variable for one subtest.
+func setContract(value string) func(*testing.T) {
+	return func(t *testing.T) { t.Setenv(operationalOrderingContractEnv, value) }
+}
+
+// unsetContract removes the variable entirely.
+//
+// t.Setenv(name, "") is NOT this: it leaves the variable exported with an empty
+// value, which the strict parser treats as a configuration error rather than as
+// absence -- exactly the distinction Python draws between None and "". Using
+// t.Setenv here would have silently tested the wrong row of the table.
+func unsetContract(t *testing.T) {
+	t.Helper()
+	previous, had := os.LookupEnv(operationalOrderingContractEnv)
+	if err := os.Unsetenv(operationalOrderingContractEnv); err != nil {
+		t.Fatalf("unset %s: %v", operationalOrderingContractEnv, err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(operationalOrderingContractEnv, previous)
+		} else {
+			_ = os.Unsetenv(operationalOrderingContractEnv)
+		}
+	})
 }
 
 // seedIncidentVersions writes the multi-version fixture.
@@ -417,16 +471,21 @@ func migratedClickHouse(
 	// "the intended schema exists". Verify the shape actually landed, using
 	// the same production reader the executor's guard uses, before any test
 	// draws a conclusion from this container.
-	deployed, err := schemaOrderingContract(ctx, conn)
-	if err != nil {
-		t.Fatalf("read the deployed contract: %v", err)
-	}
-	if deployed != contract {
-		t.Fatalf(
-			"asked the chain for a contract-%d schema and got contract-%d -- "+
-				"the fixture is not testing what it claims to test",
-			contract, deployed,
-		)
+	// Every table the projection reads, not just incidents: 067 rebuilds them
+	// in a loop, so "the chain ran" does not imply they all landed on the same
+	// contract.
+	for _, table := range doraContractTables {
+		deployed, err := schemaOrderingContract(ctx, conn, table)
+		if err != nil {
+			t.Fatalf("read the deployed contract for %s: %v", table, err)
+		}
+		if deployed != contract {
+			t.Fatalf(
+				"asked the chain for a contract-%d schema and %s came back as "+
+					"contract-%d -- the fixture is not testing what it claims to test",
+				contract, table, deployed,
+			)
+		}
 	}
 
 	migratedStores[contract] = conn
@@ -459,4 +518,128 @@ func openClickHouse(
 		t.Fatalf("open clickhouse: %v", err)
 	}
 	return conn
+}
+
+// TestAPartiallyMigratedSchemaIsRefused is the regression test for the gap that
+// guarding only operational_incidents left open.
+//
+// Migration 067 rebuilds each operational table in a LOOP, through
+// non-transactional ClickHouse DDL (shadow table, copy, EXCHANGE TABLES). There
+// is no transaction wrapping the loop, so an interrupted or failed run can
+// genuinely leave one table on contract 2 and the next still on legacy. That is
+// not a hypothetical: it is the ordinary failure mode of a multi-statement DDL
+// migration in an engine without transactional DDL.
+//
+// With the guard reading only incidents, that state passed construction. The
+// projection then wrapped BOTH tables in the contract-2 form, so the query
+// either referenced source_revision on a table that does not have it, or
+// resolved mapping versions under semantics the table was not built for --
+// wrong repository attribution rather than a clean failure. Wrong attribution
+// is the worse outcome, because it still produces numbers.
+//
+// The fixture builds the partial state honestly: it takes the LEGACY table's
+// real DDL from a legacy-migrated store and installs it into a
+// contract-2-migrated store, rather than hand-writing a table that only
+// resembles one.
+func TestAPartiallyMigratedSchemaIsRefused(t *testing.T) {
+	ctx := context.Background()
+
+	legacyDDL := showCreateTable(t, ctx,
+		migratedClickHouse(t, ctx, OperationalOrderingLegacy),
+		partiallyMigratedTable)
+
+	// A dedicated store: this one gets mutated into an inconsistent state and
+	// must not be shared with the tests that rely on a coherent schema.
+	partial := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+
+	if err := partial.Exec(ctx,
+		"DROP TABLE `"+partiallyMigratedTable+"`"); err != nil {
+		t.Fatalf("drop %s: %v", partiallyMigratedTable, err)
+	}
+	if err := partial.Exec(ctx, legacyDDL); err != nil {
+		t.Fatalf("install the legacy %s: %v", partiallyMigratedTable, err)
+	}
+
+	// Prove the fixture really is INCONSISTENT before asserting on the guard.
+	// If both tables ended up on the same contract, the test below would pass
+	// for the ordinary mismatch reason and prove nothing about partial states.
+	incidents, err := schemaOrderingContract(ctx, partial, "operational_incidents")
+	if err != nil {
+		t.Fatalf("read incidents contract: %v", err)
+	}
+	mappings, err := schemaOrderingContract(ctx, partial, partiallyMigratedTable)
+	if err != nil {
+		t.Fatalf("read mappings contract: %v", err)
+	}
+	if incidents == mappings {
+		t.Fatalf(
+			"fixture is not partial: both tables are on contract %d, so this "+
+				"would exercise the ordinary mismatch path instead", incidents,
+		)
+	}
+
+	// The configured contract AGREES with incidents. Under a guard that checked
+	// only incidents this construction succeeded.
+	t.Setenv(operationalOrderingContractEnv, "2")
+	_, err = NewDORAExecutor(ctx, partial, nil)
+	if err == nil {
+		t.Fatal(
+			"a partially migrated schema was accepted. The projection reads " +
+				"both tables through the ordering contract, so this worker " +
+				"would have queried a legacy mappings table under contract-2 " +
+				"semantics and produced wrong repository attribution rather " +
+				"than failing",
+		)
+	}
+	if !errors.Is(err, ErrOrderingContractMismatch) {
+		t.Fatalf("expected a contract mismatch, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), partiallyMigratedTable) {
+		t.Errorf(
+			"the refusal must NAME the table that disagrees, or an operator "+
+				"cannot tell which half of the migration to finish: %v", err,
+		)
+	}
+}
+
+const partiallyMigratedTable = "operational_service_repository_mappings"
+
+func showCreateTable(
+	t *testing.T, ctx context.Context, conn driver.Conn, table string,
+) string {
+	t.Helper()
+	var ddl string
+	if err := conn.QueryRow(
+		ctx, "SHOW CREATE TABLE `"+table+"`").Scan(&ddl); err != nil {
+		t.Fatalf("show create table %s: %v", table, err)
+	}
+	return ddl
+}
+
+// freshMigratedClickHouse builds an UNCACHED store, for tests that mutate the
+// schema. Handing one of the shared containers to a test that then breaks its
+// schema would make every later test's result depend on execution order.
+func freshMigratedClickHouse(
+	t *testing.T, ctx context.Context, contract OperationalOrderingContract,
+) driver.Conn {
+	t.Helper()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+
+	previous, had := os.LookupEnv(operationalOrderingContractEnv)
+	if err := os.Setenv(
+		operationalOrderingContractEnv, strconv.Itoa(int(contract)),
+	); err != nil {
+		t.Fatalf("set %s: %v", operationalOrderingContractEnv, err)
+	}
+	chschema.Apply(ctx, t, instance)
+	if had {
+		_ = os.Setenv(operationalOrderingContractEnv, previous)
+	} else {
+		_ = os.Unsetenv(operationalOrderingContractEnv)
+	}
+	return openClickHouse(t, ctx, instance)
 }

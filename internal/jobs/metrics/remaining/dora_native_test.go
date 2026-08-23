@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -269,5 +270,101 @@ func TestDateTime64ArgumentsAreLiteralsNotExpressions(t *testing.T) {
 	shifted := dateTime64Argument(moment.In(newYork), millisecondPrecision)
 	if shifted != "2026-08-09 13:45:30.123" {
 		t.Errorf("a zoned timestamp must render as UTC, got %q", shifted)
+	}
+}
+
+func TestOrderingContractParsingMirrorsPythonsStrictness(t *testing.T) {
+	// parse_operational_ordering_contract (operational_ordering_guard.py:62)
+	// returns LEGACY for None and RAISES for anything that is not exactly "1"
+	// or "2". Matching the strictness is the point: a value the Python runtime
+	// refuses to start on must not be one the Go runtime quietly accepts, or
+	// the two disagree about whether the same deployment is configured at all.
+	tests := []struct {
+		name    string
+		raw     string
+		present bool
+		want    OperationalOrderingContract
+		wantErr bool
+	}{
+		{name: "unset is legacy, as None is", present: false, want: OperationalOrderingLegacy},
+		{name: "explicit 1", raw: "1", present: true, want: OperationalOrderingLegacy},
+		{name: "explicit 2", raw: "2", present: true, want: OperationalOrderingRevision},
+		{
+			// Exported-but-empty is NOT unset. Python sees "" rather than None
+			// and raises; reading through Getenv would flatten the two.
+			name: "empty but present is an error, not legacy",
+			raw:  "", present: true, wantErr: true,
+		},
+		{
+			// Trimming first would ACCEPT this, which is the dangerous
+			// direction: Go would proceed on a value Python refuses.
+			name: "a trailing space is not the number two",
+			raw:  "2 ", present: true, wantErr: true,
+		},
+		{name: "out of range", raw: "3", present: true, wantErr: true},
+		{name: "not a number", raw: "legacy", present: true, wantErr: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseOperationalOrderingContract(test.raw, test.present)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf(
+						"%q must be refused, not silently resolved to %d -- a "+
+							"typo would otherwise select the branch that counts "+
+							"one incident as several", test.raw, got,
+					)
+				}
+				if !errors.Is(err, ErrOrderingContractUnparseable) {
+					t.Errorf("wrong error: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("got contract %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestEveryTableTheProjectionReadsIsGuarded(t *testing.T) {
+	// The guard must cover every table resolvedIncidentsQuery wraps in
+	// currentOperationalRowsSQL. Migration 067 rebuilds operational tables in a
+	// loop with non-transactional DDL, so a partial migration leaving one on v2
+	// and another on legacy is reachable -- and guarding only the first would
+	// let construction succeed and the query then reference v2 columns that do
+	// not exist on the other table.
+	query := resolvedIncidentsQuery("", OperationalOrderingRevision)
+	for _, table := range doraContractTables {
+		if !strings.Contains(query, table) {
+			t.Errorf(
+				"doraContractTables lists %q but the projection does not read "+
+					"it -- guarding a table this code never queries is "+
+					"over-refusal", table,
+			)
+		}
+	}
+	// And the converse: nothing the projection reads through the contract may
+	// be missing from the guarded set.
+	for _, table := range []string{
+		"operational_incidents",
+		"operational_service_repository_mappings",
+	} {
+		found := false
+		for _, guarded := range doraContractTables {
+			if guarded == table {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf(
+				"the projection reads %q through the ordering contract but the "+
+					"guard does not check it", table,
+			)
+		}
 	}
 }

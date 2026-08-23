@@ -43,13 +43,57 @@ const (
 // contract is in force for the same deployment.
 const operationalOrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
 
-// configuredOperationalOrderingContract mirrors
-// configured_operational_ordering_contract (operational_ordering_guard.py:72).
-func configuredOperationalOrderingContract() OperationalOrderingContract {
-	if strings.TrimSpace(os.Getenv(operationalOrderingContractEnv)) == "2" {
-		return OperationalOrderingRevision
+// ErrOrderingContractUnparseable reports a value that names no contract.
+var ErrOrderingContractUnparseable = errors.New(
+	"OPERATIONAL_ORDERING_CONTRACT must be unset, \"1\" or \"2\"")
+
+// parseOperationalOrderingContract mirrors
+// parse_operational_ordering_contract (operational_ordering_guard.py:62), and
+// mirrors its STRICTNESS, which is the part that matters:
+//
+//	if raw is None: return LEGACY
+//	if raw not in {"1", "2"}: raise OperationalOrderingConfigurationError(raw)
+//
+// Two details are deliberate because an earlier version got both wrong:
+//
+//  1. UNSET and EMPTY are different. Python sees None for an unset variable and
+//     returns LEGACY, but sees "" for one exported as empty and RAISES. So this
+//     takes the value through LookupEnv rather than Getenv, which flattens the
+//     two into "".
+//
+//  2. NO TRIMMING. Python compares the raw string, so "2 " raises. Trimming
+//     first looks harmless and is the opposite of harmless: it silently ACCEPTS
+//     a value the Python runtime refuses to start on, so the two runtimes would
+//     disagree about whether the same deployment is even configured -- and the
+//     Go side would be the one quietly proceeding.
+//
+// Anything else falling back to legacy would be worse still: a typo would not
+// merely be ignored, it would select the branch that counts one incident as
+// several, and nothing would say so.
+func parseOperationalOrderingContract(
+	raw string, present bool,
+) (OperationalOrderingContract, error) {
+	if !present {
+		return OperationalOrderingLegacy, nil
 	}
-	return OperationalOrderingLegacy
+	switch raw {
+	case "1":
+		return OperationalOrderingLegacy, nil
+	case "2":
+		return OperationalOrderingRevision, nil
+	default:
+		return 0, fmt.Errorf("%w: got %q", ErrOrderingContractUnparseable, raw)
+	}
+}
+
+// configuredOperationalOrderingContract reads the contract from the
+// environment. It is resolved ONCE, at construction, and stored on the
+// executor: re-reading per query would let a mid-flight environment change
+// split a single partition across two contracts, and would reintroduce the
+// possibility of an unparseable value after the guard had already passed.
+func configuredOperationalOrderingContract() (OperationalOrderingContract, error) {
+	raw, present := os.LookupEnv(operationalOrderingContractEnv)
+	return parseOperationalOrderingContract(raw, present)
 }
 
 // currentOperationalRowsSQL ports current_operational_rows_sql
@@ -247,7 +291,7 @@ func (executor *DORAExecutor) loadIncidents(
 		"as_of": dateTime64Argument(executor.nowUTC(), microsecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
-	query := resolvedIncidentsQuery(filter, configuredOperationalOrderingContract())
+	query := resolvedIncidentsQuery(filter, executor.contract)
 
 	rows, err := executor.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {
@@ -356,6 +400,31 @@ func derefTime(value *time.Time) time.Time {
 var ErrOrderingContractMismatch = errors.New(
 	"operational ordering contract does not match the deployed schema")
 
+// doraContractTables are the tables the native projection reads THROUGH the
+// ordering contract -- both of them.
+//
+// resolvedIncidentsQuery wraps each in currentOperationalRowsSQL
+// (operational_incidents and operational_service_repository_mappings), so both
+// carry the contract and both must agree with it. Guarding only the first was
+// a real gap: migration 067 rebuilds each operational table in a LOOP using
+// non-transactional ClickHouse DDL, so an interrupted migration can genuinely
+// leave incidents on v2 while mappings is still legacy. Construction would
+// have succeeded and the query would then have referenced v2 columns that do
+// not exist on mappings, or resolved mapping versions under the wrong
+// semantics -- wrong repository attribution rather than a clean failure.
+//
+// This is a narrower set than Python's guard_operational_writer_tables, which
+// walks every OPERATIONAL_ENTITY_TABLE. That is not a divergence but a
+// difference of role: Python's is a WRITER admission check for a store that
+// may write any of them, while this is a READER check for an executor that
+// touches exactly these two. Refusing the family over a table this code never
+// queries would be over-refusal, and would make an unrelated migration state
+// take DORA down.
+var doraContractTables = []string{
+	"operational_incidents",
+	"operational_service_repository_mappings",
+}
+
 // schemaOrderingContract reads the contract the TABLE was built for.
 //
 // The sorting key is the authoritative signal: migration 067 moves it to
@@ -363,15 +432,15 @@ var ErrOrderingContractMismatch = errors.New(
 // key -- not the presence of the columns -- that decides whether FINAL still
 // collapses two versions of one row.
 func schemaOrderingContract(
-	ctx context.Context, conn driver.Conn,
+	ctx context.Context, conn driver.Conn, table string,
 ) (OperationalOrderingContract, error) {
 	var sortingKey string
 	if err := conn.QueryRow(ctx, `
         SELECT sorting_key
         FROM system.tables
-        WHERE database = currentDatabase() AND name = 'operational_incidents'
-    `).Scan(&sortingKey); err != nil {
-		return 0, fmt.Errorf("read operational_incidents sorting key: %w", err)
+        WHERE database = currentDatabase() AND name = {table:String}
+    `, clickhouse.Named("table", table)).Scan(&sortingKey); err != nil {
+		return 0, fmt.Errorf("read %s sorting key: %w", table, err)
 	}
 	if strings.Contains(sortingKey, "source_revision") {
 		return OperationalOrderingRevision, nil
@@ -380,20 +449,24 @@ func schemaOrderingContract(
 }
 
 // verifyOrderingContract fails closed when the configured contract and the
-// deployed schema disagree.
-func verifyOrderingContract(ctx context.Context, conn driver.Conn) error {
-	configured := configuredOperationalOrderingContract()
-	deployed, err := schemaOrderingContract(ctx, conn)
-	if err != nil {
-		return err
-	}
-	if configured != deployed {
-		return fmt.Errorf(
-			"%w: %s says contract %d, operational_incidents is built for contract %d "+
-				"-- reading it under the wrong contract does not return a different "+
-				"row, it returns a different NUMBER of rows",
-			ErrOrderingContractMismatch, operationalOrderingContractEnv, configured, deployed,
-		)
+// deployed schema disagree, for ANY table the projection reads.
+func verifyOrderingContract(
+	ctx context.Context, conn driver.Conn, configured OperationalOrderingContract,
+) error {
+	for _, table := range doraContractTables {
+		deployed, err := schemaOrderingContract(ctx, conn, table)
+		if err != nil {
+			return err
+		}
+		if configured != deployed {
+			return fmt.Errorf(
+				"%w: %s says contract %d, %s is built for contract %d "+
+					"-- reading it under the wrong contract does not return a "+
+					"different row, it returns a different NUMBER of rows",
+				ErrOrderingContractMismatch, operationalOrderingContractEnv,
+				configured, table, deployed,
+			)
+		}
 	}
 	return nil
 }

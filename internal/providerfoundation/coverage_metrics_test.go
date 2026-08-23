@@ -167,3 +167,15 @@ func TestUnregisteredPerRunComponentsCollapseToASingleSeries(t *testing.T) {
 		t.Fatalf("rendered %d per-run series, want 2 (other + run_jobs)", series)
 	}
 }
+
+// The artifact skip reason is a closed vocabulary for the same reason the
+// per-run component and cause are: a route must not be able to open an
+// unbounded label dimension. An unknown reason collapses to "other".
+func TestArtifactSkipReasonLabelIsBounded(t *testing.T) {
+	if got := MetricArtifactSkipReasonLabel("  UNREADABLE_ARCHIVE "); got != "unreadable_archive" {
+		t.Fatalf("known reason label = %q, want unreadable_archive", got)
+	}
+	if got := MetricArtifactSkipReasonLabel("repo-full-chaos/dev-health-ops"); got != "other" {
+		t.Fatalf("unknown reason label = %q, want other", got)
+	}
+}

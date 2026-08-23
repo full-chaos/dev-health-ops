@@ -191,7 +191,7 @@ func (handler GitLabFilesRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, gitLabFilesTraversalError(err)
 	}
-	if tree.CapReached {
+	if tree.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	paths := make([]string, 0, len(tree.Items))

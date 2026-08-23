@@ -165,7 +165,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 			})
 		}
 	}
-	return handler.completeBatch(claim, repoPayload.FullName, rows, page.Pages, page.Pages+1+detailRequests, page.CapReached)
+	return handler.completeBatch(claim, repoPayload.FullName, rows, page.Pages, page.Pages+1+detailRequests, page.PageBudgetExhausted)
 }
 
 func (handler GitHubCommitStatsRouteHandler) completeBatch(

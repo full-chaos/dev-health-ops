@@ -149,7 +149,7 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if len(pages.Items) > maxRows || pages.CapReached {
+	if len(pages.Items) > maxRows || pages.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	rows := make([]pagerDutyOnCallRow, 0, len(pages.Items))
@@ -177,7 +177,7 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 		Result:  map[string]any{"on_calls_synced": len(rows)},
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
-			Pages: pages.Pages, Records: len(rows), CapReached: pages.CapReached,
+			Pages: pages.Pages, Records: len(rows), CapReached: pages.PageBudgetExhausted,
 		},
 	}, nil
 }

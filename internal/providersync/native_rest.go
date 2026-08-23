@@ -248,7 +248,7 @@ func collectGitHubIssues(
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 		Path: root + "/issues", Query: query, MaxPages: nativeMaxPages,
 	})
-	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages, Pages: page.Pages, CapReached: page.CapReached}
+	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages, Pages: page.Pages, CapReached: page.PageBudgetExhausted}
 	if err != nil {
 		return nil, evidence, err
 	}
@@ -290,7 +290,7 @@ func collectGitHubWorkItems(
 	})
 	evidence.Requests += page.Pages
 	evidence.Pages += page.Pages
-	evidence.CapReached = evidence.CapReached || page.CapReached
+	evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 	if err != nil {
 		return nil, evidence, err
 	}
@@ -319,7 +319,7 @@ func collectGitLabWorkItems(
 		})
 		evidence.Requests += page.Pages
 		evidence.Pages += page.Pages
-		evidence.CapReached = evidence.CapReached || page.CapReached
+		evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 		if err != nil {
 			return nil, evidence, err
 		}
@@ -523,7 +523,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 		})
 		evidence.Requests += page.Pages
 		evidence.Pages += page.Pages
-		evidence.CapReached = evidence.CapReached || page.CapReached
+		evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 		if pageErr != nil {
 			return FetchResult{}, pageErr
 		}
@@ -571,7 +571,7 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 			})
 			evidence.Requests += page.Pages
 			evidence.Pages += page.Pages
-			evidence.CapReached = evidence.CapReached || page.CapReached
+			evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 			if pageErr != nil {
 				return FetchResult{}, pageErr
 			}
@@ -815,7 +815,7 @@ func pageFetchResult(
 	}
 	return resultWithEvidence(claim, envelopes, FetchEvidence{
 		Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages,
-		Pages: page.Pages, CapReached: page.CapReached,
+		Pages: page.Pages, CapReached: page.PageBudgetExhausted,
 	}, normalizeErr)
 }
 

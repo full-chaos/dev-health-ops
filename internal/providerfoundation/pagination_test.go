@@ -36,7 +36,7 @@ func TestGitHubLinkPaginationFollowsOpaqueNextAndAppliesQueryOnce(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 2 || result.CapReached || len(result.Items) != 2 {
+	if result.Pages != 2 || result.PageBudgetExhausted || len(result.Items) != 2 {
 		t.Fatalf("result=%+v", result)
 	}
 	if got := doer.requests[0].URL.Query().Get("state"); got != "all" {
@@ -60,7 +60,7 @@ func TestGitHubLinkPaginationReportsHardCapWithoutExtraCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.CapReached || result.Pages != 1 || len(doer.requests) != 1 {
+	if !result.PageBudgetExhausted || result.Pages != 1 || len(doer.requests) != 1 {
 		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
 	}
 }
@@ -81,7 +81,7 @@ func TestGitHubLinkPaginationStopsAtExplicitItemLimitWithoutExtraPage(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 1 || result.CapReached || len(result.Items) != 2 || len(doer.requests) != 1 {
+	if result.Pages != 1 || result.PageBudgetExhausted || len(result.Items) != 2 || len(doer.requests) != 1 {
 		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
 	}
 }
@@ -103,7 +103,7 @@ func TestGitHubLinkPaginationReturnsSuccessfulPagesBeforeLaterFailure(t *testing
 	if !errors.As(err, &providerErr) || providerErr.Class != ErrorTransient {
 		t.Fatalf("error=%v", err)
 	}
-	if result.Pages != 1 || result.CapReached || len(result.Items) != 1 || len(doer.requests) != 2 {
+	if result.Pages != 1 || result.PageBudgetExhausted || len(result.Items) != 1 || len(doer.requests) != 2 {
 		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
 	}
 }
@@ -169,7 +169,7 @@ func TestGitLabPaginationUsesHeaderThenItemCountFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 3 || result.CapReached || len(result.Items) != 5 {
+	if result.Pages != 3 || result.PageBudgetExhausted || len(result.Items) != 5 {
 		t.Fatalf("result=%+v", result)
 	}
 	wantPages := []string{"1", "4", "5"}
@@ -196,7 +196,7 @@ func TestPagerDutyOffsetPaginationUsesReturnedLengthAndMore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 2 || result.CapReached || len(result.Items) != 3 {
+	if result.Pages != 2 || result.PageBudgetExhausted || len(result.Items) != 3 {
 		t.Fatalf("result=%+v", result)
 	}
 	if got := doer.requests[0].URL.RawQuery; got != "limit=100&offset=0" {
@@ -267,7 +267,7 @@ func TestLinearGraphQLPaginationPostsFirstAfterAndRejectsErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 2 || result.CapReached || len(result.Items) != 2 {
+	if result.Pages != 2 || result.PageBudgetExhausted || len(result.Items) != 2 {
 		t.Fatalf("result=%+v", result)
 	}
 	var first, second struct {
@@ -317,7 +317,7 @@ func TestJiraPaginationPreservesTokenThenOffsetAndIsLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pages != 3 || result.CapReached || len(result.Items) != 4 {
+	if result.Pages != 3 || result.PageBudgetExhausted || len(result.Items) != 4 {
 		t.Fatalf("result=%+v", result)
 	}
 	if got := doer.requests[0].URL.Query().Get("startAt"); got != "0" {
@@ -354,7 +354,7 @@ func TestLaunchDarklyFlagAndAuditPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if flags.Pages != 2 || flags.CapReached || len(flags.Items) != 51 ||
+	if flags.Pages != 2 || flags.PageBudgetExhausted || len(flags.Items) != 51 ||
 		flagDoer.requests[1].URL.Query().Get("offset") != "50" {
 		t.Fatalf("flags=%+v second=%s", flags, flagDoer.requests[1].URL.RawQuery)
 	}
@@ -371,7 +371,7 @@ func TestLaunchDarklyFlagAndAuditPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if audit.Pages != 2 || audit.CapReached || len(audit.Items) != 3 {
+	if audit.Pages != 2 || audit.PageBudgetExhausted || len(audit.Items) != 3 {
 		t.Fatalf("audit=%+v", audit)
 	}
 	if got := auditDoer.requests[0].URL.Query().Get("after"); got != "1725000000123" {

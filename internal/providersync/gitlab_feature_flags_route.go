@@ -91,7 +91,7 @@ func (handler GitLabFeatureFlagsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, gitLabFeatureFlagsCollectionError(err)
 	}
-	if flagsPage.CapReached {
+	if flagsPage.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 

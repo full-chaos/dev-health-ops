@@ -341,7 +341,7 @@ func TestChunkedExecutorReportsCommittedRowsOnTheFailurePath(t *testing.T) {
 	}
 }
 
-// The paginator's own per-invocation cap (collection.CapReached) is a
+// The paginator's own per-invocation cap (collection.PageBudgetExhausted) is a
 // DIFFERENT branch from remainingPageBudget's refusal on entry: the first is
 // reached by a pass that walks to the end of its allowance, the second only by
 // a resume whose cumulative spend is already gone. Both must finalize, so both

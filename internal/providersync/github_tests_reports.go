@@ -114,13 +114,133 @@ const (
 	// record that an inventory phase stopped at its cumulative page budget
 	// before the provider ran out of pages (CHAOS-4130). They are units of
 	// COVERAGE incompleteness rather than parse failures, which is why they
-	// share the slice: every reader of `incomplete` already treats a non-empty
-	// slice as "this unit did not see everything, do not advance the
-	// watermark".
+	// share the slice.
 	githubTestsRunInventoryComponent      = "run_inventory"
 	githubTestsArtifactInventoryComponent = "artifact_inventory"
 	githubTestsPageBudgetCause            = "page_budget_exhausted"
+	// The per-run components record that ONE workflow run held more items than
+	// its cap allows, so that run was committed with only the first cap-worth
+	// (CHAOS-4142). Count is the number of RUNS truncated in that category,
+	// never the number of items dropped, which keeps the evidence bounded on a
+	// repository of any size. The truncated run's id goes to the structured
+	// warning log, not here: GitHubTestsIncomplete deliberately carries no
+	// provider-supplied subject string.
+	githubTestsRunJobsComponent      = "run_jobs"
+	githubTestsRunArtifactsComponent = "run_artifacts"
+	githubTestsRunReportsComponent   = "run_reports"
+	// githubTestsPerRunCapCause is the POSITIVELY OBSERVED item cap: the
+	// provider handed back more items than the cap allows, so the boundary was
+	// seen and the remainder is known to be beyond it.
+	githubTestsPerRunCapCause = "per_run_cap"
+	// githubTestsPerRunPageBudgetCause is the nested paginator running out of
+	// page allowance INSIDE one run. It and the item cap above mean opposite
+	// things about what was seen: a page-budget stop leaves an UNKNOWN
+	// remainder, so it must not advance the watermark; the item cap leaves a
+	// known one, so it may.
+	//
+	// They now arrive on SEPARATE paginator fields. They used to arrive on one
+	// CapReached boolean -- which, contrary to how this comment first described
+	// it, never carried both meanings: every write site was the page budget,
+	// and the MaxItems stop set nothing at all. That silence is what let a
+	// consumer read a page-budget stop as an item cap.
+	githubTestsPerRunPageBudgetCause = "per_run_page_budget"
 )
+
+// githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
+// pairs that may advance the watermark. It is an allowlist rather than a
+// blocklist on purpose: anything not named here withholds, so a future
+// observation added to the vocabulary and forgotten here fails SAFE -- it
+// stalls loudly instead of silently advancing over data nobody looked at.
+//
+// The single rule, which CHAOS-4142 established and codex's review forced us
+// to apply one level down: **a page budget stop withholds the watermark; a
+// positively observed item cap advances it.**
+//
+// A page budget stop -- whether it is the runs LISTING hitting its cumulative
+// budget (CHAOS-4130) or a nested per-run paginator running out of pages --
+// leaves an UNKNOWN remainder. GitHub serves newest-first, so advancing over
+// an unobserved remainder is the permanent lower-bound hole CHAOS-2587
+// describes, and it is the same hole one level down when the unobserved part
+// is the tail of one run's jobs.
+//
+// A positively observed item cap is different in kind: the provider handed
+// back more items than the cap allows, the walk over the window completed, and
+// re-fetching returns exactly the same items. Withholding there recovers
+// nothing and pins since_at forever, which is the CHAOS-4142 outage.
+//
+// report_member stays withholding, preserving its pre-CHAOS-4142 behavior
+// rather than being reclassified; see CHAOS-4153.
+var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
+	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
+	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
+	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}},
+}
+
+// githubTestsBlocksWatermark reports whether these observations leave any part
+// of the requested window, or of a run inside it, UNOBSERVED. Coverage honesty
+// is a SEPARATE claim: reports_complete stays false for any observation,
+// withholding or not.
+func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
+	for _, observation := range incomplete {
+		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
+		if !advancing {
+			return true
+		}
+		if _, ok := causes[observation.Cause]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// validatePerRunPageBudget refuses a configuration in which a per-run PAGE
+// BUDGET would bind before the per-run ITEM CAP. It serves both the github and
+// gitlab tests routes, because both had the same exposure.
+//
+// Why this is a configuration error and not a runtime disposition
+// (CHAOS-4142, codex round 2, challenge 3):
+//
+// The watermark doctrine above says a page budget stop withholds the watermark
+// because its remainder was never observed. That is the right rule when the
+// budget is a property of the WINDOW -- a bigger window walk really can reach
+// the remainder next time. It is the WRONG outcome when the budget is a fixed
+// config value applied INSIDE one run: the same run exceeds the same budget on
+// every future window, the watermark is withheld every time, and since_at is
+// pinned forever. That is the identical four-day outage this route was changed
+// to fix, re-entered through the other branch.
+//
+// Rather than teach the per-run page budget to advance -- which would make one
+// rule mean two different things at two levels, the exact confusion that caused
+// the original defect -- the branch is made UNREACHABLE by construction. The
+// item cap binds first whenever the walk can hold strictly more items than the
+// cap.
+//
+// The inequality is read off the OPERATORS, not off prose. Both providers need
+// strictly more than cap items in hand before their item cap fires: github
+// passes MaxItems = cap+1 against pagination.go's `len(Items) >= MaxItems`, and
+// gitlab has no MaxItems and tests `len(items) > cap` in the route. The walk can
+// hold at most budget*perPage items, since pagination.go checks
+// `Pages >= MaxPages` at the top of its loop. So the budget is sufficient
+// exactly when budget*perPage EXCEEDS cap -- equality is NOT enough, and
+// budget*perPage == cap is the precise boundary that must be rejected.
+//
+// HONEST LIMIT: this closes the CONFIG-reachable path, which is the one that
+// bites. It does not make the branch impossible against a provider that
+// advertises a further page while returning SHORT pages, since then the walk
+// holds fewer than budget*perPage items. That residual is exactly why the
+// per-run page-budget branches STAY and keep withholding.
+func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) error {
+	if budget*perPage > itemCap {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %s=%d x per_page=%d = %d does not exceed the %d-item per-run cap, so a "+
+			"per-run page budget stop would withhold the watermark on every future "+
+			"window and stall the source permanently; set %s to at least %d",
+		ErrInvalidConfiguration, setting, budget, perPage, budget*perPage, itemCap,
+		setting, itemCap/perPage+1,
+	)
+}
 
 // githubTestsIncompleteVocabulary is the CLOSED set of (component, cause)
 // pairs a github tests/cicd unit may publish. The completion comparator fails
@@ -130,6 +250,15 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent:      {"malformed": {}, "unreadable": {}},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
+	githubTestsRunJobsComponent: {
+		githubTestsPerRunCapCause: {}, githubTestsPerRunPageBudgetCause: {},
+	},
+	githubTestsRunArtifactsComponent: {
+		githubTestsPerRunCapCause: {}, githubTestsPerRunPageBudgetCause: {},
+	},
+	// run_reports aggregates rows already parsed out of downloaded archives.
+	// Nothing paginates there, so it has no page-budget cause.
+	githubTestsRunReportsComponent: {githubTestsPerRunCapCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

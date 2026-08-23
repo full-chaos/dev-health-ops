@@ -14,6 +14,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// gitLabTestsPerRunJobPages is the page budget for the PER-RUN jobs walk, and
+// is deliberately NOT handler.MaxPages (CHAOS-4142, codex round 2).
+//
+// handler.MaxPages was doing two jobs at once: bounding the pipeline INVENTORY
+// walk, where a small budget is a legitimate and useful setting, and bounding
+// the per-run jobs walk, where a small budget is a permanent source stall --
+// the page-budget branch fires, withholds the watermark, and does so identically
+// on every future window. One knob with two correct ranges is the same
+// one-thing-meaning-two-things shape that caused the original defect, so the
+// two budgets are now separate.
+//
+// The value is DERIVED from the cap rather than chosen: the route's item cap
+// tests `len(items) > githubTestsMaxJobsPerRun`, so it needs strictly more than
+// the cap in hand, and cap/perPage+1 pages is the smallest budget that can
+// deliver that. Deriving it means the item cap always binds first for as long
+// as pages are full, without any configuration being able to say otherwise.
+const gitLabTestsPerRunJobPages = githubTestsMaxJobsPerRun/nativePerPage + 1
+
 type gitLabTestsChunkCursor struct {
 	Phase      string `json:"phase"`
 	Page       int    `json:"page,omitempty"`
@@ -46,11 +64,112 @@ type gitLabTestsChunkCursor struct {
 const (
 	gitLabPipelineInventoryComponent = "pipeline_inventory"
 	gitLabReportInventoryComponent   = "report_inventory"
+	// The per-run components are the GitLab twins of run_jobs/run_artifacts on
+	// the github route: ONE pipeline held more items than its cap allows and
+	// was committed with only the first cap-worth (CHAOS-4142).
+	gitLabRunJobsComponent      = "run_jobs"
+	gitLabRunArtifactsComponent = "run_artifacts"
+	// GitLab's truncation evidence is a set of component names with no cause
+	// field, so the page-budget variants are their own components rather than
+	// a second cause. They mean the nested paginator ran out of page allowance
+	// inside one pipeline, leaving an UNKNOWN remainder -- unlike the item cap,
+	// which was positively observed (CHAOS-4142, codex round 1).
+	gitLabRunJobsPageBudgetComponent      = "run_jobs_page_budget"
+	gitLabRunArtifactsPageBudgetComponent = "run_artifacts_page_budget"
+)
+
+// gitLabTestsTruncationComponents is the CLOSED vocabulary of truncation
+// components, and gitLabTestsWindowBlocking is the subset that leaves part of
+// the requested window unwalked.
+//
+// GitLab lists pipelines order_by=updated_at&sort=desc, so an inventory phase
+// that stops at its page budget covers the NEW end of the window and never
+// reaches the old one; advancing over that remainder would make the gap
+// permanent (CHAOS-2587). A per-run cap walks the whole window and truncates
+// only inside an already-committed pipeline, so it has no unreached remainder
+// and must NOT withhold the watermark -- withholding it there is what pinned
+// since_at forever on the github side (CHAOS-4142).
+var (
+	gitLabTestsTruncationComponents = map[string]struct{}{
+		gitLabPipelineInventoryComponent: {}, gitLabReportInventoryComponent: {},
+		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
+		gitLabRunJobsPageBudgetComponent: {}, gitLabRunArtifactsPageBudgetComponent: {},
+	}
+	// The advancing set is an ALLOWLIST, so anything added to the vocabulary
+	// and forgotten here withholds rather than silently advancing over data
+	// nobody looked at. Same single rule as the github route: a page budget
+	// stop withholds the watermark; a positively observed item cap advances it.
+	gitLabTestsWatermarkAdvancing = map[string]struct{}{
+		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
+	}
 )
 
 func gitLabTestsTruncationKnown(component string) bool {
-	return component == gitLabPipelineInventoryComponent ||
-		component == gitLabReportInventoryComponent
+	_, known := gitLabTestsTruncationComponents[component]
+	return known
+}
+
+// gitLabTestsBlocksWatermark reports whether these components leave part of the
+// requested window unwalked. coverage_complete is a SEPARATE claim and stays
+// false for any truncation, blocking or not.
+func gitLabTestsBlocksWatermark(components []string) bool {
+	for _, component := range components {
+		if _, advancing := gitLabTestsWatermarkAdvancing[component]; !advancing {
+			return true
+		}
+	}
+	return false
+}
+
+// recordGitLabTestsPerRunTruncation keeps a pipeline whose items exceeded a
+// PER-RUN cap instead of failing the unit. See
+// recordGitHubTestsPerRunTruncation for the full rationale; the two routes are
+// kept symmetric deliberately, because a cap that finalizes on one provider
+// and cancels on the other is worse than either choice consistently applied.
+// gitLabTestsMetricLabels splits GitLab's single truncation component name
+// into the (component, cause) pair the shared metric uses.
+func gitLabTestsMetricLabels(component string) (string, string) {
+	switch component {
+	case gitLabRunJobsPageBudgetComponent:
+		return "run_jobs", "per_run_page_budget"
+	case gitLabRunArtifactsPageBudgetComponent:
+		return "run_artifacts", "per_run_page_budget"
+	default:
+		return component, "per_run_cap"
+	}
+}
+
+func recordGitLabTestsPerRunTruncation(
+	cursor gitLabTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	component string,
+	runID string,
+	kept int,
+) gitLabTestsChunkCursor {
+	present := false
+	for _, existing := range cursor.Truncated {
+		if existing == component {
+			present = true
+		}
+	}
+	if !present {
+		cursor.Truncated = append(cursor.Truncated, component)
+	}
+	if client != nil {
+		// GitLab encodes the reason in the component name; the metric keeps the
+		// same (component, cause) shape as github so one dashboard serves both.
+		metricComponent, metricCause := gitLabTestsMetricLabels(component)
+		client.Metrics.RecordPerRunTruncation(
+			claim.Provider, claim.Dataset, metricComponent, metricCause,
+		)
+	}
+	slog.Warn(
+		"provider per-run item cap reached; run committed with partial items",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", component, "run", runID, "kept", kept,
+	)
+	return cursor
 }
 
 // recordGitLabTestsInventoryTruncation is the GitLab counterpart of
@@ -110,7 +229,7 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 		(cursor.Phase != "pipelines" && cursor.Phase != "reports" && cursor.Phase != "done") ||
 		cursor.Page < 0 || cursor.Index < 0 ||
 		cursor.PipelinePages < 0 || cursor.ReportPages < 0 ||
-		len(cursor.Truncated) > 2 {
+		len(cursor.Truncated) > len(gitLabTestsTruncationComponents) {
 		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
 	seen := map[string]bool{}
@@ -196,11 +315,13 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					"dimension": "rest_core", "request_count": cursor.Requests,
 				}}},
 			},
-			// A truncated walk covered only the newest part of the window.
-			// Advancing the watermark over the unreached old end would make
-			// the gap permanent, so the phase that stopped short refuses it.
+			// An INVENTORY-truncated walk covered only the newest part of
+			// the window. Advancing the watermark over the unreached old end
+			// would make the gap permanent, so the phase that stopped short
+			// refuses it. A per-run truncation walked the whole window and
+			// does not (CHAOS-4142).
 			Watermark: func() *time.Time {
-				if len(cursor.Truncated) > 0 {
+				if gitLabTestsBlocksWatermark(cursor.Truncated) {
 					return nil
 				}
 				return claim.BeforeAt
@@ -299,16 +420,39 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 					jobPage, pageErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 						Path:  root + "/pipelines/" + url.PathEscape(pipeline.RunID) + "/jobs",
-						Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage, MaxPages: maxPages,
+						Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage,
+						MaxPages: gitLabTestsPerRunJobPages,
 					})
 					if pageErr != nil {
 						return pageErr
 					}
 					cursor.Pages += jobPage.Pages
-					if jobPage.CapReached || len(jobPage.Items) > githubTestsMaxJobsPerRun {
-						return ErrPaginationCapExceeded
+					// CollectGitLabPageParamPages passes no MaxItems, so its
+					// CapReached can ONLY mean page-budget exhaustion. The item
+					// cap here is therefore len-based, and the two are recorded
+					// as different components because they classify oppositely.
+					jobItems := jobPage.Items
+					switch {
+					case len(jobItems) > githubTestsMaxJobsPerRun:
+						jobItems = jobItems[:githubTestsMaxJobsPerRun]
+						cursor = recordGitLabTestsPerRunTruncation(
+							cursor, client, claim, gitLabRunJobsComponent,
+							pipeline.RunID, len(jobItems),
+						)
+					// UNREACHABLE with full pages, and KEPT anyway -- same
+					// disposition as the github twin, reached structurally
+					// rather than by validation: gitLabTestsPerRunJobPages is
+					// derived from the cap, so no configuration can make this
+					// budget bind first. Short pages could still land here, and
+					// deleting the branch would silently change semantics if
+					// that constant is ever lowered.
+					case jobPage.PageBudgetExhausted:
+						cursor = recordGitLabTestsPerRunTruncation(
+							cursor, client, claim, gitLabRunJobsPageBudgetComponent,
+							pipeline.RunID, len(jobItems),
+						)
 					}
-					for _, rawJob := range jobPage.Items {
+					for _, rawJob := range jobItems {
 						job, jobErr := decodeGitLabTestsJob(rawJob)
 						if jobErr != nil {
 							return jobErr
@@ -365,7 +509,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			if visitErr != nil {
 				return visitErr
 			}
-			if collection.CapReached {
+			if collection.PageBudgetExhausted {
 				cursor = recordGitLabTestsInventoryTruncation(
 					cursor, client, claim, gitLabPipelineInventoryComponent, cursor.PipelinePages)
 			}
@@ -430,8 +574,25 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 				} else {
 					cursor.Pages += jobPage.Pages
-					if jobPage.CapReached {
-						return ErrPaginationCapExceeded
+					// CURRENTLY UNREACHABLE, kept consistent on purpose. This
+					// collection passes SinglePage:true, and
+					// CollectGitLabPageParamPages sets CapReached only on a
+					// SECOND loop iteration (pagination.go: the check sits at
+					// the top of the loop), while SinglePage returns right
+					// after the first page. Verified empirically: with
+					// MaxPages:1+SinglePage:true a full page advertising
+					// X-Next-Page yields CapReached=false, and the same options
+					// without SinglePage yield true. So this branch never fired
+					// and the pre-CHAOS-4142 ErrPaginationCapExceeded here was
+					// never a live cancellation. It is converted anyway so the
+					// site cannot become a landmine if SinglePage is ever
+					// dropped -- but it carries no test, because a test that
+					// cannot reach its site asserts nothing.
+					if jobPage.PageBudgetExhausted {
+						cursor = recordGitLabTestsPerRunTruncation(
+							cursor, client, claim, gitLabRunArtifactsPageBudgetComponent,
+							runID, len(jobPage.Items),
+						)
 					}
 					artifactJobs, selectJobErr := selectGitLabTestsArtifactJobs(jobPage.Items, gitLabTestsMaxArtifacts)
 					if selectJobErr != nil {
@@ -503,7 +664,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		if visitErr != nil {
 			return visitErr
 		}
-		if collection.CapReached {
+		if collection.PageBudgetExhausted {
 			cursor = recordGitLabTestsInventoryTruncation(
 				cursor, client, claim, gitLabReportInventoryComponent, cursor.ReportPages)
 		}

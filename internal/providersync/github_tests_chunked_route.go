@@ -7,13 +7,28 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// githubTestsMaxJobsPerRun bounds the items committed for ONE run: jobs, and
+// separately the suites+cases+coverage rows parsed from its artifacts.
+//
+// For jobs it is a hard bound. For report rows it is a SOFT bound of
+// max(cap, one artifact): rows are only committed in whole-artifact units, so
+// a single artifact larger than the cap is kept intact rather than split,
+// which would separate a suite from its cases (CHAOS-4142, codex round 1).
 const githubTestsMaxJobsPerRun = 500
+
+// githubTestsPerRunPerPage is the per_page this route asks for on its per-run
+// collections. It is a named constant rather than a literal because the
+// configuration check below multiplies it by the page budget: if the request
+// and the check could drift apart, the check would validate an arithmetic
+// relationship the requests do not actually have (CHAOS-4142, codex round 2).
+const githubTestsPerRunPerPage = 100
 
 // githubTestsChunkCursor is deliberately route-owned. A provider Link URL is
 // opaque, while the run index makes a crash between two runs on one page
@@ -84,7 +99,9 @@ func remainingPageBudget(budget, spent int) (int, error) {
 // githubTestsFinalMetadataBatch report reports_complete=false and, crucially,
 // a nil Watermark. Refusing to advance the watermark is what keeps GitHub's
 // newest-first ordering from turning the unreached OLD end of the window into
-// the permanent lower-bound hole CHAOS-2587 describes.
+// the permanent lower-bound hole CHAOS-2587 describes. That refusal is now
+// carried by githubTestsWindowBlockingComponents, which lists these inventory
+// components and deliberately excludes the per-run ones below (CHAOS-4142).
 func recordGitHubTestsInventoryTruncation(
 	cursor githubTestsChunkCursor,
 	client *providerfoundation.HTTPClient,
@@ -102,6 +119,57 @@ func recordGitHubTestsInventoryTruncation(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+	)
+	return cursor
+}
+
+// recordGitHubTestsPerRunTruncation keeps a run whose items exceeded a PER-RUN
+// cap instead of failing the unit (CHAOS-4142).
+//
+// The three per-run caps -- jobs, artifacts, and report rows -- each returned a
+// raw ErrPaginationCapExceeded, which providerunit maps to the
+// deterministic-terminal `pagination_incomplete` category. Because the cap is a
+// property of the RUN and not of the attempt, every retry and every later
+// window that still contains that run refused identically: since_at never
+// advanced past it, the next hourly window (which only grows) re-included it,
+// and three of this org's four github sources sat at zero cicd coverage for
+// four days. A bounded skip would have been survivable; a permanent one was
+// not.
+//
+// The disposition chris ruled is the one CHAOS-4130 already applies one level
+// up, and the one Python has always had for a capped fetch
+// (providers/github/code_client.py:735-745, :965-975 -- WARN, break, return the
+// partial list): keep the first cap-worth, record the truncation as bounded
+// evidence, and CONTINUE the walk so the unit finalizes.
+//
+// Unlike its inventory sibling above, this does NOT withhold the watermark.
+// The listing walk completes here -- every run in the window is seen and
+// committed, and only items inside an already-committed run are dropped -- so
+// there is no unreached remainder to protect, and the cap is deterministic, so
+// re-walking the window would drop exactly the same items. See
+// githubTestsWindowBlockingComponents.
+func recordGitHubTestsPerRunTruncation(
+	cursor githubTestsChunkCursor,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	component string,
+	cause string,
+	runID string,
+	kept int,
+) githubTestsChunkCursor {
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: component, Cause: cause, Count: 1,
+	})
+	if client != nil {
+		client.Metrics.RecordPerRunTruncation(claim.Provider, claim.Dataset, component, cause)
+	}
+	// The run id is provider-supplied and unbounded, so it belongs in the log
+	// line, never in the durable observation.
+	slog.Warn(
+		"provider per-run item cap reached; run committed with partial items",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", cursor.Repo, "component", component, "cause", cause,
+		"run", runID, "kept", kept,
 	)
 	return cursor
 }
@@ -158,8 +226,15 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			"reports_skipped": githubTestsIncompleteCount(incomplete),
 			"incomplete":      incomplete,
 		},
+		// Only a WINDOW-BLOCKING observation withholds the watermark. An
+		// inventory page cap leaves the old end of a newest-first window
+		// unreached, so advancing would make that gap permanent (CHAOS-2587).
+		// A per-run truncation walked the whole window and dropped items only
+		// inside runs it already committed, so withholding there buys no
+		// recovered coverage -- the cap is deterministic -- and pins since_at
+		// forever, which is the CHAOS-4142 defect.
 		Watermark: func() *time.Time {
-			if len(incomplete) > 0 {
+			if githubTestsBlocksWatermark(incomplete) {
 				return nil
 			}
 			return claim.BeforeAt
@@ -213,16 +288,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "done" {
 		return emitFinalMetadata(cursor)
 	}
-	root := providerRelativePath(client, "repos", owner, repository)
-	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repo); err != nil {
-		return err
-	}
-	cursor.Repo = repo.FullName
-	repoID, err := repositoryIdentity(repo.FullName)
-	if err != nil {
-		return err
-	}
+	// Configuration is settled BEFORE the first provider call. None of these
+	// bounds depends on the repository, and a configuration that can never
+	// produce a correct walk should not spend a request discovering that
+	// (CHAOS-4142, codex round 2). It stays BELOW the `done` early return: a
+	// cursor that already finished its scan only republishes metadata, and
+	// refusing there would strand an otherwise complete unit.
 	maxRuns := handler.MaxRuns
 	if maxRuns == 0 {
 		maxRuns = githubTestsMaxRuns
@@ -237,6 +308,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
+	}
+	if err := validatePerRunPageBudget(
+		"MaxJobPages", jobPages, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun,
+	); err != nil {
+		return err
+	}
+	root := providerRelativePath(client, "repos", owner, repository)
+	var repo gitHubRepositoryPayload
+	if err := fetchObject(ctx, client, root, &repo); err != nil {
+		return err
+	}
+	cursor.Repo = repo.FullName
+	repoID, err := repositoryIdentity(repo.FullName)
+	if err != nil {
+		return err
 	}
 	if cursor.Requests == 0 {
 		cursor.Requests = 1 // repository lookup above
@@ -291,8 +377,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			acceptance := make([]githubTestsAcceptanceRow, 0)
 			if include && !ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
 				jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-					Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
-					Query: url.Values{"per_page": {"100"}}, DataKey: "jobs", MaxPages: jobPages,
+					Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
+					Query:    url.Values{"per_page": {strconv.Itoa(githubTestsPerRunPerPage)}},
+					DataKey:  "jobs",
+					MaxPages: jobPages,
 					MaxItems: githubTestsMaxJobsPerRun + 1,
 				})
 				if pageErr != nil {
@@ -300,10 +388,40 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				cursor.Requests += jobPage.Pages
 				cursor.Pages += jobPage.Pages
-				if jobPage.CapReached || len(jobPage.Items) > githubTestsMaxJobsPerRun {
-					return ErrPaginationCapExceeded
+				// The paginator reports WHICH bound stopped it, so this reads
+				// the reason instead of inferring one from len(). MaxItems is
+				// cap+1, so ItemCapReached means the provider had at least one
+				// job beyond the cap: the boundary was positively observed.
+				// PageBudgetExhausted means MaxPages ran out first and the
+				// remainder was never seen, which must not advance the
+				// watermark. Item cap is checked first: if both are somehow
+				// set, the observed boundary is the more specific fact.
+				jobItems := jobPage.Items
+				switch {
+				case jobPage.ItemCapReached:
+					if len(jobItems) > githubTestsMaxJobsPerRun {
+						jobItems = jobItems[:githubTestsMaxJobsPerRun]
+					}
+					cursor = recordGitHubTestsPerRunTruncation(
+						cursor, client, claim, githubTestsRunJobsComponent,
+						githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
+					)
+				// UNREACHABLE through configuration, and KEPT anyway.
+				// validatePerRunPageBudget refuses any jobPages that cannot
+				// outrun the item cap, so with full pages the cap above always
+				// fires first. It is kept, still withholding, for two reasons:
+				// a provider that advertises a next page while returning SHORT
+				// pages can still land here, and deleting it would silently
+				// change this route's semantics if anyone later relaxes that
+				// validation. A branch that cannot fire is honest; a missing
+				// branch is a trapdoor (CHAOS-4142, codex round 2).
+				case jobPage.PageBudgetExhausted:
+					cursor = recordGitHubTestsPerRunTruncation(
+						cursor, client, claim, githubTestsRunJobsComponent,
+						githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
+					)
 				}
-				for _, jobRaw := range jobPage.Items {
+				for _, jobRaw := range jobItems {
 					var job githubTestsJobPayload
 					decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
 					decoder.UseNumber()
@@ -397,7 +515,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if visitErr != nil {
 				return visitErr
 			}
-			if collection.CapReached {
+			if collection.PageBudgetExhausted {
 				cursor = recordGitHubTestsInventoryTruncation(
 					cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
 			}
@@ -453,10 +571,26 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					cursor.Requests += artPage.Pages
 					cursor.Pages += artPage.Pages
-					if artPage.CapReached || len(artPage.Items) > maxArtifacts {
-						return ErrPaginationCapExceeded
+					// Same two-facts split as the jobs cap above, except this
+					// collection passes no MaxItems, so ItemCapReached can
+					// never fire here and the item cap is necessarily
+					// len-based. MaxPages is 1, so PageBudgetExhausted means a
+					// second artifact page existed and was never fetched.
+					artifactItems := artPage.Items
+					switch {
+					case len(artifactItems) > maxArtifacts:
+						artifactItems = artifactItems[:maxArtifacts]
+						cursor = recordGitHubTestsPerRunTruncation(
+							cursor, client, claim, githubTestsRunArtifactsComponent,
+							githubTestsPerRunCapCause, pipeline.RunID, len(artifactItems),
+						)
+					case artPage.PageBudgetExhausted:
+						cursor = recordGitHubTestsPerRunTruncation(
+							cursor, client, claim, githubTestsRunArtifactsComponent,
+							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
+						)
 					}
-					for _, artifactRaw := range artPage.Items {
+					for _, artifactRaw := range artifactItems {
 						var artifact githubTestsArtifactPayload
 						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
 						decoder.UseNumber()
@@ -485,11 +619,39 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						for _, observation := range reportIncomplete {
 							cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
 						}
+						// Bound the run's committed report rows WITHOUT splitting
+						// an artifact. Rows are checked for fit BEFORE they are
+						// appended, so the aggregate cannot creep past the cap
+						// one artifact at a time; a suite is never separated
+						// from its cases, because incoherent rows are wrong
+						// data rather than partial data.
+						//
+						// The bound is therefore max(cap, first artifact's rows)
+						// and not the cap flat: an artifact that alone exceeds
+						// the cap is still kept, because committing ZERO rows
+						// for a run that has reports is a worse outcome than
+						// overshooting once. See githubTestsMaxJobsPerRun.
+						committed := len(suites) + len(cases) + len(coverage)
+						incoming := len(rows.Suites) + len(rows.Cases) + len(rows.Coverage)
+						if committed > 0 && committed+incoming > githubTestsMaxJobsPerRun {
+							cursor = recordGitHubTestsPerRunTruncation(
+								cursor, client, claim, githubTestsRunReportsComponent,
+								githubTestsPerRunCapCause, pipeline.RunID, committed,
+							)
+							break
+						}
 						suites = append(suites, rows.Suites...)
 						cases = append(cases, rows.Cases...)
 						coverage = append(coverage, rows.Coverage...)
+						// Reachable only when the FIRST artifact alone exceeds
+						// the cap: it is kept whole, and the run stops here.
 						if len(suites)+len(cases)+len(coverage) > githubTestsMaxJobsPerRun {
-							return ErrPaginationCapExceeded
+							cursor = recordGitHubTestsPerRunTruncation(
+								cursor, client, claim, githubTestsRunReportsComponent,
+								githubTestsPerRunCapCause, pipeline.RunID,
+								len(suites)+len(cases)+len(coverage),
+							)
+							break
 						}
 					}
 				}
@@ -545,7 +707,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if visitErr != nil {
 				return visitErr
 			}
-			if collection.CapReached {
+			if collection.PageBudgetExhausted {
 				cursor = recordGitHubTestsInventoryTruncation(
 					cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
 			}

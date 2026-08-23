@@ -178,7 +178,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if runsPage.CapReached || len(runsPage.Items) > maxRuns {
+	if runsPage.PageBudgetExhausted || len(runsPage.Items) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	// The active Python report producer performs a second, server-side run
@@ -198,7 +198,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if artifactRunsPage.CapReached || len(artifactRunsPage.Items) > maxRuns {
+	if artifactRunsPage.PageBudgetExhausted || len(artifactRunsPage.Items) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	pipelines := make([]githubTestsPipelineRow, 0, len(runsPage.Items))
@@ -230,7 +230,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		requests += jobPage.Pages
 		pages += jobPage.Pages
-		if jobPage.CapReached {
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitHubTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
+		if jobPage.PageBudgetExhausted {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		runJobs := make([]githubTestsJobRow, 0, len(jobPage.Items))
@@ -285,7 +293,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		requests += artPage.Pages
 		pages += artPage.Pages
-		if artPage.CapReached || len(artPage.Items) > maxArtifacts {
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitHubTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
+		if artPage.PageBudgetExhausted || len(artPage.Items) > maxArtifacts {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		for _, artifactRaw := range artPage.Items {
@@ -327,7 +343,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	watermark := claim.BeforeAt
-	if len(incomplete) > 0 {
+	if githubTestsBlocksWatermark(incomplete) {
 		watermark = nil
 	}
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{

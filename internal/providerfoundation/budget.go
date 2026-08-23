@@ -254,6 +254,7 @@ type Metrics struct {
 	budgetDenied         map[string]uint64
 	budgetReleaseErrors  map[string]uint64
 	inventoryPageCap     map[string]uint64
+	perRunTruncation     map[string]uint64
 	unitTerminalWithRows map[string]uint64
 }
 
@@ -263,6 +264,7 @@ func NewMetrics() *Metrics {
 		budgetDenied:         map[string]uint64{},
 		budgetReleaseErrors:  map[string]uint64{},
 		inventoryPageCap:     map[string]uint64{},
+		perRunTruncation:     map[string]uint64{},
 		unitTerminalWithRows: map[string]uint64{},
 	}
 }
@@ -347,6 +349,60 @@ func (m *Metrics) RecordInventoryPageCap(provider, dataset string) {
 	m.inventoryPageCap[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// metricPerRunComponentVocabulary is the closed set of per-run truncation
+// components, mirroring providersync's incomplete vocabulary. An unknown
+// component collapses to "other" so a route cannot open an unbounded label
+// dimension by inventing a component name (CHAOS-4142).
+var metricPerRunComponentVocabulary = map[string]struct{}{
+	"run_jobs": {}, "run_artifacts": {}, "run_reports": {},
+}
+
+// MetricPerRunComponentLabel bounds the per-run component label.
+func MetricPerRunComponentLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricPerRunComponentVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// metricPerRunCauseVocabulary separates the two reasons a per-run truncation
+// fires. They classify oppositely -- an item cap advances the watermark, a page
+// budget withholds it -- so an operator must be able to tell them apart on the
+// metric without reading route code (CHAOS-4142).
+var metricPerRunCauseVocabulary = map[string]struct{}{
+	"per_run_cap": {}, "per_run_page_budget": {},
+}
+
+// MetricPerRunCauseLabel bounds the per-run cause label.
+func MetricPerRunCauseLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricPerRunCauseVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordPerRunTruncation counts ONE workflow run committed with only the first
+// cap-worth of its items, by bounded provider, dataset, and component.
+//
+// This is the per-run twin of RecordInventoryPageCap, and is deliberately a
+// SEPARATE series rather than a new label on that one. An inventory page cap
+// leaves part of the window unwalked and withholds the watermark; a per-run
+// truncation walks the whole window and advances it. Folding them together
+// would mix a coverage-stalling condition with a bounded, self-limiting one,
+// so an alert could not tell "this source is going stale" from "this source
+// has one enormous run in it" (CHAOS-4142).
+func (m *Metrics) RecordPerRunTruncation(provider, dataset, component, cause string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.perRunTruncation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricPerRunComponentLabel(component)+":"+MetricPerRunCauseLabel(cause)]++
+}
+
 // RecordUnitTerminalWithRows counts a provider unit that was terminalized
 // while it already held committed rows. That combination is the signature
 // CHAOS-4130 ran on undetected for days: a unit destroyed mid-stream is
@@ -378,6 +434,35 @@ func writeProviderDatasetCounter(
 		parts := strings.SplitN(key, ":", 2)
 		if _, err := fmt.Fprintf(
 			writer, "%s{provider=%q,dataset=%q} %d\n", name, parts[0], parts[1], values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeProviderDatasetComponentCounter is the four-label twin of
+// writeProviderDatasetCounter. Every key is built from bounded vocabularies,
+// so SplitN into exactly four parts is total.
+func writeProviderDatasetComponentCounter(
+	writer io.Writer, name, help string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, ":", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s{provider=%q,dataset=%q,component=%q,cause=%q} %d\n",
+			name, parts[0], parts[1], parts[2], parts[3], values[key],
 		); err != nil {
 			return err
 		}
@@ -444,6 +529,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_inventory_page_cap_total",
 		"Provider inventory phases that stopped at their cumulative page budget, by bounded provider and dataset.",
 		m.inventoryPageCap,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetComponentCounter(
+		writer, "dev_health_provider_per_run_truncation_total",
+		"Workflow runs committed with only the first cap-worth of their items, by bounded provider, dataset, and component.",
+		m.perRunTruncation,
 	); err != nil {
 		return err
 	}

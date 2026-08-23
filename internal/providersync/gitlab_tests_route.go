@@ -152,7 +152,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if adapterPage.CapReached {
+	if adapterPage.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	pipelines := make([]githubTestsPipelineRow, 0, len(adapterPage.Items))
@@ -190,7 +190,15 @@ func (handler GitLabTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 		pages += jobPage.Pages
-		if jobPage.CapReached {
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitLabTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
+		if jobPage.PageBudgetExhausted {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		runJobs := make([]githubTestsJobRow, 0, len(jobPage.Items))
@@ -223,7 +231,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	pages += reportPage.Pages
-	if reportPage.CapReached {
+	if reportPage.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	reportPipelines, err := selectGitLabTestsReportPipelines(
@@ -261,7 +269,15 @@ func (handler GitLabTestsRouteHandler) Collect(
 			continue
 		}
 		pages += jobPage.Pages
-		if jobPage.CapReached {
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitLabTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
+		if jobPage.PageBudgetExhausted {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		artifactJobs, err := selectGitLabTestsArtifactJobs(jobPage.Items, gitLabTestsMaxArtifacts)

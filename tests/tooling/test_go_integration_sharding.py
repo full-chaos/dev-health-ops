@@ -289,7 +289,36 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # and the rejected-review legacy-semantics decision. None is
     # integration-tagged, so the integration count is unchanged -- the same
     # shape as CHAOS-4130's nine, not CHAOS-4114's three.
-    assert len(expected_provider_tests) == 954
+    #
+    # CHAOS-4142 then added 17 ordinary top-level tests (954 -> 971): twelve in
+    # github_tests_per_run_cap_test.go and five in
+    # gitlab_tests_per_run_cap_test.go, covering both cap directions at each
+    # per-run site (jobs, artifacts, report rows), the watermark
+    # window-blocking classification over (component, cause) PAIRS, BOTH
+    # directions of the bidirectional comparator invariant (nil iff
+    # window-blocking), the closed per-run vocabulary on both providers, and
+    # the codex round-1 regressions: a nested page-budget stop withholding the
+    # watermark on each provider, and the report-row bound holding both when
+    # one artifact is oversized and when several small ones would otherwise
+    # creep past it. All seventeen are ordinary -- they drive the routes
+    # through in-memory HTTP doers and touch no database -- so the
+    # integration-tagged count stays 113, the way 4130's nine did.
+    #
+    # CHAOS-4142 codex round 2 then added 6 more ordinary top-level tests
+    # (971 -> 977): three per provider, pinning the per-run PAGE BUDGET against
+    # the item cap at its exact equality boundary, pinning the refutation of
+    # codex's challenge-1 reading -- a combined item-cap + page-budget stop is
+    # classified as the item cap and advances, because the committed prefix does
+    # not depend on the page budget -- and the RED-FIRST pair asserting that a
+    # starved per-run page budget never finalizes a unit with a withheld
+    # watermark, which is the stall stated as an outcome rather than a
+    # mechanism.
+    #
+    # (The seven new providerfoundation tests -- two paginator stop-reason,
+    # three per-run truncation metric, and two from round 2 pinning stop-reason
+    # mutual exclusion and prefix independence -- live in
+    # internal/providerfoundation and so do not move this providersync count.)
+    assert len(expected_provider_tests) == 977
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -306,7 +335,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 954
+    assert len(provider_flattened) == len(set(provider_flattened)) == 977
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -367,7 +396,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 954
+    assert len(selected_tests) == len(set(selected_tests)) == 977
     assert set(selected_tests) == expected_tests
 
 

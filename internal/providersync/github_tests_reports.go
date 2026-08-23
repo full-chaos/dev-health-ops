@@ -133,11 +133,16 @@ const (
 	// seen and the remainder is known to be beyond it.
 	githubTestsPerRunCapCause = "per_run_cap"
 	// githubTestsPerRunPageBudgetCause is the nested paginator running out of
-	// page allowance INSIDE one run. The two arrive on the same CapReached
-	// flag -- providerfoundation sets it both when MaxPages is exhausted and
-	// when MaxItems is reached -- but they mean opposite things about what was
-	// seen. A page-budget stop leaves an UNKNOWN remainder, so it must not
-	// advance the watermark; the item cap leaves a known one, so it may.
+	// page allowance INSIDE one run. It and the item cap above mean opposite
+	// things about what was seen: a page-budget stop leaves an UNKNOWN
+	// remainder, so it must not advance the watermark; the item cap leaves a
+	// known one, so it may.
+	//
+	// They now arrive on SEPARATE paginator fields. They used to arrive on one
+	// CapReached boolean -- which, contrary to how this comment first described
+	// it, never carried both meanings: every write site was the page budget,
+	// and the MaxItems stop set nothing at all. That silence is what let a
+	// consumer read a page-budget stop as an item cap.
 	githubTestsPerRunPageBudgetCause = "per_run_page_budget"
 )
 
@@ -186,6 +191,55 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 		}
 	}
 	return false
+}
+
+// validatePerRunPageBudget refuses a configuration in which a per-run PAGE
+// BUDGET would bind before the per-run ITEM CAP. It serves both the github and
+// gitlab tests routes, because both had the same exposure.
+//
+// Why this is a configuration error and not a runtime disposition
+// (CHAOS-4142, codex round 2, challenge 3):
+//
+// The watermark doctrine above says a page budget stop withholds the watermark
+// because its remainder was never observed. That is the right rule when the
+// budget is a property of the WINDOW -- a bigger window walk really can reach
+// the remainder next time. It is the WRONG outcome when the budget is a fixed
+// config value applied INSIDE one run: the same run exceeds the same budget on
+// every future window, the watermark is withheld every time, and since_at is
+// pinned forever. That is the identical four-day outage this route was changed
+// to fix, re-entered through the other branch.
+//
+// Rather than teach the per-run page budget to advance -- which would make one
+// rule mean two different things at two levels, the exact confusion that caused
+// the original defect -- the branch is made UNREACHABLE by construction. The
+// item cap binds first whenever the walk can hold strictly more items than the
+// cap.
+//
+// The inequality is read off the OPERATORS, not off prose. Both providers need
+// strictly more than cap items in hand before their item cap fires: github
+// passes MaxItems = cap+1 against pagination.go's `len(Items) >= MaxItems`, and
+// gitlab has no MaxItems and tests `len(items) > cap` in the route. The walk can
+// hold at most budget*perPage items, since pagination.go checks
+// `Pages >= MaxPages` at the top of its loop. So the budget is sufficient
+// exactly when budget*perPage EXCEEDS cap -- equality is NOT enough, and
+// budget*perPage == cap is the precise boundary that must be rejected.
+//
+// HONEST LIMIT: this closes the CONFIG-reachable path, which is the one that
+// bites. It does not make the branch impossible against a provider that
+// advertises a further page while returning SHORT pages, since then the walk
+// holds fewer than budget*perPage items. That residual is exactly why the
+// per-run page-budget branches STAY and keep withholding.
+func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) error {
+	if budget*perPage > itemCap {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %s=%d x per_page=%d = %d does not exceed the %d-item per-run cap, so a "+
+			"per-run page budget stop would withhold the watermark on every future "+
+			"window and stall the source permanently; set %s to at least %d",
+		ErrInvalidConfiguration, setting, budget, perPage, budget*perPage, itemCap,
+		setting, itemCap/perPage+1,
+	)
 }
 
 // githubTestsIncompleteVocabulary is the CLOSED set of (component, cause)

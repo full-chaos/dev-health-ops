@@ -81,6 +81,17 @@ func walkGitLabTestsChunks(
 	t *testing.T, claim Claim, client *providerfoundation.HTTPClient, maxChunks int,
 ) gitLabTestsWalk {
 	t.Helper()
+	return walkGitLabTestsChunksWith(t, GitLabTestsRouteHandler{}, claim, client, maxChunks)
+}
+
+// walkGitLabTestsChunksWith is the same walk with the handler supplied, so a
+// test can vary the PAGE BUDGET. That is the only way to prove the committed
+// prefix does not depend on it (CHAOS-4142, codex round 2, challenge 1).
+func walkGitLabTestsChunksWith(
+	t *testing.T, handler GitLabTestsRouteHandler, claim Claim,
+	client *providerfoundation.HTTPClient, maxChunks int,
+) gitLabTestsWalk {
+	t.Helper()
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	stop := errors.New("test continuation yield")
 	walk := gitLabTestsWalk{}
@@ -92,7 +103,7 @@ func walkGitLabTestsChunks(
 		emitted := 0
 		last := resume
 		finalSeen := false
-		err := (GitLabTestsRouteHandler{}).CollectChunks(
+		err := handler.CollectChunks(
 			context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt, resume,
 			func(emission ChunkRouteEmission) error {
 				last = emission.CursorAfter
@@ -280,5 +291,118 @@ func TestGitLabTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 	if walk.final.Watermark != nil {
 		t.Fatalf("nested page-budget stop advanced the watermark to %v; unfetched jobs would be lost permanently",
 			walk.final.Watermark)
+	}
+}
+
+// REGRESSION (codex round 2, challenge 3). The per-run page budget must outrun
+// the per-run item cap. If it does not, the page-budget branch fires, the
+// watermark is withheld, and because the budget is the same on every future
+// window it is withheld forever -- the CHAOS-4142 outage re-entered through the
+// other branch.
+//
+// GitLab reaches that guarantee STRUCTURALLY rather than by refusing config,
+// because handler.MaxPages also bounds the pipeline INVENTORY walk, where a
+// small budget is a legitimate setting that CHAOS-4130's tests rely on. The
+// per-run walk therefore has its own derived constant, and this pins the exact
+// boundary it has to clear.
+//
+// The boundary is an inequality, not a rounding preference: the route tests
+// `len(items) > githubTestsMaxJobsPerRun`, so a budget whose reach exactly
+// EQUALS the cap is still insufficient.
+func TestGitLabTestsPerRunJobPagesOutrunsTheItemCapAtTheExactBoundary(t *testing.T) {
+	equality := githubTestsMaxJobsPerRun / nativePerPage // 5 pages = exactly 500 items
+
+	// Anti-vacuity: this must really be the equality point.
+	if equality*nativePerPage != githubTestsMaxJobsPerRun {
+		t.Fatalf("not the equality point: %d x %d != %d",
+			equality, nativePerPage, githubTestsMaxJobsPerRun)
+	}
+	// Equality is NOT enough, and the constant must be strictly past it.
+	if equality*nativePerPage > githubTestsMaxJobsPerRun {
+		t.Fatalf("a budget reaching exactly %d would satisfy a > %d test; the boundary is misstated",
+			equality*nativePerPage, githubTestsMaxJobsPerRun)
+	}
+	if gitLabTestsPerRunJobPages*nativePerPage <= githubTestsMaxJobsPerRun {
+		t.Fatalf("per-run job budget reaches %d, which does not exceed the %d-job cap; "+
+			"the page-budget branch binds first and the source stalls permanently",
+			gitLabTestsPerRunJobPages*nativePerPage, githubTestsMaxJobsPerRun)
+	}
+	// It must be the SMALLEST sufficient budget, so the constant cannot quietly
+	// grow into fetching far more than the cap can ever use.
+	if gitLabTestsPerRunJobPages != equality+1 {
+		t.Fatalf("per-run job budget is %d pages, want the minimum sufficient %d",
+			gitLabTestsPerRunJobPages, equality+1)
+	}
+
+	// And the inventory budget stays independently configurable: a small
+	// MaxPages must still be accepted, because that is what bounds the
+	// pipeline inventory walk (CHAOS-4130).
+	claim := nativeTestClaim("gitlab", "tests")
+	doer := &gitLabTestsOversizedRunDoer{t: t, jobs: githubTestsMaxJobsPerRun + 25}
+	walk := walkGitLabTestsChunksWith(
+		t, GitLabTestsRouteHandler{MaxPages: 1}, claim,
+		gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4,
+	)
+	if walk.cursor.Jobs != githubTestsMaxJobsPerRun {
+		t.Fatalf("MaxPages=1 kept %d jobs, want the cap %d; the per-run walk must not inherit the inventory budget",
+			walk.cursor.Jobs, githubTestsMaxJobsPerRun)
+	}
+}
+
+// REGRESSION (codex round 2, challenge 1). Codex read the item-cap branch
+// winning over the page-budget branch as the original F1 defect surviving. It
+// is not: when the len-based cap binds, the committed set is the first N items
+// and is INDEPENDENT of the page budget, so a larger budget recovers nothing,
+// the truncation is deterministic, and advancing is correct. Withholding there
+// would pin since_at forever -- CHAOS-4142 from the opposite direction.
+//
+// This is that argument in executable form. Both stops fire together (short of
+// nothing: the fixture always advertises a next page AND serves more than the
+// cap), and two DIFFERENT page budgets must commit the identical prefix.
+func TestGitLabTestsCombinedStopIsClassifiedAsTheItemCapAndAdvances(t *testing.T) {
+	claim := nativeTestClaim("gitlab", "tests")
+	// Full pages that ALWAYS advertise another page: the walk exhausts its
+	// per-run page budget AND holds more than the cap, so both stop conditions
+	// are true at the same moment. This is exactly the state codex read as the
+	// surviving defect.
+	doer := &gitLabTestsOversizedRunDoer{t: t, jobsPerPage: nativePerPage}
+	walk := walkGitLabTestsChunks(
+		t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4,
+	)
+
+	// Anti-vacuity: both conditions must really hold. The per-run walk must
+	// have spent its whole budget (so the page budget IS exhausted) while
+	// holding more than the cap (so the item cap IS reached).
+	//
+	// The expected count is the budget PLUS ONE: the reports phase fetches the
+	// same pipeline's jobs once more with SinglePage, which is a different
+	// collection with its own documented disposition.
+	const reportsPhaseJobFetches = 1
+	if doer.jobRequests != gitLabTestsPerRunJobPages+reportsPhaseJobFetches {
+		t.Fatalf("walk issued %d job requests, want the full %d-page budget plus %d reports-phase fetch; "+
+			"the page-budget condition is not being exercised",
+			doer.jobRequests, gitLabTestsPerRunJobPages, reportsPhaseJobFetches)
+	}
+	if gitLabTestsPerRunJobPages*nativePerPage <= githubTestsMaxJobsPerRun {
+		t.Fatalf("walk held at most %d jobs, not more than the %d cap; "+
+			"the item-cap condition is not being exercised",
+			gitLabTestsPerRunJobPages*nativePerPage, githubTestsMaxJobsPerRun)
+	}
+
+	// The refutation: the item cap wins, and it is RIGHT to win. The committed
+	// set is the first cap-worth either way, so a larger budget would recover
+	// nothing -- which is why withholding here would stall forever for no gain.
+	if walk.cursor.Jobs != githubTestsMaxJobsPerRun {
+		t.Fatalf("kept %d jobs, want exactly the cap %d", walk.cursor.Jobs, githubTestsMaxJobsPerRun)
+	}
+	for _, component := range walk.cursor.Truncated {
+		if component == gitLabRunJobsPageBudgetComponent {
+			t.Fatalf("combined stop classified as a page budget: %+v; "+
+				"that classification withholds the watermark on a deterministic truncation",
+				walk.cursor.Truncated)
+		}
+	}
+	if walk.final.Watermark == nil {
+		t.Fatal("a combined item-cap + page-budget stop withheld the watermark; that is the stall CHAOS-4142 fixed")
 	}
 }

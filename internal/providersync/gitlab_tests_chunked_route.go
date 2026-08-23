@@ -14,6 +14,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// gitLabTestsPerRunJobPages is the page budget for the PER-RUN jobs walk, and
+// is deliberately NOT handler.MaxPages (CHAOS-4142, codex round 2).
+//
+// handler.MaxPages was doing two jobs at once: bounding the pipeline INVENTORY
+// walk, where a small budget is a legitimate and useful setting, and bounding
+// the per-run jobs walk, where a small budget is a permanent source stall --
+// the page-budget branch fires, withholds the watermark, and does so identically
+// on every future window. One knob with two correct ranges is the same
+// one-thing-meaning-two-things shape that caused the original defect, so the
+// two budgets are now separate.
+//
+// The value is DERIVED from the cap rather than chosen: the route's item cap
+// tests `len(items) > githubTestsMaxJobsPerRun`, so it needs strictly more than
+// the cap in hand, and cap/perPage+1 pages is the smallest budget that can
+// deliver that. Deriving it means the item cap always binds first for as long
+// as pages are full, without any configuration being able to say otherwise.
+const gitLabTestsPerRunJobPages = githubTestsMaxJobsPerRun/nativePerPage + 1
+
 type gitLabTestsChunkCursor struct {
 	Phase      string `json:"phase"`
 	Page       int    `json:"page,omitempty"`
@@ -402,7 +420,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 					jobPage, pageErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 						Path:  root + "/pipelines/" + url.PathEscape(pipeline.RunID) + "/jobs",
-						Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage, MaxPages: maxPages,
+						Query: url.Values{"include_retried": {"true"}}, PerPage: nativePerPage,
+						MaxPages: gitLabTestsPerRunJobPages,
 					})
 					if pageErr != nil {
 						return pageErr
@@ -420,6 +439,13 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 							cursor, client, claim, gitLabRunJobsComponent,
 							pipeline.RunID, len(jobItems),
 						)
+					// UNREACHABLE with full pages, and KEPT anyway -- same
+					// disposition as the github twin, reached structurally
+					// rather than by validation: gitLabTestsPerRunJobPages is
+					// derived from the cap, so no configuration can make this
+					// budget bind first. Short pages could still land here, and
+					// deleting the branch would silently change semantics if
+					// that constant is ever lowered.
 					case jobPage.PageBudgetExhausted:
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunJobsPageBudgetComponent,

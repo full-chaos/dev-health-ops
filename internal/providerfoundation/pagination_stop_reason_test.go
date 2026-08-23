@@ -115,3 +115,113 @@ func TestGitLabPageParamPagesOnlyEverReportsPageBudget(t *testing.T) {
 		t.Fatal("gitlab paginator reported ItemCapReached, which it has no MaxItems to produce")
 	}
 }
+
+// REGRESSION (codex round 2, challenge 1). Codex read the route's item-cap
+// branch winning over its page-budget branch as evidence that a page-budget stop
+// could be mislabelled as an item cap. At the site that reads these two fields
+// that cannot happen at all: each bound sets its own flag and RETURNS
+// immediately, so the two are mutually exclusive by construction, and "both set"
+// is not a state the paginator can produce.
+//
+// The fixture deliberately arranges for the two bounds to be crossable on the
+// SAME page, which is the only configuration in which conflation could occur,
+// and then sweeps the boundary in both directions so neither ordering is
+// special-cased.
+func TestGitHubLinkPagesNeverReportsBothStopReasons(t *testing.T) {
+	t.Parallel()
+	const perPage = 10
+	for _, probe := range []struct {
+		name           string
+		maxPages       int
+		maxItems       int
+		wantItemCap    bool
+		wantPageBudget bool
+	}{
+		// Both bounds land on the very same page: 2 pages of 10 is exactly 20
+		// items, and MaxItems is 20. The item cap is hit while filling page 2,
+		// before the loop can return to its page-budget check.
+		{"simultaneous", 2, perPage * 2, true, false},
+		// One item earlier: still the item cap, mid-page.
+		{"item cap one below", 2, perPage*2 - 1, true, false},
+		// One item later: unreachable within the budget, so pages run out.
+		{"page budget one above", 2, perPage*2 + 1, false, true},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := CollectGitHubLinkPages(context.Background(),
+				stopReasonClient(t, "github", &stopReasonDoer{perPage: perPage}),
+				GitHubPageOptions{Path: "/x", DataKey: "jobs",
+					MaxPages: probe.maxPages, MaxItems: probe.maxItems})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The invariant, stated directly: never both.
+			if result.ItemCapReached && result.PageBudgetExhausted {
+				t.Fatalf("both stop reasons set at once (%d items over %d pages); "+
+					"a consumer choosing between them would be choosing between two 'true' facts",
+					len(result.Items), result.Pages)
+			}
+			if result.ItemCapReached != probe.wantItemCap ||
+				result.PageBudgetExhausted != probe.wantPageBudget {
+				t.Fatalf("ItemCapReached=%v PageBudgetExhausted=%v, want %v/%v",
+					result.ItemCapReached, result.PageBudgetExhausted,
+					probe.wantItemCap, probe.wantPageBudget)
+			}
+			// A walk must never stop silently: one of the two bounds owns
+			// every stop this fixture can produce, because the doer always
+			// advertises another page.
+			if !result.ItemCapReached && !result.PageBudgetExhausted {
+				t.Fatal("walk stopped with neither reason set; the stop is unattributable")
+			}
+		})
+	}
+}
+
+// REGRESSION (codex round 2, challenge 1), the other half of the refutation.
+// At the len-based per-run sites a page-budget stop and an item cap CAN both be
+// true at once, and the routes deliberately let the item cap win. That is only
+// correct if the committed prefix does not depend on the page budget -- if a
+// larger budget could recover items, withholding would buy real coverage and
+// advancing would lose it.
+//
+// This proves the prefix is budget-independent: two genuinely different walks
+// over the same data yield the same first N items.
+func TestCollectedPrefixIsIndependentOfThePageBudget(t *testing.T) {
+	t.Parallel()
+	const perPage, prefix = 10, 25
+	collect := func(maxPages int) (PageCollection, int) {
+		doer := &stopReasonDoer{perPage: perPage}
+		result, err := CollectGitHubLinkPages(context.Background(),
+			stopReasonClient(t, "github", doer),
+			// No MaxItems: this is the len-based shape the routes use.
+			GitHubPageOptions{Path: "/x", DataKey: "jobs", MaxPages: maxPages})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.PageBudgetExhausted {
+			t.Fatalf("MaxPages=%d did not exhaust its budget; the fixture always advertises another page", maxPages)
+		}
+		return result, doer.calls
+	}
+
+	small, smallCalls := collect(4)  // 40 items
+	large, largeCalls := collect(12) // 120 items
+
+	// Anti-vacuity: the walks must really differ, or "same prefix" is trivial.
+	if smallCalls >= largeCalls || len(small.Items) >= len(large.Items) {
+		t.Fatalf("walks did not differ: %d calls/%d items vs %d calls/%d items",
+			smallCalls, len(small.Items), largeCalls, len(large.Items))
+	}
+	if len(small.Items) < prefix {
+		t.Fatalf("small walk collected %d items, fewer than the %d-item prefix under test",
+			len(small.Items), prefix)
+	}
+
+	for index := 0; index < prefix; index++ {
+		if string(small.Items[index]) != string(large.Items[index]) {
+			t.Fatalf("item %d differs between page budgets (%q vs %q); a len-based cap "+
+				"would not be deterministic and the item-cap branch could not safely advance",
+				index, small.Items[index], large.Items[index])
+		}
+	}
+}

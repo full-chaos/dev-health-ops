@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,13 @@ import (
 // a single artifact larger than the cap is kept intact rather than split,
 // which would separate a suite from its cases (CHAOS-4142, codex round 1).
 const githubTestsMaxJobsPerRun = 500
+
+// githubTestsPerRunPerPage is the per_page this route asks for on its per-run
+// collections. It is a named constant rather than a literal because the
+// configuration check below multiplies it by the page budget: if the request
+// and the check could drift apart, the check would validate an arithmetic
+// relationship the requests do not actually have (CHAOS-4142, codex round 2).
+const githubTestsPerRunPerPage = 100
 
 // githubTestsChunkCursor is deliberately route-owned. A provider Link URL is
 // opaque, while the run index makes a crash between two runs on one page
@@ -280,16 +288,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "done" {
 		return emitFinalMetadata(cursor)
 	}
-	root := providerRelativePath(client, "repos", owner, repository)
-	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repo); err != nil {
-		return err
-	}
-	cursor.Repo = repo.FullName
-	repoID, err := repositoryIdentity(repo.FullName)
-	if err != nil {
-		return err
-	}
+	// Configuration is settled BEFORE the first provider call. None of these
+	// bounds depends on the repository, and a configuration that can never
+	// produce a correct walk should not spend a request discovering that
+	// (CHAOS-4142, codex round 2). It stays BELOW the `done` early return: a
+	// cursor that already finished its scan only republishes metadata, and
+	// refusing there would strand an otherwise complete unit.
 	maxRuns := handler.MaxRuns
 	if maxRuns == 0 {
 		maxRuns = githubTestsMaxRuns
@@ -304,6 +308,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
+	}
+	if err := validatePerRunPageBudget(
+		"MaxJobPages", jobPages, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun,
+	); err != nil {
+		return err
+	}
+	root := providerRelativePath(client, "repos", owner, repository)
+	var repo gitHubRepositoryPayload
+	if err := fetchObject(ctx, client, root, &repo); err != nil {
+		return err
+	}
+	cursor.Repo = repo.FullName
+	repoID, err := repositoryIdentity(repo.FullName)
+	if err != nil {
+		return err
 	}
 	if cursor.Requests == 0 {
 		cursor.Requests = 1 // repository lookup above
@@ -358,8 +377,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			acceptance := make([]githubTestsAcceptanceRow, 0)
 			if include && !ciPipelineRunOutsideWindow(pipeline.StartedAt, claim) {
 				jobPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-					Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
-					Query: url.Values{"per_page": {"100"}}, DataKey: "jobs", MaxPages: jobPages,
+					Path:     root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/jobs",
+					Query:    url.Values{"per_page": {strconv.Itoa(githubTestsPerRunPerPage)}},
+					DataKey:  "jobs",
+					MaxPages: jobPages,
 					MaxItems: githubTestsMaxJobsPerRun + 1,
 				})
 				if pageErr != nil {
@@ -385,6 +406,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cursor, client, claim, githubTestsRunJobsComponent,
 						githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
 					)
+				// UNREACHABLE through configuration, and KEPT anyway.
+				// validatePerRunPageBudget refuses any jobPages that cannot
+				// outrun the item cap, so with full pages the cap above always
+				// fires first. It is kept, still withholding, for two reasons:
+				// a provider that advertises a next page while returning SHORT
+				// pages can still land here, and deleting it would silently
+				// change this route's semantics if anyone later relaxes that
+				// validation. A branch that cannot fire is honest; a missing
+				// branch is a trapdoor (CHAOS-4142, codex round 2).
 				case jobPage.PageBudgetExhausted:
 					cursor = recordGitHubTestsPerRunTruncation(
 						cursor, client, claim, githubTestsRunJobsComponent,

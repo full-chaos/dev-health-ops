@@ -3,12 +3,15 @@ package providersync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // githubTestsOversizedRunDoer serves ONE workflow run whose per-run item lists
@@ -474,9 +477,14 @@ func TestGitHubTestsCompletionWatermarkInvariantIsBidirectional(t *testing.T) {
 func TestGitHubTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 	doer := &githubTestsOversizedRunDoer{t: t, jobsPerPage: 3, artifacts: 0}
 	claim := nativeTestClaim("github", "cicd")
-	// MaxJobPages=2 stands in for production's 100; what matters is that the
-	// page budget is exhausted while the item count stays under the cap.
-	handler := GitHubTestsRouteHandler{MaxJobPages: 2}
+	// The budget is the smallest one validatePerRunPageBudget ACCEPTS, not an
+	// arbitrary small number: after codex round 2 a budget that cannot outrun
+	// the item cap is refused at configuration time, so this branch can no
+	// longer be reached that way. It is still reachable exactly as here -- a
+	// provider advertising a further page while serving SHORT ones -- which is
+	// why the branch is kept and still withholds. This test is the evidence
+	// for that "kept because still reachable" claim.
+	handler := GitHubTestsRouteHandler{MaxJobPages: githubTestsMaxJobsPerRun/githubTestsPerRunPerPage + 1}
 	walk := walkGitHubTestsChunks(t, handler, claim, githubTestsClient(t, doer), 4)
 
 	observation := perRunObservation(t, walk, githubTestsRunJobsComponent)
@@ -589,4 +597,78 @@ func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) 
 	}
 	perRunObservation(t, walk, githubTestsRunReportsComponent)
 	assertFinalizedAndAdvanced(t, walk)
+}
+
+// githubTestsRefusingDoer fails the test if it is ever called: a configuration
+// refusal must precede all provider traffic, which is what makes it a loud
+// startup error instead of a source that quietly stops advancing.
+type githubTestsRefusingDoer struct{ t *testing.T }
+
+func (doer githubTestsRefusingDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.t.Fatalf("config refusal issued a provider request: %s", request.URL.String())
+	return nil, nil
+}
+
+// REGRESSION (codex round 2, challenge 3), github twin of the gitlab boundary
+// test. MaxJobPages is fixed config; if its reach cannot exceed the per-run item
+// cap, the page-budget branch fires on every window and withholds the watermark
+// forever. The boundary is EQUALITY, not "too small": the item cap needs
+// strictly more than the cap in hand (MaxItems is cap+1 against a >= check), so
+// a budget reaching exactly the cap is still insufficient.
+func TestGitHubTestsPerRunPageBudgetIsRefusedAtTheEqualityBoundary(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	equality := githubTestsMaxJobsPerRun / githubTestsPerRunPerPage // 5 pages = exactly 500 items
+
+	if equality*githubTestsPerRunPerPage != githubTestsMaxJobsPerRun {
+		t.Fatalf("fixture is not at the equality point: %d x %d != %d",
+			equality, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun)
+	}
+
+	err := (GitHubTestsRouteHandler{MaxJobPages: equality}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, githubTestsRefusingDoer{t: t}),
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(ChunkRouteEmission) error {
+			t.Fatal("a refused configuration emitted a chunk")
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("MaxJobPages=%d (reach exactly %d, cap %d) err=%v, want ErrInvalidConfiguration",
+			equality, equality*githubTestsPerRunPerPage, githubTestsMaxJobsPerRun, err)
+	}
+	for _, want := range []string{"MaxJobPages", strconv.Itoa(equality), strconv.Itoa(githubTestsMaxJobsPerRun)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not name %q", err.Error(), want)
+		}
+	}
+
+	// One above the boundary is accepted and does NOT stall: the guard removes
+	// the stall rather than relocating it into a refusal of everything.
+	doer := &githubTestsOversizedRunDoer{t: t, jobs: githubTestsMaxJobsPerRun + 25, artifacts: 0}
+	walk := walkGitHubTestsChunks(
+		t, GitHubTestsRouteHandler{MaxJobPages: equality + 1}, claim, githubTestsClient(t, doer), 4,
+	)
+	if walk.cursor.Jobs != githubTestsMaxJobsPerRun {
+		t.Fatalf("MaxJobPages=%d kept %d jobs, want the cap %d",
+			equality+1, walk.cursor.Jobs, githubTestsMaxJobsPerRun)
+	}
+	if walk.final.Watermark == nil {
+		t.Fatal("the first ACCEPTED budget withheld the watermark; the guard must remove the stall, not move it")
+	}
+}
+
+// The per-run page budget on the ARTIFACTS collection is satisfied structurally
+// rather than by validation: MaxPages is 1 and per_page is 100, against a cap
+// that the existing range check already holds at or below githubTestsMaxArtifacts.
+// Pinning it means a future widening of that cap cannot silently reopen the
+// stall on a path that has no configuration knob to refuse.
+func TestGitHubTestsArtifactPageBudgetStructurallyOutrunsItsCap(t *testing.T) {
+	const artifactPageBudget = 1 // hardcoded at the artifacts collection site
+	if artifactPageBudget*githubTestsPerRunPerPage <= githubTestsMaxArtifacts {
+		t.Fatalf("artifact page budget reaches %d, which does not exceed the %d-artifact cap; "+
+			"the per-run page-budget branch there is reachable again",
+			artifactPageBudget*githubTestsPerRunPerPage, githubTestsMaxArtifacts)
+	}
 }

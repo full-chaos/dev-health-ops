@@ -134,3 +134,62 @@ func TestDeterministicTerminalFailureWithRowsReachesTheCounter(t *testing.T) {
 		t.Fatalf("terminalization with committed rows was not counted:\n%s", output.String())
 	}
 }
+
+// lostLeaseFailRepository accepts the claim but refuses the durable failure
+// transition, the way a repository does when the lease was lost under it.
+type lostLeaseFailRepository struct {
+	*memoryUnitRepository
+	failCalls int
+}
+
+func (repository *lostLeaseFailRepository) Fail(
+	_ context.Context, _ providersync.Claim, _ string, _ time.Time, _ time.Time,
+) error {
+	repository.failCalls++
+	return providersync.ErrLeaseLost
+}
+
+// A unit whose Fail CAS is refused is NOT terminalized -- Work returns
+// retryable and a later attempt records the outcome. Counting it here would
+// page an operator about a destruction that did not happen, and inflate the
+// very series an operator uses to judge how bad CHAOS-4130 is. This is the
+// same discipline observeLeaseRecovery already follows.
+func TestTerminalizationRefusedByTheRepositoryIsNotCounted(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	repository := &lostLeaseFailRepository{memoryUnitRepository: newMemoryUnitRepository(unit)}
+	metrics := providerfoundation.NewMetrics()
+	build := successfulExecutor(t, now)
+	handler := &Handler{
+		Repository:      repository,
+		LeaseDuration:   time.Minute,
+		Heartbeat:       10 * time.Second,
+		Now:             func() time.Time { return now },
+		ProviderMetrics: metrics,
+		BuildExecutor: func(session *providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			executor, err := build(session)
+			if err != nil {
+				return executor, err
+			}
+			executor.Committer.Ledger = &ambiguousAfterFirstCommitLedger{}
+			return executor, nil
+		},
+	}
+	execution := providerExecution(unit, now, 1)
+	execution.Definition.MaxAttempts = 5
+
+	if err := handler.Work(context.Background(), execution); err == nil {
+		t.Fatal("Work() succeeded; the premise needs a failing execution")
+	}
+	if repository.failCalls == 0 {
+		t.Fatal("premise broken: the terminal branch never attempted the durable Fail")
+	}
+	var output bytes.Buffer
+	if writeErr := metrics.WritePrometheus(&output); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if strings.Contains(output.String(), "dev_health_provider_unit_terminal_with_rows_total{provider=") {
+		t.Fatalf("counted a terminalization the repository refused:\n%s", output.String())
+	}
+}

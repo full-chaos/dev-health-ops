@@ -223,8 +223,10 @@ type Handler struct {
 	ProviderMetrics *providerfoundation.Metrics
 }
 
-// observeTerminalWithCommittedRows reports a unit that is being terminalized
-// while durable rows for it already exist.
+// observeTerminalWithCommittedRows reports a unit that WAS terminalized while
+// durable rows for it already exist. Call it only after the durable transition
+// succeeded: an unrecorded failure leaves the unit retryable, and a counter
+// that fired anyway would report destruction that never happened.
 //
 // This is the alarm CHAOS-4130 lacked. A page-budget refusal cancelled units
 // holding ~9,500 committed rows, deleted their checkpoints, and let the run
@@ -571,7 +573,6 @@ func (handler *Handler) Work(
 	// remaining attempts would only delay the outcome and then bury the real
 	// cause under the generic provider_unit_exhausted category.
 	if category, deterministic := deterministicTerminalCategory(err); deterministic {
-		handler.observeTerminalWithCommittedRows(session.Claim, result, category, err)
 		// Discarding this error would report a permanent, already-recorded
 		// outcome while the category never persisted and run finalization
 		// never armed, leaving the run nonterminal. Stay retryable so a later
@@ -582,14 +583,17 @@ func (handler *Handler) Work(
 		); failErr != nil {
 			return jobruntime.Retryable(failErr)
 		}
+		// Only AFTER the durable transition, for the same reason
+		// observeLeaseRecovery is: a lost CAS leaves the unit retryable, and a
+		// counter that already claimed the unit was destroyed would page an
+		// operator about an incident that did not happen -- and inflate the
+		// exact series an operator would use to judge how bad CHAOS-4130 is.
+		handler.observeTerminalWithCommittedRows(session.Claim, result, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
-		handler.observeTerminalWithCommittedRows(
-			session.Claim, result, exhaustedFailureCategory(session.Claim), err,
-		)
 		// The collector's contract forbids recording a failed CAS attempt, so
 		// this capture (where the prior code discarded the error entirely)
 		// only adds the ability to gate the metric on true success; it does
@@ -599,6 +603,9 @@ func (handler *Handler) Work(
 			startedAt, completedAt,
 		)
 		if failErr == nil {
+			handler.observeTerminalWithCommittedRows(
+				session.Claim, result, exhaustedFailureCategory(session.Claim), err,
+			)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		}

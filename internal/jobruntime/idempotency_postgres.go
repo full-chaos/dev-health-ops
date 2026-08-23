@@ -198,7 +198,33 @@ func newProceedingClaim(
 // descriptor timeout would not.
 //
 // Renewal is token-fenced and retries transient failures until the lease could
-// actually have expired, matching the budget lease's semantics.
+// actually have expired, and gives up LOUDLY when it does -- markLost closes
+// the lost channel the adapter cancels the handler from, matching
+// postgresConcurrencyLease.
+//
+// ONE DELIBERATE DIVERGENCE from that sibling. Its renewal UPDATE also carries
+// `lease_expires_at > statement_timestamp()`, which enforces the invariant
+// recorded on its Release: "Renewal only extends a still-live row, so a
+// crashed worker's expired lease cannot be resurrected by a delayed renewal
+// attempt." This UPDATE has no such predicate, so a lease that genuinely
+// lapsed can be silently re-extended if the database recovers before any other
+// claimant arrives.
+//
+// That is accepted here, not overlooked. It cannot produce double execution:
+// Begin takes the row FOR UPDATE, so a real competitor is serialized ahead of
+// this UPDATE and rotates claim_token, which lands on the fenced arm below.
+// The residual is a window that went unprotected without being counted.
+//
+// Copying the predicate would cost more than it buys, because the two leases
+// do not keep time the same way. The sibling writes its expiry entirely in
+// database time (statement_timestamp() + interval), so its predicate compares
+// database time to database time. This lease's expiry is written from the Go
+// process clock, here and in Begin. Adding a statement_timestamp() predicate
+// would put a worker-clock-versus-database-clock comparison in the renewal hot
+// path, and skew in one direction would retire healthy claims as fenced --
+// cancelling live handlers, which is the CHAOS-3866 direction and a worse
+// trade than the visibility gap it closes. Converting this lease to database
+// time first, then adding the predicate, is CHAOS-4180.
 func (claim *postgresClaim) renew(leasedAt time.Time) {
 	defer close(claim.renewalDone)
 	interval := claim.store.leaseDuration / 3

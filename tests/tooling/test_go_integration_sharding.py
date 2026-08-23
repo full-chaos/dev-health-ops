@@ -341,7 +341,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # re-anchor is recorded and an unmoved page is not. All five drive the
     # routes through in-memory HTTP doers and touch no database, so the
     # integration-tagged count stays 113.
-    assert len(expected_provider_tests) == 987
+    #
+    # Its review round then added 2 more (987 -> 989): a page that shrank
+    # EXACTLY to the stored index, which addresses nothing and was previously
+    # walked from the end silently, and the index-0-on-an-empty-page case that
+    # must NOT be reported as a re-anchor.
+    assert len(expected_provider_tests) == 989
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -358,7 +363,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 987
+    assert len(provider_flattened) == len(set(provider_flattened)) == 989
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -419,7 +424,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 987
+    assert len(selected_tests) == len(set(selected_tests)) == 989
     assert set(selected_tests) == expected_tests
 
 

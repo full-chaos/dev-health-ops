@@ -223,8 +223,16 @@ const (
 // a corrupt checkpoint: the unit's durable state is intact and every prepared
 // chunk is still committed.
 //
-// Such a mismatch therefore RE-ANCHORS -- walk the page again from the start --
-// rather than failing. Re-walking is safe because every cicd destination is a
+// Such a mismatch -- a stored index that no longer addresses an item --
+// therefore RE-ANCHORS: walk the page again from the start, rather than
+// failing.
+//
+// This detects only the case where the index addresses nothing. A page
+// RESHUFFLED to the same length still satisfies the index and is walked from
+// it, so an ordinal cursor cannot tell "same items, moved" from "different
+// items, same count". That case is silent and undetectable without anchoring
+// on item identity (CHAOS-4182), which is why the re-anchor counter is a LOWER
+// BOUND on page movement, not a measure of it. Re-walking is safe because every cicd destination is a
 // ReplacingMergeTree keyed on the row's natural identity
 // (migrations/clickhouse/000_raw_tables.sql:97-106 for ci_pipeline_runs,
 // 029_testops_tables.sql:33-102 for the testops tables), so re-processing an
@@ -245,7 +253,14 @@ func githubTestsResumeStart(
 	if cursor.NextURL != page.CursorBefore {
 		return 0
 	}
-	if cursor.Index <= len(page.Items) {
+	// A cursor is never persisted with Index == len(page.Items): both write
+	// sites normalise that to index 0 with the next page's URL (:548-556 and
+	// :751-756). A persisted Index > 0 therefore always addressed an item that
+	// existed, so an index at or past the re-fetched length now addresses
+	// NOTHING -- walking from there would process zero items and advance past
+	// whatever the page still held, silently. Index 0 is always a legitimate
+	// start, including on an empty page.
+	if cursor.Index == 0 || cursor.Index < len(page.Items) {
 		return cursor.Index
 	}
 	if client != nil {

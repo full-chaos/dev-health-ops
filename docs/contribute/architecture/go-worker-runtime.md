@@ -358,11 +358,22 @@ state is intact and every prepared chunk is still committed; only the provider
 moved. The walk restarts at the top of that page, attempt-neutral, and records
 `dev_health_provider_resume_reanchor_total{provider,dataset,phase}`.
 
-Re-walking is safe because every cicd destination is a `ReplacingMergeTree`
-keyed on the row's natural identity
+Re-walking is safe **for row identity**: every cicd destination is a
+`ReplacingMergeTree` keyed on org, repository and run
 (`src/dev_health_ops/migrations/clickhouse/000_raw_tables.sql` for
 `ci_pipeline_runs`, `029_testops_tables.sql` for the testops tables), so
-re-processing an item replaces its row rather than duplicating it.
+re-processing an item replaces its row rather than duplicating it under
+`FINAL`. Note the sort keys do **not** include the provider, so two
+same-slug repositories on different providers in one tenant can collide —
+a pre-existing latent defect, tracked with the accounting one below.
+
+Re-walking is **not** accounting-safe. The recovery layer's totals —
+`committed_rows`, `Evidence.Records`, the shadow-comparison counts and the
+effect-ledger cardinality — are increment-only and inflate on ANY replay, and
+a replayed chunk takes a path that bypasses the readback guard. That is
+pre-existing behaviour of every replay, not something re-anchoring introduces;
+re-anchoring makes replays more frequent and so raises the exposure. Tracked as
+CHAOS-4187.
 
 Two alternatives are ruled out. **Clamping** the index to the end of the page
 silently drops whatever moved off it — data loss reported as progress.
@@ -394,6 +405,27 @@ advances, which is why deferring it was safe.
 The general rule this expresses: degrade quietly where the data still worth
 having outweighs what was lost, and fail loudly where it does not. A condition
 that cannot improve by being retried should never be reported as success.
+
+### What a re-anchor cannot see
+
+The gate fires when the stored index no longer **addresses** an item — the page
+came back shorter than the index, so walking from there would process nothing.
+A page RESHUFFLED to the same length still satisfies the index and is walked
+from it: an ordinal cursor cannot distinguish "same items, moved" from
+"different items, same count". That case is silent and undetectable here, and
+is closed only by anchoring on item identity (CHAOS-4182).
+
+The re-anchor counter is therefore a **lower bound** on page movement, not a
+measure of it.
+
+The residue is bounded by the direction pages move. GitHub inserts newest-first,
+so an item displaced off the page the cursor named moves to a LATER page — one
+the walk has not reached yet — and is still collected as the walk continues.
+What is genuinely lost is an item displaced EARLIER, which requires deletion or
+expiry rather than insertion. (The watermark does not close this: the next
+incremental window subtracts only the configured overlap,
+`internal/scheduler/sync/planner.go:383-385`, whose default is zero,
+`internal/scheduler/sync/materializer.go:88`.)
 
 ### Deploys must not cost units attempts
 

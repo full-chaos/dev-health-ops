@@ -245,3 +245,71 @@ func TestGitHubTestsArtifactsPhaseResumeAfterPageShrankDoesNotBurnAnAttempt(t *t
 		t.Fatalf("artifacts re-anchor not counted:\nwant line: %s\ngot:\n%s", want, buffer.String())
 	}
 }
+
+// RED. The re-anchor gate must fire when the stored index addresses NOTHING,
+// not only when it points past the end.
+//
+// A cursor is never persisted with Index == len(page.Items): both write sites
+// normalise that to index 0 with the next page's URL
+// (github_tests_chunked_route.go:548-556 for runs, :751-756 for artifacts). So
+// a persisted Index > 0 always addressed an item that existed. If a re-fetched
+// page has shrunk to exactly that index, the index now addresses nothing --
+// the walk starts at the end, processes zero items, advances to CursorAfter,
+// and silently drops whatever that page still held. No error, no metric, no
+// incomplete marker.
+//
+// That is the same class as the defect this branch fixes, and quieter: the
+// original at least failed loudly. Detecting "points past the end" alone
+// misses it, and on a busy repository pages tend to stay full, so this shape
+// is the more common one.
+func TestGitHubTestsResumeWhenPageShrankExactlyToIndexReAnchors(t *testing.T) {
+	// Index 2 was persisted while the page held at least 3 items. It now holds
+	// exactly 2, so index 2 addresses nothing.
+	doer := &githubTestsShrinkingRunsDoer{t: t, items: 2}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	_, finals, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(2))
+	if err != nil {
+		t.Fatalf("err=%v, want the walk to re-anchor and complete", err)
+	}
+	if finals != 1 {
+		t.Fatalf("finals=%d, want exactly 1", finals)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	want := `dev_health_provider_resume_reanchor_total{provider="github",dataset="cicd",phase="runs"} 1`
+	if !strings.Contains(buffer.String(), want) {
+		t.Fatalf(
+			"a page that shrank exactly to the stored index was walked from that index, "+
+				"processing nothing and recording nothing:\nwant line: %s\ngot:\n%s",
+			want, buffer.String(),
+		)
+	}
+}
+
+// Index 0 is always a legitimate start, including on a page that came back
+// EMPTY. Without an explicit index-0 clause the "addresses nothing" test reads
+// 0 >= 0 as true and reports a re-anchor for an ordinary empty page, which
+// would make the counter fire on healthy walks. A signal that cries wolf is
+// worse than no signal, because this counter is what a deploy is verified with.
+func TestGitHubTestsResumeAtIndexZeroOnEmptyPageIsNotAReanchor(t *testing.T) {
+	doer := &githubTestsShrinkingRunsDoer{t: t, items: 0}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(0)); err != nil {
+		t.Fatalf("err=%v, want an empty page to walk cleanly", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	if strings.Contains(buffer.String(), `dev_health_provider_resume_reanchor_total{provider="github",dataset="cicd",phase="runs"} 1`) {
+		t.Fatal("an empty page at index 0 was reported as a re-anchor")
+	}
+}

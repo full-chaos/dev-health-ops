@@ -66,6 +66,31 @@ CLICKHOUSE_URI=… dev-hops metrics daily
 - **Do not let worker lanes delegate to sub-agents.** One port lane blocked on a delegated result and was killed after 30 minutes of inactivity without producing anything. Two sibling lanes completed the same task without delegating. A “30 minutes of inactivity” timeout is itself a fallback masquerade: an outstanding call made the lane look alive until the clock showed it was dead.
 - **A cited constructor is not proof of capability.** The constructor must be reachable with only its own switch enabled. A port satisfied the `file:line` acceptance bar while `cmd/dev-health-worker/provider_sync.go` returned an empty worker family because its config switch was missing from the activation condition. Registry ownership did not make the binary construct it. Strengthen the bar: cite the constructor and prove reachability with a table-driven test that enables only each pair's switch.
 
+## Compute-port parity (CUT-20)
+
+There is ONE row-comparison vocabulary in this repo:
+[`internal/testsupport/oraclecompare`](internal/testsupport/oraclecompare)
+(type-tagged leaves, exhaustive reflection over the concrete row type,
+exclusions that need a written reason and must actually match something). Three
+boundaries sit on it: row-vs-row oracle pairs in `internal/providersync`,
+write-vs-readback in that package's readback pairs, and store-vs-store whole
+TABLE parity in
+[`internal/testsupport/computeparity`](internal/testsupport/computeparity).
+
+If you are about to write a comparison rule -- how to encode a value, when two
+values are equal, how an exclusion is declared -- it already exists. A second
+one is the defect CHAOS-3092 P0 was created to remove.
+
+Field completeness comes from the row TYPE, never a hand-written column list:
+the SELECT is derived by reflection, so adding a column to the struct adds it to
+the query and the diff in one edit. Fixtures are producer-derived and stores are
+built from the real migration chain
+([`scripts/worker/compute_parity_fixtures.py`](scripts/worker/compute_parity_fixtures.py)).
+Operational health is a SEPARATE claim with disjoint verdicts
+([`scripts/worker/compare_runtime_observations.py`](scripts/worker/compare_runtime_observations.py));
+nothing compares product rows in Python. How-to:
+[`contracts/compute-parity/v1/README.md`](contracts/compute-parity/v1/README.md).
+
 ## PR and CI conventions
 
 - The `governance` check requires `TEST-EVIDENCE` and `RISK-NOTES` markers in the PR body when a change touches `src/dev_health_ops/workers/provider_unit_route.py`. This is a PR-body requirement, not a code requirement. Missing markers cost two lanes a CI round.

@@ -295,6 +295,38 @@ func TypedEncode(t *testing.T, v reflect.Value) any {
 	}
 }
 
+// EncodedFieldNames returns, in declaration order, the wire field names
+// TypedEncode will produce for a struct type -- the same names, by the same
+// rule, so a caller that needs to know a row type's fields ahead of encoding
+// it cannot drift from what the encoder actually emits.
+//
+// This is what lets a whole-table comparison derive its SELECT list FROM the
+// row type instead of carrying a hand-written column list beside it. A hand
+// list is a second, parallel declaration of the same thing, and the moment it
+// falls behind the struct, the column it forgot is simply never compared and
+// the comparison still reports a pass.
+func EncodedFieldNames(rowType reflect.Type) []string {
+	for rowType.Kind() == reflect.Ptr {
+		rowType = rowType.Elem()
+	}
+	if rowType.Kind() != reflect.Struct {
+		return nil
+	}
+	names := make([]string, 0, rowType.NumField())
+	for i := 0; i < rowType.NumField(); i++ {
+		field := rowType.Field(i)
+		if field.PkgPath != "" {
+			continue // unexported: not part of the persisted row.
+		}
+		name := jsonFieldName(field)
+		if name == "-" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 func jsonFieldName(field reflect.StructField) string {
 	tag := field.Tag.Get("json")
 	if tag == "" {

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.fullchaos.dev/contracts/compute-parity/v1/runtime-observation.schema.json",
+  "title": "Normalized Go runtime observation",
+  "description": "Input to `compare_compute_outputs.py runtime`, which compares it against the pinned v0-celery-baseline capture using the v3-canary-release-proof thresholds. This is NOT the v3 canary observation: that artifact pairs a Celery observation with a Go one and carries a route transport, a route-generation step, and rollback evidence, none of which exist post-cutover. It does carry the same attestation rigour, because a set of in-envelope numbers with no statement of which build, dataset, run, and window produced them is not evidence of anything. The comparator enforces every rule below and refuses the file otherwise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runtime", "captured_at", "window", "build", "dataset_scope", "run_scope", "families", "profiles"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "runtime": {"const": "go"},
+    "captured_at": {"type": "string", "format": "date-time", "description": "UTC instant the capture completed. Must be at or after window.end."},
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "timezone"],
+      "description": "The observation window. start < end <= captured_at, enforced.",
+      "properties": {
+        "start": {"type": "string", "format": "date-time"},
+        "end": {"type": "string", "format": "date-time"},
+        "timezone": {"const": "UTC"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "image_digest"],
+      "description": "Which binary produced the observation. Without this the numbers cannot be attributed to anything.",
+      "properties": {
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+        "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "dataset_scope": {"$ref": "#/$defs/digest", "description": "Digest of the dataset the runtime worked over."},
+    "run_scope": {"$ref": "#/$defs/digest", "description": "Digest of the run scope the observation covers."},
+    "families": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Task-outcome counts keyed by the v0 baseline's family names. Every family the baseline recorded counts for must appear, or the comparator emits `baseline_family_not_observed`: an operational-health claim over an arbitrary subset is not the claim.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["counts"],
+        "properties": {
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["success", "retry", "failure", "discard"],
+            "description": "All four are required non-negative integers. A missing or malformed count is refused, never read as zero.",
+            "properties": {
+              "success": {"type": "integer", "minimum": 0},
+              "retry": {"type": "integer", "minimum": 0},
+              "failure": {"type": "integer", "minimum": 0},
+              "discard": {"type": "integer", "minimum": 0}
+            }
+          },
+          "rates_per_second": {"type": "object"}
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Per-profile resource and queue-age measurements. Coverage is required for the union of every profile series the baseline recorded — CPU, memory, and queue age — not only the CPU one. Each value must be finite and non-negative: NaN, an infinity, and a negative all make every threshold comparison False, which is the shape of a pass.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "cpu_cores": {"type": "number", "minimum": 0},
+          "memory_bytes": {"type": "number", "minimum": 0},
+          "oldest_queue_age_seconds_p95": {"type": "number", "minimum": 0}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

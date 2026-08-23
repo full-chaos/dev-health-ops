@@ -29,4 +29,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "  RUN  internal/providersync" in result.stdout
-    assert "27 package(s) discovered, 0 denylisted, 27 will run" in result.stdout
+    # CHAOS-3092 P0 added internal/testsupport/computeparity (27 -> 28): the
+    # whole-table parity harness is integration-tagged because it provisions
+    # two migrated scratch stores in a real container.
+    assert "28 package(s) discovered, 0 denylisted, 28 will run" in result.stdout

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -214,6 +215,13 @@ func (executor *CapacityExecutor) writeForecasts(
 		return 0, fmt.Errorf("prepare capacity batch: %w", err)
 	}
 	for _, row := range rows {
+		// Every narrowing is checked BEFORE the append, so an out-of-range
+		// value aborts the batch instead of being written as a wrapped number
+		// the row counter would then report as a healthy write.
+		narrowed, err := narrowCapacityRow(row)
+		if err != nil {
+			return 0, err
+		}
 		if err := batch.Append(
 			newForecastID(), row.ComputedAt,
 			// Nullable(String) on both: Python writes None for an unscoped
@@ -221,13 +229,11 @@ func (executor *CapacityExecutor) writeForecasts(
 			// forecast indistinguishable from one scoped to a team whose id is
 			// the empty string.
 			row.TeamID, row.WorkScopeID,
-			uint32(row.BacklogSize), nullableUint32(row.TargetItems), row.TargetDate,
-			uint16(row.Forecast.HistoryDays), uint32(row.Forecast.SimulationCount),
-			nullableUint16(row.Forecast.P50Days), nullableUint16(row.Forecast.P85Days),
-			nullableUint16(row.Forecast.P95Days),
+			narrowed.backlogSize, narrowed.targetItems, row.TargetDate,
+			narrowed.historyDays, narrowed.simulationCount,
+			narrowed.p50Days, narrowed.p85Days, narrowed.p95Days,
 			row.Forecast.P50Date, row.Forecast.P85Date, row.Forecast.P95Date,
-			nullableUint32(row.Forecast.P50Items), nullableUint32(row.Forecast.P85Items),
-			nullableUint32(row.Forecast.P95Items),
+			narrowed.p50Items, narrowed.p85Items, narrowed.p95Items,
 			row.Forecast.ThroughputMean, row.Forecast.ThroughputStddev,
 			boolToUInt8(row.Forecast.InsufficientHistory),
 			boolToUInt8(row.Forecast.HighVariance),
@@ -253,20 +259,69 @@ func newForecastID() string {
 	return uuid.NewString()
 }
 
-func nullableUint16(value *int) *uint16 {
-	if value == nil {
-		return nil
-	}
-	converted := uint16(*value)
-	return &converted
+// narrowedCapacityRow holds one row's values already narrowed to the widths
+// their columns declare, so the append below cannot reach a raw int.
+type narrowedCapacityRow struct {
+	backlogSize                  uint32
+	targetItems                  *uint32
+	historyDays                  uint16
+	simulationCount              uint32
+	p50Days, p85Days, p95Days    *uint16
+	p50Items, p85Items, p95Items *uint32
 }
 
-func nullableUint32(value *int) *uint32 {
-	if value == nil {
-		return nil
+// narrowCapacityRow converts every integer this row writes, naming the first
+// field that does not fit.
+//
+// One function rather than checks inline at the append: the append site binds
+// by POSITION, and a guard written there would have to repeat the column order
+// a third time. Here each value is named once, next to the width its column
+// actually declares.
+func narrowCapacityRow(row capacityRow) (narrowedCapacityRow, error) {
+	var narrowed narrowedCapacityRow
+	var err error
+
+	if narrowed.backlogSize, err = capacityUint32(
+		"backlog_size", row.BacklogSize); err != nil {
+		return narrowedCapacityRow{}, err
 	}
-	converted := uint32(*value)
-	return &converted
+	if narrowed.targetItems, err = capacityNullableUint32(
+		"target_items", row.TargetItems); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.historyDays, err = capacityUint16(
+		"history_days", row.Forecast.HistoryDays); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.simulationCount, err = capacityUint32(
+		"simulation_count", row.Forecast.SimulationCount); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p50Days, err = capacityNullableUint16(
+		"p50_days", row.Forecast.P50Days); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p85Days, err = capacityNullableUint16(
+		"p85_days", row.Forecast.P85Days); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p95Days, err = capacityNullableUint16(
+		"p95_days", row.Forecast.P95Days); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p50Items, err = capacityNullableUint32(
+		"p50_items", row.Forecast.P50Items); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p85Items, err = capacityNullableUint32(
+		"p85_items", row.Forecast.P85Items); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	if narrowed.p95Items, err = capacityNullableUint32(
+		"p95_items", row.Forecast.P95Items); err != nil {
+		return narrowedCapacityRow{}, err
+	}
+	return narrowed, nil
 }
 
 func boolToUInt8(value bool) uint8 {
@@ -276,31 +331,128 @@ func boolToUInt8(value bool) uint8 {
 	return 0
 }
 
+// ErrCapacityValueOutOfRange reports a computed value that does not fit the
+// ClickHouse column it is destined for.
+//
+// FAIL-CLOSED, and deliberately not a clamp. Go narrows silently: uint32(6e9)
+// is 1705032704, no panic and no error. The backlog is read into a uint64
+// precisely because sum() over a UInt32 column widens to UInt64, and then the
+// write narrowed it straight back with no guard -- so two legitimate rows at
+// 3e9 wip produced a plausible-looking 1.7e9 forecast, the batch succeeded, and
+// the partition counter recorded a healthy write. Saturating at MaxUint32
+// instead would keep exactly that property: a wrong number that the telemetry
+// then certifies. A value this large is corrupt input or schema drift, and the
+// honest response is to refuse the partition and say which field overflowed.
+var ErrCapacityValueOutOfRange = errors.New(
+	"capacity value does not fit its ClickHouse column")
+
+// capacityUint32 narrows for a UInt32 column, refusing rather than wrapping.
+func capacityUint32(field string, value int) (uint32, error) {
+	if value < 0 || uint64(value) > math.MaxUint32 {
+		return 0, fmt.Errorf("%w: %s = %d does not fit UInt32",
+			ErrCapacityValueOutOfRange, field, value)
+	}
+	return uint32(value), nil
+}
+
+// capacityUint16 narrows for a UInt16 column, refusing rather than wrapping.
+func capacityUint16(field string, value int) (uint16, error) {
+	if value < 0 || uint64(value) > math.MaxUint16 {
+		return 0, fmt.Errorf("%w: %s = %d does not fit UInt16",
+			ErrCapacityValueOutOfRange, field, value)
+	}
+	return uint16(value), nil
+}
+
+// capacityNullableUint32 narrows an optional value for a Nullable(UInt32)
+// column. A nil stays nil: absent is not out of range.
+func capacityNullableUint32(field string, value *int) (*uint32, error) {
+	if value == nil {
+		return nil, nil
+	}
+	converted, err := capacityUint32(field, *value)
+	if err != nil {
+		return nil, err
+	}
+	return &converted, nil
+}
+
+// capacityNullableUint16 narrows an optional value for a Nullable(UInt16)
+// column.
+func capacityNullableUint16(field string, value *int) (*uint16, error) {
+	if value == nil {
+		return nil, nil
+	}
+	converted, err := capacityUint16(field, *value)
+	if err != nil {
+		return nil, err
+	}
+	return &converted, nil
+}
+
 // ErrCapacitySchemaIncompatible reports a deployed schema this executor cannot
 // compute against.
 var ErrCapacitySchemaIncompatible = errors.New(
-	"capacity tables are missing columns this executor reads or writes")
+	"deployed capacity schema does not support what this executor reads or writes")
 
-// capacityRequiredColumns is every column the executor touches, by table.
+// capacityTableRequirement is what THIS code needs from one table.
+//
+// Columns are the obvious half. The engine is the half the first version of
+// this probe missed: every read below is `FROM work_item_metrics_daily FINAL`,
+// and FINAL is not a hint. On a ReplacingMergeTree it collapses superseded
+// versions to the newest; on any other engine it is silently a NO-OP. A table
+// carrying every required column under a pre-migration plain MergeTree
+// therefore passes a column-only probe, and then two versions of one
+// (org, day, scope, team) both survive into sum() -- items_completed of 5 and
+// 7 reported as 12 rather than 7. That is a successful, well-telemetered,
+// WRONG forecast, which is worse than the retry storm this probe was built to
+// prevent: the retry storm at least announces itself.
+type capacityTableRequirement struct {
+	columns []string
+	// readWithFINAL marks a table this code reads with FINAL, making the
+	// Replacing family a precondition rather than a deployment detail.
+	readWithFINAL bool
+}
+
+// capacityTableRequirements is every table the executor touches, and what it
+// needs from each.
 //
 // Derived from the queries and the insert in this file rather than from the
 // migration: the question at startup is not "is the chain at head" but "can
 // THIS code run", and those differ whenever a migration is partially applied or
-// a column is renamed ahead of the code that uses it.
-var capacityRequiredColumns = map[string][]string{
+// a column is renamed ahead of the code that uses it. The engine entry is that
+// same principle carried one layer deeper -- an engine this code's queries
+// depend on is as much a precondition as a column they name.
+var capacityTableRequirements = map[string]capacityTableRequirement{
 	"work_item_metrics_daily": {
-		"day", "org_id", "team_id", "work_scope_id",
-		"items_completed", "wip_count_end_of_day",
+		columns: []string{
+			"day", "org_id", "team_id", "work_scope_id",
+			"items_completed", "wip_count_end_of_day",
+		},
+		readWithFINAL: true,
 	},
 	"capacity_forecasts": {
-		"forecast_id", "computed_at", "org_id", "team_id", "work_scope_id",
-		"backlog_size", "target_items", "target_date", "history_days",
-		"simulation_count", "p50_days", "p85_days", "p95_days",
-		"p50_date", "p85_date", "p95_date", "p50_items", "p85_items", "p95_items",
-		"throughput_mean", "throughput_stddev", "insufficient_history",
-		"high_variance",
+		columns: []string{
+			"forecast_id", "computed_at", "org_id", "team_id", "work_scope_id",
+			"backlog_size", "target_items", "target_date", "history_days",
+			"simulation_count", "p50_days", "p85_days", "p95_days",
+			"p50_date", "p85_date", "p95_date", "p50_items", "p85_items", "p95_items",
+			"throughput_mean", "throughput_stddev", "insufficient_history",
+			"high_variance",
+		},
+		// Written, never read back with FINAL, so this code does not depend on
+		// the engine collapsing anything here.
+		readWithFINAL: false,
 	},
 }
+
+// capacityReplacingEngineMarker matches the Replacing family.
+//
+// Substring rather than equality on purpose: production runs
+// ReplicatedReplacingMergeTree, local and test stacks run ReplacingMergeTree,
+// and both collapse superseded versions under FINAL. Requiring an exact string
+// would refuse a perfectly correct replicated deployment.
+const capacityReplacingEngineMarker = "ReplacingMergeTree"
 
 // verifyCapacitySchema refuses a database this executor cannot compute against.
 //
@@ -314,7 +466,11 @@ var capacityRequiredColumns = map[string][]string{
 // It also makes the refusal telemetry honest: before this, the inspect_failed
 // reason could effectively never fire, because nothing inspected anything.
 func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
+	// Ordered explicitly rather than ranged over the map: a map range would
+	// report a different table first on different runs, so the same broken
+	// deployment would produce a different refusal message each restart.
 	for _, table := range []string{"work_item_metrics_daily", "capacity_forecasts"} {
+		requirement := capacityTableRequirements[table]
 		present, err := capacityTableColumns(ctx, conn, table)
 		if err != nil {
 			return err
@@ -324,7 +480,7 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 				ErrCapacitySchemaIncompatible, table)
 		}
 		var missing []string
-		for _, column := range capacityRequiredColumns[table] {
+		for _, column := range requirement.columns {
 			if !present[column] {
 				missing = append(missing, column)
 			}
@@ -332,6 +488,21 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 		if len(missing) > 0 {
 			return fmt.Errorf("%w: %s is missing %s",
 				ErrCapacitySchemaIncompatible, table, strings.Join(missing, ", "))
+		}
+		if !requirement.readWithFINAL {
+			continue
+		}
+		engine, err := capacityTableEngine(ctx, conn, table)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(engine, capacityReplacingEngineMarker) {
+			return fmt.Errorf(
+				"%w: %s is %s, but this executor reads it with FINAL, which only "+
+					"collapses superseded rows on the %s family -- on %s the "+
+					"duplicates stay visible and aggregate into the forecast",
+				ErrCapacitySchemaIncompatible, table, engine,
+				capacityReplacingEngineMarker, engine)
 		}
 	}
 	return nil
@@ -361,4 +532,22 @@ func capacityTableColumns(
 		return nil, fmt.Errorf("iterate %s columns: %w", table, err)
 	}
 	return present, nil
+}
+
+// capacityTableEngine reports the engine backing one table.
+//
+// system.tables rather than SHOW CREATE TABLE: the engine column is already the
+// bare family name, so this needs no parsing of DDL text that varies between
+// server versions.
+func capacityTableEngine(
+	ctx context.Context, conn driver.Conn, table string,
+) (string, error) {
+	var engine string
+	if err := conn.QueryRow(ctx, `
+        SELECT engine FROM system.tables
+        WHERE database = currentDatabase() AND name = {table:String}
+    `, clickhouse.Named("table", table)).Scan(&engine); err != nil {
+		return "", fmt.Errorf("inspect %s engine: %w", table, err)
+	}
+	return engine, nil
 }

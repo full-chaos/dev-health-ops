@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
 func TestCapacityExecutorFailsClosedWithoutAConnection(t *testing.T) {
@@ -21,13 +25,15 @@ func TestEveryColumnTheExecutorTouchesIsRequiredAtStartup(t *testing.T) {
 	// insert in capacity_native_clickhouse.go name; a column added to either
 	// without being added here would pass startup and then fail on every
 	// partition, which is the retry storm the probe exists to prevent.
-	for table, columns := range capacityRequiredColumns {
-		if len(columns) == 0 {
+	for table, requirement := range capacityTableRequirements {
+		if len(requirement.columns) == 0 {
 			t.Errorf("%s requires no columns, so its probe asserts nothing", table)
 		}
 	}
 	for _, column := range []string{"items_completed", "wip_count_end_of_day", "day"} {
-		if !slices.Contains(capacityRequiredColumns["work_item_metrics_daily"], column) {
+		if !slices.Contains(
+			capacityTableRequirements["work_item_metrics_daily"].columns, column,
+		) {
 			t.Errorf("the throughput/backlog reads use %q but startup does not require it", column)
 		}
 	}
@@ -35,8 +41,160 @@ func TestEveryColumnTheExecutorTouchesIsRequiredAtStartup(t *testing.T) {
 	for _, column := range []string{
 		"forecast_id", "p50_days", "p95_items", "throughput_stddev", "org_id",
 	} {
-		if !slices.Contains(capacityRequiredColumns["capacity_forecasts"], column) {
+		if !slices.Contains(
+			capacityTableRequirements["capacity_forecasts"].columns, column,
+		) {
 			t.Errorf("the insert writes %q but startup does not require it", column)
+		}
+	}
+}
+
+func TestEveryTableReadWithFINALRequiresTheReplacingEngine(t *testing.T) {
+	// The column half of the probe is not the whole precondition. FINAL is a
+	// no-op outside the Replacing family, so a table read with FINAL under a
+	// plain MergeTree returns superseded rows that then aggregate into the
+	// forecast -- a wrong answer reported as a successful write.
+	//
+	// This pins the two halves together: any table whose query text carries
+	// FINAL must also carry the engine requirement. Adding a FINAL read of a
+	// new table without setting readWithFINAL would otherwise reintroduce
+	// exactly the gap this replaces.
+	source := capacityClickHouseSource(t)
+	for table, requirement := range capacityTableRequirements {
+		readWithFINAL := strings.Contains(source, table+" FINAL")
+		if readWithFINAL && !requirement.readWithFINAL {
+			t.Errorf(
+				"%s is read with FINAL but its requirement does not demand the "+
+					"Replacing family, so a plain MergeTree would pass startup",
+				table)
+		}
+		if !readWithFINAL && requirement.readWithFINAL {
+			t.Errorf(
+				"%s demands the Replacing family but nothing reads it with FINAL, "+
+					"so the probe refuses deployments it does not need to",
+				table)
+		}
+	}
+}
+
+// capacityClickHouseSource reads the query file this probe is derived from.
+//
+// Reading the SOURCE rather than restating its query text keeps one definition
+// of what is read with FINAL. A copy here would be free to keep asserting the
+// old shape after the queries moved on, which is the failure the requirement
+// set itself is designed against.
+func capacityClickHouseSource(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("capacity_native_clickhouse.go")
+	if err != nil {
+		t.Fatalf("read the capacity query source: %v", err)
+	}
+	return string(raw)
+}
+
+func TestNarrowingRefusesValuesTheColumnCannotHold(t *testing.T) {
+	// Go narrows silently: uint32(6e9) is 1705032704 with no panic and no
+	// error. Two legitimate rows at 3e9 wip therefore used to produce a
+	// plausible 1.7e9 backlog that the batch accepted and the row counter
+	// reported as healthy. Each case below is a value that MUST refuse.
+	for _, testCase := range []struct {
+		name  string
+		row   capacityRow
+		field string
+	}{
+		{
+			name:  "backlog above UInt32",
+			row:   capacityRow{BacklogSize: math.MaxUint32 + 1},
+			field: "backlog_size",
+		},
+		{
+			name:  "negative backlog",
+			row:   capacityRow{BacklogSize: -1},
+			field: "backlog_size",
+		},
+		{
+			name:  "target items above UInt32",
+			row:   capacityRow{TargetItems: intPointer(math.MaxUint32 + 1)},
+			field: "target_items",
+		},
+		{
+			name: "history days above UInt16",
+			row: capacityRow{Forecast: numerical.ForecastResult{
+				HistoryDays: math.MaxUint16 + 1,
+			}},
+			field: "history_days",
+		},
+		{
+			name: "p95 items above UInt32",
+			row: capacityRow{Forecast: numerical.ForecastResult{
+				P95Items: intPointer(math.MaxUint32 + 1),
+			}},
+			field: "p95_items",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := narrowCapacityRow(testCase.row)
+			if err == nil {
+				t.Fatal("an unrepresentable value was accepted, so it would be " +
+					"written wrapped and counted as a successful write")
+			}
+			if !errors.Is(err, ErrCapacityValueOutOfRange) {
+				t.Fatalf("refusal must be identifiable, got %v", err)
+			}
+			if !strings.Contains(err.Error(), testCase.field) {
+				t.Fatalf("refusal must name the offending field %q, got %v",
+					testCase.field, err)
+			}
+		})
+	}
+}
+
+func TestNarrowingAcceptsTheWidestRepresentableRow(t *testing.T) {
+	// The negative control for the test above: a guard that refused everything
+	// would pass it while breaking every real write. These are the largest
+	// values each column CAN hold, and they must all survive.
+	narrowed, err := narrowCapacityRow(capacityRow{
+		BacklogSize: math.MaxUint32,
+		TargetItems: intPointer(math.MaxUint32),
+		Forecast: numerical.ForecastResult{
+			HistoryDays:     math.MaxUint16,
+			SimulationCount: math.MaxUint32,
+			P50Days:         intPointer(math.MaxUint16),
+			P95Items:        intPointer(math.MaxUint32),
+		},
+	})
+	if err != nil {
+		t.Fatalf("representable values must be accepted: %v", err)
+	}
+	if narrowed.backlogSize != math.MaxUint32 {
+		t.Errorf("backlog_size = %d, want %d", narrowed.backlogSize, uint32(math.MaxUint32))
+	}
+	if narrowed.targetItems == nil || *narrowed.targetItems != math.MaxUint32 {
+		t.Error("target_items lost its value on the way through")
+	}
+	if narrowed.p50Days == nil || *narrowed.p50Days != math.MaxUint16 {
+		t.Error("p50_days lost its value on the way through")
+	}
+}
+
+func TestNarrowingKeepsAbsentValuesAbsent(t *testing.T) {
+	// nil is not out of range: an unset percentile writes NULL, and turning it
+	// into a zero would make "no estimate" indistinguishable from "zero days".
+	narrowed, err := narrowCapacityRow(capacityRow{})
+	if err != nil {
+		t.Fatalf("an empty row must be writable: %v", err)
+	}
+	for name, value := range map[string]bool{
+		"target_items": narrowed.targetItems != nil,
+		"p50_days":     narrowed.p50Days != nil,
+		"p85_days":     narrowed.p85Days != nil,
+		"p95_days":     narrowed.p95Days != nil,
+		"p50_items":    narrowed.p50Items != nil,
+		"p85_items":    narrowed.p85Items != nil,
+		"p95_items":    narrowed.p95Items != nil,
+	} {
+		if value {
+			t.Errorf("%s became present, so a NULL would be written as a number", name)
 		}
 	}
 }

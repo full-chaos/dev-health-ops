@@ -387,7 +387,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestRemainingMetricsGoldenMatchesLivePython$' \
+        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/numerical
   ); then
     rm -rf -- "${proof_dir}"
@@ -396,6 +396,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/numerical-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: numerical golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY from the numerical golden above rather than folded into
+  # one marker. Two goldens with two producers are two claims: a single proof
+  # file would be satisfied by whichever guard happened to run, so the other
+  # could be skipped, renamed, or filtered out of the -run pattern without the
+  # lane noticing -- the same silent-degradation shape these guards exist to
+  # prevent.
+  proof_file="${proof_dir}/capacity-forecast-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: capacity forecast golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

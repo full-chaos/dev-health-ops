@@ -13,6 +13,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// githubTestsMaxJobsPerRun bounds the items committed for ONE run: jobs, and
+// separately the suites+cases+coverage rows parsed from its artifacts.
+//
+// For jobs it is a hard bound. For report rows it is a SOFT bound of
+// max(cap, one artifact): rows are only committed in whole-artifact units, so
+// a single artifact larger than the cap is kept intact rather than split,
+// which would separate a suite from its cases (CHAOS-4142, codex round 1).
 const githubTestsMaxJobsPerRun = 500
 
 // githubTestsChunkCursor is deliberately route-owned. A provider Link URL is
@@ -138,21 +145,23 @@ func recordGitHubTestsPerRunTruncation(
 	client *providerfoundation.HTTPClient,
 	claim Claim,
 	component string,
+	cause string,
 	runID string,
 	kept int,
 ) githubTestsChunkCursor {
 	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
-		Component: component, Cause: githubTestsPerRunCapCause, Count: 1,
+		Component: component, Cause: cause, Count: 1,
 	})
 	if client != nil {
-		client.Metrics.RecordPerRunTruncation(claim.Provider, claim.Dataset, component)
+		client.Metrics.RecordPerRunTruncation(claim.Provider, claim.Dataset, component, cause)
 	}
 	// The run id is provider-supplied and unbounded, so it belongs in the log
 	// line, never in the durable observation.
 	slog.Warn(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "run", runID, "kept", kept,
+		"repository", cursor.Repo, "component", component, "cause", cause,
+		"run", runID, "kept", kept,
 	)
 	return cursor
 }
@@ -358,14 +367,28 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				cursor.Requests += jobPage.Pages
 				cursor.Pages += jobPage.Pages
+				// The paginator reports WHICH bound stopped it, so this reads
+				// the reason instead of inferring one from len(). MaxItems is
+				// cap+1, so ItemCapReached means the provider had at least one
+				// job beyond the cap: the boundary was positively observed.
+				// PageBudgetExhausted means MaxPages ran out first and the
+				// remainder was never seen, which must not advance the
+				// watermark. Item cap is checked first: if both are somehow
+				// set, the observed boundary is the more specific fact.
 				jobItems := jobPage.Items
-				if jobPage.CapReached || len(jobItems) > githubTestsMaxJobsPerRun {
+				switch {
+				case jobPage.ItemCapReached:
 					if len(jobItems) > githubTestsMaxJobsPerRun {
 						jobItems = jobItems[:githubTestsMaxJobsPerRun]
 					}
 					cursor = recordGitHubTestsPerRunTruncation(
 						cursor, client, claim, githubTestsRunJobsComponent,
-						pipeline.RunID, len(jobItems),
+						githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
+					)
+				case jobPage.PageBudgetExhausted:
+					cursor = recordGitHubTestsPerRunTruncation(
+						cursor, client, claim, githubTestsRunJobsComponent,
+						githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
 					)
 				}
 				for _, jobRaw := range jobItems {
@@ -462,7 +485,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if visitErr != nil {
 				return visitErr
 			}
-			if collection.CapReached {
+			if collection.PageBudgetExhausted {
 				cursor = recordGitHubTestsInventoryTruncation(
 					cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
 			}
@@ -518,14 +541,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					cursor.Requests += artPage.Pages
 					cursor.Pages += artPage.Pages
+					// Same two-facts split as the jobs cap above, except this
+					// collection passes no MaxItems, so ItemCapReached can
+					// never fire here and the item cap is necessarily
+					// len-based. MaxPages is 1, so PageBudgetExhausted means a
+					// second artifact page existed and was never fetched.
 					artifactItems := artPage.Items
-					if artPage.CapReached || len(artifactItems) > maxArtifacts {
-						if len(artifactItems) > maxArtifacts {
-							artifactItems = artifactItems[:maxArtifacts]
-						}
+					switch {
+					case len(artifactItems) > maxArtifacts:
+						artifactItems = artifactItems[:maxArtifacts]
 						cursor = recordGitHubTestsPerRunTruncation(
 							cursor, client, claim, githubTestsRunArtifactsComponent,
-							pipeline.RunID, len(artifactItems),
+							githubTestsPerRunCapCause, pipeline.RunID, len(artifactItems),
+						)
+					case artPage.PageBudgetExhausted:
+						cursor = recordGitHubTestsPerRunTruncation(
+							cursor, client, claim, githubTestsRunArtifactsComponent,
+							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
 						)
 					}
 					for _, artifactRaw := range artifactItems {
@@ -557,17 +589,37 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						for _, observation := range reportIncomplete {
 							cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
 						}
+						// Bound the run's committed report rows WITHOUT splitting
+						// an artifact. Rows are checked for fit BEFORE they are
+						// appended, so the aggregate cannot creep past the cap
+						// one artifact at a time; a suite is never separated
+						// from its cases, because incoherent rows are wrong
+						// data rather than partial data.
+						//
+						// The bound is therefore max(cap, first artifact's rows)
+						// and not the cap flat: an artifact that alone exceeds
+						// the cap is still kept, because committing ZERO rows
+						// for a run that has reports is a worse outcome than
+						// overshooting once. See githubTestsMaxJobsPerRun.
+						committed := len(suites) + len(cases) + len(coverage)
+						incoming := len(rows.Suites) + len(rows.Cases) + len(rows.Coverage)
+						if committed > 0 && committed+incoming > githubTestsMaxJobsPerRun {
+							cursor = recordGitHubTestsPerRunTruncation(
+								cursor, client, claim, githubTestsRunReportsComponent,
+								githubTestsPerRunCapCause, pipeline.RunID, committed,
+							)
+							break
+						}
 						suites = append(suites, rows.Suites...)
 						cases = append(cases, rows.Cases...)
 						coverage = append(coverage, rows.Coverage...)
-						// Report rows arrive a whole artifact at a time, so the
-						// kept set is the last artifact that fit -- this stops
-						// consuming FURTHER artifacts for this run rather than
-						// splitting one artifact's rows.
+						// Reachable only when the FIRST artifact alone exceeds
+						// the cap: it is kept whole, and the run stops here.
 						if len(suites)+len(cases)+len(coverage) > githubTestsMaxJobsPerRun {
 							cursor = recordGitHubTestsPerRunTruncation(
 								cursor, client, claim, githubTestsRunReportsComponent,
-								pipeline.RunID, len(suites)+len(cases)+len(coverage),
+								githubTestsPerRunCapCause, pipeline.RunID,
+								len(suites)+len(cases)+len(coverage),
 							)
 							break
 						}
@@ -625,7 +677,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if visitErr != nil {
 				return visitErr
 			}
-			if collection.CapReached {
+			if collection.PageBudgetExhausted {
 				cursor = recordGitHubTestsInventoryTruncation(
 					cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
 			}

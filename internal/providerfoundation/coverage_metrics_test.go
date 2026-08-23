@@ -101,12 +101,12 @@ func TestUnregisteredDatasetsCollapseToASingleSeries(t *testing.T) {
 func TestPerRunTruncationCounterRendersPerProviderDatasetAndComponent(t *testing.T) {
 	t.Parallel()
 	metrics := NewMetrics()
-	metrics.RecordPerRunTruncation("GitHub", "cicd", "run_jobs")
-	metrics.RecordPerRunTruncation("github", "cicd", "run_jobs")
-	metrics.RecordPerRunTruncation("github", "cicd", "run_artifacts")
-	metrics.RecordPerRunTruncation("gitlab", "tests", "run_jobs")
+	metrics.RecordPerRunTruncation("GitHub", "cicd", "run_jobs", "per_run_cap")
+	metrics.RecordPerRunTruncation("github", "cicd", "run_jobs", "per_run_cap")
+	metrics.RecordPerRunTruncation("github", "cicd", "run_artifacts", "per_run_cap")
+	metrics.RecordPerRunTruncation("gitlab", "tests", "run_jobs", "per_run_cap")
 	// Every unbounded label source must collapse rather than mint a series.
-	metrics.RecordPerRunTruncation("mystery", "org-4711/repo", "run_"+strings.Repeat("x", 64))
+	metrics.RecordPerRunTruncation("mystery", "org-4711/repo", "run_"+strings.Repeat("x", 64), "nonsense")
 
 	var output bytes.Buffer
 	if err := metrics.WritePrometheus(&output); err != nil {
@@ -114,10 +114,10 @@ func TestPerRunTruncationCounterRendersPerProviderDatasetAndComponent(t *testing
 	}
 	rendered := output.String()
 	for _, want := range []string{
-		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="run_jobs"} 2`,
-		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="run_artifacts"} 1`,
-		`dev_health_provider_per_run_truncation_total{provider="gitlab",dataset="tests",component="run_jobs"} 1`,
-		`dev_health_provider_per_run_truncation_total{provider="other",dataset="other",component="other"} 1`,
+		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="run_jobs",cause="per_run_cap"} 2`,
+		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="run_artifacts",cause="per_run_cap"} 1`,
+		`dev_health_provider_per_run_truncation_total{provider="gitlab",dataset="tests",component="run_jobs",cause="per_run_cap"} 1`,
+		`dev_health_provider_per_run_truncation_total{provider="other",dataset="other",component="other",cause="other"} 1`,
 		"# TYPE dev_health_provider_per_run_truncation_total counter",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -126,7 +126,7 @@ func TestPerRunTruncationCounterRendersPerProviderDatasetAndComponent(t *testing
 	}
 	// A nil registry is the no-metrics deployment; recording must stay safe.
 	var absent *Metrics
-	absent.RecordPerRunTruncation("github", "cicd", "run_jobs")
+	absent.RecordPerRunTruncation("github", "cicd", "run_jobs", "per_run_cap")
 }
 
 func TestMetricPerRunComponentLabelIsAllowlisted(t *testing.T) {
@@ -150,16 +150,16 @@ func TestUnregisteredPerRunComponentsCollapseToASingleSeries(t *testing.T) {
 	t.Parallel()
 	metrics := NewMetrics()
 	for index := 0; index < 5000; index++ {
-		metrics.RecordPerRunTruncation("github", "cicd", "component-"+strconv.Itoa(index))
+		metrics.RecordPerRunTruncation("github", "cicd", "component-"+strconv.Itoa(index), "per_run_cap")
 	}
-	metrics.RecordPerRunTruncation("github", "cicd", "run_jobs")
+	metrics.RecordPerRunTruncation("github", "cicd", "run_jobs", "per_run_cap")
 	var output bytes.Buffer
 	if err := metrics.WritePrometheus(&output); err != nil {
 		t.Fatal(err)
 	}
 	rendered := output.String()
 	if !strings.Contains(rendered,
-		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="other"} 5000`) {
+		`dev_health_provider_per_run_truncation_total{provider="github",dataset="cicd",component="other",cause="per_run_cap"} 5000`) {
 		t.Fatalf("5000 unregistered components did not collapse to one series:\n%s", rendered)
 	}
 	series := strings.Count(rendered, "dev_health_provider_per_run_truncation_total{")

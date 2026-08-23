@@ -89,7 +89,7 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	items := page.Items
@@ -113,7 +113,7 @@ func (handler GitHubCommitsRouteHandler) Collect(ctx context.Context, claim Clai
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"commits_synced": len(rows), "repo": repoPayload.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages + 1, Pages: page.Pages, Records: len(rows), CapReached: page.CapReached}}, nil
+	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"commits_synced": len(rows), "repo": repoPayload.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages + 1, Pages: page.Pages, Records: len(rows), CapReached: page.PageBudgetExhausted}}, nil
 }
 
 func normalizeGitHubCommit(claim Claim, repoID string, commit gitHubCommitPayload, normalizedAt time.Time) (gitCommitRow, bool) {

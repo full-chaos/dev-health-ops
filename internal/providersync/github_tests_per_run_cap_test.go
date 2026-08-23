@@ -26,6 +26,9 @@ type githubTestsOversizedRunDoer struct {
 	// the artifact-count cap.
 	reportSuitesPerArtifact int
 
+	// jobsPerPage, when > 0, overrides `jobs` and serves that many jobs on
+	// every page with a next link, so the page budget is what stops the walk.
+	jobsPerPage      int
 	jobRequests      int
 	artifactRequests int
 	archiveRequests  int
@@ -42,6 +45,17 @@ func (doer *githubTestsOversizedRunDoer) Do(request *http.Request) (*http.Respon
 		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(1, 1)), nil
 	case strings.HasSuffix(path, "/jobs"):
 		doer.jobRequests++
+		// jobsPerPage>0 serves SHORT pages that always advertise a next link,
+		// which is how the nested paginator runs out of PAGE budget long before
+		// the 500-item cap is reached.
+		if doer.jobsPerPage > 0 {
+			next := *request.URL
+			forward := next.Query()
+			forward.Set("page", strconv.Itoa(doer.jobRequests+1))
+			next.RawQuery = forward.Encode()
+			header.Set("Link", "<"+next.String()+">; rel=\"next\"")
+			return githubTestsHTTPResponse(request, header, githubTestsJobsFixture(doer.jobsPerPage)), nil
+		}
 		return githubTestsHTTPResponse(request, header, githubTestsJobsFixture(doer.jobs)), nil
 	case strings.HasSuffix(path, "/artifacts"):
 		doer.artifactRequests++
@@ -227,37 +241,61 @@ func TestGitHubTestsInventoryTruncationStillWithholdsTheWatermark(t *testing.T) 
 	}
 }
 
-// The watermark predicate is a CLASSIFICATION, so it is tested as one rather
-// than only through the two routes that happen to produce each class.
+// The watermark predicate is a CLASSIFICATION over (component, cause) PAIRS,
+// not over components. The same component carries both a positively observed
+// item cap (advances) and a nested page-budget stop (withholds), so a
+// component-only rule would have advanced over unobserved data -- the
+// regression codex round 1 caught.
 func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 	cases := []struct {
-		component string
-		blocking  bool
+		component, cause string
+		blocking         bool
 	}{
-		{githubTestsRunInventoryComponent, true},
-		{githubTestsArtifactInventoryComponent, true},
+		{githubTestsRunInventoryComponent, githubTestsPageBudgetCause, true},
+		{githubTestsArtifactInventoryComponent, githubTestsPageBudgetCause, true},
 		// Preserved from before CHAOS-4142 rather than reclassified; the
 		// reclassification is CHAOS-4153.
-		{githubTestsReportMemberComponent, true},
-		{githubTestsRunJobsComponent, false},
-		{githubTestsRunArtifactsComponent, false},
-		{githubTestsRunReportsComponent, false},
+		{githubTestsReportMemberComponent, "malformed", true},
+		{githubTestsReportMemberComponent, "unreadable", true},
+		// Positively observed item caps advance.
+		{githubTestsRunJobsComponent, githubTestsPerRunCapCause, false},
+		{githubTestsRunArtifactsComponent, githubTestsPerRunCapCause, false},
+		{githubTestsRunReportsComponent, githubTestsPerRunCapCause, false},
+		// The SAME components withhold when the nested page budget was what
+		// stopped the walk, because the remainder was never observed.
+		{githubTestsRunJobsComponent, githubTestsPerRunPageBudgetCause, true},
+		{githubTestsRunArtifactsComponent, githubTestsPerRunPageBudgetCause, true},
+		// Fail-safe: anything not explicitly on the advancing allowlist
+		// withholds, so a future vocabulary entry forgotten there stalls
+		// loudly instead of silently advancing.
+		{githubTestsRunJobsComponent, "", true},
+		{githubTestsRunJobsComponent, "invented_cause", true},
+		{"invented_component", githubTestsPerRunCapCause, true},
 	}
 	for _, testCase := range cases {
-		got := githubTestsBlocksWatermark(
-			[]GitHubTestsIncomplete{{Component: testCase.component, Count: 1}},
-		)
+		got := githubTestsBlocksWatermark([]GitHubTestsIncomplete{
+			{Component: testCase.component, Cause: testCase.cause, Count: 1},
+		})
 		if got != testCase.blocking {
-			t.Fatalf("%s blocks watermark=%v, want %v", testCase.component, got, testCase.blocking)
+			t.Fatalf("%s/%s blocks watermark=%v, want %v",
+				testCase.component, testCase.cause, got, testCase.blocking)
 		}
 	}
-	// A blocking component anywhere in the slice blocks the whole unit.
+	// A withholding pair anywhere in the slice withholds for the whole unit.
 	mixed := []GitHubTestsIncomplete{
-		{Component: githubTestsRunJobsComponent, Count: 1},
-		{Component: githubTestsRunInventoryComponent, Count: 1},
+		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
+		{Component: githubTestsRunInventoryComponent, Cause: githubTestsPageBudgetCause, Count: 1},
 	}
 	if !githubTestsBlocksWatermark(mixed) {
-		t.Fatal("a mixed slice containing an inventory observation must block the watermark")
+		t.Fatal("a mixed slice containing an inventory observation must withhold the watermark")
+	}
+	// And the per-run page budget dominates its own component's item cap.
+	sameComponent := []GitHubTestsIncomplete{
+		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
+		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunPageBudgetCause, Count: 1},
+	}
+	if !githubTestsBlocksWatermark(sameComponent) {
+		t.Fatal("a page-budget observation must withhold even alongside an item-cap one")
 	}
 }
 
@@ -419,4 +457,136 @@ func TestGitHubTestsCompletionWatermarkInvariantIsBidirectional(t *testing.T) {
 				testCase.name, err == nil, testCase.valid, err)
 		}
 	}
+}
+
+// REGRESSION (codex round 1). CapReached is written by providerfoundation for
+// TWO different reasons -- MaxPages exhausted and MaxItems reached -- and the
+// first version of this change treated both as the per-run item cap. With a
+// provider serving short pages, the nested jobs paginator runs out of PAGE
+// budget at far fewer than 500 items; committing those and advancing the
+// watermark silently discarded every remaining job. Measured directly against
+// the real paginator: MaxPages=100 with 3 items/page yields CapReached=true at
+// 300 items.
+//
+// The remainder there was never observed, so it must withhold the watermark,
+// and it must say per_run_page_budget so an operator can tell which of the two
+// caps fired without reading route code.
+func TestGitHubTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
+	doer := &githubTestsOversizedRunDoer{t: t, jobsPerPage: 3, artifacts: 0}
+	claim := nativeTestClaim("github", "cicd")
+	// MaxJobPages=2 stands in for production's 100; what matters is that the
+	// page budget is exhausted while the item count stays under the cap.
+	handler := GitHubTestsRouteHandler{MaxJobPages: 2}
+	walk := walkGitHubTestsChunks(t, handler, claim, githubTestsClient(t, doer), 4)
+
+	observation := perRunObservation(t, walk, githubTestsRunJobsComponent)
+	if observation.Cause != githubTestsPerRunPageBudgetCause {
+		t.Fatalf("cause=%q, want %q — a page-budget stop must not be reported as the item cap",
+			observation.Cause, githubTestsPerRunPageBudgetCause)
+	}
+	// Anti-vacuity: the fixture must stop on PAGES while staying UNDER the item
+	// cap, or this would just be re-testing the item cap under another name.
+	if walk.cursor.Jobs >= githubTestsMaxJobsPerRun {
+		t.Fatalf("kept %d jobs, which reaches the %d item cap; the fixture is not exercising the page budget",
+			walk.cursor.Jobs, githubTestsMaxJobsPerRun)
+	}
+	if walk.cursor.Jobs == 0 {
+		t.Fatal("kept no jobs; the run committed nothing at all")
+	}
+	// The defect: advancing here loses every job past the page budget forever.
+	if walk.final.Watermark != nil {
+		t.Fatalf("nested page-budget stop advanced the watermark to %v; the unfetched jobs would be lost permanently",
+			walk.final.Watermark)
+	}
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, walk.final,
+	); err != nil {
+		t.Fatalf("production comparator rejected a page-budget completion: %v", err)
+	}
+}
+
+// REGRESSION (codex round 1). Report rows were appended a whole artifact at a
+// time and only THEN measured, so the committed set could creep arbitrarily far
+// past the cap -- the original fixture committed 1000 rows against a 500 cap.
+// The bound is deliberately soft, max(cap, first artifact), because splitting
+// an artifact would separate a suite from its cases; but it must be a bound.
+func TestGitHubTestsReportRowsStayWithinTheDocumentedBound(t *testing.T) {
+	// Each artifact carries 400 suites + 400 cases = 800 rows, so the FIRST
+	// alone exceeds the 500 cap and any second artifact must be refused.
+	suitesPer := 400
+	doer := &githubTestsOversizedRunDoer{
+		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
+	}
+	walk := perRunWalk(t, doer)
+
+	firstArtifactRows := suitesPer * 2
+	// Anti-vacuity: the first artifact must genuinely exceed the cap on its own.
+	if firstArtifactRows <= githubTestsMaxJobsPerRun {
+		t.Fatalf("first artifact carries %d rows, which does not exceed the %d cap",
+			firstArtifactRows, githubTestsMaxJobsPerRun)
+	}
+	committed := walk.cursor.Suites + walk.cursor.Cases + walk.cursor.Coverage
+	bound := githubTestsMaxJobsPerRun
+	if firstArtifactRows > bound {
+		bound = firstArtifactRows
+	}
+	// THE INVARIANT: durable rows never exceed max(cap, first artifact's rows).
+	if committed > bound {
+		t.Fatalf("committed %d report rows, exceeding the documented bound max(cap=%d, firstArtifact=%d)=%d",
+			committed, githubTestsMaxJobsPerRun, firstArtifactRows, bound)
+	}
+	// A run with reports must never commit zero, which is why the first
+	// oversized artifact is kept whole rather than refused.
+	if committed == 0 {
+		t.Fatal("committed no report rows; an oversized first artifact must still land")
+	}
+	// Only the first artifact is downloaded; the rest are refused before fetch.
+	if doer.archiveRequests != 1 {
+		t.Fatalf("downloaded %d archives, want 1 — later artifacts must be refused, not fetched and discarded",
+			doer.archiveRequests)
+	}
+	perRunObservation(t, walk, githubTestsRunReportsComponent)
+	assertFinalizedAndAdvanced(t, walk)
+}
+
+// The discriminating case for the row bound: artifacts that each fit UNDER the
+// cap but together exceed it. The oversized-first-artifact test above cannot
+// see the defect, because max(cap, firstArtifact) absorbs the overshoot and the
+// fixed and broken code commit the same rows — a mutation that restored
+// append-then-check survived it. Here the bound is the flat cap, so
+// appending before measuring is visible: 2x300 rows lands 600 against a 500
+// bound.
+func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) {
+	// 150 suites + 150 cases = 300 rows per artifact; three artifacts.
+	suitesPer := 150
+	doer := &githubTestsOversizedRunDoer{
+		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
+	}
+	walk := perRunWalk(t, doer)
+
+	rowsPerArtifact := suitesPer * 2
+	// Anti-vacuity, both directions: each artifact must FIT on its own, and two
+	// together must NOT. Otherwise this collapses into one of the other tests.
+	if rowsPerArtifact > githubTestsMaxJobsPerRun {
+		t.Fatalf("artifact carries %d rows and already exceeds the %d cap alone; "+
+			"this fixture is the oversized-first case, not the creep case",
+			rowsPerArtifact, githubTestsMaxJobsPerRun)
+	}
+	if rowsPerArtifact*2 <= githubTestsMaxJobsPerRun {
+		t.Fatalf("two artifacts carry %d rows, which does not exceed the %d cap; "+
+			"nothing would truncate", rowsPerArtifact*2, githubTestsMaxJobsPerRun)
+	}
+	committed := walk.cursor.Suites + walk.cursor.Cases + walk.cursor.Coverage
+	// Every artifact fits individually, so the bound here is the flat cap.
+	if committed > githubTestsMaxJobsPerRun {
+		t.Fatalf("committed %d report rows against a %d cap; rows were appended before "+
+			"being measured, so the aggregate crept past the bound one artifact at a time",
+			committed, githubTestsMaxJobsPerRun)
+	}
+	if committed != rowsPerArtifact {
+		t.Fatalf("committed %d rows, want exactly the one artifact that fit (%d)",
+			committed, rowsPerArtifact)
+	}
+	perRunObservation(t, walk, githubTestsRunReportsComponent)
+	assertFinalizedAndAdvanced(t, walk)
 }

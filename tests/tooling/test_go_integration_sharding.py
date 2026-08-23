@@ -290,16 +290,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # integration-tagged, so the integration count is unchanged -- the same
     # shape as CHAOS-4130's nine, not CHAOS-4114's three.
     #
-    # CHAOS-4142 then added 13 ordinary top-level tests (954 -> 967): nine in
-    # github_tests_per_run_cap_test.go and four in
+    # CHAOS-4142 then added 17 ordinary top-level tests (954 -> 971): twelve in
+    # github_tests_per_run_cap_test.go and five in
     # gitlab_tests_per_run_cap_test.go, covering both cap directions at each
     # per-run site (jobs, artifacts, report rows), the watermark
-    # window-blocking classification from both sides, BOTH directions of the
-    # bidirectional comparator invariant (nil iff window-blocking), and the
-    # closed per-run vocabulary on both providers. All thirteen are ordinary --
-    # they drive the routes through in-memory HTTP doers and touch no database
-    # -- so the integration-tagged count stays 113, the way 4130's nine did.
-    assert len(expected_provider_tests) == 967
+    # window-blocking classification over (component, cause) PAIRS, BOTH
+    # directions of the bidirectional comparator invariant (nil iff
+    # window-blocking), the closed per-run vocabulary on both providers, and
+    # the codex round-1 regressions: a nested page-budget stop withholding the
+    # watermark on each provider, and the report-row bound holding both when
+    # one artifact is oversized and when several small ones would otherwise
+    # creep past it. All seventeen are ordinary -- they drive the routes
+    # through in-memory HTTP doers and touch no database -- so the
+    # integration-tagged count stays 113, the way 4130's nine did.
+    #
+    # (The five new providerfoundation tests -- two paginator stop-reason and
+    # three per-run truncation metric -- live in internal/providerfoundation
+    # and so do not move this providersync count at all.)
+    assert len(expected_provider_tests) == 971
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -316,7 +324,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 967
+    assert len(provider_flattened) == len(set(provider_flattened)) == 971
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -377,7 +385,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 967
+    assert len(selected_tests) == len(set(selected_tests)) == 971
     assert set(selected_tests) == expected_tests
 
 

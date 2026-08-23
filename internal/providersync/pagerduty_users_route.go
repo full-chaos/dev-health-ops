@@ -136,7 +136,7 @@ func (handler PagerDutyUsersRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if len(pages.Items) > maxRows || pages.CapReached {
+	if len(pages.Items) > maxRows || pages.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	rows := make([]pagerDutyUserRow, 0, len(pages.Items))
@@ -160,7 +160,7 @@ func (handler PagerDutyUsersRouteHandler) Collect(
 		Result:  map[string]any{"users_synced": len(rows)},
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
-			Pages: pages.Pages, Records: len(rows), CapReached: pages.CapReached,
+			Pages: pages.Pages, Records: len(rows), CapReached: pages.PageBudgetExhausted,
 		},
 	}, nil
 }

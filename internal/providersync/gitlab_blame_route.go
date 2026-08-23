@@ -202,7 +202,7 @@ func collectGitLabBlame(
 	if err != nil {
 		return CompleteRouteBatch{}, gitLabBlameTraversalError(err)
 	}
-	if tree.CapReached {
+	if tree.PageBudgetExhausted {
 		return CompleteRouteBatch{}, fmt.Errorf("%w: tree page cap", ErrGitLabBlameIncomplete)
 	}
 	paths := make([]string, 0, len(tree.Items))

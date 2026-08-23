@@ -94,7 +94,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 

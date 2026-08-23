@@ -562,7 +562,7 @@ func collectLinearTeams(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	teams := make([]linearTeamPayload, 0, len(page.Items))
@@ -617,7 +617,7 @@ func collectLinearTeam(
 	if err != nil {
 		return linearTeamPayload{}, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return linearTeamPayload{}, page.Pages, ErrPaginationCapExceeded
 	}
 	for _, raw := range page.Items {
@@ -651,7 +651,7 @@ func collectLinearCycles(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	cycles := make([]linearCyclePayload, 0, len(page.Items))
@@ -683,7 +683,7 @@ func collectLinearIssueAttachments(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	items := make([]linearAttachmentPayload, 0, len(page.Items))
@@ -716,7 +716,7 @@ func collectLinearIssueHistory(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	items := make([]linearHistoryEntry, 0, len(page.Items))
@@ -749,7 +749,7 @@ func collectLinearIssueComments(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	comments := make([]linearCommentPayload, 0, len(page.Items))
@@ -788,7 +788,7 @@ func collectLinearIssueRelations(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	items := make([]linearRelationPayload, 0, len(page.Items))
@@ -1153,7 +1153,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		if pageErr != nil {
 			return CompleteRouteBatch{}, pageErr
 		}
-		if page.CapReached {
+		if page.PageBudgetExhausted {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		pagesSeen += page.Pages

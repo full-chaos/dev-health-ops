@@ -128,52 +128,60 @@ const (
 	githubTestsRunJobsComponent      = "run_jobs"
 	githubTestsRunArtifactsComponent = "run_artifacts"
 	githubTestsRunReportsComponent   = "run_reports"
-	githubTestsPerRunCapCause        = "per_run_cap"
+	// githubTestsPerRunCapCause is the POSITIVELY OBSERVED item cap: the
+	// provider handed back more items than the cap allows, so the boundary was
+	// seen and the remainder is known to be beyond it.
+	githubTestsPerRunCapCause = "per_run_cap"
+	// githubTestsPerRunPageBudgetCause is the nested paginator running out of
+	// page allowance INSIDE one run. The two arrive on the same CapReached
+	// flag -- providerfoundation sets it both when MaxPages is exhausted and
+	// when MaxItems is reached -- but they mean opposite things about what was
+	// seen. A page-budget stop leaves an UNKNOWN remainder, so it must not
+	// advance the watermark; the item cap leaves a known one, so it may.
+	githubTestsPerRunPageBudgetCause = "per_run_page_budget"
 )
 
-// githubTestsWindowBlockingComponents is the subset of the vocabulary that
-// leaves part of the REQUESTED WINDOW unwalked, and is therefore the subset
-// that must withhold the watermark.
+// githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
+// pairs that may advance the watermark. It is an allowlist rather than a
+// blocklist on purpose: anything not named here withholds, so a future
+// observation added to the vocabulary and forgotten here fails SAFE -- it
+// stalls loudly instead of silently advancing over data nobody looked at.
 //
-// GitHub serves runs newest-first, so an inventory phase that stops at its
-// page budget has covered the new end of the window and never reached the old
-// one. Advancing past that would turn the unreached remainder into the
-// permanent lower-bound hole CHAOS-2587 describes, which is why CHAOS-4130
-// made those observations withhold the watermark.
+// The single rule, which CHAOS-4142 established and codex's review forced us
+// to apply one level down: **a page budget stop withholds the watermark; a
+// positively observed item cap advances it.**
 //
-// A per-run cap is the opposite shape: the listing walk COMPLETED, every run
-// in the window was seen and committed, and only items inside an
-// already-committed run were dropped. There is no unreached remainder to
-// protect. Withholding the watermark there recovers nothing -- the caps are
-// deterministic, so the next attempt at the same window drops exactly the same
-// items -- while costing the source every future window. That is the
-// permanent-zero-coverage defect CHAOS-4142 was opened for.
-var githubTestsWindowBlockingComponents = map[string]struct{}{
-	githubTestsRunInventoryComponent:      {},
-	githubTestsArtifactInventoryComponent: {},
-	// report_member is listed to PRESERVE its pre-CHAOS-4142 behavior
-	// unchanged, not because a malformed archive member leaves a window
-	// unwalked -- it does not. A repository with a permanently unparseable
-	// test-report member therefore still withholds its watermark on every
-	// window, which is the same permanent-staleness shape CHAOS-4142 fixes for
-	// the per-run caps, just without a cancellation to make it visible.
-	// Both of its causes are in fact deterministic (`unreadable` at :326 is a
-	// zip read of an already-downloaded in-memory archive, `malformed` at :339
-	// and :347 is a parse of those same bytes -- a transient fetch failure
-	// returns earlier, in downloadGitHubTestsArtifact), so it very likely
-	// belongs in the in-window class. Reclassifying it is a coverage-semantics
-	// decision of its own and would rewrite four tests that deliberately assert
-	// today's behavior, so it is tracked as CHAOS-4153 rather than folded in
-	// here; this change narrows the predicate for the per-run components ONLY.
-	githubTestsReportMemberComponent: {},
+// A page budget stop -- whether it is the runs LISTING hitting its cumulative
+// budget (CHAOS-4130) or a nested per-run paginator running out of pages --
+// leaves an UNKNOWN remainder. GitHub serves newest-first, so advancing over
+// an unobserved remainder is the permanent lower-bound hole CHAOS-2587
+// describes, and it is the same hole one level down when the unobserved part
+// is the tail of one run's jobs.
+//
+// A positively observed item cap is different in kind: the provider handed
+// back more items than the cap allows, the walk over the window completed, and
+// re-fetching returns exactly the same items. Withholding there recovers
+// nothing and pins since_at forever, which is the CHAOS-4142 outage.
+//
+// report_member stays withholding, preserving its pre-CHAOS-4142 behavior
+// rather than being reclassified; see CHAOS-4153.
+var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
+	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
+	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
+	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}},
 }
 
-// githubTestsBlocksWatermark reports whether these observations leave part of
-// the requested window unwalked. Coverage honesty is a SEPARATE claim:
-// reports_complete stays false for any observation, blocking or not.
+// githubTestsBlocksWatermark reports whether these observations leave any part
+// of the requested window, or of a run inside it, UNOBSERVED. Coverage honesty
+// is a SEPARATE claim: reports_complete stays false for any observation,
+// withholding or not.
 func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 	for _, observation := range incomplete {
-		if _, blocking := githubTestsWindowBlockingComponents[observation.Component]; blocking {
+		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
+		if !advancing {
+			return true
+		}
+		if _, ok := causes[observation.Cause]; !ok {
 			return true
 		}
 	}
@@ -188,9 +196,15 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent:      {"malformed": {}, "unreadable": {}},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
-	githubTestsRunJobsComponent:           {githubTestsPerRunCapCause: {}},
-	githubTestsRunArtifactsComponent:      {githubTestsPerRunCapCause: {}},
-	githubTestsRunReportsComponent:        {githubTestsPerRunCapCause: {}},
+	githubTestsRunJobsComponent: {
+		githubTestsPerRunCapCause: {}, githubTestsPerRunPageBudgetCause: {},
+	},
+	githubTestsRunArtifactsComponent: {
+		githubTestsPerRunCapCause: {}, githubTestsPerRunPageBudgetCause: {},
+	},
+	// run_reports aggregates rows already parsed out of downloaded archives.
+	// Nothing paginates there, so it has no page-budget cause.
+	githubTestsRunReportsComponent: {githubTestsPerRunCapCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

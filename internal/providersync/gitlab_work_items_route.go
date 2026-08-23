@@ -454,7 +454,7 @@ func collectGitLabPayloads(
 	if err != nil {
 		return nil, 0, err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	return page.Items, page.Pages, nil

@@ -165,7 +165,7 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 			}
 			result.addIncomplete("milestones", "", pageErr)
 		}
-		if page.CapReached {
+		if page.PageBudgetExhausted {
 			return result, ErrPaginationCapExceeded
 		}
 		for _, raw := range page.Items {
@@ -246,7 +246,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	if err != nil {
 		return err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return ErrPaginationCapExceeded
 	}
 	for _, raw := range page.Items {
@@ -268,7 +268,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		if err != nil {
 			return err
 		}
-		if eventPage.CapReached {
+		if eventPage.PageBudgetExhausted {
 			return ErrPaginationCapExceeded
 		}
 		comments := []json.RawMessage{}
@@ -287,7 +287,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 				}
 				result.addIncomplete("issue_comments", strconv.Itoa(listed.Number), commentErr)
 				comments = commentRows
-			case commentPage.CapReached:
+			case commentPage.PageBudgetExhausted:
 				return ErrPaginationCapExceeded
 			default:
 				comments = commentRows
@@ -338,7 +338,7 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 	if err != nil {
 		return err
 	}
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return ErrPaginationCapExceeded
 	}
 	numbers, err := filterGitHubPullWindow(page.Items, claim)
@@ -393,7 +393,7 @@ func collectGitHubWorkItemChildPages(
 			MaxPages: maxPages, MaxItems: itemLimit,
 		},
 	)
-	if err != nil || page.CapReached {
+	if err != nil || page.PageBudgetExhausted {
 		return page.Items, page, err
 	}
 	return page.Items, page, nil
@@ -503,7 +503,7 @@ func (result *GitHubWorkItemsRESTResult) addPageEvidence(
 	page providerfoundation.PageCollection,
 ) {
 	result.Evidence.Pages += page.Pages
-	result.Evidence.CapReached = result.Evidence.CapReached || page.CapReached
+	result.Evidence.CapReached = result.Evidence.CapReached || page.PageBudgetExhausted
 }
 
 func (result *GitHubWorkItemsRESTResult) addIncomplete(

@@ -27,10 +27,26 @@ var ErrGraphQLComplexity = errors.New("provider GraphQL query exceeds complexity
 
 // PageCollection reports bounded pagination evidence. Pages counts logical
 // page responses; physical retry attempts remain available through Metrics.
+// PageCollection reports WHY a walk stopped, not merely that it did.
+//
+// These were one boolean, CapReached, written at ten sites for what turned out
+// to be a single reason (page budget) while a second, quite different reason
+// (the item cap) silently set nothing at all. A per-run cap consumer read that
+// boolean as "this run had too many items", committed a partial run, and
+// advanced its watermark past jobs that had never been fetched (CHAOS-4142,
+// codex round 1). The reasons classify OPPOSITELY -- an observed item cap has a
+// known remainder and may advance a watermark, an exhausted page budget has an
+// unknown one and must not -- so they are separate fields and every consumer is
+// made to say which it means.
 type PageCollection struct {
-	Items      []json.RawMessage
-	Pages      int
-	CapReached bool
+	Items []json.RawMessage
+	Pages int
+	// PageBudgetExhausted: MaxPages ran out before the provider ran out of
+	// pages. The remainder was never observed.
+	PageBudgetExhausted bool
+	// ItemCapReached: MaxItems was reached, so the boundary was positively
+	// observed and everything beyond it is known to be beyond the cap.
+	ItemCapReached bool
 }
 
 // PageVisit is the bounded page callback used by resumable provider routes.
@@ -74,7 +90,7 @@ func VisitGitHubLinkPages(
 	result := PageCollection{}
 	for next != "" {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		cursorBefore := next
@@ -121,7 +137,7 @@ func VisitGitLabPageParamPages(
 	result := PageCollection{}
 	for page > 0 {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		query := cloneValues(options.Query)
@@ -223,7 +239,7 @@ func CollectGitHubLinkPages(
 	result := PageCollection{}
 	for next != "" {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		response, err := client.Do(ctx, http.MethodGet, next, nil)
@@ -248,6 +264,7 @@ func CollectGitHubLinkPages(
 			}
 			result.Items = append(result.Items, item)
 			if options.MaxItems > 0 && len(result.Items) >= options.MaxItems {
+				result.ItemCapReached = true
 				return result, nil
 			}
 		}
@@ -287,7 +304,7 @@ func CollectGitLabPageParamPages(
 	result := PageCollection{}
 	for page > 0 {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		query := cloneValues(options.Query)
@@ -363,7 +380,7 @@ func CollectLinearGraphQLPages(
 	cursor := strings.TrimSpace(options.InitialCursor)
 	for {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		variables := cloneAnyMap(options.Variables)
@@ -453,7 +470,7 @@ func CollectJiraTokenOffsetPages(
 	token := ""
 	for {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		query := cloneValues(options.Query)
@@ -534,7 +551,7 @@ func CollectLaunchDarklyOffsetPages(
 	offset := 0
 	for {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		query := cloneValues(options.Query)
@@ -630,6 +647,7 @@ func CollectLaunchDarklyAuditPages(
 		}
 		result.Items = append(result.Items, items...)
 		if len(result.Items) >= options.MaxItems {
+			result.ItemCapReached = true
 			return result, nil
 		}
 		href, err := launchDarklyNextHref(payload)
@@ -641,7 +659,7 @@ func CollectLaunchDarklyAuditPages(
 		}
 		next = href
 	}
-	result.CapReached = true
+	result.PageBudgetExhausted = true
 	return result, nil
 }
 

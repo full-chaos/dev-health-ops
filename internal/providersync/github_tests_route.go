@@ -178,7 +178,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if runsPage.CapReached || len(runsPage.Items) > maxRuns {
+	if runsPage.PageBudgetExhausted || len(runsPage.Items) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	// The active Python report producer performs a second, server-side run
@@ -198,7 +198,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if artifactRunsPage.CapReached || len(artifactRunsPage.Items) > maxRuns {
+	if artifactRunsPage.PageBudgetExhausted || len(artifactRunsPage.Items) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	pipelines := make([]githubTestsPipelineRow, 0, len(runsPage.Items))
@@ -238,7 +238,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// this cap. It survives as the oracle/comparison implementation. If a
 		// fixture ever crosses this cap, mirror recordGitHubTestsPerRunTruncation
 		// here rather than treating the refusal as intended behavior.
-		if jobPage.CapReached {
+		if jobPage.PageBudgetExhausted {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		runJobs := make([]githubTestsJobRow, 0, len(jobPage.Items))
@@ -301,7 +301,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// this cap. It survives as the oracle/comparison implementation. If a
 		// fixture ever crosses this cap, mirror recordGitHubTestsPerRunTruncation
 		// here rather than treating the refusal as intended behavior.
-		if artPage.CapReached || len(artPage.Items) > maxArtifacts {
+		if artPage.PageBudgetExhausted || len(artPage.Items) > maxArtifacts {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
 		for _, artifactRaw := range artPage.Items {

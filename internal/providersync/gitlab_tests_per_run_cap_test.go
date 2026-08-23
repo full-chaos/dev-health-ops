@@ -18,8 +18,12 @@ import (
 // budget can trip, which isolates the per-run cap as the only reason the
 // watermark could be withheld.
 type gitLabTestsOversizedRunDoer struct {
-	t           *testing.T
-	jobs        int
+	t    *testing.T
+	jobs int
+	// jobsPerPage, when > 0, serves that many jobs per page and always sets
+	// X-Next-Page, so the paginator stops on its PAGE budget rather than on the
+	// item cap.
+	jobsPerPage int
 	jobRequests int
 }
 
@@ -39,8 +43,13 @@ func (doer *gitLabTestsOversizedRunDoer) Do(request *http.Request) (*http.Respon
 			`"web_url":"https://gitlab.example/acme/api/-/pipelines/9000"}]`
 	case strings.HasSuffix(path, "/jobs"):
 		doer.jobRequests++
-		items := make([]string, 0, doer.jobs)
-		for index := 1; index <= doer.jobs; index++ {
+		count := doer.jobs
+		if doer.jobsPerPage > 0 {
+			count = doer.jobsPerPage
+			header.Set("X-Next-Page", strconv.Itoa(doer.jobRequests+1))
+		}
+		items := make([]string, 0, count)
+		for index := 1; index <= count; index++ {
 			id := strconv.Itoa(index)
 			items = append(items, `{"id":`+id+`,"name":"unit-`+id+`","stage":"test",`+
 				`"status":"success","started_at":"2026-07-22T10:01:00Z",`+
@@ -238,5 +247,38 @@ func TestGitLabTestsTruncationVocabularyStaysClosed(t *testing.T) {
 		`{"phase":"pipelines","truncated":["run_job"]}`,
 	); !errors.Is(err, ErrChunkCheckpointConflict) {
 		t.Fatalf("unknown truncation decoded err=%v, want a checkpoint conflict", err)
+	}
+}
+
+// REGRESSION (codex round 1), GitLab side. CollectGitLabPageParamPages is
+// passed no MaxItems at all, so its CapReached can ONLY ever mean page-budget
+// exhaustion -- the item cap here is purely len-based. Treating that flag as
+// the item cap advanced the watermark over jobs that were never fetched.
+func TestGitLabTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
+	doer := &gitLabTestsOversizedRunDoer{t: t, jobsPerPage: 2}
+	claim := nativeTestClaim("gitlab", "tests")
+	walk := walkGitLabTestsChunks(t, claim, gitLabRepositoryClient(t, doer, "https://gitlab.example"), 4)
+
+	found := false
+	for _, component := range walk.cursor.Truncated {
+		if component == gitLabRunJobsPageBudgetComponent {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no %s truncation in %+v — a page-budget stop must not be reported as the item cap",
+			gitLabRunJobsPageBudgetComponent, walk.cursor.Truncated)
+	}
+	// Anti-vacuity: stopped on PAGES while under the item cap.
+	if walk.cursor.Jobs >= githubTestsMaxJobsPerRun {
+		t.Fatalf("kept %d jobs, reaching the %d item cap; the fixture is not exercising the page budget",
+			walk.cursor.Jobs, githubTestsMaxJobsPerRun)
+	}
+	if walk.cursor.Jobs == 0 {
+		t.Fatal("kept no jobs; the pipeline committed nothing at all")
+	}
+	if walk.final.Watermark != nil {
+		t.Fatalf("nested page-budget stop advanced the watermark to %v; unfetched jobs would be lost permanently",
+			walk.final.Watermark)
 	}
 }

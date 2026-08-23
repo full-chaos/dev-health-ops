@@ -200,7 +200,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// since-boundary early stop above, CapReached now means what it claims:
 	// more than MaxPages pages fall WITHIN the claim's window, not that the
 	// repository merely has a long history.
-	if page.CapReached {
+	if page.PageBudgetExhausted {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	listed, err := filterGitHubPullWindow(page.Items, claim)
@@ -244,7 +244,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 			Requests:   page.Pages + 1 + detailRequests,
 			Pages:      page.Pages,
 			Records:    len(rows),
-			CapReached: page.CapReached,
+			CapReached: page.PageBudgetExhausted,
 		},
 	}, nil
 }

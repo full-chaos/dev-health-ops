@@ -366,6 +366,23 @@ func MetricPerRunComponentLabel(value string) string {
 	return lowered
 }
 
+// metricPerRunCauseVocabulary separates the two reasons a per-run truncation
+// fires. They classify oppositely -- an item cap advances the watermark, a page
+// budget withholds it -- so an operator must be able to tell them apart on the
+// metric without reading route code (CHAOS-4142).
+var metricPerRunCauseVocabulary = map[string]struct{}{
+	"per_run_cap": {}, "per_run_page_budget": {},
+}
+
+// MetricPerRunCauseLabel bounds the per-run cause label.
+func MetricPerRunCauseLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricPerRunCauseVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
 // RecordPerRunTruncation counts ONE workflow run committed with only the first
 // cap-worth of its items, by bounded provider, dataset, and component.
 //
@@ -376,14 +393,14 @@ func MetricPerRunComponentLabel(value string) string {
 // would mix a coverage-stalling condition with a bounded, self-limiting one,
 // so an alert could not tell "this source is going stale" from "this source
 // has one enormous run in it" (CHAOS-4142).
-func (m *Metrics) RecordPerRunTruncation(provider, dataset, component string) {
+func (m *Metrics) RecordPerRunTruncation(provider, dataset, component, cause string) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.perRunTruncation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
-		":"+MetricPerRunComponentLabel(component)]++
+		":"+MetricPerRunComponentLabel(component)+":"+MetricPerRunCauseLabel(cause)]++
 }
 
 // RecordUnitTerminalWithRows counts a provider unit that was terminalized
@@ -424,9 +441,9 @@ func writeProviderDatasetCounter(
 	return nil
 }
 
-// writeProviderDatasetComponentCounter is the three-label twin of
+// writeProviderDatasetComponentCounter is the four-label twin of
 // writeProviderDatasetCounter. Every key is built from bounded vocabularies,
-// so SplitN into exactly three parts is total.
+// so SplitN into exactly four parts is total.
 func writeProviderDatasetComponentCounter(
 	writer io.Writer, name, help string, values map[string]uint64,
 ) error {
@@ -439,13 +456,13 @@ func writeProviderDatasetComponentCounter(
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		parts := strings.SplitN(key, ":", 3)
-		if len(parts) != 3 {
+		parts := strings.SplitN(key, ":", 4)
+		if len(parts) != 4 {
 			continue
 		}
 		if _, err := fmt.Fprintf(
-			writer, "%s{provider=%q,dataset=%q,component=%q} %d\n",
-			name, parts[0], parts[1], parts[2], values[key],
+			writer, "%s{provider=%q,dataset=%q,component=%q,cause=%q} %d\n",
+			name, parts[0], parts[1], parts[2], parts[3], values[key],
 		); err != nil {
 			return err
 		}

@@ -209,7 +209,7 @@ func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *
 
 // The cumulative-budget refusal path (remainingPageBudget returning the error
 // on entry, before the paginator's own per-invocation cap can fire) is a
-// DIFFERENT branch from collection.CapReached, and only a resume reaches it.
+// DIFFERENT branch from collection.PageBudgetExhausted, and only a resume reaches it.
 // It is the branch the CHAOS-4130 units actually died on: they never got to
 // spend a request.
 func TestGitLabTestsChunkRouteResumeWithExhaustedBudgetFinalizes(t *testing.T) {

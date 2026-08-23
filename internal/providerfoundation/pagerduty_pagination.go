@@ -37,7 +37,7 @@ func CollectPagerDutyOffsetPages(
 	offset := 0
 	for {
 		if result.Pages >= options.MaxPages {
-			result.CapReached = true
+			result.PageBudgetExhausted = true
 			return result, nil
 		}
 		query := url.Values{

@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -19,6 +19,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.compute_work_items import (
+    _INHERITABLE_RELATIONSHIP_TYPES,
     build_linked_issue_team_resolver,
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
@@ -31,6 +32,10 @@ from dev_health_ops.metrics.job_daily import (
 from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.team_attribution_telemetry import (
+    ATTRIBUTION_DOWNGRADES_TOTAL,
+    STORED_EDGE_LOAD_FAILURES_TOTAL,
+)
 from dev_health_ops.metrics.work_item_engine_destinations import (
     compute_work_item_engine_destinations_daily,
 )
@@ -40,7 +45,7 @@ from dev_health_ops.metrics.work_items import (
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
-from dev_health_ops.models.work_items import WorkItem
+from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
 from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
@@ -99,6 +104,291 @@ def _ensure_unit_lease_for_write(surface: str) -> None:
     check = _WORK_ITEMS_SYNC_LEASE_CHECK.get()
     if check is not None and not check(surface):
         raise WorkItemsSyncLeaseLost(surface)
+
+
+# CHAOS-4112: sources that mean "this item has no owning team". Anything else
+# that carries a team_id is a real attribution, so falling from it to one of
+# these across a recompute is a data loss, not a precedence change.
+_TEAMLESS_ATTRIBUTION_SOURCES = frozenset({"unassigned", ""})
+
+
+def _merge_stored_inheritable_edges(
+    primary_sink: Any,
+    org_id: str,
+    work_items: Sequence[Any],
+    merged_deps: dict[tuple[str, str, str], Any],
+) -> int:
+    """Union the STORED inheritable edges for the items being recomputed,
+    minus the ones this run's provider snapshot proves were removed.
+
+    CHAOS-4112: the donor preload used to consider this run's fresh edges
+    only. Attribution rows are re-stamped every run, so once a PR's
+    ``relates_to`` edge aged out of the sync window every later recompute
+    rebuilt that PR as ``unassigned`` and superseded its own earlier, correct
+    ``linked_issue`` attribution -- the recency of the EDGE decided, not the
+    recency of the items.
+
+    The naive union would fix that at the cost of never forgetting a removed
+    link, because ``work_item_dependencies`` is insert-only and carries no
+    tombstone. It does not have to: the producers RE-EXTRACT an item's links
+    on every sync and stamp them ``last_synced=now`` (all four providers
+    construct ``WorkItemDependency``, whose ``last_synced`` defaults to now),
+    so a link still present upstream reappears in THIS run's fresh edges. An
+    edge that is only in the store, for an item whose current sync DID produce
+    edges, is therefore a link the provider has stopped emitting -- a removal.
+
+    That is what the "extractor ran" proof below tests, keyed on
+    ``(source_work_item_id, relationship_type_raw)``. A stored edge is dropped
+    only when THAT extractor produced a fresh edge for THAT item this run --
+    positive evidence it ran and simply did not re-emit this link. An
+    item-level proof would be unsound: GitHub edges come from the PR body
+    (always parsed) and from Linear linkback comments (gated by
+    GITHUB_FETCH_COMMENTS, capped by GITHUB_COMMENTS_LIMIT), so a fresh body
+    edge says nothing about whether comment extraction ran, and treating it as
+    proof would delete stored `github_comment_linear_url` edges -- decaying
+    exactly the population this ticket protects. Where no such evidence
+    exists, "removed" and "that extractor did not run" are
+    indistinguishable, so the stored edge is kept: never re-introducing the
+    decay this function exists to remove.
+
+    Verified against the dev store: 1,263 edges are stamped in the same pass
+    as their source item, and every one of the 25 that lag their item belongs
+    to an item that ALSO has fresh edges -- i.e. the extractor ran and those
+    links were genuinely dropped upstream.
+
+    Residual: removals are only detected per provenance, so an item that loses
+    its LAST edge of a given kind produces no fresh edge of that kind and its
+    stored one keeps donating until another appears. Closing that needs a
+    tombstone, or a recorded "this extractor ran and found nothing" marker, at
+    the sync layer. The residual errs toward preserving a team rather than
+    losing one.
+
+    Bounded to this run's items as the edge SOURCE and to
+    ``_INHERITABLE_RELATIONSHIP_TYPES``, so this is a keyed read, never a
+    history scan. A fresh edge stays authoritative for its own
+    ``(source, target, relationship_type)``; a stored edge differing only by
+    type is kept so ``build_linked_issue_team_resolver``'s ``latest_edge``
+    collapse can settle the pair by ``last_synced`` -- which is what protects
+    the retype case (``relates_to`` -> ``blocked_by``) that motivated the
+    fresh-only rule.
+
+    Returns the number of stored edges added, for logging and tests.
+    """
+    if not org_id or not work_items:
+        return 0
+    if not hasattr(primary_sink, "query_dicts"):
+        return 0
+    source_ids = sorted(
+        {
+            str(getattr(wi, "work_item_id", "") or "")
+            for wi in work_items
+            if getattr(wi, "work_item_id", "")
+        }
+    )
+    if not source_ids:
+        return 0
+
+    # (source_work_item_id, relationship_type_raw) pairs this run produced.
+    #
+    # The pruning proof is PER PROVENANCE, not per item, because "the item was
+    # re-synced" does not imply "every extractor that can produce its edges
+    # ran". GitHub edges come from at least two places: the PR body, always
+    # parsed, and Linear linkback COMMENTS, which are gated by
+    # GITHUB_FETCH_COMMENTS and capped by GITHUB_COMMENTS_LIMIT. A PR whose
+    # body edge is fresh while comments were disabled, capped or failed would,
+    # under an item-level proof, have its stored `github_comment_linear_url`
+    # edge deleted -- decaying exactly the Linear-linkback population this
+    # ticket exists to protect.
+    #
+    # Keying the proof on relationship_type_raw means a stored edge is only
+    # discarded when THAT extractor demonstrably ran and did not re-emit it.
+    # A retype (`linear_relation:related` -> `linear_relation:blocks`) changes
+    # the raw value, so the old row is not pruned here; `latest_edge`'s
+    # recency collapse remains the backstop for that case.
+    resynced_provenances = {
+        (dep.source_work_item_id, dep.relationship_type_raw)
+        for dep in merged_deps.values()
+    }
+
+    # One bounded retry. This read is now load-bearing for attribution
+    # correctness, and a transient ClickHouse blip would otherwise drop the
+    # run back to sync-window-only inheritance -- silently recreating the very
+    # decay this function exists to prevent. Retrying costs one keyed lookup
+    # and removes the most common failure mode.
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        added = 0
+        try:
+            rows = list(
+                primary_sink.query_dicts(
+                    "SELECT * FROM work_item_dependencies FINAL "
+                    "WHERE org_id = {org_id:String} "
+                    "  AND source_work_item_id IN {source_ids:Array(String)} "
+                    "  AND relationship_type IN {rel_types:Array(String)}",
+                    {
+                        "org_id": org_id,
+                        "source_ids": source_ids,
+                        "rel_types": sorted(_INHERITABLE_RELATIONSHIP_TYPES),
+                    },
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - retried, then reported below
+            last_error = exc
+            continue
+
+        for row in rows:
+            stored_dep = to_dataclass(WorkItemDependency, row)
+            key = (
+                stored_dep.source_work_item_id,
+                stored_dep.target_work_item_id,
+                stored_dep.relationship_type,
+            )
+            if key in merged_deps:
+                continue
+            provenance = (
+                stored_dep.source_work_item_id,
+                stored_dep.relationship_type_raw,
+            )
+            if provenance in resynced_provenances:
+                # This extractor ran for this item and did not re-emit this
+                # edge: the provider has removed the link.
+                continue
+            merged_deps[key] = stored_dep
+            added += 1
+        break
+    else:
+        # Both attempts failed. Inheritance falls back to the sync window for
+        # THIS run, which is the pre-CHAOS-4112 behaviour: an item whose donor
+        # edge is older than the window can be rebuilt as `unassigned`. The
+        # next successful run restores it -- the stored edge is found again --
+        # so the regression is transient and self-healing, unlike the original
+        # bug. It is still a degraded window, so it is counted rather than
+        # left to a log line nobody aggregates -- and it is doubly observable,
+        # since the downgrade counter also fires on the degraded write.
+        #
+        # Shipping this rather than failing closed is a deliberate ruling: a
+        # partial skip would trade a transient inconsistency for a cross-table
+        # one, because compute stamps the same resolver's team onto
+        # work_item_cycle_times and the state-duration rows too. Making all
+        # three writers fail closed together is a design question tracked in
+        # **CHAOS-4123**.
+        logger.warning(
+            "Stored inheritable edge load failed after retry; team "
+            "inheritance is limited to the sync window for this run, so "
+            "items whose donor edge is older than the window may be rebuilt "
+            "as unassigned until the next successful run (CHAOS-4112)",
+            exc_info=last_error,
+        )
+        STORED_EDGE_LOAD_FAILURES_TOTAL.labels(org_id=org_id).inc()
+        return 0
+
+    if added:
+        logger.info(
+            "Team inheritance: unioned %d stored inheritable edge(s) with the "
+            "sync window's fresh edges",
+            added,
+        )
+    return added
+
+
+def _load_prior_primary_attributions(
+    primary_sink: Any, org_id: str, work_item_ids: list[str]
+) -> dict[str, tuple[str, str]]:
+    """Primary (source, provider) per work item as stored BEFORE this run.
+
+    Read before the recompute writes, so it is the state a downgrade would
+    supersede. Bounded to the items being recomputed. Same latest-primary
+    fence as every other reader of this table (FINAL + is_primary + the
+    (work_item_id, max(computed_at)) tuple filter): without it an older
+    candidate row can masquerade as the current attribution and manufacture a
+    phantom downgrade.
+    """
+    if not org_id or not work_item_ids:
+        return {}
+    if not hasattr(primary_sink, "query_dicts"):
+        return {}
+    prior: dict[str, tuple[str, str]] = {}
+    try:
+        for row in primary_sink.query_dicts(
+            "SELECT work_item_id, source, provider, team_id "
+            "FROM work_item_team_attributions FINAL "
+            "WHERE org_id = {org_id:String} "
+            "  AND work_item_id IN {ids:Array(String)} "
+            "  AND is_primary = 1 "
+            "  AND (work_item_id, computed_at) IN ("
+            "      SELECT work_item_id, max(computed_at) "
+            "      FROM work_item_team_attributions "
+            "      WHERE org_id = {org_id:String} "
+            "        AND work_item_id IN {ids:Array(String)} "
+            "      GROUP BY work_item_id)",
+            {"org_id": org_id, "ids": sorted(set(work_item_ids))},
+        ):
+            work_item_id = str(row.get("work_item_id") or "")
+            if not work_item_id:
+                continue
+            source = str(row.get("source") or "")
+            team_id = str(row.get("team_id") or "").strip()
+            # Only a row that actually carried a team can be downgraded FROM.
+            if source in _TEAMLESS_ATTRIBUTION_SOURCES or not team_id:
+                continue
+            prior[work_item_id] = (source, str(row.get("provider") or ""))
+    except Exception:
+        # Telemetry must never fail the run it observes.
+        logger.warning(
+            "Prior attribution load failed; team-attribution downgrade "
+            "telemetry is unavailable for this run",
+            exc_info=True,
+        )
+        return {}
+    return prior
+
+
+def _report_attribution_downgrades(
+    prior_primary: dict[str, tuple[str, str]],
+    new_attributions: Sequence[Any],
+) -> int:
+    """Count and log items that lost a real team on this recompute.
+
+    The decay CHAOS-4112 describes is silent by construction -- the rebuilt
+    row simply supersedes the good one -- so this is the only place the
+    transition is observable. Recoveries (unassigned -> teamed) and moves
+    between two teamed sources are deliberately NOT counted; neither loses
+    data.
+    """
+    downgraded = 0
+    for record in new_attributions:
+        if int(getattr(record, "is_primary", 0) or 0) != 1:
+            continue
+        work_item_id = str(getattr(record, "work_item_id", "") or "")
+        previous = prior_primary.get(work_item_id)
+        if previous is None:
+            continue
+        source = str(getattr(record, "source", "") or "")
+        team_id = str(getattr(record, "team_id", "") or "").strip()
+        if source not in _TEAMLESS_ATTRIBUTION_SOURCES and team_id:
+            continue
+        previous_source, previous_provider = previous
+        downgraded += 1
+        logger.warning(
+            "Team attribution DOWNGRADED to unassigned on recompute: "
+            "work_item_id=%s previous_source=%s new_source=%s. A stored "
+            "inheritable edge or donor attribution that previously resolved "
+            "this item no longer does (CHAOS-4112).",
+            work_item_id,
+            previous_source,
+            source or "unassigned",
+        )
+        ATTRIBUTION_DOWNGRADES_TOTAL.labels(
+            provider=str(getattr(record, "provider", "") or previous_provider or ""),
+            previous_source=previous_source,
+        ).inc()
+    if downgraded:
+        logger.warning(
+            "%d work item(s) lost a previously-attributed team on this "
+            "recompute (CHAOS-4112 decay signature)",
+            downgraded,
+        )
+    return downgraded
 
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
@@ -1145,10 +1435,28 @@ def run_work_items_sync_job(
         # Linear issue).
         #
         # Freshly-extracted edges are AUTHORITATIVE for the items synced this
-        # run — they are the current source-of-truth, so a link removed from a
-        # PR is simply absent and stops granting inheritance (no append-only
-        # stale-edge problem on the sync path). We therefore use the fresh edges
-        # only. The donor *items* they point at may have been synced earlier, so
+        # run, but they are NOT the whole edge set. Attribution rows are
+        # recomputed and re-stamped on every run, so using the fresh edges
+        # alone meant that once a PR's `relates_to` edge aged out of the sync
+        # window, every later recompute rebuilt that PR as `unassigned` and
+        # SUPERSEDED its own earlier, correct `linked_issue` attribution
+        # (CHAOS-4112: 69 items org-wide were wrongly unassigned this way; the
+        # recency of the EDGE, not of the items, decided). We therefore union
+        # the STORED inheritable edges for the items being recomputed with the
+        # fresh ones, and let `build_linked_issue_team_resolver`'s existing
+        # `latest_edge` collapse settle any conflict by `last_synced` — which
+        # is what protects the stale-edge case that motivated the fresh-only
+        # rule: a relationship retyped `relates_to` -> `blocked_by` arrives
+        # fresh with a newer timestamp and supersedes the stored row.
+        #
+        # Residual, accepted deliberately on this ticket: work_item_dependencies
+        # is insert-only (ReplacingMergeTree keyed on
+        # (source, target, relationship_type)), so a link genuinely REMOVED
+        # from a PR leaves no tombstone and its stored row keeps donating. The
+        # ticket weighs that against 69 silently-decayed attributions and
+        # chooses the union; a real fix needs edge deletion at the sync layer.
+        #
+        # The donor *items* the edges point at may have been synced earlier, so
         # those are loaded from ClickHouse — bounded to the referenced targets,
         # never a full-history scan — and unioned with the fresh items.
         donor_by_id: dict[str, Any] = {}
@@ -1161,6 +1469,8 @@ def run_work_items_sync_job(
                     dep.relationship_type,
                 )
             ] = dep
+
+        _merge_stored_inheritable_edges(primary_sink, org_id, work_items, merged_deps)
 
         # Load only the donor items referenced by a fresh edge target — bounded
         # to the linked surface, under tenant scope, degrading gracefully.
@@ -1227,6 +1537,17 @@ def run_work_items_sync_job(
             attribution_context=team_attribution_context,
         )
 
+        # CHAOS-4112 telemetry: snapshot the stored primary attributions
+        # BEFORE this run overwrites them, so a teamed -> unassigned
+        # transition can be detected. Loaded once per run, not per day: the
+        # attribution compute below does not vary with the day, so reporting
+        # inside the loop would multiply every downgrade by the backfill
+        # window.
+        prior_primary_attributions = _load_prior_primary_attributions(
+            primary_sink, org_id, [wi.work_item_id for wi in work_items]
+        )
+        attribution_downgrades_reported = False
+
         for d in days:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
@@ -1257,6 +1578,12 @@ def run_work_items_sync_job(
                 linked_issue_resolver=linked_issue_resolver,
                 attribution_context=team_attribution_context,
             )
+            if not attribution_downgrades_reported:
+                attribution_downgrades_reported = True
+                _report_attribution_downgrades(
+                    prior_primary_attributions, wi_team_attributions
+                )
+
             wi_state_durations = compute_work_item_state_durations_daily(
                 day=d,
                 work_items=work_items,

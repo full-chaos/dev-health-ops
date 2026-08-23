@@ -1,85 +1,29 @@
-"""Prometheus and OpenTelemetry instruments for investment LLM telemetry."""
+"""Prometheus and OpenTelemetry instruments for investment LLM telemetry.
+
+The dual-backend plumbing lives in ``dev_health_ops.telemetry_metrics``
+(extracted under CHAOS-4112 so the work-item attribution module can register
+counters without copying it). This module keeps its own meter, so these
+instruments stay attributed to it.
+"""
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
+from dev_health_ops.telemetry_metrics import (
+    build_counter,
+    build_histogram,
+    load_otel_meter,
+    load_prometheus,
+    noop_metric,
+)
 
-def _noop_metric(*args: Any, **kwargs: Any) -> Any:
-    class _Noop:
-        def labels(self, **values: str) -> _Noop:
-            return self
+# Kept under its original private name: this module's existing test surface
+# refers to it (tests/work_graph/test_investment_llm_telemetry.py).
+_noop_metric = noop_metric
 
-        def inc(self, amount: float = 1) -> None:
-            return None
-
-        def observe(self, amount: float) -> None:
-            return None
-
-    return _Noop()
-
-
-try:
-    _prometheus: Any = import_module("prometheus_client")
-except ImportError:
-    _prometheus = None
-
-try:
-    _otel_metrics: Any = import_module("opentelemetry.metrics")
-    _meter: Any = _otel_metrics.get_meter(__name__)
-except ImportError:
-    _meter = None
-
-
-class _DualCounter:
-    def __init__(self, prometheus: Any, otel: Any) -> None:
-        self._prometheus = prometheus
-        self._otel = otel
-
-    def labels(self, **values: str) -> _BoundCounter:
-        prometheus = (
-            self._prometheus.labels(**values) if self._prometheus is not None else None
-        )
-        return _BoundCounter(prometheus, self._otel, values)
-
-
-class _BoundCounter:
-    def __init__(self, prometheus: Any, otel: Any, attributes: dict[str, str]) -> None:
-        self._prometheus = prometheus
-        self._otel = otel
-        self._attributes = attributes
-
-    def inc(self, amount: float = 1) -> None:
-        if self._prometheus is not None:
-            self._prometheus.inc(amount)
-        if self._otel is not None:
-            self._otel.add(amount, attributes=self._attributes)
-
-
-class _DualHistogram:
-    def __init__(self, prometheus: Any, otel: Any) -> None:
-        self._prometheus = prometheus
-        self._otel = otel
-
-    def labels(self, **values: str) -> _BoundHistogram:
-        prometheus = (
-            self._prometheus.labels(**values) if self._prometheus is not None else None
-        )
-        return _BoundHistogram(prometheus, self._otel, values)
-
-
-class _BoundHistogram:
-    def __init__(self, prometheus: Any, otel: Any, attributes: dict[str, str]) -> None:
-        self._prometheus = prometheus
-        self._otel = otel
-        self._attributes = attributes
-
-    def observe(self, amount: float) -> None:
-        if self._prometheus is not None:
-            self._prometheus.observe(amount)
-        if self._otel is not None:
-            self._otel.record(amount, attributes=self._attributes)
+_prometheus: Any = load_prometheus()
+_meter: Any = load_otel_meter(__name__)
 
 
 def _counter(
@@ -90,19 +34,7 @@ def _counter(
     meter: Any = _meter,
     prometheus: Any = _prometheus,
 ) -> Any:
-    prometheus_counter = (
-        prometheus.Counter(name, description, labels)
-        if prometheus is not None
-        else None
-    )
-    otel_counter = (
-        meter.create_counter(name, description=description)
-        if meter is not None
-        else None
-    )
-    if prometheus_counter is None and otel_counter is None:
-        return _noop_metric()
-    return _DualCounter(prometheus_counter, otel_counter)
+    return build_counter(name, description, labels, meter=meter, prometheus=prometheus)
 
 
 def _histogram(
@@ -114,23 +46,9 @@ def _histogram(
     meter: Any = _meter,
     prometheus: Any = _prometheus,
 ) -> Any:
-    prometheus_histogram = (
-        prometheus.Histogram(name, description, labels, buckets=buckets)
-        if prometheus is not None
-        else None
+    return build_histogram(
+        name, description, labels, buckets, meter=meter, prometheus=prometheus
     )
-    otel_histogram = (
-        meter.create_histogram(
-            name,
-            description=description,
-            explicit_bucket_boundaries_advisory=buckets,
-        )
-        if meter is not None
-        else None
-    )
-    if prometheus_histogram is None and otel_histogram is None:
-        return _noop_metric()
-    return _DualHistogram(prometheus_histogram, otel_histogram)
 
 
 COMMON_LABELS = ["provider", "model", "stage", "prompt_kind", "prompt_version"]

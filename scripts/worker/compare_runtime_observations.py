@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -363,7 +364,11 @@ def _require_measure(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ComparisonError(f"observation_measure_not_a_number:{name}")
     number = float(value)
-    if number != number or number in (float("inf"), float("-inf")):
+    # math.isfinite covers NaN and both infinities in one predicate. The
+    # earlier `number != number` spelling was the C idiom for NaN and CodeQL
+    # flagged it as a comparison of identical expressions -- correctly, since
+    # a reader cannot tell an intentional NaN test from a typo.
+    if not math.isfinite(number):
         raise ComparisonError(f"observation_measure_not_finite:{name}")
     if number < 0:
         raise ComparisonError(f"observation_measure_negative:{name}")
@@ -397,7 +402,7 @@ def _baseline_scalar(recorded: Any, key: str = "p50") -> float | None:
         return None
     # A non-finite or negative baseline is unusable as a denominator or a
     # reference point; treat it as no baseline rather than compare against it.
-    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+    if not math.isfinite(number) or number < 0:
         return None
     return number
 

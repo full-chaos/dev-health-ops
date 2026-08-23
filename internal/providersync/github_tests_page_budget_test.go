@@ -340,3 +340,66 @@ func TestChunkedExecutorReportsCommittedRowsOnTheFailurePath(t *testing.T) {
 		)
 	}
 }
+
+// The paginator's own per-invocation cap (collection.CapReached) is a
+// DIFFERENT branch from remainingPageBudget's refusal on entry: the first is
+// reached by a pass that walks to the end of its allowance, the second only by
+// a resume whose cumulative spend is already gone. Both must finalize, so both
+// need a test -- a continuation-driven walk never reaches the first.
+func TestGitHubTestsChunkRouteSinglePassCapReachedFinalizes(t *testing.T) {
+	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	claim := nativeTestClaim("github", "tests")
+	var final CompleteRouteBatch
+	terminal := ""
+	// MaxRuns=100 is one page of budget per phase against three real pages,
+	// and this emit never yields, so each phase walks its whole allowance and
+	// stops at the paginator's cap rather than at a cumulative refusal.
+	err := (GitHubTestsRouteHandler{MaxRuns: 100}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+		func(emission ChunkRouteEmission) error {
+			terminal = emission.CursorAfter
+			if emission.Final {
+				final = emission.Batch
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("CollectChunks err=%v, want a finalized unit", err)
+	}
+	cursor, decodeErr := decodeGitHubTestsChunkCursor(terminal)
+	if decodeErr != nil {
+		t.Fatalf("decode terminal cursor: %v", decodeErr)
+	}
+	if cursor.RunPages != 1 || cursor.ArtifactPages != 1 {
+		t.Fatalf(
+			"premise broken: phases spent RunPages=%d ArtifactPages=%d, want one page each",
+			cursor.RunPages, cursor.ArtifactPages,
+		)
+	}
+	want := map[string]bool{
+		githubTestsRunInventoryComponent:      false,
+		githubTestsArtifactInventoryComponent: false,
+	}
+	for _, observation := range cursor.Incomplete {
+		if observation.Cause == githubTestsPageBudgetCause {
+			if _, tracked := want[observation.Component]; tracked {
+				want[observation.Component] = true
+			}
+		}
+	}
+	for component, seen := range want {
+		if !seen {
+			t.Fatalf("no %s page-budget observation in %+v", component, cursor.Incomplete)
+		}
+	}
+	if final.Watermark != nil {
+		t.Fatalf("truncated unit advanced its watermark to %v", final.Watermark)
+	}
+	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, final,
+	); err != nil {
+		t.Fatalf("production comparator rejected a truncated completion: %v", err)
+	}
+}

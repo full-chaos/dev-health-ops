@@ -137,3 +137,125 @@ func TestGitLabTestsChunkRouteCountsEachPipelinePageOnce(t *testing.T) {
 		t.Fatalf("only %d pipeline listing request(s); the walk never re-entered a page", doer.pipelineListRequests)
 	}
 }
+
+// GitLab's budget stop must finalize with recorded lower-bound coverage, not
+// cancel. Returning ErrPaginationCapExceeded here reaches the same
+// deterministic-terminal category that destroyed the GitHub units in
+// CHAOS-4130 -- the project just has to be busy enough to get there.
+func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *testing.T) {
+	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	claim := nativeTestClaim("gitlab", "tests")
+	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+
+	// MaxPages=1 is one page of budget per phase against three real pages.
+	var final CompleteRouteBatch
+	terminal := ""
+	emissions := 0
+	err := (GitLabTestsRouteHandler{MaxPages: 1}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt, "",
+		func(emission ChunkRouteEmission) error {
+			terminal = emission.CursorAfter
+			if emission.Final {
+				final = emission.Batch
+				return nil
+			}
+			emissions++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("CollectChunks err=%v, want a finalized unit", err)
+	}
+	if emissions == 0 {
+		t.Fatal("truncated unit committed nothing; the rows before the cap must still land")
+	}
+	cursor, decodeErr := decodeGitLabTestsChunkCursor(terminal)
+	if decodeErr != nil {
+		t.Fatalf("decode terminal cursor: %v", decodeErr)
+	}
+	want := map[string]bool{
+		gitLabPipelineInventoryComponent: false,
+		gitLabReportInventoryComponent:   false,
+	}
+	for _, component := range cursor.Truncated {
+		if _, tracked := want[component]; tracked {
+			want[component] = true
+		}
+	}
+	for component, seen := range want {
+		if !seen {
+			t.Fatalf("no %s truncation recorded in %v", component, cursor.Truncated)
+		}
+	}
+	if final.Watermark != nil {
+		t.Fatalf("truncated unit advanced its watermark to %v", final.Watermark)
+	}
+	if complete, ok := final.Result["coverage_complete"].(bool); !ok || complete {
+		t.Fatalf("coverage_complete=%v, want false", final.Result["coverage_complete"])
+	}
+	// The cursor's closed vocabulary must survive a round trip; an unknown
+	// component has to fail closed rather than reach a coverage reader.
+	poisoned, encodeErr := encodeGitLabTestsChunkCursor(gitLabTestsChunkCursor{
+		Phase: "done", Truncated: []string{"whatever_inventory"},
+	})
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	if _, err := decodeGitLabTestsChunkCursor(poisoned); !errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf("unknown truncation component decoded with err=%v", err)
+	}
+}
+
+// The cumulative-budget refusal path (remainingPageBudget returning the error
+// on entry, before the paginator's own per-invocation cap can fire) is a
+// DIFFERENT branch from collection.CapReached, and only a resume reaches it.
+// It is the branch the CHAOS-4130 units actually died on: they never got to
+// spend a request.
+func TestGitLabTestsChunkRouteResumeWithExhaustedBudgetFinalizes(t *testing.T) {
+	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	claim := nativeTestClaim("gitlab", "tests")
+	client := gitLabRepositoryClient(t, doer, "https://gitlab.example")
+	spent, err := encodeGitLabTestsChunkCursor(gitLabTestsChunkCursor{
+		Phase: "pipelines", PipelinePages: 1, ReportPages: 1, Repo: "acme/api", ProjectID: 123,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final CompleteRouteBatch
+	terminal := ""
+	err = (GitLabTestsRouteHandler{MaxPages: 1}).CollectChunks(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), spent,
+		func(emission ChunkRouteEmission) error {
+			terminal = emission.CursorAfter
+			if emission.Final {
+				final = emission.Batch
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("resume with an exhausted cumulative budget err=%v, want a finalized unit", err)
+	}
+	// CHAOS-3822's invariant: an exhausted phase may not spend one more request.
+	if doer.pipelineListRequests != 0 {
+		t.Fatalf("exhausted budget still fetched %d listing page(s)", doer.pipelineListRequests)
+	}
+	cursor, decodeErr := decodeGitLabTestsChunkCursor(terminal)
+	if decodeErr != nil {
+		t.Fatalf("decode terminal cursor: %v", decodeErr)
+	}
+	if cursor.PipelinePages != 1 || cursor.ReportPages != 1 {
+		t.Fatalf(
+			"cumulative spend was not carried forward: PipelinePages=%d ReportPages=%d",
+			cursor.PipelinePages, cursor.ReportPages,
+		)
+	}
+	if len(cursor.Truncated) != 2 {
+		t.Fatalf("both phases must record their truncation, got %v", cursor.Truncated)
+	}
+	if final.Watermark != nil {
+		t.Fatalf("a budget-truncated unit advanced its watermark to %v", final.Watermark)
+	}
+}

@@ -114,13 +114,66 @@ const (
 	// record that an inventory phase stopped at its cumulative page budget
 	// before the provider ran out of pages (CHAOS-4130). They are units of
 	// COVERAGE incompleteness rather than parse failures, which is why they
-	// share the slice: every reader of `incomplete` already treats a non-empty
-	// slice as "this unit did not see everything, do not advance the
-	// watermark".
+	// share the slice.
 	githubTestsRunInventoryComponent      = "run_inventory"
 	githubTestsArtifactInventoryComponent = "artifact_inventory"
 	githubTestsPageBudgetCause            = "page_budget_exhausted"
+	// The per-run components record that ONE workflow run held more items than
+	// its cap allows, so that run was committed with only the first cap-worth
+	// (CHAOS-4142). Count is the number of RUNS truncated in that category,
+	// never the number of items dropped, which keeps the evidence bounded on a
+	// repository of any size. The truncated run's id goes to the structured
+	// warning log, not here: GitHubTestsIncomplete deliberately carries no
+	// provider-supplied subject string.
+	githubTestsRunJobsComponent      = "run_jobs"
+	githubTestsRunArtifactsComponent = "run_artifacts"
+	githubTestsRunReportsComponent   = "run_reports"
+	githubTestsPerRunCapCause        = "per_run_cap"
 )
+
+// githubTestsWindowBlockingComponents is the subset of the vocabulary that
+// leaves part of the REQUESTED WINDOW unwalked, and is therefore the subset
+// that must withhold the watermark.
+//
+// GitHub serves runs newest-first, so an inventory phase that stops at its
+// page budget has covered the new end of the window and never reached the old
+// one. Advancing past that would turn the unreached remainder into the
+// permanent lower-bound hole CHAOS-2587 describes, which is why CHAOS-4130
+// made those observations withhold the watermark.
+//
+// A per-run cap is the opposite shape: the listing walk COMPLETED, every run
+// in the window was seen and committed, and only items inside an
+// already-committed run were dropped. There is no unreached remainder to
+// protect. Withholding the watermark there recovers nothing -- the caps are
+// deterministic, so the next attempt at the same window drops exactly the same
+// items -- while costing the source every future window. That is the
+// permanent-zero-coverage defect CHAOS-4142 was opened for.
+var githubTestsWindowBlockingComponents = map[string]struct{}{
+	githubTestsRunInventoryComponent:      {},
+	githubTestsArtifactInventoryComponent: {},
+	// report_member is listed to PRESERVE its pre-CHAOS-4142 behavior
+	// unchanged, not because a malformed archive member leaves a window
+	// unwalked -- it does not. A repository with a permanently unparseable
+	// test-report member therefore still withholds its watermark on every
+	// window, which is the same permanent-staleness shape CHAOS-4142 fixes for
+	// the per-run caps, just without a cancellation to make it visible.
+	// Reclassifying it is a coverage-semantics decision of its own and is
+	// tracked separately; this change deliberately narrows the predicate for
+	// the per-run components ONLY.
+	githubTestsReportMemberComponent: {},
+}
+
+// githubTestsBlocksWatermark reports whether these observations leave part of
+// the requested window unwalked. Coverage honesty is a SEPARATE claim:
+// reports_complete stays false for any observation, blocking or not.
+func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
+	for _, observation := range incomplete {
+		if _, blocking := githubTestsWindowBlockingComponents[observation.Component]; blocking {
+			return true
+		}
+	}
+	return false
+}
 
 // githubTestsIncompleteVocabulary is the CLOSED set of (component, cause)
 // pairs a github tests/cicd unit may publish. The completion comparator fails
@@ -130,6 +183,9 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent:      {"malformed": {}, "unreadable": {}},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
+	githubTestsRunJobsComponent:           {githubTestsPerRunCapCause: {}},
+	githubTestsRunArtifactsComponent:      {githubTestsPerRunCapCause: {}},
+	githubTestsRunReportsComponent:        {githubTestsPerRunCapCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

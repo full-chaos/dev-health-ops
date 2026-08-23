@@ -327,7 +327,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	watermark := claim.BeforeAt
-	if len(incomplete) > 0 {
+	if githubTestsBlocksWatermark(incomplete) {
 		watermark = nil
 	}
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{

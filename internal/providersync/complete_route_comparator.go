@@ -95,7 +95,16 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 	if complete != (skipped == 0) || complete != (len(incomplete) == 0) {
 		return ErrInvalidConfiguration
 	}
-	if !complete {
+	// Incompleteness and watermark-withholding are two DIFFERENT claims.
+	// reports_complete=false says "what this unit scanned was not everything".
+	// A nil watermark says "part of the requested WINDOW was never walked, so
+	// advancing past it would leave a permanent hole". Only window-blocking
+	// observations imply the second (CHAOS-4142): a per-run cap walks the whole
+	// window and truncates inside runs it already committed, and it recurs
+	// identically on every future window, so demanding a nil watermark there
+	// pins since_at forever -- which is exactly what left three sources at zero
+	// cicd coverage for four days.
+	if githubTestsBlocksWatermark(incomplete) {
 		if batch.Watermark != nil {
 			return ErrInvalidConfiguration
 		}

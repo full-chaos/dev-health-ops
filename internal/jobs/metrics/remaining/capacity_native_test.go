@@ -108,3 +108,42 @@ func intPointer(value int) *int { return &value }
 // stubConn satisfies just enough of driver.Conn for the seed refusal, which
 // returns before any query runs.
 type stubConn struct{ driverConnStub }
+
+func TestDiscoveredEmptyScopeIsNotTheSameAsAnAbsentOne(t *testing.T) {
+	// Two different things reach the writer as team_id, and they must stay
+	// different:
+	//
+	//   an EXPLICIT scope omitting team_id  -> nil -> writes NULL
+	//   DISCOVERY of an unteamed row        -> ""  -> writes ""
+	//
+	// team_id is LowCardinality(String) in work_item_metrics_daily, so
+	// ClickHouse returns "" and never NULL, and Python carries that "" into the
+	// forecast row. capacity_forecasts.team_id is Nullable(String), so the two
+	// land as distinct values and the comparator sees them as distinct.
+	// Normalising "" to nil in discovery reads like tidying and silently
+	// rewrites one into the other.
+	explicit := capacityTarget{}
+	if explicit.TeamID != nil {
+		t.Fatal("an explicit scope with no team must carry nil, to write NULL")
+	}
+
+	empty := ""
+	discovered := capacityTarget{TeamID: &empty, WorkScopeID: &empty}
+	if discovered.TeamID == nil {
+		t.Fatal("a discovered unteamed row must carry \"\", not nil")
+	}
+	if *discovered.TeamID != "" {
+		t.Fatalf("discovered team id = %q", *discovered.TeamID)
+	}
+
+	// ...while the FILTER treats both alike, matching Python's `if team_id:`
+	// falsy check. Same value, different question.
+	arguments := map[string]any{}
+	if conditions := capacityScopeFilters("org", discovered, arguments); len(conditions) != 1 {
+		t.Errorf("an empty discovered scope must add no filter: %v", conditions)
+	}
+	arguments = map[string]any{}
+	if conditions := capacityScopeFilters("org", explicit, arguments); len(conditions) != 1 {
+		t.Errorf("an absent scope must add no filter: %v", conditions)
+	}
+}

@@ -120,13 +120,14 @@ func (executor *CapacityExecutor) loadBacklog(
           )
     `, where, where)
 
-	var backlog float64
+	// sum() over a UInt32 column widens to UInt64, so the destination has to
+	// be uint64 rather than the column's own type. An aggregate always returns
+	// exactly one row -- zero when nothing matches -- so there is no empty
+	// case to handle separately, matching Python's `int(... or 0)`.
+	var backlog uint64
 	if err := executor.conn.QueryRow(
 		ctx, query, namedArguments(arguments)...,
 	).Scan(&backlog); err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return 0, nil
-		}
 		return 0, fmt.Errorf("load backlog: %w", err)
 	}
 	return int(backlog), nil
@@ -161,16 +162,24 @@ func (executor *CapacityExecutor) resolveScopes(
 		if err := rows.Scan(&teamID, &workScopeID); err != nil {
 			return nil, fmt.Errorf("scan team scope: %w", err)
 		}
-		target := capacityTarget{}
-		if teamID != "" {
-			value := teamID
-			target.TeamID = &value
-		}
-		if workScopeID != "" {
-			value := workScopeID
-			target.WorkScopeID = &value
-		}
-		targets = append(targets, target)
+		// Kept EXACTLY as discovery returned them, empty strings included.
+		//
+		// team_id and work_scope_id are LowCardinality(String) in
+		// work_item_metrics_daily, so ClickHouse returns "" and never NULL, and
+		// Python's `str(row.get(...)) if ... is not None` therefore yields ""
+		// too. That "" travels into the forecast and is WRITTEN as "" to
+		// capacity_forecasts, whose columns are Nullable(String).
+		//
+		// Normalising "" to nil here -- which reads like tidying -- would write
+		// NULL instead, and NULL is not "" to either ClickHouse or the
+		// comparator. The distinction survives because it is real: an explicit
+		// scope that omits team_id gives nil and writes NULL, while discovery
+		// of an unteamed row gives "" and writes "". Only the FILTER treats the
+		// two alike, which is Python's `if team_id:` falsy check.
+		teamValue, workScopeValue := teamID, workScopeID
+		targets = append(targets, capacityTarget{
+			TeamID: &teamValue, WorkScopeID: &workScopeValue,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate team scopes: %w", err)

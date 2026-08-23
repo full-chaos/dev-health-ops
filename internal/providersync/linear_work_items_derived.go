@@ -182,8 +182,18 @@ func linearWorkItemRowsAsGitHub(rows linearWorkItemRows) (githubWorkItemRows, er
 // GitHub deriver, with Linear's normalized rows and claim namespace. It is a
 // provider-owned seam and does not register or activate a route.
 type LinearWorkItemDeriver struct {
-	Source githubWorkItemDerivationContextSource
-	engine githubWorkItemEngineDeriver
+	Source       githubWorkItemDerivationContextSource
+	engine       githubWorkItemEngineDeriver
+	observations *workItemDerivationObservations
+}
+
+// StoredEdgeMergeObservation reports the stored-edge union this deriver has
+// observed so far on its unit (CHAOS-3978).
+func (deriver *LinearWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+	if deriver == nil {
+		return githubWorkItemStoredEdgeMergeObservation{}
+	}
+	return deriver.observations.storedEdgeMergeSnapshot()
 }
 
 type linearWorkItemEngineDeriver struct {
@@ -229,8 +239,9 @@ func NewLinearWorkItemDeriver(
 		return nil, err
 	}
 	return &LinearWorkItemDeriver{
-		Source: githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: lease},
-		engine: linearWorkItemEngineDeriver{engine: engine},
+		Source:       githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: lease},
+		engine:       linearWorkItemEngineDeriver{engine: engine},
+		observations: newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -259,6 +270,7 @@ func (deriver LinearWorkItemDeriver) Derive(
 	if err != nil {
 		return nil, err
 	}
+	deriver.observations.recordStoredEdgeMerge(derivationContext.storedEdgeMerge)
 	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
 	if err != nil {
 		return nil, err

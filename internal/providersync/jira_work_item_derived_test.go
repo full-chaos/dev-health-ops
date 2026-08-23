@@ -301,6 +301,14 @@ func (source jiraDerivedFailingContextSource) Load(
 	return githubWorkItemDerivationFacts{}, source.err
 }
 
+// Succeeds on purpose: this double exists to pin Load's fail-closed path, so
+// the stored-edge read must not be the thing that fails (CHAOS-3978).
+func (source jiraDerivedFailingContextSource) LoadStoredInheritableEdges(
+	context.Context, Claim, []string,
+) ([]githubWorkItemDependencyRow, error) {
+	return nil, nil
+}
+
 func TestJiraWorkItemDeriverFailsClosedWhenAttributionContextCannotLoad(t *testing.T) {
 	wantErr := errors.New("attribution context unavailable")
 	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))

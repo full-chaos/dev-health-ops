@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -121,6 +122,45 @@ type githubWorkItemDerivationContextSource interface {
 		Claim,
 		githubWorkItemDerivationLoadRequest,
 	) (githubWorkItemDerivationFacts, error)
+
+	// LoadStoredInheritableEdges returns the STORED inheritable dependency
+	// edges whose SOURCE is one of the given work items, for the claim's
+	// tenant. CHAOS-3978: without it this route sees only the edges its own
+	// provider extracted THIS run, so an edge minted by a DIFFERENT provider's
+	// sync -- a Linear attachment linking a Linear issue to a GitHub PR,
+	// `relationship_type_raw='linear_attachment'` -- is structurally invisible
+	// to the side that would inherit from it, and the PR is rebuilt
+	// `unassigned` on every run despite a valid, teamed donor.
+	//
+	// It is a REQUIRED method rather than an optional interface on purpose: a
+	// double that silently kept the fresh-only behaviour would make every test
+	// using it pass while production stayed blind, which is the failure mode
+	// this ticket exists to remove.
+	LoadStoredInheritableEdges(
+		context.Context,
+		Claim,
+		[]string,
+	) ([]githubWorkItemDependencyRow, error)
+}
+
+// githubWorkItemStoredEdgeMergeObservation is the ledger-side record of what
+// the stored-edge union did on one unit. providersync is a pure effect-ledger
+// package with no logger and no metrics registry, so this travels out through
+// the route's existing `Result["observations"]` map and lands on the unit's
+// persisted payload (providerunit.Handler), which is where an operator can see
+// the CHAOS-3978 population recovering after deploy.
+type githubWorkItemStoredEdgeMergeObservation struct {
+	// StoredEdgesMerged counts stored edges unioned into this run's fresh set
+	// (CHAOS-4112's decay fix, ported here).
+	StoredEdgesMerged int `json:"stored_edges_merged"`
+	// DonorRescues counts items whose inherited team came from an edge that
+	// was ONLY in the store -- i.e. attributions that would have been rebuilt
+	// `unassigned` without this union.
+	DonorRescues int `json:"donor_rescues"`
+	// CrossProviderRescues is the CHAOS-3978 subset of DonorRescues: the donor
+	// item belongs to a DIFFERENT provider than the claim being derived, which
+	// is exactly the population no per-provider fresh edge set can see.
+	CrossProviderRescues int `json:"cross_provider_rescues"`
 }
 
 type githubWorkItemClickHouseDerivationContextSource struct {
@@ -137,6 +177,7 @@ type githubWorkItemDerivationContext struct {
 	memberByID      map[string][]githubWorkItemDerivationCandidate
 	manualFallbacks []githubWorkItemDerivationManualFallback
 	linkedIssue     map[string][2]string
+	storedEdgeMerge githubWorkItemStoredEdgeMergeObservation
 }
 
 func loadGitHubWorkItemDerivationContext(
@@ -193,7 +234,30 @@ func loadWorkItemDerivationContextForProvider(
 	//
 	// The limit is the same rail for the same reason: a truncated donor set
 	// produces confidently wrong attribution, not absent attribution.
-	donorIDs, donorKeys := githubWorkItemDerivationDonorTargets(rows.Dependencies)
+	//
+	// CHAOS-3978: the same ruling decides the STORED-edge read below. A
+	// failure there is not "inherit a little less this run": the recompute
+	// re-stamps every item it touched, so a run that could not see the stored
+	// cross-provider edge writes `unassigned` OVER a correct `linked_issue`
+	// attribution -- confidently wrong, silently. Python degrades and
+	// continues at the equivalent site; that degradation is on the CHAOS-4150
+	// silent-fail list, i.e. the defect inventory, not the precedent. A failed
+	// unit is loud, retryable and self-healing; a silently team-less item is
+	// none of those.
+	subjectIDs := githubWorkItemDerivationSubjectIDs(rows.WorkItems)
+	storedEdges, err := source.LoadStoredInheritableEdges(ctx, claim, subjectIDs)
+	if err != nil {
+		return githubWorkItemDerivationContext{}, err
+	}
+	for _, dependency := range storedEdges {
+		if dependency.OrgID != claim.OrgID {
+			return githubWorkItemDerivationContext{}, providerfoundation.ErrInvalidScope
+		}
+	}
+	dependencies, storedOnly, merged := mergeStoredInheritableWorkItemEdges(
+		rows.Dependencies, storedEdges,
+	)
+	donorIDs, donorKeys := githubWorkItemDerivationDonorTargets(dependencies)
 	if len(donorIDs)+len(donorKeys) > githubWorkItemDerivationContextLimit {
 		return githubWorkItemDerivationContext{}, ErrEffectRecoveryUnsafe
 	}
@@ -221,8 +285,115 @@ func loadWorkItemDerivationContextForProvider(
 		// Fresh rows are authoritative over a persisted donor version.
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
+	linkedIssue, rescues, crossProviderRescues := derived.buildLinkedIssueIndex(
+		provider, subjects, dependencies, storedOnly,
+	)
+	derived.linkedIssue = linkedIssue
+	derived.storedEdgeMerge = githubWorkItemStoredEdgeMergeObservation{
+		StoredEdgesMerged:    merged,
+		DonorRescues:         rescues,
+		CrossProviderRescues: crossProviderRescues,
+	}
 	return derived, nil
+}
+
+func githubWorkItemDerivationSubjectIDs(rows []githubWorkItemRow) []string {
+	ids := map[string]struct{}{}
+	for _, row := range rows {
+		if identifier := strings.TrimSpace(row.WorkItemID); identifier != "" {
+			ids[identifier] = struct{}{}
+		}
+	}
+	return sortedStringSet(ids)
+}
+
+// githubWorkItemDerivationEdgeKey is the identity a fresh edge is authoritative
+// for. It is deliberately the ClickHouse sorting key of work_item_dependencies
+// (source, target, relationship_type), matching Python's merged_deps key in
+// job_work_items.py.
+type githubWorkItemDerivationEdgeKey struct {
+	source, target, relationshipType string
+}
+
+// mergeStoredInheritableWorkItemEdges unions this run's fresh edges with the
+// STORED inheritable edges for the same source items, minus the ones this
+// run's provider snapshot proves were removed.
+//
+// The pruning proof is keyed on (source_work_item_id, relationship_type_raw),
+// EXACTLY as _merge_stored_inheritable_edges does in Python
+// (metrics/job_work_items.py). That key shape is load-bearing, not incidental:
+//
+//   - Per ITEM would be unsound. One item's edges come from several
+//     independently-gated extractors (a GitHub PR body is always parsed;
+//     Linear linkback COMMENTS are gated by GITHUB_FETCH_COMMENTS and capped
+//     by GITHUB_COMMENTS_LIMIT), so a fresh body edge is no evidence that
+//     comment extraction ran -- and treating it as evidence would delete the
+//     stored linkback edges, decaying exactly the population CHAOS-4112
+//     protects.
+//   - Per (source, target, relationship_type) alone would never prune, so a
+//     link genuinely removed upstream would donate forever.
+//
+// A DIVERGENCE between this key and Python's would undo CHAOS-4112 from
+// whichever side drifted, since both writers stamp the same rows; the key
+// shape is therefore pinned by test on both sides.
+//
+// Removals stay expressible without a tombstone because every provider
+// re-extracts an item's links on each sync, so a link still present upstream
+// reappears among the fresh edges. Residual (identical to Python's, and
+// tracked in CHAOS-4129): an item that loses its LAST edge of a given
+// provenance emits no fresh edge of that provenance, so its stored one keeps
+// donating until another appears -- erring toward PRESERVING a team.
+//
+// Returns the merged edges, the set of keys that came from the store ALONE
+// (for the rescue observation), and how many stored edges were added.
+func mergeStoredInheritableWorkItemEdges(
+	fresh []githubWorkItemDependencyRow,
+	stored []githubWorkItemDependencyRow,
+) ([]githubWorkItemDependencyRow, map[githubWorkItemDerivationEdgeKey]bool, int) {
+	freshKeys := make(map[githubWorkItemDerivationEdgeKey]bool, len(fresh))
+	resyncedProvenances := make(map[[2]string]bool, len(fresh))
+	for _, dependency := range fresh {
+		freshKeys[githubWorkItemDerivationEdgeKey{
+			source:           dependency.SourceWorkItemID,
+			target:           dependency.TargetWorkItemID,
+			relationshipType: dependency.RelationshipType,
+		}] = true
+		resyncedProvenances[[2]string{
+			dependency.SourceWorkItemID, dependency.RelationshipTypeRaw,
+		}] = true
+	}
+	merged := append([]githubWorkItemDependencyRow(nil), fresh...)
+	storedOnly := map[githubWorkItemDerivationEdgeKey]bool{}
+	added := 0
+	for _, dependency := range stored {
+		if !githubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] {
+			continue
+		}
+		key := githubWorkItemDerivationEdgeKey{
+			source:           dependency.SourceWorkItemID,
+			target:           dependency.TargetWorkItemID,
+			relationshipType: dependency.RelationshipType,
+		}
+		// A fresh edge is authoritative for its OWN identity. A stored edge
+		// differing only by relationship_type is kept so the latest-edge
+		// recency collapse can settle the pair by last_synced -- which is what
+		// protects the retype case (relates_to -> blocked_by) that motivated
+		// the fresh-only rule in the first place.
+		if freshKeys[key] || storedOnly[key] {
+			continue
+		}
+		if resyncedProvenances[[2]string{
+			dependency.SourceWorkItemID, dependency.RelationshipTypeRaw,
+		}] {
+			// That extractor ran for this item this run and did not re-emit
+			// this link: the provider removed it.
+			continue
+		}
+		merged = append(merged, dependency)
+		storedOnly[key] = true
+		added++
+	}
+	return merged, storedOnly, added
 }
 
 func githubWorkItemDerivationDonorTargets(
@@ -707,10 +878,20 @@ func sameDerivationCandidate(left, right githubWorkItemDerivationCandidate) bool
 		left.Priority == right.Priority && left.UpdatedAt.Equal(right.UpdatedAt)
 }
 
+// buildLinkedIssueIndex resolves each team-less item to the team of a linked,
+// first-class-attributed donor.
+//
+// It additionally reports how many of those inheritances rest on an edge that
+// exists ONLY in the store (rescues) and how many of THOSE reach a donor in a
+// different provider (the CHAOS-3978 population). The counts are derived from
+// the same winning edge the attribution uses, never re-estimated, so an
+// observation of N is a claim about N specific attributions.
 func (derived githubWorkItemDerivationContext) buildLinkedIssueIndex(
+	provider string,
 	subjects map[string]githubWorkItemDerivationSubject,
 	dependencies []githubWorkItemDependencyRow,
-) map[string][2]string {
+	storedOnly map[githubWorkItemDerivationEdgeKey]bool,
+) (map[string][2]string, int, int) {
 	donors := map[string][2]string{}
 	baseNative := map[string]bool{}
 	keyIndex := map[string]string{}
@@ -747,8 +928,9 @@ func (derived githubWorkItemDerivationContext) buildLinkedIssueIndex(
 		}
 	}
 	candidates := map[string][]struct {
-		target string
-		team   [2]string
+		target     string
+		team       [2]string
+		storedOnly bool
 	}{}
 	for _, dependency := range latestGitHubWorkItemDerivationDependencies(dependencies) {
 		if !githubWorkItemDerivationInheritableRelationships[dependency.RelationshipType] || baseNative[dependency.SourceWorkItemID] {
@@ -763,17 +945,41 @@ func (derived githubWorkItemDerivationContext) buildLinkedIssueIndex(
 		}
 		if donor, exists := donors[target]; exists {
 			candidates[dependency.SourceWorkItemID] = append(candidates[dependency.SourceWorkItemID], struct {
-				target string
-				team   [2]string
-			}{target: target, team: donor})
+				target     string
+				team       [2]string
+				storedOnly bool
+			}{
+				target: target, team: donor,
+				storedOnly: storedOnly[githubWorkItemDerivationEdgeKey{
+					source:           dependency.SourceWorkItemID,
+					target:           dependency.TargetWorkItemID,
+					relationshipType: dependency.RelationshipType,
+				}],
+			})
 		}
 	}
 	result := map[string][2]string{}
+	rescues := 0
+	crossProviderRescues := 0
 	for source, possible := range candidates {
 		sort.Slice(possible, func(left, right int) bool { return possible[left].target < possible[right].target })
-		result[source] = possible[0].team
+		winner := possible[0]
+		result[source] = winner.team
+		if !winner.storedOnly {
+			continue
+		}
+		rescues++
+		// Cross-provider is decided by the DONOR's provider, not by the edge's
+		// provenance string: `linear_attachment` is today's whole population,
+		// but the defect is structural (one provider's sync mints the edge,
+		// another provider's writer needs it), so the observation must count
+		// the structure rather than one extractor's name.
+		if donor, exists := subjects[winner.target]; exists &&
+			strings.TrimSpace(donor.Provider) != strings.TrimSpace(provider) {
+			crossProviderRescues++
+		}
 	}
-	return result
+	return result, rescues, crossProviderRescues
 }
 
 func (derived githubWorkItemDerivationContext) resolveWithoutLinked(
@@ -1029,6 +1235,95 @@ LIMIT ?`, orgID, asOf, asOf, githubWorkItemDerivationContextLimit+1)
 		}
 	}
 	return result, rows.Err()
+}
+
+// LoadStoredInheritableEdges reads the stored inheritable edges whose SOURCE is
+// one of this run's items (CHAOS-3978).
+//
+// Bounded exactly like every other read here: tenant-scoped, keyed on the
+// subject ids, restricted to the inheritable relationship types, and capped by
+// the same context limit -- a keyed lookup, never a history scan.
+//
+// ONE bounded retry, then FAIL CLOSED (D17). A transient ClickHouse blip
+// otherwise silently downgrades the whole unit's attribution to fresh-window
+// inheritance and re-stamps `unassigned` over correct rows. Python retries and
+// then CONTINUES at the equivalent site; that continue is catalogued as a
+// silent-degradation defect (CHAOS-4150), so it is not the precedent to copy.
+func (source githubWorkItemClickHouseDerivationContextSource) LoadStoredInheritableEdges(
+	ctx context.Context,
+	claim Claim,
+	sourceWorkItemIDs []string,
+) ([]githubWorkItemDependencyRow, error) {
+	if ctx == nil || source.Conn == nil || source.Lease == nil || claim.Validate() != nil ||
+		!isDerivedWorkItemProvider(claim.Provider) || claim.Dataset != "work-items" {
+		return nil, ErrInvalidConfiguration
+	}
+	if len(sourceWorkItemIDs) == 0 {
+		return []githubWorkItemDependencyRow{}, nil
+	}
+	if err := source.Lease.Assert(ctx); err != nil {
+		return nil, err
+	}
+	relationshipTypes := make([]string, 0, len(githubWorkItemDerivationInheritableRelationships))
+	for relationshipType := range githubWorkItemDerivationInheritableRelationships {
+		relationshipTypes = append(relationshipTypes, relationshipType)
+	}
+	sort.Strings(relationshipTypes)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := source.queryStoredInheritableEdges(
+			ctx, claim.OrgID, sourceWorkItemIDs, relationshipTypes,
+		)
+		if err == nil {
+			return result, nil
+		}
+		// The cap is a correctness rail, not a transient fault: retrying an
+		// over-limit read just spends another query to fail the same way.
+		if errors.Is(err, ErrEffectRecoveryUnsafe) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (source githubWorkItemClickHouseDerivationContextSource) queryStoredInheritableEdges(
+	ctx context.Context,
+	orgID string,
+	sourceWorkItemIDs []string,
+	relationshipTypes []string,
+) ([]githubWorkItemDependencyRow, error) {
+	rows, err := source.Conn.Query(ctx, `
+SELECT source_work_item_id, target_work_item_id, relationship_type,
+       relationship_type_raw, relationship_semantics_version, last_synced, org_id
+FROM work_item_dependencies FINAL
+WHERE org_id = ? AND has(?, source_work_item_id) AND has(?, relationship_type)
+ORDER BY source_work_item_id, target_work_item_id, relationship_type
+LIMIT ?`, orgID, sourceWorkItemIDs, relationshipTypes,
+		githubWorkItemDerivationContextLimit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []githubWorkItemDependencyRow{}
+	for rows.Next() {
+		var row githubWorkItemDependencyRow
+		if err := rows.Scan(
+			&row.SourceWorkItemID, &row.TargetWorkItemID, &row.RelationshipType,
+			&row.RelationshipTypeRaw, &row.RelationshipSemanticsVersion,
+			&row.LastSynced, &row.OrgID,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+		if len(result) > githubWorkItemDerivationContextLimit {
+			return nil, ErrEffectRecoveryUnsafe
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (source githubWorkItemClickHouseDerivationContextSource) loadDonors(

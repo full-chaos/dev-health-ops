@@ -355,6 +355,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
 	}
+	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	var watermark *time.Time
 	if len(optionalIncomplete) == 0 && derivedWatermark != nil {
 		value := derivedWatermark.UTC()

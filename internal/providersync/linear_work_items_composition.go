@@ -99,6 +99,7 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 	}); err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	raw.Result = attachWorkItemTeamInheritanceObservation(raw.Result, handler.Derived)
 	return raw, nil
 }
 

@@ -42,6 +42,15 @@ func (source linearFamilyDerivationSource) Load(
 	return githubWorkItemDerivationFacts{}, source.err
 }
 
+// Succeeds on purpose: the fail-closed case this double serves is about Load,
+// and a stored-edge read that failed too would let the test pass for the wrong
+// reason (CHAOS-3978 has its own fail-closed case).
+func (source linearFamilyDerivationSource) LoadStoredInheritableEdges(
+	context.Context, Claim, []string,
+) ([]githubWorkItemDependencyRow, error) {
+	return nil, nil
+}
+
 type linearFamilyEngine struct{}
 
 func (linearFamilyEngine) Derive(

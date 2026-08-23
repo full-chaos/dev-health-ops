@@ -45,8 +45,9 @@ func githubDerivedMultiDayOracleCases() []oracleCase {
 // facts the Python pair reads, so neither side sees a fact set the other did
 // not.
 type githubMultiDayOracleSource struct {
-	facts githubWorkItemDerivationFacts
-	loads int
+	facts           githubWorkItemDerivationFacts
+	loads           int
+	storedEdgeLoads int
 }
 
 func (source *githubMultiDayOracleSource) Load(
@@ -54,6 +55,16 @@ func (source *githubMultiDayOracleSource) Load(
 ) (githubWorkItemDerivationFacts, error) {
 	source.loads++
 	return source.facts, nil
+}
+
+// The oracle supplies every edge through the case input, so this source has no
+// stored edges to add (CHAOS-3978). It counts the calls anyway, so the
+// once-per-window pin below covers the stored-edge read too.
+func (source *githubMultiDayOracleSource) LoadStoredInheritableEdges(
+	context.Context, Claim, []string,
+) ([]githubWorkItemDependencyRow, error) {
+	source.storedEdgeLoads++
+	return nil, nil
 }
 
 // TestGitHubWorkItemTeamAttributionsMatchLivePythonProductionAcrossDays is the

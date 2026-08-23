@@ -96,6 +96,16 @@ type GitLabWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping
 	investmentClassifier *InvestmentClassifier
+	observations         *workItemDerivationObservations
+}
+
+// StoredEdgeMergeObservation reports the stored-edge union this deriver has
+// observed so far on its unit (CHAOS-3978).
+func (deriver *GitLabWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+	if deriver == nil {
+		return githubWorkItemStoredEdgeMergeObservation{}
+	}
+	return deriver.observations.storedEdgeMergeSnapshot()
 }
 
 // NewGitLabWorkItemDeriver loads the same governed status and investment
@@ -122,6 +132,7 @@ func NewGitLabWorkItemDeriver(
 	return &GitLabWorkItemDeriver{
 		Source:        githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: lease},
 		statusMapping: statusMapping, investmentClassifier: classifier,
+		observations: newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -151,6 +162,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 	if err != nil {
 		return GitLabWorkItemDerivedRows{}, err
 	}
+	deriver.observations.recordStoredEdgeMerge(contextFacts.storedEdgeMerge)
 	var watermark *time.Time
 	if claim.BeforeAt != nil {
 		value := claim.BeforeAt.UTC()

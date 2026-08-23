@@ -430,6 +430,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
 		"gitlab_work_items":                  summary,
 	}
+	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{

@@ -82,6 +82,16 @@ type JiraWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping
 	investmentClassifier *InvestmentClassifier
+	observations         *workItemDerivationObservations
+}
+
+// StoredEdgeMergeObservation reports the stored-edge union this deriver has
+// observed so far on its unit (CHAOS-3978).
+func (deriver *JiraWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+	if deriver == nil {
+		return githubWorkItemStoredEdgeMergeObservation{}
+	}
+	return deriver.observations.storedEdgeMergeSnapshot()
 }
 
 // jiraWorkItemClickHouseDerivationContextSource is provider-local because the
@@ -132,6 +142,23 @@ func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	return facts, nil
 }
 
+// LoadStoredInheritableEdges keeps the Jira-local source on the same
+// stored-edge contract as the shared one (CHAOS-3978). It fences the claim to
+// Jira exactly as Load does, then delegates: the read itself is
+// provider-neutral -- it is keyed on the SUBJECT items, and the whole point is
+// that the edges it finds may have been minted by another provider's sync.
+func (source jiraWorkItemClickHouseDerivationContextSource) LoadStoredInheritableEdges(
+	ctx context.Context,
+	claim Claim,
+	sourceWorkItemIDs []string,
+) ([]githubWorkItemDependencyRow, error) {
+	if ctx == nil || claim.Validate() != nil || claim.Provider != "jira" ||
+		claim.Dataset != "work-items" {
+		return nil, ErrInvalidConfiguration
+	}
+	return source.delegate.LoadStoredInheritableEdges(ctx, claim, sourceWorkItemIDs)
+}
+
 func NewJiraWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
@@ -155,6 +182,7 @@ func NewJiraWorkItemDeriver(
 			Conn: conn, Lease: lease,
 		}},
 		statusMapping: statusMapping, investmentClassifier: classifier,
+		observations: newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -192,6 +220,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 	if err != nil {
 		return JiraWorkItemDerivedRows{}, err
 	}
+	deriver.observations.recordStoredEdgeMerge(contextFacts.storedEdgeMerge)
 	result := JiraWorkItemDerivedRows{
 		EstimateCoverageMetricsDaily:   []JiraEstimateCoverageMetricsDailyRow{},
 		InvestmentClassificationsDaily: []JiraInvestmentClassificationDailyRow{},

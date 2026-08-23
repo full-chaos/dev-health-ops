@@ -2,12 +2,14 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
@@ -347,4 +349,51 @@ func derefTime(value *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *value
+}
+
+// ErrOrderingContractMismatch reports that the configured operational ordering
+// contract disagrees with the schema actually deployed.
+var ErrOrderingContractMismatch = errors.New(
+	"operational ordering contract does not match the deployed schema")
+
+// schemaOrderingContract reads the contract the TABLE was built for.
+//
+// The sorting key is the authoritative signal: migration 067 moves it to
+// (org_id, id, source_revision, source_conflict_key), and it is the sorting
+// key -- not the presence of the columns -- that decides whether FINAL still
+// collapses two versions of one row.
+func schemaOrderingContract(
+	ctx context.Context, conn driver.Conn,
+) (OperationalOrderingContract, error) {
+	var sortingKey string
+	if err := conn.QueryRow(ctx, `
+        SELECT sorting_key
+        FROM system.tables
+        WHERE database = currentDatabase() AND name = 'operational_incidents'
+    `).Scan(&sortingKey); err != nil {
+		return 0, fmt.Errorf("read operational_incidents sorting key: %w", err)
+	}
+	if strings.Contains(sortingKey, "source_revision") {
+		return OperationalOrderingRevision, nil
+	}
+	return OperationalOrderingLegacy, nil
+}
+
+// verifyOrderingContract fails closed when the configured contract and the
+// deployed schema disagree.
+func verifyOrderingContract(ctx context.Context, conn driver.Conn) error {
+	configured := configuredOperationalOrderingContract()
+	deployed, err := schemaOrderingContract(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if configured != deployed {
+		return fmt.Errorf(
+			"%w: %s says contract %d, operational_incidents is built for contract %d "+
+				"-- reading it under the wrong contract does not return a different "+
+				"row, it returns a different NUMBER of rows",
+			ErrOrderingContractMismatch, operationalOrderingContractEnv, configured, deployed,
+		)
+	}
+	return nil
 }

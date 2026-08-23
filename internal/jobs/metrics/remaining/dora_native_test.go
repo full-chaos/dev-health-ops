@@ -1,6 +1,7 @@
 package remaining
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ func TestNewDORAExecutorFailsClosedWithoutAConnection(t *testing.T) {
 	// executor for a kind wholesale. A worker that cannot build it must refuse
 	// to serve the family, never quietly revert to the Python bridge -- a
 	// silent fallback would make "the kind is native" unfalsifiable.
-	if _, err := NewDORAExecutor(nil, nil); err == nil {
+	if _, err := NewDORAExecutor(context.Background(), nil, nil); err == nil {
 		t.Fatal("a nil connection must refuse, not degrade to the bridge")
 	}
 }

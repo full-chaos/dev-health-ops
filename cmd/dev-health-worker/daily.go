@@ -223,7 +223,7 @@ func buildDailyWorker(
 			if candidate, ok := observer.(remaining.DORAObserver); ok {
 				doraObserver = candidate
 			}
-			executor, executorErr := remaining.NewDORAExecutor(metricsClickHouse, doraObserver)
+			executor, executorErr := remaining.NewDORAExecutor(context.Background(), metricsClickHouse, doraObserver)
 			if executorErr != nil {
 				_ = metricsClickHouse.Close()
 				return workerFamily{}, errWorkerDependencyUnavailable

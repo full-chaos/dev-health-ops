@@ -91,9 +91,33 @@ var defaultDORAMetrics = []string{
 // compute this kind natively, and the family must refuse to start rather than
 // silently fall back to the bridge -- the two-plane rule is that the native
 // implementation REPLACES the executor for a kind wholesale.
-func NewDORAExecutor(conn driver.Conn, observer DORAObserver) (*DORAExecutor, error) {
+func NewDORAExecutor(
+	ctx context.Context, conn driver.Conn, observer DORAObserver,
+) (*DORAExecutor, error) {
 	if conn == nil {
 		return nil, errDORAUnavailable
+	}
+	// The configured ordering contract must match the schema actually
+	// deployed, and this is checked at CONSTRUCTION so a mismatch refuses the
+	// family rather than silently computing wrong numbers job after job.
+	//
+	// This is not defensive padding. Migration 067 does not merely change
+	// which SQL is emitted -- it rewrites the table, moving the sorting key to
+	// (org_id, id, source_revision, source_conflict_key). Measured against a
+	// freshly migrated database with two versions of one incident: the
+	// contract-2 projection returns ONE row, while the legacy FINAL projection
+	// returns TWO, because the two versions are now distinct primary keys and
+	// FINAL no longer collapses them at all. A worker on the wrong branch does
+	// not pick a different winner; it sees every version of an incident as a
+	// separate incident, inflating incident counts and therefore
+	// time_to_restore_service. Legacy is the default when the environment
+	// variable is unset, so this is reachable by omission.
+	//
+	// Python performs the equivalent check (guard_operational_writer_tables,
+	// called from ClickHouseStore.__aenter__); Go had none, and a port missing
+	// a guard the original has is a gap rather than restraint.
+	if err := verifyOrderingContract(ctx, conn); err != nil {
+		return nil, err
 	}
 	return &DORAExecutor{
 		conn:      conn,

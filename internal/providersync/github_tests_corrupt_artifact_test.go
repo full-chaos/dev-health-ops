@@ -92,12 +92,11 @@ func githubTestsArtifactIDFromPath(t *testing.T, path string) int {
 // returns, so it has to be observable.
 func walkGitHubTestsChunksResult(
 	t *testing.T,
-	doer providerfoundation.HTTPDoer,
+	client *providerfoundation.HTTPClient,
 	maxChunks int,
 ) (githubTestsWalk, error) {
 	t.Helper()
 	claim := nativeTestClaim("github", "cicd")
-	client := githubTestsClient(t, doer)
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	walk := githubTestsWalk{}
 	resume := ""
@@ -156,7 +155,7 @@ func isGitHubTestsWalkContinuation(err error) bool {
 func TestGitHubTestsHealthyArtifactsCompleteTheUnit(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{}}
 
-	walk, err := walkGitHubTestsChunksResult(t, doer, 4)
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
 	if err != nil {
 		t.Fatalf("healthy artifacts returned err=%v, want the unit to complete", err)
 	}
@@ -201,7 +200,8 @@ func TestGitHubTestsHealthyArtifactsCompleteTheUnit(t *testing.T) {
 func TestGitHubTestsCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
 
-	walk, err := walkGitHubTestsChunksResult(t, doer, 4)
+	client := githubTestsClient(t, doer)
+	walk, err := walkGitHubTestsChunksResult(t, client, 4)
 	if err != nil {
 		t.Fatalf(
 			"one unreadable artifact sank the unit: err=%v; want the artifact skipped and the unit finalized",
@@ -240,5 +240,67 @@ func TestGitHubTestsCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 		context.Background(), nativeTestClaim("github", "cicd"), walk.final,
 	); err != nil {
 		t.Fatalf("production comparator rejected a skipped-artifact completion: %v", err)
+	}
+}
+
+// The non-chunked oracle route carries the same defect at
+// github_tests_route.go:327 and must get the same disposition. It is not the
+// path prod executes today, but it is the comparison implementation the
+// production comparator is checked against, so letting the two disagree about
+// an unreadable artifact would make the oracle reject a healthy chunked
+// completion.
+func TestGitHubTestsRouteCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
+	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
+	claim := nativeTestClaim("github", "cicd")
+
+	batch, err := (GitHubTestsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf(
+			"one unreadable artifact sank the non-chunked route: err=%v; want the artifact skipped",
+			err,
+		)
+	}
+	if doer.archiveRequests != 2 {
+		t.Fatalf(
+			"downloaded %d archives, want 2; the route never reached the healthy artifact",
+			doer.archiveRequests,
+		)
+	}
+	if complete, ok := batch.Result["reports_complete"].(bool); !ok || complete {
+		t.Fatalf(
+			"reports_complete=%v, want false after an artifact was skipped",
+			batch.Result["reports_complete"],
+		)
+	}
+}
+
+// A skipped artifact that nothing counts is a silent data loss: the unit
+// finalizes, the board says success, and coverage quietly shrinks. The
+// standing requirement is that new behaviour ships with its telemetry, so the
+// counter is asserted through the ROUTE rather than by calling the recorder
+// directly -- that is what proves the route is actually wired to it.
+func TestGitHubTestsUnreadableArchiveIsCounted(t *testing.T) {
+	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
+	client := githubTestsClient(t, doer)
+	// The executors attach Metrics to the client before handing it to a route
+	// (chunked_stream_executor.go:147, chunked_executor.go:92). githubTestsClient
+	// leaves it nil, so attach one here or the assertion below would pass
+	// vacuously against a nil recorder.
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	want := `dev_health_provider_artifact_skipped_total{provider="github",dataset="cicd",reason="unreadable_archive"} 1`
+	if !strings.Contains(buffer.String(), want) {
+		t.Fatalf("metrics did not carry the skip:\nwant line: %s\ngot:\n%s", want, buffer.String())
 	}
 }

@@ -25,6 +25,18 @@ const (
 
 var ErrGitHubTestsReportInvalid = errors.New("github tests report invalid")
 
+// ErrGitHubTestsArchiveUnreadable narrows ErrGitHubTestsReportInvalid to the
+// one case that is a property of the DOWNLOADED BYTES rather than of the
+// caller: the archive container itself could not be opened.
+//
+// It exists so the routes can tell an unreadable artifact apart from a
+// programming error (an empty repo/org id, a zero normalizedAt) that also
+// reports ErrGitHubTestsReportInvalid. The first is provider data and must be
+// skipped like an expired or empty artifact; the second is a bug and must stay
+// fatal. Errors returned for it satisfy errors.Is for BOTH sentinels, so
+// callers that only knew the wider one are unaffected (CHAOS-4177).
+var ErrGitHubTestsArchiveUnreadable = errors.New("github tests archive unreadable")
+
 type testSuiteResultRow struct {
 	RepoID           string     `json:"repo_id"`
 	RunID            string     `json:"run_id"`
@@ -144,6 +156,14 @@ const (
 	// and the MaxItems stop set nothing at all. That silence is what let a
 	// consumer read a page-budget stop as an item cap.
 	githubTestsPerRunPageBudgetCause = "per_run_page_budget"
+	// githubTestsUnreadableArchiveCause records that ONE artifact's archive
+	// could not be opened, so none of its reports could be read and the
+	// artifact was skipped. It joins the report_member vocabulary alongside
+	// unreadable, malformed, archive_bounds and report_cap, which is what
+	// makes it WITHHOLD the watermark: report_member is absent from
+	// githubTestsWatermarkAdvancingPairs, and the skipped archive's contents
+	// were never observed (CHAOS-4177).
+	githubTestsUnreadableArchiveCause = "unreadable_archive"
 )
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
@@ -247,7 +267,9 @@ func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) erro
 // closed against it, so a route cannot invent an observation that downstream
 // coverage readers have no meaning for.
 var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
-	githubTestsReportMemberComponent:      {"malformed": {}, "unreadable": {}},
+	githubTestsReportMemberComponent: {
+		"malformed": {}, "unreadable": {}, githubTestsUnreadableArchiveCause: {},
+	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
 	githubTestsRunJobsComponent: {
@@ -363,7 +385,9 @@ func parseGitHubTestsArtifact(
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
-		return githubTestsReportRows{}, fmt.Errorf("%w: zip: %v", ErrGitHubTestsReportInvalid, err)
+		return githubTestsReportRows{}, fmt.Errorf(
+			"%w: %w: zip: %v", ErrGitHubTestsReportInvalid, ErrGitHubTestsArchiveUnreadable, err,
+		)
 	}
 	result := githubTestsReportRows{}
 	processed := 0

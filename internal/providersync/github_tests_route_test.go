@@ -370,8 +370,22 @@ func TestGitHubTestsRoutePreservesValidReportsAndRecordsSkippedMember(t *testing
 	}
 }
 
+// The fixture here used to be the bytes "not a zip archive" -- a corrupt
+// CONTAINER, which CHAOS-4177 reclassified as a skip, not a failure (see
+// github_tests_corrupt_artifact_test.go). That fixture never matched this
+// test's name or its subject: an UNSAFE archive is one that opens fine and
+// then asks the parser to do something it refuses to do. recordSkipped marks
+// those blocking (report_cap, archive_bounds), and a blocking issue must still
+// fail the whole batch closed. The fixture is now a real archive holding one
+// more report than githubTestsMaxReportsPerRun allows, so the invariant this
+// test was written to protect is asserted against the path that actually
+// carries it.
 func TestGitHubTestsRouteUnsafeArchiveFailureRemainsFailClosed(t *testing.T) {
-	doer := &githubTestsRouteDoer{t: t, archive: []byte("not a zip archive")}
+	members := make(map[string]string, githubTestsMaxReportsPerRun+1)
+	for index := 0; index <= githubTestsMaxReportsPerRun; index++ {
+		members["report-"+strconv.Itoa(index)+".xml"] = githubTestsMultiSuiteJUnit(1)
+	}
+	doer := &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, members)}
 	claim := nativeTestClaim("github", "tests")
 	batch, err := (GitHubTestsRouteHandler{}).Collect(
 		context.Background(), claim, providerfoundation.Credential{},

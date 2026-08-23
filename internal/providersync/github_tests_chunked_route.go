@@ -174,6 +174,39 @@ func recordGitHubTestsPerRunTruncation(
 	return cursor
 }
 
+// recordGitHubTestsUnreadableArchive records ONE skipped artifact and returns
+// the updated observation slice. It serves BOTH tests routes -- the chunked one
+// keeps its observations on the cursor, the non-chunked oracle on a local
+// slice -- so the vocabulary, the counter and the log line cannot drift apart
+// between them (CHAOS-4177).
+func recordGitHubTestsUnreadableArchive(
+	incomplete []GitHubTestsIncomplete,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	repo string,
+	runID string,
+) []GitHubTestsIncomplete {
+	incomplete = mergeGitHubTestsIncomplete(incomplete, GitHubTestsIncomplete{
+		Component: githubTestsReportMemberComponent,
+		Cause:     githubTestsUnreadableArchiveCause,
+		Count:     1,
+	})
+	if client != nil {
+		client.Metrics.RecordArtifactSkipped(
+			claim.Provider, claim.Dataset, githubTestsUnreadableArchiveCause,
+		)
+	}
+	// The run id is provider-supplied and unbounded, so it belongs in the log
+	// line, never in the durable observation.
+	slog.Warn(
+		"provider artifact archive unreadable; artifact skipped and inventory continued",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repo, "component", githubTestsReportMemberComponent,
+		"cause", githubTestsUnreadableArchiveCause, "run", runID,
+	)
+	return incomplete
+}
+
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	if strings.TrimSpace(raw) == "" {
 		return githubTestsChunkCursor{Phase: "runs"}, nil
@@ -610,6 +643,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						}
 						rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 						if parseErr != nil {
+							// An archive that will not open is provider data, not
+							// a fault of this unit. Skip it exactly as an expired
+							// or empty artifact is skipped a few lines above, and
+							// keep walking: one bad artifact must not cost the
+							// healthy ones or the whole unit (CHAOS-4177).
+							if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
+								cursor.Incomplete = recordGitHubTestsUnreadableArchive(
+									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+								)
+								continue
+							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 						}
 						reportIncomplete, optional := rows.optionalIncomplete()

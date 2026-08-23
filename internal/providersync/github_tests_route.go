@@ -324,6 +324,14 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 			if parseErr != nil {
+				// Same disposition as the chunked route: an archive that will
+				// not open is skipped and the walk continues (CHAOS-4177).
+				if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
+					incomplete = recordGitHubTestsUnreadableArchive(
+						incomplete, client, claim, claim.SourceName, pipeline.RunID,
+					)
+					continue
+				}
 				return CompleteRouteBatch{}, fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)
 			}
 			reportIncomplete, optional := rows.optionalIncomplete()

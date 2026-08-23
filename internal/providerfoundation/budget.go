@@ -255,6 +255,7 @@ type Metrics struct {
 	budgetReleaseErrors  map[string]uint64
 	inventoryPageCap     map[string]uint64
 	perRunTruncation     map[string]uint64
+	artifactSkipped      map[string]uint64
 	unitTerminalWithRows map[string]uint64
 }
 
@@ -265,6 +266,7 @@ func NewMetrics() *Metrics {
 		budgetReleaseErrors:  map[string]uint64{},
 		inventoryPageCap:     map[string]uint64{},
 		perRunTruncation:     map[string]uint64{},
+		artifactSkipped:      map[string]uint64{},
 		unitTerminalWithRows: map[string]uint64{},
 	}
 }
@@ -403,6 +405,44 @@ func (m *Metrics) RecordPerRunTruncation(provider, dataset, component, cause str
 		":"+MetricPerRunComponentLabel(component)+":"+MetricPerRunCauseLabel(cause)]++
 }
 
+// metricArtifactSkipReasonVocabulary is the closed set of reasons a single
+// provider artifact was skipped while the rest of the inventory continued. An
+// unknown reason collapses to "other" so a route cannot open an unbounded
+// label dimension (CHAOS-4177).
+var metricArtifactSkipReasonVocabulary = map[string]struct{}{
+	"unreadable_archive": {},
+}
+
+// MetricArtifactSkipReasonLabel bounds the artifact skip reason label.
+func MetricArtifactSkipReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricArtifactSkipReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordArtifactSkipped counts ONE provider artifact that could not be read
+// and was skipped, by bounded provider, dataset, and reason.
+//
+// This is deliberately a SEPARATE series from RecordPerRunTruncation rather
+// than a new cause label on it. That series documents runs that were walked
+// completely and therefore ADVANCE the watermark; a skipped artifact leaves
+// its contents unobserved and WITHHOLDS it (report_member is absent from
+// githubTestsWatermarkAdvancingPairs). Folding the two together would mix a
+// self-limiting condition with a coverage-stalling one on a single series --
+// the exact confusion RecordPerRunTruncation's own comment was written to
+// prevent (CHAOS-4177).
+func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
 // RecordUnitTerminalWithRows counts a provider unit that was terminalized
 // while it already held committed rows. That combination is the signature
 // CHAOS-4130 ran on undetected for days: a unit destroyed mid-stream is
@@ -463,6 +503,35 @@ func writeProviderDatasetComponentCounter(
 		if _, err := fmt.Fprintf(
 			writer, "%s{provider=%q,dataset=%q,component=%q,cause=%q} %d\n",
 			name, parts[0], parts[1], parts[2], parts[3], values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeProviderDatasetReasonCounter is the three-label twin of
+// writeProviderDatasetCounter. Every key is built from bounded vocabularies,
+// so SplitN into exactly three parts is total.
+func writeProviderDatasetReasonCounter(
+	writer io.Writer, name, help string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s{provider=%q,dataset=%q,reason=%q} %d\n",
+			name, parts[0], parts[1], parts[2], values[key],
 		); err != nil {
 			return err
 		}
@@ -536,6 +605,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_per_run_truncation_total",
 		"Workflow runs committed with only the first cap-worth of their items, by bounded provider, dataset, and component.",
 		m.perRunTruncation,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_artifact_skipped_total",
+		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
+		m.artifactSkipped,
 	); err != nil {
 		return err
 	}

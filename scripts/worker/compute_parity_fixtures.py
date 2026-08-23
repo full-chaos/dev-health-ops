@@ -387,7 +387,7 @@ def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
     environment.update({"CLICKHOUSE_URI": dsn, "DATABASE_URI": dsn})
     for arguments in (["upgrade"], ["status", "--check"]):
         completed = subprocess.run(  # noqa: S603 -- fixed checked-in CLI
-            [_dev_hops(), "migrate", "clickhouse", *arguments],
+            [*_migrate_command(), "migrate", "clickhouse", *arguments],
             env=environment,
             capture_output=True,
             text=True,
@@ -400,9 +400,21 @@ def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
     return {"database": database, "migrated": True, "reset": reset}
 
 
-def _dev_hops() -> str:
+def _migrate_command() -> list[str]:
+    """How to invoke the migration CLI.
+
+    Prefer the console script when it is installed, but fall back to running
+    the module through THIS interpreter rather than the bare name `dev-hops`.
+    The Go integration shards run without the Python package installed as a
+    console script while `dev_health_ops` is still importable, so the bare name
+    raised FileNotFoundError and provisioning could not build either store --
+    a failure that only appears in CI, because a developer's worktree always
+    has the venv entry point.
+    """
     candidate = REPO_ROOT / ".venv" / "bin" / "dev-hops"
-    return str(candidate) if candidate.exists() else "dev-hops"
+    if candidate.exists():
+        return [str(candidate)]
+    return [sys.executable, "-m", "dev_health_ops.cli"]
 
 
 def clone(kind: str, from_dsn: str, to_dsn: str) -> dict[str, Any]:

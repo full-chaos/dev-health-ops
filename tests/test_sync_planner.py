@@ -15,6 +15,7 @@ from dev_health_ops.models import (
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
+    SyncExecutedProofLedger,
     SyncRun,
     SyncRunMode,
     SyncRunReferenceDiscovery,
@@ -1207,6 +1208,12 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
                 SyncRun,
                 SyncRunReferenceDiscovery,
                 SyncRunUnit,
+                # CHAOS-4114: plan_sync_run records every planned pair as
+                # ATTEMPTED in the executed-proof ledger, in this same
+                # transaction. An explicit `tables=` list does not pull it in,
+                # and the planner's write then aborts the transaction this
+                # test exists to prove stays usable.
+                SyncExecutedProofLedger,
                 SyncDispatchOutbox,
                 SyncWatermark,
             ),
@@ -1768,7 +1775,7 @@ def test_linear_backfill_units_never_write_watermarks(db_session, monkeypatch):
     Mirrors the invariant in test_sync_units.py::test_run_sync_unit_success_skips_watermark_for_backfill.
     The planner side of the contract: all units produced for a Linear backfill
     carry mode='backfill', which is the gate the worker checks before writing
-    watermarks (workers/sync_units.py:401-408). This test asserts the planner
+    watermarks (workers/sync_units.py:404-411). This test asserts the planner
     never emits a non-backfill mode for a backfill request, and that no
     SyncWatermark rows exist after planning (planning never writes watermarks).
     """

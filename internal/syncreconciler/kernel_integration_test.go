@@ -910,6 +910,22 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// CHAOS-4114: the executed-proof ledger joined domainPosture's manifest
+		// (migration 0109). Every domain GRANT is wrapped in a to_regclass guard,
+		// so a venue that never CREATEs it silently skips the grant and
+		// CheckDomainAuthorization then fails closed with an opaque readiness
+		// error naming neither the table nor this venue.
+		`CREATE TABLE public.sync_executed_proof_ledger (
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			attempted_at timestamptz NOT NULL,
+			proven_at timestamptz,
+			PRIMARY KEY (provider, dataset_key),
+			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
+		)`,
 		// Migration 0088 (#1529) added this table to domainPosture's manifest,
 		// so the CheckDomainAuthorization readiness call each test in this
 		// package makes fails closed on its absence — the

@@ -20,6 +20,7 @@ from dev_health_ops.models.integrations import (
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
+    SyncExecutedProofLedger,
     SyncRun,
     SyncRunReferenceDiscovery,
     SyncRunUnit,
@@ -62,6 +63,10 @@ _TABLES = tables_of(
     SyncRun,
     SyncRunReferenceDiscovery,
     SyncRunUnit,
+    # CHAOS-4114: triggering a sync runs plan_sync_run, which records every
+    # planned pair as ATTEMPTED in the executed-proof ledger inside the same
+    # transaction. An explicit `tables=` list does not pull it in.
+    SyncExecutedProofLedger,
     SyncWatermark,
     SyncCoverageProjection,
 )

@@ -387,6 +387,22 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		// CHAOS-4114: the executed-proof ledger joined domainPosture's manifest
+		// (migration 0109). Every domain GRANT is wrapped in a to_regclass guard,
+		// so a venue that never CREATEs it silently skips the grant and
+		// CheckDomainAuthorization then fails closed with an opaque readiness
+		// error naming neither the table nor this venue.
+		`CREATE TABLE public.sync_executed_proof_ledger (
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			attempted_at timestamptz NOT NULL,
+			proven_at timestamptz,
+			PRIMARY KEY (provider, dataset_key),
+			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
+		)`,
 		// Chunked provider persistence (migration 0102). These must exist BEFORE
 		// the grants run: every domain GRANT is wrapped in a to_regclass guard, so
 		// an absent table silently skips its grant while domainPosture() still

@@ -466,10 +466,74 @@ groups:
           summary: "Scheduler executed-proof evidence refresh is failing"
           description: |
             NativeMaterializer.RefreshExecutedProof is erroring against the domain
-            Postgres pool (CHAOS-4060). Every non-waived route stays blocked
-            (fail-closed) until a refresh succeeds; check PostgreSQL connectivity
-            and permissions for public.sync_run_units and worker logs for the
-            ERROR this counter accompanies.
+            Postgres pool (CHAOS-4060). Read it WITH
+            devhealth_scheduler_executed_proof_evidence_state: at 0 the snapshot
+            is stale but proven routes keep planning, at -1 nothing has ever
+            loaded and every non-waived route is blocked. Check PostgreSQL
+            connectivity and the domain role's privileges on
+            public.sync_executed_proof_ledger (alembic 0109, CHAOS-4114 -- the
+            refresh reads the ledger now, not sync_run_units), plus the scheduler
+            logs for the ERROR this counter accompanies.
+      # CHAOS-4124: this is the one that had to exist and did not. The gauge
+      # above cannot separate "the last refresh failed, proven routes still
+      # plan" from "no refresh has EVER succeeded, so every non-waived route
+      # is blocked" -- and on 2026-08-22 the second one ran for eight hours
+      # while the scheduler reported ready. -1 is only ever the second.
+      # Critical, not warning: at -1 the product is not syncing at all.
+      - alert: SchedulerExecutedProofEvidenceNeverLoaded
+        expr: |
+          min(devhealth_scheduler_executed_proof_evidence_state) < 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Scheduler executed-proof evidence has never loaded"
+          description: |
+            No executed-proof refresh has succeeded since this scheduler process
+            started, so the gate is enforcing an EMPTY Degraded snapshot: every
+            provider/dataset pair without an explicit waiver is blocked from
+            planning, and the only work that still plans is the single waived
+            route. This is the CHAOS-4124 outage shape. The scheduler's
+            executed_proof_evidence readiness check is closed for the same
+            reason -- check the ERROR at process start, PostgreSQL reachability,
+            and that alembic 0109 (public.sync_executed_proof_ledger) is
+            installed. It clears itself as soon as one refresh succeeds.
+      # Planning volume. A zero-unit occurrence completes SUCCESSFULLY, which
+      # is why the 17-dataset-to-1 collapse ran unpaged: nothing measured the
+      # work, only whether the pass finished. Read as a ratio against the
+      # denominator so a scheduler that is merely idle overnight does not
+      # page, and one that is materializing steadily while planning nothing
+      # does.
+      - alert: SchedulerPlansNothingAcrossEveryOccurrence
+        expr: |
+          sum(increase(devhealth_scheduler_zero_planned_occurrences_total[1h])) >= 3
+          and
+          sum(increase(devhealth_scheduler_zero_planned_occurrences_total[1h]))
+            >= sum(increase(devhealth_scheduler_materialized_occurrences_total[1h]))
+        for: 15m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Every scheduled sync occurrence is planning zero units"
+          description: |
+            Every occurrence the scheduler materialized in the last hour planned
+            NO units, and it materialized at least three. Runs still complete
+            successfully -- they just do nothing -- so no run-failure alert
+            fires and coverage windows quietly empty (CHAOS-4124). Check
+            devhealth_scheduler_executed_proof_evidence_state first: a blocked
+            gate is the known cause. Otherwise look at dataset enablement and
+            the planner's window computation.
+      # CHAOS-4114 corrected this description. It previously said every
+      # non-waived route was blocked whenever this gauge read 1, which is only
+      # true of the never-loaded case. ExecutedProofSatisfied checks
+      # HasExecutedProof BEFORE Degraded, and a failed refresh carries the
+      # previous snapshot's Proven set forward, so after a successful load a
+      # LATER failure leaves proven routes planning normally. Reading the two
+      # as the same condition is how a bounded degradation gets handled as a
+      # total outage -- or, worse, how the real total outage gets dismissed as
+      # the routine one.
       - alert: SchedulerExecutedProofGateDegraded
         expr: |
           max(devhealth_scheduler_executed_proof_gate_degraded) > 0
@@ -480,7 +544,20 @@ groups:
         annotations:
           summary: "Scheduler executed-proof gate is running degraded"
           description: |
-            The CHAOS-4060 executed-proof gate has never had a successful evidence
-            load, or its last refresh failed: every non-waived route is being
-            treated as unproven and blocked from planning new work until a refresh
-            succeeds.
+            The CHAOS-4060 executed-proof gate's last evidence refresh failed, so
+            it is operating on a snapshot it can no longer confirm. WHICH routes
+            that blocks depends entirely on
+            devhealth_scheduler_executed_proof_evidence_state, so read it before
+            acting:
+              state 0  -- evidence loaded successfully at least once. Proven facts
+                          carried forward and already-proven routes keep planning
+                          normally; only never-attempted pairs lose their
+                          bootstrap pass-through. Bounded. Investigate, do not
+                          escalate.
+              state -1 -- no refresh has EVER succeeded. The snapshot is empty as
+                          well as degraded, so EVERY non-waived route is blocked
+                          and the product is not syncing. This is the CHAOS-4124
+                          outage; SchedulerExecutedProofEvidenceNeverLoaded fires
+                          for it at critical.
+            Either way it clears itself once a refresh succeeds; nothing needs a
+            restart.

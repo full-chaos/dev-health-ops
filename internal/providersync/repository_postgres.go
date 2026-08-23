@@ -155,6 +155,16 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
+	// transaction just terminalized, inside the same transaction. It reads
+	// the persisted row -- not `encoded` -- with the identical predicate the
+	// legacy whole-table evidence scan used, so the ledger and the query it
+	// replaces cannot drift apart. A failure here rolls the completion back
+	// rather than committing a unit whose proof was silently not recorded:
+	// the gate's whole value is that its evidence matches reality.
+	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
+		return ErrInvalidConfiguration
+	}
 	// The prepared effect payload is recovery state, not a product record.
 	// Delete it in the same transaction that terminalizes the unit so any
 	// later watermark/outbox failure rolls both operations back together.
@@ -241,6 +251,16 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
+	// transaction just terminalized, inside the same transaction. It reads
+	// the persisted row -- not `encoded` -- with the identical predicate the
+	// legacy whole-table evidence scan used, so the ledger and the query it
+	// replaces cannot drift apart. A failure here rolls the completion back
+	// rather than committing a unit whose proof was silently not recorded:
+	// the gate's whole value is that its evidence matches reality.
+	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
+		return ErrInvalidConfiguration
 	}
 	if _, err := tx.Exec(ctx, deletePreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),

@@ -137,6 +137,16 @@ SELECT format(
        )
  WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
 \gexec
+-- CHAOS-4114: the executed-proof ledger is the maintained projection of
+-- sync_run_units that the CHAOS-4060 route-readiness gate reads instead of
+-- rescanning that whole table. Written and read by the domain role only; no
+-- DELETE, because the ledger is monotone by construction.
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_executed_proof_ledger') IS NOT NULL
+\gexec
 SELECT format(
          'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
          :'domain_role'

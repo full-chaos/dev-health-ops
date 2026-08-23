@@ -47,6 +47,22 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
+		// CHAOS-4114: the executed-proof ledger joined domainPosture's manifest
+		// (migration 0109). Every domain GRANT is wrapped in a to_regclass guard,
+		// so a venue that never CREATEs it silently skips the grant and
+		// CheckDomainAuthorization then fails closed with an opaque readiness
+		// error naming neither the table nor this venue.
+		`CREATE TABLE public.sync_executed_proof_ledger (
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			attempted_at timestamptz NOT NULL,
+			proven_at timestamptz,
+			PRIMARY KEY (provider, dataset_key),
+			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
+		)`,
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
@@ -106,7 +122,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT ON TABLE public.backfill_jobs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,

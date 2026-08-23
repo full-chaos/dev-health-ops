@@ -2,8 +2,10 @@ package providersync
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -172,12 +174,18 @@ func (descriptor CompleteRouteDescriptor) ExecutedProofSatisfied(evidence *Execu
 // Deliberately no WHERE clause: a row of ANY status counts toward
 // "attempted" (a unit was planned/claimed for this pair, whatever became of
 // it), while "proven" is folded in per-group via bool_or over the
-// success-and-positive-count predicate. One full scan computes both sets --
+// success-and-positive-count predicate. One full scan computes both sets.
+//
+// CHAOS-4114/CHAOS-4124: this query is NO LONGER what the refresh runs. It
+// outgrew both its deadlines and a startup timeout installed an empty
+// Degraded snapshot that blocked every non-waived pair for eight hours. It
+// survives here as the DEFINITION the durable ledger projects -- the alembic
+// 0109 backfill (ExecutedProofLedgerBackfillSQL) and the per-unit stamps are
+// built from the same executedProofProvenPredicateSQL, and the integration
+// tests assert this scan and the ledger read agree on identical fixtures.
 // CHAOS-4080 ("Executed-proof evidence query: unbounded full scan of
-// sync_run_units, no shaped index") tracks giving this an indexed/maintained
-// projection instead of a periodic full scan; the bounded refresh interval
-// in NativeMaterializer caps query FREQUENCY in the meantime, not per-scan
-// cost.
+// sync_run_units, no shaped index") asked for exactly this maintained
+// projection; the ledger is it.
 //
 // Each disjunct is wrapped in its own COALESCE(...,false): a row whose
 // go_provider_route.records key is present-but-zero and whose legacy
@@ -193,29 +201,141 @@ func (descriptor CompleteRouteDescriptor) ExecutedProofSatisfied(evidence *Execu
 // same semantics the original WHERE-clause version of this query had.
 const executedProofEvidenceSQL = `
 SELECT
-  lower(provider) AS provider,
-  lower(dataset_key) AS dataset_key,
-  bool_or(
-    status = 'success'
-    AND (
-      COALESCE(
-        (result #>> '{go_provider_route,records}') ~ '^[0-9]{1,18}$'
-        AND (result #>> '{go_provider_route,records}')::bigint > 0,
-        false
-      )
-      OR COALESCE(
-        (result ->> 'persisted') ~ '^[0-9]{1,18}$'
-        AND (result ->> 'persisted')::bigint > 0,
-        false
-      )
-    )
-  ) AS proven
-FROM public.sync_run_units
+  lower(unit.provider) AS provider,
+  lower(unit.dataset_key) AS dataset_key,
+  bool_or(` + executedProofProvenPredicateSQL + `) AS proven
+FROM public.sync_run_units AS unit
 GROUP BY 1, 2
 `
 
-// QueryExecutedProofEvidence computes the durable executed-proof snapshot
-// (CHAOS-4060) from the authoritative sync_run_units table. It always returns
+// executedProofProvenPredicateSQL is THE single definition of "this one
+// sync_run_units row is live executed proof" (CHAOS-4114). Every consumer --
+// the legacy whole-table scan above, the per-unit ledger stamp
+// executedProofLedgerTerminalSQL writes on terminalization, and the alembic
+// 0109 one-time backfill -- evaluates this identical expression, so the
+// ledger cannot silently mean something different from the query it replaces.
+// It is deliberately a SQL fragment and not a Go (or Python) reimplementation
+// of the same rules: the JSON-path/regex/bigint semantics live in exactly one
+// place, in the one language that already had to get them right. The
+// migration copy is pinned to this text by
+// tests/test_executed_proof_ledger_predicate_parity.py.
+//
+// It is written against the alias `unit`, so every consumer must alias
+// public.sync_run_units AS unit.
+const executedProofProvenPredicateSQL = `
+    unit.status = 'success'
+    AND (
+      COALESCE(
+        (unit.result #>> '{go_provider_route,records}') ~ '^[0-9]{1,18}$'
+        AND (unit.result #>> '{go_provider_route,records}')::bigint > 0,
+        false
+      )
+      OR COALESCE(
+        (unit.result ->> 'persisted') ~ '^[0-9]{1,18}$'
+        AND (unit.result ->> 'persisted')::bigint > 0,
+        false
+      )
+    )
+  `
+
+// executedProofLedgerReadSQL is what the refresh actually runs now. The
+// whole-table GROUP BY above outgrew both of its deadlines (CHAOS-4114: the
+// 15s scheduler StepTimeout on the periodic refresh, and the 30s startup
+// budget whose failure caused the CHAOS-4124 eight-hour total planning
+// outage), because it scanned every sync_run_units row and extracted JSON
+// from each one -- monotonically slower forever, since that table only grows.
+// The ledger holds at most one row per (provider, dataset_key) pair -- ~100
+// rows for the entire route matrix, independent of sync history -- so this
+// read is bounded by the SIZE OF THE ROUTE MATRIX rather than by the size of
+// the run history. The house rule the ticket names applies: a timeout never
+// fixes capacity; durable truth does.
+//
+// Note this reads the RAW provider/dataset_key the units were planned under.
+// Alias canonicalization stays a read-time transform in
+// QueryExecutedProofEvidence, byte-identical to the pre-ledger behavior, so
+// the ledger is a faithful projection of sync_run_units and not a second,
+// subtly different opinion about route identity.
+const executedProofLedgerReadSQL = `
+SELECT provider, dataset_key, proven_at IS NOT NULL AS proven
+FROM public.sync_executed_proof_ledger
+`
+
+// executedProofLedgerAttemptedSQL records that a pair has been ATTEMPTED. It
+// is issued in the same transaction that INSERTs the sync_run_units rows,
+// because "attempted" is a statement about ROW EXISTENCE, not about
+// terminalization: executedProofEvidenceSQL has no WHERE clause, so a pair
+// became Attempted the instant planning minted its first row, whatever became
+// of it afterwards. Writing it anywhere later would leave a window in which
+// the gate reads a freshly-planned pair as never-attempted and bootstraps it
+// through -- the fail-OPEN direction.
+//
+// DO NOTHING, never DO UPDATE: attempted_at records when the pair FIRST
+// became attempted, and monotone means the first writer wins. It must never
+// clobber a proven_at either.
+const executedProofLedgerAttemptedSQL = `
+INSERT INTO public.sync_executed_proof_ledger (provider, dataset_key, attempted_at)
+SELECT DISTINCT btrim(lower(pair.provider)), btrim(lower(pair.dataset_key)), $3::timestamptz
+FROM unnest($1::text[], $2::text[]) AS pair(provider, dataset_key)
+WHERE btrim(pair.provider) <> '' AND btrim(pair.dataset_key) <> ''
+ON CONFLICT (provider, dataset_key) DO NOTHING
+`
+
+// executedProofLedgerTerminalSQL stamps PROVEN from the unit row the caller
+// just terminalized, looked up by primary key. Deriving the verdict from the
+// persisted row rather than from the caller's in-memory result payload is the
+// point: the row is what the legacy scan read, and
+// executedProofProvenPredicateSQL is the identical expression it read it
+// with, so the two can never disagree about what counts.
+//
+// The upsert is monotone in both columns. attempted_at is only ever supplied
+// by the INSERT arm (a terminalizing unit's pair is necessarily already
+// attempted, so in practice the conflict arm always runs); proven_at is
+// COALESCEd so an already-proven pair keeps its original proving instant and
+// a later unproven completion can never un-prove it. That mirrors bool_or's
+// semantics in the query this replaces: proof is permanent.
+const executedProofLedgerTerminalSQL = `
+INSERT INTO public.sync_executed_proof_ledger AS ledger
+  (provider, dataset_key, attempted_at, proven_at)
+SELECT
+  btrim(lower(unit.provider)),
+  btrim(lower(unit.dataset_key)),
+  $2::timestamptz,
+  CASE WHEN ` + executedProofProvenPredicateSQL + ` THEN $2::timestamptz END
+FROM public.sync_run_units AS unit
+WHERE unit.id = $1::uuid
+  AND btrim(unit.provider) <> '' AND btrim(unit.dataset_key) <> ''
+ON CONFLICT (provider, dataset_key) DO UPDATE
+  SET proven_at = COALESCE(ledger.proven_at, EXCLUDED.proven_at)
+`
+
+// ExecutedProofLedgerBackfillSQL rebuilds the whole ledger from
+// sync_run_units in one pass. It is the one-time alembic 0109 backfill (run
+// offline, in migration context, where neither the 15s nor the 30s deadline
+// exists), and it is what the integration tests run to prove the ledger read
+// answers EXACTLY what the whole-table scan answered on the same fixture.
+//
+// attempted_at/proven_at are derived from the units themselves rather than
+// stamped with now(), so a backfilled ledger reads as the honest history it
+// is. Both aggregates are monotone-merged into whatever the ledger already
+// holds, so running the backfill twice is a no-op.
+const ExecutedProofLedgerBackfillSQL = `
+INSERT INTO public.sync_executed_proof_ledger AS ledger
+  (provider, dataset_key, attempted_at, proven_at)
+SELECT
+  btrim(lower(unit.provider)),
+  btrim(lower(unit.dataset_key)),
+  min(unit.created_at),
+  min(unit.updated_at) FILTER (WHERE ` + executedProofProvenPredicateSQL + `)
+FROM public.sync_run_units AS unit
+GROUP BY 1, 2
+ON CONFLICT (provider, dataset_key) DO UPDATE
+  SET attempted_at = LEAST(ledger.attempted_at, EXCLUDED.attempted_at),
+      proven_at = COALESCE(ledger.proven_at, EXCLUDED.proven_at)
+`
+
+// QueryExecutedProofEvidence loads the durable executed-proof snapshot
+// (CHAOS-4060) from the maintained sync_executed_proof_ledger projection
+// (CHAOS-4114) rather than scanning sync_run_units. It always returns
 // a non-nil *ExecutedProofEvidence on success -- including one with both sets
 // empty, which is a legitimate "nothing has ever been attempted yet" result,
 // not a sentinel for "gate disabled" (see ExecutedProofEvidence).
@@ -231,7 +351,7 @@ func QueryExecutedProofEvidence(ctx context.Context, db *pgxpool.Pool) (*Execute
 	if db == nil || ctx == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	rows, err := db.Query(ctx, executedProofEvidenceSQL)
+	rows, err := db.Query(ctx, executedProofLedgerReadSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -256,4 +376,64 @@ func QueryExecutedProofEvidence(ctx context.Context, db *pgxpool.Pool) (*Execute
 		return nil, err
 	}
 	return evidence, nil
+}
+
+// executedProofLedgerExecutor is the narrow write surface the ledger stamps
+// need. Both *pgxpool.Pool and pgx.Tx satisfy it, so a caller can enlist the
+// stamp in the transaction that is already writing the units -- which is the
+// only correct place for it. A stamp committed separately from the unit row
+// it describes can survive a rolled-back unit (ledger says attempted, no row
+// exists) or be lost while the unit commits (row exists, ledger silent, gate
+// fails OPEN on a pair it should be watching).
+type executedProofLedgerExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+// RecordExecutedProofAttempted marks every supplied provider/dataset pair as
+// ATTEMPTED. Call it from inside the transaction that inserts the
+// sync_run_units rows, with the pairs those rows carry.
+//
+// Pairs are deduplicated and empty ones dropped by the statement itself, so a
+// caller may pass a plan's units verbatim. Calling it with no pairs is a
+// no-op rather than an error: a zero-unit plan is a legitimate outcome and
+// must not fail the materialization it belongs to.
+func RecordExecutedProofAttempted(
+	ctx context.Context,
+	executor executedProofLedgerExecutor,
+	providers, datasets []string,
+	now time.Time,
+) error {
+	if ctx == nil || executor == nil || len(providers) != len(datasets) {
+		return ErrInvalidConfiguration
+	}
+	if len(providers) == 0 {
+		return nil
+	}
+	_, err := executor.Exec(
+		ctx, executedProofLedgerAttemptedSQL, providers, datasets, now.UTC(),
+	)
+	return err
+}
+
+// RecordExecutedProofTerminal stamps PROVEN for the unit the caller just
+// terminalized, deriving the verdict from the persisted row by primary key.
+// Call it from inside the terminalizing transaction, AFTER the status/result
+// write, so the row it reads is the terminal one.
+//
+// It is safe (and a deliberate no-op) on a failure terminalization: the
+// predicate requires status='success' with a positive row count, so a failed
+// unit merely re-asserts attempted_at, which is already set. That is why the
+// unreclaimable sweep and the terminal-delivery repair do not call this --
+// they cannot move either bit.
+func RecordExecutedProofTerminal(
+	ctx context.Context,
+	executor executedProofLedgerExecutor,
+	unitID string,
+	now time.Time,
+) error {
+	if ctx == nil || executor == nil || strings.TrimSpace(unitID) == "" {
+		return ErrInvalidConfiguration
+	}
+	_, err := executor.Exec(ctx, executedProofLedgerTerminalSQL, unitID, now.UTC())
+	return err
 }

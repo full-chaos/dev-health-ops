@@ -283,30 +283,123 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		if err != nil {
 			return nil, err
 		}
-		// CHAOS-4060: load the executed-proof snapshot once at process
-		// startup, bounded so a blocked query cannot hang scheduler
-		// construction indefinitely. A failed load is not fatal to the
-		// PROCESS -- RefreshExecutedProof installs an empty, non-nil,
-		// enforced snapshot on the first failure (fail CLOSED, not open:
-		// every non-waived route is conservatively unproven rather than the
-		// gate going silently unenforced), and maybeRefreshExecutedProof
-		// keeps retrying on its normal bounded interval from inside
-		// Materialize. This must still be loud: an operator needs to know
-		// route planning is running proof-less, not just that the process
-		// came up "ready".
-		startupCtx, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
-		refreshErr := materializer.RefreshExecutedProof(startupCtx)
-		cancelStartup()
+		// CHAOS-4060/CHAOS-4114/CHAOS-4124: load the executed-proof snapshot
+		// at process startup. A failed load is not fatal to the PROCESS --
+		// RefreshExecutedProof installs an empty, non-nil, enforced snapshot on
+		// the first failure (fail CLOSED, not open) and maybeRefreshExecutedProof
+		// keeps retrying from inside Materialize.
+		//
+		// But that first-failure state is NOT bounded the way a later failure
+		// is. A later failure carries forward Proven facts and HasExecutedProof
+		// is checked before Degraded, so proven routes keep planning. A FIRST
+		// failure has nothing to carry forward: the empty Degraded snapshot
+		// blocks every non-waived pair, which on 2026-08-22 collapsed planning
+		// from 17 datasets to the single waived route for eight hours
+		// (CHAOS-4124). One 30s attempt against a database busy with recovery
+		// load was the entire difference between a healthy deploy and a total
+		// outage, so one attempt is not enough. Retry on a short backoff inside
+		// a bounded overall budget, then -- if it still has not loaded -- leave
+		// the loud ERROR and the fail-closed snapshot exactly as they were and
+		// let the readiness check registered by the caller make the deploy
+		// visibly unhealthy instead of silently planning nothing.
+		refreshErr := loadExecutedProofAtStartup(materializer, time.Sleep)
 		if refreshErr != nil {
 			slog.Default().Error(
-				"executed-proof evidence load failed at scheduler startup; "+
-					"every non-waived route is being treated as UNPROVEN (fail "+
-					"closed) until a later refresh succeeds (CHAOS-4060)",
+				"executed-proof evidence load failed at scheduler startup after "+
+					"every bounded retry; every non-waived route is being treated as "+
+					"UNPROVEN (fail closed) and the executed_proof_evidence readiness "+
+					"check will hold this process unhealthy until a refresh succeeds "+
+					"(CHAOS-4060, CHAOS-4124)",
 				"error", refreshErr,
+				"attempts", executedProofStartupAttempts,
 			)
 		}
 		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
 	},
+}
+
+// executedProofStartupAttempts and the two budgets below bound how hard the
+// scheduler tries to load executed-proof evidence before giving up and going
+// visibly unready. They are constants rather than environment settings on
+// purpose: the numbers only matter during the seconds after a restart, and a
+// misconfigured one is exactly the kind of thing nobody notices until the
+// next incident.
+//
+// Per-attempt budget is deliberately SHORTER than the single 30s attempt it
+// replaces. Post-CHAOS-4114 this query reads at most one row per route pair
+// (~100 rows), so a healthy database answers in milliseconds; a read that has
+// not answered in 8s is contending, and the useful response to contention is
+// to back off and ask again, not to keep one doomed statement open. The
+// overall budget caps total startup delay so a permanently unreachable
+// database cannot hang process construction.
+const (
+	executedProofStartupAttempts       = 6
+	executedProofStartupAttemptBudget  = 8 * time.Second
+	executedProofStartupTotalBudget    = 45 * time.Second
+	executedProofStartupInitialBackoff = 250 * time.Millisecond
+	executedProofStartupMaxBackoff     = 4 * time.Second
+)
+
+// executedProofStartupLoader is the narrow shape loadExecutedProofAtStartup
+// needs, so the retry policy is testable without a database.
+type executedProofStartupLoader interface {
+	RefreshExecutedProof(context.Context) error
+	HasLoadedExecutedProof() bool
+}
+
+// loadExecutedProofAtStartup runs the bounded aggressive retry described at
+// its only production call site. It returns nil as soon as any attempt
+// succeeds and the last error otherwise.
+//
+// sleep is injected so the test can prove the backoff schedule and the
+// bounded attempt count without spending wall-clock time -- and, more
+// importantly, so a test can prove the loop STOPS. An unbounded retry here
+// would trade CHAOS-4124's silent outage for a process that never finishes
+// constructing, which is not an improvement.
+func loadExecutedProofAtStartup(
+	loader executedProofStartupLoader,
+	sleep func(time.Duration),
+) error {
+	if loader == nil || sleep == nil {
+		return errors.New("executed-proof startup loader is required")
+	}
+	deadline := time.Now().Add(executedProofStartupTotalBudget)
+	backoff := executedProofStartupInitialBackoff
+	var lastErr error
+	for attempt := 1; attempt <= executedProofStartupAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(
+			context.Background(), executedProofStartupAttemptBudget,
+		)
+		err := loader.RefreshExecutedProof(attemptCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == executedProofStartupAttempts {
+			break
+		}
+		// Check the overall budget BEFORE sleeping, not after: sleeping past
+		// a budget that is already spent adds startup latency that buys
+		// nothing, and the whole point of the budget is that a database
+		// which is not coming back must not hold the process hostage.
+		if !time.Now().Add(backoff).Before(deadline) {
+			break
+		}
+		slog.Default().Warn(
+			"executed-proof evidence load failed at scheduler startup; retrying "+
+				"before falling back to the fail-closed empty snapshot (CHAOS-4124)",
+			"error", err,
+			"attempt", attempt,
+			"attempts", executedProofStartupAttempts,
+			"backoff", backoff,
+		)
+		sleep(backoff)
+		if backoff *= 2; backoff > executedProofStartupMaxBackoff {
+			backoff = executedProofStartupMaxBackoff
+		}
+	}
+	return lastErr
 }
 
 func buildProductionSchedulerLoop(
@@ -437,6 +530,41 @@ func buildSchedulerLoopWithSources(
 	// does not match, so this is a no-op outside production composition.
 	if source, ok := occurrences.(interface{ WritePrometheus(io.Writer) error }); ok {
 		if err := registry.RegisterMetrics("scheduler_executed_proof_gate", source); err != nil {
+			return nil, err
+		}
+	}
+	// CHAOS-4124: make a never-loaded evidence snapshot LOUD at the place
+	// operators and deploy tooling already look. The outage's defining
+	// property was not that the gate failed closed -- that is correct -- but
+	// that it did so silently: the process reported ready, completed every
+	// occurrence successfully, and planned nothing for eight hours.
+	//
+	// This is deliberately a readiness check and not a construction failure.
+	// Refusing to construct would turn an evidence outage into a scheduler
+	// outage, and refusing to RUN would reproduce CHAOS-4124 by another
+	// route. The scheduler's loop does not gate on Registry.CheckRequired
+	// (only the worker does, cmd/dev-health-worker/dependencies.go), so a
+	// failing check here surfaces on /ready and in
+	// dev_health_runtime_check_failed while planning continues on whatever
+	// evidence exists -- the deploy goes visibly unhealthy instead of
+	// silently degrading. maybeRefreshExecutedProof keeps retrying, so the
+	// check clears itself the moment a refresh succeeds; nothing has to be
+	// restarted to recover.
+	if reporter, ok := occurrences.(interface{ HasLoadedExecutedProof() bool }); ok {
+		if err := registry.RegisterRequired(
+			"executed_proof_evidence",
+			func(context.Context) error {
+				if reporter.HasLoadedExecutedProof() {
+					return nil
+				}
+				return errors.New(
+					"executed-proof evidence has never loaded in this process; the " +
+						"gate is running on an empty Degraded snapshot and every " +
+						"non-waived provider/dataset pair is blocked from planning " +
+						"(CHAOS-4124)",
+				)
+			},
+		); err != nil {
 			return nil, err
 		}
 	}

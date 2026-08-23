@@ -119,6 +119,9 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
+from dev_health_ops.sync.executed_proof_ledger import (
+    record_executed_proof_attempts,
+)
 from dev_health_ops.sync.family_flags import (
     FAMILY_CANONICAL_DATASET_KEY,
     WORK_ITEM_DATASETS,
@@ -357,6 +360,18 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     ]
     session.add_all(unit_rows)
     session.flush()
+    # CHAOS-4114: this is the Python half of the executed-proof ledger's
+    # "attempted" write, and it is the path an operator reaches through the
+    # admin sync endpoints and the backfill runner. It writes sync_run_units
+    # through the ORM rather than through SQL, which is exactly why sweeping
+    # "the write paths" by grepping for INSERT statements misses it. It runs
+    # in the SAME transaction as the unit rows on purpose -- see the module
+    # docstring for why a separately committed ledger fails OPEN.
+    record_executed_proof_attempts(
+        session,
+        [(unit.provider, unit.dataset_key) for unit in unit_rows],
+        now=now,
+    )
     session.add(
         SyncRunReferenceDiscovery(
             org_id=integration.org_id,

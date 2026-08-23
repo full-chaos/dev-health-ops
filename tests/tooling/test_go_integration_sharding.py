@@ -271,8 +271,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # two independent budget-stop branches on both providers, and the drift
     # guard tying the dataset registry to the metric label allowlist. All nine
     # are ordinary, so the integration-tagged count is unchanged.
-    assert len(expected_provider_tests) == 941
-    assert len(expected_integration_tests) == 110
+    #
+    # CHAOS-4114 then added 3 INTEGRATION-tagged top-level tests (941 -> 944,
+    # 110 -> 113) in executed_proof_ledger_integration_test.go:
+    # TestPostgresCompleteStampsExecutedProofLedger,
+    # TestExecutedProofLedgerAttemptedIsMonotoneAndNeverClobbersProof and
+    # TestExecutedProofLedgerRefusesUnnormalizedIdentity. Both counts move by
+    # the same 3 because all three are integration-tagged -- unlike 4130's
+    # nine, which moved only the first.
+    assert len(expected_provider_tests) == 944
+    assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -288,7 +296,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 941
+    assert len(provider_flattened) == len(set(provider_flattened)) == 944
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -349,7 +357,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 941
+    assert len(selected_tests) == len(set(selected_tests)) == 944
     assert set(selected_tests) == expected_tests
 
 

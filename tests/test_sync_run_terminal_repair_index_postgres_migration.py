@@ -136,4 +136,4 @@ def test_0101_downgrade_and_application_head_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert _indexes(migrated_to_0100.engine)[_INDEX] == ("status", "id")
-    assert _revisions(migrated_to_0100.engine) == {"0108"}
+    assert _revisions(migrated_to_0100.engine) == {"0109"}

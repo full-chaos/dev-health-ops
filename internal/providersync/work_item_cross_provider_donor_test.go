@@ -313,6 +313,80 @@ func TestStoredEdgeRetypeIsStillSettledByRecency(t *testing.T) {
 	}
 }
 
+// TestLegacySemanticsStoredEdgeStillDonates records a REJECTED review finding
+// as an executable decision, so nobody "fixes" it back.
+//
+// The finding: the stored-edge read filters only `relationship_type`, so it can
+// admit `legacy.v1` rows whose direction was never validated for this resolver;
+// it recommended requiring `relationship_semantics_version =
+// canonical-blocks.v2`.
+//
+// Rejected on mechanism, for two independent reasons:
+//
+//  1. The legacy direction ambiguity is BLOCKER-ONLY. `_canonical_dependency`
+//     (work_graph/builder.py) applies its direction correction inside the
+//     `relationship in _BLOCKER_TYPES` branch --
+//     {blocks, blocked_by, is_blocked_by} -- and returns non-blocker rows
+//     source->target unchanged under BOTH semantics versions. That set is
+//     disjoint from the inheritable set this read filters to, so there is no
+//     row whose direction this merge could misread.
+//  2. Applying the recommendation would BREAK the fix. Migration
+//     071_blocker_direction_projection.sql adds the column with
+//     `DEFAULT 'legacy.v1'`, so every row written before it carries that
+//     value -- and the oldest stored edges are precisely the ones most likely
+//     to sit outside any sync window, i.e. the population this ticket exists
+//     to rescue. A canonical-only filter would silently drop them, and would
+//     also diverge from the Python reader, which applies no such filter.
+//
+// The first arm proves the acceptance is deliberate; the second proves the
+// blocker exclusion that makes it SAFE is real, not incidental.
+func TestLegacySemanticsStoredEdgeStillDonates(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	claim := crossProviderClaim()
+
+	legacy := crossProviderStoredEdge(claim, now.AddDate(0, 0, -40))
+	legacy.RelationshipSemanticsVersion = "legacy.v1"
+	source := &fakeGitHubWorkItemDerivationContextSource{
+		facts:       crossProviderDonorFacts(claim),
+		storedEdges: []githubWorkItemDependencyRow{legacy},
+	}
+	derivationContext, err := loadGitHubWorkItemDerivationContext(
+		context.Background(), claim, crossProviderRows(claim), source, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamID, _, _ := derivationContext.resolve(crossProviderSubject(claim))
+	if teamID == nil || *teamID != crossProviderTeamID {
+		t.Fatalf("a legacy.v1 non-blocker edge stopped donating: team=%v. "+
+			"If this was a deliberate semantics filter, it also drops every "+
+			"row predating migration 071, which is the CHAOS-3978 population.",
+			teamID)
+	}
+
+	// The safety half: a legacy BLOCKER row -- the only kind whose direction
+	// the rebuild ever rewrites -- must never reach inheritance, whatever its
+	// semantics version says.
+	for _, blockerType := range []string{"blocks", "blocked_by", "is_blocked_by"} {
+		blocker := legacy
+		blocker.RelationshipType = blockerType
+		blocked := &fakeGitHubWorkItemDerivationContextSource{
+			facts:       crossProviderDonorFacts(claim),
+			storedEdges: []githubWorkItemDependencyRow{blocker},
+		}
+		blockedContext, err := loadGitHubWorkItemDerivationContext(
+			context.Background(), claim, crossProviderRows(claim), blocked, now,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if teamID, _, _ := blockedContext.resolve(crossProviderSubject(claim)); teamID != nil {
+			t.Fatalf("a legacy %q edge donated a team: %v", blockerType, *teamID)
+		}
+	}
+}
+
 // TestStoredEdgeLoadFailureFailsClosed pins D17 on the new read.
 //
 // Degrading here would re-stamp `unassigned` over correct attributions with

@@ -409,6 +409,15 @@ func RunProducer(
 			identityEntryPoint = canonicalPath(resolved)
 		}
 	}
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+	// The argv is written by the test that calls this, in checked-in code --
+	// it is a producer this repo declares, not input from a request, a file,
+	// or an environment variable. Running a caller-declared producer IS the
+	// job here: a harness that could only exec a hard-coded command could not
+	// compare a Python reference against a native executor, which is the whole
+	// purpose. The path is resolved through exec.LookPath (no shell, so no
+	// word-splitting or metacharacter interpretation), and this package is
+	// importable only from _test.go files.
 	command := exec.Command(program, argv[1:]...)
 	command.Dir = workingDir
 	command.Env = environment

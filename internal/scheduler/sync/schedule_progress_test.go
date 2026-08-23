@@ -276,3 +276,99 @@ func TestFutureDatedLedgerRowCannotSuppressADueOccurrence(t *testing.T) {
 		t.Fatalf("next occurrence = %v, want 11:00", evaluation.NextOccurrence)
 	}
 }
+
+// pausedLedgerRow is lockedLedgerRow with the config's is_active column FALSE.
+// "Paused" in the product is exactly sync_configurations.is_active = false --
+// the Sync Status board derives its Paused state from it
+// (api/services/sync_coverage.py: paused = not bool(config.is_active)), and
+// the UI's Pause action writes nothing else. Index 2 is that column, in the
+// same order schedulerHandoffCandidatesSQL selects it.
+func pausedLedgerRow(
+	configID, orgID, jobID, cron string,
+	createdAt, lastSyncAt time.Time,
+	nextRunAt, lastOccurrenceAt *time.Time,
+) []any {
+	row := lockedLedgerRow(configID, orgID, jobID, cron, createdAt, lastSyncAt, nextRunAt, lastOccurrenceAt)
+	row[2] = false
+	return row
+}
+
+// TestPausedConfigMintsNoOccurrenceAcrossConsecutiveWindows pins the paused
+// gate in the evaluator.
+//
+// A paused integration must not be dispatched, no matter how due its cron
+// makes it look. This test drives the case that motivated the question --
+// a config paused a week ago whose cron has come round hundreds of times
+// since -- and asserts the ledger stays empty across every window.
+//
+// The gate lives in two independent places: schedulerHandoffCandidatesSQL
+// filters `WHERE config.is_active = TRUE` before a row is ever locked, and
+// evaluateContext returns DecisionInactive for a row that reaches it anyway.
+// This test covers the SECOND one, deliberately: the in-memory harness feeds
+// rows straight past the SQL, which is exactly the shape of a caller that
+// bypasses or loosens that WHERE clause. Before this test, DecisionInactive
+// had no coverage anywhere in the package -- the constant was defined,
+// assigned in one place, and asserted nowhere -- so nothing stopped the gate
+// being dropped in a refactor while every other scheduler test stayed green.
+//
+// Note the interaction with CHAOS-3936: a paused config's last_sync_at is
+// frozen by definition (nothing completes while it is paused), which is the
+// very state TestFailedRunStillMintsAnOccurrenceEveryWindow requires to keep
+// minting. Paused must win over that, and the two tests together say so.
+func TestPausedConfigMintsNoOccurrenceAcrossConsecutiveWindows(t *testing.T) {
+	createdAt := at("2026-08-01T00:00:00Z")
+	pausedSince := at("2026-08-14T01:21:00Z")
+	ledger := newLedgerCoordinator()
+	var nextRunAt *time.Time
+
+	for tick := range 5 {
+		observedAt := at("2026-08-23T09:00:00Z").Add(time.Duration(tick) * time.Hour)
+		transaction := &fakeSchedulerTransaction{
+			rows: &fakeLockedRows{rows: [][]any{pausedLedgerRow(
+				"config-paused", "org-a", "job-a", "0 * * * *",
+				createdAt, pausedSince, nextRunAt, ledger.latest(),
+			)}},
+			execTag: pgconn.NewCommandTag("UPDATE 1"),
+		}
+		result, err := mutationRepository(transaction).HandoffDueResult(
+			context.Background(), observedAt, 4, ledger,
+		)
+		if err != nil {
+			t.Fatalf("window %d HandoffDueResult() err = %v", tick, err)
+		}
+		if result.Minted() != 0 || len(result.HandedOff) != 0 {
+			t.Fatalf(
+				"window %d dispatched a PAUSED config: minted=%d handed off=%d",
+				tick, result.Minted(), len(result.HandedOff),
+			)
+		}
+	}
+	if len(ledger.minted) != 0 {
+		t.Fatalf(
+			"a paused config minted %d occurrence(s) across 5 windows, want none: %v",
+			len(ledger.minted), ledger.instants(),
+		)
+	}
+}
+
+// TestPausedConfigEvaluatesInactiveRatherThanDue names the decision, not just
+// the absence of an occurrence. Zero occurrences alone is a weak assertion:
+// a config that was merely not-due yet would satisfy it too, and would keep
+// satisfying it right up until the moment the cron came round. The decision
+// is what says the scheduler refused BECAUSE it is paused.
+func TestPausedConfigEvaluatesInactiveRatherThanDue(t *testing.T) {
+	pausedSince := at("2026-08-14T01:21:00Z")
+	evaluation := Evaluate(Candidate{
+		ConfigID:     "config-paused",
+		Active:       false,
+		ScheduleCron: "* * * * *",
+		CreatedAt:    at("2026-08-01T00:00:00Z"),
+		LastSyncAt:   &pausedSince,
+	}, at("2026-08-23T09:00:00Z"))
+	if evaluation.Due {
+		t.Fatalf("a paused config evaluated DUE: decision=%s", evaluation.Decision)
+	}
+	if evaluation.Decision != DecisionInactive {
+		t.Fatalf("decision = %s, want %s", evaluation.Decision, DecisionInactive)
+	}
+}

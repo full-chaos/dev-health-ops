@@ -137,12 +137,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:758",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:760",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 757
+        "line": 759
       },
       "queue_or_cadence": "sync",
       "dispatches": "sync.provider_unit outbox rows (per unit)",
@@ -166,7 +166,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1159
+        "line": 1161
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -190,7 +190,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2034
+        "line": 2036
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -1294,7 +1294,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1665
+        "line": 1667
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -1318,7 +1318,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2574
+        "line": 2658
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

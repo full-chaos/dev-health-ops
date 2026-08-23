@@ -214,12 +214,18 @@ def _mark_dispatching(session, unit):
     session.flush()
 
 
-def _seed_zero_unit_run(session):
+def _seed_zero_unit_run(
+    session,
+    *,
+    provider="linear",
+    planner_error=None,
+    planner_result=None,
+):
     org_id = str(uuid.uuid4())
     integration = Integration(
         org_id=org_id,
-        provider="linear",
-        name="linear-demo",
+        provider=provider,
+        name=f"{provider}-demo",
         config={},
         is_active=True,
     )
@@ -234,6 +240,8 @@ def _seed_zero_unit_run(session):
         total_units=0,
         completed_units=0,
         failed_units=0,
+        error=planner_error,
+        result=planner_result,
     )
     session.add(run)
     session.flush()
@@ -2261,6 +2269,274 @@ def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch)
         .one()
     )
     assert post_sync_outbox.status == OUTBOX_STATUS_PENDING
+
+
+class _RecordingCounter:
+    """Minimal stand-in for the dual Prometheus/OTel counter."""
+
+    def __init__(self):
+        self.increments = []
+
+    def labels(self, **values):
+        counter = self
+
+        class _Bound:
+            def inc(self, amount=1):
+                counter.increments.append((values, amount))
+
+        return _Bound()
+
+
+def test_finalize_zero_unit_run_preserves_the_planner_recorded_cause(
+    db_session, monkeypatch
+):
+    """CHAOS-4159: finalize must not overwrite a diagnosis the planner made.
+
+    A zero-unit run still finalizes FAILED -- that trade is ratified by
+    ``test_fully_caught_up_plan_finalizes_failed_not_silently_successful`` and
+    is NOT what this test changes. What it pins is that the run must not
+    finalize ANONYMOUSLY. Finalize has no units to read a cause off, so it
+    cannot know why the plan was empty; the planner can, and the terminalizing
+    planner paths already write ``error`` plus ``result.error_category`` onto
+    the run before dispatch.
+
+    Before this fix the ``total_units == 0`` branch overwrote both
+    unconditionally, so a PagerDuty integration with no credential, a disabled
+    sync target and a genuinely empty plan all ended up with the identical
+    ``"No sync units planned"``. An operator reading ``sync_runs.error`` then
+    cannot tell "attach a credential" from "this is expected" -- which is
+    precisely how a local stack accumulated hundreds of indistinguishable red
+    rows.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="pagerduty",
+        planner_error="PagerDuty credential is unavailable",
+        planner_result={"error_category": "pagerduty_credential_unavailable"},
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert run.status == SyncRunStatus.FAILED.value, (
+        "the zero-unit FAILED path is ratified and must stay -- this fix "
+        "changes the label, never the status"
+    )
+    assert run.error == "PagerDuty credential is unavailable", (
+        "the planner's diagnosis must survive finalize, not be replaced by "
+        "the generic zero-unit label"
+    )
+    assert run.result == {
+        "completed_units": 0,
+        "failed_units": 0,
+        "error_category": "pagerduty_credential_unavailable",
+        "reason": "pagerduty_credential_unavailable",
+    }
+
+
+def test_finalize_zero_unit_run_prefers_an_explicit_planner_reason(
+    db_session, monkeypatch
+):
+    """An explicit ``reason`` outranks ``error_category`` as the label.
+
+    ``error_category`` is a coarse bucket that other consumers already read;
+    ``reason`` is the planner saying exactly what it decided. When both are
+    present the specific one is the classification, and the bucket is carried
+    through unchanged for those other consumers.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="pagerduty",
+        planner_error="PagerDuty sync target must be operational",
+        planner_result={
+            "error_category": "pagerduty_sync_disabled",
+            "reason": "pagerduty_targets_malformed",
+        },
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert run.result["reason"] == "pagerduty_targets_malformed"
+    assert run.result["error_category"] == "pagerduty_sync_disabled"
+
+
+def test_finalize_zero_unit_run_ignores_a_blank_planner_reason(db_session, monkeypatch):
+    """A blank recorded reason is absence, not a classification.
+
+    An empty label is worse than the honest generic one: it reads as a
+    classification that ran and found nothing, so an operator stops looking.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="github",
+        planner_result={"reason": "   ", "error_category": ""},
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert run.error == "No sync units planned"
+    assert run.result["reason"] == "no_sync_units_planned"
+    assert "error_category" not in run.result
+
+
+@pytest.mark.parametrize("blank_error", ("", "   "))
+def test_finalize_zero_unit_run_treats_a_blank_planner_error_as_absent(
+    db_session, monkeypatch, blank_error
+):
+    """A blank recorded error is absence, exactly as a blank reason is.
+
+    ``_zero_unit_reason`` already treats a blank ``reason`` as absent, on the
+    argument that an empty label reads as a classification that ran and found
+    nothing (see the sibling test above). ``run.error`` is that same argument
+    one column over, and the preserve-the-cause branch did not carry it: only
+    ``run.error is None`` took the generic literal, so a blank-but-not-NULL
+    error took the preserving branch and survived as an EMPTY cause.
+
+    That is the worst of the three outcomes. ``sync_runs.error`` is served raw
+    to operators through the admin job-history endpoint, so the run shows as
+    FAILED with no reason at all -- strictly less useful than the honest
+    generic label it replaced, because it reads as "the system had nothing to
+    say" rather than "the reason was not captured".
+
+    No current producer writes a blank error: the three writers that can put a
+    cause on a zero-unit run all write non-empty text (``sync/planner.py``
+    writes ``error=reason``, ``sync/feature_denial.py`` writes ``str(error)``,
+    and the dispatch-denied path in this module writes ``decision.reason or
+    "sync dispatch denied"``). So this closes the branch's own asymmetry
+    rather than a defect reachable today -- which is why it is pinned by a
+    test instead of left for the next reader to notice.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="github",
+        planner_error=blank_error,
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.error == "No sync units planned", (
+        "a blank error is absence, not a preserved cause -- preserving it "
+        "leaves an operator staring at a FAILED run with no reason at all"
+    )
+    assert run.result["reason"] == "no_sync_units_planned"
+
+
+def test_finalize_zero_unit_run_counts_by_provider_and_reason(db_session, monkeypatch):
+    """Standing telemetry order: the new classification must be observable.
+
+    Counted from the once-only branch. A re-finalization of an
+    already-terminalized run must NOT count again, or retry pressure reads as
+    more zero-unit runs than actually happened.
+    """
+    from dev_health_ops.workers import sync_units
+
+    counter = _RecordingCounter()
+    monkeypatch.setattr(sync_units, "ZERO_UNIT_FINALIZATIONS_TOTAL", counter)
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="PagerDuty",
+        planner_error="PagerDuty credential is unavailable",
+        planner_result={"error_category": "pagerduty_credential_unavailable"},
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+    assert counter.increments == [
+        (
+            {
+                "provider": "pagerduty",
+                "reason": "pagerduty_credential_unavailable",
+            },
+            1,
+        )
+    ]
+
+    result = sync_units.finalize_sync_run(str(run.id))
+    assert result["status"] == "already_dispatched"
+    assert len(counter.increments) == 1, "a re-finalization must not be counted again"
+
+
+def test_finalize_zero_unit_run_sanitizes_the_cause_it_preserves(
+    db_session, monkeypatch
+):
+    """Preserving the planner's cause must not un-do a scrub.
+
+    The generic literal this branch used to write unconditionally was, by
+    accident, also a sanitizer: whatever was in ``sync_runs.error`` was thrown
+    away before anyone could read it. ``sync_runs.error`` is served raw to
+    operators through the admin job-history endpoint, and the pre-existing
+    ``run_error`` sanitization only guards the COPY into
+    ``SyncConfiguration.last_sync_error`` -- not the column itself. So a
+    credential-shaped fragment left on the run by an older release, or by any
+    future planner path that stringifies an exception, would now reach an
+    operator's screen.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="github",
+        planner_error="plan failed: Authorization: Bearer ghp_notarealtokenvalue",
+        planner_result={"error_category": "planner_error"},
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert "ghp_notarealtokenvalue" not in (run.error or "")
+    assert REDACTION_MARKER in (run.error or "")
+    assert run.result["reason"] == "planner_error"
+
+
+def test_finalize_zero_unit_run_counts_only_after_the_transaction_commits(
+    db_session, monkeypatch
+):
+    """A rolled-back finalization must not leave an increment behind.
+
+    ``nested.commit()`` only releases a savepoint. If the work after it raises,
+    the outer transaction rolls back and nothing was durably finalized -- but a
+    counter already incremented stays incremented. Over a retry sequence that
+    publishes N+1 for one real finalization, which is exactly the direction
+    that moves an alert threshold.
+    """
+    from dev_health_ops.workers import sync_units
+
+    counter = _RecordingCounter()
+    monkeypatch.setattr(sync_units, "ZERO_UNIT_FINALIZATIONS_TOTAL", counter)
+
+    run = _seed_zero_unit_run(db_session, provider="linear")
+    _patch_db_session(monkeypatch, db_session)
+
+    boom = RuntimeError("post-dispatch payload build failed")
+    monkeypatch.setattr(
+        sync_units,
+        "build_post_sync_dispatch_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(boom),
+    )
+    with pytest.raises(RuntimeError):
+        sync_units.finalize_sync_run(str(run.id))
+
+    assert counter.increments == [], (
+        "a finalization whose transaction did not commit must not be counted"
+    )
 
 
 def test_finalize_sync_run_only_syncs_nonterminal_job_run_observers(
@@ -5842,6 +6118,93 @@ def test_fully_caught_up_plan_finalizes_failed_not_silently_successful(
         "implies coverage was refreshed"
     )
     assert run.error == "No sync units planned"
+
+
+def test_current_watermark_still_plans_a_unit_for_a_scheduled_shaped_request(
+    db_session, monkeypatch
+):
+    """CHAOS-4159 premise pin: "watermark is current" does NOT plan zero units.
+
+    CHAOS-4159 was filed on the theory that a quiet integration -- one whose
+    watermark is already at "now" -- resolves to an empty window, plans zero
+    units and is therefore wrongly finalized FAILED. That theory is wrong, and
+    this test is here so nobody re-derives it from a red dashboard.
+
+    ``get_watermark_with_overlap`` subtracts ``SYNC_WATERMARK_OVERLAP`` from
+    the stored value, so a watermark sitting exactly at ``now`` still resolves
+    a window start STRICTLY BEFORE ``now``. A scheduled request passes no
+    explicit ``before``, so the window end is ``now``. ``end <= start`` --
+    the only condition under which ``_watermark_stamping_window`` suppresses
+    the window -- is therefore unreachable on the scheduled path, exactly as
+    ``test_fully_caught_up_plan_finalizes_failed_not_silently_successful``
+    already notes.
+
+    Zero-unit runs in the wild come from a plan with no admissible work
+    (no credential, a disabled target, no enabled dataset), not from a caught-up
+    watermark. That is why CHAOS-4159 landed as "preserve the planner's cause"
+    rather than "finalize a no-op as SUCCESS": there is no no-op to finalize.
+    """
+    from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+    from dev_health_ops.sync.watermarks import set_watermark
+
+    _patch_db_session(monkeypatch, db_session)
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name="demo",
+        config={"initial_sync_depth": 30},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    db_session.add(
+        IntegrationSource(
+            org_id=org_id,
+            integration_id=integration.id,
+            provider="github",
+            source_type="repo",
+            external_id="full-chaos/dev-health",
+            name="dev-health",
+            full_name="full-chaos/dev-health",
+            metadata_={},
+            is_enabled=True,
+        )
+    )
+    db_session.add(
+        IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key="commits",
+            is_enabled=True,
+            options={},
+        )
+    )
+    db_session.flush()
+
+    set_watermark(
+        db_session,
+        org_id,
+        "full-chaos/dev-health",
+        "commits",
+        datetime.now(timezone.utc),
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=org_id,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="schedule",
+        ),
+    )
+
+    assert plan.total_units == 1, (
+        "a fully caught-up integration on the SCHEDULED path still plans "
+        "work; if this ever becomes 0, the premise behind CHAOS-4159 has "
+        "become true and the no-op-success question must be reopened"
+    )
 
 
 # ---------------------------------------------------------------------------

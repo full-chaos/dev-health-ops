@@ -77,10 +77,27 @@ Consequences to expect when reading run state:
   full-depth incremental window.
 - A run requested with an upper bound already covered by the dataset's watermark
   plans no unit for that dataset. If that leaves the whole run with no units, the
-  run finalizes as failed with "No sync units planned". Read that as "the
-  requested window was already covered", not as an ingestion fault. Scheduled
-  runs do not request an upper bound and so never reach this state; only a
-  manually requested past upper bound can.
+  run finalizes as failed. Read that as "the requested window was already
+  covered", not as an ingestion fault. Scheduled runs do not request an upper
+  bound and so never reach this state; only a manually requested past upper
+  bound can.
+- A run with no planned units always finalizes as failed, whatever the cause.
+  That is deliberate: the alternative is a run that fetched nothing and reports
+  success, which is a false claim of coverage. Finalization reports the cause the
+  planner recorded on the run, and falls back to "No sync units planned" only
+  when the planner recorded none. Read that fallback as "the reason was not
+  captured" rather than as "the plan was legitimately empty" — the two look
+  identical in the run row, and today the fallback is what most zero-unit runs
+  show, because the planner paths that do record a cause terminalize the run
+  themselves and never reach finalization. A planner that plans nothing on
+  purpose and still lets the run dispatch — the scheduled path for a PagerDuty
+  integration with no usable credential is the known case — records nothing, so
+  its runs are indistinguishable from any other empty plan. Fixing that belongs
+  in the planner, not in relaxing the failed status.
+- `devhealth_sync_run_zero_unit_finalizations_total` breaks these runs down by
+  provider and by the cause finalization used. A series dominated by the generic
+  fallback is the signal that a planner path is discarding its own diagnosis, and
+  names the provider to look at.
 
 A watermark is never recorded beyond what the run actually read. A synchronization
 timestamp reported by a provider is capped at the end of the unit's own window

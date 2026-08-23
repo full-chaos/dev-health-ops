@@ -334,7 +334,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (The one new providerfoundation test bounding the artifact skip reason
     # label lives in internal/providerfoundation and so does not move this
     # providersync count.)
-    assert len(expected_provider_tests) == 982
+    #
+    # CHAOS-4177 part 2 then added 5 more ordinary top-level providersync tests
+    # (982 -> 987): the within-page control, the shrunk-page red test and its
+    # artifacts-phase twin, and the counted/not-counted pair pinning that a
+    # re-anchor is recorded and an unmoved page is not. All five drive the
+    # routes through in-memory HTTP doers and touch no database, so the
+    # integration-tagged count stays 113.
+    assert len(expected_provider_tests) == 987
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -351,7 +358,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 982
+    assert len(provider_flattened) == len(set(provider_flattened)) == 987
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -412,7 +419,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 982
+    assert len(selected_tests) == len(set(selected_tests)) == 987
     assert set(selected_tests) == expected_tests
 
 

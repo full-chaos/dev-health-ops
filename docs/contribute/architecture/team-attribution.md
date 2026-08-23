@@ -318,7 +318,11 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `work_items.work_item_id`; it is resolved through the `repos` table into the
   provider's work-item namespace (`ghpr:{owner}/{repo}#{n}` for GitHub,
   `gitlab:{group}/{project}!{n}` for GitLab MRs) and then joined against the
-  same primary `work_item_team_attributions` snapshot. This adds no attribution
+  same primary `work_item_team_attributions` snapshot. A repo UUID that
+  resolves to more than one provider fails closed and bridges nothing, since
+  electing one by `argMax` could attach the other provider's team; that guard
+  only covers the window before the two `repos` rows merge, and making the id
+  seed provider-aware is tracked in **CHAOS-4122**. This adds no attribution
   logic of its own — it reuses the team the resolver already computed for the
   PR/MR work item, with that resolver's precedence and provenance — so a unit
   whose PR has no primary attribution row still resolves `unassigned`. Before

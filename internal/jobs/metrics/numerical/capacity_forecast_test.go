@@ -260,3 +260,81 @@ func numericalRepoRoot(t *testing.T) string {
 		directory = parent
 	}
 }
+
+func TestTimeOfDayDoesNotChangeTheForecast(t *testing.T) {
+	// Python receives `today` as a DATE (now.date()), so the hour a job runs
+	// at cannot affect its arithmetic. The Go worker hands this function a
+	// TIMESTAMP, and before it was truncated the fixed-date branch computed
+	// days_available as (target - now).Hours()/24 -- so a run at 14:00 UTC with
+	// a target of TOMORROW got 10/24 = 0 and forecast ZERO items.
+	//
+	// Every fixed-date capacity run outside midnight was affected, and neither
+	// proof layer could see it: the golden vectors always pass a date (midnight
+	// by construction), and the parity fixture is fixed-scope only, so
+	// days_available is never computed there. This test is the one that looks.
+	history := []int{3, 8, 1, 5, 13, 2, 9, 4, 7, 2, 9, 1, 6, 3}
+	target := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+
+	forecastAt := func(moment time.Time) ForecastResult {
+		t.Helper()
+		result, err := ForecastCapacity(ForecastRequest{
+			History:     Throughput{DailyThroughputs: history, DaysOfHistory: len(history)},
+			TargetDate:  &target,
+			Simulations: 100,
+			Seed:        20260823,
+		}, moment)
+		if err != nil {
+			t.Fatalf("forecast: %v", err)
+		}
+		return result
+	}
+
+	midnight := forecastAt(time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC))
+	afternoon := forecastAt(time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC))
+	lateNight := forecastAt(time.Date(2026, 8, 23, 23, 59, 59, 0, time.UTC))
+
+	if midnight.P50Items == nil {
+		t.Fatal("a target one day out must forecast items, not nil")
+	}
+	if *midnight.P50Items == 0 {
+		t.Fatal("a target one day out must forecast a positive item count")
+	}
+	for name, result := range map[string]ForecastResult{
+		"14:00": afternoon, "23:59": lateNight,
+	} {
+		if result.P50Items == nil || *result.P50Items != *midnight.P50Items {
+			t.Errorf(
+				"running at %s changed p50_items (%s vs %d at midnight): the hour "+
+					"of execution must not reach the forecast, because Python's "+
+					"`today` is a date",
+				name, describeInt(result.P50Items), *midnight.P50Items)
+		}
+	}
+
+	// And the boundary itself: a target LATER TODAY is zero days available, not
+	// a fraction rounded up.
+	sameDay := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+	result, err := ForecastCapacity(ForecastRequest{
+		History:     Throughput{DailyThroughputs: history, DaysOfHistory: len(history)},
+		TargetDate:  &sameDay,
+		Simulations: 100,
+		Seed:        20260823,
+	}, time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.P50Items == nil || *result.P50Items != 0 {
+		t.Errorf("a same-day target must yield zero items, got %s",
+			describeInt(result.P50Items))
+	}
+}
+
+// describeInt renders a nullable count for a failure message. Formatting the
+// pointer itself prints an address, which tells a reader nothing about what
+// went wrong.
+func describeInt(value *int) string {
+	if value == nil {
+		return "nil"
+	}
+	return strconv.Itoa(*value)
+}

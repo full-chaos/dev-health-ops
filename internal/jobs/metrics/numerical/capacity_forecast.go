@@ -102,6 +102,16 @@ func ForecastCapacity(request ForecastRequest, today time.Time) (ForecastResult,
 	if request.Today != nil {
 		today = *request.Today
 	}
+	// Python's `today` is a DATE (now.date(), compute_capacity.py:304), and
+	// every use of it below is calendar arithmetic against another date. The
+	// worker hands this function a TIMESTAMP, so it is truncated here exactly
+	// once.
+	//
+	// Skipping this is not a rounding nicety, it silently loses a day:
+	// days_available was computed as (target - now).Hours()/24, so a job
+	// running at 14:00 UTC with a target of TOMORROW got 10/24 -> 0 and
+	// forecast zero items. Every fixed-date run outside midnight was affected.
+	today = startOfUTCDay(today)
 
 	statistics := ThroughputStatistics(request.History.DailyThroughputs)
 	coefficientOfVariation := 0.0
@@ -139,7 +149,9 @@ func ForecastCapacity(request ForecastRequest, today time.Time) (ForecastResult,
 
 	// Fixed-date: "how many items by date X?" -- a separate `if`, not an else.
 	if request.TargetDate != nil {
-		daysAvailable := int(request.TargetDate.Sub(today).Hours() / 24)
+		// Both operands are start-of-day UTC, so this is the exact calendar-day
+		// count Python's date subtraction yields.
+		daysAvailable := int(startOfUTCDay(*request.TargetDate).Sub(today).Hours() / 24)
 		zero := 0
 		if daysAvailable > 0 {
 			items, err := MonteCarloForecastItems(
@@ -225,6 +237,12 @@ func MonteCarloForecastItems(
 // reach that difference -- these are UTC dates, where the two agree -- so it is
 // a case the comparison would not catch and the unit vectors must.
 func AddDays(day time.Time, days int) time.Time {
-	return time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC).
-		AddDate(0, 0, days)
+	return startOfUTCDay(day).AddDate(0, 0, days)
+}
+
+// startOfUTCDay truncates a timestamp to the calendar day Python's
+// datetime.now(UTC).date() would have produced.
+func startOfUTCDay(moment time.Time) time.Time {
+	utc := moment.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
 }

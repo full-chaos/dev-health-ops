@@ -417,6 +417,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// they receive DELETE but no UPDATE. Worker lifecycle tables have their
 		// own bounded DELETE grants below.
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL THEN GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO " + domainRole + "; END IF; END $$",
+		// CHAOS-4114: the executed-proof ledger is written by the same domain
+		// transactions that write sync_run_units and read by the scheduler's
+		// evidence refresh. No DELETE: the ledger is monotone by construction.
+		"DO $$ BEGIN IF to_regclass('public.sync_executed_proof_ledger') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",

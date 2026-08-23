@@ -259,6 +259,21 @@ func createLeaseRepairIntegrationFixture(ctx context.Context, pool *pgxpool.Pool
 			lease_expires_at timestamptz,
 			updated_at timestamptz NOT NULL
 		)`,
+		// CHAOS-4114: the maintained executed-proof projection. It is in
+		// domainPosture's manifest, and the scheduler/worker write paths stamp
+		// it inside the same transaction that writes sync_run_units, so a venue
+		// without it fails those writes outright.
+		`CREATE TABLE public.sync_executed_proof_ledger (
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			attempted_at timestamptz NOT NULL,
+			proven_at timestamptz,
+			PRIMARY KEY (provider, dataset_key),
+			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
+		)`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			return err

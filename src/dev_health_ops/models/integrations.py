@@ -25,6 +25,67 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from dev_health_ops.models.git import GUID, Base
 
 
+class SyncExecutedProofLedger(Base):
+    """Durable per-route executed-proof evidence (CHAOS-4114).
+
+    The CHAOS-4060 route-readiness gate used to derive its evidence from a
+    whole-table ``GROUP BY`` over ``sync_run_units``. That scan outgrew both
+    of its deadlines and, on 2026-08-22, a timed-out startup refresh installed
+    an empty Degraded snapshot that blocked every non-waived route for eight
+    hours (CHAOS-4124). This table is the maintained projection that replaces
+    the scan: one row per ``(provider, dataset_key)`` pair, so reading it costs
+    the size of the route matrix rather than the size of sync history.
+
+    Deliberately ORG-AGNOSTIC, matching the query it replaces: the gate asks
+    whether a provider route's WRITER has ever landed a real row -- a fact
+    about code, not about a tenant's data.
+
+    Both columns are lowercase-normalized, enforced by CHECK constraints in
+    alembic 0109 rather than by writer discipline: a writer that forgot
+    ``lower()`` would mint a second invisible row for the same pair and split
+    one route's proof in half.
+
+    Writers, and there are exactly two kinds:
+
+    * ``attempted_at`` -- stamped by whatever INSERTs the ``sync_run_units``
+      rows, in the same transaction. "Attempted" is a claim about row
+      EXISTENCE (the query it replaces had no ``WHERE`` clause), so it belongs
+      at planning time. Python: :func:`dev_health_ops.sync.planner.plan_sync_run`.
+      Go: ``persistDomainGraph`` in ``internal/scheduler/sync/materializer.go``.
+    * ``proven_at`` -- stamped by whatever terminalizes a unit SUCCESSFULLY
+      with a positive persisted-row count, in the same transaction. Python:
+      ``dev_health_ops.workers.sync_units``. Go: ``completeUnitSQL``'s callers
+      in ``internal/providersync/repository_postgres.go``.
+
+    FAILURE terminalizers (the unreclaimable sweep, the terminal-delivery
+    repair, the budget-guard chokepoint) deliberately do not write here: their
+    units already exist, so the pair is already attempted, and a failure never
+    proves anything. Both bits are monotone -- nothing in this system may
+    un-prove a route.
+    """
+
+    __tablename__ = "sync_executed_proof_ledger"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    dataset_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: ``None`` means attempted-but-never-proven -- the CHAOS-4048/4049 shape
+    #: the gate exists to catch. It is a load-bearing state, not missing data.
+    proven_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # The normalization CHECKs live in a PostgreSQL-only after_create DDL at
+    # the bottom of this module, not in __table_args__. They call btrim(),
+    # which SQLite does not have, and Base.metadata.create_all() against
+    # in-memory SQLite is how most of the unit suite builds its schema -- an
+    # inline constraint makes every one of those fixtures fail to create the
+    # table at all. The production DDL is alembic 0109; this mirror exists so
+    # a PostgreSQL-backed test built from the models gets the same invariant.
+
+
 class SyncRunUnitStatus(str, Enum):
     """Sync run unit statuses.
 
@@ -747,6 +808,31 @@ event.listen(
     SyncDispatchOutbox.__table__,
     "after_create",
     DDL(SYNC_DISPATCH_OUTBOX_FENCE_TRIGGER_CREATE_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+
+
+# CHAOS-4114: the executed-proof ledger's lowercase/trimmed identity is an
+# INVARIANT enforced by PostgreSQL, not a convention its writers are trusted to
+# remember -- a writer that forgot would mint a second, invisible row for the
+# same pair and split one route's proof in half. It is attached as an
+# after_create DDL rather than a __table_args__ CheckConstraint because btrim()
+# does not exist in SQLite, which is what most of the unit suite creates these
+# tables in. alembic 0109 is the production authority; this keeps a
+# models-built PostgreSQL schema equivalent to it.
+SYNC_EXECUTED_PROOF_LEDGER_NORMALIZATION_POSTGRESQL = """
+ALTER TABLE sync_executed_proof_ledger
+  ADD CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+    CHECK (provider = btrim(lower(provider)) AND provider <> ''),
+  ADD CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+    CHECK (dataset_key = btrim(lower(dataset_key)) AND dataset_key <> '')
+"""
+
+event.listen(
+    SyncExecutedProofLedger.__table__,
+    "after_create",
+    DDL(SYNC_EXECUTED_PROOF_LEDGER_NORMALIZATION_POSTGRESQL).execute_if(
         dialect="postgresql"
     ),
 )

@@ -96,6 +96,9 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
+from dev_health_ops.sync.executed_proof_ledger import (
+    record_executed_proof_terminal,
+)
 from dev_health_ops.sync.feature_denial import (
     FeatureDisabledRunTransition,
     terminalize_feature_disabled_run,
@@ -1412,6 +1415,26 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
+            # CHAOS-4114: the unit is terminal and successful, so this is
+            # the moment the pair may have earned PROVEN. It runs inside the
+            # same transaction as the status write, after it, so a ledger
+            # entry cannot survive a rolled-back completion.
+            #
+            # This path is Celery-only and Celery was retired under
+            # CHAOS-4026, so it is not a production writer today -- the Go
+            # worker's completeUnitSQL callers are. It is stamped anyway
+            # because "this path is dead" is exactly the assumption that
+            # leaves a ledger silently behind reality if it ever comes back,
+            # and because the omission would be invisible: a missing proven
+            # stamp reads as attempted-but-unproven and BLOCKS the route.
+            record_executed_proof_terminal(
+                session,
+                provider=ctx.provider,
+                dataset_key=ctx.dataset_key,
+                status=SyncRunUnitStatus.SUCCESS.value,
+                result=result_payload,
+                now=completed_at,
+            )
             upsert_outbox_wakeup(
                 session,
                 sync_run_id=ctx.sync_run_id,

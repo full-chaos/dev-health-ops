@@ -110,6 +110,22 @@ _module(
     OUTBOX_KIND_DISCOVERY="reference_discovery",
     upsert_outbox_wakeup=lambda *_args, **_kwargs: None,
 )
+# CHAOS-4114 gave planner.py a module-level dependency on the executed-proof
+# ledger's ATTEMPTED write, which plan_sync_run issues in the same transaction
+# as the unit rows. Stubbed as a no-op for the same reason
+# upsert_outbox_wakeup above is: this oracle compares PLANS -- which units a
+# given input produces -- against a fake session with no database behind it,
+# and the ledger write is a side effect on a different table that is not part
+# of the plan. The Go side writes it from persistDomainGraph, which is
+# likewise outside BuildScheduledPlan, so there is nothing here for the two
+# sides to disagree about. The stub must exist regardless, or planner.py fails
+# to IMPORT and the whole oracle dies before comparing anything.
+_module(
+    "dev_health_ops.sync.executed_proof_ledger",
+    record_executed_proof_attempts=lambda *_args, **_kwargs: None,
+    record_executed_proof_terminal=lambda *_args, **_kwargs: None,
+    result_proves_execution=lambda *_args, **_kwargs: False,
+)
 _module("dev_health_ops.sync.guard", _resolve_total_unit_cap=lambda *_args: 1000)
 # CHAOS-3996 gave planner.py a new module-level dependency on this name
 # (``from dev_health_ops.tracing import current_trace_parent``, used to stamp

@@ -253,7 +253,7 @@ def test_sanitize_error_text_max_length_none_disables_cap():
 # report zero changes -- no ``_SECRET_PATTERN`` matches the literal
 # ``REDACTION_MARKER``, and truncation is a fixed point once the text is
 # under the cap. This was previously an unstated assumption the copy sites
-# relied on (``workers/sync_units.py:1810-1817, 2057-2064``); this test pins
+# relied on (``workers/sync_units.py:1833-1840, 2080-2087``); this test pins
 # it explicitly, over the same pattern-fixture table used above plus a
 # capped variant so both the redaction and truncation fixed points are
 # covered. Appended, not interleaved, so this addition stays a clean diff

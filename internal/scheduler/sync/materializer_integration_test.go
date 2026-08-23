@@ -3,14 +3,17 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +89,18 @@ CREATE TABLE public.sync_run_units (
  last_heartbeat_at timestamptz, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
 	FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id),
 	FOREIGN KEY(source_id) REFERENCES integration_sources(id)
+);
+-- CHAOS-4114: the maintained executed-proof projection. persistDomainGraph
+-- stamps every planned pair ATTEMPTED here inside the same transaction that
+-- inserts the units, so a venue without it fails materialization outright.
+CREATE TABLE public.sync_executed_proof_ledger (
+ provider text NOT NULL, dataset_key text NOT NULL,
+ attempted_at timestamptz NOT NULL, proven_at timestamptz,
+ PRIMARY KEY (provider, dataset_key),
+ CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+  CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+ CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+  CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
 );
 CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY);
 CREATE TABLE public.job_runs (
@@ -826,6 +841,16 @@ INSERT INTO sync_run_units (
 	); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4114: in production the ledger is maintained BY the write paths --
+	// planning stamps attempted, terminalization stamps proven. This helper
+	// fabricates an already-terminal unit directly, so it projects it into the
+	// ledger with the same statement alembic 0109 uses. Seeding the unit
+	// without the ledger would make every gate assertion below read a history
+	// the gate cannot see, which is a fixture bug that would look exactly like
+	// a gate bug.
+	if _, err := fixture.pool.Exec(ctx, providersync.ExecutedProofLedgerBackfillSQL); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestNativeMaterializerExecutedProofBootstrapConvergence is the CHAOS-4060
@@ -916,6 +941,106 @@ func TestNativeMaterializerExecutedProofBootstrapConvergence(t *testing.T) {
 // error left executedProof nil, and nil is the documented "gate not wired"
 // pass-through -- meaning a transient Postgres hiccup at boot would have
 // permitted every unproven route for as long as the process ran.
+// TestNativeMaterializerPlanningStampsExecutedProofAttempted is the
+// CHAOS-4114 convergence proof, and the red control for the one direction
+// this ledger must never fail in.
+//
+// Before the ledger, "attempted" was whatever a whole-table scan found, so a
+// planned unit made its pair attempted the instant the row committed --
+// nobody had to remember to record it. The ledger has to be WRITTEN, and if
+// the planning path forgets, a pair stays "never attempted" forever and
+// bootstraps through every cycle no matter how many times it fails. That is
+// fail-OPEN: exactly the CHAOS-4048/4049 shape the gate exists to catch,
+// reintroduced by the gate's own evidence source.
+//
+// So this seeds NOTHING. It plans (bootstrap), refreshes, and requires the
+// second occurrence to be blocked purely because the first one recorded its
+// own attempt. Delete the stamp in persistDomainGraph and this test plans a
+// unit both times.
+func TestNativeMaterializerPlanningStampsExecutedProofAttempted(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	suppressAutoSecurityDataset(t, fixture)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanTotalUnits := func(runID string) int {
+		t.Helper()
+		var units int
+		if err := fixture.pool.QueryRow(context.Background(),
+			`SELECT total_units FROM sync_runs WHERE id=$1::uuid`, runID,
+		).Scan(&units); err != nil {
+			t.Fatal(err)
+		}
+		return units
+	}
+	occurrenceN := func(n int) PendingOccurrence {
+		occurrence := fixture.occurrence
+		occurrence.ID = fmt.Sprintf("occurrence:v1:scheduled:attempt-stamp-%d", n)
+		occurrence.ScheduledFor = fixture.occurrence.ScheduledFor.Add(time.Duration(n) * time.Hour)
+		return occurrence
+	}
+
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrenceN(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 1 {
+		t.Fatalf("total_units=%d, want 1: never-attempted must bootstrap through", got)
+	}
+
+	// The stamp itself, before any inference from planner behavior: the pair
+	// is attempted and, having only been PLANNED, is not proven.
+	var attemptedAt time.Time
+	var provenAt *time.Time
+	if err := fixture.pool.QueryRow(context.Background(), `
+SELECT attempted_at, proven_at FROM public.sync_executed_proof_ledger
+WHERE provider = 'github' AND dataset_key = 'commits'`,
+	).Scan(&attemptedAt, &provenAt); err != nil {
+		t.Fatalf("planning left no executed-proof ledger row for github/commits: %v", err)
+	}
+	if provenAt != nil {
+		t.Fatalf("a merely PLANNED unit proved its pair: proven_at=%s", provenAt)
+	}
+
+	// And the behavior that fact buys: the next cycle blocks, with nothing
+	// seeded and no terminalization ever having happened.
+	if err := materializer.RefreshExecutedProof(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = materializeAndCommit(t, fixture, materializer, occurrenceN(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scanTotalUnits(plan.SyncRunID); got != 0 {
+		t.Fatalf("total_units=%d, want 0: the first plan recorded its own attempt, so "+
+			"this pair is attempted-and-unproven and must block", got)
+	}
+
+	// The planning-volume series, observed against REAL materializations
+	// rather than against fields a test poked. TestPlannedUnitSeriesMoveOnReal
+	// Materializations proves WritePrometheus reports them; this proves
+	// Materialize is what moves them, which is the half a unit test cannot
+	// see. The run above is exactly the CHAOS-4124 shape: a pass that
+	// completed successfully and planned nothing.
+	var metrics bytes.Buffer
+	if err := materializer.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"devhealth_scheduler_planned_units 0",
+		"devhealth_scheduler_zero_planned_occurrences_total 1",
+		"devhealth_scheduler_materialized_occurrences_total 2",
+	} {
+		if !strings.Contains(metrics.String(), want+"\n") {
+			t.Errorf("materialization metrics missing %q:\n%s", want, metrics.String())
+		}
+	}
+}
+
 func TestNativeMaterializerRefreshExecutedProofFailsClosedOnQueryError(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	materializer, err := NewNativeMaterializer(fixture.pool)

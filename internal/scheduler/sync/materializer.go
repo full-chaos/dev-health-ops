@@ -59,6 +59,24 @@ type NativeMaterializer struct {
 	// pattern -- not readiness-endpoint surgery.
 	executedProofRefreshFailuresTotal atomic.Uint64
 	executedProofLastRefreshOK        atomic.Bool
+	// executedProofEverLoadedOK separates "this process has never once
+	// loaded evidence" from "it loaded evidence and the LAST refresh
+	// failed". CHAOS-4124 is exactly that distinction: a later refresh
+	// failure is bounded (Proven facts carry forward and HasExecutedProof is
+	// checked before Degraded), while a FIRST-load failure installs an empty
+	// Degraded snapshot that blocks every non-waived pair -- an eight-hour
+	// total planning outage. executedProofLastRefreshOK alone reads false in
+	// both cases, so it cannot tell an operator which one is happening. This
+	// is the Measured bit: it is what readiness and the metric key off.
+	executedProofEverLoadedOK atomic.Bool
+	// plannedUnitsLast and zeroPlannedOccurrencesTotal exist because the
+	// 4124 outage's ONLY user-visible signal was a 17-dataset -> 1-dataset
+	// collapse in planned work, and nothing measured planned work. A run
+	// that plans zero units completes successfully; the scheduler stayed
+	// "healthy" for eight hours while planning nothing.
+	plannedUnitsLast            atomic.Int64
+	zeroPlannedOccurrencesTotal atomic.Uint64
+	materializedOccurrences     atomic.Uint64
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -158,8 +176,23 @@ func (materializer *NativeMaterializer) RefreshExecutedProof(ctx context.Context
 		return err
 	}
 	materializer.executedProofLastRefreshOK.Store(true)
+	materializer.executedProofEverLoadedOK.Store(true)
 	materializer.executedProof.Store(evidence)
 	return nil
+}
+
+// HasLoadedExecutedProof reports whether at least one evidence refresh has
+// ever SUCCEEDED in this process. It is deliberately not the inverse of
+// "degraded": a materializer that loaded evidence once and then hit a
+// refresh failure is degraded but still operating on carried-forward Proven
+// facts, whereas one that has never loaded is operating on an empty Degraded
+// snapshot that blocks every non-waived pair (CHAOS-4124). Only the second
+// is a reason to refuse readiness.
+func (materializer *NativeMaterializer) HasLoadedExecutedProof() bool {
+	if materializer == nil {
+		return false
+	}
+	return materializer.executedProofEverLoadedOK.Load()
 }
 
 // maybeRefreshExecutedProof reloads the executed-proof snapshot on a bounded
@@ -208,21 +241,59 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 		return errors.New("Prometheus output is required")
 	}
 	wired := materializer.executedProof.Load() != nil
+	everLoaded := materializer.executedProofEverLoadedOK.Load()
 	failures := materializer.executedProofRefreshFailuresTotal.Load()
 	degraded := wired && !materializer.executedProofLastRefreshOK.Load()
+	plannedUnits := materializer.plannedUnitsLast.Load()
+	zeroPlanned := materializer.zeroPlannedOccurrencesTotal.Load()
+	materialized := materializer.materializedOccurrences.Load()
 	var text strings.Builder
 	fmt.Fprintf(&text,
 		"# HELP devhealth_scheduler_executed_proof_refresh_failures_total "+
-			"CHAOS-4060 executed-proof evidence refresh failures (startup or periodic).\n"+
+			"CHAOS-4060 executed-proof evidence refresh failures (startup or periodic). "+
+			"Read with devhealth_scheduler_executed_proof_evidence_state: a failure while "+
+			"state is 1 is bounded (proven facts carry forward), a failure while state is "+
+			"-1 means nothing has EVER loaded and every non-waived pair is blocked.\n"+
 			"# TYPE devhealth_scheduler_executed_proof_refresh_failures_total counter\n"+
 			"devhealth_scheduler_executed_proof_refresh_failures_total %d\n",
 		failures,
 	)
+	// The three states are one series, not three booleans, because the whole
+	// CHAOS-4124 lesson is that "not ok" is TWO different conditions with
+	// wildly different blast radii and an operator has to be able to tell
+	// them apart at a glance. -1 is the outage state.
+	fmt.Fprint(&text,
+		"# HELP devhealth_scheduler_executed_proof_evidence_state "+
+			"Executed-proof evidence liveness: 1 = a refresh succeeded and the "+
+			"snapshot is clean; 0 = evidence loaded at least once but the LAST refresh "+
+			"failed, so the snapshot is stale-but-usable (proven pairs keep planning); "+
+			"-1 = no refresh has EVER succeeded in this process, so the gate is running "+
+			"on an empty Degraded snapshot and every non-waived pair is blocked "+
+			"(CHAOS-4124, an 8-hour total planning outage). Alert on -1.\n"+
+			"# TYPE devhealth_scheduler_executed_proof_evidence_state gauge\n"+
+			"devhealth_scheduler_executed_proof_evidence_state ",
+	)
+	switch {
+	case !wired:
+		// Not wired is not a health claim at all: no caller composed the
+		// gate in this process, so there is nothing to be stale about. It
+		// reads as clean rather than as the outage state, exactly as
+		// _gate_degraded already does.
+		text.WriteString("1\n")
+	case !everLoaded:
+		text.WriteString("-1\n")
+	case degraded:
+		text.WriteString("0\n")
+	default:
+		text.WriteString("1\n")
+	}
 	fmt.Fprint(&text,
 		"# HELP devhealth_scheduler_executed_proof_gate_degraded "+
 			"Whether the executed-proof gate is running on a failed or "+
 			"never-succeeded evidence load (1) or a healthy one (0); 0 when the "+
-			"gate has never been wired by this process.\n"+
+			"gate has never been wired by this process. Cannot distinguish a "+
+			"stale snapshot from a never-loaded one -- read "+
+			"devhealth_scheduler_executed_proof_evidence_state for that.\n"+
 			"# TYPE devhealth_scheduler_executed_proof_gate_degraded gauge\n"+
 			"devhealth_scheduler_executed_proof_gate_degraded ",
 	)
@@ -231,6 +302,39 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 	} else {
 		text.WriteString("0\n")
 	}
+	fmt.Fprintf(&text,
+		"# HELP devhealth_scheduler_planned_units Units the last SUCCESSFUL "+
+			"materialization planned. Zero is a legitimate value (nothing was due), "+
+			"which is why it cannot be alerted on alone -- pair it with "+
+			"devhealth_scheduler_zero_planned_occurrences_total, and read both as "+
+			"unproven while devhealth_scheduler_materialized_occurrences_total is flat, "+
+			"since a scheduler that materializes nothing at all reports a stale gauge "+
+			"identical to a healthy idle one.\n"+
+			"# TYPE devhealth_scheduler_planned_units gauge\n"+
+			"devhealth_scheduler_planned_units %d\n",
+		plannedUnits,
+	)
+	fmt.Fprintf(&text,
+		"# HELP devhealth_scheduler_zero_planned_occurrences_total Successful "+
+			"materializations that planned ZERO units. CHAOS-4124 collapsed planning "+
+			"from 17 datasets to 1 for eight hours and nothing paged, because a "+
+			"zero-unit run completes successfully. A sustained climb here with "+
+			"materialized_occurrences_total climbing at the same rate means every "+
+			"occurrence is planning nothing -- alert on that ratio.\n"+
+			"# TYPE devhealth_scheduler_zero_planned_occurrences_total counter\n"+
+			"devhealth_scheduler_zero_planned_occurrences_total %d\n",
+		zeroPlanned,
+	)
+	fmt.Fprintf(&text,
+		"# HELP devhealth_scheduler_materialized_occurrences_total Occurrences "+
+			"this process materialized successfully. It is the denominator that makes "+
+			"the two series above readable: without it, zero-planned staying flat is "+
+			"ambiguous between a healthy scheduler and one that is not running passes "+
+			"at all.\n"+
+			"# TYPE devhealth_scheduler_materialized_occurrences_total counter\n"+
+			"devhealth_scheduler_materialized_occurrences_total %d\n",
+		materialized,
+	)
 	_, err := io.WriteString(output, text.String())
 	return err
 }
@@ -341,6 +445,16 @@ func (materializer *NativeMaterializer) Materialize(
 	}
 	if err := persistCoordinatorGraph(ctx, coordinatorTx, ids, occurrence, len(units), loaded.terminalReason); err != nil {
 		return PlanResult{}, err
+	}
+	// Recorded only on the success path, deliberately. A pass that FAILED
+	// planned nothing, but it also measured nothing -- publishing a zero for
+	// it would be indistinguishable from a healthy occurrence that genuinely
+	// had no work, and the zero-planned counter exists precisely to be
+	// alertable without that ambiguity.
+	materializer.materializedOccurrences.Add(1)
+	materializer.plannedUnitsLast.Store(int64(len(units)))
+	if len(units) == 0 {
+		materializer.zeroPlannedOccurrencesTotal.Add(1)
 	}
 	return PlanResult{JobRunID: ids.JobRunID, SyncRunID: ids.SyncRunID}, nil
 }
@@ -1143,6 +1257,25 @@ ON CONFLICT (id) DO NOTHING`, unitID, unit.OrgID, ids.SyncRunID, unit.Integratio
 	}
 	if err := results.Close(); err != nil {
 		return fmt.Errorf("finish scheduled sync unit batch: %w", err)
+	}
+	// CHAOS-4114: every pair this plan just minted a row for is ATTEMPTED
+	// from this instant, and the durable ledger has to say so in the SAME
+	// transaction the rows commit in. "Attempted" is a statement about row
+	// existence, not about terminalization -- the evidence query it replaces
+	// had no WHERE clause at all -- so recording it any later would leave a
+	// window where the gate reads a freshly-planned pair as never-attempted
+	// and bootstraps it through. That is the fail-OPEN direction, which is
+	// the one direction this gate must never take.
+	providers := make([]string, 0, len(units))
+	datasets := make([]string, 0, len(units))
+	for _, unit := range units {
+		providers = append(providers, unit.Provider)
+		datasets = append(datasets, unit.Dataset)
+	}
+	if err := providersync.RecordExecutedProofAttempted(
+		ctx, tx, providers, datasets, createdAt,
+	); err != nil {
+		return fmt.Errorf("record scheduled sync unit executed-proof attempts: %w", err)
 	}
 	rows, err := tx.Query(ctx, `
 SELECT id::text,org_id,sync_run_id::text,integration_id::text,source_id::text,provider,dataset_key,

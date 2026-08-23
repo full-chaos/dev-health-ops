@@ -566,6 +566,17 @@ func domainPosture() RolePosture {
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},
+			// CHAOS-4114: the executed-proof ledger is the maintained
+			// projection of sync_run_units the CHAOS-4060 gate now reads
+			// instead of rescanning that table. It is written by the same
+			// domain transactions that write the units it summarizes -- the
+			// scheduler materializer's plan INSERT stamps "attempted", the
+			// provider-unit completion stamps "proven" -- and read by the
+			// scheduler's own refresh, all on the domain role. Nothing ever
+			// deletes a row: the ledger is monotone by construction (proof
+			// does not stop being true), so DELETE stays off and a bug that
+			// tried to un-prove a route would be refused by the database.
+			{"sync_executed_proof_ledger", true, true, false},
 			// Chunked provider routes write a small tenant/generation checkpoint
 			// and immutable prepared normalized sidecars. The checkpoint advances
 			// in place; sidecars transition pending -> writing -> committed and

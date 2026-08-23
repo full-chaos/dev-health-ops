@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -142,9 +143,44 @@ INSERT INTO public.sync_run_units (
 		}
 	}
 
+	// CHAOS-4114: QueryExecutedProofEvidence now reads the maintained ledger
+	// instead of rescanning sync_run_units, so this test projects the seeded
+	// history into the ledger exactly the way alembic 0109 does and then
+	// makes every original assertion against the read. That is the whole
+	// equivalence claim of this ticket, checked on the hardest fixture the
+	// repository has: the malformed blob, the bigint overflow on both key
+	// shapes, the 18-digit boundary, the empty-but-successful window, the
+	// zero-row effect batch, and the pre-CHAOS-4054 alias row. If the ledger
+	// projection meant anything different from the scan it replaced, one of
+	// the assertions below would have to move.
+	if _, err := pool.Exec(ctx, ExecutedProofLedgerBackfillSQL); err != nil {
+		t.Fatalf("backfill executed-proof ledger: %v", err)
+	}
+	// Running it a second time must change nothing. The migration is not
+	// re-runnable in practice, but the same statement is the recovery tool an
+	// operator reaches for, and a backfill that double-counted or clobbered
+	// would be discovered at the worst possible moment.
+	if _, err := pool.Exec(ctx, ExecutedProofLedgerBackfillSQL); err != nil {
+		t.Fatalf("re-run executed-proof ledger backfill: %v", err)
+	}
+
 	evidence, err := QueryExecutedProofEvidence(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// The scan this ledger replaces, run against the same fixture. Every
+	// assertion below is made against `evidence` (the ledger read); this
+	// compares the two directly so a future change to either side that made
+	// them disagree fails here rather than silently changing what the gate
+	// blocks.
+	legacy, err := queryExecutedProofEvidenceByFullScan(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(evidence, legacy) {
+		t.Fatalf("ledger read and legacy full scan disagree:\n ledger = %+v\n  scan  = %+v",
+			evidence, legacy)
 	}
 
 	wantProven := map[string]bool{
@@ -205,4 +241,39 @@ INSERT INTO public.sync_run_units (
 				neverTouched, evidence.Proven[neverTouched], evidence.Attempted[neverTouched])
 		}
 	}
+}
+
+// queryExecutedProofEvidenceByFullScan is the pre-CHAOS-4114 implementation,
+// preserved here as the oracle the ledger read is checked against. It is
+// deliberately a copy of the production body with only the SQL constant
+// swapped: a shared helper parameterized by query would let a change to the
+// scanning/canonicalization half alter both sides at once and still pass.
+func queryExecutedProofEvidenceByFullScan(
+	ctx context.Context, db *pgxpool.Pool,
+) (*ExecutedProofEvidence, error) {
+	rows, err := db.Query(ctx, executedProofEvidenceSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	evidence := &ExecutedProofEvidence{
+		Proven:    make(map[string]bool),
+		Attempted: make(map[string]bool),
+	}
+	for rows.Next() {
+		var provider, dataset string
+		var proven bool
+		if err := rows.Scan(&provider, &dataset, &proven); err != nil {
+			return nil, err
+		}
+		key := matrixKey(provider, canonicalRouteIdentity(dataset))
+		evidence.Attempted[key] = true
+		if proven {
+			evidence.Proven[key] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return evidence, nil
 }

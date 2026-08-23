@@ -193,6 +193,35 @@ func (reconciler *OccurrenceReconciler) WritePrometheus(output io.Writer) error 
 	return source.WritePrometheus(output)
 }
 
+// executedProofLoadReporter is the CHAOS-4124 readiness shape, restated
+// locally for the same reason prometheusWriter is.
+type executedProofLoadReporter interface {
+	HasLoadedExecutedProof() bool
+}
+
+// HasLoadedExecutedProof delegates the "has evidence EVER loaded in this
+// process" question to the materializer so cmd/dev-health-scheduler can
+// register it as a required readiness check without reaching through the
+// narrow Materializer interface.
+//
+// A materializer that does not report it (any test double) answers true, not
+// false: the check exists to catch the specific production condition where a
+// real evidence load never succeeded, and a double that never had evidence
+// to load has not reproduced that condition. Answering false there would
+// fail readiness for every composition that does not opt into the gate --
+// which is precisely the "a safety check took the pass down" failure mode
+// CHAOS-4073 forbids.
+func (reconciler *OccurrenceReconciler) HasLoadedExecutedProof() bool {
+	if reconciler == nil {
+		return false
+	}
+	reporter, ok := reconciler.materializer.(executedProofLoadReporter)
+	if !ok {
+		return true
+	}
+	return reporter.HasLoadedExecutedProof()
+}
+
 // Reconcile processes one bounded batch of due occurrences.
 //
 // Each occurrence gets its own transaction rather than a savepoint inside a

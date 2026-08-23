@@ -632,8 +632,27 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL,
+			-- CHAOS-4114: alembic 0015 has had this column all along; the
+			-- fixture simply never needed it until the executed-proof
+			-- ledger backfill started deriving attempted_at from it.
+			created_at timestamptz NOT NULL DEFAULT now(),
 			CONSTRAINT uq_sync_run_units_org_id_id_effect_snapshots
 				UNIQUE (org_id, id)
+		)`,
+		// CHAOS-4114: the maintained executed-proof projection. It is in
+		// domainPosture's manifest, and the scheduler/worker write paths stamp
+		// it inside the same transaction that writes sync_run_units, so a venue
+		// without it fails those writes outright.
+		`CREATE TABLE public.sync_executed_proof_ledger (
+			provider text NOT NULL,
+			dataset_key text NOT NULL,
+			attempted_at timestamptz NOT NULL,
+			proven_at timestamptz,
+			PRIMARY KEY (provider, dataset_key),
+			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
+				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
+			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
+				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
 		)`,
 		`CREATE TABLE public.sync_run_unit_chunk_checkpoints (
 			org_id text NOT NULL, sync_run_unit_id uuid NOT NULL, schema_version text NOT NULL DEFAULT 'v1', generation text NOT NULL,

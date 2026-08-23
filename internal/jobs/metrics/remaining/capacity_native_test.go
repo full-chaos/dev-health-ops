@@ -332,3 +332,64 @@ func TestDiscoveredEmptyScopeIsNotTheSameAsAnAbsentOne(t *testing.T) {
 		t.Errorf("an absent scope must add no filter: %v", conditions)
 	}
 }
+
+func TestAggregateNarrowingRefusesValuesTheKernelCannotHold(t *testing.T) {
+	// The mirror of TestNarrowingRefusesValuesTheColumnCannotHold. That guard
+	// covers values going OUT to ClickHouse; this covers values coming IN.
+	// Fixing one direction of a symmetric boundary and leaving the other is how
+	// a guarded write path ends up fed by an unguarded read path.
+	//
+	// sum() over a UInt32 column widens to UInt64, so these arrive as uint64
+	// and the kernel works in int. Above MaxInt64 that conversion wraps
+	// NEGATIVE, and a negative count is not merely wrong: a negative backlog
+	// makes the scope skip and the partition return successfully having
+	// forecast nothing, which reads as a quiet day rather than as a fault.
+	for _, testCase := range []struct {
+		name  string
+		field string
+		value uint64
+	}{
+		{
+			name:  "backlog above MaxInt64",
+			field: "wip_count_end_of_day",
+			value: uint64(math.MaxInt64) + 1,
+		},
+		{
+			name:  "throughput above MaxInt64",
+			field: "items_completed",
+			value: math.MaxUint64,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := capacityCountFromAggregate(testCase.field, testCase.value)
+			if err == nil {
+				t.Fatalf(
+					"an aggregate the kernel cannot represent was accepted and "+
+						"became %d; a negative count silently skips the scope and "+
+						"reports the partition as successful", got)
+			}
+			if !errors.Is(err, ErrCapacityValueOutOfRange) {
+				t.Fatalf("refusal must be identifiable, got %v", err)
+			}
+			if !strings.Contains(err.Error(), testCase.field) {
+				t.Fatalf("refusal must name the offending aggregate %q, got %v",
+					testCase.field, err)
+			}
+		})
+	}
+}
+
+func TestAggregateNarrowingAcceptsTheWidestRepresentableCount(t *testing.T) {
+	// Negative control: a guard that refused everything would pass the test
+	// above while breaking every real read.
+	got, err := capacityCountFromAggregate("items_completed", uint64(math.MaxInt64))
+	if err != nil {
+		t.Fatalf("a representable aggregate must be accepted: %v", err)
+	}
+	if got != math.MaxInt64 {
+		t.Fatalf("value changed on the way through: got %d", got)
+	}
+	if zero, err := capacityCountFromAggregate("items_completed", 0); err != nil || zero != 0 {
+		t.Fatalf("zero must survive unchanged: %d, %v", zero, err)
+	}
+}

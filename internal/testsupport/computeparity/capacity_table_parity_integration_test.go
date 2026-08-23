@@ -214,6 +214,59 @@ func TestCapacityNativePortMatchesThePythonProducerAcrossTwoScratchStores(t *tes
 		}
 	})
 
+	t.Run("a replay honours the declared repeat policy on both sides", func(t *testing.T) {
+		// capacityTable declares AppendDuplicates, and until this subtest
+		// existed NOTHING checked it. The declaration is load-bearing for this
+		// port: forecast_id is a fresh UUID per row precisely so that no two
+		// runs collide and a replay APPENDS rather than replacing. An
+		// implementation that reused the id -- or that wrote through a path
+		// which collapsed on replay -- would still have passed every other
+		// assertion in this file, because they all read a table produced by a
+		// SINGLE run of each side.
+		fixtures(t, "python",
+			"produce", "--kind", "metrics.capacity", "--dsn", leftDSN)
+		computeparity.RunProducer(t, "go_native", repoRoot(t), nil,
+			nativeBinary, "produce",
+			"--dsn", rightDSN,
+			"--org-id", parityOrgID,
+			"--seed", strconv.Itoa(capacityParitySeed),
+			"--team-id", capacityParityTeamID,
+			"--work-scope-id", capacityParityWorkScopeID,
+			"--simulations", strconv.Itoa(capacityParitySimulations),
+			"--target-date-offset-days", strconv.Itoa(capacityParityTargetOffsetDays),
+		)
+
+		leftAfter := readCapacity(ctx, t, leftDSN, table, "python")
+		rightAfter := readCapacity(ctx, t, rightDSN, table, "go_native")
+
+		for _, pair := range []struct{ before, after computeparity.Snapshot }{
+			{left, leftAfter}, {right, rightAfter},
+		} {
+			if messages := computeparity.EvaluateRepeat(
+				table, pair.before, pair.after,
+			); len(messages) != 0 {
+				t.Errorf("replay: %s", strings.Join(messages, "; "))
+			}
+		}
+
+		// Row counts asserted explicitly as well as through EvaluateRepeat.
+		// The policy check classifies the KIND of replay behaviour; these pin
+		// the magnitude, so a replay that appended a single row rather than a
+		// second full set would still be caught.
+		if len(leftAfter.Rows) != len(left.Rows)*2 {
+			t.Errorf("python replay should have doubled the rows: %d -> %d",
+				len(left.Rows), len(leftAfter.Rows))
+		}
+		// BOTH sides, because the declared policy is a claim about behaviour
+		// rather than about Python: a port that silently became idempotent on
+		// replay is a real behavioural difference, and checking only the
+		// reference side would leave exactly that unmeasured.
+		if len(rightAfter.Rows) != len(right.Rows)*2 {
+			t.Errorf("native replay should have doubled the rows: %d -> %d",
+				len(right.Rows), len(rightAfter.Rows))
+		}
+	})
+
 	t.Run("the compared rows actually carry simulation output", func(t *testing.T) {
 		// Every exclusion above removes a column. If the quantiles were also
 		// absent -- both sides writing NULL because no forecast ran -- the

@@ -88,7 +88,11 @@ func (executor *CapacityExecutor) loadThroughput(
 		if err := rows.Scan(&day, &completed); err != nil {
 			return numerical.Throughput{}, fmt.Errorf("scan throughput: %w", err)
 		}
-		history.DailyThroughputs = append(history.DailyThroughputs, int(completed))
+		count, err := capacityCountFromAggregate("items_completed", completed)
+		if err != nil {
+			return numerical.Throughput{}, err
+		}
+		history.DailyThroughputs = append(history.DailyThroughputs, count)
 	}
 	if err := rows.Err(); err != nil {
 		return numerical.Throughput{}, fmt.Errorf("iterate throughput: %w", err)
@@ -133,7 +137,28 @@ func (executor *CapacityExecutor) loadBacklog(
 	).Scan(&backlog); err != nil {
 		return 0, fmt.Errorf("load backlog: %w", err)
 	}
-	return int(backlog), nil
+	return capacityCountFromAggregate("wip_count_end_of_day", backlog)
+}
+
+// capacityCountFromAggregate converts a ClickHouse aggregate to the int the
+// kernel works in, refusing what int cannot represent.
+//
+// The mirror of narrowCapacityRow, which guards values going OUT. sum() over a
+// UInt32 column widens to UInt64, so these arrive as uint64 and the kernel
+// works in int; above MaxInt64 that conversion wraps NEGATIVE. A negative count
+// is worse than a large one: loadBacklog returning a negative backlog makes the
+// scope skip and the partition finish successfully having forecast nothing,
+// which is indistinguishable from a genuinely quiet day.
+//
+// Guarding the write path and leaving this one unguarded was the actual defect
+// -- half of a symmetric boundary, which is the shape that survives review
+// precisely because the guarded half looks like the whole job.
+func capacityCountFromAggregate(field string, value uint64) (int, error) {
+	if value > math.MaxInt64 {
+		return 0, fmt.Errorf("%w: aggregate %s = %d does not fit int",
+			ErrCapacityValueOutOfRange, field, value)
+	}
+	return int(value), nil
 }
 
 // resolveScopes ports the all_teams branch of run_capacity_forecast.

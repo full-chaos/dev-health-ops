@@ -327,16 +327,30 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   insert-only and carries no tombstone. The providers re-extract an item's
   links on every sync and stamp them `last_synced=now`, so a link still
   present upstream reappears among this run's fresh edges. A stored edge is
-  therefore discarded when its source item contributed **at least one fresh
-  edge this run** — positive evidence the extractor ran and simply did not
-  re-emit that link. When an item produced no fresh edges at all, "removed"
-  and "this sync path does not extract dependencies" are indistinguishable,
-  so its stored edges are kept rather than risk re-introducing the decay.
+  therefore discarded when the same item produced a fresh edge with the **same
+  `relationship_type_raw`** this run — positive evidence that *that* extractor
+  ran and simply did not re-emit the link. The proof is per provenance, not
+  per item, and the distinction is load-bearing: GitHub edges come from the PR
+  body (always parsed) and from Linear linkback comments (gated by
+  `GITHUB_FETCH_COMMENTS`, capped by `GITHUB_COMMENTS_LIMIT`), so a fresh body
+  edge is no evidence about comment extraction — treating it as such would
+  delete stored `github_comment_linear_url` edges and decay precisely the
+  linkback population this fix protects (`linear_attachment` is the dominant
+  edge kind in the store). Where that per-extractor evidence is absent,
+  "removed" and "that extractor did not run" are indistinguishable, so the
+  stored edge is kept rather than risk re-introducing the decay. A retype
+  changes the raw value, so `latest_edge`'s recency collapse remains the
+  backstop there.
   (Verified in the dev store: 1,263 edges are stamped in the same pass as
   their source item, and all 25 that lag their item belong to items that also
-  have fresh edges.) Residual: an item whose links were *all* removed in one
-  sync emits no fresh edge, so its stored edges keep donating until it gains
-  any link again — narrow, and in the safe direction.
+  have fresh edges — i.e. the extractor ran and those links were genuinely
+  dropped upstream.) Residual: removals are detected per provenance, so an
+  item that loses its LAST edge of a given kind emits no fresh edge of that
+  kind and its stored one keeps donating until another appears. Closing that
+  needs a sync-layer "this extractor ran and found nothing" marker (an
+  empty-snapshot tombstone), tracked in **CHAOS-4129**. The residual errs
+  toward *preserving* a team — the opposite failure direction from the decay
+  this fix removes.
   A teamed → `unassigned` transition across recomputes is counted by
   `devhealth_work_item_team_attribution_downgrades_total` and logged at WARN
   — it is always a bug, never a precedence change.

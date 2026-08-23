@@ -382,39 +382,58 @@ def provision(dsn: str, *, reset: bool = False) -> dict[str, Any]:
         )
     finally:
         client.close()
-    environment = dict(os.environ)
-    environment.update(PROCESS_ENVIRONMENT)
-    environment.update({"CLICKHOUSE_URI": dsn, "DATABASE_URI": dsn})
-    for arguments in (["upgrade"], ["status", "--check"]):
-        completed = subprocess.run(  # noqa: S603 -- fixed checked-in CLI
-            [*_migrate_command(), "migrate", "clickhouse", *arguments],
-            env=environment,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode != 0:
-            tail = (completed.stderr or completed.stdout or "").strip().splitlines()
-            raise FixtureError(
-                f"migrate_failed:{' '.join(arguments)}:{tail[-1][:200] if tail else ''}"
-            )
+    _apply_migrations(dsn)
     return {"database": database, "migrated": True, "reset": reset}
 
 
-def _migrate_command() -> list[str]:
-    """How to invoke the migration CLI.
+# The CANONICAL migration entrypoint, character-for-character the one
+# internal/testsupport/chschema uses -- deliberately not the `dev-hops migrate`
+# CLI.
+#
+# Both reach the same chain, but the CLI drags its own import closure (auth ->
+# PyJWT and everything under it), and ci/requirements-clickhouse-migrations.txt
+# exists precisely to keep the Go integration shards' Python closure minimal
+# and pinned. Going through the CLI meant those shards failed with
+# ModuleNotFoundError: No module named 'jwt', and "just add PyJWT" would put
+# the CLI's whole weight on a job that does not need it -- which that file's
+# own comments warn against. Using the same entrypoint chschema uses keeps this
+# inside the closure CI already installs, and keeps ONE sanctioned way to apply
+# the chain from a test.
+#
+# force=True bypasses the AUTO_RUN_MIGRATIONS opt-out exactly as the CLI does,
+# so an ambient environment cannot turn this into a silent no-op that leaves a
+# comparison running against an empty database.
+_APPLY_SCRIPT = """
+import sys
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    Prefer the console script when it is installed, but fall back to running
-    the module through THIS interpreter rather than the bare name `dev-hops`.
-    The Go integration shards run without the Python package installed as a
-    console script while `dev_health_ops` is still importable, so the bare name
-    raised FileNotFoundError and provisioning could not build either store --
-    a failure that only appears in CI, because a developer's worktree always
-    has the venv entry point.
-    """
-    candidate = REPO_ROOT / ".venv" / "bin" / "dev-hops"
-    if candidate.exists():
-        return [str(candidate)]
-    return [sys.executable, "-m", "dev_health_ops.cli"]
+sink = ClickHouseMetricsSink(dsn=sys.argv[1])
+try:
+    sink.ensure_schema(force=True)
+finally:
+    sink.close()
+print("PARITY_SCHEMA_APPLIED")
+"""
+
+
+def _apply_migrations(dsn: str) -> None:
+    environment = dict(os.environ)
+    environment.update(PROCESS_ENVIRONMENT)
+    environment.update({"CLICKHOUSE_URI": dsn, "DATABASE_URI": dsn})
+    completed = subprocess.run(  # noqa: S603 -- fixed, checked-in entrypoint
+        [sys.executable, "-c", _APPLY_SCRIPT, dsn],
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        tail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        raise FixtureError(f"migrate_failed:{tail[-1][:200] if tail else 'no output'}")
+    # The runner can exit 0 having done nothing if the entrypoint ever stops
+    # raising on failure, so require the positive marker rather than trusting
+    # the exit code alone.
+    if "PARITY_SCHEMA_APPLIED" not in completed.stdout:
+        raise FixtureError("migrate_produced_no_completion_marker")
 
 
 def clone(kind: str, from_dsn: str, to_dsn: str) -> dict[str, Any]:

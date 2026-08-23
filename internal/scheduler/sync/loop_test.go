@@ -450,3 +450,42 @@ func TestLoopWithoutALoggerDoesNotFallBackToSlogDefault(t *testing.T) {
 		t.Fatalf("nil logger fell back to slog.Default(): %s", buf.String())
 	}
 }
+
+// TestLoopExportsPreMintSkipCounters proves the two pre-mint eligibility
+// refusals reach Prometheus. Without this the gates would be invisible in
+// production: a fleet whose schedules are being refused for missing
+// organizations looks exactly like a fleet with nothing due, and those need
+// opposite responses.
+func TestLoopExportsPreMintSkipCounters(t *testing.T) {
+	clock := &testLoopClock{now: at("2026-08-23T12:00:00Z")}
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+		return HandoffResult{
+			Candidates:             5,
+			TimingEligible:         5,
+			SkippedOrgMissing:      3,
+			SkippedFeatureDisabled: 2,
+		}, nil
+	}), clock)
+	openLoopReadiness(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_scheduler_skipped_org_missing_total 3",
+		"sync_scheduler_skipped_feature_disabled_total 2",
+	} {
+		if !strings.Contains(metrics.String(), want+"\n") {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		}
+	}
+	if strings.Contains(metrics.String(), "{") {
+		t.Fatalf("metrics must not expose dynamic labels:\n%s", metrics.String())
+	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -151,6 +151,8 @@ type Loop struct {
 	occurrencesMinted      uint64
 	occurrencesRepeated    uint64
 	idleDueWindows         uint64
+	skippedOrgMissing      uint64
+	skippedFeatureDisabled uint64
 }
 
 func NewLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig) (*Loop, error) {
@@ -265,6 +267,8 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 		loop.mu.Lock()
 		loop.unsupportedCron += uint64(result.UnsupportedCron)
 		loop.invalidCron += uint64(result.InvalidCron)
+		loop.skippedOrgMissing += uint64(result.SkippedOrgMissing)
+		loop.skippedFeatureDisabled += uint64(result.SkippedFeatureDisabled)
 		loop.mu.Unlock()
 		if err == nil {
 			return ErrSchedulerFallbackRequired
@@ -296,6 +300,8 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	}
 	loop.unsupportedCron += uint64(result.UnsupportedCron)
 	loop.invalidCron += uint64(result.InvalidCron)
+	loop.skippedOrgMissing += uint64(result.SkippedOrgMissing)
+	loop.skippedFeatureDisabled += uint64(result.SkippedFeatureDisabled)
 	loop.consecutive = 0
 	loop.lastOK, loop.up = now.UTC(), true
 	loop.ready.Store(true)
@@ -413,6 +419,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	completed, retried := loop.occurrencesCompleted, loop.occurrencesRetried
 	quarantined := loop.occurrencesQuarantined
 	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
+	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
 	loop.mu.Unlock()
 
 	age := 0.0
@@ -431,6 +438,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_occurrences_completed_total", "Pending scheduled sync occurrences materialized.", completed)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_retried_total", "Pending scheduled sync occurrences deferred for retry.", retried)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_quarantined_total", "Pending scheduled sync occurrences terminally quarantined.", quarantined)
+	writeLoopCounter(&text, "sync_scheduler_skipped_org_missing_total", "Due candidates refused before minting because their organization no longer exists. Sustained growth means schedules are outliving the orgs that owned them.", orgMissing)
+	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_consecutive_failures Consecutive failed handoff windows.\n# TYPE sync_scheduler_consecutive_failures gauge\nsync_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP sync_scheduler_up Whether the scheduler has completed a current successful handoff window.\n# TYPE sync_scheduler_up gauge\nsync_scheduler_up ")
 	if up {

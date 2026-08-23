@@ -53,6 +53,15 @@ const (
 	DecisionNextRunGate     Decision = "next_run_gate"
 	DecisionInvalidCron     Decision = "invalid_cron"
 	DecisionUnsupportedCron Decision = "unsupported_cron"
+	// DecisionOrgMissing mirrors Python's pre-mint organization guard
+	// (workers/sync_scheduler.py:204-205 via workers/org_guard.py:14-36). It is
+	// produced by the Coordinator, not by Evaluate: this package's timing kernel
+	// deliberately owns no business lookups (see Evaluate's doc comment).
+	DecisionOrgMissing Decision = "org_missing"
+	// DecisionFeatureDisabled mirrors Python's pre-mint canonical-incident
+	// entitlement guard (workers/sync_scheduler.py:207-219). Also a Coordinator
+	// decision, for the same reason.
+	DecisionFeatureDisabled Decision = "feature_disabled"
 )
 
 // ErrUnsupportedCron identifies syntax intentionally routed outside the

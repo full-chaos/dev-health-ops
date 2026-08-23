@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,11 +47,43 @@ func (*coordinatorTransaction) Exec(
 	return pgconn.CommandTag{}, errors.New("unexpected Exec")
 }
 
+// eligibilityRow answers the Coordinator's two pre-mint eligibility lookups
+// (organization existence and the schedule's sync targets). It exists so the
+// occurrence-handoff tests below can keep asserting on the OCCURRENCE
+// statements positionally: the eligibility queries are answered here and are
+// deliberately not recorded, because those tests are about the handoff, and the
+// gates have their own coverage in eligibility_gate_integration_test.go.
+type eligibilityRow struct{ targets []byte }
+
+func (row eligibilityRow) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return errors.New("unexpected eligibility scan arity")
+	}
+	switch target := dest[0].(type) {
+	case *string:
+		// organizations lookup: a row exists.
+		*target = "00000000-0000-4000-8000-000000000001"
+	case *[]byte:
+		*target = row.targets
+	default:
+		return errors.New("unsupported eligibility scan destination")
+	}
+	return nil
+}
+
 func (transaction *coordinatorTransaction) QueryRow(
 	_ context.Context,
 	statement string,
 	args ...any,
 ) pgx.Row {
+	if strings.Contains(statement, "public.organizations") {
+		return eligibilityRow{}
+	}
+	if strings.Contains(statement, "sync_targets") {
+		// Ungated targets, so the canonical-incident gate does not apply and
+		// the handoff proceeds to the statements these tests assert on.
+		return eligibilityRow{targets: []byte(`["git"]`)}
+	}
 	transaction.statements = append(transaction.statements, statement)
 	transaction.args = append(transaction.args, args)
 	row := transaction.rows[0]

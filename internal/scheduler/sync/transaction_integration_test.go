@@ -781,10 +781,18 @@ func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) 
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
 			is_active boolean NOT NULL,
+			sync_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
 			sync_options jsonb NOT NULL,
 			last_sync_at timestamptz,
 			created_at timestamptz NOT NULL
 		)`,
+		// The Coordinator's pre-mint organization guard reads this table. This
+		// fixture's org_id ("org-integration") is deliberately NOT a UUID, and
+		// the guard admits a non-UUID org without any lookup because Python
+		// does (workers/org_guard.py:18-20) -- so these tests keep exercising
+		// the minting path they were written for. The table is created anyway
+		// so the guard has somewhere to look if that org_id ever becomes a UUID.
+		`CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text)`,
 		`CREATE TABLE public.scheduled_jobs (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,

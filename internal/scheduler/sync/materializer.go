@@ -896,17 +896,42 @@ func planDatasetsRequireCanonicalIncident(provider string, datasets []PlanDatase
 	return false
 }
 
+// rowQuerier is the read surface both entitlement call sites share: the
+// materializer holds a pgx.Tx, the scheduler Coordinator holds a
+// HandoffTransaction, and this decision must not be implemented twice.
+type rowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// canonicalIncidentAllowedForUpdate is the phase-B, row-locking form.
 func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
+	return canonicalIncidentAllowed(ctx, tx, orgID, now, true)
+}
+
+// canonicalIncidentAllowed resolves the canonical-incident entitlement for an
+// organization. `lockRows` selects the phase it is being asked for: phase B
+// materialization takes FOR UPDATE so the decision cannot change underneath the
+// plan it authorizes, while the phase-A scheduler gate reads WITHOUT locking --
+// mirroring Python, which uses the non-locking
+// is_canonical_incident_feature_enabled_sync before minting
+// (workers/sync_scheduler.py:207-219) and the locking
+// require_canonical_incident_feature_for_update_sync only at materialization
+// (sync/execution_trigger.py:348-355). Locking the global feature_flags row on
+// every scheduler window would serialize every replica against one row.
+func canonicalIncidentAllowed(ctx context.Context, tx rowQuerier, orgID string, now time.Time, lockRows bool) (bool, error) {
 	if _, err := uuid.Parse(orgID); err != nil {
 		return false, nil
+	}
+	lockClause := ""
+	if lockRows {
+		lockClause = "\nFOR UPDATE"
 	}
 	var featureID, minTier string
 	var globallyEnabled bool
 	err := tx.QueryRow(ctx, `
 SELECT id::text,min_tier,is_enabled
 FROM public.feature_flags
-WHERE key='canonical_incident_ingestion'
-FOR UPDATE`).Scan(&featureID, &minTier, &globallyEnabled)
+WHERE key='canonical_incident_ingestion'`+lockClause).Scan(&featureID, &minTier, &globallyEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -923,8 +948,7 @@ FOR UPDATE`).Scan(&featureID, &minTier, &globallyEnabled)
 	err = tx.QueryRow(ctx, `
 SELECT is_enabled,expires_at
 FROM public.org_feature_overrides
-WHERE org_id=$1::uuid AND feature_id=$2::uuid
-FOR UPDATE`, orgID, featureID).Scan(&overrideEnabled, &overrideExpires)
+WHERE org_id=$1::uuid AND feature_id=$2::uuid`+lockClause, orgID, featureID).Scan(&overrideEnabled, &overrideExpires)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("lock canonical incident override: %w", err)
 	}

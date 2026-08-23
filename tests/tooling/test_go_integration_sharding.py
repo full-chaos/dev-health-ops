@@ -279,7 +279,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestExecutedProofLedgerRefusesUnnormalizedIdentity. Both counts move by
     # the same 3 because all three are integration-tagged -- unlike 4130's
     # nine, which moved only the first.
-    assert len(expected_provider_tests) == 944
+    #
+    # CHAOS-3978 then added 10 ordinary top-level tests (944 -> 954), all in
+    # work_item_cross_provider_donor_test.go, covering the cross-provider
+    # stored-donor-edge rescue, its red control, the stored-edge-before-donor-
+    # targets ordering, the Python-parity pruning key, the retype backstop, the
+    # D17 fail-closed and foreign-tenant rails, the rescue observation, the
+    # deriver-to-route observation path, the bounded/retried ClickHouse read,
+    # and the rejected-review legacy-semantics decision. None is
+    # integration-tagged, so the integration count is unchanged -- the same
+    # shape as CHAOS-4130's nine, not CHAOS-4114's three.
+    assert len(expected_provider_tests) == 954
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -296,7 +306,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 944
+    assert len(provider_flattened) == len(set(provider_flattened)) == 954
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -357,7 +367,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 944
+    assert len(selected_tests) == len(set(selected_tests)) == 954
     assert set(selected_tests) == expected_tests
 
 

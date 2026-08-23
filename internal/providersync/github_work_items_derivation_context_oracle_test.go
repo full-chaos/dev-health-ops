@@ -59,7 +59,9 @@ func buildGitHubWorkItemDerivationOracleCandidates(
 	for _, subject := range decoded.WorkItems {
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, decoded.Dependencies)
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		"github", subjects, decoded.Dependencies, nil,
+	)
 	_, _, candidates := derived.resolve(decoded.Subject)
 	result := githubWorkItemDerivationOracleCandidates{
 		Source: make([]string, 0, len(candidates)), TeamID: make([]*string, 0, len(candidates)),

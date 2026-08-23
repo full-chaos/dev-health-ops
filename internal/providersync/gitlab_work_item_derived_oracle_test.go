@@ -89,7 +89,9 @@ func gitlabWorkItemOracleRows(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		"gitlab", subjects, rows.Dependencies, nil,
+	)
 	return claim, rows, derived
 }
 

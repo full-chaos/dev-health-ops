@@ -354,6 +354,40 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   A teamed → `unassigned` transition across recomputes is counted by
   `devhealth_work_item_team_attribution_downgrades_total` and logged at WARN
   — it is always a bug, never a precedence change.
+- **Cross-provider donor edges (CHAOS-3978):** the same union now exists in the
+  Go work-item writer (`internal/providersync`), which had never read
+  `work_item_dependencies` at all — original design (#921), not a regression.
+  Per-provider fresh-edges-only was sound *within* a provider and wrong across
+  providers: `ghpr:…#1794 --relates_to--> linear:CHAOS-3914`
+  (`relationship_type_raw = linear_attachment`) is minted **exclusively by the
+  Linear sync** from a Linear attachment, and the GitHub writer never mints a
+  `linear:` target, so the edge was structurally invisible to the side that
+  would inherit from it. Because every sync run re-stamps a row per item,
+  `unassigned` included, and a sync row always outranks the daily on
+  `max(computed_at)`, the last writer to touch the item was always the one
+  incapable of seeing the edge — deterministic, not a race. 85 prod items on
+  2026-08-23 (82 on 2026-08-20; the population was growing).
+  The Go loader now reads the stored inheritable edges for the items being
+  recomputed **before** it resolves donor targets, so the donor item is loaded
+  too, and prunes them on the same
+  `(source_work_item_id, relationship_type_raw)` provenance key Python uses.
+  That key shape is pinned by test on BOTH sides
+  (`work_item_cross_provider_donor_test.go`,
+  `tests/metrics/test_cross_provider_donor_edges.py`): both runtimes write
+  `work_item_team_attributions` for the same items, so a divergence in it
+  would undo CHAOS-4112 from whichever side drifted.
+  **Failure policy differs from Python deliberately:** the Go read retries once
+  and then FAILS THE UNIT (D17). Degrading would re-stamp `unassigned` over
+  correct rows with nothing in the row saying the run was blind; Python's
+  degrade-and-continue at the equivalent site is catalogued as a
+  silent-degradation defect (CHAOS-4150), not a precedent.
+  **Observability:** providersync carries no logger and no metrics registry, so
+  each unit's result payload records
+  `observations.team_inheritance = {stored_edges_merged, donor_rescues,
+  cross_provider_rescues}`. `cross_provider_rescues` is decided by the DONOR's
+  provider differing from the claim's — the structure, not one extractor's
+  name — and is emitted even when zero, so "nothing to rescue" stays
+  distinguishable from "this build cannot see stored edges".
 - **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
   Investment `unit_team` resolution reads **both** the `issues` **and** the
   `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`

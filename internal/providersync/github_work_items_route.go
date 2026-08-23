@@ -396,14 +396,14 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	}
 	return CompleteRouteBatch{
 		Effects: effects,
-		Result: map[string]any{
+		Result: attachWorkItemTeamInheritanceObservation(map[string]any{
 			"work_items_synced":                len(rows.WorkItems),
 			"projects_v2":                      projectState,
 			githubWorkItemsIncompleteResultKey: incomplete,
 			"observations": map[string]any{
 				"provider_usage": usage.snapshot(),
 			},
-		},
+		}, handler.Deriver),
 		Watermark: watermark,
 		Evidence:  evidence,
 	}, nil

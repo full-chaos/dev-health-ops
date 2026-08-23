@@ -528,13 +528,23 @@ func TestGitHubWorkItemDeriverLoadsDerivationContextOncePerRun(t *testing.T) {
 	}
 }
 
-type countingGitHubWorkItemDerivationContextSource struct{ loads int }
+type countingGitHubWorkItemDerivationContextSource struct {
+	loads           int
+	storedEdgeLoads int
+}
 
 func (source *countingGitHubWorkItemDerivationContextSource) Load(
 	context.Context, Claim, githubWorkItemDerivationLoadRequest,
 ) (githubWorkItemDerivationFacts, error) {
 	source.loads++
 	return githubWorkItemDerivationFacts{}, nil
+}
+
+func (source *countingGitHubWorkItemDerivationContextSource) LoadStoredInheritableEdges(
+	context.Context, Claim, []string,
+) ([]githubWorkItemDependencyRow, error) {
+	source.storedEdgeLoads++
+	return nil, nil
 }
 
 // githubWorkItemStubEngine isolates composition mechanics from the real config

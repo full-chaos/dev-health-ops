@@ -20,6 +20,13 @@ type fakeGitHubWorkItemDerivationContextSource struct {
 	called  bool
 	claim   Claim
 	request githubWorkItemDerivationLoadRequest
+
+	// CHAOS-3978 stored-edge half.
+	storedEdges          []githubWorkItemDependencyRow
+	storedEdgeErr        error
+	storedEdgeCalls      int
+	storedEdgeSubjectIDs []string
+	storedEdgeClaim      Claim
 }
 
 type recordingGitHubWorkItemDerivationConn struct {
@@ -57,6 +64,20 @@ func (source *fakeGitHubWorkItemDerivationContextSource) Load(
 	source.claim = claim
 	source.request = request
 	return source.facts, source.err
+}
+
+func (source *fakeGitHubWorkItemDerivationContextSource) LoadStoredInheritableEdges(
+	_ context.Context,
+	claim Claim,
+	sourceWorkItemIDs []string,
+) ([]githubWorkItemDependencyRow, error) {
+	source.storedEdgeCalls++
+	source.storedEdgeClaim = claim
+	source.storedEdgeSubjectIDs = append([]string(nil), sourceWorkItemIDs...)
+	if source.storedEdgeErr != nil {
+		return nil, source.storedEdgeErr
+	}
+	return append([]githubWorkItemDependencyRow(nil), source.storedEdges...), nil
 }
 
 func TestLoadGitHubWorkItemDerivationContextBoundsDonorQueryToLiveInheritableEdges(t *testing.T) {
@@ -295,10 +316,12 @@ func TestGitHubWorkItemDerivationRequiresAnUnambiguousActualEdge(t *testing.T) {
 
 	t.Run("ambiguous provider-neutral key", func(t *testing.T) {
 		candidateContext := derived
-		candidateContext.linkedIssue = candidateContext.buildLinkedIssueIndex(subjects, []githubWorkItemDependencyRow{{
-			SourceWorkItemID: source.WorkItemID, TargetWorkItemID: "extkey:CHAOS-9",
-			RelationshipType: "external_issue_key", LastSynced: now, OrgID: "org-acme",
-		}})
+		candidateContext.linkedIssue, _, _ = candidateContext.buildLinkedIssueIndex(
+			"github", subjects, []githubWorkItemDependencyRow{{
+				SourceWorkItemID: source.WorkItemID, TargetWorkItemID: "extkey:CHAOS-9",
+				RelationshipType: "external_issue_key", LastSynced: now, OrgID: "org-acme",
+			}}, nil,
+		)
 		teamID, _, candidates := candidateContext.resolve(source)
 		if teamID != nil || len(candidates) != 1 || candidates[0].Source != "unassigned" {
 			t.Fatalf("ambiguous key resolved: team=%v candidates=%+v", teamID, candidates)
@@ -307,10 +330,12 @@ func TestGitHubWorkItemDerivationRequiresAnUnambiguousActualEdge(t *testing.T) {
 
 	t.Run("key-shaped donor without edge", func(t *testing.T) {
 		candidateContext := derived
-		candidateContext.linkedIssue = candidateContext.buildLinkedIssueIndex(subjects, []githubWorkItemDependencyRow{{
-			SourceWorkItemID: "gh:acme/api#other", TargetWorkItemID: linearDonor.WorkItemID,
-			RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
-		}})
+		candidateContext.linkedIssue, _, _ = candidateContext.buildLinkedIssueIndex(
+			"github", subjects, []githubWorkItemDependencyRow{{
+				SourceWorkItemID: "gh:acme/api#other", TargetWorkItemID: linearDonor.WorkItemID,
+				RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
+			}}, nil,
+		)
 		teamID, _, candidates := candidateContext.resolve(source)
 		if teamID != nil || len(candidates) != 1 || candidates[0].Source != "unassigned" {
 			t.Fatalf("unlinked donor resolved: team=%v candidates=%+v", teamID, candidates)

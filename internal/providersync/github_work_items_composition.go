@@ -171,6 +171,21 @@ type GitHubWorkItemDeriver struct {
 	// through NewGitHubWorkItemDeriver, which loads both configs atomically.
 	// Package tests may still inject hostile doubles to prove fail-closed paths.
 	engine githubWorkItemEngineDeriver
+
+	// observations carries what the donor load did (CHAOS-3978/4112) out to
+	// the route result. A POINTER, so the value receiver Derive uses can still
+	// record; nil when a test constructs the deriver directly, which changes
+	// nothing about the derivation itself.
+	observations *workItemDerivationObservations
+}
+
+// StoredEdgeMergeObservation reports the stored-edge union this deriver has
+// observed so far on its unit.
+func (deriver *GitHubWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+	if deriver == nil {
+		return githubWorkItemStoredEdgeMergeObservation{}
+	}
+	return deriver.observations.storedEdgeMergeSnapshot()
 }
 
 // NewGitHubWorkItemDeriver is the only production construction path that can
@@ -208,7 +223,8 @@ func NewGitHubWorkItemDeriver(
 		Source: githubWorkItemClickHouseDerivationContextSource{
 			Conn: conn, Lease: lease,
 		},
-		engine: engine,
+		engine:       engine,
+		observations: newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -339,6 +355,7 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 	if err != nil {
 		return nil, err
 	}
+	deriver.observations.recordStoredEdgeMerge(derivationContext.storedEdgeMerge)
 	// Every owned destination is present from the start, so a destination that
 	// legitimately produces no rows on any day is still reported as evaluated.
 	derived := make(map[string][]json.RawMessage, len(githubWorkItemDerivedDestinations))

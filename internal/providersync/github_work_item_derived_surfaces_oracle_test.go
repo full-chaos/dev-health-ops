@@ -791,7 +791,14 @@ func buildGitHubDerivedOracleSurfaces(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
+	// The oracle feeds BOTH sides the same edge list, so there are no
+	// stored-only edges here: the stored-edge union is a LOAD-path concern
+	// (CHAOS-3978), deliberately placed where it cannot change what the
+	// resolver does with a given edge set -- which is what keeps every case in
+	// this file valid across that fix.
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		provider, subjects, rows.Dependencies, nil,
+	)
 	surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 		provider, claim, rows, day, computedAt, derived,
 	)

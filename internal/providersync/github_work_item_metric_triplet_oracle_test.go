@@ -214,7 +214,9 @@ func githubWorkItemMetricTripletOracleResult(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		provider, subjects, rows.Dependencies, nil,
+	)
 
 	triplet, err := buildWorkItemMetricTripletForProvider(
 		provider, claim, rows, day, decoded.ComputedAt, derived,

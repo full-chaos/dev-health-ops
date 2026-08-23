@@ -116,7 +116,11 @@ func TestGitHubTestsChunkRoutePageBudgetIsCumulative(t *testing.T) {
 		t.Fatalf("overspent budget err=%v, want ErrPaginationCapExceeded", err)
 	}
 
-	// The route must actually carry the spend forward in its cursor.
+	// The route must actually carry the spend forward in its cursor. Since
+	// CHAOS-4130 an exhausted budget no longer CANCELS the unit -- it
+	// finalizes with recorded lower-bound coverage -- but the 3822 invariant
+	// under test is unchanged and re-asserted below: a resume may never reset
+	// the spend, and an exhausted phase may never spend one more request.
 	doer := &githubTestsHighVolumeDoer{t: t}
 	claim := nativeTestClaim("github", "tests")
 	spent, err := encodeGitHubTestsChunkCursor(githubTestsChunkCursor{
@@ -125,16 +129,41 @@ func TestGitHubTestsChunkRoutePageBudgetIsCumulative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	terminal := ""
+	var final CompleteRouteBatch
 	err = (GitHubTestsRouteHandler{MaxRuns: 300}).CollectChunks(
 		context.Background(), claim, providerfoundation.Credential{},
 		githubTestsClient(t, doer), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), spent,
-		func(ChunkRouteEmission) error { return nil },
+		func(emission ChunkRouteEmission) error {
+			terminal, final = emission.CursorAfter, emission.Batch
+			return nil
+		},
 	)
-	if !errors.Is(err, ErrPaginationCapExceeded) {
-		t.Fatalf("resume with an exhausted cumulative budget err=%v, want ErrPaginationCapExceeded", err)
+	if err != nil {
+		t.Fatalf("resume with an exhausted cumulative budget err=%v, want a finalized unit", err)
 	}
 	if doer.runListRequests != 0 {
 		t.Fatalf("exhausted budget still fetched %d listing page(s)", doer.runListRequests)
+	}
+	cursor, decodeErr := decodeGitHubTestsChunkCursor(terminal)
+	if decodeErr != nil {
+		t.Fatalf("decode terminal cursor: %v", decodeErr)
+	}
+	if cursor.RunPages != 3 {
+		t.Fatalf("RunPages=%d after an exhausted resume, want the cumulative 3 carried forward", cursor.RunPages)
+	}
+	truncated := false
+	for _, observation := range cursor.Incomplete {
+		if observation.Component == githubTestsRunInventoryComponent &&
+			observation.Cause == githubTestsPageBudgetCause {
+			truncated = true
+		}
+	}
+	if !truncated {
+		t.Fatalf("no run-inventory page-budget observation in %+v", cursor.Incomplete)
+	}
+	if final.Watermark != nil {
+		t.Fatalf("a budget-truncated unit advanced its watermark to %v", final.Watermark)
 	}
 }
 

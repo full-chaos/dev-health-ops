@@ -43,6 +43,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		if errors.Is(checkpointErr, ErrChunkCheckpointNotFound) {
 			checkpoint = ChunkCheckpoint{}
 		}
+		result.CommittedRows = checkpoint.CommittedRows
 		nextOrdinal := checkpoint.PreparedChunks
 
 		// Recovery always drains already-prepared sidecars first. A restart
@@ -80,6 +81,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		if errors.Is(checkpointErr, ErrChunkCheckpointNotFound) {
 			checkpoint = ChunkCheckpoint{}
 		}
+		result.CommittedRows = checkpoint.CommittedRows
 		if checkpoint.InventoryComplete {
 			if checkpoint.TotalChunks < 1 || checkpoint.NextOrdinal != checkpoint.TotalChunks || checkpoint.PreparedChunks != checkpoint.TotalChunks {
 				return ErrChunkCheckpointConflict
@@ -313,6 +315,7 @@ func loadChunkedFinalResult(
 	result.Comparison = final.Comparison
 	result.Comparison.NativeRecords = int(checkpoint.CommittedRows)
 	result.Comparison.PythonRecords = int(checkpoint.CommittedRows)
+	result.CommittedRows = checkpoint.CommittedRows
 	result.WorklogObservations = final.WorklogObservations
 	return nil
 }

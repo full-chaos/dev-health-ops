@@ -184,8 +184,17 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "pipelines" {
 		visit := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
-			cursor.PipelinePages++
 			pageNumber, _ := strconv.Atoi(page.CursorBefore)
+			// First-entry-only counting against the CUMULATIVE budget. This is
+			// the GitLab twin of the GitHub defect measured in CHAOS-4130: a
+			// continuation re-requests the page it stopped inside, and
+			// counting that re-visit shrank an N-page budget to N/visits-per-
+			// page real pages, cancelling every busy project. cursor.Page ==
+			// pageNumber is also true for a FRESH page entered at index 0, so
+			// cursor.Index > 0 is what identifies the re-entry.
+			if !(cursor.Page == pageNumber && cursor.Index > 0) {
+				cursor.PipelinePages++
+			}
 			start := 0
 			if cursor.Page == pageNumber {
 				start = cursor.Index
@@ -293,8 +302,11 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 	reportVisit := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
-		cursor.ReportPages++
 		pageNumber, _ := strconv.Atoi(page.CursorBefore)
+		// First-entry-only counting, exactly as in the pipelines visit above.
+		if !(cursor.Page == pageNumber && cursor.Index > 0) {
+			cursor.ReportPages++
+		}
 		start := 0
 		if cursor.Page == pageNumber {
 			start = cursor.Index
@@ -371,6 +383,15 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			if after.Index >= len(page.Items) {
 				nextPage, _ := strconv.Atoi(page.CursorAfter)
 				after.Page, after.Index = nextPage, 0
+				// Publish the terminal phase, exactly as the pipelines phase
+				// publishes "reports". A cursor at {phase:reports, page:0} is
+				// otherwise indistinguishable from a phase that has not
+				// started, so a continuation landing on the last item of the
+				// last page re-walked the WHOLE reports phase and spent fresh
+				// budget on every lap (the GitLab twin of CHAOS-4130).
+				if nextPage == 0 {
+					after.Phase = "done"
+				}
 			}
 			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
 				return err
@@ -380,6 +401,9 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		if len(page.Items) == 0 {
 			nextPage, _ := strconv.Atoi(page.CursorAfter)
 			cursor.Page, cursor.Index = nextPage, 0
+			if nextPage == 0 {
+				cursor.Phase = "done"
+			}
 		}
 		return nil
 	}

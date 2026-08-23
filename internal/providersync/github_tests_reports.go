@@ -106,6 +106,41 @@ type GitHubTestsIncomplete struct {
 	Count     int    `json:"count"`
 }
 
+const (
+	// githubTestsReportMemberComponent is the original vocabulary: one member
+	// of a test-report archive that could not be parsed.
+	githubTestsReportMemberComponent = "report_member"
+	// githubTestsRunInventoryComponent and githubTestsArtifactInventoryComponent
+	// record that an inventory phase stopped at its cumulative page budget
+	// before the provider ran out of pages (CHAOS-4130). They are units of
+	// COVERAGE incompleteness rather than parse failures, which is why they
+	// share the slice: every reader of `incomplete` already treats a non-empty
+	// slice as "this unit did not see everything, do not advance the
+	// watermark".
+	githubTestsRunInventoryComponent      = "run_inventory"
+	githubTestsArtifactInventoryComponent = "artifact_inventory"
+	githubTestsPageBudgetCause            = "page_budget_exhausted"
+)
+
+// githubTestsIncompleteVocabulary is the CLOSED set of (component, cause)
+// pairs a github tests/cicd unit may publish. The completion comparator fails
+// closed against it, so a route cannot invent an observation that downstream
+// coverage readers have no meaning for.
+var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
+	githubTestsReportMemberComponent:      {"malformed": {}, "unreadable": {}},
+	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
+	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},
+}
+
+func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {
+	causes, known := githubTestsIncompleteVocabulary[observation.Component]
+	if !known {
+		return false
+	}
+	_, ok := causes[observation.Cause]
+	return ok
+}
+
 type githubTestsReportIssue struct {
 	evidence GitHubTestsIncomplete
 	blocking bool
@@ -122,7 +157,7 @@ func (rows *githubTestsReportRows) recordSkipped(cause string, blocking bool) {
 	}
 	rows.issues = append(rows.issues, githubTestsReportIssue{
 		evidence: GitHubTestsIncomplete{
-			Component: "report_member", Cause: cause, Count: 1,
+			Component: githubTestsReportMemberComponent, Cause: cause, Count: 1,
 		},
 		blocking: blocking,
 	})

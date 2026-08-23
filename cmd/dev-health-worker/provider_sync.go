@@ -234,6 +234,11 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 		// claim.Recovered (an expired lease was recovered into this attempt)
 		// are ever observed; see providerunit.Handler.observeLeaseRecovery.
 		LeaseMetrics: leaseRecoveryObserver{collector: collector},
+		// The SAME instance the executors below hand to every HTTP client, so
+		// the CHAOS-4130 terminalized-with-committed-rows counter lands in the
+		// already-registered dev_health_provider_* family rather than in a
+		// second, unscraped registry.
+		ProviderMetrics: providerMetrics,
 		// A route fault means the Python producer gate routed a scope the Go
 		// capability system does not serve. The unit is never terminalized
 		// (TRD non-negotiable #3), so this log is the operator's only signal

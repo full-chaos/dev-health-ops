@@ -150,6 +150,15 @@ type CompleteRouteExecutionResult struct {
 	Comparison          ShadowComparison
 	Effects             EffectCommitResult
 	WorklogObservations []JiraWorklogFetchObservation
+	// CommittedRows is the chunked checkpoint's CUMULATIVE committed row count
+	// for this unit, across every attempt, as of the last checkpoint this
+	// execution read. It is deliberately reported on the FAILURE path too: the
+	// caller needs to know that a unit it is about to terminalize already owns
+	// durable rows (CHAOS-4130). Effects.Written cannot answer that -- it
+	// counts only this attempt, and the attempts that died in the CHAOS-4130
+	// loop committed nothing before the page budget refused them. Zero for
+	// non-chunked routes, which have no checkpoint.
+	CommittedRows int64
 }
 
 func (executor CompleteRouteExecutor) now() time.Time {

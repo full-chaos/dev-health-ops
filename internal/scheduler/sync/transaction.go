@@ -55,6 +55,16 @@ type HandoffResult struct {
 	// HandedOff is every occurrence durably present after this window,
 	// whichever window actually created it.
 	HandedOff []Occurrence
+	// SkippedOrgMissing counts candidates refused because their organization
+	// no longer exists, mirroring Python's pre-mint guard at
+	// workers/sync_scheduler.py:204-205. Counted rather than silently dropped:
+	// a skip nobody can see is indistinguishable from a schedule that was never
+	// due, and those need different responses.
+	SkippedOrgMissing int
+	// SkippedFeatureDisabled counts candidates refused because their sync
+	// targets require the canonical-incident feature and the organization is
+	// not entitled to it, mirroring workers/sync_scheduler.py:207-219.
+	SkippedFeatureDisabled int
 	// Repeated is the subset of HandedOff that already existed when this
 	// window ran, so this window created no row for it. It exists because
 	// counting handoffs alone cannot tell a scheduler that is producing work
@@ -89,7 +99,29 @@ const (
 	// this window wrote nothing. Sustained repetition is the signature of a
 	// schedule that has stopped advancing (CHAOS-3936).
 	OccurrenceRepeated HandoffOutcome = "repeated"
+	// OccurrenceRefusedOrgMissing means the Coordinator declined the handoff
+	// because the schedule's organization no longer exists.
+	OccurrenceRefusedOrgMissing HandoffOutcome = "refused_org_missing"
+	// OccurrenceRefusedFeatureDisabled means the Coordinator declined the
+	// handoff because the schedule's targets require the canonical-incident
+	// feature and the organization is not entitled to it.
+	OccurrenceRefusedFeatureDisabled HandoffOutcome = "refused_feature_disabled"
 )
+
+// refusalDecision maps a Coordinator refusal to the Decision it represents, or
+// returns false for an outcome that is not a refusal. Kept beside the outcome
+// constants so a new refusal cannot be added without deciding what it is called
+// in the parity table.
+func refusalDecision(outcome HandoffOutcome) (Decision, bool) {
+	switch outcome {
+	case OccurrenceRefusedOrgMissing:
+		return DecisionOrgMissing, true
+	case OccurrenceRefusedFeatureDisabled:
+		return DecisionFeatureDisabled, true
+	default:
+		return "", false
+	}
+}
 
 // Coordinator owns every non-timing eligibility decision, including
 // organization existence and feature entitlement, then persists the durable
@@ -285,6 +317,22 @@ func (repository *Repository) HandoffDueResult(
 		outcome, err := coordinator.Handoff(ctx, transaction, occurrence)
 		if err != nil {
 			return HandoffResult{}, fmt.Errorf("handoff scheduler occurrence %s: %w", occurrence.ID, err)
+		}
+		if decision, refused := refusalDecision(outcome); refused {
+			// A refusal is a SKIP, not a failure and not a handoff. The marker
+			// deliberately does NOT advance: Python returns False at
+			// sync_scheduler.py:205 and :219, both BEFORE the marker is stamped
+			// at :303-305, so a schedule refused for a missing organization or a
+			// withdrawn entitlement stays due and resumes the moment the reason
+			// goes away. Advancing here would silently skip that config's next
+			// cron instant as well.
+			switch decision {
+			case DecisionOrgMissing:
+				result.SkippedOrgMissing++
+			case DecisionFeatureDisabled:
+				result.SkippedFeatureDisabled++
+			}
+			continue
 		}
 		if outcome != OccurrenceMinted && outcome != OccurrenceRepeated {
 			return HandoffResult{}, fmt.Errorf(

@@ -235,3 +235,39 @@ func TestUTCDayWindowIsHalfOpen(t *testing.T) {
 		t.Errorf("window must be exactly one day: %s..%s", start, end)
 	}
 }
+
+func TestDateTime64ArgumentsAreLiteralsNotExpressions(t *testing.T) {
+	// ClickHouse PARSES a query parameter rather than evaluating it, so a
+	// value rendered as toDateTime('...') is rejected with
+	// BAD_QUERY_PARAMETER. The driver renders time.Time exactly that way, and
+	// the failure only appears once a query actually runs -- which is why this
+	// asserts the rendered SHAPE here as well.
+	moment := time.Date(2026, 8, 9, 13, 45, 30, 123456000, time.UTC)
+
+	if got := dateTime64Argument(moment, millisecondPrecision); got != "2026-08-09 13:45:30.123" {
+		t.Errorf("millisecond rendering = %q", got)
+	}
+	if got := dateTime64Argument(moment, microsecondPrecision); got != "2026-08-09 13:45:30.123456" {
+		t.Errorf("microsecond rendering = %q", got)
+	}
+	for _, rendered := range []string{
+		dateTime64Argument(moment, millisecondPrecision),
+		dateTime64Argument(moment, microsecondPrecision),
+	} {
+		if strings.ContainsAny(rendered, "(')") {
+			t.Errorf(
+				"%q looks like an expression; a query parameter must be a bare "+
+					"literal or the server refuses it", rendered,
+			)
+		}
+	}
+
+	// A non-UTC input must still cross the wire as UTC: the columns are
+	// DateTime64(_, 'UTC') and carry no offset, so a local-zone rendering
+	// would shift the day window silently.
+	newYork := time.FixedZone("EDT", -4*60*60)
+	shifted := dateTime64Argument(moment.In(newYork), millisecondPrecision)
+	if shifted != "2026-08-09 13:45:30.123" {
+		t.Errorf("a zoned timestamp must render as UTC, got %q", shifted)
+	}
+}

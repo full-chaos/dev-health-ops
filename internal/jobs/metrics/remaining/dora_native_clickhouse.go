@@ -184,8 +184,8 @@ func (executor *DORAExecutor) loadDeployments(
 	start, end := utcDayWindow(day)
 	arguments := map[string]any{
 		"org_id": organizationID,
-		"start":  start,
-		"end":    end,
+		"start":  dateTime64Argument(start, millisecondPrecision),
+		"end":    dateTime64Argument(end, millisecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
 	rows, err := executor.conn.Query(
@@ -238,13 +238,13 @@ func (executor *DORAExecutor) loadIncidents(
 	start, end := utcDayWindow(day)
 	arguments := map[string]any{
 		"org_id": organizationID,
-		"start":  start,
-		"end":    end,
+		"start":  dateTime64Argument(start, millisecondPrecision),
+		"end":    dateTime64Argument(end, millisecondPrecision),
 		// Python binds now() here. CHAOS-4111: mappings whose valid_from is
 		// NULL match nothing, because NULL <= as_of is NULL -- a producer gap,
 		// not something this reader may paper over. Reproduced exactly so the
 		// two runtimes agree on which mappings are live.
-		"as_of": executor.nowUTC(),
+		"as_of": dateTime64Argument(executor.nowUTC(), microsecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
 	query := resolvedIncidentsQuery(filter, configuredOperationalOrderingContract())
@@ -396,4 +396,31 @@ func verifyOrderingContract(ctx context.Context, conn driver.Conn) error {
 		)
 	}
 	return nil
+}
+
+// ClickHouse query parameters are LITERALS, not expressions.
+//
+// clickhouse-go renders a time.Time bound to a {name:DateTime64(...)}
+// placeholder as `toDateTime('2026-08-09 00:00:00')`, and the server rejects
+// it: "Value toDateTime(...) cannot be parsed as DateTime64(3, 'UTC') ...
+// because it isn't parsed completely: only 10 of 33 bytes was parsed"
+// (BAD_QUERY_PARAMETER). The parameter mechanism does not evaluate the value,
+// it PARSES it, so a function call is text the parser gives up on partway
+// through.
+//
+// Formatting the value here is also the closer match to Python, whose driver
+// sends these parameters as plain literals; the timestamps therefore cross the
+// wire in the same shape on both sides rather than in two driver-specific
+// encodings that have to be trusted to agree.
+const (
+	millisecondPrecision = "2006-01-02 15:04:05.000"
+	microsecondPrecision = "2006-01-02 15:04:05.000000"
+)
+
+// dateTime64Argument renders a timestamp at the precision its column declares.
+// Passing more digits than the column holds is silently truncated by the
+// server, which would make a window boundary land a fraction early or late
+// without any error to notice.
+func dateTime64Argument(value time.Time, precision string) string {
+	return value.UTC().Format(precision)
 }

@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -29,20 +30,23 @@ import (
 // ClickHouse side -- a real container, production row types, and the shared
 // comparison vocabulary rather than a bespoke assertion list.
 //
-// The reference kind is metrics.dora: the smallest deterministic compute kind
-// in the R1 pilot's scope. Its Go port DOES NOT EXIST YET -- that is slice R1,
-// downstream of this one -- so both sides here run the PYTHON producer.
+// The reference kind is metrics.dora, the first family to leave the HTTP
+// compatibility bridge (CHAOS-3092 R1).
 //
-// This is therefore a COMPARATOR SELF-TEST, not a port proof, and the test
-// name says so. It proves the harness reports EQUAL when the two sides really
-// are equal and reports each injected difference when they are not; a
-// comparator that has not been shown to do both cannot be trusted to judge a
-// real port. It proves nothing whatsoever about a Go implementation.
+// This file was a COMPARATOR SELF-TEST while the Go port did not exist: both
+// sides ran the Python producer, which proved the harness reports EQUAL when
+// the sides really are equal and reports each injected difference when they
+// are not, and proved nothing whatsoever about a Go implementation. R1 flips
+// it. The right side now runs the native executor through its own binary, and
+// computeparity.RequirePortProof asserts from the harness's own observation --
+// resolved program plus entry point, not a label either side supplied -- that
+// two different implementations really ran.
 //
-// R1 adds the port proof: same table declaration, same comparator, right side
-// pointed at the native executor, and computeparity.RequirePortProof asserting
-// the two sides really were different implementations -- so a port test cannot
-// silently degrade into another copy of this self-test.
+// The negative controls are KEPT rather than retired. A cross-implementation
+// EQUAL is only evidence if the comparator would have reported a difference
+// had one existed, and that is a property of this run, not of the run in which
+// the controls were first written. Without them a comparator that had degraded
+// to always-equal would report the port perfect.
 
 // doraMetricsDailyRow is the production shape of dora_metrics_daily.
 //
@@ -83,7 +87,39 @@ func doraTable() computeparity.Table {
 
 const parityAsOf = "2026-08-22T00:00:00+00:00"
 
-func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
+// parityOrgID is PARITY_ORG_ID from scripts/worker/compute_parity_fixtures.py.
+// The Python producer takes it from that module; the native binary has to be
+// told, and if the two ever disagree the native side computes over an empty
+// organization and writes nothing -- which the non-empty check on the right
+// snapshot is there to catch rather than let pass as EQUAL.
+const parityOrgID = "8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a10"
+
+// buildNativeProducer compiles the native producer from THIS checkout.
+//
+// Building rather than locating one is deliberate: a stale binary on PATH
+// would let the comparison pass against code that is not the code under
+// review, and the failure would look like a success.
+func buildNativeProducer(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	binary := filepath.Join(t.TempDir(), "dora-native-producer")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dora-native-producer")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the native producer: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func TestDORANativePortMatchesThePythonProducerAcrossTwoScratchStores(t *testing.T) {
+	// Both the migration chain and both query builders read this variable,
+	// and 067 DEFERS when it says legacy. Leaving it ambient would let the
+	// host decide which schema the stores got and therefore which SQL each
+	// side ran -- a parity result that changes with the developer's shell is
+	// not a parity result. Contract 2 is pinned because it is the shape the
+	// native executor is being cut over onto.
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
+
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -112,20 +148,31 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 	fixtures(t, "setup", "seed", "--kind", "metrics.dora", "--dsn", leftDSN, "--as-of", parityAsOf)
 	fixtures(t, "setup", "clone", "--kind", "metrics.dora", "--from-dsn", leftDSN, "--to-dsn", rightDSN)
 
-	produce := func(side, dsn string) computeparity.Execution {
-		return fixtures(t, side,
+	nativeBinary := buildNativeProducer(t)
+	producePython := func(dsn string) computeparity.Execution {
+		return fixtures(t, "python",
 			"produce", "--kind", "metrics.dora", "--dsn", dsn, "--as-of", parityAsOf)
 	}
-	leftExecution := produce("python", leftDSN)
-	rightExecution := produce("python_replica", rightDSN)
+	produceNative := func(dsn string) computeparity.Execution {
+		return computeparity.RunProducer(t, "go_native", repoRoot(t), os.Environ(),
+			nativeBinary, "produce",
+			"--dsn", dsn, "--as-of", parityAsOf, "--days", "14",
+			"--org-id", parityOrgID)
+	}
+	leftExecution := producePython(leftDSN)
+	rightExecution := produceNative(rightDSN)
 
 	table := doraTable()
 	left := read(ctx, t, leftDSN, table, "python")
-	right := read(ctx, t, rightDSN, table, "python_replica")
+	right := read(ctx, t, rightDSN, table, "go_native")
 
 	if len(left.Rows) == 0 {
 		t.Fatal("the reference producer wrote no rows -- a comparison over an " +
 			"empty table proves nothing about the port")
+	}
+	if len(right.Rows) == 0 {
+		t.Fatal("the NATIVE producer wrote no rows. Two empty tables compare " +
+			"EQUAL, so this must fail loudly rather than pass quietly")
 	}
 
 	t.Run("all four DORA metrics are actually produced", func(t *testing.T) {
@@ -147,28 +194,28 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 		}
 	})
 
-	t.Run("this is a self-test, and is not mistakable for a port proof", func(t *testing.T) {
-		// Both sides genuinely ran the same interpreter and the same script,
-		// so the harness-observed identities match and the guard refuses --
-		// regardless of what either side is called. R1 points one side at the
-		// native executor, and the same guard then accepts it.
-		violation := computeparity.PortProofViolation(leftExecution, rightExecution)
-		if violation == "" {
-			t.Fatal("two runs of the same producer must not qualify as a port proof")
-		}
+	t.Run("two different implementations really ran", func(t *testing.T) {
+		// This is the assertion that keeps the test honest as the code moves.
+		// If the native producer were ever replaced by, or degraded into,
+		// another invocation of the Python one, every comparison below would
+		// still report EQUAL and the file would still be called a port proof.
+		// The guard judges by what the harness OBSERVED each side execute,
+		// never by the side labels above, which are cosmetic.
+		computeparity.RequirePortProof(t, leftExecution, rightExecution)
 	})
 
-	t.Run("same implementation both sides reports EQUAL", func(t *testing.T) {
+	t.Run("the native port matches the Python producer", func(t *testing.T) {
 		if messages := computeparity.Compare(t, table, left, right); len(messages) != 0 {
-			t.Fatalf("self-test must be EQUAL, got:\n  %s", strings.Join(messages, "\n  "))
+			t.Fatalf("the Go port diverged from Python:\n  %s",
+				strings.Join(messages, "\n  "))
 		}
 	})
 
 	t.Run("a replay honours the declared repeat policy on both sides", func(t *testing.T) {
-		produce("python", leftDSN)
-		produce("python_replica", rightDSN)
+		producePython(leftDSN)
+		produceNative(rightDSN)
 		leftAfter := read(ctx, t, leftDSN, table, "python")
-		rightAfter := read(ctx, t, rightDSN, table, "python_replica")
+		rightAfter := read(ctx, t, rightDSN, table, "go_native")
 
 		for _, pair := range []struct{ before, after computeparity.Snapshot }{
 			{left, leftAfter}, {right, rightAfter},
@@ -180,6 +227,14 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 		if len(leftAfter.Rows) != len(left.Rows)*2 {
 			t.Errorf("append_duplicates should have doubled the rows: %d -> %d",
 				len(left.Rows), len(leftAfter.Rows))
+		}
+		// Asserted on BOTH sides. The declared repeat policy is a claim about
+		// the KIND, so a port that silently became idempotent on replay would
+		// be a behavioural difference; checking only the Python side would
+		// leave exactly that unmeasured.
+		if len(rightAfter.Rows) != len(right.Rows)*2 {
+			t.Errorf("the native port did not honour append_duplicates: %d -> %d",
+				len(right.Rows), len(rightAfter.Rows))
 		}
 		// Parity must survive the replay too: a port can match on run one and
 		// diverge on run two.
@@ -193,7 +248,7 @@ func TestDORAWholeTableComparatorSelfTestAcrossTwoScratchStores(t *testing.T) {
 		// are injected into a copy of the right side's snapshot rather than
 		// into the store, so one control cannot leak into the next -- a lossy
 		// restore between live mutations is its own source of false findings.
-		baseline := read(ctx, t, rightDSN, table, "python_replica")
+		baseline := read(ctx, t, rightDSN, table, "go_native")
 		if messages := computeparity.Compare(t, table, read(ctx, t, leftDSN, table, "python"), baseline); len(messages) != 0 {
 			t.Fatalf("the control baseline must be EQUAL first: %v", messages)
 		}

@@ -335,6 +335,12 @@ func (recorder *recordingRetirements) ObserveIdempotencyRenewalRetired(
 	return nil
 }
 
+func (recorder *recordingRetirements) all() []IdempotencyRenewalRetiredReason {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]IdempotencyRenewalRetiredReason(nil), recorder.reasons...)
+}
+
 func (recorder *recordingRetirements) reason() IdempotencyRenewalRetiredReason {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -409,5 +415,72 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenFencedOut(t *testing.T) {
 	}
 	if got := retirements.reason(); got != IdempotencyRenewalFenced {
 		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalFenced)
+	}
+}
+
+// TestPostgresIdempotencyOrdinaryCompletionIsSilent is the counter-weight to the
+// two retirement tests. Loud retirement is only an improvement if it stays
+// quiet when nothing is wrong: a loss signal on an ordinary Finish would cancel
+// a healthy handler, and a retirement counted on every completion would bury
+// the real signal under normal traffic. Cancelling on a false positive is the
+// CHAOS-3866 regression, which is worse than the hole this change closes.
+func TestPostgresIdempotencyOrdinaryCompletionIsSilent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createIdempotencyTable(t, ctx, pool)
+
+	const lease = 1500 * time.Millisecond
+	retirements := &recordingRetirements{}
+	store, err := NewPostgresIdempotency(pool, retirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.leaseDuration = lease
+	request := idempotencyRequest("retention:worker_job_quiet_finish:2026-08-23")
+
+	claim, err := store.Begin(ctx, request)
+	if err != nil || claim.State() != ClaimProceed {
+		t.Fatalf("Begin = %v, %v", claim, err)
+	}
+	handlerContext, cancelLoss := withIdempotencyClaimLoss(context.Background(), claim)
+	defer cancelLoss()
+
+	// Long enough that renewal ticks several times against a healthy database,
+	// then finish the way a successful handler does.
+	time.Sleep(2 * lease)
+	if err := claim.Finish(ctx, Completion{Result: ResultSuccess, Category: CategoryNone}); err != nil {
+		t.Fatalf("finish healthy claim: %v", err)
+	}
+
+	lost, ok := claim.(interface{ Lost() <-chan struct{} })
+	if !ok {
+		t.Fatal("claim lost the lost-signal capability")
+	}
+	select {
+	case <-lost.Lost():
+		t.Fatal("an ordinary completion signaled lease loss: a healthy handler would have been canceled")
+	default:
+	}
+	select {
+	case <-handlerContext.Done():
+		t.Fatal("an ordinary completion canceled the handler context")
+	default:
+	}
+	if got := len(retirements.all()); got != 0 {
+		t.Fatalf("ordinary completion recorded %d retirements, want 0", got)
 	}
 }

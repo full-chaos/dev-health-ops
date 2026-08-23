@@ -2426,6 +2426,72 @@ def test_finalize_zero_unit_run_counts_by_provider_and_reason(db_session, monkey
     assert len(counter.increments) == 1, "a re-finalization must not be counted again"
 
 
+def test_finalize_zero_unit_run_sanitizes_the_cause_it_preserves(
+    db_session, monkeypatch
+):
+    """Preserving the planner's cause must not un-do a scrub.
+
+    The generic literal this branch used to write unconditionally was, by
+    accident, also a sanitizer: whatever was in ``sync_runs.error`` was thrown
+    away before anyone could read it. ``sync_runs.error`` is served raw to
+    operators through the admin job-history endpoint, and the pre-existing
+    ``run_error`` sanitization only guards the COPY into
+    ``SyncConfiguration.last_sync_error`` -- not the column itself. So a
+    credential-shaped fragment left on the run by an older release, or by any
+    future planner path that stringifies an exception, would now reach an
+    operator's screen.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="github",
+        planner_error="plan failed: Authorization: Bearer ghp_notarealtokenvalue",
+        planner_result={"error_category": "planner_error"},
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert "ghp_notarealtokenvalue" not in (run.error or "")
+    assert REDACTION_MARKER in (run.error or "")
+    assert run.result["reason"] == "planner_error"
+
+
+def test_finalize_zero_unit_run_counts_only_after_the_transaction_commits(
+    db_session, monkeypatch
+):
+    """A rolled-back finalization must not leave an increment behind.
+
+    ``nested.commit()`` only releases a savepoint. If the work after it raises,
+    the outer transaction rolls back and nothing was durably finalized -- but a
+    counter already incremented stays incremented. Over a retry sequence that
+    publishes N+1 for one real finalization, which is exactly the direction
+    that moves an alert threshold.
+    """
+    from dev_health_ops.workers import sync_units
+
+    counter = _RecordingCounter()
+    monkeypatch.setattr(sync_units, "ZERO_UNIT_FINALIZATIONS_TOTAL", counter)
+
+    run = _seed_zero_unit_run(db_session, provider="linear")
+    _patch_db_session(monkeypatch, db_session)
+
+    boom = RuntimeError("post-dispatch payload build failed")
+    monkeypatch.setattr(
+        sync_units,
+        "build_post_sync_dispatch_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(boom),
+    )
+    with pytest.raises(RuntimeError):
+        sync_units.finalize_sync_run(str(run.id))
+
+    assert counter.increments == [], (
+        "a finalization whose transaction did not commit must not be counted"
+    )
+
+
 def test_finalize_sync_run_only_syncs_nonterminal_job_run_observers(
     db_session, monkeypatch
 ):

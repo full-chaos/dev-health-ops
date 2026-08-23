@@ -2046,6 +2046,10 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
 
     from dev_health_ops.db import get_postgres_session_sync
 
+    # Captured inside the transaction, emitted AFTER it commits. See the
+    # assignment site for why the increment cannot live where it is decided.
+    zero_unit_labels: tuple[str, str] | None = None
+
     with get_postgres_session_sync() as session:
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
@@ -2142,6 +2146,20 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             zero_unit_reason = _zero_unit_reason(planner_result)
             if run.error is None:
                 run.error = _ZERO_UNIT_GENERIC_ERROR
+            else:
+                # The generic literal this branch used to write unconditionally
+                # was, by accident, also a scrub: whatever a planner (or a
+                # pre-sanitization row from an older release) had left in
+                # sync_runs.error was thrown away before anyone could read it.
+                # Preserving the cause removes that accidental scrub, and
+                # sync_runs.error is served raw to operators through the admin
+                # job-history endpoint -- the `run_error` sanitization below
+                # only guards the COPY into SyncConfiguration.last_sync_error,
+                # not the column itself. So sanitize what we keep, at the point
+                # we decide to keep it. Idempotent on already-clean text; same
+                # discipline, and same reasoning, as the CHAOS-2766 comment
+                # immediately below.
+                run.error = sanitize_error_text(run.error)
             result_payload["reason"] = zero_unit_reason
         run.result = result_payload
         run_success = run.status == SyncRunStatus.SUCCESS.value
@@ -2219,15 +2237,31 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
                 # series dominated by the generic residual is itself the
                 # signal that an upstream planner path is still discarding
                 # its own diagnosis.
-                ZERO_UNIT_FINALIZATIONS_TOTAL.labels(
-                    provider=_run_provider(session, run),
-                    reason=str(result_payload.get("reason", _ZERO_UNIT_GENERIC_REASON)),
-                ).inc()
+                #
+                # DECIDED here, not incremented here. `nested.commit()` only
+                # releases a savepoint; the outer transaction commits when the
+                # session context exits, and anything between here and there
+                # can still raise. A counter incremented inside a transaction
+                # that then rolls back is wrong in the one direction that
+                # matters for an alert threshold -- N failed attempts plus one
+                # eventual success would publish N+1 for a single durable
+                # finalization. So capture the labels and defer the increment
+                # to after the commit.
+                zero_unit_labels = (
+                    _run_provider(session, run),
+                    str(result_payload.get("reason", _ZERO_UNIT_GENERIC_REASON)),
+                )
         post_sync_payload = build_post_sync_dispatch_payload(session, run_uuid)
         post_sync_targets = (
             post_sync_payload.sync_targets if post_sync_payload is not None else []
         )
         session.flush()
+
+    if zero_unit_labels is not None:
+        provider_label, reason_label = zero_unit_labels
+        ZERO_UNIT_FINALIZATIONS_TOTAL.labels(
+            provider=provider_label, reason=reason_label
+        ).inc()
 
     run_status = _aggregate_run_status(len(units), success_count, failed_count)
     logger.info(

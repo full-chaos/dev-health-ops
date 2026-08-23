@@ -159,9 +159,10 @@ def _merge_stored_inheritable_edges(
     Residual: removals are only detected per provenance, so an item that loses
     its LAST edge of a given kind produces no fresh edge of that kind and its
     stored one keeps donating until another appears. Closing that needs a
-    tombstone, or a recorded "this extractor ran and found nothing" marker, at
-    the sync layer. The residual errs toward preserving a team rather than
-    losing one.
+    sync-layer "this extractor ran and found nothing" marker (an empty-snapshot
+    tombstone), tracked in **CHAOS-4129** -- follow-up machinery, not something
+    this function can synthesise. The residual errs toward PRESERVING a team,
+    the opposite failure direction from the decay this fix removes.
 
     Bounded to this run's items as the edge SOURCE and to
     ``_INHERITABLE_RELATIONSHIP_TYPES``, so this is a keyed read, never a

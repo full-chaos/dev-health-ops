@@ -510,6 +510,20 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					}
 				} else {
 					cursor.Pages += jobPage.Pages
+					// CURRENTLY UNREACHABLE, kept consistent on purpose. This
+					// collection passes SinglePage:true, and
+					// CollectGitLabPageParamPages sets CapReached only on a
+					// SECOND loop iteration (pagination.go: the check sits at
+					// the top of the loop), while SinglePage returns right
+					// after the first page. Verified empirically: with
+					// MaxPages:1+SinglePage:true a full page advertising
+					// X-Next-Page yields CapReached=false, and the same options
+					// without SinglePage yield true. So this branch never fired
+					// and the pre-CHAOS-4142 ErrPaginationCapExceeded here was
+					// never a live cancellation. It is converted anyway so the
+					// site cannot become a landmine if SinglePage is ever
+					// dropped -- but it carries no test, because a test that
+					// cannot reach its site asserts nothing.
 					if jobPage.CapReached {
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunArtifactsComponent,

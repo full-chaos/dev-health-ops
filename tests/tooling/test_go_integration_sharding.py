@@ -290,15 +290,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # integration-tagged, so the integration count is unchanged -- the same
     # shape as CHAOS-4130's nine, not CHAOS-4114's three.
     #
-    # CHAOS-4142 then added 12 ordinary top-level tests (954 -> 966): eight in
+    # CHAOS-4142 then added 13 ordinary top-level tests (954 -> 967): nine in
     # github_tests_per_run_cap_test.go and four in
     # gitlab_tests_per_run_cap_test.go, covering both cap directions at each
     # per-run site (jobs, artifacts, report rows), the watermark
-    # window-blocking classification from both sides, and the closed per-run
-    # vocabulary on both providers. All twelve are ordinary -- they drive the
-    # routes through in-memory HTTP doers and touch no database -- so the
-    # integration-tagged count stays 113, the way 4130's nine did.
-    assert len(expected_provider_tests) == 966
+    # window-blocking classification from both sides, BOTH directions of the
+    # bidirectional comparator invariant (nil iff window-blocking), and the
+    # closed per-run vocabulary on both providers. All thirteen are ordinary --
+    # they drive the routes through in-memory HTTP doers and touch no database
+    # -- so the integration-tagged count stays 113, the way 4130's nine did.
+    assert len(expected_provider_tests) == 967
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -315,7 +316,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 966
+    assert len(provider_flattened) == len(set(provider_flattened)) == 967
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -376,7 +377,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 966
+    assert len(selected_tests) == len(set(selected_tests)) == 967
     assert set(selected_tests) == expected_tests
 
 

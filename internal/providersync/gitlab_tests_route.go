@@ -190,6 +190,14 @@ func (handler GitLabTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 		pages += jobPage.Pages
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitLabTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
 		if jobPage.CapReached {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
@@ -261,6 +269,14 @@ func (handler GitLabTestsRouteHandler) Collect(
 			continue
 		}
 		pages += jobPage.Pages
+		// DELIBERATE DIVERGENCE from the chunked route's per-run disposition
+		// (CHAOS-4142). This non-chunked Collect is production-dead for
+		// cicd/tests: execution_registry.go:476 marks {github,gitlab} x
+		// {cicd,tests} Chunked unconditionally, and chunked_executor.go routes
+		// any ChunkedCompleteRouteHandler to CollectChunks, so nothing reaches
+		// this cap. It survives as the oracle/comparison implementation. If a
+		// fixture ever crosses this cap, mirror recordGitLabTestsPerRunTruncation
+		// here rather than treating the refusal as intended behavior.
 		if jobPage.CapReached {
 			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}

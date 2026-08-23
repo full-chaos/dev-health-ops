@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // githubTestsOversizedRunDoer serves ONE workflow run whose per-run item lists
@@ -235,7 +236,8 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 	}{
 		{githubTestsRunInventoryComponent, true},
 		{githubTestsArtifactInventoryComponent, true},
-		// Preserved from before CHAOS-4142 rather than reclassified.
+		// Preserved from before CHAOS-4142 rather than reclassified; the
+		// reclassification is CHAOS-4153.
 		{githubTestsReportMemberComponent, true},
 		{githubTestsRunJobsComponent, false},
 		{githubTestsRunArtifactsComponent, false},
@@ -359,4 +361,62 @@ func TestGitHubTestsPerRunReportRowsCapTruncatesAndAdvances(t *testing.T) {
 			doer.archiveRequests)
 	}
 	assertFinalizedAndAdvanced(t, walk)
+}
+
+// The comparator invariant is BIDIRECTIONAL: the watermark is nil IFF a
+// window-blocking observation is present. Testing only one direction leaves a
+// regressed producer failing open on the other -- a unit that withholds its
+// watermark for a merely per-run truncation would be accepted and would pin
+// since_at exactly the way CHAOS-4142 describes, while still reporting success.
+func TestGitHubTestsCompletionWatermarkInvariantIsBidirectional(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	perRun := GitHubTestsIncomplete{
+		Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1,
+	}
+	blocking := GitHubTestsIncomplete{
+		Component: githubTestsRunInventoryComponent, Cause: githubTestsPageBudgetCause, Count: 1,
+	}
+	// The durable form is always a non-nil slice -- the comparator refuses a
+	// JSON null, so the one writer normalizes it (see githubTestsFinalMetadataBatch).
+	batchFor := func(observations []GitHubTestsIncomplete, watermark *time.Time) CompleteRouteBatch {
+		observations = append(make([]GitHubTestsIncomplete, 0, len(observations)), observations...)
+		skipped := 0
+		for _, observation := range observations {
+			skipped += observation.Count
+		}
+		return CompleteRouteBatch{
+			Watermark: watermark,
+			Result: map[string]any{
+				"reports_complete": len(observations) == 0,
+				"reports_skipped":  skipped,
+				"incomplete":       observations,
+			},
+		}
+	}
+
+	cases := []struct {
+		name        string
+		observation []GitHubTestsIncomplete
+		watermark   *time.Time
+		valid       bool
+	}{
+		{"per-run truncation advances", []GitHubTestsIncomplete{perRun}, claim.BeforeAt, true},
+		// Direction 1: withholding without a window-blocking reason.
+		{"per-run truncation withholding is invalid", []GitHubTestsIncomplete{perRun}, nil, false},
+		{"inventory truncation withholds", []GitHubTestsIncomplete{blocking}, nil, true},
+		// Direction 2: advancing despite a window-blocking reason.
+		{"inventory truncation advancing is invalid", []GitHubTestsIncomplete{blocking}, claim.BeforeAt, false},
+		// A blocking observation dominates a mixed set in both directions.
+		{"mixed set withholds", []GitHubTestsIncomplete{perRun, blocking}, nil, true},
+		{"mixed set advancing is invalid", []GitHubTestsIncomplete{perRun, blocking}, claim.BeforeAt, false},
+		{"complete unit advances", nil, claim.BeforeAt, true},
+		{"complete unit withholding is invalid", nil, nil, false},
+	}
+	for _, testCase := range cases {
+		err := validateGitHubTestsCompletion(claim, batchFor(testCase.observation, testCase.watermark))
+		if (err == nil) != testCase.valid {
+			t.Fatalf("%s: comparator accepted=%v, want %v (err=%v)",
+				testCase.name, err == nil, testCase.valid, err)
+		}
+	}
 }

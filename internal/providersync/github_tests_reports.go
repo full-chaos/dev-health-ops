@@ -157,9 +157,14 @@ var githubTestsWindowBlockingComponents = map[string]struct{}{
 	// test-report member therefore still withholds its watermark on every
 	// window, which is the same permanent-staleness shape CHAOS-4142 fixes for
 	// the per-run caps, just without a cancellation to make it visible.
-	// Reclassifying it is a coverage-semantics decision of its own and is
-	// tracked separately; this change deliberately narrows the predicate for
-	// the per-run components ONLY.
+	// Both of its causes are in fact deterministic (`unreadable` at :326 is a
+	// zip read of an already-downloaded in-memory archive, `malformed` at :339
+	// and :347 is a parse of those same bytes -- a transient fetch failure
+	// returns earlier, in downloadGitHubTestsArtifact), so it very likely
+	// belongs in the in-window class. Reclassifying it is a coverage-semantics
+	// decision of its own and would rewrite four tests that deliberately assert
+	// today's behavior, so it is tracked as CHAOS-4153 rather than folded in
+	// here; this change narrows the predicate for the per-run components ONLY.
 	githubTestsReportMemberComponent: {},
 }
 

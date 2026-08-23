@@ -325,6 +325,128 @@ this short-circuit unless the `worker_job_runs` row is reconciled in the same
 work. The settled constraint, from CHAOS-3991, is one sentence: **success may
 never be recorded on a claim conflict.**
 
+## Chunked provider walks: continuations and resume cursors
+
+A provider unit too large for one attempt is walked in chunks. Each committed
+chunk advances a durable checkpoint (`sync_run_unit_chunk_checkpoints`), and
+the walk yields a **continuation** — `ChunkContinuationError`
+(`internal/providersync/chunked_persistence.go`), translated to River's snooze
+path so it is **attempt-neutral**: the domain row compensates with
+`attempts = GREATEST(attempts - 1, 0)`
+(`internal/providersync/repository_postgres.go`). A unit may continue any number
+of times without spending its bounded failure budget.
+
+That budget is the thing to protect. Attempts are counted **per unit**, while
+anything that consumes one is encountered **per chunk**, so a unit's exposure
+grows with the number of chunks — which is to say with the size of the
+repository. A defect that costs one attempt per resume is therefore invisible on
+small sources and fatal on large ones.
+
+### A resume cursor is a position, and positions move
+
+A resume cursor stores an **ordinal index into a provider-ordered page**,
+identified by that page's URL. On resume the page is re-fetched and the index is
+applied to whatever came back.
+
+Providers do not guarantee stable pagination. GitHub serves Actions runs
+newest-first, so every new run shifts the contents of every page. After any gap —
+and a deploy is a gap — the page a cursor named can come back holding fewer items
+than the index recorded against it.
+
+**A positional mismatch is a RE-ANCHOR, never corruption.** The unit's durable
+state is intact and every prepared chunk is still committed; only the provider
+moved. The walk restarts at the top of that page, attempt-neutral, and records
+`dev_health_provider_resume_reanchor_total{provider,dataset,phase}`.
+
+Re-walking is safe **for row identity**: every cicd destination is a
+`ReplacingMergeTree` whose final sort key is org, repository and run
+(`src/dev_health_ops/migrations/clickhouse/027_add_org_id_to_sorting_keys.py`
+and `042_rmt_org_id_dedup_keys.py` — the keys the initial DDL declares are not
+the ones in force), so
+re-processing an item replaces its row rather than duplicating it under
+`FINAL`. Note the sort keys do **not** include the provider, so two
+same-slug repositories on different providers in one tenant can collide —
+a pre-existing latent defect, tracked with the accounting one below.
+
+Re-walking is **not** accounting-safe. A **fresh re-walk** — one that collects
+from the provider again and so prepares NEW chunks, which is what a re-anchor
+does — increments the recovery layer's totals again: `committed_rows`,
+`Evidence.Records`, the shadow-comparison counts and the effect-ledger
+cardinality are all increment-only, and a freshly prepared chunk is written
+without passing the readback guard.
+
+This is narrower than "any replay". Recovery from an ALREADY-PREPARED chunk
+does not inflate: committed effects are skipped and a `writing` effect is
+inspected by readback first (`internal/providersync/effect_committer.go`). The
+exposure is specific to re-collection, which re-anchoring makes more frequent.
+Pre-existing either way; tracked as CHAOS-4187.
+
+Two alternatives are ruled out. **Clamping** the index to the end of the page
+silently drops whatever moved off it — data loss reported as progress.
+**Failing** costs the unit one of its five attempts, which is what made busy
+repositories terminalize after a deploy while quiet ones completed (CHAOS-4177).
+
+`ErrChunkCheckpointConflict` stays, and is reserved for state that really is
+corrupt or impossible: a cursor that does not decode, a checkpoint that fails
+its own validation, an inventory marked complete with no chunks. A provider
+whose pages moved is none of those.
+
+### Partial degradation is tolerated; total degradation is not
+
+The same judgement governs unreadable provider payloads. **Partial**
+unreadability — one artifact whose archive will not open — is skipped and
+recorded, and withholds the watermark so the window is re-walked; the rest of
+the walk is real data and nothing is lost.
+
+**Total** unreadability — every artifact the walk downloaded failing to open —
+is a systematic route condition, such as a proxy or auth edge answering every
+request with an error document. It cannot improve by being retried, so it
+should fail the unit with its own cause rather than report a success that
+ingested nothing. **That escalation is deliberately deferred and NOT yet
+implemented** (CHAOS-4185): today such a walk completes, and the only signals
+are `dev_health_provider_artifact_skipped_total`, the per-skip warning log, and
+a withheld watermark that keeps re-walking the window. Coverage never silently
+advances, which is why deferring it was safe.
+
+The general rule this expresses: degrade quietly where the data still worth
+having outweighs what was lost, and fail loudly where it does not. A condition
+that cannot improve by being retried should never be reported as success.
+
+### What a re-anchor cannot see
+
+The gate fires when the stored index no longer **addresses** an item — the page
+came back shorter than the index, so walking from there would process nothing.
+A page RESHUFFLED to the same length still satisfies the index and is walked
+from it: an ordinal cursor cannot distinguish "same items, moved" from
+"different items, same count". That case is silent and undetectable here, and
+is closed only by anchoring on item identity (CHAOS-4182).
+
+The re-anchor counter is therefore a **lower bound** on page movement, not a
+measure of it.
+
+The residue is bounded by the direction pages move. GitHub inserts newest-first,
+so an item displaced off the page the cursor named moves to a LATER page — one
+the walk has not reached yet — and is still collected as the walk continues.
+What is genuinely lost is an item displaced EARLIER, which requires deletion or
+expiry rather than insertion. (The watermark does not close this: the next
+incremental window subtracts only the configured overlap,
+`internal/scheduler/sync/planner.go:383-385`, whose default is zero,
+`internal/scheduler/sync/materializer.go:88`.)
+
+### Deploys must not cost units attempts
+
+This is the standing requirement the rule above serves. A deploy stops workers
+mid-walk and restarts them against checkpoints written by the previous binary.
+Every resume that follows is a normal, expected operation. Any behaviour that
+turns "the world moved while we were away" into a failure will burn attempts in
+proportion to how long the deploy took and how busy the source is, and will look
+like an ingestion fault rather than a deploy artifact.
+
+The end-state is a cursor anchored on the provider's own stable identity for an
+item — a workflow run id rather than its position — so a resume is exact whenever
+the anchor is still on the page, and degrades to the re-anchor above when it is
+not. Tracked as CHAOS-4182.
+
 ## Outbox rows and delivery generations
 
 `worker_job_outbox` is the transactional handoff between a domain write and a

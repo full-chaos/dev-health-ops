@@ -359,21 +359,27 @@ moved. The walk restarts at the top of that page, attempt-neutral, and records
 `dev_health_provider_resume_reanchor_total{provider,dataset,phase}`.
 
 Re-walking is safe **for row identity**: every cicd destination is a
-`ReplacingMergeTree` keyed on org, repository and run
-(`src/dev_health_ops/migrations/clickhouse/000_raw_tables.sql` for
-`ci_pipeline_runs`, `029_testops_tables.sql` for the testops tables), so
+`ReplacingMergeTree` whose final sort key is org, repository and run
+(`src/dev_health_ops/migrations/clickhouse/027_add_org_id_to_sorting_keys.py`
+and `042_rmt_org_id_dedup_keys.py` — the keys the initial DDL declares are not
+the ones in force), so
 re-processing an item replaces its row rather than duplicating it under
 `FINAL`. Note the sort keys do **not** include the provider, so two
 same-slug repositories on different providers in one tenant can collide —
 a pre-existing latent defect, tracked with the accounting one below.
 
-Re-walking is **not** accounting-safe. The recovery layer's totals —
-`committed_rows`, `Evidence.Records`, the shadow-comparison counts and the
-effect-ledger cardinality — are increment-only and inflate on ANY replay, and
-a replayed chunk takes a path that bypasses the readback guard. That is
-pre-existing behaviour of every replay, not something re-anchoring introduces;
-re-anchoring makes replays more frequent and so raises the exposure. Tracked as
-CHAOS-4187.
+Re-walking is **not** accounting-safe. A **fresh re-walk** — one that collects
+from the provider again and so prepares NEW chunks, which is what a re-anchor
+does — increments the recovery layer's totals again: `committed_rows`,
+`Evidence.Records`, the shadow-comparison counts and the effect-ledger
+cardinality are all increment-only, and a freshly prepared chunk is written
+without passing the readback guard.
+
+This is narrower than "any replay". Recovery from an ALREADY-PREPARED chunk
+does not inflate: committed effects are skipped and a `writing` effect is
+inspected by readback first (`internal/providersync/effect_committer.go`). The
+exposure is specific to re-collection, which re-anchoring makes more frequent.
+Pre-existing either way; tracked as CHAOS-4187.
 
 Two alternatives are ruled out. **Clamping** the index to the end of the page
 silently drops whatever moved off it — data loss reported as progress.

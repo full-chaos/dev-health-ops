@@ -253,9 +253,11 @@ func githubTestsResumeStart(
 	if cursor.NextURL != page.CursorBefore {
 		return 0
 	}
-	// A cursor is never persisted with Index == len(page.Items): both write
-	// sites normalise that to index 0 with the next page's URL (:548-556 and
-	// :751-756). A persisted Index > 0 therefore always addressed an item that
+	// A cursor is never persisted with Index == len(page.Items): both item
+	// write sites (the runs loop and its artifacts twin) assign index+1 and
+	// then normalise every >= len case to index 0 with CursorAfter, and both
+	// empty-page branches set index 0. A persisted Index > 0 therefore always
+	// addressed an item that
 	// existed, so an index at or past the re-fetched length now addresses
 	// NOTHING -- walking from there would process zero items and advance past
 	// whatever the page still held, silently. Index 0 is always a legitimate

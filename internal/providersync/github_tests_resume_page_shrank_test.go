@@ -62,19 +62,37 @@ func githubTestsResumeCollect(
 	t *testing.T, client *providerfoundation.HTTPClient, resume string,
 ) (emissions int, finals int, err error) {
 	t.Helper()
+	_, emissions, finals, err = githubTestsResumeCollectCursor(t, client, resume)
+	return emissions, finals, err
+}
+
+// githubTestsResumeCollectCursor also returns the TERMINAL cursor. Completion
+// and a metric line together still do not prove the walk processed anything:
+// a route that recorded the re-anchor and then resumed from the stale index
+// would satisfy both while skipping the page. The cursor's cumulative item
+// counts are what show real work.
+func githubTestsResumeCollectCursor(
+	t *testing.T, client *providerfoundation.HTTPClient, resume string,
+) (cursor githubTestsChunkCursor, emissions int, finals int, err error) {
+	t.Helper()
+	last := resume
 	err = GitHubTestsRouteHandler{}.CollectChunks(
 		context.Background(), nativeTestClaim("github", "cicd"),
 		providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume,
 		func(emission ChunkRouteEmission) error {
 			emissions++
+			last = emission.CursorAfter
 			if emission.Final {
 				finals++
 			}
 			return nil
 		},
 	)
-	return emissions, finals, err
+	if decoded, decodeErr := decodeGitHubTestsChunkCursor(last); decodeErr == nil {
+		cursor = decoded
+	}
+	return cursor, emissions, finals, err
 }
 
 // CONTROL. A resume whose stored index still addresses an item on the page
@@ -249,10 +267,11 @@ func TestGitHubTestsArtifactsPhaseResumeAfterPageShrankDoesNotBurnAnAttempt(t *t
 // RED. The re-anchor gate must fire when the stored index addresses NOTHING,
 // not only when it points past the end.
 //
-// A cursor is never persisted with Index == len(page.Items): both write sites
-// normalise that to index 0 with the next page's URL
-// (github_tests_chunked_route.go:548-556 for runs, :751-756 for artifacts). So
-// a persisted Index > 0 always addressed an item that existed. If a re-fetched
+// A cursor is never persisted with Index == len(page.Items): both item write
+// sites in github_tests_chunked_route.go -- the runs loop and its artifacts
+// twin -- assign index+1 and then normalise every >= len case to index 0 with
+// CursorAfter, and both empty-page branches set index 0. So a persisted
+// Index > 0 always addressed an item that existed. If a re-fetched
 // page has shrunk to exactly that index, the index now addresses nothing --
 // the walk starts at the end, processes zero items, advances to CursorAfter,
 // and silently drops whatever that page still held. No error, no metric, no
@@ -269,12 +288,22 @@ func TestGitHubTestsResumeWhenPageShrankExactlyToIndexReAnchors(t *testing.T) {
 	client := githubTestsClient(t, doer)
 	client.Metrics = providerfoundation.NewMetrics()
 
-	_, finals, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(2))
+	cursor, _, finals, err := githubTestsResumeCollectCursor(t, client, githubTestsRunsResumeCursor(2))
 	if err != nil {
 		t.Fatalf("err=%v, want the walk to re-anchor and complete", err)
 	}
 	if finals != 1 {
 		t.Fatalf("finals=%d, want exactly 1", finals)
+	}
+	// The load-bearing assertion: re-anchoring must actually RE-WALK the page.
+	// Recording the metric and then resuming from the stale index would still
+	// skip both runs, and completion alone cannot tell the two apart.
+	if cursor.Pipelines != 2 {
+		t.Fatalf(
+			"processed %d pipelines after re-anchoring a 2-item page, want 2; "+
+				"the walk recorded the re-anchor but did not re-walk the page",
+			cursor.Pipelines,
+		)
 	}
 
 	var buffer bytes.Buffer

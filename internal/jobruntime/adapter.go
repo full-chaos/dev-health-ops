@@ -77,6 +77,14 @@ type budgetLeaseLoss interface {
 	Lost() <-chan struct{}
 }
 
+// idempotencyClaimLoss is the claim-side twin of budgetLeaseLoss. It stays an
+// optional interface rather than widening IdempotencyClaim for the same reason
+// budgetLeaseLoss does: a store whose claims cannot be lost mid-run has nothing
+// to implement, and the runtime must keep working with claims that do not.
+type idempotencyClaimLoss interface {
+	Lost() <-chan struct{}
+}
+
 type Budget interface {
 	Supports(string, int) bool
 	Acquire(context.Context, BudgetRequest) (BudgetLease, error)
@@ -411,6 +419,12 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 		return choice, envelope, errors.New("idempotency returned invalid claim state")
 	}
 
+	// A claim that loses its lease mid-run must stop the handler, exactly as a
+	// lost budget lease does. Without this the handler works on under a lease
+	// Begin's running-with-expired-lease branch will hand to a duplicate.
+	ctx, cancelClaimLoss := withIdempotencyClaimLoss(ctx, claim)
+	defer cancelClaimLoss()
+
 	deadline, _ := ctx.Deadline()
 	execution := &Execution[T]{
 		JobID:          job.ID,
@@ -462,6 +476,24 @@ func withBudgetLeaseLoss(ctx context.Context, lease BudgetLease) (context.Contex
 		}
 	}()
 	return leaseContext, cancel
+}
+
+func withIdempotencyClaimLoss(
+	ctx context.Context, claim IdempotencyClaim,
+) (context.Context, context.CancelFunc) {
+	lostClaim, ok := claim.(idempotencyClaimLoss)
+	if !ok || lostClaim.Lost() == nil {
+		return ctx, func() {}
+	}
+	claimContext, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-lostClaim.Lost():
+			cancel()
+		case <-claimContext.Done():
+		}
+	}()
+	return claimContext, cancel
 }
 
 func finishClaim(ctx context.Context, claim IdempotencyClaim, completion Completion) error {

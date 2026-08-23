@@ -50,6 +50,24 @@ const (
 	ReportRunLeaseResultFailed   ReportRunLeaseResult = "failed"
 )
 
+// IdempotencyRenewalRetiredReason names why a job claim's lease renewal gave
+// up. The set is closed and mirrors the two non-transient arms of the renewal
+// loop, because they mean opposite things operationally: fenced is a correct
+// handover the fleet should barely notice, while transient_exhausted means the
+// database was unreachable for longer than a whole lease and a handler was
+// stopped mid-flight. Collapsing them into one number would hide a database
+// incident behind ordinary takeover traffic.
+type IdempotencyRenewalRetiredReason string
+
+const (
+	// IdempotencyRenewalFenced is the renewal UPDATE matching zero rows: the
+	// run is provably no longer ours.
+	IdempotencyRenewalFenced IdempotencyRenewalRetiredReason = "fenced"
+	// IdempotencyRenewalTransientExhausted is consecutive renewal failures
+	// outlasting the lease itself.
+	IdempotencyRenewalTransientExhausted IdempotencyRenewalRetiredReason = "transient_exhausted"
+)
+
 // DailyMetricsLeaseStage names which daily-metrics claim reported a lease it
 // could not take. The set is closed: partition and finalize are the only two
 // daily-metrics claims that hold a bounded lease a dead claimant can orphan.
@@ -205,21 +223,22 @@ type MetricsCollector struct {
 
 	runtimeInfo *RuntimeInfo
 
-	jobsAvailable         map[JobLabels]int64
-	jobOldestAge          map[queueLabels]float64
-	jobsRunning           map[JobLabels]int64
-	executionSaturation   map[queueLabels]float64
-	jobWait               map[JobLabels]*histogram
-	jobDuration           map[jobResultLabels]*histogram
-	jobAttempts           map[attemptLabels]uint64
-	jobPanics             map[string]uint64
-	cancellations         map[cancellationLabels]uint64
-	domainMismatch        map[string]uint64
-	syncLeaseExpired      map[syncLeaseResultLabels]uint64
-	reportRunLeaseExpired map[ReportRunLeaseResult]uint64
-	dailyMetricsLease     map[dailyMetricsLeaseLabels]uint64
-	workGraphReleaseLost  uint64
-	remainingReleaseLost  uint64
+	jobsAvailable             map[JobLabels]int64
+	jobOldestAge              map[queueLabels]float64
+	jobsRunning               map[JobLabels]int64
+	executionSaturation       map[queueLabels]float64
+	jobWait                   map[JobLabels]*histogram
+	jobDuration               map[jobResultLabels]*histogram
+	jobAttempts               map[attemptLabels]uint64
+	jobPanics                 map[string]uint64
+	cancellations             map[cancellationLabels]uint64
+	domainMismatch            map[string]uint64
+	syncLeaseExpired          map[syncLeaseResultLabels]uint64
+	reportRunLeaseExpired     map[ReportRunLeaseResult]uint64
+	idempotencyRenewalRetired map[IdempotencyRenewalRetiredReason]uint64
+	dailyMetricsLease         map[dailyMetricsLeaseLabels]uint64
+	workGraphReleaseLost      uint64
+	remainingReleaseLost      uint64
 
 	// Native DORA compute (CHAOS-3092 R1). The HTTP compatibility bridge could
 	// only ever report a status code, so a partition that computed nothing and
@@ -299,6 +318,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		domainMismatch:            make(map[string]uint64, len(dimensions.DomainTypes)),
 		syncLeaseExpired:          make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
 		reportRunLeaseExpired:     make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		idempotencyRenewalRetired: make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
 		dailyMetricsLease:         make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		streamLag:                 make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamPending:             make(map[StreamLabels]int64, len(dimensions.Streams)),
@@ -358,6 +378,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, result := range reportRunLeaseResults() {
 		collector.reportRunLeaseExpired[result] = 0
+	}
+	for _, reason := range idempotencyRenewalRetiredReasons() {
+		collector.idempotencyRenewalRetired[reason] = 0
 	}
 	for _, labels := range dailyMetricsLeaseSeries() {
 		collector.dailyMetricsLease[labels] = 0
@@ -592,6 +615,25 @@ func (collector *MetricsCollector) ObserveReportRunLeaseExpired(result ReportRun
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.reportRunLeaseExpired[result]++
+	return nil
+}
+
+// ObserveIdempotencyRenewalRetired records a job claim whose lease renewal
+// stopped for good. Before this counter existed the retirement was invisible:
+// the goroutine returned, the handler carried on believing it held a lease,
+// and a healthy run and an orphaned one looked identical from outside the
+// process. Callers must not record an ordinary stop -- a claim that finished
+// its work and stopped renewal deliberately has not retired, and counting it
+// would bury the real signal under normal completions.
+func (collector *MetricsCollector) ObserveIdempotencyRenewalRetired(
+	reason IdempotencyRenewalRetiredReason,
+) error {
+	if !validIdempotencyRenewalRetiredReason(reason) {
+		return errors.New("idempotency renewal retired reason is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.idempotencyRenewalRetired[reason]++
 	return nil
 }
 
@@ -914,6 +956,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeJobs(&output)
 	collector.writeSyncLeases(&output)
 	collector.writeReportRunLeases(&output)
+	collector.writeIdempotencyRenewalRetired(&output)
 	collector.writeDailyMetricsLeases(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
@@ -1068,6 +1111,15 @@ func (collector *MetricsCollector) writeReportRunLeases(output *strings.Builder)
 		writeUintSample(output, "worker_report_run_lease_expired_total", []metricLabel{
 			{"result", string(result)},
 		}, collector.reportRunLeaseExpired[result])
+	}
+}
+
+func (collector *MetricsCollector) writeIdempotencyRenewalRetired(output *strings.Builder) {
+	writeMetadata(output, "worker_idempotency_renewal_retired_total", "Job claim lease renewals that gave up, by bounded reason.", "counter")
+	for _, reason := range idempotencyRenewalRetiredReasons() {
+		writeUintSample(output, "worker_idempotency_renewal_retired_total", []metricLabel{
+			{"reason", string(reason)},
+		}, collector.idempotencyRenewalRetired[reason])
 	}
 }
 
@@ -1342,6 +1394,16 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 
 func reportRunLeaseResults() []ReportRunLeaseResult {
 	return []ReportRunLeaseResult{ReportRunLeaseResultFailed, ReportRunLeaseResultRetrying}
+}
+
+func validIdempotencyRenewalRetiredReason(reason IdempotencyRenewalRetiredReason) bool {
+	return reason == IdempotencyRenewalFenced || reason == IdempotencyRenewalTransientExhausted
+}
+
+func idempotencyRenewalRetiredReasons() []IdempotencyRenewalRetiredReason {
+	return []IdempotencyRenewalRetiredReason{
+		IdempotencyRenewalFenced, IdempotencyRenewalTransientExhausted,
+	}
 }
 
 func poolAcquireResults() []string {

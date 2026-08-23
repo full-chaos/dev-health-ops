@@ -2144,7 +2144,11 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             if isinstance(planner_category, str) and planner_category:
                 result_payload.setdefault("error_category", planner_category)
             zero_unit_reason = _zero_unit_reason(planner_result)
-            if run.error is None:
+            # Blank counts as absent, the same rule _zero_unit_reason applies
+            # to the reason one column over: preserving "" would leave a FAILED
+            # run showing no cause at all, which reads as "nothing to say"
+            # rather than "not captured".
+            if run.error is None or not run.error.strip():
                 run.error = _ZERO_UNIT_GENERIC_ERROR
             else:
                 # The generic literal this branch used to write unconditionally

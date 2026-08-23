@@ -1318,7 +1318,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2654
+        "line": 2658
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

@@ -2390,6 +2390,53 @@ def test_finalize_zero_unit_run_ignores_a_blank_planner_reason(db_session, monke
     assert "error_category" not in run.result
 
 
+@pytest.mark.parametrize("blank_error", ("", "   "))
+def test_finalize_zero_unit_run_treats_a_blank_planner_error_as_absent(
+    db_session, monkeypatch, blank_error
+):
+    """A blank recorded error is absence, exactly as a blank reason is.
+
+    ``_zero_unit_reason`` already treats a blank ``reason`` as absent, on the
+    argument that an empty label reads as a classification that ran and found
+    nothing (see the sibling test above). ``run.error`` is that same argument
+    one column over, and the preserve-the-cause branch did not carry it: only
+    ``run.error is None`` took the generic literal, so a blank-but-not-NULL
+    error took the preserving branch and survived as an EMPTY cause.
+
+    That is the worst of the three outcomes. ``sync_runs.error`` is served raw
+    to operators through the admin job-history endpoint, so the run shows as
+    FAILED with no reason at all -- strictly less useful than the honest
+    generic label it replaced, because it reads as "the system had nothing to
+    say" rather than "the reason was not captured".
+
+    No current producer writes a blank error: the three writers that can put a
+    cause on a zero-unit run all write non-empty text (``sync/planner.py``
+    writes ``error=reason``, ``sync/feature_denial.py`` writes ``str(error)``,
+    and the dispatch-denied path in this module writes ``decision.reason or
+    "sync dispatch denied"``). So this closes the branch's own asymmetry
+    rather than a defect reachable today -- which is why it is pinned by a
+    test instead of left for the next reader to notice.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run = _seed_zero_unit_run(
+        db_session,
+        provider="github",
+        planner_error=blank_error,
+    )
+    _patch_db_session(monkeypatch, db_session)
+
+    sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert run.status == SyncRunStatus.FAILED.value
+    assert run.error == "No sync units planned", (
+        "a blank error is absence, not a preserved cause -- preserving it "
+        "leaves an operator staring at a FAILED run with no reason at all"
+    )
+    assert run.result["reason"] == "no_sync_units_planned"
+
+
 def test_finalize_zero_unit_run_counts_by_provider_and_reason(db_session, monkeypatch):
     """Standing telemetry order: the new classification must be observable.
 

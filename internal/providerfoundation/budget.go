@@ -410,7 +410,7 @@ func (m *Metrics) RecordPerRunTruncation(provider, dataset, component, cause str
 // unknown reason collapses to "other" so a route cannot open an unbounded
 // label dimension (CHAOS-4177).
 var metricArtifactSkipReasonVocabulary = map[string]struct{}{
-	"unreadable_archive": {},
+	"unreadable_archive": {}, "all_artifacts_unreadable": {},
 }
 
 // MetricArtifactSkipReasonLabel bounds the artifact skip reason label.

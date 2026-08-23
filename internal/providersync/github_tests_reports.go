@@ -164,6 +164,13 @@ const (
 	// githubTestsWatermarkAdvancingPairs, and the skipped archive's contents
 	// were never observed (CHAOS-4177).
 	githubTestsUnreadableArchiveCause = "unreadable_archive"
+	// githubTestsAllArtifactsUnreadableCause records that EVERY artifact the
+	// walk downloaded failed to open. One unreadable archive is item noise and
+	// is skipped; all of them is a systematic route condition -- a proxy or
+	// auth edge answering every artifact with an error document -- which does
+	// not heal by re-walking and must fail loudly instead of completing a unit
+	// that ingested nothing (CHAOS-4177).
+	githubTestsAllArtifactsUnreadableCause = "all_artifacts_unreadable"
 )
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)

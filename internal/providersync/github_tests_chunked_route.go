@@ -56,6 +56,13 @@ type githubTestsChunkCursor struct {
 	// Repo lets the terminal `done` resume publish completion metadata without
 	// re-fetching the repository object.
 	Repo string `json:"repo,omitempty"`
+	// ArchivesSeen and ArchivesUnreadable are CUMULATIVE across continuations,
+	// which is why they live on the durable cursor rather than in a local. The
+	// totality judgement is a property of the whole walk: a single attempt may
+	// legitimately see only unreadable artifacts while the unit as a whole has
+	// read plenty.
+	ArchivesSeen       int `json:"archives_seen,omitempty"`
+	ArchivesUnreadable int `json:"archives_unreadable,omitempty"`
 }
 
 // emitCursorPair publishes one emission whose before and after cursors are the
@@ -311,6 +318,28 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return err
 	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
+		// Totality gate. Partial unreadability skips and withholds; TOTAL
+		// unreadability fails. Checked here because this is the single point
+		// every completion path funnels through, including a resume that
+		// re-enters already in phase "done".
+		if cursor.ArchivesUnreadable > 0 && cursor.ArchivesUnreadable == cursor.ArchivesSeen {
+			if client != nil {
+				client.Metrics.RecordArtifactSkipped(
+					claim.Provider, claim.Dataset, githubTestsAllArtifactsUnreadableCause,
+				)
+			}
+			slog.Warn(
+				"every downloaded artifact was unreadable; failing the unit rather than reporting success",
+				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+				"repository", cursor.Repo, "cause", githubTestsAllArtifactsUnreadableCause,
+				"archives", cursor.ArchivesSeen,
+			)
+			return fmt.Errorf(
+				"%w: %s: %d of %d downloaded artifacts could not be opened",
+				ErrGitHubTestsIncomplete, githubTestsAllArtifactsUnreadableCause,
+				cursor.ArchivesUnreadable, cursor.ArchivesSeen,
+			)
+		}
 		cursor.Phase = "done"
 		batch, batchErr := githubTestsFinalMetadataBatch(claim, cursor)
 		if batchErr != nil {
@@ -641,6 +670,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if len(archive) == 0 {
 							continue
 						}
+						cursor.ArchivesSeen++
 						rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 						if parseErr != nil {
 							// An archive that will not open is provider data, not
@@ -649,6 +679,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// keep walking: one bad artifact must not cost the
 							// healthy ones or the whole unit (CHAOS-4177).
 							if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
+								cursor.ArchivesUnreadable++
 								cursor.Incomplete = recordGitHubTestsUnreadableArchive(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								)

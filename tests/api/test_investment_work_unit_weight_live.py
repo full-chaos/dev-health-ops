@@ -111,6 +111,7 @@ def _wui_cols() -> list[str]:
 def _cleanup(sink: Any, org_id: str) -> None:
     for table in (
         "work_unit_investments",
+        "work_unit_repo_effort",
         "work_item_cycle_times",
         "work_item_team_attributions",
     ):
@@ -275,5 +276,204 @@ async def test_explicit_churn_loc_measure_still_available_as_alternative(sink):
         assert big_share > 0.99, (
             f"expected the explicit LOC measure to reproduce the old skew, got {big_share:.1%}"
         )
+    finally:
+        _cleanup(sink, org)
+
+
+def _wure_cols() -> list[str]:
+    return [
+        "work_unit_id",
+        "repo_id",
+        "effort_metric",
+        "effort_value",
+        "allocation_weight",
+        "allocation_source",
+        "computed_at",
+        "org_id",
+    ]
+
+
+def _seed_coverage_fixture(sink: Any, org: str) -> None:
+    """Three work units exercising both coverage bugs codex found in review:
+
+    * wu-single: TeamA, scalar repo (repo_single) -- one row, unambiguous.
+    * wu-multi: TeamB, effort allocated 60/40 across TWO repos via
+      work_unit_repo_effort -- fans out to 2 rows in the coverage query's
+      `wure` LEFT JOIN. A plain count() over those rows double-counts this
+      ONE work unit as two.
+    * wu-none: no team attribution row at all (team unassigned), scalar
+      repo_id=NULL and no allocation row (repo unassigned). The investment
+      dimension's REPO column formats a missing repo as '' (never SQL NULL),
+      so a naive `{repo_col} IS NOT NULL` predicate wrongly marks this row
+      "assigned".
+
+    True (fixed) expectation, weighting each work unit as exactly 1 (COUNT
+    measure): team_coverage = 2/3 (wu-single, wu-multi assigned; wu-none not)
+    and repo_coverage = 2/3 (same two have a real repo; wu-none does not).
+    The OLD buggy coverage query would compute team_coverage = 3/4 (row-count
+    over the fanned wu-multi rows) and repo_coverage = 4/4 = 1.0 (every row,
+    including wu-none's, misread as repo-assigned).
+    """
+    feature = {"Feature Delivery.product": 1.0}
+    repo_single = uuid.uuid4()
+    repo_m1 = uuid.uuid4()
+    repo_m2 = uuid.uuid4()
+
+    single_issue = "SINGLE-1"
+    multi_issue = "MULTI-1"
+    # wu-none has NO issue reference at all -- structural_evidence_json is
+    # empty, so the team-resolution join has nothing to attribute and the
+    # unit resolves to 'unassigned', exactly like a genuinely untracked unit.
+
+    sink.client.insert(
+        "work_unit_investments",
+        [
+            [
+                "wu-single",
+                FROM_TS,
+                TO_TS,
+                repo_single,
+                "churn_loc",
+                50.0,
+                feature,
+                f'{{"issues": ["{single_issue}"]}}',
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-multi",
+                FROM_TS,
+                TO_TS,
+                None,
+                "churn_loc",
+                100.0,
+                feature,
+                f'{{"issues": ["{multi_issue}"]}}',
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-none",
+                FROM_TS,
+                TO_TS,
+                None,
+                "churn_loc",
+                20.0,
+                feature,
+                "{}",
+                COMPUTED_AT,
+                org,
+            ],
+        ],
+        column_names=_wui_cols(),
+    )
+
+    sink.client.insert(
+        "work_unit_repo_effort",
+        [
+            [
+                "wu-multi",
+                repo_m1,
+                "churn_loc",
+                60.0,
+                0.6,
+                "structural",
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-multi",
+                repo_m2,
+                "churn_loc",
+                40.0,
+                0.4,
+                "structural",
+                COMPUTED_AT,
+                org,
+            ],
+        ],
+        column_names=_wure_cols(),
+    )
+
+    sink.write_work_item_team_attributions(
+        [
+            WorkItemTeamAttributionRecord(
+                work_item_id=single_issue,
+                provider="github",
+                source="native_team",
+                is_primary=1,
+                confidence="high",
+                evidence="native_team_key=team-a",
+                computed_at=COMPUTED_AT,
+                repo_id=repo_single,
+                team_id="team-a",
+                team_name="Team A",
+                org_id=org,
+            ),
+            WorkItemTeamAttributionRecord(
+                work_item_id=multi_issue,
+                provider="github",
+                source="native_team",
+                is_primary=1,
+                confidence="high",
+                evidence="native_team_key=team-b",
+                computed_at=COMPUTED_AT,
+                repo_id=repo_m1,
+                team_id="team-b",
+                team_name="Team B",
+                org_id=org,
+            ),
+        ]
+    )
+
+
+async def _resolve_coverage(sink: Any, org: str):
+    from dev_health_ops.api.graphql.context import GraphQLContext
+    from dev_health_ops.api.graphql.models.inputs import (
+        AnalyticsRequestInput,
+        DateRangeInput,
+        DimensionInput,
+        MeasureInput,
+        SankeyRequestInput,
+    )
+    from dev_health_ops.api.graphql.resolvers import analytics as analytics_resolver
+
+    batch = AnalyticsRequestInput(
+        sankey=SankeyRequestInput(
+            path=[DimensionInput.TEAM, DimensionInput.REPO],
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(start_date=START_DATE, end_date=END_DATE),
+            use_investment=True,
+        ),
+        use_investment=True,
+    )
+    context = GraphQLContext(org_id=org, db_url=CLICKHOUSE_URI or "", client=sink)
+    result = await analytics_resolver.resolve_analytics(context, batch)
+    assert result.sankey is not None and result.sankey.coverage is not None, (
+        result.sankey
+    )
+    return result.sankey.coverage
+
+
+async def test_coverage_matches_work_unit_count_not_fanned_rows(sink):
+    """CHAOS-4241 codex finding (HIGH): coverage must count each work unit
+    ONCE, not once per repo-allocation row, and a repo-less unit must never
+    read as repo-assigned. See `_seed_coverage_fixture` for the exact fixture
+    and expected math (2/3 for both cards, not 3/4 / 4/4).
+    """
+    org = f"test-chaos-4241-coverage-{uuid.uuid4()}"
+    try:
+        _seed_coverage_fixture(sink, org)
+
+        coverage = await _resolve_coverage(sink, org)
+
+        assert coverage.team_coverage == pytest.approx(2 / 3, abs=0.01), coverage
+        assert coverage.repo_coverage == pytest.approx(2 / 3, abs=0.01), coverage
+
+        # Guard against the specific regressions codex flagged: neither card
+        # may read as "everything assigned" (the old repo_col IS NOT NULL /
+        # fan-out bugs both trend toward inflated coverage).
+        assert coverage.team_coverage < 0.99, coverage
+        assert coverage.repo_coverage < 0.99, coverage
     finally:
         _cleanup(sink, org)

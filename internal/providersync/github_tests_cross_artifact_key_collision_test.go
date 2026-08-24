@@ -63,7 +63,7 @@ func TestGitHubTestsCrossArtifactSameNameSuiteGetsDistinctNaturalKeys(t *testing
 	if len(suiteRows) != 2 {
 		t.Fatalf("test_suite_results rows=%d, want 2 (one per artifact)", len(suiteRows))
 	}
-	if suiteRows[0].SuiteID == "" || suiteRows[0].SuiteID == suiteRows[1].SuiteID {
+	if suiteRows[0].SuiteID == "" || suiteRows[1].SuiteID == "" || suiteRows[0].SuiteID == suiteRows[1].SuiteID {
 		t.Fatalf("CHAOS-4190: suite ids=%q,%q from two DISTINCT artifacts of the same run collided; "+
 			"WriteEffect's recordGitHubTestsKey rejects the second as a duplicate",
 			suiteRows[0].SuiteID, suiteRows[1].SuiteID)
@@ -73,7 +73,7 @@ func TestGitHubTestsCrossArtifactSameNameSuiteGetsDistinctNaturalKeys(t *testing
 	if len(caseRows) != 2 {
 		t.Fatalf("test_case_results rows=%d, want 2 (one per artifact)", len(caseRows))
 	}
-	if caseRows[0].CaseID == "" || caseRows[0].CaseID == caseRows[1].CaseID {
+	if caseRows[0].CaseID == "" || caseRows[1].CaseID == "" || caseRows[0].CaseID == caseRows[1].CaseID {
 		t.Fatalf("CHAOS-4190: case ids=%q,%q from two DISTINCT artifacts of the same run collided",
 			caseRows[0].CaseID, caseRows[1].CaseID)
 	}
@@ -179,7 +179,7 @@ func TestGitHubTestsCrossArtifactSameReportPathCoverageGetsDistinctSnapshotIDs(t
 	if len(rowsA.Coverage) != 1 || len(rowsB.Coverage) != 1 {
 		t.Fatalf("coverage rows A=%+v B=%+v", rowsA.Coverage, rowsB.Coverage)
 	}
-	if rowsA.Coverage[0].SnapshotID == "" || rowsA.Coverage[0].SnapshotID == rowsB.Coverage[0].SnapshotID {
+	if rowsA.Coverage[0].SnapshotID == "" || rowsB.Coverage[0].SnapshotID == "" || rowsA.Coverage[0].SnapshotID == rowsB.Coverage[0].SnapshotID {
 		t.Fatalf("CHAOS-4190: LCOV coverage snapshot ids=%q,%q from two DISTINCT artifacts at the same report path collided",
 			rowsA.Coverage[0].SnapshotID, rowsB.Coverage[0].SnapshotID)
 	}
@@ -201,7 +201,7 @@ func TestGitHubTestsCrossArtifactSameReportPathCoberturaGetsDistinctSnapshotIDs(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rowA.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
+	if rowA.SnapshotID == "" || rowB.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
 		t.Fatalf("CHAOS-4190: Cobertura coverage snapshot ids=%q,%q from two DISTINCT artifacts at the same report path collided",
 			rowA.SnapshotID, rowB.SnapshotID)
 	}
@@ -224,7 +224,7 @@ func TestGitLabTestsCrossJobSameReportPathCoverageGetsDistinctSnapshotIDs(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rowA.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
+	if rowA.SnapshotID == "" || rowB.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
 		t.Fatalf("CHAOS-4190: GitLab coverage snapshot ids=%q,%q from two DISTINCT jobs at the same report path collided",
 			rowA.SnapshotID, rowB.SnapshotID)
 	}

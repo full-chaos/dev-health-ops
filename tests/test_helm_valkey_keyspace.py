@@ -85,3 +85,33 @@ def test_explicit_external_valkey_uri_suppresses_the_derived_one() -> None:
     )
     assert "VALKEY_URI" not in data
     assert "REDIS_URL" not in data
+
+
+def test_api_pod_resolves_the_same_shared_config_map() -> None:
+    """The API (REDIS_URL reader) and the Go sync worker (VALKEY_URI reader)
+    must both take their URL from the one ConfigMap -- neither pins a
+    conflicting value in its own env."""
+    docs = _render()
+    api = next(
+        doc
+        for doc in docs
+        if doc.get("kind") == "Deployment"
+        and doc["metadata"]["name"] == "keyspace-contract-dev-health-api"
+    )
+    config_name = next(
+        doc["metadata"]["name"]
+        for doc in docs
+        if doc.get("kind") == "ConfigMap"
+        and doc["metadata"]["name"].endswith("-config")
+    )
+    container = api["spec"]["template"]["spec"]["containers"][0]
+    sources = [
+        ref["configMapRef"]["name"]
+        for ref in container.get("envFrom", [])
+        if "configMapRef" in ref
+    ]
+    assert config_name in sources
+    assert all(
+        env["name"] not in {"REDIS_URL", "VALKEY_URI"}
+        for env in container.get("env", [])
+    )

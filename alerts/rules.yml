@@ -485,13 +485,11 @@ groups:
       # inventory continued", internal/providersync/github_tests_chunked_route.go),
       # which carries `repository`, `run`, and `unit`. A unit-level failure
       # naming its own source on the sync board when EVERY artifact in a
-      # walk is unreadable is tracked separately under CHAOS-4185 and is NOT
-      # implemented as of this alert shipping -- verified against
-      # internal/providersync source, which the ticket's own "what exists"
-      # section overstated (the doc at
-      # docs/contribute/architecture/go-worker-runtime.md correctly calls it
-      # deferred). Do not point operators at a sync-board cause that does
-      # not exist yet; once CHAOS-4185 lands, update this annotation.
+      # walk is unreadable is a SEPARATE signal, implemented under
+      # CHAOS-4185: that condition fails the sync_run_unit closed with its
+      # own `all_artifacts_unreadable` category, and the row names the
+      # repository directly -- this alert's own PARTIAL-condition metric
+      # still cannot.
       - alert: ProviderArtifactSkipsSustained
         expr: |
           sum by (provider, dataset) (
@@ -518,9 +516,13 @@ groups:
             repository/run/unit label either. Localize from the per-skip
             WARNING log line instead, which carries `repository`, `run`,
             and `unit`. A unit-level failure naming its own source on the
-            sync board when EVERY artifact in a walk is unreadable is
-            tracked separately under CHAOS-4185 and is NOT implemented yet
-            -- do not expect a sync-board cause for this alert today. The
+            sync board -- when EVERY artifact in a walk is unreadable, not
+            just a sustained partial share -- is a SEPARATE signal
+            (CHAOS-4185): that unit fails closed with its own
+            `all_artifacts_unreadable` category and its sync_run_units row
+            names the repository directly, so a sync-board cause IS
+            available for that total condition even though this alert's own
+            metric still cannot say which repository is affected. The
             metric's `reason` label
             (unreadable_archive / artifact_unavailable / other) narrows the
             failure shape.

@@ -269,6 +269,7 @@ type Metrics struct {
 	resumeReanchor             map[string]uint64
 	unitTerminalWithRows       map[string]uint64
 	incidentEntitlementRefused map[string]uint64
+	allArtifactsUnreadable     map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -283,6 +284,7 @@ func NewMetrics() *Metrics {
 		resumeReanchor:             map[string]uint64{},
 		unitTerminalWithRows:       map[string]uint64{},
 		incidentEntitlementRefused: map[string]uint64{},
+		allArtifactsUnreadable:     map[string]uint64{},
 	}
 }
 
@@ -589,6 +591,20 @@ func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
 	m.unitTerminalWithRows[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// RecordAllArtifactsUnreadable counts ONE provider unit that failed because
+// every cicd/tests artifact it observed was unreadable (CHAOS-4185). The
+// condition terminalizes on its first attempt (deterministicTerminalCategory
+// maps its sentinel to a durable category), so this fires exactly once per
+// affected unit rather than once per retry.
+func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allArtifactsUnreadable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
 // writeProviderDatasetCounter renders one provider:dataset keyed counter
 // family in stable key order.
 func writeProviderDatasetCounter(
@@ -768,9 +784,16 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
-	return writeProviderDatasetReasonCounter(
+	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_incident_entitlement_refused_total",
 		"Provider units refused by the execution-time canonical-incident entitlement re-check, by bounded provider, dataset, and seam.",
 		"seam", m.incidentEntitlementRefused,
+	); err != nil {
+		return err
+	}
+	return writeProviderDatasetCounter(
+		writer, "dev_health_provider_all_artifacts_unreadable_total",
+		"Provider units failed because every cicd/tests artifact observed was unreadable, by bounded provider and dataset.",
+		m.allArtifactsUnreadable,
 	)
 }

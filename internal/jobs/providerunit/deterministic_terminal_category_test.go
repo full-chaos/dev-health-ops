@@ -71,6 +71,17 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			category: FeatureDisabledCategory,
 		},
 		{
+			// Deterministic given the source's current state: a proxy or
+			// auth edge answering every artifact request with a 2xx error
+			// document produces the identical total failure on every
+			// attempt, so retrying just re-observes it five times before
+			// burying the specific cause under provider_unit_exhausted
+			// (CHAOS-4185).
+			name:     "github tests all artifacts unreadable",
+			err:      providersync.ErrGitHubTestsAllArtifactsUnreadable,
+			category: AllArtifactsUnreadableCategory,
+		},
+		{
 			// Already non-retryable at the HTTP layer; the unit handler was
 			// still spending four more executions against a dead credential.
 			name:     "authentication",

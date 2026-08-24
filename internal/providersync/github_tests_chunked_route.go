@@ -56,6 +56,91 @@ type githubTestsChunkCursor struct {
 	// Repo lets the terminal `done` resume publish completion metadata without
 	// re-fetching the repository object.
 	Repo string `json:"repo,omitempty"`
+	// ArchivesSeen and ArchivesUnreadable feed the total-unreadability gate
+	// (CHAOS-4185). They are pointers so a cursor written BEFORE this pair
+	// existed decodes them as UNKNOWN (nil), never zero: reading an absent
+	// counter as zero was the exact false-positive a reverted CHAOS-4177
+	// attempt shipped -- a walk spanning the deploy would restore 0/0 after
+	// several real successes, then fail on the very next ordinary skip. A
+	// fresh walk (empty resume cursor) initializes both to a known 0 in
+	// decodeGitHubTestsChunkCursor; once a cursor decodes them as unknown,
+	// every subsequent cursor derived from it stays unknown for the rest of
+	// that walk's lifetime -- see bumpGitHubTestsArchiveCounter.
+	ArchivesSeen       *int `json:"archives_seen,omitempty"`
+	ArchivesUnreadable *int `json:"archives_unreadable,omitempty"`
+}
+
+// bumpGitHubTestsArchiveCounter returns a NEW pointer one greater than the
+// input, or nil if the input is nil. It never mutates through the input
+// pointer: githubTestsChunkCursor is copied by value throughout this route
+// (before := cursor, after := cursor), and mutating *counter in place would
+// silently corrupt every earlier copy that shares the same pointer, since a
+// struct copy duplicates the pointer, not its target.
+func bumpGitHubTestsArchiveCounter(counter *int) *int {
+	if counter == nil {
+		return nil
+	}
+	next := *counter + 1
+	return &next
+}
+
+// githubTestsAllArtifactsUnreadableFloor is the minimum number of archives
+// this walk must have observed before total unreadability is treated as
+// evidence of a systematic condition rather than ordinary single-item noise.
+// A repository with one workflow run and one corrupt archive would otherwise
+// satisfy unreadable==seen at 1/1 and fail a healthy, quiet repository -- a
+// regression against the incident CHAOS-4177 fixed (CHAOS-4185).
+const githubTestsAllArtifactsUnreadableFloor = 2
+
+// ErrGitHubTestsAllArtifactsUnreadable narrows ErrGitHubTestsIncomplete to
+// the case where every archive this walk observed failed to read, on a
+// sample large enough to rule out ordinary single-item noise. Unlike
+// ErrGitHubTestsArchiveUnreadable / ErrGitHubTestsArtifactUnavailable, which
+// each skip ONE bad artifact and keep walking, this means the SOURCE itself
+// -- a proxy or auth edge answering every artifact request with a 2xx error
+// document -- produced a unit that ingested nothing and would repeat the
+// same outcome forever. It must terminalize on the FIRST attempt: retrying
+// only re-observes the identical total failure, burning the unit's retry
+// budget before finally recording the generic provider_unit_exhausted
+// category and losing the specific cause (CHAOS-4185).
+var ErrGitHubTestsAllArtifactsUnreadable = fmt.Errorf("%w: all observed artifacts unreadable", ErrGitHubTestsIncomplete)
+
+// githubTestsCheckAllArtifactsUnreadable evaluates the totality gate against
+// a fully-formed cursor. It is called from exactly one place --
+// emitFinalMetadata, which serves both the natural end of a walk and a
+// `done`-cursor resume -- so a totality failure fires at most once per walk
+// and always on the FIRST attempt that reaches it, never once per retry.
+//
+// The counters are UNKNOWN (nil) whenever this cursor -- or the cursor it
+// resumed from -- was ever decoded without them, or a genuine artifacts-phase
+// re-anchor replayed a page this walk had already partly counted. Skipping
+// the gate on UNKNOWN is deliberate: a walk spanning the deploy, or one whose
+// counters a replay can no longer be trusted to represent, is then bounded
+// and self-healing rather than a false failure.
+//
+// Deliberately does NOT record the RecordAllArtifactsUnreadable metric: that
+// happens in providerunit.Handler.observeAllArtifactsUnreadable, ONLY after
+// the durable Fail transition succeeds. Recording it here, before the error
+// even leaves this route, would double-count if Repository.Fail itself
+// errors and a later attempt re-detects the identical condition (CHAOS-4185
+// codex round 1) -- the same reasoning providerunit's
+// observeTerminalWithCommittedRows already documents for CHAOS-4130's row
+// counter.
+func githubTestsCheckAllArtifactsUnreadable(cursor githubTestsChunkCursor, claim Claim) error {
+	if cursor.ArchivesSeen == nil || cursor.ArchivesUnreadable == nil {
+		return nil
+	}
+	seen, unreadable := *cursor.ArchivesSeen, *cursor.ArchivesUnreadable
+	if seen < githubTestsAllArtifactsUnreadableFloor || unreadable != seen {
+		return nil
+	}
+	slog.Error(
+		"provider unit failing: every observed cicd artifact was unreadable",
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"org", claim.OrgID, "sync_run_id", claim.SyncRunID, "unit", claim.ID,
+		"repository", cursor.Repo, "seen", seen, "unreadable", unreadable,
+	)
+	return fmt.Errorf("%w: seen=%d unreadable=%d", ErrGitHubTestsAllArtifactsUnreadable, seen, unreadable)
 }
 
 // emitCursorPair publishes one emission whose before and after cursors are the
@@ -247,15 +332,23 @@ const (
 // Failing here cost one of the unit's five attempts per occurrence, which is
 // why a deploy or any other gap used to burn attempts on exactly the busiest
 // repositories -- the ones whose pages shift most (CHAOS-4177).
+// The bool return reports whether this call is a GENUINE re-anchor (the
+// stored index no longer addresses an item, so the page is about to be
+// re-walked from 0) as opposed to a fresh page never resumed at all. The
+// artifacts phase needs this distinction: a genuine re-anchor re-downloads
+// and re-counts every artifact on the page, including ones an earlier
+// attempt already reflected in ArchivesSeen/ArchivesUnreadable, which can
+// otherwise cross the totality floor on a truly small sample (CHAOS-4185
+// codex round 1) -- see the caller in the artifacts phase below.
 func githubTestsResumeStart(
 	cursor githubTestsChunkCursor,
 	page providerfoundation.PageVisit,
 	client *providerfoundation.HTTPClient,
 	claim Claim,
 	phase string,
-) int {
+) (int, bool) {
 	if cursor.NextURL != page.CursorBefore {
-		return 0
+		return 0, false
 	}
 	// A cursor is never persisted with Index == len(page.Items): both item
 	// write sites (the runs loop and its artifacts twin) assign index+1 and
@@ -267,7 +360,7 @@ func githubTestsResumeStart(
 	// whatever the page still held, silently. Index 0 is always a legitimate
 	// start, including on an empty page.
 	if cursor.Index == 0 || cursor.Index < len(page.Items) {
-		return cursor.Index
+		return cursor.Index, false
 	}
 	if client != nil {
 		client.Metrics.RecordResumeReanchor(claim.Provider, claim.Dataset, phase)
@@ -278,18 +371,32 @@ func githubTestsResumeStart(
 		"repository", cursor.Repo, "phase", phase,
 		"stored_index", cursor.Index, "page_items", len(page.Items),
 	)
-	return 0
+	return 0, true
 }
 
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	if strings.TrimSpace(raw) == "" {
-		return githubTestsChunkCursor{Phase: "runs"}, nil
+		// A brand-new walk starts the totality counters at a KNOWN zero: only
+		// a cursor that predates these fields decodes them as unknown below.
+		// Two separate variables: the two fields must never alias one int.
+		seenZero, unreadableZero := 0, 0
+		return githubTestsChunkCursor{
+			Phase: "runs", ArchivesSeen: &seenZero, ArchivesUnreadable: &unreadableZero,
+		}, nil
 	}
 	var cursor githubTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
 		(cursor.Phase != "runs" && cursor.Phase != "artifacts" && cursor.Phase != "done") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 {
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 ||
+		// The counter pair is either both known or both unknown, never split:
+		// a cursor carrying exactly one is corrupt, not a legacy shape (a
+		// legacy cursor predates the field entirely, so it is missing BOTH).
+		(cursor.ArchivesSeen == nil) != (cursor.ArchivesUnreadable == nil) ||
+		(cursor.ArchivesSeen != nil && *cursor.ArchivesSeen < 0) ||
+		(cursor.ArchivesUnreadable != nil && *cursor.ArchivesUnreadable < 0) ||
+		(cursor.ArchivesSeen != nil && cursor.ArchivesUnreadable != nil &&
+			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
 	return cursor, nil
@@ -386,6 +493,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
+		// The totality gate runs here, not inline in the artifacts loop below,
+		// so it evaluates exactly once per walk regardless of which of the two
+		// callers below reached it -- the natural end of pagination, or a
+		// resume that landed directly on an already-`done` cursor.
+		if err := githubTestsCheckAllArtifactsUnreadable(cursor, claim); err != nil {
+			return err
+		}
 		batch, batchErr := githubTestsFinalMetadataBatch(claim, cursor)
 		if batchErr != nil {
 			return batchErr
@@ -464,7 +578,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 			cursor.RunPages++
 		}
-		start := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
 			before := cursor
 			var run gitHubWorkflowRunPayload
@@ -643,7 +757,24 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 				cursor.ArtifactPages++
 			}
-			start := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
+			start, reanchored := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
+			if reanchored {
+				// A genuine re-anchor re-walks this WHOLE page from index 0,
+				// which re-downloads and re-counts every artifact on it --
+				// including ones an earlier attempt already reflected in
+				// these counters. That can cross the totality floor on a
+				// truly small real sample (e.g. a genuine 1-artifact repo
+				// whose page shrank under a resume): the SAME artifact would
+				// be counted twice, satisfying seen>=2 with only one
+				// distinct observation (CHAOS-4185 codex round 1).
+				//
+				// Poisoning to UNKNOWN here is the same trade-off already
+				// accepted for a legacy pre-deploy cursor: bounded and
+				// self-healing (the very next fresh walk starts with known
+				// counters again), rather than risk a false positive from
+				// state a replay can no longer be trusted to represent.
+				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
 				var run gitHubWorkflowRunPayload
@@ -695,7 +826,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue
 						}
-						archive, used, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
+						archive, used, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
 						cursor.Requests += used
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -704,17 +835,66 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// container is skipped below, and keep walking:
 							// one bad artifact must not cost the healthy ones
 							// or the whole unit (CHAOS-4191, extending
-							// CHAOS-4177).
+							// CHAOS-4177). Counted as SEEN here (not before
+							// the call): a fetch that never even reached this
+							// branch commits nothing, so nothing should be
+							// attributed to the totality denominator either.
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactUnavailable) {
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactUnavailableCause,
 								)
+								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
+								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
 							}
 							return downloadErr
 						}
+						if notFound {
+							// A ROUTINE provider-side disappearance: the
+							// artifact expired or was deleted between listing
+							// and download (GitHub answers 404/410 for this,
+							// a documented, ordinary outcome -- see
+							// downloadGitHubTestsArtifact's doc comment).
+							// Provider-side ephemeral state is not evidence
+							// about whether OUR channel to read artifacts is
+							// broken, so it is excluded from totality
+							// accounting entirely -- neither seen nor
+							// unreadable -- matching this route's
+							// pre-CHAOS-4185 disposition for this exact case.
+							// Without this exclusion, two artifacts that
+							// simply expired between listing and download
+							// would satisfy the totality floor and
+							// terminalize a healthy unit (CHAOS-4185 codex
+							// round 3).
+							continue
+						}
+						// Counted as SEEN the moment a real read is attempted
+						// AND the artifact is confirmed present -- so every
+						// downstream disposition (healthy, unreadable, or a
+						// fatal parse bound) is reflected in the denominator
+						// the totality gate divides by, while a routine
+						// not-found above never was (CHAOS-4185).
+						cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 						if len(archive) == 0 {
+							// A 2xx download with a truly empty body is not a
+							// legitimate GitHub response (a real artifact
+							// either has bytes or the download 404s/410s,
+							// handled above); it is the same "answers every
+							// request with an empty document" edge condition
+							// the totality gate exists to catch, just without
+							// even a malformed payload to reject. Recording
+							// it as unreadable -- exactly like a container
+							// that downloaded but would not open -- closes
+							// the gap where a broken proxy returning empty
+							// bodies for every artifact would otherwise
+							// finalize the unit as healthy with zero report
+							// rows (CHAOS-4185 codex round 2).
+							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+								githubTestsUnreadableArchiveCause,
+							)
+							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
 						rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
@@ -729,6 +909,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsUnreadableArchiveCause,
 								)
+								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
 							}
 							return fmt.Errorf("%w: artifact parse failed: %v", ErrGitHubTestsIncomplete, parseErr)

@@ -409,7 +409,76 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # through a fake row scanner and a captured slog handler; the end-to-end
     # reachability proof lives in cmd/dev-health-worker and does not move
     # this count. Integration-tagged stays 114.
-    assert len(expected_provider_tests) == 1017
+    #
+    # CHAOS-4185 then added 11 more ordinary top-level providersync tests
+    # (1017 -> 1028) in github_tests_all_artifacts_unreadable_test.go: the
+    # totality-fires and below-the-floor pair, the partial-degradation
+    # non-firing control, four decode-invariant tests for the new
+    # ArchivesSeen/ArchivesUnreadable cursor counters, the legacy-cursor
+    # (pre-deploy, unknown counters) non-firing test, the cross-continuation
+    # accumulation test, the done-resume no-reevaluate/no-double-count test,
+    # and the re-anchor-replay equality-preservation test. All eleven drive
+    # the chunked route through in-memory HTTP doers and touch no database,
+    # so the integration-tagged count stays 114. (The reachability proof
+    # through the production handler lives in cmd/dev-health-worker and does
+    # not move this count, matching CHAOS-4219's precedent above.)
+    #
+    # Its review round then added 1 more ordinary test (1028 -> 1029): the
+    # structured-log-fields pin for the totality gate's slog.Error line
+    # (org/dataset/sync_run_id/unit/repository/seen/unreadable), asserted on
+    # the captured record's attributes rather than rendered text -- the same
+    # observability standing order CHAOS-4194's membership-skip log tests
+    # apply. Drives the chunked route through an in-memory HTTP doer and
+    # touches no database, so the integration-tagged count stays 114.
+    #
+    # A first codex adversarial round (HIGH) then found a re-anchor whole-page
+    # replay could re-download and re-count an artifact an earlier attempt
+    # already reflected in ArchivesSeen/ArchivesUnreadable, crossing the
+    # totality floor on a genuinely single real unreadable artifact. The fix
+    # (a genuine artifacts-phase re-anchor poisons the totality counters to
+    # UNKNOWN for the rest of the walk) replaced the prior
+    # TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay test in
+    # place (net 0) and added ONE new control test, +1 (1029 -> 1030):
+    # TestGitHubTestsAllArtifactsUnreadableOrdinaryResumeKeepsCountersKnown,
+    # proving an ordinary (non-shrinking) resume keeps its known counters and
+    # still detects a genuine totality failure -- i.e. the fix poisons ONLY on
+    # a genuine re-anchor, not on every resume. Both drive the chunked route
+    # through in-memory HTTP doers and touch no database, so the
+    # integration-tagged count stays 114. (The same round's two MEDIUM
+    # findings -- moving the metric to only fire after providerunit's durable
+    # Fail succeeds, and triaging the "malformed cursor" finding as the
+    # ticket's own already-accepted bypass trade-off, not a new defect -- add
+    # tests in internal/jobs/providerunit, a package this providersync-scoped
+    # census does not track.)
+    #
+    # A second codex round (MEDIUM) then found a 2xx download with a TRULY
+    # EMPTY body silently continued without incrementing ArchivesUnreadable
+    # or recording any incomplete evidence -- ArchivesSeen grew while
+    # ArchivesUnreadable stayed 0, so the totality gate never fired and a
+    # broken proxy/edge answering every artifact with an empty body could
+    # finalize the unit as healthy having ingested zero report rows. +1
+    # ordinary test (1030 -> 1031):
+    # TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable. Drives the chunked
+    # route through an in-memory HTTP doer and touches no database, so the
+    # integration-tagged count stays 114.
+    #
+    # A third (final) codex round then found that fix regressed a ROUTINE
+    # provider condition: downloadGitHubTestsArtifact returns the identical
+    # (nil-archive, no-error) shape for BOTH a genuine 2xx-empty body and an
+    # ordinary 404/410 (an artifact that expired or was deleted between
+    # listing and download, which GitHub documents as a normal response) --
+    # so two routine vanished artifacts would satisfy the totality floor and
+    # terminalize a healthy unit. The fix gives the downloader a `notFound`
+    # return so the chunked route can exclude a routine 404/410 from totality
+    # accounting entirely (neither seen nor unreadable), while a genuinely
+    # empty 2xx body still counts. +2 ordinary tests (1031 -> 1033):
+    # TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality (404 and 410,
+    # subtests) and TestGitHubTestsMixedNotFoundAndUnreadableCountsOnlyTheObserved
+    # (one not-found artifact alongside two genuinely unreadable ones must
+    # still fire on exactly the two observed). Both drive the chunked route
+    # through in-memory HTTP doers and touch no database, so the
+    # integration-tagged count stays 114.
+    assert len(expected_provider_tests) == 1033
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -426,7 +495,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1017
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1033
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -487,7 +556,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1017
+    assert len(selected_tests) == len(set(selected_tests)) == 1033
     assert set(selected_tests) == expected_tests
 
 

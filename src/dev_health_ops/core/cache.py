@@ -73,6 +73,22 @@ assert ORG_CACHE_EPOCH_TTL_SECONDS >= (
 )
 
 
+def epoch_scoped(cache: TTLCache) -> TTLCache:
+    """Declare a cache as epoch-scoped at CONSTRUCTION time.
+
+    Refuses an entry TTL above ``EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS`` once,
+    where the TTL is decided (``api/main.py``), instead of re-checking a
+    static number on every request in ``epoch_cache_key``.
+    """
+    if cache.ttl_seconds > EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS:
+        raise ValueError(
+            f"epoch-scoped cache ttl {cache.ttl_seconds}s exceeds "
+            f"{EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS}s; the epoch key expiry "
+            "margin would no longer hold"
+        )
+    return cache
+
+
 def org_cache_epoch_key(org_id: str) -> str:
     """The Valkey key holding an organization's cache epoch.
 

@@ -4,7 +4,7 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
-from dev_health_ops.core.cache import EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS, TTLCache
+from dev_health_ops.core.cache import TTLCache
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.utils.datetime import utc_today
 
@@ -45,13 +45,9 @@ def epoch_cache_key(
     One backend GET reads the epoch; a bump by the Go finalize (or by
     ``core.cache_invalidation``) changes the key, so the next read misses
     and recomputes instead of serving the pre-finalize entry until TTL.
+    The entry-TTL ceiling is enforced once at construction
+    (``core.cache.epoch_scoped``), not here.
     """
-    if cache.ttl_seconds > EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS:
-        raise ValueError(
-            f"epoch-scoped cache ttl {cache.ttl_seconds}s exceeds "
-            f"{EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS}s; the epoch key expiry "
-            "margin would no longer hold"
-        )
     scoped = {"_cache_epoch": cache.org_epoch(org_id)}
     if extra:
         scoped = {**extra, **scoped}

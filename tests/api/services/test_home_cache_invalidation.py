@@ -184,8 +184,14 @@ async def test_memory_fallback_reads_the_same_key_as_epoch_zero(monkeypatch):
 
 
 def test_epoch_scoped_cache_refuses_a_ttl_that_breaks_the_epoch_margin():
-    from dev_health_ops.core.cache import EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS
+    """The ceiling fires once, at construction (api/main.py), not per read."""
+    from dev_health_ops.core.cache import (
+        EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS,
+        epoch_scoped,
+    )
 
     too_long = TTLCache(ttl_seconds=EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS + 1)
     with pytest.raises(ValueError):
-        epoch_cache_key(too_long, "home", ORG, _filters())
+        epoch_scoped(too_long)
+    fits = TTLCache(ttl_seconds=EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS)
+    assert epoch_scoped(fits) is fits

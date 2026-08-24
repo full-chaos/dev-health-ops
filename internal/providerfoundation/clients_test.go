@@ -397,3 +397,37 @@ func TestJiraCanonicalKeysOutrankTheirAliases(t *testing.T) {
 		t.Fatalf("alias displaced the canonical base_url: host = %q", doer.url.Host)
 	}
 }
+
+// TestJiraBaseURLShadowingMatchesPython pins the one case where "check the
+// secret, then the config column" and Python's merged mapping disagree. Python
+// builds {**config, **decrypted} before reading, so a decrypted key that
+// exists but is empty HIDES the config value of the same name rather than
+// deferring to it. Falling through here would point the probe at a different
+// host than the sync uses — with the token attached.
+func TestJiraBaseURLShadowingMatchesPython(t *testing.T) {
+	credential := testCredential("jira", map[string]string{
+		"email":      "dev@acme.test",
+		"api_token":  "jira-token",
+		"base_url":   "",
+		"server_url": "https://new.atlassian.net",
+	})
+	credential.Config = map[string]string{"base_url": "https://old.atlassian.net"}
+
+	if got := jiraCredentialBaseURL(credential); got != "https://new.atlassian.net" {
+		t.Fatalf("jiraCredentialBaseURL = %q, want the server_url alias, not the shadowed config value", got)
+	}
+}
+
+// TestJiraBaseURLFallsBackToConfigWhenNoSecretExists keeps the shadowing rule
+// from swallowing the ordinary case: a config-only base URL is still read.
+func TestJiraBaseURLFallsBackToConfigWhenNoSecretExists(t *testing.T) {
+	credential := testCredential("jira", map[string]string{
+		"email":     "dev@acme.test",
+		"api_token": "jira-token",
+	})
+	credential.Config = map[string]string{"url": "https://config.atlassian.net"}
+
+	if got := jiraCredentialBaseURL(credential); got != "https://config.atlassian.net" {
+		t.Fatalf("jiraCredentialBaseURL = %q, want the config value", got)
+	}
+}

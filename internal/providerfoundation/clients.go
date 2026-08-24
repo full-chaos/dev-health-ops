@@ -178,12 +178,22 @@ func firstConfiguredSecret(credential Credential, names []string) secrets.Value 
 	return secrets.Value{}
 }
 
-// jiraCredentialBaseURL mirrors Python's jira_credentials_from_mapping: the
-// canonical key wins, then the aliases the web credential surfaces wrote.
+// jiraCredentialBaseURL mirrors Python's jira_credentials_from_mapping over
+// the merged mapping _credential_mapping builds: the canonical key wins, then
+// the aliases the web credential surfaces wrote.
+//
+// A decrypted key that is PRESENT shadows the config column even when it is
+// empty, because Python merges `{**config, **decrypted}` before reading — so
+// an empty stored base_url hides a config base_url there, and falling through
+// to the config value here would send the token to a different host than the
+// sync uses.
 func jiraCredentialBaseURL(credential Credential) string {
 	for _, name := range jiraBaseURLAliases {
-		if value, ok := credential.Secret(name); ok && value.Configured() {
-			return value.Reveal()
+		if value, ok := credential.Secret(name); ok {
+			if value.Configured() {
+				return value.Reveal()
+			}
+			continue
 		}
 		if value := strings.TrimSpace(credential.Config[name]); value != "" {
 			return value

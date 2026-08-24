@@ -29,6 +29,7 @@ from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
     ClickHouseTeamAdminService,
     member_facets,
 )
+from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 from .common import get_clickhouse_store, get_session
@@ -283,13 +284,10 @@ async def discover_team_members(
             team_key=provider_team_id,
         )
     else:
-        email = decrypted.get("email")
-        api_token = decrypted.get("api_token") or decrypted.get("token")
-        jira_config_url = config.get("url")
-        jira_url = jira_config_url if isinstance(jira_config_url, str) else None
-        if jira_url is None:
-            decrypted_url = decrypted.get("url")
-            jira_url = decrypted_url if isinstance(decrypted_url, str) else None
+        jira_credentials = jira_credentials_from_mapping({**config, **decrypted})
+        email = jira_credentials.email if jira_credentials else None
+        api_token = jira_credentials.api_token if jira_credentials else None
+        jira_url = jira_credentials.base_url if jira_credentials else None
         project_key = provider_team_id
         if ":" in project_key:
             project_key = project_key.split(":", 1)[1]
@@ -460,13 +458,10 @@ async def infer_team_members_from_jira_activity(
         )
 
     config: dict[str, Any] = getattr(credential, "config") or {}
-    email = decrypted.get("email")
-    api_token = decrypted.get("api_token") or decrypted.get("token")
-    jira_config_url = config.get("url")
-    jira_url = jira_config_url if isinstance(jira_config_url, str) else None
-    if jira_url is None:
-        decrypted_url = decrypted.get("url")
-        jira_url = decrypted_url if isinstance(decrypted_url, str) else None
+    jira_credentials = jira_credentials_from_mapping({**config, **decrypted})
+    email = jira_credentials.email if jira_credentials else None
+    api_token = jira_credentials.api_token if jira_credentials else None
+    jira_url = jira_credentials.base_url if jira_credentials else None
     if not email or not api_token or not jira_url:
         raise HTTPException(
             status_code=400,

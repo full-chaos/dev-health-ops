@@ -27,6 +27,7 @@ from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.credentials.resolver import (
     github_credentials_from_mapping,
     gitlab_credentials_from_mapping,
+    jira_credentials_from_mapping,
 )
 from dev_health_ops.exceptions import (
     APIException,
@@ -714,16 +715,19 @@ async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
 async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    email = _string_value(creds.get("email"))
-    api_token = _string_value(creds.get("token")) or _string_value(
-        creds.get("api_token")
-    )
-    base_url = _string_value(creds.get("url")) or _string_value(creds.get("base_url"))
-
-    if email is None or api_token is None or base_url is None:
+    # Read through the same resolver the sync uses (CHAOS-4224). Hand-rolling
+    # the lookup here is how this endpoint came to accept `token` while the
+    # runtime did not: a credential passed its own connection test and then
+    # authenticated nothing.
+    jira_credentials = jira_credentials_from_mapping(creds)
+    if jira_credentials is None:
         return False, {
             "error": "Missing required credentials (email, api_token, base_url)"
         }
+
+    email = jira_credentials.email
+    api_token = jira_credentials.api_token
+    base_url = jira_credentials.base_url
 
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:

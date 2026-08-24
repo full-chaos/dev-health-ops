@@ -4,7 +4,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FIXTURE_PATH = (
-    _REPO_ROOT / "internal" / "providersync" / "repository_postgres_integration_test.go"
+    _REPO_ROOT / "internal" / "testsupport" / "providersyncschema" / "schema.go"
 )
 
 
@@ -25,10 +25,10 @@ def _fixture_function(fixture_source: str) -> str:
     a false match in an unrelated test's ad-hoc SQL from passing this check
     for the wrong reason.
     """
-    start = fixture_source.index("func createProviderSyncFixture(")
+    start = fixture_source.index("func Create(")
     # The function ends at the closing brace of the `for _, statement := range`
     # loop's enclosing function -- the next top-level `func ` marks that.
-    end = fixture_source.index("\nfunc ", start + 1)
+    end = len(fixture_source)
     return fixture_source[start:end]
 
 

@@ -140,6 +140,11 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 		// this mapper at all.
 		providersync.ErrGitHubTestsIncomplete,
 		providersync.ErrGitHubTestsArtifactUnavailable,
+		// An entitlement that could not be READ is an infrastructure fault,
+		// not a policy decision: it must retry, and must never be swept into
+		// feature_disabled with the sibling sentinel it fails closed beside.
+		providersync.ErrIncidentEntitlementUnavailable,
+		fmt.Errorf("%w: %w", providersync.ErrIncidentEntitlementUnavailable, errors.New("pool exhausted")),
 	} {
 		if category, ok := deterministicTerminalCategory(err); ok {
 			t.Errorf("deterministicTerminalCategory(%v) = (%q, true), want retryable",

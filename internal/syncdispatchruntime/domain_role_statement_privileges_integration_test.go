@@ -574,16 +574,17 @@ CREATE TABLE sync_run_reference_discoveries (
 // suite, and it is what keeps the CHAOS-4209 widening from degrading into
 // "the domain role may do whatever it likes to these tables".
 //
-// Four tables became dual-grant or gained a verb. For each, the manifest
+// Six tables became dual-grant or gained a verb. For each, the manifest
 // deliberately withheld something, and a grant list is only a boundary if the
 // withheld verb is still refused. Asserting the PERMITTED half alone would
 // pass just as happily against GRANT ALL -- so every row here names a verb no
 // production statement issues, and every one must still raise 42501.
 //
-// DELETE is the verb chosen throughout because it is the destructive one and
-// because no native sync-dispatch statement deletes from any of these: the
-// discovery ledger and the post-dispatch ledger are durable evidence, and
-// job_runs / backfill_jobs rows outlive the run that terminalized them.
+// Every table the change touches appears, not just the ones that were new.
+// An earlier revision covered only the four tables that gained their FIRST
+// domain grant and omitted the two that merely gained a verb
+// (sync_configurations, sync_compute_checkpoints); a later widening on either
+// would then have left this test green while the boundary moved.
 func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -591,41 +592,75 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 
 	for _, withheld := range []struct {
 		table     string
+		verb      string
 		statement string
 		why       string
 	}{
 		{
 			table:     "sync_run_reference_discoveries",
+			verb:      "DELETE",
 			statement: "DELETE FROM public.sync_run_reference_discoveries WHERE sync_run_id = gen_random_uuid()",
 			why:       "the ledger IS the durable evidence that discovery ran; nothing removes it",
 		},
 		{
 			table:     "sync_run_post_dispatches",
+			verb:      "DELETE",
 			statement: "DELETE FROM public.sync_run_post_dispatches WHERE sync_run_id = gen_random_uuid()",
 			why:       "once-only dispatch evidence; a run that could delete it could re-dispatch",
 		},
 		{
 			table:     "job_runs",
+			verb:      "DELETE",
 			statement: "DELETE FROM public.job_runs WHERE id = gen_random_uuid()",
 			why:       "the domain worker closes job runs, it does not open or destroy them",
 		},
 		{
 			table:     "backfill_jobs",
+			verb:      "DELETE",
 			statement: "DELETE FROM public.backfill_jobs WHERE id = gen_random_uuid()",
 			why:       "the domain worker terminalizes backfills, it does not create or remove them",
+		},
+		// The two tables whose change was a verb rather than a first grant.
+		// Omitting them (codex round 2) left the boundary incomplete: a future
+		// widening on either would not have failed anything here, so this test
+		// did not prove the least-privilege boundary it claims to cover.
+		{
+			table:     "sync_configurations",
+			verb:      "INSERT",
+			statement: "INSERT INTO public.sync_configurations (id,org_id,integration_id,sync_options,created_at) " +
+				"VALUES (gen_random_uuid(),'org',gen_random_uuid(),'{}'::json,now())",
+			why:       "finalize stamps last_sync_* on an EXISTING config; creating one is the scheduler's job",
+		},
+		{
+			table:     "sync_configurations",
+			verb:      "DELETE",
+			statement: "DELETE FROM public.sync_configurations WHERE id = gen_random_uuid()",
+			why:       "a sync configuration outlives every run that stamps it",
+		},
+		{
+			table:     "sync_compute_checkpoints",
+			verb:      "UPDATE",
+			statement: "UPDATE public.sync_compute_checkpoints SET status = 'ok' WHERE id = gen_random_uuid()",
+			why:       "the checkpoint is insert-once via ON CONFLICT DO NOTHING; nothing amends one in place",
+		},
+		{
+			table:     "sync_compute_checkpoints",
+			verb:      "DELETE",
+			statement: "DELETE FROM public.sync_compute_checkpoints WHERE id = gen_random_uuid()",
+			why:       "checkpoints are the replay/audit record of what compute input was proven",
 		},
 	} {
 		tx, err := domain.Begin(ctx)
 		if err != nil {
-			t.Fatalf("%s: begin: %v", withheld.table, err)
+			t.Fatalf("%s %s: begin: %v", withheld.table, withheld.verb, err)
 		}
 		_, execErr := tx.Exec(ctx, withheld.statement)
 		_ = tx.Rollback(ctx)
 
 		if execErr == nil {
-			t.Errorf("%s: the domain role was PERMITTED a verb the manifest withholds.\n"+
+			t.Errorf("%s: the domain role was PERMITTED %s, a verb the manifest withholds.\n"+
 				"  reason it is withheld: %s\n  statement: %s",
-				withheld.table, withheld.why, withheld.statement)
+				withheld.table, withheld.verb, withheld.why, withheld.statement)
 			continue
 		}
 		var pgErr *pgconn.PgError
@@ -635,8 +670,8 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 			// raised during parse analysis first -- so this row would be
 			// measuring nothing, which is the failure mode this file exists
 			// to remove.
-			t.Errorf("%s: expected insufficient_privilege (42501), got a different failure: %v\n  statement: %s",
-				withheld.table, execErr, withheld.statement)
+			t.Errorf("%s %s: expected insufficient_privilege (42501), got a different failure: %v\n  statement: %s",
+				withheld.table, withheld.verb, execErr, withheld.statement)
 		}
 	}
 }

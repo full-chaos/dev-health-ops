@@ -16,7 +16,7 @@ from dev_health_ops.api.models.schemas import (
 )
 from dev_health_ops.api.services import home as home_service
 from dev_health_ops.api.services.cache import TTLCache
-from dev_health_ops.api.services.filtering import filter_cache_key
+from dev_health_ops.api.services.filtering import epoch_cache_key
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_cached_home_response_refreshes_latest_successful_sync(monkeypatch
         events=[],
     )
     cache.set(
-        filter_cache_key("home", "org-1", filters),
+        epoch_cache_key(cache, "home", "org-1", filters),
         cached_response.model_dump(mode="json"),
     )
     semantic_session = MagicMock(spec=AsyncSession)
@@ -103,7 +103,7 @@ async def test_cached_home_response_survives_sync_freshness_query_failure(monkey
         events=[],
     )
     cache.set(
-        filter_cache_key("home", "org-1", filters),
+        epoch_cache_key(cache, "home", "org-1", filters),
         cached_response.model_dump(mode="json"),
     )
 

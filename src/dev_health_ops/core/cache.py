@@ -34,6 +34,54 @@ def _safe_key_label(key: str) -> str:
     return f"{prefix}:{digest}"
 
 
+# =============================================================================
+# Per-org cache epoch (CHAOS-4226)
+# =============================================================================
+#
+# Filter-scoped cache entries (``home:{...}``, ``explain:{...}``) embed the
+# full filter payload, so no producer can enumerate "every key for org X" to
+# delete them. Instead every org has ONE epoch key; readers fold its value
+# into their cache key (``epoch_cache_key``) and writers that change the
+# org's data bump it (INCR). A bump makes every older entry unreachable in
+# one write; the orphans age out by their own TTL.
+#
+# The Go native finalize (internal/cacheinvalidation) bumps the SAME key
+# after a sync run commits. The two sides never hand-copy each other's
+# string: tests/test_cache_epoch_contract.py regenerates
+# contracts/cache-invalidation/v1/org_cache_epoch_key.json from
+# ``org_cache_epoch_key`` and the Go contract test asserts against it.
+
+ORG_CACHE_EPOCH_KEY_PREFIX = "cache_epoch:org:"
+
+# Expiry the bumping side sets on the epoch key (INCR + EXPIRE refreshes it
+# on every bump). It must exceed every epoch-scoped entry TTL by a wide
+# margin: if the epoch key expired while entries stamped with epoch N were
+# still alive, a reader would fall back to epoch 0 -- harmless (0 never
+# collides with N >= 1), but the entries stamped N would silently keep
+# serving after the NEXT bump re-created the key at 1. 30 days against a
+# 60-120s entry TTL closes that window by five orders of magnitude.
+ORG_CACHE_EPOCH_TTL_SECONDS = 30 * 24 * 60 * 60
+
+# Largest entry TTL an epoch-scoped cache may use; ``epoch_cache_key``
+# refuses a cache whose TTL is longer, so the margin above is enforced at
+# the read site rather than trusted.
+EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS = 3600
+EPOCH_SCOPED_CACHE_TTL_MARGIN = 100
+
+assert ORG_CACHE_EPOCH_TTL_SECONDS >= (
+    EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS * EPOCH_SCOPED_CACHE_TTL_MARGIN
+)
+
+
+def org_cache_epoch_key(org_id: str) -> str:
+    """The Valkey key holding an organization's cache epoch.
+
+    Identical across MemoryBackend and RedisBackend so a Valkey outage (and
+    the per-process memory fallback it triggers) never splits the scheme.
+    """
+    return f"{ORG_CACHE_EPOCH_KEY_PREFIX}{org_id}"
+
+
 class CacheBackend(ABC):
     """Abstract base class for cache backends."""
 
@@ -59,6 +107,18 @@ class CacheBackend(ABC):
         override this to issue a single round-trip.
         """
         return [self.get(k) for k in keys]
+
+    def incr(self, key: str, ttl_seconds: int) -> int | None:
+        """Increment an integer counter (absent -> 1) and (re)set its expiry.
+
+        Returns the new value, or None when the backend could not apply it.
+        Default implementation is a non-atomic get/set; backends with a
+        native INCR (Redis) override it.
+        """
+        current = self.get(key)
+        value = (int(current) if isinstance(current, int) else 0) + 1
+        self.set(key, value, ttl_seconds)
+        return value
 
 
 class MemoryBackend(CacheBackend):
@@ -151,6 +211,28 @@ class RedisBackend(CacheBackend):
                 exc_info=True,
             )
 
+    def incr(self, key: str, ttl_seconds: int) -> int | None:
+        """INCR + EXPIRE in one pipeline -- the same two commands the Go
+        finalize issues (internal/cacheinvalidation), so a Python-side bump
+        and a Go-side bump are indistinguishable to readers."""
+        if not self._available:
+            return self._fallback.incr(key, ttl_seconds)
+        try:
+            pipe = self._client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, ttl_seconds)
+            value, _ = pipe.execute()
+            return int(value)
+        except Exception as e:
+            logger.warning(
+                "Redis incr failed for key=%s ttl=%s: %s",
+                _safe_key_label(key),
+                ttl_seconds,
+                e,
+                exc_info=True,
+            )
+            return None
+
     def status(self) -> str:
         if not self._available:
             return "down"
@@ -181,6 +263,26 @@ class TTLCache:
 
     def set(self, key: str, value: Any) -> None:
         self._backend.set(key, value, self.ttl_seconds)
+
+    def org_epoch(self, org_id: str) -> int:
+        """Current cache epoch for an org: ONE backend GET; absent/unreadable
+        reads as 0 so the memory fallback and a fresh org are deterministic."""
+        raw = self._backend.get(org_cache_epoch_key(org_id))
+        if isinstance(raw, bool):
+            return 0
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+        return 0
+
+    def bump_org_epoch(self, org_id: str) -> int | None:
+        """Invalidate every epoch-scoped entry of an org in one write."""
+        if not org_id:
+            return None
+        return self._backend.incr(
+            org_cache_epoch_key(org_id), ORG_CACHE_EPOCH_TTL_SECONDS
+        )
 
     def status(self) -> str:
         """Returns the status of the underlying backend."""

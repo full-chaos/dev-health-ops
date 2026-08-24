@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
@@ -49,6 +50,33 @@ type NativeFinalizeSyncRunService struct {
 	logger   *slog.Logger
 	observer jobruntime.ZeroUnitFinalizationObserver
 	now      func() time.Time
+	// coverageCache bumps the org's cache epoch in Valkey AFTER the
+	// finalizing transaction commits (CHAOS-4226). Optional at the type
+	// level so unit tests need no Valkey; the worker binary refuses to
+	// build the family without one (cmd/dev-health-worker/sync_dispatch.go).
+	coverageCache cacheinvalidation.OrgCacheInvalidator
+}
+
+// UseCoverageCacheInvalidator attaches the Valkey epoch bumper. A nil
+// invalidator is refused rather than silently accepted as "no-op": a
+// finalize without it is exactly the miss CHAOS-4226 exists to remove, and
+// it stays visible as a permanent emitted - consumed gap.
+func (service *NativeFinalizeSyncRunService) UseCoverageCacheInvalidator(invalidator cacheinvalidation.OrgCacheInvalidator) error {
+	if service == nil {
+		return ErrFinalizeSyncRunUnavailable
+	}
+	if invalidator == nil {
+		return cacheinvalidation.ErrNilClient
+	}
+	service.coverageCache = invalidator
+	return nil
+}
+
+// CoverageCacheInvalidatorConfigured reports whether the post-commit cache
+// hop is wired -- the reachability probe cmd/dev-health-worker's tests use
+// instead of citing a constructor.
+func (service *NativeFinalizeSyncRunService) CoverageCacheInvalidatorConfigured() bool {
+	return service != nil && service.coverageCache != nil
 }
 
 // NewNativeFinalizeSyncRunService constructs the native finalize_sync_run
@@ -285,13 +313,21 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 		return ErrFinalizeSyncRunUnavailable
 	}
 
+	// Everything below runs only on the once-only branch (the
+	// already_dispatched early return above skipped it), and only AFTER
+	// the transaction durably committed -- the same rule the zero-unit
+	// counter follows. The Postgres invalidation
+	// (invalidateSyncCoverageForIntegration) committed just now; this is
+	// its cache-layer twin (CHAOS-4226).
+	provider := resolveRunProviderBestEffort(ctx, service.pool, run.integrationID)
+	service.invalidateCoverageCache(ctx, run, provider)
+
 	if isZeroUnit {
 		// DECIDED above (zeroUnitReason), INCREMENTED here -- after the
 		// transaction actually committed. See zero_unit_telemetry.py's
 		// module docstring and sync_units.py:2244-2257: a counter bumped
 		// before commit would overcount every retry of a finalization that
 		// eventually succeeds once.
-		provider := resolveRunProviderBestEffort(ctx, service.pool, run.integrationID)
 		reason := zeroUnitReason
 		if reason == "" {
 			reason = zeroUnitGenericReason
@@ -310,6 +346,48 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 		)
 	}
 	return nil
+}
+
+// coverageCacheInvalidationTimeout bounds the post-commit Valkey hop. The
+// finalize already committed; a slow Valkey must not hold the River job
+// (and its lease) hostage, it must show up as an unconsumed emit.
+const coverageCacheInvalidationTimeout = 5 * time.Second
+
+// invalidateCoverageCache is the post-commit cache hop: one emit per
+// finalized run, consumed only when Valkey acknowledged the epoch bump.
+// Failures are logged with the run identifiers and counted; they NEVER
+// fail the committed finalize (a River retry would hit already_dispatched
+// and skip this branch anyway, so failing here could only lose work).
+func (service *NativeFinalizeSyncRunService) invalidateCoverageCache(ctx context.Context, run *finalizeSyncRun, provider string) {
+	var err error
+	if service.coverageCache == nil {
+		err = cacheinvalidation.ErrNilClient
+	} else {
+		hopCtx, cancel := context.WithTimeout(ctx, coverageCacheInvalidationTimeout)
+		err = service.coverageCache.InvalidateOrg(hopCtx, run.orgID)
+		cancel()
+	}
+	if observer, ok := service.observer.(jobruntime.CoverageCacheInvalidationObserver); ok && observer != nil {
+		// Metric failures are dropped, matching every other Observe call
+		// site in this tree: telemetry must never decide the outcome of a
+		// durably-committed finalization.
+		_ = observer.ObserveCoverageCacheInvalidation(provider, err == nil)
+	}
+	if err != nil {
+		service.logger.WarnContext(ctx, "finalize_sync_run.coverage_cache_invalidation_failed",
+			slog.String("sync_run_id", run.id),
+			slog.String("org_id", run.orgID),
+			slog.String("integration_id", run.integrationID),
+			slog.String("provider", provider),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	service.logger.InfoContext(ctx, "finalize_sync_run.coverage_cache_invalidated",
+		slog.String("sync_run_id", run.id),
+		slog.String("org_id", run.orgID),
+		slog.String("provider", provider),
+	)
 }
 
 func (service *NativeFinalizeSyncRunService) nowUTC() time.Time {

@@ -4,6 +4,7 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+from dev_health_ops.core.cache import EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS, TTLCache
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.utils.datetime import utc_today
 
@@ -30,6 +31,31 @@ def filter_cache_key(
     payload["_org_id"] = org_id
     serialized = json.dumps(payload, sort_keys=True, default=str)
     return f"{prefix}:{serialized}"
+
+
+def epoch_cache_key(
+    cache: TTLCache,
+    prefix: str,
+    org_id: str,
+    filters: MetricFilter,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """``filter_cache_key`` scoped by the org's cache epoch (CHAOS-4226).
+
+    One backend GET reads the epoch; a bump by the Go finalize (or by
+    ``core.cache_invalidation``) changes the key, so the next read misses
+    and recomputes instead of serving the pre-finalize entry until TTL.
+    """
+    if cache.ttl_seconds > EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS:
+        raise ValueError(
+            f"epoch-scoped cache ttl {cache.ttl_seconds}s exceeds "
+            f"{EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS}s; the epoch key expiry "
+            "margin would no longer hold"
+        )
+    scoped = {"_cache_epoch": cache.org_epoch(org_id)}
+    if extra:
+        scoped = {**extra, **scoped}
+    return filter_cache_key(prefix, org_id, filters, extra=scoped)
 
 
 def time_window(filters: MetricFilter) -> tuple[date, date, date, date]:

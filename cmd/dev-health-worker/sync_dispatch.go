@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -15,11 +16,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+	valkeygo "github.com/valkey-io/valkey-go"
 )
 
 type dailyPostSyncWriter struct {
@@ -287,13 +291,31 @@ func buildSyncCoordinatorWorker(
 	if !cfg.ClickHouseURI.Configured() {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// Valkey is the second hard requirement (CHAOS-4226): the finalize's
+	// post-commit hop bumps the home-dashboard cache epoch there. A family
+	// built without it would finalize forever with the cache hop skipped --
+	// the exact silent miss this ticket removes -- so it refuses to build,
+	// the same way the ClickHouse check above does.
+	if !cfg.ValkeyURI.Configured() {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	clickhouseConnection, err := clickhousestore.Open(
 		ctx, clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
 	)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	closeClickHouse := func() { _ = clickhouseConnection.Close() }
+	valkeyClient, err := valkeystore.Open(
+		ctx, valkeystore.DefaultConfig(cfg.ValkeyURI.Reveal()),
+	)
+	if err != nil {
+		_ = clickhouseConnection.Close()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	closeClickHouse := func() {
+		valkeyClient.Close()
+		_ = clickhouseConnection.Close()
+	}
 	bridge, err := syncdispatchruntime.NewHTTPBridge(syncdispatchruntime.HTTPBridgeConfig{
 		BaseURL:       strings.TrimRight(cfg.OperationalBridgeURL, "/"),
 		BearerToken:   cfg.OperationalBridgeToken.Reveal(),
@@ -332,14 +354,8 @@ func buildSyncCoordinatorWorker(
 	// generic runtime middleware has no way to know a run planned zero units
 	// or what cause finalize classified it under -- only this implementation
 	// does (CHAOS-4175).
-	var zeroUnitObservers []jobruntime.ZeroUnitFinalizationObserver
-	if zeroUnitObserver, ok := observer.(jobruntime.ZeroUnitFinalizationObserver); ok {
-		zeroUnitObservers = append(zeroUnitObservers, zeroUnitObserver)
-	}
-	finalizeSyncRun, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(
-		postgresDatabase.pools.Domain,
-		logger,
-		zeroUnitObservers...,
+	finalizeSyncRun, err := buildFinalizeSyncRunService(
+		postgresDatabase.pools.Domain, logger, observer, valkeyClient,
 	)
 	if err != nil {
 		closeClickHouse()
@@ -440,6 +456,39 @@ func buildSyncCoordinatorWorker(
 			syncdispatchcontract.KindPostSync,
 			syncdispatchcontract.KindReferenceDiscovery,
 		},
-		cleanups: []func() error{clickhouseConnection.Close},
+		cleanups: []func() error{
+			clickhouseConnection.Close,
+			func() error { valkeyClient.Close(); return nil },
+		},
 	}, nil
+}
+
+// buildFinalizeSyncRunService constructs the native finalize with BOTH its
+// post-commit side channels attached: the zero-unit counter and the
+// coverage-cache epoch bumper (CHAOS-4226). Split out of
+// buildSyncCoordinatorWorker so a plain unit test can prove the Valkey
+// client actually reaches the service (sync_dispatch_cache_invalidation_test.go)
+// -- a cited constructor is not proof of capability.
+func buildFinalizeSyncRunService(
+	pool *pgxpool.Pool,
+	logger *slog.Logger,
+	observer jobruntime.Observer,
+	valkeyClient valkeygo.Client,
+) (*syncdispatchruntime.NativeFinalizeSyncRunService, error) {
+	var zeroUnitObservers []jobruntime.ZeroUnitFinalizationObserver
+	if zeroUnitObserver, ok := observer.(jobruntime.ZeroUnitFinalizationObserver); ok {
+		zeroUnitObservers = append(zeroUnitObservers, zeroUnitObserver)
+	}
+	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, logger, zeroUnitObservers...)
+	if err != nil {
+		return nil, err
+	}
+	invalidator, err := cacheinvalidation.NewValkeyOrgCacheInvalidator(valkeyClient)
+	if err != nil {
+		return nil, err
+	}
+	if err := service.UseCoverageCacheInvalidator(invalidator); err != nil {
+		return nil, err
+	}
+	return service, nil
 }

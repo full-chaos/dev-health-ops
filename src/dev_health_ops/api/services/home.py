@@ -47,7 +47,7 @@ from ..queries.sync_freshness import fetch_latest_successful_sync_at
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import (
-    filter_cache_key,
+    epoch_cache_key,
     scope_filter_for_metric,
     time_window,
     work_category_filter,
@@ -971,7 +971,7 @@ async def build_home_response(
     org_id: str = "",
     semantic_session: AsyncSession | None = None,
 ) -> HomeResponse:
-    cache_key = filter_cache_key("home", org_id, filters)
+    cache_key = epoch_cache_key(cache, "home", org_id, filters)
     cached = cache.get(cache_key)
     if semantic_session is None:
         if cached is not None:

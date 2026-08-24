@@ -5,7 +5,9 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -319,6 +321,49 @@ func TestActiveBudgetConsumptionDegradesAFailedGroupWithoutFailingTheWhole(t *te
 		}
 		if got[budgetKey] != 42 {
 			t.Fatalf("consumed[%s]=%d want=42 -- the failing group's 999 must not count, and the ok group's 42 must still land", budgetKey, got[budgetKey])
+		}
+	})
+}
+
+// TestActiveBudgetConsumptionLogsTheGroupFanout pins the observability
+// addition: when active units span more than one (org, run) group, the
+// per-pass fanout (group count + total unit count) must be visible in the
+// logs, not just discoverable as latency after the fact.
+func TestActiveBudgetConsumptionLogsTheGroupFanout(t *testing.T) {
+	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC()
+		unitA := "00000000-0000-4000-8000-000000000141"
+		unitB := "00000000-0000-4000-8000-000000000142"
+		insertConsumptionUnit(t, ctx, pool, consumptionUnitFixture{id: unitA, syncRunID: "00000000-0000-4000-8000-000000000241", orgID: "org-a", status: syncRunUnitStatusDispatching, updatedAt: now})
+		insertConsumptionUnit(t, ctx, pool, consumptionUnitFixture{id: unitB, syncRunID: "00000000-0000-4000-8000-000000000242", orgID: "org-b", status: syncRunUnitStatusDispatching, updatedAt: now})
+
+		budgetKey := budgetKeyFor(budgetEstimateBucket{Provider: "github", Dimension: "rest_core"}, "work-items")
+		estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{
+			unitA: estimateFor(1, "github", "rest_core", "work-items"),
+			unitB: estimateFor(1, "github", "rest_core", "work-items"),
+		}}
+
+		var logged strings.Builder
+		logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := activeBudgetConsumption(ctx, tx, estimator, logger, now, map[string]bool{budgetKey: true}); err != nil {
+			t.Fatalf("activeBudgetConsumption: %v", err)
+		}
+
+		output := logged.String()
+		if !strings.Contains(output, `"dispatch_sync_run.budget_guard_active_consumption_fanout"`) {
+			t.Fatalf("log output missing the fanout line: %s", output)
+		}
+		if !strings.Contains(output, `"group_count":2`) {
+			t.Fatalf("log output missing group_count=2: %s", output)
+		}
+		if !strings.Contains(output, `"total_units":2`) {
+			t.Fatalf("log output missing total_units=2: %s", output)
 		}
 	})
 }

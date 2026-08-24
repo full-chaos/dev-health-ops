@@ -121,6 +121,22 @@ ORDER BY id`,
 		return groupKeys[i].syncRunID < groupKeys[j].syncRunID
 	})
 
+	// This grouping-into-per-run bridge calls is a Go-side cost Python
+	// never pays (it calls SyncTaskBootstrap.load per unit, in-process, no
+	// HTTP hop). If system-wide active consumption ever fans out to dozens
+	// of (org, run) groups in one pass, that latency should be visible in
+	// the logs, not discovered by reading a trace after the fact -- and it
+	// self-documents as a cost CHAOS-4198's later native estimator port
+	// removes entirely (no bridge, no grouping, no fanout).
+	if len(groupKeys) > 0 {
+		var totalUnits int
+		for _, units := range unitsByGroup {
+			totalUnits += len(units)
+		}
+		logger.InfoContext(ctx, "dispatch_sync_run.budget_guard_active_consumption_fanout",
+			slog.Int("group_count", len(groupKeys)), slog.Int("total_units", totalUnits))
+	}
+
 	for _, key := range groupKeys {
 		units := unitsByGroup[key]
 		unitIDs := make([]string, len(units))

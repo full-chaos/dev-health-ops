@@ -226,7 +226,10 @@ def main() -> int:
         estimate(10, dimension=BudgetDimension.GRAPHQL_COST),
         consumed_by_bucket={},
         limits={
-            _budget_key(bucket(dimension=BudgetDimension.GRAPHQL_COST).to_dict(), route_family="core"): 2,
+            _budget_key(
+                bucket(dimension=BudgetDimension.GRAPHQL_COST).to_dict(),
+                route_family="core",
+            ): 2,
         },
         default_limit=1_000_000,
     )
@@ -254,7 +257,11 @@ def main() -> int:
             {
                 "name": name,
                 "estimates": [
-                    {"estimated_units": e.estimated_units, "route_family": e.route_family, "bucket": e.bucket.to_dict()}
+                    {
+                        "estimated_units": e.estimated_units,
+                        "route_family": e.route_family,
+                        "bucket": e.bucket.to_dict(),
+                    }
                     for e in estimates
                 ],
                 "baseline_consumption": baseline_consumption,
@@ -301,12 +308,16 @@ def main() -> int:
         limits={fits_key: 100},
         default_limit=1_000_000,
     )
-    permanent_key = _budget_key(bucket(dimension=BudgetDimension.GRAPHQL_COST).to_dict(), route_family="core")
+    permanent_key = _budget_key(
+        bucket(dimension=BudgetDimension.GRAPHQL_COST).to_dict(), route_family="core"
+    )
     add_unfitness_case(
         "permanent misfit outranks a larger contention misfit",
         [
             estimate(50, dimension=BudgetDimension.GRAPHQL_COST),  # permanent: 50 > 10
-            estimate(1_000_000),  # contention: huge estimate but still <= its own limit? no, force contention below
+            estimate(
+                1_000_000
+            ),  # contention: huge estimate but still <= its own limit? no, force contention below
         ],
         baseline_consumption={permanent_key: 0, fits_key: 999_990},
         limits={permanent_key: 10, fits_key: 1_000_000},
@@ -319,12 +330,22 @@ def main() -> int:
             estimate(50, dimension=BudgetDimension.CONTENTS_BLOB),
         ],
         baseline_consumption={
-            _budget_key(bucket(dimension=BudgetDimension.SEARCH).to_dict(), route_family="core"): 90,
-            _budget_key(bucket(dimension=BudgetDimension.CONTENTS_BLOB).to_dict(), route_family="core"): 90,
+            _budget_key(
+                bucket(dimension=BudgetDimension.SEARCH).to_dict(), route_family="core"
+            ): 90,
+            _budget_key(
+                bucket(dimension=BudgetDimension.CONTENTS_BLOB).to_dict(),
+                route_family="core",
+            ): 90,
         },
         limits={
-            _budget_key(bucket(dimension=BudgetDimension.SEARCH).to_dict(), route_family="core"): 100,
-            _budget_key(bucket(dimension=BudgetDimension.CONTENTS_BLOB).to_dict(), route_family="core"): 100,
+            _budget_key(
+                bucket(dimension=BudgetDimension.SEARCH).to_dict(), route_family="core"
+            ): 100,
+            _budget_key(
+                bucket(dimension=BudgetDimension.CONTENTS_BLOB).to_dict(),
+                route_family="core",
+            ): 100,
         },
         default_limit=1_000_000,
     )
@@ -334,7 +355,9 @@ def main() -> int:
     # ------------------------------------------------------------------
     expiry_cases: list[dict[str, Any]] = []
 
-    def observation(reset_at=None, retry_after_seconds=None, observed=observed_at) -> ProviderRateLimitObservation:
+    def observation(
+        reset_at=None, retry_after_seconds=None, observed=observed_at
+    ) -> ProviderRateLimitObservation:
         return ProviderRateLimitObservation(
             org_id=org_a,
             provider="github",
@@ -394,10 +417,12 @@ def main() -> int:
         dimension_cooldowns: dict[tuple[str, str, str, str], datetime],
     ) -> None:
         by_family = {
-            (key[0], key[1], uuid.UUID(key[2]), key[3]): value for key, value in family_cooldowns.items()
+            (key[0], key[1], uuid.UUID(key[2]), key[3]): value
+            for key, value in family_cooldowns.items()
         }
         by_dimension = {
-            (key[0], key[1], uuid.UUID(key[2]), key[3]): value for key, value in dimension_cooldowns.items()
+            (key[0], key[1], uuid.UUID(key[2]), key[3]): value
+            for key, value in dimension_cooldowns.items()
         }
         result = _matching_cooldown_expiry(
             estimates,
@@ -420,7 +445,10 @@ def main() -> int:
                     "|".join(k): _iso(v) for k, v in dimension_cooldowns.items()
                 },
                 "estimates": [
-                    {"route_family": e.route_family, "dimension": e.bucket.dimension.value}
+                    {
+                        "route_family": e.route_family,
+                        "dimension": e.bucket.dimension.value,
+                    }
                     for e in estimates
                 ],
                 "expiry": None if result is None else _iso(result),
@@ -454,7 +482,9 @@ def main() -> int:
         provider="github",
         integration_id=integration_a,
         family_cooldowns={},
-        dimension_cooldowns={(org_a, "github", str(integration_a), "rest_core"): dimension_expiry},
+        dimension_cooldowns={
+            (org_a, "github", str(integration_a), "rest_core"): dimension_expiry
+        },
     )
     add_matching_case(
         "both match -> the LATEST expiry wins, not the first",
@@ -463,7 +493,9 @@ def main() -> int:
         provider="github",
         integration_id=integration_a,
         family_cooldowns={(org_a, "github", str(integration_a), "core"): family_expiry},
-        dimension_cooldowns={(org_a, "github", str(integration_a), "rest_core"): dimension_expiry},
+        dimension_cooldowns={
+            (org_a, "github", str(integration_a), "rest_core"): dimension_expiry
+        },
     )
     add_matching_case(
         "a cooldown under a DIFFERENT integration never matches",
@@ -480,7 +512,9 @@ def main() -> int:
         org_id=org_a,
         provider="github",
         integration_id=integration_a,
-        family_cooldowns={(org_a, "github", str(integration_a), "graphql"): family_expiry},
+        family_cooldowns={
+            (org_a, "github", str(integration_a), "graphql"): family_expiry
+        },
         dimension_cooldowns={},
     )
     earlier_family_expiry = observed_at + timedelta(minutes=2)

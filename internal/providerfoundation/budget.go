@@ -256,6 +256,7 @@ type Metrics struct {
 	inventoryPageCap     map[string]uint64
 	perRunTruncation     map[string]uint64
 	artifactSkipped      map[string]uint64
+	snapshotDiscarded    map[string]uint64
 	resumeReanchor       map[string]uint64
 	unitTerminalWithRows map[string]uint64
 }
@@ -268,6 +269,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:     map[string]uint64{},
 		perRunTruncation:     map[string]uint64{},
 		artifactSkipped:      map[string]uint64{},
+		snapshotDiscarded:    map[string]uint64{},
 		resumeReanchor:       map[string]uint64{},
 		unitTerminalWithRows: map[string]uint64{},
 	}
@@ -450,6 +452,49 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
+// route snapshot may be discarded. Bounded because it becomes a Prometheus
+// label; an unknown reason collapses to "other" rather than opening the
+// dimension.
+var metricSnapshotDiscardReasonVocabulary = map[string]struct{}{
+	"manifest_mismatch": {}, "manifest_mismatch_unreplayable": {},
+	"manifest_mismatch_partially_committed": {},
+}
+
+// MetricSnapshotDiscardReasonLabel bounds a discard reason.
+func MetricSnapshotDiscardReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricSnapshotDiscardReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordPreparedSnapshotDiscarded counts one persisted prepared-route snapshot
+// that could not be used and was thrown away.
+//
+// It exists because the alternative to discarding is a unit that retries the
+// same unusable document forever -- stuck, and silent, because nothing else in
+// the pipeline reports "recovery keeps refusing the same snapshot". A discard
+// is the safe outcome, but it is not a free one: the route re-runs from the
+// claim, so the provider is fetched again. A rate that is anything but a brief
+// spike after a deploy means something is wrong with the manifest contract.
+//
+// The two reasons are NOT interchangeable. `manifest_mismatch` is the expected,
+// self-healing case: a document written before a destination was added, thrown
+// away and replayed. `manifest_mismatch_unreplayable` is the same staleness on
+// a document that also contains a recovery-BLOCKED effect, which cannot be
+// safely redone -- that unit stops rather than replays, and needs a person.
+func (m *Metrics) RecordPreparedSnapshotDiscarded(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.snapshotDiscarded[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricSnapshotDiscardReasonLabel(reason)]++
 }
 
 // metricResumePhaseVocabulary is the closed set of paginated phases whose
@@ -650,6 +695,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_per_run_truncation_total",
 		"Workflow runs committed with only the first cap-worth of their items, by bounded provider, dataset, and component.",
 		m.perRunTruncation,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_prepared_snapshot_discarded_total",
+		"Prepared route snapshots discarded as unusable, by bounded provider, dataset, and reason.",
+		"reason", m.snapshotDiscarded,
 	); err != nil {
 		return err
 	}

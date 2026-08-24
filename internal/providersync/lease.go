@@ -26,6 +26,14 @@ var (
 	)
 	ErrEffectRecoveryAmbiguous = errors.New("provider sync effect recovery requires exact reconciliation")
 	ErrEffectRecoveryUnsafe    = errors.New("provider sync effect recovery is outside the bounded contract")
+	// ErrPreparedSnapshotManifestMismatch is a persisted snapshot that is
+	// authentically this claim's but describes a destination set the route no
+	// longer emits -- a document written before a manifest change. It is
+	// deliberately NOT ErrEffectLedgerConflict: that error means "do not trust
+	// this document", and the caller answers it by refusing, whereas this one
+	// means "this document is stale" and is answered by discarding it and
+	// replaying the route.
+	ErrPreparedSnapshotManifestMismatch = errors.New("provider sync prepared snapshot describes a superseded destination manifest")
 	// ErrProviderDatasetUnavailable means the provider account cannot expose a
 	// specific dataset even though the credential itself is valid. Retrying
 	// cannot add an account-level product ability, and treating the response as

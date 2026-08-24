@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -247,29 +248,94 @@ func (executor CompleteRouteExecutor) Execute(
 			manifest, err := preparedLedger.LoadRouteSnapshot(
 				workContext, session.Claim, *recoveredEffects, executor.now(),
 			)
-			if err != nil {
+			// A snapshot that is authentically this claim's but describes a
+			// destination set the route no longer emits is STALE, not
+			// untrustworthy, and the two need opposite answers. Refusing it --
+			// which is what every other load failure earns -- leaves the unit
+			// retrying a document that can never become valid: stuck, and
+			// silent, because nothing reports "recovery keeps refusing the same
+			// snapshot". Every future destination added to the manifest would
+			// strand whatever was in flight at deploy.
+			//
+			// So it is DISCARDED and the route replayed from the claim. That
+			// honours the v1->v2 precedent a few lines above rather than
+			// contradicting it: that rule forbids RESUMING from a document
+			// written before a contract existed, and this does not resume from
+			// it at all -- it throws the document away and re-runs the route.
+			//
+			// Discarding is only safe if every effect the old document
+			// describes can be produced again and land idempotently, so that is
+			// checked against the document's OWN recorded classification rather
+			// than assumed from today's builder -- the document was written by
+			// an older binary, which is the entire situation. A recovery-
+			// BLOCKED effect means "this cannot be redone safely", so such a
+			// unit stops instead, with its own reason, loud rather than stuck.
+			if errors.Is(err, ErrPreparedSnapshotManifestMismatch) {
+				reason := "manifest_mismatch"
+				switch {
+				case !preparedSnapshotReplayable(*recoveredEffects):
+					reason = "manifest_mismatch_unreplayable"
+				case !isSafeWorkItemsManifestReplanState(session.Claim, *recoveredEffects):
+					// Something in the document already committed. Discarding
+					// would delete the generation journal that records it, so
+					// the evidence a write landed would go with it. Stops
+					// loudly instead -- a partially committed generation is
+					// exactly when a person should look.
+					reason = "manifest_mismatch_partially_committed"
+				}
+				executor.Metrics.RecordPreparedSnapshotDiscarded(
+					session.Claim.Provider, session.Claim.Dataset, reason,
+				)
+				slog.Warn(
+					"provider_sync.prepared_snapshot_discarded",
+					"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
+					"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
+					"reason", reason,
+					"persisted_effects", len(recoveredEffects.Effects),
+					"expected_effects", len(descriptor.Destinations),
+				)
+				if reason != "manifest_mismatch" {
+					return ErrEffectRecoveryUnsafe
+				}
+				replanner, ok := committer.Ledger.(EffectLedgerReplanner)
+				if !ok {
+					return ErrInvalidConfiguration
+				}
+				replannedAt := executor.now()
+				if err := replanner.ResetPreparedEffectsForReplan(
+					workContext, session.Claim, *recoveredEffects, replannedAt,
+				); err != nil {
+					return err
+				}
+				recoveredEffects = nil
+				normalizedAt = replannedAt
+			} else if err != nil {
 				return err
 			}
-			manifest.Batch.Result, manifest.Batch.Watermark, err =
-				applyGitHubWorkItemsIncompletePolicy(
-					session.Claim.Provider, session.Claim.Dataset,
-					manifest.Batch.Result, manifest.Batch.Watermark,
+			if recoveredEffects != nil {
+				manifest.Batch.Result, manifest.Batch.Watermark, err =
+					applyGitHubWorkItemsIncompletePolicy(
+						session.Claim.Provider, session.Claim.Dataset,
+						manifest.Batch.Result, manifest.Batch.Watermark,
+					)
+				if err != nil {
+					return ErrEffectLedgerConflict
+				}
+				if err := manifest.Batch.validate(descriptor); err != nil ||
+					!manifest.NormalizedAt.Equal(normalizedAt) {
+					return ErrEffectLedgerConflict
+				}
+				result.Fetch, result.Result, result.Watermark =
+					manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
+				result.WorklogObservations = manifest.Batch.WorklogObservations
+				result.Comparison = manifest.Comparison
+				result.Effects, err = committer.CommitPrepared(
+					workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
 				)
-			if err != nil {
-				return ErrEffectLedgerConflict
+				return err
 			}
-			if err := manifest.Batch.validate(descriptor); err != nil ||
-				!manifest.NormalizedAt.Equal(normalizedAt) {
-				return ErrEffectLedgerConflict
-			}
-			result.Fetch, result.Result, result.Watermark =
-				manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
-			result.WorklogObservations = manifest.Batch.WorklogObservations
-			result.Comparison = manifest.Comparison
-			result.Effects, err = committer.CommitPrepared(
-				workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
-			)
-			return err
+			// Fell through: the snapshot was discarded and the route replays
+			// from the claim below, exactly as an ordinary first attempt would.
 		}
 		credential, err := executor.Credentials.Resolve(
 			workContext,

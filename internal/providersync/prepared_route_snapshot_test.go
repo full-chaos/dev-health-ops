@@ -1010,3 +1010,105 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 			recovering.normalizedAt, ledger.preparedPrepares)
 	}
 }
+
+// TestASupersededDestinationManifestIsDistinguishableFromTampering is the
+// deploy-compatibility contract (CHAOS-4194, Context Fabric ruling D).
+//
+// A prepared snapshot persisted by an OLDER binary describes the manifest that
+// binary emitted. Adding a destination makes every such document unloadable,
+// and the previous code answered that the only way it could: by refusing, with
+// the same error tampering earns. The document never changes, so every retry
+// refused identically and the unit was stuck -- silently, because nothing
+// reports "recovery keeps refusing the same snapshot". Every future destination
+// addition would strand whatever was in flight at deploy.
+//
+// The fix turns entirely on telling the two apart, so that is what this pins:
+// a superseded set returns its OWN error, and every other identity failure
+// still returns the refusal it always did.
+func TestASupersededDestinationManifestIsDistinguishableFromTampering(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	current := preparedGitHubWorkItemsFixture(t, claim)
+
+	// Exactly a pre-CHAOS-4194 document: this manifest minus the two
+	// destinations that ticket added. Structurally valid, authentically this
+	// claim's, and describing a set the route no longer emits.
+	superseded := current
+	kept := make([]EffectBatch, 0, len(current.Effects))
+	for _, effect := range current.Effects {
+		if effect.Destination == "project_membership_transitions" || effect.Destination == "projects" {
+			continue
+		}
+		kept = append(kept, effect)
+	}
+	if len(kept) != len(current.Effects)-2 {
+		t.Fatalf("fixture lacks the new destinations: kept %d of %d", len(kept), len(current.Effects))
+	}
+	superseded.Effects = kept
+
+	if err := preparedRouteManifestDestinationsMatch(superseded); !errors.Is(
+		err, ErrPreparedSnapshotManifestMismatch,
+	) {
+		t.Fatalf("superseded manifest error=%v, want ErrPreparedSnapshotManifestMismatch", err)
+	}
+	if err := preparedRouteManifestDestinationsMatch(current); err != nil {
+		t.Fatalf("current manifest was rejected: %v", err)
+	}
+	// The distinction is only worth anything if the OTHER failures still refuse.
+	// A wrong-provider claim must not be mistaken for a stale document and
+	// discarded -- that would turn the tamper fence into a replay trigger.
+	foreign := claim
+	foreign.Provider = "gitlab"
+	if err := validatePreparedRouteManifestIdentity(foreign, current, normalizedAt); !errors.Is(
+		err, ErrEffectRecoveryUnsafe,
+	) {
+		t.Fatalf("foreign-provider identity error=%v, want ErrEffectRecoveryUnsafe", err)
+	}
+}
+
+// TestOnlyAnUntouchedSupersededDocumentMayBeDiscarded keeps the discard honest.
+//
+// Discarding deletes the generation journal, which is also the record that a
+// committed effect ever landed. So it is restricted to documents where nothing
+// has committed and nothing is recovery-blocked; anything else stops loudly
+// instead. Without this the fix would trade a stuck unit for a silently
+// destroyed write record, which is the worse of the two.
+func TestOnlyAnUntouchedSupersededDocumentMayBeDiscarded(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	state, err := NewEffectLedgerState(claim, batch.Effects, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isSafeWorkItemsManifestReplanState(claim, state) {
+		t.Fatal("an untouched document was judged unsafe to discard")
+	}
+
+	committed := state
+	committed.Effects = append([]EffectLedgerEntry(nil), state.Effects...)
+	started, landed := normalizedAt, normalizedAt
+	committed.Effects[0].Status = GenerationBlockCommitted
+	committed.Effects[0].StartedAt, committed.Effects[0].CommittedAt = &started, &landed
+	if isSafeWorkItemsManifestReplanState(claim, committed) {
+		t.Fatal("a document with a committed effect was judged safe to discard")
+	}
+
+	blocked := state
+	blocked.Effects = append([]EffectLedgerEntry(nil), state.Effects...)
+	blocked.Effects[0].Recovery = EffectRecoveryBlocked
+	if isSafeWorkItemsManifestReplanState(claim, blocked) {
+		t.Fatal("a document with a recovery-blocked effect was judged safe to discard")
+	}
+	if preparedSnapshotReplayable(blocked) {
+		t.Fatal("a recovery-blocked document was judged replayable")
+	}
+
+	// The blame predicate must not have been widened by accident: it still
+	// answers only for its own dataset and shape.
+	if isSafeGitHubBlameReplanState(claim, state) {
+		t.Fatal("the blame replan predicate accepted a work-items document")
+	}
+}

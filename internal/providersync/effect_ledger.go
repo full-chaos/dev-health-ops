@@ -437,7 +437,7 @@ func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
 	expected EffectLedgerState,
 	now time.Time,
 ) error {
-	if !isSafeGitHubBlameReplanState(claim, expected) || now.IsZero() {
+	if !isSafeReplanState(claim, expected) || now.IsZero() {
 		return ErrInvalidConfiguration
 	}
 	expectedEncoded := encodeEffectLedgerState(expected)
@@ -447,12 +447,58 @@ func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
 	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
 		current, err := decodeEffectLedgerState(document[effectLedgerResultKey])
 		if err != nil || !bytes.Equal(encodeEffectLedgerState(current), expectedEncoded) ||
-			!isSafeGitHubBlameReplanState(claim, current) {
+			!isSafeReplanState(claim, current) {
 			return ErrEffectLedgerConflict
 		}
 		delete(document, effectLedgerResultKey)
 		return nil
 	})
+}
+
+// isSafeReplanState is the union of the two shapes a prepared manifest may be
+// discarded from. Both must prove the same thing -- that discarding cannot lose
+// or duplicate a durable write -- but they prove it differently, so they are
+// separate predicates rather than one relaxed to cover both.
+func isSafeReplanState(claim Claim, state EffectLedgerState) bool {
+	return isSafeGitHubBlameReplanState(claim, state) ||
+		isSafeWorkItemsManifestReplanState(claim, state)
+}
+
+// isSafeWorkItemsManifestReplanState admits a github work-items document whose
+// destination manifest is superseded, and ONLY while nothing in it has
+// committed (CHAOS-4194).
+//
+// The committed-effect rule is the whole safety argument, and it is the same
+// one the blame predicate makes in its own vocabulary: that one names two
+// specific destinations and requires the second still pending, which is a
+// hand-checked way of saying "no durable write has happened yet". Stated
+// generally here because this document's length is exactly what is in question
+// -- a predicate that counted effects could not judge a document whose count is
+// the anomaly.
+//
+// Why committed effects are refused rather than tolerated. Every github
+// destination is readback-fenced, so a replayed write would inspect before
+// writing and a re-run would converge on the ReplacingMergeTree key. It would
+// very probably be safe. But "probably safe" is not the standard this ledger
+// holds elsewhere: the generation journal is deleted by the replan, so a
+// committed effect's record is destroyed along with it, and the evidence that
+// it ever landed is gone. Refusing keeps the discard to the case where there is
+// nothing to lose -- and a partially committed generation is exactly when a
+// human should look.
+func isSafeWorkItemsManifestReplanState(claim Claim, state EffectLedgerState) bool {
+	if claim.Validate() != nil || state.validate() != nil ||
+		claim.Provider != "github" || !isWorkItemFamilyDataset(claim.Dataset) ||
+		state.Generation != claim.GenerationKey() || state.Provider != claim.Provider ||
+		state.Dataset != claim.Dataset {
+		return false
+	}
+	for _, effect := range state.Effects {
+		if effect.Status == GenerationBlockCommitted ||
+			effect.Recovery == EffectRecoveryBlocked {
+			return false
+		}
+	}
+	return true
 }
 
 func isSafeGitHubBlameReplanState(claim Claim, state EffectLedgerState) bool {

@@ -792,6 +792,93 @@ func TestNativeMaterializerConcurrentReplayConverges(t *testing.T) {
 	}
 }
 
+// TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges
+// reproduces CHAOS-4203: the "ensure scheduled security dataset" INSERT at
+// materializer.go:1293-1296 computes a fully deterministic id
+// (uuid.NewSHA1 over IntegrationID alone), so two concurrent replays of the
+// same occurrence always attempt to insert the SAME primary key -- but its
+// ON CONFLICT clause names only the (org_id,integration_id,dataset_key)
+// unique constraint as arbiter. integration_datasets ALSO has a separate
+// PRIMARY KEY on id (alembic 0015_add_integration_data_model.py). Postgres
+// only protects the SPECIFIED arbiter: when both inserts reach the
+// server's physical index-insertion phase before either commits, the
+// second one raises a raw duplicate-key error on the pkey instead of
+// waiting to recheck the (unaffected) arbiter, even though the rows are
+// byte-identical. Confirmed empirically (not by source inference): a
+// single racing pair hits this ~29% of the time locally (87/300 in a probe
+// run) -- consistent with CI's one observed flake under heavier load
+// against 4/4 clean isolated runs including -race (the isolation evidence
+// in CHAOS-4203). If the two inserts are instead forced to interleave
+// serially (one blocks server-side, confirmed via pg_stat_activity, before
+// the other commits), Postgres's arbiter-wait path resolves it silently
+// every time -- so only true concurrent racing reproduces the bug, not a
+// synchronized handoff.
+//
+// This test drives that same true race deterministically-in-practice: a
+// tight start-barrier pair, repeated. At the measured 29% per-attempt rate,
+// the probability of zero hits across 150 attempts is on the order of
+// 1e-19, so a pre-fix run fails within the first few iterations and a
+// post-fix run passing all 150 is a strong convergence guarantee -- far
+// beyond what CI's incidental load ever exercised.
+func TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	ctx := context.Background()
+
+	var integrationID string
+	if err := fixture.pool.QueryRow(ctx, `SELECT integration_id::text FROM sync_configurations WHERE id=$1::uuid`, fixture.occurrence.ConfigID).Scan(&integrationID); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadedMaterializationPlan{
+		ensureSecurityDataset: true,
+		input:                 PlannerInput{OrgID: fixture.occurrence.OrgID, IntegrationID: integrationID},
+	}
+
+	const attempts = 150
+	for attempt := range attempts {
+		if _, err := fixture.pool.Exec(ctx, `DELETE FROM integration_datasets WHERE org_id=$1 AND integration_id=$2::uuid AND dataset_key='security'`, loaded.input.OrgID, integrationID); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var group sync.WaitGroup
+		for range 2 {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				tx, err := fixture.pool.Begin(context.Background())
+				if err != nil {
+					errs <- err
+					return
+				}
+				<-start
+				err = applyDomainPlanMutations(context.Background(), tx, loaded, time.Now())
+				if err == nil {
+					err = tx.Commit(context.Background())
+				} else {
+					_ = tx.Rollback(context.Background())
+				}
+				errs <- err
+			}()
+		}
+		close(start)
+		group.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("attempt %d: concurrent replay of the ensure-INSERT for the same (org,integration,dataset) did not converge: %v", attempt, err)
+			}
+		}
+	}
+
+	var rowCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM integration_datasets WHERE org_id=$1 AND integration_id=$2::uuid AND dataset_key='security'`, loaded.input.OrgID, integrationID).Scan(&rowCount); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("concurrent replay left %d security dataset rows, want 1", rowCount)
+	}
+}
+
 func TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	const missingCredential = "00000000-0000-4000-8000-000000009999"

@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -1289,10 +1290,41 @@ WHERE org_id=$1 AND last_synced_at IS NOT NULL`, orgID)
 
 func applyDomainPlanMutations(ctx context.Context, tx pgx.Tx, loaded loadedMaterializationPlan, now time.Time) error {
 	if loaded.ensureSecurityDataset {
-		if _, err := tx.Exec(ctx, `
+		// CHAOS-4203: the ON CONFLICT clause below only arbitrates the
+		// (org_id,integration_id,dataset_key) unique constraint. This row's
+		// id is ALSO fully deterministic (derived from IntegrationID
+		// alone), so two concurrent replays of the same occurrence race on
+		// the PRIMARY KEY too -- a conflict Postgres does not silently
+		// resolve for a non-arbiter index, even though it is the exact
+		// same logical "already ensured" outcome ON CONFLICT DO NOTHING
+		// exists to produce. A raw 23505 here means a concurrent replay
+		// already inserted this row; treat it like the DO NOTHING branch.
+		//
+		// The failing INSERT must run inside its own savepoint (a nested
+		// pgx.Tx): Postgres poisons the whole enclosing transaction after
+		// any unhandled statement error, so swallowing the error in Go
+		// without also rolling back to a savepoint would make the later
+		// domain-graph writes and the outer commit fail instead (matches
+		// native_finalize_sync_run.go's identical savepoint-then-swallow
+		// precedent for a once-only insert).
+		savepoint, err := tx.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("ensure scheduled security dataset: begin savepoint: %w", err)
+		}
+		_, execErr := savepoint.Exec(ctx, `
 INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
 VALUES ($1::uuid,$2,$3::uuid,'security',TRUE,'{"auto_enabled_by":"scheduled_code_host_sync"}'::jsonb)
-ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID); err != nil {
+ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID)
+		if execErr != nil {
+			var pgErr *pgconn.PgError
+			if !errors.As(execErr, &pgErr) || pgErr.Code != "23505" {
+				_ = savepoint.Rollback(ctx)
+				return fmt.Errorf("ensure scheduled security dataset: %w", execErr)
+			}
+			if err := savepoint.Rollback(ctx); err != nil {
+				return fmt.Errorf("ensure scheduled security dataset: recover from concurrent replay: %w", err)
+			}
+		} else if err := savepoint.Commit(ctx); err != nil {
 			return fmt.Errorf("ensure scheduled security dataset: %w", err)
 		}
 	}

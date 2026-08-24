@@ -119,7 +119,7 @@ flowchart TD
     S["ClickHouse sink<br/>external_clickhouse.go"]
     T[("project_membership_transitions<br/>ReplacingMergeTree(last_synced)<br/>ORDER BY org_id, subject_kind, repo_id,<br/>subject_id, occurred_at, event_id")]
     MS["worker_external_project_memberships_sunk_total<br/>{provider}"]
-    PR[["project_membership_presence<br/>view: latest transition, else work_items column"]]
+    PR[["project_membership_presence<br/>per (subject, project): active iff the latest<br/>row touching it JOINED it<br/>else work_items column, per subject"]]
     W[("work_items FINAL<br/>current-value column, no history")]
     CF["Context Fabric devhealthsource<br/>BELONGS_TO_PROJECT edge"]
     RC["ExternalRecomputeScope<br/>coalesced in Valkey, scheduled after commit"]
@@ -217,13 +217,32 @@ Load-bearing properties, and why each is where it is:
   the repo-as-project value with `unresolvable_project_entity`, and the presence
   view's column arm filters it out again on the read side -- that arm reads rows
   written long before this kind existed, which never passed the sink's check.
-- **An empty destination is the unassignment sentinel.** `to_project_id = ""`
-  means removed from every project, and it is the one value exempt from the
-  resolve-to-`projects` constraint. The transition arm yields no row for it and
-  the column arm's anti-join runs against the UNFILTERED transition set, so the
-  subject does not fall through and resurrect the value the removal retired. A
-  destination key with NO id is refused; an id with no key is normal, since a
-  GitHub board has a number and a title and no key at all.
+- **Presence is keyed per (subject, PROJECT), not one project per subject.** A
+  subject holds several memberships at once -- a GitHub pull request sits on as
+  many boards as someone adds it to -- so each transition row names the project
+  LEFT in `from_project_id` and the project JOINED in `to_project_id`, and
+  TOUCHES up to two memberships. A membership is active when the last thing that
+  happened to it was joining it. An earlier shape `argMax`'d one project per
+  subject and failed in the direction that hurts: removing the subject from its
+  latest board made the transition arm yield nothing and the column arm's
+  anti-join suppress the fallback, so a PR still on board A vanished entirely
+  because it had left board B. One incomplete answer became no answer, and a
+  missing edge reads as "not a member" rather than "ask again".
+- **A removal must name the board it left.** `(P, "")` retires membership P;
+  `(P, Q)` is a move carried in ONE row, which is what lets the view retire P
+  and create Q from a single observed event instead of making a consumer pair up
+  two rows and guess whether a missing partner means "not synced yet" or "never
+  happened". `("", "")` is REFUSED -- under the older per-subject keying it meant
+  "removed from everything", but per-project it names nothing, so it could not
+  retire or create any membership and would sit in the history looking like a
+  removal that silently did nothing. A destination key with NO id is refused
+  too; an id with no key is normal, since a GitHub board has a number and a
+  title and no key at all.
+- **The column arm stays per SUBJECT and is excluded on ANY transition row.**
+  `work_items.project_id` holds one current value with no history, so it can
+  only ever describe a single membership. Mixing that history-less value into a
+  per-project answer would invent a membership nobody observed, so a subject
+  with any observed history is answered by that history, whole.
 - **The effects hop is where the rows were lost the SECOND time,** and it is
   drawn because a diagram that stops at the fetch result would have hidden it
   exactly as the tests did. The route merges the producer's rows, the effects

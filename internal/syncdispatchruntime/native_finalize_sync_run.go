@@ -319,7 +319,15 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 	// counter follows. The Postgres invalidation
 	// (invalidateSyncCoverageForIntegration) committed just now; this is
 	// its cache-layer twin (CHAOS-4226).
-	provider := resolveRunProviderBestEffort(ctx, service.pool, run.integrationID)
+	//
+	// The provider label is a telemetry-only lookup, so it gets its own
+	// short budget rather than the River job's: a saturated domain pool
+	// must not hold a committed finalize hostage on the way to the cache
+	// hop (codex R1, CHAOS-4226). resolveRunProviderBestEffort already
+	// degrades to "unknown" on any error, timeout included.
+	providerCtx, cancelProvider := context.WithTimeout(ctx, postCommitLookupTimeout)
+	provider := resolveRunProviderBestEffort(providerCtx, service.pool, run.integrationID)
+	cancelProvider()
 	service.invalidateCoverageCache(ctx, run, provider)
 
 	if isZeroUnit {
@@ -352,6 +360,11 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 // finalize already committed; a slow Valkey must not hold the River job
 // (and its lease) hostage, it must show up as an unconsumed emit.
 const coverageCacheInvalidationTimeout = 5 * time.Second
+
+// postCommitLookupTimeout bounds the telemetry-only provider lookup that
+// precedes the cache hop, for the same reason: the whole post-commit tail
+// (lookup + Valkey) must fit well inside the finalize job's own deadline.
+const postCommitLookupTimeout = 2 * time.Second
 
 // invalidateCoverageCache is the post-commit cache hop: one emit per
 // finalized run, consumed only when Valkey acknowledged the epoch bump.

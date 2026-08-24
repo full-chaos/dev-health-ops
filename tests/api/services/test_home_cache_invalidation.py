@@ -171,9 +171,15 @@ async def test_home_read_without_any_finalize_still_hits_the_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_memory_fallback_reads_the_same_key_as_epoch_zero(monkeypatch):
-    """A Valkey outage flips RedisBackend to its memory fallback; the epoch
-    key is the same string there and an absent key is deterministically 0,
-    so the two backends never split the key scheme."""
+    """A Valkey outage at construction flips RedisBackend to its memory
+    fallback; the epoch key is the same string there and an absent key is
+    deterministically 0, so the two backends never split the key scheme.
+
+    This pins the key contract only. A process that fell back to memory
+    CANNOT observe a Go-side bump (nothing in-process reads shared Valkey
+    again); its staleness is bounded by the entry TTL exactly as before
+    CHAOS-4226 -- see the PR RISK-NOTES / follow-up on RedisBackend
+    reconnect."""
     filters = _filters()
     memory_cache = TTLCache(ttl_seconds=60)
     valkey_cache, _fake = _valkey_cache(monkeypatch)

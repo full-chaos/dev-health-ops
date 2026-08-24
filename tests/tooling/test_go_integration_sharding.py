@@ -380,7 +380,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # item travels through the effects builder and the ClickHouse adapters into
     # the migrated tables. That one genuinely provisions a container, which is
     # why it moves the integration count and the other five do not.
-    assert len(expected_provider_tests) == 1008
+    #
+    # Then 2 more ordinary tests (1008 -> 1010): the superseded prepared
+    # snapshot must be distinguishable from tampering, and only an untouched
+    # document may be discarded. Both are pure predicate tests over in-memory
+    # ledger state and touch no database, so the integration-tagged count stays
+    # 114.
+    assert len(expected_provider_tests) == 1010
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -397,7 +403,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1008
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1010
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -458,7 +464,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1008
+    assert len(selected_tests) == len(set(selected_tests)) == 1010
     assert set(selected_tests) == expected_tests
 
 

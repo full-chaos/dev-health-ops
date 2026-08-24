@@ -49,7 +49,7 @@ const (
 // in the backoff calculation, matching Python's
 // `getattr(exc, "retry_after_seconds", None)`.
 type DiscoveryExecutor interface {
-	Discover(ctx context.Context, runID string) (summary map[string]any, err error)
+	Discover(ctx context.Context, orgID, runID string) (summary map[string]any, err error)
 }
 
 // retryAfterProvider is satisfied by a DiscoveryExecutor error that carries a
@@ -111,7 +111,7 @@ func (service *NativeReferenceDiscoveryService) Discover(ctx context.Context, ar
 	stopHeartbeat := service.startHeartbeat(args.SyncRunID(), leaseOwner, deadline)
 	defer stopHeartbeat()
 
-	summary, discoverErr := service.executor.Discover(ctx, args.SyncRunID())
+	summary, discoverErr := service.executor.Discover(ctx, args.OrganizationID(), args.SyncRunID())
 	if discoverErr != nil {
 		return service.handleFailure(ctx, args.SyncRunID(), leaseOwner, discoverErr)
 	}

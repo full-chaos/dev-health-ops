@@ -75,6 +75,93 @@ func TestHTTPBridgeRejectsUnsafeOrUnsuccessfulDelivery(t *testing.T) {
 	}
 }
 
+// TestHTTPBridgePopulatesReferenceDiscoveryWithIdentifiersOnly pins the
+// CHAOS-4175 (b) ruling's security property directly at the wire level: the
+// request body carries exactly organization_id/sync_run_id (no field this
+// call could carry credential material through), and the response body's
+// summary dict is decoded and returned verbatim.
+func TestHTTPBridgePopulatesReferenceDiscoveryWithIdentifiersOnly(t *testing.T) {
+	t.Parallel()
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		path = request.URL.Path
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 2 || payload["organization_id"] != testOrg || payload["sync_run_id"] != testRun {
+			t.Errorf("payload=%#v want identifiers only", payload)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"status":               "success",
+			"provider":             "linear",
+			"reference_team_keys":  []string{"ENG"},
+			"reference_sprint_ids": []string{"sprint-1"},
+		})
+	}))
+	defer server.Close()
+
+	bridge, err := NewHTTPBridge(HTTPBridgeConfig{
+		BaseURL: server.URL, BearerToken: "bridge-token", Timeout: time.Second, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := bridge.PopulateReferenceDiscovery(context.Background(), testOrg, testRun)
+	if err != nil {
+		t.Fatalf("PopulateReferenceDiscovery: %v", err)
+	}
+	if path != "/api/internal/worker-sync/reference-discovery-populate" {
+		t.Fatalf("path=%q", path)
+	}
+	if summary["status"] != "success" || summary["provider"] != "linear" {
+		t.Fatalf("summary=%#v", summary)
+	}
+	teamKeys, ok := summary["reference_team_keys"].([]any)
+	if !ok || len(teamKeys) != 1 || teamKeys[0] != "ENG" {
+		t.Fatalf("summary[reference_team_keys]=%#v", summary["reference_team_keys"])
+	}
+}
+
+// TestHTTPBridgePopulateReferenceDiscoveryFailsClosedOnBadInputOrResponse
+// mutation-proves both failure edges: an invalid identifier never reaches
+// the network, and a non-2xx or non-JSON response is a genuine error, not
+// a silently empty summary.
+func TestHTTPBridgePopulateReferenceDiscoveryFailsClosedOnBadInputOrResponse(t *testing.T) {
+	t.Parallel()
+	var handler func(http.ResponseWriter, *http.Request)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		handler(response, request)
+	}))
+	defer server.Close()
+	bridge, err := NewHTTPBridge(HTTPBridgeConfig{
+		BaseURL: server.URL, BearerToken: "bridge-token", Timeout: time.Second, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := bridge.PopulateReferenceDiscovery(context.Background(), "not-a-uuid", testRun); !errors.Is(err, ErrInvalidBridge) {
+		t.Fatalf("invalid orgID error=%v want=%v", err, ErrInvalidBridge)
+	}
+
+	handler = func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}
+	if _, err := bridge.PopulateReferenceDiscovery(context.Background(), testOrg, testRun); !errors.Is(err, ErrBridgeRequest) {
+		t.Fatalf("non-2xx error=%v want=%v", err, ErrBridgeRequest)
+	}
+
+	handler = func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte("not json"))
+	}
+	if _, err := bridge.PopulateReferenceDiscovery(context.Background(), testOrg, testRun); !errors.Is(err, ErrBridgeRequest) {
+		t.Fatalf("invalid JSON body error=%v want=%v", err, ErrBridgeRequest)
+	}
+}
+
 func TestHTTPBridgeConnectionBudgetDoesNotCapWholeRequest(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

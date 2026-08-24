@@ -72,14 +72,15 @@ func RegisterWorkers(
 	bridge CoordinatorBridge,
 	postSync *NativePostSyncService,
 	finalizeSyncRun *NativeFinalizeSyncRunService,
+	referenceDiscovery *NativeReferenceDiscoveryService,
 ) error {
-	if workers == nil || bridge == nil || postSync == nil || finalizeSyncRun == nil {
+	if workers == nil || bridge == nil || postSync == nil || finalizeSyncRun == nil || referenceDiscovery == nil {
 		return ErrWorkerRegistration
 	}
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{service: finalizeSyncRun}) != nil ||
 		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
-		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil {
+		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{service: referenceDiscovery}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil
@@ -160,7 +161,7 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 
 type referenceDiscoveryWorker struct {
 	river.WorkerDefaults[ReferenceDiscoveryArgs]
-	bridge CoordinatorBridge
+	service *NativeReferenceDiscoveryService
 }
 
 type teamAutoimportWorker struct {
@@ -188,11 +189,11 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 }
 
 func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job[ReferenceDiscoveryArgs]) (err error) {
-	if worker == nil || worker.bridge == nil || job == nil {
+	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	defer func() { finishCoordinatorSpan(span, err) }()
-	err = worker.bridge.Discover(ctx, job.Args)
+	err = worker.service.Discover(ctx, job.Args)
 	return err
 }

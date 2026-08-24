@@ -117,7 +117,7 @@ type fakeDiscoveryExecutor struct {
 	calls   int
 }
 
-func (executor *fakeDiscoveryExecutor) Discover(ctx context.Context, runID string) (map[string]any, error) {
+func (executor *fakeDiscoveryExecutor) Discover(ctx context.Context, orgID, runID string) (map[string]any, error) {
 	executor.calls++
 	return executor.summary, executor.err
 }

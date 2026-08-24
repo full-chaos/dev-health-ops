@@ -319,7 +319,23 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun); err != nil {
+	// The populate step (credential resolution + run_team_autoimport_strict)
+	// stays behind the narrow, identifiers-only bridge call by design
+	// (CHAOS-4175 ruling, 2026-08-24) -- everything else (claim/lease/
+	// heartbeat/retry-backoff/outbox wakeups/state transitions) is native.
+	discoveryExecutor, err := syncdispatchruntime.NewBridgeDiscoveryExecutor(bridge)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	referenceDiscovery, err := syncdispatchruntime.NewNativeReferenceDiscoveryService(
+		postgresDatabase.pools.Domain,
+		logger,
+		discoveryExecutor,
+	)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// A registered kind may only be consumed once its durable route permits

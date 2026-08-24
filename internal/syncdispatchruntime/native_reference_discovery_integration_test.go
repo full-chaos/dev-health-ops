@@ -38,6 +38,7 @@ CREATE TABLE sync_runs (
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
  dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
+ cost_class text NOT NULL DEFAULT 'standard',
  available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
  last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );

@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestPostgresJiraIncidentEntitlementHonorsRevocation(t *testing.T) {
+func TestPostgresIncidentEntitlementHonorsRevocation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -58,7 +58,7 @@ INSERT INTO feature_flags (id, key, min_tier, is_enabled)
 VALUES ($1, 'canonical_incident_ingestion', 'community', true)`, featureID); err != nil {
 		t.Fatal(err)
 	}
-	entitlement := PostgresJiraIncidentEntitlement{
+	entitlement := PostgresIncidentEntitlement{
 		Pool: pool,
 		Now: func() time.Time {
 			return time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
@@ -72,7 +72,7 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled)
 VALUES ($1, $2, false)`, orgID, featureID); err != nil {
 		t.Fatal(err)
 	}
-	if err := entitlement.Require(ctx, orgID); !errors.Is(err, ErrJiraIncidentEntitlementDisabled) {
+	if err := entitlement.Require(ctx, orgID); !errors.Is(err, ErrIncidentEntitlementDisabled) {
 		t.Fatalf("revoked grant error=%v", err)
 	}
 }

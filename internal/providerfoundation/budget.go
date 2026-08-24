@@ -258,29 +258,31 @@ func (g ValkeyBackoffGate) Penalize(ctx context.Context, delay time.Duration) er
 }
 
 type Metrics struct {
-	mu                   sync.Mutex
-	requests             map[string]uint64
-	budgetDenied         map[string]uint64
-	budgetReleaseErrors  map[string]uint64
-	inventoryPageCap     map[string]uint64
-	perRunTruncation     map[string]uint64
-	artifactSkipped      map[string]uint64
-	snapshotDiscarded    map[string]uint64
-	resumeReanchor       map[string]uint64
-	unitTerminalWithRows map[string]uint64
+	mu                         sync.Mutex
+	requests                   map[string]uint64
+	budgetDenied               map[string]uint64
+	budgetReleaseErrors        map[string]uint64
+	inventoryPageCap           map[string]uint64
+	perRunTruncation           map[string]uint64
+	artifactSkipped            map[string]uint64
+	snapshotDiscarded          map[string]uint64
+	resumeReanchor             map[string]uint64
+	unitTerminalWithRows       map[string]uint64
+	incidentEntitlementRefused map[string]uint64
 }
 
 func NewMetrics() *Metrics {
 	return &Metrics{
-		requests:             map[string]uint64{},
-		budgetDenied:         map[string]uint64{},
-		budgetReleaseErrors:  map[string]uint64{},
-		inventoryPageCap:     map[string]uint64{},
-		perRunTruncation:     map[string]uint64{},
-		artifactSkipped:      map[string]uint64{},
-		snapshotDiscarded:    map[string]uint64{},
-		resumeReanchor:       map[string]uint64{},
-		unitTerminalWithRows: map[string]uint64{},
+		requests:                   map[string]uint64{},
+		budgetDenied:               map[string]uint64{},
+		budgetReleaseErrors:        map[string]uint64{},
+		inventoryPageCap:           map[string]uint64{},
+		perRunTruncation:           map[string]uint64{},
+		artifactSkipped:            map[string]uint64{},
+		snapshotDiscarded:          map[string]uint64{},
+		resumeReanchor:             map[string]uint64{},
+		unitTerminalWithRows:       map[string]uint64{},
+		incidentEntitlementRefused: map[string]uint64{},
 	}
 }
 
@@ -547,6 +549,37 @@ func (m *Metrics) RecordResumeReanchor(provider, dataset, phase string) {
 // CHAOS-4130 ran on undetected for days: a unit destroyed mid-stream is
 // throwing away cursor position for work it had already paid for, and no
 // healthy route does it. Any non-zero rate here deserves an operator.
+// metricIncidentEntitlementSeamVocabulary is the closed set of execution
+// seams at which a canonical-incident entitlement re-check can refuse a unit:
+// before provider fetch, and at the ClickHouse write boundary.
+var metricIncidentEntitlementSeamVocabulary = map[string]struct{}{
+	"collect": {}, "write": {},
+}
+
+// MetricIncidentEntitlementSeamLabel bounds the entitlement seam label.
+func MetricIncidentEntitlementSeamLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricIncidentEntitlementSeamVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordIncidentEntitlementRefused counts ONE unit refused by the
+// execution-time canonical-incident entitlement re-check, by bounded provider,
+// dataset and seam. One series carries every gated provider (Jira incidents
+// and the PagerDuty datasets) -- the provider label is what distinguishes
+// them, so a second provider must never mint a second series (CHAOS-4219).
+func (m *Metrics) RecordIncidentEntitlementRefused(provider, dataset, seam string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.incidentEntitlementRefused[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricIncidentEntitlementSeamLabel(seam)]++
+}
+
 func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
 	if m == nil {
 		return
@@ -728,9 +761,16 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
-	return writeProviderDatasetCounter(
+	if err := writeProviderDatasetCounter(
 		writer, "dev_health_provider_unit_terminal_with_rows_total",
 		"Provider units terminalized while holding committed rows, by bounded provider and dataset.",
 		m.unitTerminalWithRows,
+	); err != nil {
+		return err
+	}
+	return writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_incident_entitlement_refused_total",
+		"Provider units refused by the execution-time canonical-incident entitlement re-check, by bounded provider, dataset, and seam.",
+		"seam", m.incidentEntitlementRefused,
 	)
 }

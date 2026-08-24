@@ -67,7 +67,7 @@ func TestPagerDutyServicesRouteBuildsTypedServicesAndSeparateMappingEffects(t *t
 	}
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": " Acme "}}
 	normalizedAt := time.Date(2026, 8, 9, 12, 0, 0, 987654321, time.FixedZone("PDT", -7*60*60))
-	batch, err := (PagerDutyServicesRouteHandler{MaxPages: 10}).Collect(
+	batch, err := (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 10}).Collect(
 		context.Background(), claim, credential, client, normalizedAt,
 	)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestPagerDutyServicesRouteBuildsTypedServicesAndSeparateMappingEffects(t *t
 func TestPagerDutyServicesRouteRejectsAnotherPagerDutyDataset(t *testing.T) {
 	claim := nativeTestClaim("pagerduty", "teams")
 	client := pagerDutyServicesTestClient(t, &pagerDutyServicesDoer{t: t}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
-	_, err := (PagerDutyServicesRouteHandler{}).Collect(
+	_, err := (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -150,20 +150,20 @@ func TestPagerDutyServicesRoutePreservesRetryAuthCapAndLeaseSemantics(t *testing
 	retryClient := pagerDutyServicesTestClient(t, clientRetryDoer, providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
-	batch, err := (PagerDutyServicesRouteHandler{}).Collect(context.Background(), claim, credential, retryClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	batch, err := (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(context.Background(), claim, credential, retryClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 	if err != nil || len(clientRetryDoer.requests) != 2 || len(batch.Effects) != 2 {
 		t.Fatalf("retry batch=%+v error=%v requests=%d", batch, err, len(clientRetryDoer.requests))
 	}
 	authDoer := &pagerDutyServicesDoer{t: t, responses: []pagerDutyServicesResponse{{status: http.StatusUnauthorized, body: `{"message":"bad token"}`}}}
 	authClient := pagerDutyServicesTestClient(t, authDoer, providerfoundation.RetryPolicy{MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
-	_, err = (PagerDutyServicesRouteHandler{}).Collect(context.Background(), claim, credential, authClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	_, err = (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(context.Background(), claim, credential, authClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 	var providerErr *providerfoundation.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorAuthentication || len(authDoer.requests) != 1 {
 		t.Fatalf("auth error=%v requests=%d", err, len(authDoer.requests))
 	}
 	capDoer := &pagerDutyServicesDoer{t: t, responses: []pagerDutyServicesResponse{{body: `{"services":[{"id":"one"}],"more":true}`}}}
 	capClient := pagerDutyServicesTestClient(t, capDoer, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
-	_, err = (PagerDutyServicesRouteHandler{MaxPages: 1}).Collect(context.Background(), claim, credential, capClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	_, err = (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(context.Background(), claim, credential, capClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("cap error=%v", err)
 	}
@@ -186,7 +186,7 @@ func TestPagerDutyServicesRoutePreservesRetryAuthCapAndLeaseSemantics(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (PagerDutyServicesRouteHandler{}).Collect(context.Background(), claim, credential, leaseClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	_, err = (PagerDutyServicesRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(context.Background(), claim, credential, leaseClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 	if !errors.Is(err, providerfoundation.ErrLeaseLost) || len(leaseDoer.requests) != 1 {
 		t.Fatalf("lease error=%v requests=%d asserts=%d", err, len(leaseDoer.requests), asserts)
 	}

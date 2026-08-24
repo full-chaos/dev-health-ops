@@ -16,14 +16,21 @@ import (
 const pagerDutyEscalationPoliciesColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,name,description,is_deleted,deleted_at"
 
 type PagerDutyEscalationPoliciesClickHouseEffects struct {
-	Conn  driver.Conn
-	Lease providerfoundation.LeaseGuard
+	Conn        driver.Conn
+	Lease       providerfoundation.LeaseGuard
+	Entitlement IncidentEntitlement
+	Metrics     *providerfoundation.Metrics
 }
 
 func (sink PagerDutyEscalationPoliciesClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+		return err
+	}
+	if err := requireIncidentEntitlement(
+		ctx, sink.Entitlement, sink.Metrics, claim, IncidentEntitlementSeamWrite,
+	); err != nil {
 		return err
 	}
 	rows, err := decodeEffectRows[pagerDutyEscalationPolicyRow](effect)
@@ -97,7 +104,7 @@ func (sink PagerDutyEscalationPoliciesClickHouseEffects) InspectEffect(
 func (sink PagerDutyEscalationPoliciesClickHouseEffects) validateRequest(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
-	if ctx == nil || sink.Conn == nil || sink.Lease == nil || claim.Validate() != nil ||
+	if ctx == nil || sink.Conn == nil || sink.Lease == nil || sink.Entitlement == nil || claim.Validate() != nil ||
 		claim.Provider != "pagerduty" || claim.Dataset != "escalation-policies" ||
 		effect.Destination != "operational_escalation_policies" {
 		return ErrInvalidConfiguration

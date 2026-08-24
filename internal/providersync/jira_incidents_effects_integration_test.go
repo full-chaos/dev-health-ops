@@ -33,9 +33,9 @@ CREATE TABLE operational_incidents (
 func TestJiraIncidentReadbackIsExactAndTenantScoped(t *testing.T) {
 	ctx, sink, readback := newJiraIncidentIntegrationSink(t)
 	revoked := false
-	sink.Entitlement = jiraIncidentEntitlementFunc(func(context.Context, string) error {
+	sink.Entitlement = incidentEntitlementFunc(func(context.Context, string) error {
 		if revoked {
-			return ErrJiraIncidentEntitlementDisabled
+			return ErrIncidentEntitlementDisabled
 		}
 		return nil
 	})
@@ -94,7 +94,7 @@ func newJiraIncidentIntegrationSink(
 	}
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	return ctx, JiraIncidentClickHouseEffects{
-		Writer: conn, Lease: lease, Entitlement: allowJiraIncidentEntitlement,
+		Writer: conn, Lease: lease, Entitlement: allowIncidentEntitlement,
 	}, JiraIncidentClickHouseReadback{Conn: conn, Lease: lease}
 }
 

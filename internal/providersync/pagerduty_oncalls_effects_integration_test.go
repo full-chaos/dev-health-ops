@@ -67,7 +67,8 @@ func TestPagerDutyOnCallsEffectUsesMigratedClickHouseUpsertsAndExactReplay(t *te
 		t.Fatal(err)
 	}
 	sink := PagerDutyOnCallsClickHouseEffects{
-		Conn: conn, ProviderInstanceID: "Acme",
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, ProviderInstanceID: "Acme",
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
 	if inspection, err := sink.InspectEffect(ctx, claim, initialEffect); err != nil || inspection != EffectAbsent {

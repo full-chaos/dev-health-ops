@@ -70,7 +70,8 @@ func TestPagerDutyIncidentFamilyEffectsUseMigratedClickHouseAndExactReplay(t *te
 	}
 
 	sink := PagerDutyIncidentFamilyClickHouseEffects{
-		Conn: conn, ProviderInstanceID: "Acme",
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, ProviderInstanceID: "Acme",
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
 	cases := []struct {

@@ -22,12 +22,19 @@ type PagerDutyTeamsClickHouseEffects struct {
 	Lease              providerfoundation.LeaseGuard
 	ProviderInstanceID string
 	Now                func() time.Time
+	Entitlement        IncidentEntitlement
+	Metrics            *providerfoundation.Metrics
 }
 
 func (sink PagerDutyTeamsClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+		return err
+	}
+	if err := requireIncidentEntitlement(
+		ctx, sink.Entitlement, sink.Metrics, claim, IncidentEntitlementSeamWrite,
+	); err != nil {
 		return err
 	}
 	rows, err := decodeEffectRows[pagerDutyTeamRow](effect)
@@ -160,7 +167,7 @@ func (sink PagerDutyTeamsClickHouseEffects) providerInstance(
 func (sink PagerDutyTeamsClickHouseEffects) validateRequest(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
-	if ctx == nil || sink.Conn == nil || sink.Lease == nil || claim.Validate() != nil ||
+	if ctx == nil || sink.Conn == nil || sink.Lease == nil || sink.Entitlement == nil || claim.Validate() != nil ||
 		claim.Provider != "pagerduty" || claim.Dataset != "teams" ||
 		effect.Destination != "operational_teams" {
 		return ErrInvalidConfiguration

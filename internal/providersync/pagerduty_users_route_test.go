@@ -59,7 +59,7 @@ func TestPagerDutyUsersRouteUsesOffsetPaginationAndCanonicalRow(t *testing.T) {
 		Provider: "pagerduty", Config: map[string]string{"subdomain": " Acme "},
 	}
 	normalizedAt := time.Date(2026, 8, 9, 12, 0, 0, 987654321, time.FixedZone("PDT", -7*60*60))
-	batch, err := (PagerDutyUsersRouteHandler{MaxPages: 10}).Collect(
+	batch, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 10}).Collect(
 		context.Background(), claim, credential, client, normalizedAt,
 	)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestPagerDutyUsersRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 	retryClient := pagerDutyUsersTestClient(t, clientRetryDoer, providerfoundation.RetryPolicy{
 		MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
-	batch, err := (PagerDutyUsersRouteHandler{}).Collect(
+	batch, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, retryClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil || len(clientRetryDoer.requests) != 2 || len(batch.Effects) != 1 {
@@ -125,7 +125,7 @@ func TestPagerDutyUsersRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 	authClient := pagerDutyUsersTestClient(t, authDoer, providerfoundation.RetryPolicy{
 		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 	})
-	_, err = (PagerDutyUsersRouteHandler{}).Collect(
+	_, err = (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, authClient, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	var providerErr *providerfoundation.ProviderError
@@ -143,13 +143,13 @@ func TestPagerDutyUsersRouteFailsClosedOnPaginationCapAndMissingInstance(t *test
 			body: `{"users":[{"id":"one"}],"more":true}`,
 		}}}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
-	_, err := (PagerDutyUsersRouteHandler{MaxPages: 1}).Collect(
+	_, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim, credential, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
 	if !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("cap error=%v", err)
 	}
-	_, err = (PagerDutyUsersRouteHandler{}).Collect(
+	_, err = (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, providerfoundation.Credential{Provider: "pagerduty"}, client,
 		time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
 	)
@@ -164,7 +164,7 @@ func TestPagerDutyUsersRouteRejectsAnotherPagerDutyDataset(t *testing.T) {
 	client := pagerDutyUsersTestClient(t, &pagerDutyUsersDoer{
 		t: t, responses: []pagerDutyUsersResponse{{body: `{"users":[],"more":false}`}},
 	}, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond})
-	_, err := (PagerDutyUsersRouteHandler{}).Collect(
+	_, err := (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
@@ -197,7 +197,7 @@ func TestPagerDutyUsersRouteStopsWhenLeaseExpiresBetweenPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (PagerDutyUsersRouteHandler{}).Collect(
+	_, err = (PagerDutyUsersRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),

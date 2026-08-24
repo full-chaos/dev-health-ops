@@ -171,6 +171,44 @@ func TestBuildProviderSyncHandlerConfiguresLinearAccountDiscovery(t *testing.T) 
 	}
 }
 
+// stubIncidentEntitlement satisfies the PagerDuty/Jira construction dependency
+// without a database; these tests pin wiring, not the decision.
+type stubIncidentEntitlement struct{}
+
+func (stubIncidentEntitlement) Require(context.Context, string) error { return nil }
+
+var pagerDutyGatedDatasets = []string{
+	"services", "business-services", "escalation-policies", "schedules",
+	"on-calls", "users", "teams", "incidents", "incident-alerts",
+	"incident-log-entries", "incident-notes",
+}
+
+// Every PagerDuty dataset is canonical-incident gated, so the executor must
+// refuse to build without the execution-time entitlement rather than construct
+// a route that passes a disabled organization through (CHAOS-4219). Jira
+// incidents already failed closed this way at the same seam.
+func TestBuildProviderSyncHandlerRefusesPagerDutyRoutesWithoutIncidentEntitlement(t *testing.T) {
+	t.Parallel()
+	for _, dataset := range pagerDutyGatedDatasets {
+		dataset := dataset
+		t.Run(dataset, func(t *testing.T) {
+			t.Parallel()
+			handler, _ := buildProviderSyncHandler(
+				nil, nil, nil, nil, nil,
+				nil, nil, slog.Default(),
+			)
+			_, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: "pagerduty", Dataset: dataset,
+				}},
+			})
+			if !errors.Is(err, errWorkerDependencyUnavailable) {
+				t.Fatalf("nil entitlement err=%v want errWorkerDependencyUnavailable", err)
+			}
+		})
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEffects(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -194,9 +232,9 @@ func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEff
 		test := test
 		t.Run(test.dataset, func(t *testing.T) {
 			t.Parallel()
-			handler, _ := buildProviderSyncHandler(
+			handler, providerMetrics := buildProviderSyncHandler(
 				nil, nil, nil, nil, nil,
-				nil, nil, slog.Default(),
+				stubIncidentEntitlement{}, nil, slog.Default(),
 			)
 			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 				Claim: providersync.Claim{Unit: providersync.Unit{
@@ -208,6 +246,9 @@ func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEff
 			}
 			if got := fmt.Sprintf("%T", executor.Handler); got != test.handlerType {
 				t.Fatalf("handler=%s want=%s", got, test.handlerType)
+			}
+			if field := reflect.ValueOf(executor.Handler).FieldByName("Entitlement"); !field.IsValid() || field.IsNil() {
+				t.Fatalf("route handler %s carries no execution-time entitlement", test.handlerType)
 			}
 			if executor.EffectsFactory == nil || executor.Committer.Sink != nil {
 				t.Fatalf("effects factory=%v startup sink=%T", executor.EffectsFactory != nil, executor.Committer.Sink)
@@ -228,6 +269,14 @@ func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEff
 			if field := value.FieldByName("ProviderInstanceID"); field.IsValid() && field.String() != "acme" {
 				t.Fatalf("provider instance=%q want=acme", field.String())
 			}
+			if field := value.FieldByName("Entitlement"); !field.IsValid() || field.IsNil() {
+				t.Fatalf("sink %s carries no execution-time entitlement", test.sinkType)
+			}
+			// The write-seam refusal must land on the ONE scraped Metrics
+			// instance, not a per-sink copy that is never registered.
+			if field := value.FieldByName("Metrics"); !field.IsValid() || field.Pointer() != reflect.ValueOf(providerMetrics).Pointer() {
+				t.Fatalf("sink %s metrics are not the shared provider metrics instance", test.sinkType)
+			}
 		})
 	}
 }
@@ -244,7 +293,7 @@ func TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator(t *testing.T) 
 	})
 	handler, _ := buildProviderSyncHandlerWithRuntimeDependencies(
 		nil, nil, hydrator,
-		nil, nil, nil, nil, nil, slog.Default(), workItemsRuntimeConfig{},
+		nil, nil, nil, stubIncidentEntitlement{}, nil, slog.Default(), workItemsRuntimeConfig{},
 	)
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 		Claim: providersync.Claim{Unit: providersync.Unit{

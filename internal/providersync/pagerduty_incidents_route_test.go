@@ -52,7 +52,7 @@ func TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor
 	claim := nativeTestClaim("pagerduty", "incidents")
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": " Acme "}}
 	normalizedAt := time.Date(2026, 7, 19, 12, 0, 0, 987654321, time.FixedZone("PDT", -7*60*60))
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, client, normalizedAt,
 	)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestPagerDutyIncidentFamilyRouteCapsChildrenAndClampsToEarliestUndrainedInc
 	client := pagerDutyIncidentFamilyTestClient(t, doer)
 	claim := nativeTestClaim("pagerduty", "incident-alerts")
 	claim.DatasetOptions = map[string]any{"enrichment_cap": 1}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		client, time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -132,7 +132,7 @@ func TestPagerDutyIncidentFamilyRouteKeepsSinceBoundaryInclusive(t *testing.T) {
 			{"id":"PI-BEFORE","created_at":"2026-06-30T23:59:59Z","updated_at":"2026-06-30T23:59:59Z"},
 			{"id":"PI-BOUNDARY","created_at":"` + boundary + `","updated_at":"` + boundary + `"}],"more":false}`,
 	}}}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -155,7 +155,7 @@ func TestPagerDutyIncidentFamilyRouteDoesNotPaginateNotes(t *testing.T) {
 		{body: `{"incidents":[{"id":"PI1","created_at":"2026-07-10T12:00:00Z","updated_at":"2026-07-10T12:00:00Z"}],"more":false}`},
 		{body: `{"notes":[{"id":"N1","content":"first note","created_at":"2026-07-10T12:01:00Z"}]}`},
 	}}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -175,7 +175,7 @@ func TestPagerDutyIncidentFamilyRouteDisabledEnrichmentMakesNoProviderCall(t *te
 	claim := nativeTestClaim("pagerduty", "incident-notes")
 	claim.DatasetOptions = map[string]any{"enabled": false}
 	doer := &pagerDutyIncidentFamilyDoer{t: t}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -194,7 +194,7 @@ func TestPagerDutyIncidentFamilyRouteZeroCapReadsParentsWithoutChildRequests(t *
 	doer := &pagerDutyIncidentFamilyDoer{t: t, responses: []pagerDutyIncidentFamilyResponse{{
 		body: `{"incidents":[{"id":"PI1","created_at":"2026-07-10T12:00:00Z","updated_at":"2026-07-10T12:00:00Z"}],"more":false}`,
 	}}}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -213,7 +213,7 @@ func TestPagerDutyIncidentFamilyRouteRejectsPaginationCap(t *testing.T) {
 	doer := &pagerDutyIncidentFamilyDoer{t: t, responses: []pagerDutyIncidentFamilyResponse{{
 		body: `{"incidents":[{"id":"PI1","created_at":"2026-07-10T12:00:00Z"}],"more":true}`,
 	}}}
-	_, err := (PagerDutyIncidentFamilyRouteHandler{MaxPages: 1}).Collect(
+	_, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement, MaxPages: 1}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}},
 		pagerDutyIncidentFamilyTestClient(t, doer), time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC),
@@ -269,7 +269,7 @@ func TestPagerDutyIncidentsRouteAdvancesWatermarkOnAnEmptyWindow(t *testing.T) {
 	client := pagerDutyIncidentFamilyTestClient(t, doer)
 	claim := nativeTestClaim("pagerduty", "incidents")
 	credential := providerfoundation.Credential{Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"}}
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).Collect(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
 		context.Background(), claim, credential, client,
 		time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
 	)
@@ -292,7 +292,7 @@ func TestPagerDutyIncidentsRouteAdvancesWatermarkOnAnEmptyWindow(t *testing.T) {
 // is preserved.
 func TestPagerDutyIncidentsRouteWithholdsWatermarkWhenTheWindowWasCapped(t *testing.T) {
 	t.Parallel()
-	batch, err := (PagerDutyIncidentFamilyRouteHandler{}).collectPagerDutyIncidents(
+	batch, err := (PagerDutyIncidentFamilyRouteHandler{Entitlement: allowIncidentEntitlement}).collectPagerDutyIncidents(
 		nativeTestClaim("pagerduty", "incidents"), "acme",
 		time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
 		pagerDutyIncidentPageCollection{Items: nil, Pages: 1, CapReached: true},

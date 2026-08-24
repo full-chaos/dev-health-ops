@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-func buildJiraIncidentEntitlementDecisionForOracle(
+func buildIncidentEntitlementDecisionForOracle(
 	t *testing.T, input map[string]any,
-) jiraIncidentFeatureDecision {
+) canonicalIncidentFeatureDecision {
 	t.Helper()
-	state := jiraIncidentFeatureState{
+	state := canonicalIncidentFeatureState{
 		Registered:      input["registered"].(bool),
 		GloballyEnabled: input["globally_enabled"].(bool),
 		MinTier:         input["min_tier"].(string), OrgTier: input["org_tier"].(string),
@@ -17,7 +17,7 @@ func buildJiraIncidentEntitlementDecisionForOracle(
 	}
 	if raw := input["org_override"]; raw != nil {
 		value := raw.(map[string]any)
-		state.OrgOverride = &jiraIncidentFeatureOverride{Enabled: value["enabled"].(bool)}
+		state.OrgOverride = &canonicalIncidentFeatureOverride{Enabled: value["enabled"].(bool)}
 		if encoded, ok := value["expires_at"].(string); ok && encoded != "" {
 			parsed, err := time.Parse(time.RFC3339Nano, encoded)
 			if err != nil {
@@ -30,10 +30,10 @@ func buildJiraIncidentEntitlementDecisionForOracle(
 		value := raw.(bool)
 		state.LicenseOverride = &value
 	}
-	return decideJiraIncidentFeature(state)
+	return decideCanonicalIncidentFeature(state)
 }
 
-func jiraIncidentEntitlementOracleCases() []oracleCase {
+func incidentEntitlementOracleCases() []oracleCase {
 	base := func() map[string]any {
 		return map[string]any{
 			"registered": true, "globally_enabled": true,
@@ -70,9 +70,9 @@ func jiraIncidentEntitlementOracleCases() []oracleCase {
 	}
 }
 
-func TestGenericOracleMatchesLivePythonForJiraIncidentEntitlement(t *testing.T) {
+func TestGenericOracleMatchesLivePythonForIncidentEntitlement(t *testing.T) {
 	compareRowsAgainstPythonOracle(
-		t, "jira/incidents/entitlement", jiraIncidentEntitlementOracleCases(),
-		buildJiraIncidentEntitlementDecisionForOracle, nil,
+		t, "jira/incidents/entitlement", incidentEntitlementOracleCases(),
+		buildIncidentEntitlementDecisionForOracle, nil,
 	)
 }

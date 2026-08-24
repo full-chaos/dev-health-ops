@@ -58,7 +58,8 @@ func TestPagerDutyUsersEffectUsesMigratedClickHouseTombstonesAndExactReplay(t *t
 		t.Fatal(err)
 	}
 	sink := PagerDutyUsersClickHouseEffects{
-		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 		ProviderInstanceID: "Acme",
 	}
 	if inspection, err := sink.InspectEffect(ctx, claim, initialEffect); err != nil || inspection != EffectAbsent {

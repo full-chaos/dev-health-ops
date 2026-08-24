@@ -61,6 +61,16 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			category: GitHubTestsArtifactOversizedCategory,
 		},
 		{
+			// Deterministic given the organization's current feature state:
+			// the execution-time canonical-incident re-check (Jira incidents
+			// and every PagerDuty dataset) reads the same disabled feature on
+			// every attempt. Python stamps the same category from
+			// _classify_error (CHAOS-4219).
+			name:     "canonical incident entitlement disabled",
+			err:      providersync.ErrIncidentEntitlementDisabled,
+			category: FeatureDisabledCategory,
+		},
+		{
 			// Already non-retryable at the HTTP layer; the unit handler was
 			// still spending four more executions against a dead credential.
 			name:     "authentication",

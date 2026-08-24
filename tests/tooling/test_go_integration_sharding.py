@@ -386,7 +386,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # document may be discarded. Both are pure predicate tests over in-memory
     # ledger state and touch no database, so the integration-tagged count stays
     # 114.
-    assert len(expected_provider_tests) == 1010
+    #
+    # CHAOS-4219 then added 5 more ordinary top-level providersync tests
+    # (1010 -> 1015), all in pagerduty_incident_entitlement_test.go: the two
+    # PagerDuty seam tests (refused before provider fetch; revoked grant
+    # re-checked at the ClickHouse write boundary), the two sweeps asserting
+    # every PagerDuty route handler and every PagerDuty sink carry the
+    # re-check, and the completeness guard tying both sweeps to the native_go
+    # pagerduty pairs in the capability matrix. All five drive the routes
+    # through in-memory HTTP doers and an unreachable ClickHouse conn and
+    # touch no database, so the integration-tagged count stays 114. (The
+    # renamed entitlement files -- incident_entitlement_integration_test.go
+    # and incident_entitlement_oracle_test.go -- keep their one test each.)
+    assert len(expected_provider_tests) == 1015
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -403,7 +415,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1010
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1015
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -464,7 +476,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1010
+    assert len(selected_tests) == len(set(selected_tests)) == 1015
     assert set(selected_tests) == expected_tests
 
 

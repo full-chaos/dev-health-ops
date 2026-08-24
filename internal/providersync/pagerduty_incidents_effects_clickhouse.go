@@ -25,12 +25,19 @@ type PagerDutyIncidentFamilyClickHouseEffects struct {
 	Conn               driver.Conn
 	Lease              providerfoundation.LeaseGuard
 	ProviderInstanceID string
+	Entitlement        IncidentEntitlement
+	Metrics            *providerfoundation.Metrics
 }
 
 func (sink PagerDutyIncidentFamilyClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+		return err
+	}
+	if err := requireIncidentEntitlement(
+		ctx, sink.Entitlement, sink.Metrics, claim, IncidentEntitlementSeamWrite,
+	); err != nil {
 		return err
 	}
 	switch effect.Destination {
@@ -126,7 +133,7 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) InspectEffect(
 func (sink PagerDutyIncidentFamilyClickHouseEffects) validateRequest(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
-	if ctx == nil || sink.Conn == nil || sink.Lease == nil || claim.Validate() != nil ||
+	if ctx == nil || sink.Conn == nil || sink.Lease == nil || sink.Entitlement == nil || claim.Validate() != nil ||
 		claim.Provider != "pagerduty" || strings.TrimSpace(sink.ProviderInstanceID) == "" {
 		return ErrInvalidConfiguration
 	}

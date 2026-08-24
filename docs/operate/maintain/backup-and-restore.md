@@ -40,8 +40,11 @@ This writes a timestamped directory under `dev-health/backups/<ts>/`
 - `clickhouse-<db>-<ts>.zip` — one native `BACKUP DATABASE <db> TO
   File(...)` per ClickHouse database (`system`/`information_schema`
   excluded), copied out of the container and cleaned up container-side;
-- `SHA256SUMS` — a digest of every artifact in the run, so a caller can
-  pin or compare a specific backup without re-downloading it.
+- `SHA256SUMS-<ts>` — a digest of every artifact THIS run produced, so a
+  caller can pin or compare a specific backup without re-downloading it
+  (named per-run, not a bare `SHA256SUMS`, so `--force` into a directory
+  that already has a prior run's files never overwrites that prior run's
+  own manifest).
 
 The script verifies every artifact after writing it (a zero exit code
 alone is never proof a backup is usable): `gzip -t` plus the `pg_dumpall`
@@ -76,25 +79,32 @@ stack** — matches the general "Test restore in isolation" guidance above
 and the isolation posture in
 [databases-and-storage.md](../configure/databases-and-storage.md).
 
-Postgres (against the `compose.yml` container, host/port/credentials
-default to `localhost:5432`, `POSTGRES_USER`/`POSTGRES_PASSWORD` from
-`ops/.env` — `devhealth`/`devhealth` unless overridden):
+Both snippets below are self-contained — they source `ops/.env` for
+credentials rather than assuming the values are already in your shell
+(they will not be, in a clean shell, and both commands would otherwise
+silently run with empty credentials). Run from the `ops` repo root, and
+substitute the real `<ts>`/`<db>` filenames from the backup directory:
+
+Postgres (against the `compose.yml` container at `localhost:5432`):
 
 ```bash
+set -a; source ops/.env; set +a  # POSTGRES_USER, POSTGRES_PASSWORD
+set -o pipefail
 gunzip -c postgres-all-<ts>.sql.gz \
   | PGPASSWORD="$POSTGRES_PASSWORD" psql -h localhost -p 5432 \
       -U "$POSTGRES_USER" -d postgres --set ON_ERROR_STOP=1
 ```
 
-`--set ON_ERROR_STOP=1` is required — without it `psql` keeps going past a
-failed statement and a partial, silently-corrupt restore looks identical
-to a clean one in the output.
+`--set ON_ERROR_STOP=1` and `set -o pipefail` are both required — without
+`ON_ERROR_STOP`, `psql` keeps going past a failed statement; without
+`pipefail`, a truncated/corrupt `.gz` file makes `gunzip` fail but still
+feeds `psql` whatever partial SQL prefix it managed to decompress, which
+can exit 0 having silently restored only part of the dump.
 
-ClickHouse (against the `compose.yml` container,
-`CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` from `ops/.env` — `ch`/`ch` unless
-overridden), per database:
+ClickHouse (against the `compose.yml` container), per database:
 
 ```bash
+set -a; source ops/.env; set +a  # CLICKHOUSE_USER, CLICKHOUSE_PASSWORD
 docker cp clickhouse-<db>-<ts>.zip \
   dev-health-clickhouse-1:/var/lib/clickhouse/backups/<db>-<ts>.zip
 docker exec dev-health-clickhouse-1 clickhouse-client \

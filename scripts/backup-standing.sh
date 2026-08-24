@@ -135,7 +135,15 @@ for c in "$PG_CONTAINER" "$CH_CONTAINER"; do
   fi
 done
 
-TS="$(date -u +%Y%m%d-%H%M%S)"
+# PID-suffixed (codex xhigh re-review finding, PR #1885 round 2): a
+# bare second-resolution timestamp collides on a same-second --force
+# retry (a failed run immediately retried with --force), which would
+# truncate the FIRST run's dump/zips/SHA256SUMS-<ts> under the SAME
+# filenames -- contradicting the whole point of --force being "lifts the
+# directory guard" rather than "may overwrite a run's own files". `$$` is
+# unique per invocation (a retry is a new process), so two runs can never
+# collide on a filename even inside the same second, --force or not.
+TS="$(date -u +%Y%m%d-%H%M%S)-$$"
 OUT_DIR="${OUT_DIR_OVERRIDE:-$OUT_ROOT/$TS}"
 
 mkdir -p "$OUT_ROOT"
@@ -213,7 +221,15 @@ for db in "${ch_dbs[@]}"; do
   # after a full timestamp second (extremely unlikely, but free to avoid).
   # Best-effort: an already-successful docker cp above means the backup
   # is safe either way, this is tidiness, not correctness.
-  docker exec "$CH_CONTAINER" rm -f "/var/lib/clickhouse/backups/$container_zip" || true
+  if ! docker exec "$CH_CONTAINER" rm -f "/var/lib/clickhouse/backups/$container_zip"; then
+    # Non-fatal (the local copy via docker cp above already succeeded,
+    # so the backup itself is not lost) but LOUD, never silent -- a
+    # bare `|| true` here (codex xhigh re-review finding, PR #1885
+    # round 2) would leave a sensitive backup zip sitting in the
+    # container's persistent volume indefinitely while this script
+    # still reports a clean overall success.
+    echo "backup-standing.sh: WARNING container-side cleanup failed for $db (/var/lib/clickhouse/backups/$container_zip left on $CH_CONTAINER) -- the local copy at $local_zip is unaffected, but remove the container-side leftover manually" >&2
+  fi
   ch_zips+=("$local_zip")
 done
 
@@ -257,16 +273,19 @@ dumped_db_count="$(grep -c '^CREATE DATABASE .* WITH TEMPLATE = ' "$pg_plain_fil
 dumped_db_count="${dumped_db_count:-0}"
 rm -f "$pg_plain_file"
 trap - EXIT
-# pg_dumpall never emits a CREATE DATABASE for `postgres` itself -- every
-# target cluster already has it by construction (live-verified: it dumps
-# postgres' CONTENTS via a \connect block, just never its CREATE
-# DATABASE) -- nor for a database with datallowconn=false (truly
-# unconnectable, dumpall cannot dump it) or datconnlimit=-2 (PG's
-# pending-drop/invalid marker, upstream pg_dumpall skips these too; see
-# pg_dump/pg_dumpall.c). All three are excluded from the live count for
-# the SAME reason dumpall itself excludes them, not because they went
-# unbacked-up.
-live_db_count="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -tAc "SELECT count(*) FROM pg_database WHERE datistemplate = false AND datname <> 'postgres' AND datallowconn AND datconnlimit <> -2")"
+# Mirrors pg_dumpall's OWN selection criteria exactly (verified against
+# src/bin/pg_dump/pg_dumpall.c's dumpDatabases(), not inferred): `SELECT
+# datname FROM pg_database WHERE datallowconn AND datconnlimit != -2`,
+# then template0 is always skipped (even if somehow datallowconn), and
+# template1/postgres are assumed to already exist on the target so they
+# get NO CREATE DATABASE statement (a \connect block instead) -- codex
+# xhigh re-review, PR #1885 round 2, correctly flagged that the FIRST fix
+# used `datistemplate = false` instead, which only happened to agree with
+# this on an ordinary cluster (template1 has datistemplate=true there by
+# coincidence) and would silently disagree on a cluster with a
+# non-standard IS_TEMPLATE flag on some other database. datistemplate is
+# not part of pg_dumpall's real criteria at all; do not reintroduce it.
+live_db_count="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -tAc "SELECT count(*) FROM pg_database WHERE datallowconn AND datconnlimit <> -2 AND datname NOT IN ('template0','template1','postgres')")"
 live_db_count="${live_db_count//[[:space:]]/}"
 if [[ "$dumped_db_count" -ne "$live_db_count" ]]; then
   echo "backup-standing.sh: VERIFY FAILED: dump has $dumped_db_count CREATE DATABASE statements, live cluster has $live_db_count non-template, connectable databases -- see $pg_log_file" >&2

@@ -588,3 +588,109 @@ async def test_gitlab_connection_helper_sanitizes_raw_response_body(monkeypatch)
     assert details["status"] == 401
     assert _LEAK not in details["error"]
     assert "[REDACTED]" in details["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "creds",
+    [
+        {"token": "placeholder", "url": "https://gitlab.com"},
+        {"token": "placeholder", "base_url": "https://gitlab.com"},
+        {"token": "placeholder", "gitlab_url": "https://gitlab.com"},
+        {"token": "placeholder", "url": "https://gitlab.com/api/v4"},
+        {"token": "placeholder"},
+    ],
+    ids=["url-root", "base_url-root", "gitlab_url-root", "url-api-v4", "no-url"],
+)
+async def test_gitlab_connection_helper_targets_the_v4_api_for_every_url_spelling(
+    monkeypatch, creds
+):
+    """CHAOS-4223: the stored GitLab URL is an instance root everywhere else.
+
+    ``gitlab_credentials_from_mapping`` reads ``gitlab_url``/``url``/
+    ``base_url`` and hands the value straight to ``gitlab.Gitlab(...)``,
+    which appends ``/api/v4`` itself, and ``normalize_gitlab_instance``
+    explicitly ignores any path. This helper used to treat the same key as
+    an API base and append ``user`` to it, so the create-sync inline
+    credential modal's default ``https://gitlab.com`` was probed at
+    ``https://gitlab.com/user`` -- an HTML page -- and no token could ever
+    pass the test.
+    """
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
+
+    requested: list[str] = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"username": "probe", "name": "Probe"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            requested.append(url)
+            return _FakeResponse()
+
+    with patch("httpx.AsyncClient", _FakeAsyncClient):
+        success, details = await admin_router_module._test_gitlab_connection(creds)
+
+    assert requested == ["https://gitlab.com/api/v4/user"]
+    assert success is True
+    assert details["user"] == "probe"
+
+
+@pytest.mark.asyncio
+async def test_gitlab_connection_helper_honours_a_self_hosted_instance_root(
+    monkeypatch,
+):
+    """A self-hosted instance root must reach that instance's v4 API."""
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
+
+    requested: list[str] = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"username": "probe", "name": "Probe"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            requested.append(url)
+            return _FakeResponse()
+
+    with patch("httpx.AsyncClient", _FakeAsyncClient):
+        success, _ = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder", "gitlab_url": "https://gitlab.example.com"}
+        )
+
+    assert requested == ["https://gitlab.example.com/api/v4/user"]
+    assert success is True

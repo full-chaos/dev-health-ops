@@ -24,7 +24,10 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
 )
 from dev_health_ops.api.utils.errors import error_detail
-from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.credentials.resolver import (
+    github_credentials_from_mapping,
+    gitlab_credentials_from_mapping,
+)
 from dev_health_ops.exceptions import (
     APIException,
     AuthenticationException,
@@ -33,6 +36,7 @@ from dev_health_ops.exceptions import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth
 from dev_health_ops.providers.github.code_client import GitHubCodeClient
+from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.pagerduty.sync_auth import (
     hydrate_pagerduty_credentials_async,
 )
@@ -65,6 +69,20 @@ def _github_credentials_or_400(creds: dict[str, Any]):
             ),
         )
     return github_credentials
+
+
+def _gitlab_api_base_url(base_url: str | None) -> str:
+    """Resolve a stored GitLab URL to that instance's v4 API root.
+
+    The stored value is an instance root everywhere else in the codebase:
+    ``gitlab.Gitlab(...)`` appends ``/api/v4`` itself and
+    ``normalize_gitlab_instance`` discards any path, so
+    ``https://gitlab.com`` and ``https://gitlab.com/api/v4`` name the same
+    instance. Normalizing here keeps the connection test on the same
+    vocabulary as the sync runtime instead of probing a web page.
+    """
+    instance = normalize_gitlab_instance(base_url) or "https://gitlab.com"
+    return f"{instance}/api/v4"
 
 
 def _validated_github_base_url(base_url: str | None) -> str:
@@ -645,15 +663,12 @@ async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
 async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    token = creds.get("token")
-    if not token:
+    gitlab_credentials = gitlab_credentials_from_mapping(creds)
+    if gitlab_credentials is None:
         return False, {"error": "No token provided"}
 
-    base_url = (
-        _string_value(creds.get("url"))
-        or _string_value(creds.get("base_url"))
-        or "https://gitlab.com/api/v4"
-    )
+    token = gitlab_credentials.token
+    base_url = _gitlab_api_base_url(gitlab_credentials.base_url)
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:
         return False, {"error": error}

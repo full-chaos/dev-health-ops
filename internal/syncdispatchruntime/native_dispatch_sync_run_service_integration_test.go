@@ -274,7 +274,7 @@ func TestDispatchDeniesWithActiveUnitsFailsOnlyStrandedOnes(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		strandedUnit := "00000000-0000-4000-8000-0000000000eb"
 		runningUnit := "00000000-0000-4000-8000-0000000000ec"
 		if _, err := pool.Exec(ctx, `
@@ -326,7 +326,7 @@ func TestDispatchDeniesWithNoActiveUnitsFailsTheWholeRun(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		unitA := "00000000-0000-4000-8000-0000000000ee"
 		unitB := "00000000-0000-4000-8000-0000000000ef"
 		if _, err := pool.Exec(ctx, `
@@ -375,7 +375,7 @@ func TestDispatchEnqueuesARoutableUnitAndMarksTheRunDispatching(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f1"
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
@@ -422,7 +422,7 @@ func TestDispatchTerminalizesAnUnroutableUnitAndArmsFinalize(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f2"
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
@@ -480,7 +480,7 @@ func TestDispatchRejectsANonCanonicalAtomicFamilyAliasAndRollsBackTheClaim(t *te
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f4"
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
@@ -520,7 +520,7 @@ func TestDispatchFailsClosedWhenTheProviderUnitKindIsNotCheckedInAsExecutable(t 
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-0000000000f3"
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)

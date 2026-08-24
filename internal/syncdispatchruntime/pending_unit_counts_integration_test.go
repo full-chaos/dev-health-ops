@@ -18,7 +18,7 @@ import (
 // units are excluded entirely.
 func TestComputePendingUnitCountsClassifiesEveryNonTerminalStatus(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		past := now.Add(-time.Hour)
 		future := now.Add(time.Hour)
 		staleCutoff := staleDispatchCutoff(now)
@@ -64,7 +64,7 @@ func TestComputePendingUnitCountsClassifiesEveryNonTerminalStatus(t *testing.T) 
 // earliest-wins aggregation across multiple not-yet-due RETRYING units.
 func TestComputePendingUnitCountsTracksTheEarliestDeferral(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		soon := now.Add(10 * time.Minute)
 		later := now.Add(2 * time.Hour)
 

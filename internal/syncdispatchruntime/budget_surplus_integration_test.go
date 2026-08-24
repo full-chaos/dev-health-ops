@@ -59,7 +59,7 @@ VALUES ($1::uuid, $2, $3, now())`, budgetSurplusTestUnit, status, availableAt); 
 // promotion or terminalization wins the race.
 func TestAdmitUnitFromSurplusPullsAvailableAtForward(t *testing.T) {
 	withBudgetSurplusPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 		insertSurplusUnit(t, ctx, pool, syncRunUnitStatusRetrying, future)
 		unit := budgetUnit{id: budgetSurplusTestUnit}
@@ -105,7 +105,7 @@ func TestAdmitUnitFromSurplusPullsAvailableAtForward(t *testing.T) {
 // against a fixture that only tests strictly-past values.
 func TestAdmitUnitFromSurplusLosesTheRaceWhenAlreadyDue(t *testing.T) {
 	withBudgetSurplusPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		past := now.Add(-time.Minute)
 		insertSurplusUnit(t, ctx, pool, syncRunUnitStatusRetrying, past)
 		unit := budgetUnit{id: budgetSurplusTestUnit}
@@ -130,7 +130,7 @@ func TestAdmitUnitFromSurplusLosesTheRaceWhenAlreadyDue(t *testing.T) {
 // (Python's predicate is strictly available_at > now).
 func TestAdmitUnitFromSurplusLosesTheRaceAtTheExactBoundary(t *testing.T) {
 	withBudgetSurplusPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		insertSurplusUnit(t, ctx, pool, syncRunUnitStatusRetrying, now)
 		unit := budgetUnit{id: budgetSurplusTestUnit}
 
@@ -154,7 +154,7 @@ func TestAdmitUnitFromSurplusLosesTheRaceAtTheExactBoundary(t *testing.T) {
 // pre-promotion available_at, and nothing else moves.
 func TestWithdrawSurplusAdmissionRestoresThePriorAvailableAt(t *testing.T) {
 	withBudgetSurplusPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		priorAvailableAt := now.Add(45 * time.Minute)
 		promotedAvailableAt := now
 		insertSurplusUnit(t, ctx, pool, syncRunUnitStatusRetrying, promotedAvailableAt)
@@ -204,7 +204,7 @@ func TestWithdrawSurplusAdmissionRestoresThePriorAvailableAt(t *testing.T) {
 // must not stomp on it.
 func TestWithdrawSurplusAdmissionLosesTheRaceIfAvailableAtMoved(t *testing.T) {
 	withBudgetSurplusPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		promotedAvailableAt := now
 		actualAvailableAt := now.Add(10 * time.Minute) // something else moved it
 		insertSurplusUnit(t, ctx, pool, syncRunUnitStatusRetrying, actualAvailableAt)

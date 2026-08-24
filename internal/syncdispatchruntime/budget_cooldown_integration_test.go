@@ -37,7 +37,7 @@ func insertObservation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id
 	t.Helper()
 	o := insertObservationOpts{
 		orgID: cooldownTestOrg, provider: "github", integrationID: cooldownTestInt,
-		observedAt: time.Now().UTC(),
+		observedAt: pgNow(),
 	}
 	opts(&o)
 	if _, err := pool.Exec(ctx, `
@@ -87,7 +87,7 @@ func candidateUnit(orgID, provider, integrationID string) budgetUnit {
 // with a resolved route_family gates the family map, not the dimension map.
 func TestActiveCooldownsMatchesByFamily(t *testing.T) {
 	withCooldownPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := "work-items"
 		insertObservation(t, ctx, pool, "00000000-0000-4000-8000-0000000000d1", func(o *insertObservationOpts) {
 			o.routeFamily = &future
@@ -116,7 +116,7 @@ func TestActiveCooldownsMatchesByFamily(t *testing.T) {
 // observation gates on dimension, never the family map.
 func TestActiveCooldownsFallsBackToDimensionWhenAmbiguous(t *testing.T) {
 	withCooldownPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		attribution := ambiguousRouteFamilyAttribution
 		dim := "rest_core"
 		insertObservation(t, ctx, pool, "00000000-0000-4000-8000-0000000000d2", func(o *insertObservationOpts) {
@@ -147,7 +147,7 @@ func TestActiveCooldownsFallsBackToDimensionWhenAmbiguous(t *testing.T) {
 // coincide.
 func TestActiveCooldownsIsOrgIsolated(t *testing.T) {
 	withCooldownPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		family := "work-items"
 		otherOrg := "00000000-0000-4000-8000-0000000000cc"
 		insertObservation(t, ctx, pool, "00000000-0000-4000-8000-0000000000d3", func(o *insertObservationOpts) {
@@ -173,7 +173,7 @@ func TestActiveCooldownsIsOrgIsolated(t *testing.T) {
 // whose expiry has already passed does not gate.
 func TestActiveCooldownsExcludesAnExpiredObservation(t *testing.T) {
 	withCooldownPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		family := "work-items"
 		insertObservation(t, ctx, pool, "00000000-0000-4000-8000-0000000000d4", func(o *insertObservationOpts) {
 			o.routeFamily = &family
@@ -210,7 +210,7 @@ func TestActiveCooldownsIsFailOpenOnAQueryError(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		familyMap, dimensionMap := activeCooldowns(ctx, tx, nil, cooldownTestRun, []budgetUnit{candidateUnit(cooldownTestOrg, "github", cooldownTestInt)}, time.Now().UTC())
+		familyMap, dimensionMap := activeCooldowns(ctx, tx, nil, cooldownTestRun, []budgetUnit{candidateUnit(cooldownTestOrg, "github", cooldownTestInt)}, pgNow())
 		if len(familyMap) != 0 || len(dimensionMap) != 0 {
 			t.Fatalf("want two empty maps on a query error, got family=%+v dimension=%+v", familyMap, dimensionMap)
 		}

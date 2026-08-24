@@ -16,7 +16,7 @@ import (
 // so a query against it would fail loudly rather than silently succeed.
 func TestReconfirmCooldownsReturnsEmptyWhenAllUnitsAlreadyExcluded(t *testing.T) {
 	withBudgetEnforcePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000501"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 		unit := budgetUnit{id: unitID, orgID: "org-1", provider: "github"}
@@ -48,7 +48,7 @@ func TestReconfirmCooldownsReturnsEmptyWhenAllUnitsAlreadyExcluded(t *testing.T)
 // through the SAME resolveCooldownBlockedUnit path enforceRun itself uses.
 func TestReconfirmCooldownsDefersAFreshlyObservedCooldown(t *testing.T) {
 	withBudgetEnforcePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000502"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 		routeFamily := "work-items"
@@ -103,8 +103,8 @@ func TestReconfirmCooldownsDefersAFreshlyObservedCooldown(t *testing.T) {
 // which would fabricate an episode reset.
 func TestReconfirmCooldownsWithdrawsASurplusAdmittedUnitInsteadOfDeferring(t *testing.T) {
 	withBudgetEnforcePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		enforcedAt := time.Now().UTC().Add(-time.Second) // enforceRun's OWN now, earlier than this check
-		checkedAt := time.Now().UTC()
+		enforcedAt := pgNow().Add(-time.Second) // enforceRun's OWN now, earlier than this check
+		checkedAt := pgNow()
 		priorAvailableAt := checkedAt.Add(2 * time.Hour) // where the unit was BEFORE the surplus promotion
 		unitID := "00000000-0000-4000-8000-000000000503"
 
@@ -183,8 +183,8 @@ func TestReconfirmCooldownsWithdrawsASurplusAdmittedUnitInsteadOfDeferring(t *te
 // is left due with a cooldown this check just matched.
 func TestReconfirmCooldownsExcludesASurplusUnitEvenWhenTheWithdrawalCASLoses(t *testing.T) {
 	withBudgetEnforcePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		enforcedAt := time.Now().UTC().Add(-time.Second)
-		checkedAt := time.Now().UTC()
+		enforcedAt := pgNow().Add(-time.Second)
+		checkedAt := pgNow()
 		actualAvailableAt := checkedAt.Add(30 * time.Minute) // something else already moved it
 		unitID := "00000000-0000-4000-8000-000000000504"
 

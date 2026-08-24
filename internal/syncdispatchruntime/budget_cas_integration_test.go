@@ -67,7 +67,7 @@ func TestApplyCooldownDeferralWritesTheStampAndClearsTheBudgetEpisode(t *testing
 			t.Fatal(err)
 		}
 		unit := budgetUnit{id: budgetCASTestUnit}
-		now := time.Now().UTC()
+		now := pgNow()
 		firstSeenAt := now.Add(-time.Minute)
 		deferral := rateLimitDeferralPlan{notBefore: now.Add(30 * time.Second), attempts: 1, firstSeenAt: firstSeenAt}
 
@@ -113,7 +113,7 @@ func TestApplyCooldownDeferralClampsToTheWallClockDeadline(t *testing.T) {
 	withBudgetCASPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		insertBudgetCASUnit(t, ctx, pool, syncRunUnitStatusPlanned)
 		unit := budgetUnit{id: budgetCASTestUnit}
-		now := time.Now().UTC()
+		now := pgNow()
 		firstSeenAt := now.Add(-time.Hour)
 		deadline := firstSeenAt.Add(rateLimitMaxTotalWaitSecondsBudget * time.Second)
 		// notBefore is already AT the deadline -- any jitter must be clamped away.
@@ -148,7 +148,7 @@ func TestDeferUnitForBudgetIncrementsInSQLAndClearsTheRateLimitEpisode(t *testin
 			t.Fatal(err)
 		}
 		unit := budgetUnit{id: budgetCASTestUnit}
-		now := time.Now().UTC()
+		now := pgNow()
 		availableAt := now.Add(time.Minute)
 
 		tx, err := pool.Begin(ctx)
@@ -189,7 +189,7 @@ func TestResolveCooldownBlockedUnitDefersANormalUnit(t *testing.T) {
 	withBudgetCASPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		insertBudgetCASUnit(t, ctx, pool, syncRunUnitStatusPlanned)
 		unit := budgetUnit{id: budgetCASTestUnit, result: map[string]any{}}
-		now := time.Now().UTC()
+		now := pgNow()
 		cooldownExpiry := now.Add(5 * time.Minute)
 
 		tx, err := pool.Begin(ctx)
@@ -236,7 +236,7 @@ func TestResolveCooldownBlockedUnitTerminalizesAnExhaustedEpisode(t *testing.T) 
 			result:             map[string]any{"error_category": rateLimitEpisodeErrorCategory},
 			rateLimitDeferrals: rateLimitMaxDeferralsBudget,
 		}
-		now := time.Now().UTC()
+		now := pgNow()
 		cooldownExpiry := now.Add(5 * time.Minute)
 
 		tx, err := pool.Begin(ctx)

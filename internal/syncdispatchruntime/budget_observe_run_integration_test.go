@@ -41,7 +41,7 @@ func TestObserveRunReturnsEmptyWithoutCallingTheBridgeWhenNoCandidates(t *testin
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, time.Now())
+		observations, err := observeRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, pgNow())
 		if err != nil {
 			t.Fatalf("observeRun: %v", err)
 		}
@@ -62,7 +62,7 @@ func TestObserveRunReturnsEmptyWithoutCallingTheBridgeWhenNoCandidates(t *testin
 // dataset_key/provider/cost_class fields.
 func TestObserveRunEmitsTheParityPinnedLogLine(t *testing.T) {
 	withObserveRunPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000401"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 
@@ -112,7 +112,7 @@ func TestObserveRunUsesTheDryRunLimitSourceNotTheRealOne(t *testing.T) {
 		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
 		t.Setenv("SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT", "50")
 		t.Setenv("SYNC_BUDGET_DEFAULT_LIMIT", "1000") // must be IGNORED by observeRun
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000402"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 
@@ -141,7 +141,7 @@ func TestObserveRunUsesTheDryRunLimitSourceNotTheRealOne(t *testing.T) {
 // before.
 func TestObserveRunNeverWritesToTheDatabase(t *testing.T) {
 	withObserveRunPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000403"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 

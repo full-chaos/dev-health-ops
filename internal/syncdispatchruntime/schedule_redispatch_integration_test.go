@@ -25,7 +25,7 @@ func dispatchOutboxAvailableAt(t *testing.T, ctx context.Context, pool *pgxpool.
 // now+SYNC_DISPATCH_REDISPATCH_COUNTDOWN (default 60s).
 func TestScheduleRedispatchArmsANewWakeupWithTheDefaultCountdown(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
@@ -41,7 +41,7 @@ func TestScheduleRedispatchArmsANewWakeupWithTheDefaultCountdown(t *testing.T) {
 // instead of the countdown.
 func TestScheduleRedispatchUsesTheExplicitAvailableAtWhenGiven(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		explicit := now.Add(45 * time.Minute)
 		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &explicit, now)
 
@@ -60,7 +60,7 @@ func TestScheduleRedispatchUsesTheExplicitAvailableAtWhenGiven(t *testing.T) {
 // earlier of the two.
 func TestScheduleRedispatchOverwritesAPendingUnclaimedRowsAvailableAt(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		earlier := now.Add(5 * time.Minute)
 		if _, err := pool.Exec(ctx, `
 INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,created_at,updated_at)
@@ -87,7 +87,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,now(),now())`,
 // not have its target time yanked out from under it.
 func TestScheduleRedispatchDoesNotOverwriteAClaimedRow(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		claimedAt := now.Add(5 * time.Minute)
 		claimExpiresAt := now.Add(time.Hour)
 		if _, err := pool.Exec(ctx, `
@@ -115,7 +115,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,'some-claim-token',$6,now(),now())`,
 func TestScheduleRedispatchNeverPanicsOrPropagatesWhenTheTransactionFails(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		pool.Close()
-		now := time.Now().UTC()
+		now := pgNow()
 		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now) // must not panic
 	})
 }

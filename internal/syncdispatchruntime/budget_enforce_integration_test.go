@@ -11,6 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// pgNow returns the current time truncated to microsecond precision, the
+// finest Postgres timestamptz actually stores. A bare time.Now().UTC() has
+// nanosecond resolution on Linux (never on macOS, in practice, which is why
+// this was never caught locally): compare an untruncated value against one
+// that round-tripped through a write and read-back and the comparison fails
+// on the sub-microsecond remainder essentially every time it runs on Linux
+// CI. Every fixture and assertion in this file's family of integration
+// tests that seeds or checks a timestamp uses this, not a bare time.Now().
+func pgNow() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
+
 func withBudgetEnforcePool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -76,7 +86,7 @@ func TestEnforceRunAdmitsWhatFitsAndDefersWhatDoesNot(t *testing.T) {
 		// convenience (a real per-bucket override) -- neutralize it so this
 		// test's math is deterministic regardless of the ambient environment.
 		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
-		now := time.Now().UTC()
+		now := pgNow()
 
 		unitA := "00000000-0000-4000-8000-000000000301" // fits alone: 60 <= 100
 		unitB := "00000000-0000-4000-8000-000000000302" // 60 (A) + 50 (B) = 110 > 100
@@ -134,7 +144,7 @@ func TestEnforceRunTerminalizesAnExhaustedPermanentMisfit(t *testing.T) {
 		// convenience (a real per-bucket override) -- neutralize it so this
 		// test's math is deterministic regardless of the ambient environment.
 		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000311"
 
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
@@ -191,7 +201,7 @@ func TestEnforceRunDivertsACooldownGatedUnitBeforeBudgetAdmission(t *testing.T) 
 		// convenience (a real per-bucket override) -- neutralize it so this
 		// test's math is deterministic regardless of the ambient environment.
 		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
-		now := time.Now().UTC()
+		now := pgNow()
 
 		cooldownGated := "00000000-0000-4000-8000-000000000321"
 		fitsIfNotCharged := "00000000-0000-4000-8000-000000000322"
@@ -267,7 +277,7 @@ func TestEnforceRunAdmitsASurplusCandidateWhenHeadroomAllows(t *testing.T) {
 		// convenience (a real per-bucket override) -- neutralize it so this
 		// test's math is deterministic regardless of the ambient environment.
 		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 		unitID := "00000000-0000-4000-8000-000000000341"
 

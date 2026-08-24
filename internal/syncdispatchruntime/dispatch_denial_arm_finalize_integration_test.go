@@ -16,7 +16,7 @@ import (
 // enqueue, and not a separate transaction.
 func TestArmFinalizeSyncRunWakeupArmsAFinalizeWakeupAtNow(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -50,7 +50,7 @@ func TestArmFinalizeSyncRunWakeupArmsAFinalizeWakeupAtNow(t *testing.T) {
 // transaction never commits, the wakeup must not exist either.
 func TestArmFinalizeSyncRunWakeupRollsBackWithTheCallersTransaction(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {

@@ -85,7 +85,7 @@ func withGuardPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool
 // total-cap or concurrency-cap hit, slotHeadroom still populated per bucket.
 func TestAuthorizeRunAllowsWhenUnderEveryCap(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f1", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
 
 		tx, err := pool.Begin(ctx)
@@ -117,7 +117,7 @@ func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 		if _, err := pool.Exec(ctx, `INSERT INTO public.tier_limits (tier, limit_key, limit_value) VALUES ('community', 'max_sync_units', '1')`); err != nil {
 			t.Fatal(err)
 		}
-		now := time.Now().UTC()
+		now := pgNow()
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f1", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f2", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
 
@@ -157,7 +157,7 @@ func TestAuthorizeRunFallsBackToTheDefaultCapOnAnOrgResolutionFailure(t *testing
 		if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, org_id) VALUES ($1::uuid, $2)`, missingOrgRun, missingOrg); err != nil {
 			t.Fatal(err)
 		}
-		now := time.Now().UTC()
+		now := pgNow()
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units (id, org_id, sync_run_id, provider, cost_class, status, updated_at)
 VALUES ($1::uuid, $2, $3::uuid, 'github', 'standard', $4, $5)`,
@@ -190,7 +190,7 @@ VALUES ($1::uuid, $2, $3::uuid, 'github', 'standard', $4, $5)`,
 func TestAuthorizeRunConcurrencyCapsOverflowAndOrdersReclaimsFirst(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "2")
-		now := time.Now().UTC()
+		now := pgNow()
 		staleCutoff := now.Add(-16 * time.Minute) // default stale window is 900s=15m
 
 		// One live consumer occupies one of the bucket's two slots, leaving
@@ -232,7 +232,7 @@ func TestAuthorizeRunConcurrencyCapsOverflowAndOrdersReclaimsFirst(t *testing.T)
 func TestAuthorizeRunTreatsAnExpiredLeaseAsNotConsuming(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
-		now := time.Now().UTC()
+		now := pgNow()
 		expiredLeaseID := "00000000-0000-4000-8000-0000000000f7"
 		expiredLease := now.Add(-time.Hour)
 		insertGuardUnit(t, ctx, pool, expiredLeaseID, "github", "standard", syncRunUnitStatusRunning, now, nil, &expiredLease, ptrString("dead-owner"))
@@ -262,7 +262,7 @@ func TestAuthorizeRunTreatsAnExpiredLeaseAsNotConsuming(t *testing.T) {
 // the case surplus retry exists to unblock.
 func TestAuthorizeRunPopulatesSlotHeadroomForADeferredOnlyBucket(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		notYetDue := now.Add(time.Hour)
 		deferredID := "00000000-0000-4000-8000-0000000000f9"
 		insertGuardUnit(t, ctx, pool, deferredID, "github", "standard", syncRunUnitStatusRetrying, now, &notYetDue, nil, nil)

@@ -301,7 +301,7 @@ func TestDispatchHoldsAClaimedUnitUnderAPausedRouteAndTheRelayDeliversOnResume(t
 			t.Fatalf("after Dispatch (negative control): river jobs=%d, want 0 -- Dispatch itself must never touch River directly", riverJobs)
 		}
 
-		if _, err := fixture.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+		if _, err := fixture.relay.Step(ctx, pgNow(), 10); err != nil {
 			t.Fatalf("relay.Step (route still celery): %v", err)
 		}
 		unitStatus, outboxStatus, outboxRows, riverJobs = routeHoldCounts(t, ctx, fixture.pool, unitID)
@@ -316,7 +316,7 @@ func TestDispatchHoldsAClaimedUnitUnderAPausedRouteAndTheRelayDeliversOnResume(t
 		}
 
 		routeHoldSetProviderUnitTransport(t, ctx, fixture.pool, "river")
-		if _, err := fixture.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+		if _, err := fixture.relay.Step(ctx, pgNow(), 10); err != nil {
 			t.Fatalf("relay.Step (route restored): %v", err)
 		}
 		unitStatus, outboxStatus, outboxRows, riverJobs = routeHoldCounts(t, ctx, fixture.pool, unitID)
@@ -384,7 +384,7 @@ func TestDispatchStaleReclaimDedupesTheOutboxRowUnderAStillPausedRoute(t *testin
 		}
 
 		routeHoldSetProviderUnitTransport(t, ctx, fixture.pool, "river")
-		if _, err := fixture.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+		if _, err := fixture.relay.Step(ctx, pgNow(), 10); err != nil {
 			t.Fatalf("relay.Step (route restored): %v", err)
 		}
 		_, outboxStatus, outboxRows, riverJobs = routeHoldCounts(t, ctx, fixture.pool, unitID)

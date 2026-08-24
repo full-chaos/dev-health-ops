@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -75,7 +74,7 @@ func TestEnforceRunChunksOversizedCandidateBatches(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, time.Now(), nil)
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, pgNow(), nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v, want nil -- chunking must make the oversized batch a non-event", err)
 		}
@@ -118,7 +117,7 @@ func TestEnforceRunFailsClosedOnAContractRejectedChunk(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		_, err = enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, time.Now(), nil)
+		_, err = enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, pgNow(), nil)
 		if !errors.Is(err, ErrBridgeContractRejected) {
 			t.Fatalf("enforceRun error=%v, want ErrBridgeContractRejected -- a rejected chunk must fail the whole pass, not silently admit it", err)
 		}

@@ -144,7 +144,7 @@ func TestActiveBudgetConsumptionReturnsEmptyWithoutQueryingWhenNoBudgetKeys(t *t
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		estimator := &fakeBudgetEstimator{}
-		got, err := activeBudgetConsumption(ctx, tx, estimator, nil, time.Now(), map[string]bool{})
+		got, err := activeBudgetConsumption(ctx, tx, estimator, nil, pgNow(), map[string]bool{})
 		if err != nil {
 			t.Fatalf("activeBudgetConsumption: %v", err)
 		}
@@ -164,7 +164,7 @@ func TestActiveBudgetConsumptionReturnsEmptyWithoutQueryingWhenNoBudgetKeys(t *t
 // bridge is tenant-fenced to one (org, run) per call).
 func TestActiveBudgetConsumptionIsNotScopedToOneSyncRun(t *testing.T) {
 	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 
 		unitA := "00000000-0000-4000-8000-000000000101" // run-1 / org-1
@@ -210,7 +210,7 @@ func TestActiveBudgetConsumptionIsNotScopedToOneSyncRun(t *testing.T) {
 // the table, whether or not a reconciler has gotten to them yet.
 func TestActiveBudgetConsumptionExcludesStaleDispatchingAndExpiredLeases(t *testing.T) {
 	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		past := now.Add(-time.Hour)
 		staleCutoff := staleDispatchCutoff(now)
 
@@ -266,7 +266,7 @@ func TestActiveBudgetConsumptionExcludesStaleDispatchingAndExpiredLeases(t *test
 // back from a real active unit.
 func TestActiveBudgetConsumptionIgnoresEstimatesOutsideTheTargetBudgetKeys(t *testing.T) {
 	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitID := "00000000-0000-4000-8000-000000000121"
 		runID := "00000000-0000-4000-8000-000000000211"
 		insertConsumptionUnit(t, ctx, pool, consumptionUnitFixture{id: unitID, syncRunID: runID, orgID: "org-1", status: syncRunUnitStatusDispatching, updatedAt: now})
@@ -301,7 +301,7 @@ func TestActiveBudgetConsumptionIgnoresEstimatesOutsideTheTargetBudgetKeys(t *te
 // degraded server-side) must not take down another group's contribution.
 func TestActiveBudgetConsumptionDegradesAFailedGroupWithoutFailingTheWhole(t *testing.T) {
 	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		okUnit := "00000000-0000-4000-8000-000000000131"
 		failUnit := "00000000-0000-4000-8000-000000000132"
 		okRun := "00000000-0000-4000-8000-000000000221"
@@ -341,7 +341,7 @@ func TestActiveBudgetConsumptionDegradesAFailedGroupWithoutFailingTheWhole(t *te
 // logs, not just discoverable as latency after the fact.
 func TestActiveBudgetConsumptionLogsTheGroupFanout(t *testing.T) {
 	withBudgetConsumptionPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		unitA := "00000000-0000-4000-8000-000000000141"
 		unitB := "00000000-0000-4000-8000-000000000142"
 		insertConsumptionUnit(t, ctx, pool, consumptionUnitFixture{id: unitA, syncRunID: "00000000-0000-4000-8000-000000000241", orgID: "org-a", status: syncRunUnitStatusDispatching, updatedAt: now})

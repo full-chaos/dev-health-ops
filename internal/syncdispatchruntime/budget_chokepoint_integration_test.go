@@ -61,7 +61,7 @@ func TestTerminalizeUnitWritesTheVerdict(t *testing.T) {
 	withChokepointPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		insertChokepointUnit(t, ctx, pool, syncRunUnitStatusPlanned, `{}`)
 		unit := budgetUnit{id: chokepointTestUnit, result: map[string]any{}}
-		now := time.Now().UTC()
+		now := pgNow()
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -102,7 +102,7 @@ func TestTerminalizeUnitRefusesAnUnlicensedEpisode(t *testing.T) {
 	withChokepointPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		insertChokepointUnit(t, ctx, pool, syncRunUnitStatusPlanned, `{"error_category":"budget_deferred"}`)
 		unit := budgetUnit{id: chokepointTestUnit, result: map[string]any{"error_category": budgetDeferredCategory}}
-		now := time.Now().UTC()
+		now := pgNow()
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -139,7 +139,7 @@ func TestTerminalizeUnitLosesTheRaceWhenTheUnitAlreadyMovedOn(t *testing.T) {
 	withChokepointPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		insertChokepointUnit(t, ctx, pool, syncRunUnitStatusSuccess, `{}`)
 		unit := budgetUnit{id: chokepointTestUnit, result: map[string]any{}}
-		now := time.Now().UTC()
+		now := pgNow()
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {

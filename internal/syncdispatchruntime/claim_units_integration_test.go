@@ -34,7 +34,7 @@ func claimedUnitRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id st
 // successful claim is the moment a unit stops being blocked).
 func TestClaimUnitsClaimsFreshPlannedUnits(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		past := now.Add(-time.Hour)
 		unitID := "00000000-0000-4000-8000-000000000601"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now, firstBlockedAt: &past})
@@ -71,7 +71,7 @@ func TestClaimUnitsClaimsFreshPlannedUnits(t *testing.T) {
 // cleared.
 func TestClaimUnitsClaimsDueRetryingUnitsAndClearsAvailableAt(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		due := now.Add(-time.Minute)
 		blocked := now.Add(-2 * time.Hour)
 		unitID := "00000000-0000-4000-8000-000000000602"
@@ -111,7 +111,7 @@ func TestClaimUnitsClaimsDueRetryingUnitsAndClearsAvailableAt(t *testing.T) {
 // as-is.
 func TestClaimUnitsSkipsNotYetDueRetryingUnits(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 		unitID := "00000000-0000-4000-8000-000000000603"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusRetrying, availableAt: &future, updatedAt: now})
@@ -139,7 +139,7 @@ func TestClaimUnitsSkipsNotYetDueRetryingUnits(t *testing.T) {
 // recovery belongs to reconcile_sync_dispatch, not this function.
 func TestClaimUnitsReclaimsStaleDispatchingButNeverRunning(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		staleCutoff := staleDispatchCutoff(now)
 		staleDispatching := "00000000-0000-4000-8000-000000000604"
 		veryOldRunning := "00000000-0000-4000-8000-000000000605"
@@ -185,7 +185,7 @@ func TestClaimUnitsReclaimsStaleDispatchingButNeverRunning(t *testing.T) {
 // the planned, due-retrying, or stale-dispatching branch.
 func TestClaimUnitsExcludesCappedUnitIDsFromEveryClaimPath(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		due := now.Add(-time.Minute)
 		staleCutoff := staleDispatchCutoff(now)
 
@@ -227,7 +227,7 @@ func TestClaimUnitsExcludesCappedUnitIDsFromEveryClaimPath(t *testing.T) {
 // map's shape in isolation.
 func TestClaimUnitsRoundTripsProcessorFlagsForValidateClaim(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		complete := "00000000-0000-4000-8000-000000000621"
 		incomplete := "00000000-0000-4000-8000-000000000622"
 
@@ -281,7 +281,7 @@ func TestClaimUnitsReturnsEmptyWhenNothingClaimable(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, time.Now())
+		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, pgNow())
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}

@@ -15,7 +15,7 @@ import (
 // status (including a sibling PLANNED unit in the same run) reports false.
 func TestRunHasDispatchingOrRunningUnitsMatchesExactlyTheseTwoStatuses(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: "00000000-0000-4000-8000-000000000701", status: syncRunUnitStatusPlanned, updatedAt: now})
 
 		tx, err := pool.Begin(ctx)
@@ -49,7 +49,7 @@ func TestRunHasDispatchingOrRunningUnitsMatchesExactlyTheseTwoStatuses(t *testin
 // RUNNING/terminal.
 func TestFailPlannedUnitsFailsPlannedAndRetryingOnly(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		planned := "00000000-0000-4000-8000-000000000711"
 		retrying := "00000000-0000-4000-8000-000000000712"
 		dispatching := "00000000-0000-4000-8000-000000000713"
@@ -100,7 +100,7 @@ func TestFailPlannedUnitsFailsPlannedAndRetryingOnly(t *testing.T) {
 // status predicate at UPDATE time, not from a pre-read snapshot.
 func TestFailStaleDispatchingUnitsExcludesFreshAndConcurrentlyClaimedRows(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		staleCutoff := staleDispatchCutoff(now)
 		stale := "00000000-0000-4000-8000-000000000721"
 		fresh := "00000000-0000-4000-8000-000000000722"
@@ -162,7 +162,7 @@ func TestFailStaleDispatchingUnitsExcludesFreshAndConcurrentlyClaimedRows(t *tes
 // excluded by the write-time CAS.
 func TestTerminalizeUnroutableUnitsGroupsByPairAndNamesEachReason(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		aliasUnit := "00000000-0000-4000-8000-000000000731"
 		matrixUnit := "00000000-0000-4000-8000-000000000732"
 		alreadyRunning := "00000000-0000-4000-8000-000000000733"
@@ -236,7 +236,7 @@ func TestTerminalizeUnroutableUnitsGroupsByPairAndNamesEachReason(t *testing.T) 
 // once, with none silently left DISPATCHING to retry-loop forever.
 func TestTerminalizeUnroutableUnitsNeverSilentlyDropsAnUnroutableUnit(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		units := []budgetUnit{
 			{id: "00000000-0000-4000-8000-000000000741", provider: "github", datasetKey: "work-item-labels"},
 			{id: "00000000-0000-4000-8000-000000000742", provider: "unknown-a", datasetKey: "unknown-a-dataset"},
@@ -287,7 +287,7 @@ func TestTerminalizeUnroutableUnitsReturnsZeroForAnEmptySlice(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		n, err := terminalizeUnroutableUnits(ctx, tx, nil, time.Now())
+		n, err := terminalizeUnroutableUnits(ctx, tx, nil, pgNow())
 		if err != nil {
 			t.Fatalf("terminalizeUnroutableUnits: %v", err)
 		}

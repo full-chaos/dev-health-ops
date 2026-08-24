@@ -117,7 +117,7 @@ func idsOf(units []budgetUnit) map[string]bool {
 // candidates regardless of timing.
 func TestDispatchCandidateUnitsSelectsEligibleStatuses(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		past := now.Add(-time.Hour)
 		future := now.Add(time.Hour)
 		staleCutoff := staleDispatchCutoff(now)
@@ -181,7 +181,7 @@ func TestDispatchCandidateUnitsSelectsEligibleStatuses(t *testing.T) {
 // pass must not resurface.
 func TestDispatchCandidateUnitsExcludesIgnoredIDs(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		id := "00000000-0000-4000-8000-000000000021"
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: id, status: syncRunUnitStatusPlanned, updatedAt: now})
 
@@ -206,7 +206,7 @@ func TestDispatchCandidateUnitsExcludesIgnoredIDs(t *testing.T) {
 // a unit whose own last cause is not budget_deferred is skipped.
 func TestSurplusRetryCandidatesFiltersToNotYetDueBudgetDeferrals(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 		past := now.Add(-time.Hour)
 
@@ -260,7 +260,7 @@ func TestSurplusRetryCandidatesFiltersToNotYetDueBudgetDeferrals(t *testing.T) {
 // of fresh deferrals starve the oldest indefinitely.
 func TestSurplusRetryCandidatesOrdersLongestDeferredFirst(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 
 		oldest := "00000000-0000-4000-8000-000000000041"
@@ -307,7 +307,7 @@ func TestSurplusRetryCandidatesOrdersLongestDeferredFirst(t *testing.T) {
 func TestSurplusRetryCandidatesTruncatesAtTheConfiguredMax(t *testing.T) {
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t.Setenv("SYNC_BUDGET_SURPLUS_MAX_CANDIDATES", "2")
-		now := time.Now().UTC()
+		now := pgNow()
 		future := now.Add(time.Hour)
 		for i := 0; i < 5; i++ {
 			id := fmt.Sprintf("00000000-0000-4000-8000-00000000005%d", i)

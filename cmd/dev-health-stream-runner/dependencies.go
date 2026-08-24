@@ -10,6 +10,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/externalrecompute"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/pagerduty"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -65,7 +66,7 @@ type streamStorage interface {
 	ClickHouseReady(context.Context) error
 	DomainPostgresReady(context.Context) error
 	ValkeyReady(context.Context) error
-	Handler(streamHandlerKind) (streamrunner.Handler, error)
+	Handler(streamHandlerKind, streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error)
 	NewTransport() (streamrunner.Transport, error)
 	ControlComponents() []lifecycle.Component
 	Close()
@@ -173,7 +174,7 @@ func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
 	return nil
 }
 
-func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamrunner.Handler, error) {
+func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	if storage == nil {
 		return nil, errStreamDependencyUnavailable
 	}
@@ -220,7 +221,7 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamr
 		if err != nil {
 			return nil, err
 		}
-		return streamhandlers.NewExternalIngestHandler(repository, sink, storage.recompute)
+		return streamhandlers.NewExternalIngestHandler(repository, sink, storage.recompute, observer)
 	case pagerdutyHandlerKind:
 		// Ownership was already proven above: while the transport names Celery
 		// the Python ingress still dispatches its task, reconciles, and XDELs
@@ -388,7 +389,7 @@ func configureStreamRunnerDependenciesWithSources(
 				config: productTelemetryRunnerConfig(replicas),
 			},
 		} {
-			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config, logger)
+			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config, logger, nil)
 			if err != nil {
 				if errors.Is(err, streamrunner.ErrInvalidConfig) {
 					return nil, err
@@ -398,12 +399,23 @@ func configureStreamRunnerDependenciesWithSources(
 			components = append(components, runner)
 		}
 	case "external":
+		// The external profile is the only one that ingests customer-pushed
+		// records, so it is the only one with refusals and project-transition
+		// writes to report. Registering the collector on the health registry
+		// is what makes the counters REACHABLE rather than merely constructed:
+		// without it the handler would hold a live observer whose numbers no
+		// scrape ever reads.
+		observer, err := newExternalIngestMetrics(registry)
+		if err != nil {
+			return nil, err
+		}
 		runner, err := buildStreamRunner(
 			storage,
 			registry,
 			externalIngestHandlerKind,
 			externalIngestRunnerConfig(replicas),
 			logger,
+			observer,
 		)
 		if err != nil {
 			if errors.Is(err, streamrunner.ErrInvalidConfig) {
@@ -420,6 +432,7 @@ func configureStreamRunnerDependenciesWithSources(
 			pagerdutyHandlerKind,
 			pagerdutyRunnerConfig(replicas),
 			logger,
+			nil,
 		)
 		if err != nil {
 			if errors.Is(err, streamrunner.ErrInvalidConfig) {
@@ -436,14 +449,39 @@ func configureStreamRunnerDependenciesWithSources(
 	return components, nil
 }
 
+// newExternalIngestMetrics builds the external profile's Prometheus collector
+// and registers it on the operator endpoint.
+//
+// Registration failure is returned rather than tolerated. A duplicate or
+// unsafe metrics name means this fragment would be missing from every scrape,
+// and a worker that starts anyway is a worker whose refusal counter reads zero
+// for the most trustworthy-looking reason there is: nothing is publishing it.
+func newExternalIngestMetrics(registry *health.Registry) (*jobruntime.MetricsCollector, error) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		return nil, err
+	}
+	// NOT "external_ingest": streamrunner.New registers its own runner
+	// fragment under the stream config's Name, which is exactly that. A
+	// duplicate name is refused by the registry, and because the external
+	// profile treats a non-ErrInvalidConfig build failure as "defer
+	// construction", the collision surfaced as a profile that silently built
+	// no consumers at all rather than as an error anyone would read.
+	if err := registry.RegisterMetrics("external_ingest_records", collector); err != nil {
+		return nil, err
+	}
+	return collector, nil
+}
+
 func buildStreamRunner(
 	storage streamStorage,
 	registry *health.Registry,
 	kind streamHandlerKind,
 	cfg streamrunner.Config,
 	logger *slog.Logger,
+	observer streamhandlers.ExternalIngestObserver,
 ) (*streamrunner.Runner, error) {
-	handler, err := storage.Handler(kind)
+	handler, err := storage.Handler(kind, observer)
 	if err != nil {
 		return nil, err
 	}

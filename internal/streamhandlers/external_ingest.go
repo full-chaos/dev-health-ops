@@ -120,21 +120,60 @@ type externalRecomputeScheduler interface {
 	Schedule(context.Context, ExternalRecomputeScope) error
 }
 
+// ExternalIngestObserver reports what this handler durably wrote and what it
+// refused. It is satisfied by *jobruntime.MetricsCollector; the interface is
+// declared here, on the consumer side, so streamhandlers does not depend on
+// the telemetry package.
+//
+// Errors from these calls are deliberately DISCARDED at the call sites. A
+// bounded-label rejection means the exposition is wrong, not that the batch
+// is: failing an already-durable ingest because a counter refused a label
+// would turn a telemetry defect into data loss.
+type ExternalIngestObserver interface {
+	ObserveExternalProjectTransitionsSunk(provider string, rows int) error
+	ObserveExternalKindRefused(sourceSystem, reason string) error
+}
+
 type ExternalIngestHandler struct {
 	repository externalBatchRepository
 	sink       externalBatchSink
 	scheduler  externalRecomputeScheduler
+	observer   ExternalIngestObserver
 	backoff    []time.Duration
 }
 
-func NewExternalIngestHandler(repository externalBatchRepository, sink externalBatchSink, scheduler externalRecomputeScheduler) (*ExternalIngestHandler, error) {
+// NewExternalIngestHandler builds the handler. observer may be nil -- the
+// stream-runner profiles that do not expose a Prometheus surface pass nil
+// rather than a no-op double, so a missing observer is a visible absence at
+// the construction site instead of a silently inert object.
+func NewExternalIngestHandler(repository externalBatchRepository, sink externalBatchSink, scheduler externalRecomputeScheduler, observer ExternalIngestObserver) (*ExternalIngestHandler, error) {
 	if repository == nil || sink == nil {
 		return nil, streamrunner.ErrInvalidConfig
 	}
 	return &ExternalIngestHandler{
-		repository: repository, sink: sink, scheduler: scheduler,
+		repository: repository, sink: sink, scheduler: scheduler, observer: observer,
 		backoff: []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second},
 	}, nil
+}
+
+// observeOutcome records the batch's telemetry. It runs AFTER Complete has
+// persisted the outcome, not at classification time: normalizeExternalRecords
+// runs once per Handle, but writeWithRetries can retry the sink, and the
+// handler returns an error on exhaustion so the message is redelivered and the
+// whole batch re-normalized. Counting refusals before the outcome is durable
+// would multiply every refusal in a batch that also contained a record whose
+// write was slow to succeed.
+func (h *ExternalIngestHandler) observeOutcome(pointer externalPointer, counts map[string]int, rejections []externalRejection) {
+	if h.observer == nil {
+		return
+	}
+	//nolint:errcheck // see ExternalIngestObserver: telemetry must not fail an ingest.
+	_ = h.observer.ObserveExternalProjectTransitionsSunk(
+		pointer.SourceSystem, counts["work_item_project_transition.v1"])
+	for _, rejection := range rejections {
+		//nolint:errcheck // see above.
+		_ = h.observer.ObserveExternalKindRefused(pointer.SourceSystem, rejection.Code)
+	}
 }
 
 func (h *ExternalIngestHandler) Handle(ctx context.Context, message streamrunner.Message) error {
@@ -208,6 +247,7 @@ func (h *ExternalIngestHandler) Handle(ctx context.Context, message streamrunner
 	if err := h.repository.Complete(ctx, batch, completion); err != nil {
 		return err
 	}
+	h.observeOutcome(pointer, counts, rejections)
 	if h.scheduler != nil && len(accepted) > 0 {
 		// Completion persisted the pending scope transactionally. Scheduling
 		// is best-effort here; a crash or outage is recovered by the scheduler's

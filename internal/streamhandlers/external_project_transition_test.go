@@ -2,6 +2,7 @@ package streamhandlers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestExternalIngestRefusesUnregisteredKindRatherThanDroppingIt(t *testing.T)
 		},
 	}
 	sink := &externalSinkFake{}
-	handler, err := NewExternalIngestHandler(repository, sink, &externalSchedulerFake{})
+	handler, err := NewExternalIngestHandler(repository, sink, &externalSchedulerFake{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestExternalIngestAcceptsProjectTransitionForEveryWorkItemProvider(t *testi
 				},
 			}
 			sink := &externalSinkFake{}
-			handler, err := NewExternalIngestHandler(repository, sink, &externalSchedulerFake{})
+			handler, err := NewExternalIngestHandler(repository, sink, &externalSchedulerFake{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -283,5 +284,133 @@ func TestExternalProjectTransitionFallsBackToLastSyncedWhenProviderHasNoEventTim
 	}
 	if !slices.Contains(scope.RecordKinds, "work_item_project_transition.v1") {
 		t.Fatalf("recompute scope omits the kind: %#v", scope.RecordKinds)
+	}
+}
+
+type externalObserverFake struct {
+	sunk     map[string]int
+	refusals []string
+}
+
+func (f *externalObserverFake) ObserveExternalProjectTransitionsSunk(provider string, rows int) error {
+	if f.sunk == nil {
+		f.sunk = map[string]int{}
+	}
+	f.sunk[provider] += rows
+	return nil
+}
+
+func (f *externalObserverFake) ObserveExternalKindRefused(sourceSystem, reason string) error {
+	f.refusals = append(f.refusals, sourceSystem+":"+reason)
+	return nil
+}
+
+// TestExternalIngestReportsSunkTransitionsAndRefusalsTogether covers the
+// standing telemetry order for this change. The batch deliberately mixes a
+// durable transition with a refused record: reporting either one alone is what
+// makes the counters unreadable, since a flat sunk counter cannot be told from
+// a registry refusing everything.
+func TestExternalIngestReportsSunkTransitionsAndRefusalsTogether(t *testing.T) {
+	pointer := externalTestPointer()
+	payload := externalTestPayload(t, pointer, "legacy", []map[string]any{
+		{
+			"kind": "work_item_project_transition.v1", "externalId": "evt-1",
+			"payload": externalProjectTransitionPayload("github", nil),
+		},
+		{
+			"kind": "work_item_project_transition.v1", "externalId": "evt-2",
+			"payload": externalProjectTransitionPayload("github", map[string]any{"eventId": "evt-2"}),
+		},
+		{
+			"kind": "work_item_project_transition.v1", "externalId": "evt-3",
+			"payload": externalProjectTransitionPayload("github", map[string]any{"workItemType": "pr"}),
+		},
+	})
+	repository := &externalRepositoryFake{
+		allowed: true,
+		batch: externalBatch{
+			Pointer: pointer, SourceID: uuid.New(), EntityFamily: "legacy",
+			ItemsReceived: 3, Payload: payload,
+		},
+	}
+	observer := &externalObserverFake{}
+	handler, err := NewExternalIngestHandler(repository, &externalSinkFake{}, nil, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.backoff = nil
+	if err := handler.Handle(context.Background(), externalTestMessage(pointer)); err != nil {
+		t.Fatal(err)
+	}
+	if observer.sunk["github"] != 2 {
+		t.Errorf("sunk transitions = %#v, want 2 for github", observer.sunk)
+	}
+	if len(observer.refusals) != 1 || observer.refusals[0] != "github:invalid_field" {
+		t.Errorf("refusals = %#v, want one github:invalid_field", observer.refusals)
+	}
+}
+
+// TestExternalIngestReportsNothingWhenTheSinkNeverCommitted is the discipline
+// the zero-unit finalization counter learned the hard way: a counter bumped
+// before the write is durable overcounts every retry of a batch that
+// eventually succeeds once. Here the sink never succeeds at all, so a handler
+// that counted at classification time would report project transitions that do
+// not exist in ClickHouse.
+func TestExternalIngestReportsNothingWhenTheSinkNeverCommitted(t *testing.T) {
+	pointer := externalTestPointer()
+	payload := externalTestPayload(t, pointer, "legacy", []map[string]any{{
+		"kind": "work_item_project_transition.v1", "externalId": "evt-1",
+		"payload": externalProjectTransitionPayload("github", nil),
+	}})
+	repository := &externalRepositoryFake{
+		allowed: true,
+		batch: externalBatch{
+			Pointer: pointer, SourceID: uuid.New(), EntityFamily: "legacy",
+			ItemsReceived: 1, Payload: payload,
+		},
+	}
+	sink := &externalSinkFake{errors: []error{errors.New("clickhouse unavailable")}}
+	observer := &externalObserverFake{}
+	handler, err := NewExternalIngestHandler(repository, sink, nil, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.backoff = nil
+	if err := handler.Handle(context.Background(), externalTestMessage(pointer)); err == nil {
+		t.Fatal("a failed sink write was reported as a successful batch")
+	}
+	if len(observer.sunk) != 0 || len(observer.refusals) != 0 {
+		t.Fatalf("telemetry recorded an uncommitted batch: sunk=%#v refusals=%#v", observer.sunk, observer.refusals)
+	}
+}
+
+// TestExternalIngestHandlesABatchWithoutAnObserver kills the nil guard in
+// observeOutcome. The stream-runner profiles that expose no Prometheus surface
+// pass nil rather than a no-op double, so nil is a real production shape and
+// not a test-only convenience.
+func TestExternalIngestHandlesABatchWithoutAnObserver(t *testing.T) {
+	pointer := externalTestPointer()
+	payload := externalTestPayload(t, pointer, "legacy", []map[string]any{{
+		"kind": "work_item_project_transition.v1", "externalId": "evt-1",
+		"payload": externalProjectTransitionPayload("github", nil),
+	}})
+	repository := &externalRepositoryFake{
+		allowed: true,
+		batch: externalBatch{
+			Pointer: pointer, SourceID: uuid.New(), EntityFamily: "legacy",
+			ItemsReceived: 1, Payload: payload,
+		},
+	}
+	sink := &externalSinkFake{}
+	handler, err := NewExternalIngestHandler(repository, sink, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.backoff = nil
+	if err := handler.Handle(context.Background(), externalTestMessage(pointer)); err != nil {
+		t.Fatalf("a nil observer broke ingest: %v", err)
+	}
+	if len(sink.calls) != 1 || len(sink.calls[0].Records) != 1 {
+		t.Fatalf("record did not reach the sink without an observer: %#v", sink.calls)
 	}
 }

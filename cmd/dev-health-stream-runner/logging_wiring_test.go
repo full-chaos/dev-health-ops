@@ -130,7 +130,7 @@ type failingReadStorage struct {
 func (*failingReadStorage) ClickHouseReady(context.Context) error     { return nil }
 func (*failingReadStorage) DomainPostgresReady(context.Context) error { return nil }
 func (*failingReadStorage) ValkeyReady(context.Context) error         { return nil }
-func (*failingReadStorage) Handler(streamHandlerKind) (streamrunner.Handler, error) {
+func (*failingReadStorage) Handler(streamHandlerKind, streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	return streamCommandHandler{}, nil
 }
 func (storage *failingReadStorage) NewTransport() (streamrunner.Transport, error) {

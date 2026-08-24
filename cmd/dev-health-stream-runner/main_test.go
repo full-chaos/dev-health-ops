@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/streamhandlers"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 )
 
@@ -60,7 +61,7 @@ type streamCommandStorage struct {
 func (*streamCommandStorage) ClickHouseReady(context.Context) error     { return nil }
 func (*streamCommandStorage) DomainPostgresReady(context.Context) error { return nil }
 func (storage *streamCommandStorage) ValkeyReady(context.Context) error { return storage.valkeyErr }
-func (storage *streamCommandStorage) Handler(kind streamHandlerKind) (streamrunner.Handler, error) {
+func (storage *streamCommandStorage) Handler(kind streamHandlerKind, _ streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	if storage.handlerErr != nil {
 		return nil, storage.handlerErr
 	}
@@ -438,7 +439,7 @@ func TestPagerDutyConsumerRefusesToRaceCelery(t *testing.T) {
 					transport: test.transport,
 				},
 			}
-			_, err := storage.Handler(pagerdutyHandlerKind)
+			_, err := storage.Handler(pagerdutyHandlerKind, nil)
 			if test.wantErr {
 				// ErrInvalidConfig stops the process rather than leaving it
 				// live: a profile/owner contradiction is operator error.

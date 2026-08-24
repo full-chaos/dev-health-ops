@@ -953,6 +953,14 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		// readiness error naming neither table.
 		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
+		// The same CHAOS-4209 addition. These two are created in this package's
+		// materializer fixture as well, which is why the package-level venue
+		// guard did not name them here: that guard aggregates CREATE TABLE
+		// across a package, so a second fixture in the same package masks a gap
+		// in this one. CheckDomainAuthorization, which runs per fixture, does
+		// not -- it failed closed here until these were added.
+		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",

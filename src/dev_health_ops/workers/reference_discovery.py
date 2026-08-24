@@ -132,13 +132,7 @@ def run_sync_reference_discovery(sync_run_id: str) -> dict[str, Any]:
             sync_run_id, lease_owner, deadline
         )
         context = _load_discovery_context(run_uuid)
-        summary = run_team_autoimport_strict(
-            provider=context["provider"],
-            org_id=context["org_id"],
-            credentials=context["credentials"],
-            scope=context["scope"],
-            analytics_db_url=context["analytics_db_url"],
-        )
+        summary = run_reference_discovery_populate_strict(context=context)
         _verify_reference_readback(
             org_id=context["org_id"],
             provider=context["provider"],
@@ -203,6 +197,50 @@ def run_sync_reference_discovery(sync_run_id: str) -> dict[str, Any]:
             heartbeat_stop.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2)
+
+
+def run_reference_discovery_populate_strict(
+    *, context: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Run the strict team-autoimport populate step for an already-resolved
+    discovery context.
+
+    Extracted (CHAOS-4175) so both the in-process Celery task -- which
+    already has `context` from computing the discovery scope -- and
+    run_reference_discovery_populate_for_sync_run below share this exact
+    call instead of reimplementing it. Calls the module-level
+    `run_team_autoimport_strict` name (not a captured reference) so
+    existing tests that monkeypatch
+    `reference_discovery.run_team_autoimport_strict` keep working
+    unchanged.
+    """
+    return run_team_autoimport_strict(
+        provider=context["provider"],
+        org_id=context["org_id"],
+        credentials=context["credentials"],
+        scope=context["scope"],
+        analytics_db_url=context["analytics_db_url"],
+    )
+
+
+def run_reference_discovery_populate_for_sync_run(sync_run_id: str) -> dict[str, Any]:
+    """Load discovery context (including credential resolution -- Fernet
+    decryption, PagerDuty OAuth hydration, the CHAOS-2755 stamped-vs-mutable
+    auth freeze -- entirely in-process) and run the strict populate step.
+
+    This is the ONLY entrypoint the native Go reference-discovery gate's
+    narrow bridge call may invoke (CHAOS-4175's (b) ruling, widened
+    2026-08-24): the bridge endpoint that wraps this function receives and
+    returns identifiers/summary data only -- organization_id and
+    sync_run_id in, the populator's summary dict out. No credential
+    material of any kind crosses that boundary; this function is where
+    credentials are resolved, decrypted, and consumed, and they stay on
+    this side of it. Do not add a parameter here that could carry secret
+    material across a future caller boundary.
+    """
+    run_uuid = uuid.UUID(str(sync_run_id))
+    context = _load_discovery_context(run_uuid)
+    return run_reference_discovery_populate_strict(context=context)
 
 
 def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:

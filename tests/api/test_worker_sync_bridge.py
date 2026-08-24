@@ -135,3 +135,105 @@ def test_team_autoimport_bridge_rejects_cross_org_run(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "stale"}
     run.assert_not_called()
+
+
+# CHAOS-4175: the narrow, identifiers-only bridge call the native Go
+# reference-discovery gate uses for the one step credential resolution
+# stays entirely Python-side (ruling, 2026-08-24 -- "credentials must stay
+# entirely Python-side... a security property, not just a shape
+# preference"). These tests pin both the request contract and the call
+# behavior.
+
+
+def test_reference_discovery_populate_request_is_identifiers_only() -> None:
+    """Pins the request payload shape so nobody later "optimizes" secret
+    material into it. TeamAutoImportReference (the model this endpoint
+    reuses) must declare EXACTLY organization_id and sync_run_id, and
+    forbid any extra field -- a client-supplied "credentials" key must be
+    rejected at the schema layer, not silently accepted and ignored.
+    """
+    from dev_health_ops.api.internal.worker_sync import TeamAutoImportReference
+
+    schema = TeamAutoImportReference.model_json_schema()
+    assert set(schema["properties"]) == {"organization_id", "sync_run_id"}
+    assert TeamAutoImportReference.model_config.get("extra") == "forbid"
+
+
+def test_reference_discovery_populate_bridge_rejects_a_credentials_field(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    reference = {
+        "organization_id": _REFERENCE["organization_id"],
+        "sync_run_id": _REFERENCE["sync_run_id"],
+        "credentials": {"token": "should-never-be-accepted-here"},
+    }
+    with patch(
+        "dev_health_ops.api.internal.worker_sync.run_reference_discovery_populate_for_sync_run"
+    ) as populate:
+        response = TestClient(app).post(
+            "/api/internal/worker-sync/reference-discovery-populate",
+            headers={"Authorization": "Bearer test-token"},
+            json=reference,
+        )
+    assert response.status_code == 422
+    populate.assert_not_called()
+
+
+def test_reference_discovery_populate_bridge_rejects_cross_org_run(monkeypatch) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    reference = {
+        "organization_id": _REFERENCE["organization_id"],
+        "sync_run_id": _REFERENCE["sync_run_id"],
+    }
+    with (
+        patch(
+            "dev_health_ops.api.internal.worker_sync._current_sync_run_reference",
+            return_value=False,
+        ),
+        patch(
+            "dev_health_ops.api.internal.worker_sync.run_reference_discovery_populate_for_sync_run"
+        ) as populate,
+    ):
+        response = TestClient(app).post(
+            "/api/internal/worker-sync/reference-discovery-populate",
+            headers={"Authorization": "Bearer test-token"},
+            json=reference,
+        )
+    assert response.status_code == 409
+    populate.assert_not_called()
+
+
+def test_reference_discovery_populate_bridge_calls_the_strict_entrypoint_with_the_run_id_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    reference = {
+        "organization_id": _REFERENCE["organization_id"],
+        "sync_run_id": _REFERENCE["sync_run_id"],
+    }
+    summary = {
+        "status": "success",
+        "provider": "linear",
+        "org_id": _REFERENCE["organization_id"],
+        "reference_team_keys": ["ENG"],
+        "reference_sprint_ids": ["sprint-1"],
+    }
+    with (
+        patch(
+            "dev_health_ops.api.internal.worker_sync._current_sync_run_reference",
+            return_value=True,
+        ),
+        patch(
+            "dev_health_ops.api.internal.worker_sync.run_reference_discovery_populate_for_sync_run",
+            return_value=summary,
+        ) as populate,
+    ):
+        response = TestClient(app).post(
+            "/api/internal/worker-sync/reference-discovery-populate",
+            headers={"Authorization": "Bearer test-token"},
+            json=reference,
+        )
+    assert response.status_code == 200
+    assert response.json() == summary
+    populate.assert_called_once_with(_REFERENCE["sync_run_id"])

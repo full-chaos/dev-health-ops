@@ -54,9 +54,20 @@ type LoopConfig struct {
 	Logger *slog.Logger
 }
 
-// DefaultLoopConfig allows two seconds for one indexed read of at most 101
-// candidates. This is deliberately conservative relative to the bounded query
-// while still failing readiness promptly on database stalls.
+// DefaultLoopConfig's two-second ObservationTimeout suits a Stepper that is
+// genuinely one bounded call, such as Shadow's single indexed read. It is
+// NOT sized for the sync-dispatch mutation pipeline: that Stepper
+// (MutationPipeline) is a 7-stage, 3-pool composition, and CHAOS-4239 found
+// this same comment claiming "one indexed read of at most 101 candidates"
+// years after the pipeline made that description false -- the doc drifted,
+// nothing caught it, and the flat 2s deadline it described kept killing the
+// whole process whenever any one of the 7 stages ran long.
+//
+// cmd/dev-health-reconciler/dependencies.go overrides ObservationTimeout for
+// the mutation loop to StageBudgets.Sum() plus a fixed margin (see
+// stageBudgetOuterEnvelopeMargin there) -- a documented composition of what
+// the pipeline actually runs, not an independently chosen number. This
+// default stays a flat 2s only for Steppers that really are one call.
 func DefaultLoopConfig(registry *health.Registry) LoopConfig {
 	return LoopConfig{
 		PollInterval:       time.Second,
@@ -185,11 +196,22 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.mu.Unlock()
 
 	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
+		if !errors.Is(err, ErrDegradedStage) {
+			loop.setFailed()
+			loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
+			cancel()
+			close(done)
+			return fmt.Errorf("initial sync dispatch observation: %w", err)
+		}
+		// CHAOS-4239: the ticket's primary observed failure window was the
+		// first ~40s after each container restart -- a degraded stage on the
+		// very first tick must not fail Start and take the whole runtime
+		// down with it, or the "process stays up" fix above is undone right
+		// here on every cold start. Readiness stays closed (setFailed,
+		// matching every other not-yet-ready path); the loop starts ticking
+		// normally and the next successful tick opens readiness as usual.
 		loop.setFailed()
-		loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
-		cancel()
-		close(done)
-		return fmt.Errorf("initial sync dispatch observation: %w", err)
+		loop.logger().WarnContext(ctx, "sync dispatch observer initial step degraded; continuing", "error", err.Error())
 	}
 	ticker := loop.clock.NewTicker(loop.config.PollInterval)
 	loop.mu.Lock()
@@ -242,6 +264,22 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 			if err := loop.step(ctx, now); err != nil {
 				if isContextError(err) && (ctx.Err() != nil || loop.isStopping()) {
 					return
+				}
+				// CHAOS-4239: a stage of the mutation pipeline (only ever the
+				// observer -- see ErrDegradedStage's doc comment) exceeded its
+				// own bounded budget or errored. That stage already recorded
+				// itself loudly (syncreconciler.stage_failed,
+				// sync_reconciler_stage_failures_total); this branch's whole
+				// job is to make sure the OTHER five stages, and the process
+				// itself, are not held hostage by it. Readiness reflects the
+				// miss for this tick and self-heals on the next successful
+				// one; the loop keeps ticking instead of tearing the service
+				// down and re-relaying outbox work on every restart the way
+				// the pre-fix crash-loop did.
+				if errors.Is(err, ErrDegradedStage) {
+					loop.setFailed()
+					loop.logger().WarnContext(ctx, "sync dispatch observer step degraded; continuing", "error", err.Error())
+					continue
 				}
 				fatal = fmt.Errorf("sync dispatch observation step: %w", err)
 				return

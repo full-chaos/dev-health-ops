@@ -31,6 +31,13 @@ const (
 	defaultReconcilerContractRoot   = "contracts/jobs/v1"
 	defaultSyncDispatchContractRoot = "contracts/sync-dispatch/v1"
 	recorderCleanupTimeout          = time.Second
+	// stageBudgetOuterEnvelopeMargin pads the mutation loop's outer
+	// ObservationTimeout above syncreconciler.DefaultStageBudgets().Sum()
+	// (CHAOS-4239). Per-stage budgets are the real bound; this margin exists
+	// only to absorb the loop's own scheduling/context overhead so the outer
+	// envelope is not tripping at the exact instant the inner budgets would
+	// have finished gracefully on their own.
+	stageBudgetOuterEnvelopeMargin = 250 * time.Millisecond
 )
 
 var errReconcilerDependencyUnavailable = errors.New("reconciler readiness dependency is unavailable")
@@ -173,7 +180,7 @@ type reconcilerDependencySources struct {
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
-	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry, config.Config) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry, config.Config, *health.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
@@ -254,6 +261,7 @@ func buildSyncMutationPipeline(
 	riverSchema string,
 	registry *syncdispatchcontract.Registry,
 	cfg config.Config,
+	healthRegistry *health.Registry,
 ) (syncreconciler.Stepper, error) {
 	repair, err := syncreconciler.NewLeaseRepair(domainPool)
 	if err != nil {
@@ -309,6 +317,11 @@ func buildSyncMutationPipeline(
 	}
 	// The worker registers all four coordinator kinds, including the native
 	// post_sync fanout, before advertising River route readiness.
+	pipelineConfig := syncreconciler.DefaultMutationPipelineConfig()
+	// CHAOS-4239: optional -- nil skips the self-registered per-stage metrics
+	// fragment, which is fine for callers (most tests) that don't wire a
+	// process-wide health.Registry at all.
+	pipelineConfig.Registry = healthRegistry
 	return syncreconciler.NewMutationPipeline(
 		repair,
 		terminalRepair,
@@ -318,7 +331,7 @@ func buildSyncMutationPipeline(
 		publish,
 		nil,
 		sweep,
-		syncreconciler.DefaultMutationPipelineConfig(),
+		pipelineConfig,
 	)
 }
 
@@ -623,6 +636,7 @@ func buildReconcilerDependencies(
 			cfg.RiverDatabaseSchema,
 			dependencies.syncDispatchRegistry,
 			cfg,
+			registry,
 		)
 	} else {
 		syncStepper, err = sources.buildSyncShadow(
@@ -648,6 +662,21 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
+	// CHAOS-4239: DefaultLoopConfig's flat 2s default suits a Stepper that is
+	// genuinely one bounded call (Shadow's single indexed read). The mutation
+	// pipeline is a 7-stage, 3-pool composition where each stage now carries
+	// its own budget (syncreconciler.DefaultStageBudgets); the loop's outer
+	// envelope is derived from that composition -- the stage budgets' sum
+	// plus a fixed scheduling-overhead margin -- rather than an independently
+	// chosen number, so the two cannot drift the way DefaultLoopConfig's own
+	// stale doc comment already had. This deliberately sizes UP from 2s: not
+	// a timeout widening in the CHAOS-4239 sense (a bigger flat guess),
+	// because the inner per-stage budgets -- not this outer number -- are
+	// what actually bounds and fails each stage now; this envelope is a
+	// documented backstop, sized to what it wraps.
+	if activation.syncMutation {
+		syncLoopConfig.ObservationTimeout = syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+	}
 	// CHAOS-4092: --sync-observation-timeout / SYNC_OBSERVATION_TIMEOUT
 	// overrides the 2s default in place of a redeploy. Config.Load never
 	// returns a zero SyncObservationTimeout -- durationEnv falls back to

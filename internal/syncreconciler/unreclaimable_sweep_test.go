@@ -810,12 +810,20 @@ func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing
 
 // THE DURABLE-WORK RULE, extended to the sweep (the ExhaustedDeliveriesRecovered
 // comment states it for the repair). The sweep commits before the stages after
-// it run, so a later failure does not un-destroy the units it already
-// terminalized. An observation reporting zero after a real terminalization
-// would put destroyed work under its own alert threshold -- and the sweep is
-// the one component here whose mistakes are unrecoverable.
-func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
+// it run, so a later stage's own failure does not un-destroy the units it
+// already terminalized. An observation reporting zero after a real
+// terminalization would put destroyed work under its own alert threshold --
+// and the sweep is the one component here whose mistakes are unrecoverable.
+//
+// Since CHAOS-4239, terminal-delivery repair is a continue-safe stage: its
+// own failure no longer aborts the materializer, kernel or observer (a stall
+// in one of these largely-disjoint-table stages buys nothing by blocking the
+// others). The pass is still not an error -- the observer runs and succeeds
+// -- so this test now pins that the sweep's committed work survives a
+// terminal-repair failure inside a SUCCESSFUL tick, not merely a failed one.
+func TestPipelineStepCarriesSweepFiguresPastATerminalRepairFailure(t *testing.T) {
 	failure := errors.New("scripted terminal-delivery repair failure")
+	var materializerCalled, kernelCalled bool
 	pipeline, err := NewMutationPipeline(
 		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
 			return LeaseRepairResult{}, nil
@@ -824,10 +832,11 @@ func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
 			return TerminalDeliveryRepairResult{}, failure
 		}),
 		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
-			t.Fatal("the materializer must not run after the repair failed")
+			materializerCalled = true
 			return MaterializerResult{}, nil
 		}),
 		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			kernelCalled = true
 			return KernelResult{}, nil
 		}),
 		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
@@ -844,8 +853,12 @@ func TestPipelineStepCarriesSweepFiguresOutOfAFailedPass(t *testing.T) {
 		t.Fatalf("construct pipeline: %v", err)
 	}
 	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
-	if !errors.Is(stepErr, failure) {
-		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	if stepErr != nil {
+		t.Fatalf("Step() error = %v, want nil: terminal-delivery repair is continue-safe", stepErr)
+	}
+	if !materializerCalled || !kernelCalled {
+		t.Fatalf("a continue-safe stage's failure blocked its siblings: materializer=%v kernel=%v",
+			materializerCalled, kernelCalled)
 	}
 	if observation.UnreclaimableTerminalized != 3 || observation.UnreclaimableCandidates != 3 {
 		t.Fatalf("a failed pass dropped the sweep's already-committed work: %+v", observation)
@@ -883,7 +896,8 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 			return MaterializerResult{}, failure
 		}),
 		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
-			t.Fatal("the kernel must not run after the materializer failed")
+			// CHAOS-4239: materializer is a continue-safe stage now, so the
+			// kernel still runs after it fails.
 			return KernelResult{}, nil
 		}),
 		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
@@ -898,8 +912,8 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 		t.Fatalf("construct pipeline: %v", err)
 	}
 	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
-	if !errors.Is(stepErr, failure) {
-		t.Fatalf("Step() error = %v, want the scripted failure", stepErr)
+	if stepErr != nil {
+		t.Fatalf("Step() error = %v, want nil: materializer is continue-safe and the observer succeeded", stepErr)
 	}
 	if observation.WakeupReportFailures != 1 {
 		t.Fatalf("WakeupReportFailures = %d: the detector did not look, and the "+
@@ -969,56 +983,84 @@ func TestPipelineStepLeavesTheSweepFailureCounterAloneOnAHealthyPass(t *testing.
 // The counter's contract is "this pass did not deliver a report". Three
 // successive rounds each found another exit satisfying that description while
 // leaving it at zero — the materializer's own error, then the swallowed
-// non-fatal failures, then repair failure and terminal-repair failure. Every
-// one was the same bug; every fix patched the site in front of it.
+// non-fatal failures, then repair failure. Every one was the same bug; every
+// fix patched the site in front of it.
 //
-// The accounting is now deferred on the named return, so it covers paths this
-// table does not list and paths added later. This table exists to prove the
-// ones that already exist, and to fail loudly if someone replaces the defer
-// with per-site assignments again.
+// The accounting is deferred on the named return, so it covers paths this
+// test does not list and paths added later. Since CHAOS-4239 only lease
+// repair (and kernel, which has nothing left to run before the observer
+// anyway) still ABORTS the tick before the materializer runs; terminal
+// repair is continue-safe (see TestTerminalRepairFailureStillDeliversTheReport
+// below), so it no longer belongs in this table.
 func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
-	failure := errors.New("scripted stage failure")
-	okRepair := func(contextT, time.Time, int) (LeaseRepairResult, error) {
-		return LeaseRepairResult{}, nil
+	failure := errors.New("scripted repair failure")
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, failure
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			t.Fatal("terminal-delivery repair must not run after repair aborted the tick")
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
+			t.Fatal("the materializer must not run after repair aborted the tick")
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			t.Fatal("the kernel must not run after repair aborted the tick")
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(contextT, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
 	}
-	okTerminal := func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
-		return TerminalDeliveryRepairResult{}, nil
+	observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
+	if stepErr != nil {
+		t.Fatalf("Step() error = %v, want nil: the observer still ran and succeeded", stepErr)
 	}
-	for _, testCase := range []struct {
-		name     string
-		repair   func(contextT, time.Time, int) (LeaseRepairResult, error)
-		terminal func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error)
-	}{
-		{
-			name: "lease repair fails before anything else runs",
-			repair: func(contextT, time.Time, int) (LeaseRepairResult, error) {
-				return LeaseRepairResult{}, failure
-			},
-			terminal: okTerminal,
+	if observation.WakeupReportFailures != 1 {
+		t.Fatalf("WakeupReportFailures = %d on a pass that never reached the "+
+			"report: the detector reads as continuously healthy through a "+
+			"real upstream outage", observation.WakeupReportFailures)
+	}
+	// ...and the gauge must not claim to have measured anything.
+	if observation.RunawayMeasured {
+		t.Fatalf("a pass that never ran the report claimed to have measured it: %+v",
+			observation)
+	}
+}
+
+// TestTerminalRepairFailureStillDeliversTheReport is the CHAOS-4239
+// counterpart to the table above: terminal-delivery repair failing (or
+// returning counts it cannot stand behind) is continue-safe, so unlike a
+// repair failure it does NOT prevent the materializer from running its
+// runaway-wakeup report. WakeupReportFailures must stay at zero.
+func TestTerminalRepairFailureStillDeliversTheReport(t *testing.T) {
+	failure := errors.New("scripted terminal-delivery repair failure")
+	for name, terminal := range map[string]func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error){
+		"terminal-delivery repair errors": func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, failure
 		},
-		{
-			name:   "terminal-delivery repair fails before the materializer",
-			repair: okRepair,
-			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
-				return TerminalDeliveryRepairResult{}, failure
-			},
-		},
-		{
-			name:   "the repair returns counts it cannot stand behind",
-			repair: okRepair,
-			// Recovered is out of range against its own subtotals, which the
-			// pipeline treats as a failed step returning ErrUnavailable.
-			terminal: func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
-				return TerminalDeliveryRepairResult{Recovered: 1, ExhaustedRecovered: 5}, nil
-			},
+		"the repair returns counts it cannot stand behind": func(contextT, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{Recovered: 1, ExhaustedRecovered: 5}, nil
 		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
+			materializerRan := false
 			pipeline, err := NewMutationPipeline(
-				pipelineLeaseRepairFunc(testCase.repair),
-				pipelineTerminalDeliveryRepairFunc(testCase.terminal),
+				pipelineLeaseRepairFunc(func(contextT, time.Time, int) (LeaseRepairResult, error) {
+					return LeaseRepairResult{}, nil
+				}),
+				pipelineTerminalDeliveryRepairFunc(terminal),
 				pipelineMaterializerFunc(func(contextT, time.Time, time.Time, int) (MaterializerResult, error) {
-					t.Fatal("the materializer must not run on this path")
+					materializerRan = true
 					return MaterializerResult{}, nil
 				}),
 				pipelineKernelFunc(func(contextT, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
@@ -1036,18 +1078,15 @@ func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
 				t.Fatalf("construct pipeline: %v", err)
 			}
 			observation, stepErr := pipeline.Step(testContext(), time.Now().UTC(), 10)
-			if stepErr == nil {
-				t.Fatal("Step() = nil, want the scripted failure")
+			if stepErr != nil {
+				t.Fatalf("Step() error = %v, want nil", stepErr)
 			}
-			if observation.WakeupReportFailures != 1 {
-				t.Fatalf("WakeupReportFailures = %d on a pass that never reached the "+
-					"report: the detector reads as continuously healthy through a "+
-					"real upstream outage", observation.WakeupReportFailures)
+			if !materializerRan {
+				t.Fatal("the materializer must still run after a continue-safe terminal-repair failure")
 			}
-			// ...and the gauge must not claim to have measured anything.
-			if observation.RunawayMeasured {
-				t.Fatalf("a pass that never ran the report claimed to have measured it: %+v",
-					observation)
+			if observation.WakeupReportFailures != 0 {
+				t.Fatalf("WakeupReportFailures = %d, want 0: the materializer ran and delivered its report",
+					observation.WakeupReportFailures)
 			}
 		})
 	}

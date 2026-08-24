@@ -139,7 +139,7 @@ func TestProductionReconcilerSelectsTheMutationStepper(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilt = true
 		return syncStepFunc(func(
@@ -224,7 +224,7 @@ func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilt = true
 		return syncStepFunc(func(

@@ -139,7 +139,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -199,12 +199,17 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 }
 
 // TestSyncObservationTimeoutPropagatesFromConfig pins CHAOS-4092's wiring:
-// cfg.SyncObservationTimeout, not the syncreconciler package default, decides
-// the observer loop's per-step budget when the operator set an override, and
-// a bare config.Config{} (every other reconciler test's shape, and what a
-// caller who never wires the option would produce) leaves
-// DefaultLoopConfig's built-in 2s standing rather than tripping
-// LoopConfig.validate's >= 10ms floor with a zero value.
+// cfg.SyncObservationTimeout, not the computed default, decides the observer
+// loop's per-step budget when the operator set an override, and a bare
+// config.Config{} (every other reconciler test's shape, and what a caller who
+// never wires the option would produce) leaves the CHAOS-4239 composed
+// default standing rather than tripping LoopConfig.validate's >= 10ms floor
+// with a zero value. That composed default is
+// syncreconciler.DefaultStageBudgets().Sum() (3.75s) plus
+// stageBudgetOuterEnvelopeMargin (250ms) = 4s -- no longer
+// DefaultLoopConfig's flat 2s, which described a single bounded Stepper call
+// and was never sized for the 7-stage mutation pipeline (see the doc comment
+// on DefaultLoopConfig and on the ObservationTimeout override below).
 func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 
@@ -255,8 +260,9 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if captured != 2*time.Second {
-			t.Fatalf("ObservationTimeout = %s, want DefaultLoopConfig's 2s", captured)
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s (stage budgets sum + margin)", captured, want)
 		}
 	})
 }
@@ -285,6 +291,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		string,
 		*syncdispatchcontract.Registry,
 		config.Config,
+		*health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -504,7 +511,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		return nil, errors.New("sync mutation construction failed")
 	}
@@ -701,7 +708,7 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil

@@ -164,6 +164,16 @@ const (
 	// githubTestsWatermarkAdvancingPairs, and the skipped archive's contents
 	// were never observed (CHAOS-4177).
 	githubTestsUnreadableArchiveCause = "unreadable_archive"
+	// githubTestsArtifactUnavailableCause records that ONE artifact could
+	// never be fetched at all: the provider answered the artifact-download
+	// redirect with no Location header, so there was nothing to follow. It
+	// joins the report_member vocabulary alongside unreadable_archive but
+	// names a DIFFERENT fact -- unreadable_archive means the bytes were
+	// obtained and the container just would not open, this means the bytes
+	// were never obtained -- so the two must not be conflated in the durable
+	// evidence or an operator reading the cause could not tell which failure
+	// actually happened (CHAOS-4191).
+	githubTestsArtifactUnavailableCause = "artifact_unavailable"
 )
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
@@ -269,6 +279,7 @@ func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) erro
 var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnreadableArchiveCause: {},
+		githubTestsArtifactUnavailableCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},

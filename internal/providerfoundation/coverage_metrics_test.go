@@ -175,6 +175,13 @@ func TestArtifactSkipReasonLabelIsBounded(t *testing.T) {
 	if got := MetricArtifactSkipReasonLabel("  UNREADABLE_ARCHIVE "); got != "unreadable_archive" {
 		t.Fatalf("known reason label = %q, want unreadable_archive", got)
 	}
+	// artifact_unavailable (CHAOS-4191): an artifact whose bytes could never
+	// be fetched at all, distinct from unreadable_archive (bytes obtained,
+	// container would not open). Added to the vocabulary alongside it and
+	// must not collapse to "other".
+	if got := MetricArtifactSkipReasonLabel("  ARTIFACT_UNAVAILABLE "); got != "artifact_unavailable" {
+		t.Fatalf("known reason label = %q, want artifact_unavailable", got)
+	}
 	if got := MetricArtifactSkipReasonLabel("repo-full-chaos/dev-health-ops"); got != "other" {
 		t.Fatalf("unknown reason label = %q, want other", got)
 	}

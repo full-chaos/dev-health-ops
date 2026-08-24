@@ -394,9 +394,16 @@ whose pages moved is none of those.
 ### Partial degradation is tolerated; total degradation is not
 
 The same judgement governs unreadable provider payloads. **Partial**
-unreadability — one artifact whose archive will not open — is skipped and
-recorded, and withholds the watermark so the window is re-walked; the rest of
-the walk is real data and nothing is lost.
+unreadability — one artifact whose archive will not open, or whose bytes could
+never be downloaded at all (the artifact-download redirect carried no
+Location header, CHAOS-4191) — is skipped and recorded, and withholds the
+watermark so the window is re-walked; the rest of the walk is real data and
+nothing is lost. A genuine I/O failure reading the artifact body, or a body
+that exceeds the download size bound, stays terminal instead: unlike a
+malformed payload, a dropped connection can succeed on retry, and a
+size-bound breach is treated the same as the in-archive `archive_bounds` /
+`report_cap` bounds below — a property of the bytes serious enough to fail the
+unit closed rather than silently drop.
 
 **Total** unreadability — every artifact the walk downloaded failing to open —
 is a systematic route condition, such as a proxy or auth edge answering every

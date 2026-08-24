@@ -51,6 +51,16 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			category: PaginationIncompleteCategory,
 		},
 		{
+			// Deterministic given the artifact's size: the same bytes breach
+			// the same bound on every attempt, so retrying re-downloaded up
+			// to githubTestsMaxDownloadSize five times over before the
+			// generic exhausted category buried the real cause (CHAOS-4191,
+			// the same repeated-refusal waste CHAOS-3871 fixed above).
+			name:     "github tests artifact oversized",
+			err:      providersync.ErrGitHubTestsArtifactOversized,
+			category: GitHubTestsArtifactOversizedCategory,
+		},
+		{
 			// Already non-retryable at the HTTP layer; the unit handler was
 			// still spending four more executions against a dead credential.
 			name:     "authentication",
@@ -113,6 +123,13 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 		// still deserves its bounded retries.
 		&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429},
 		&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503},
+		// The wider github tests sentinel and its per-artifact-skip sibling
+		// must NOT be swept into the oversized category: a plain read
+		// failure genuinely can succeed on retry, and an unavailable
+		// artifact is handled as a skip inside the route, never reaching
+		// this mapper at all.
+		providersync.ErrGitHubTestsIncomplete,
+		providersync.ErrGitHubTestsArtifactUnavailable,
 	} {
 		if category, ok := deterministicTerminalCategory(err); ok {
 			t.Errorf("deterministicTerminalCategory(%v) = (%q, true), want retryable",

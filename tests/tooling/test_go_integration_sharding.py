@@ -354,7 +354,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # GitLab cross-job coverage collision test. All six drive parsing/route
     # code directly or through in-memory HTTP doers and touch no database, so
     # the integration-tagged count stays 113.
-    assert len(expected_provider_tests) == 995
+    #
+    # CHAOS-4191 then added 7 more ordinary top-level providersync tests
+    # (995 -> 1002): a per-artifact skip-and-continue pair (chunked + oracle)
+    # for a download redirect with no Location header, its telemetry-counted
+    # twin, a read-failure and an oversized-download cause-attach pair each
+    # driven through both the chunked route and the non-chunked oracle. All
+    # seven drive the routes through in-memory HTTP doers and touch no
+    # database, so the integration-tagged count stays 113.
+    assert len(expected_provider_tests) == 1002
     assert len(expected_integration_tests) == 113
     assert expected_integration_tests < expected_provider_tests
 
@@ -371,7 +379,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 995
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1002
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -432,7 +440,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 995
+    assert len(selected_tests) == len(set(selected_tests)) == 1002
     assert set(selected_tests) == expected_tests
 
 

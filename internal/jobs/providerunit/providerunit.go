@@ -88,6 +88,15 @@ const (
 	// PaginationIncompleteCategory covers a fail-closed pagination or row-cap
 	// refusal -- Python's PaginationException category.
 	PaginationIncompleteCategory = "pagination_incomplete"
+	// GitHubTestsArtifactOversizedCategory covers a github tests/cicd
+	// artifact whose download exceeded the size bound -- deterministic given
+	// the artifact's size, so retrying re-downloads and re-rejects the same
+	// bytes on every attempt before collapsing into the generic exhausted
+	// category (CHAOS-4191, same repeated-refusal waste CHAOS-3871 fixed for
+	// pagination). No Python equivalent exists yet; this is a Go-only
+	// addition, matching the precedent set by GitHubFilesInventoryFailureCategory
+	// and EffectRecoveryAmbiguousCategory above.
+	GitHubTestsArtifactOversizedCategory = "github_tests_artifact_oversized"
 )
 
 func deterministicTerminalCategory(err error) (string, bool) {
@@ -103,6 +112,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	// (CHAOS-3871).
 	if errors.Is(err, providersync.ErrPaginationCapExceeded) {
 		return PaginationIncompleteCategory, true
+	}
+	if errors.Is(err, providersync.ErrGitHubTestsArtifactOversized) {
+		return GitHubTestsArtifactOversizedCategory, true
 	}
 	// Authentication and not-found are already non-retryable at the HTTP layer
 	// (providerfoundation.ProviderError.Retryable), so the unit handler was

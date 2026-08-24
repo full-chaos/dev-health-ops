@@ -132,6 +132,113 @@ func TestHTTPCompatibilityExecutorRejectsAmbiguousResponse(t *testing.T) {
 	}
 }
 
+// recordingCompatibilityObserver captures ObserveCompatibilityPartition calls
+// for assertion, mirroring the fake DORAObserver/CapacityObserver test
+// doubles already used elsewhere in this package.
+type recordingCompatibilityObserver struct {
+	family      string
+	rowsWritten *int
+	calls       int
+}
+
+func (observer *recordingCompatibilityObserver) ObserveCompatibilityPartition(
+	family string, rowsWritten *int,
+) error {
+	observer.family = family
+	observer.rowsWritten = rowsWritten
+	observer.calls++
+	return nil
+}
+
+// TestHTTPCompatibilityExecutorReportsAZeroRowCompletionDistinctly is the
+// CHAOS-4243 acceptance case: before this, a partition that wrote real rows
+// and a partition that reported success while writing zero were
+// indistinguishable outside the Python bridge -- the response's rows_written
+// field must now be surfaced through CompatibilityOutcome and the observer,
+// and an explicit 0 must never collapse into the "not applicable" nil case.
+func TestHTTPCompatibilityExecutorReportsAZeroRowCompletionDistinctly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"success","rows_written":0}`))
+	}))
+	defer server.Close()
+	observer := &recordingCompatibilityObserver{}
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{Timeout: time.Second},
+		HTTPCompatibilityConfig{
+			Endpoint:    server.URL + "/internal/worker/remaining-metrics/v1/execute",
+			BearerToken: "token",
+			Observer:    observer,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{
+		ID:             "11111111-1111-4111-8111-111111111111",
+		OrganizationID: "22222222-2222-4222-8222-222222222222",
+		Family:         "release_impact",
+		Status:         "running",
+	}
+	partition := Partition{ID: "33333333-3333-4333-8333-333333333333", RunID: run.ID}
+
+	outcome, err := executor.ComputePartition(t.Context(), run, partition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.RowsWritten == nil {
+		t.Fatal("outcome carries no rows_written; a reported 0 must not collapse to nil")
+	}
+	if *outcome.RowsWritten != 0 {
+		t.Fatalf("outcome.RowsWritten = %d, want 0", *outcome.RowsWritten)
+	}
+	if observer.calls != 1 || observer.family != "release_impact" {
+		t.Fatalf("observer calls=%d family=%q, want one call for release_impact", observer.calls, observer.family)
+	}
+	if observer.rowsWritten == nil || *observer.rowsWritten != 0 {
+		t.Fatalf("observer.rowsWritten = %v, want a pointer to 0", observer.rowsWritten)
+	}
+}
+
+// TestHTTPCompatibilityExecutorLeavesRowsWrittenNilWhenAbsent proves the
+// converse: a family/response that carries no rows_written field at all must
+// report nil ("not applicable"), never coerce to a false zero.
+func TestHTTPCompatibilityExecutorLeavesRowsWrittenNilWhenAbsent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"success"}`))
+	}))
+	defer server.Close()
+	observer := &recordingCompatibilityObserver{}
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{Timeout: time.Second},
+		HTTPCompatibilityConfig{
+			Endpoint:    server.URL + "/internal/worker/remaining-metrics/v1/execute",
+			BearerToken: "token",
+			Observer:    observer,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{
+		ID:             "11111111-1111-4111-8111-111111111111",
+		OrganizationID: "22222222-2222-4222-8222-222222222222",
+		Family:         "membership_backfill",
+		Status:         "running",
+	}
+	partition := Partition{ID: "33333333-3333-4333-8333-333333333333", RunID: run.ID}
+
+	outcome, err := executor.ComputePartition(t.Context(), run, partition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.RowsWritten != nil {
+		t.Fatalf("outcome.RowsWritten = %v, want nil for a response with no rows_written field", *outcome.RowsWritten)
+	}
+	if observer.calls != 1 || observer.rowsWritten != nil {
+		t.Fatalf("observer calls=%d rowsWritten=%v, want one call with nil", observer.calls, observer.rowsWritten)
+	}
+}
+
 func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{"status":"success"}`))

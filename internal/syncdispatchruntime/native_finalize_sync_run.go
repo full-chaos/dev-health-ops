@@ -389,6 +389,7 @@ WHERE id = $1::uuid AND org_id = $2`,
 
 type finalizeSyncRunUnit struct {
 	id             string
+	orgID          string
 	status         string
 	provider       string
 	datasetKey     string
@@ -404,7 +405,7 @@ type finalizeSyncRunUnit struct {
 
 func loadFinalizeUnits(ctx context.Context, tx pgx.Tx, runID string) ([]finalizeSyncRunUnit, error) {
 	rows, err := tx.Query(ctx, `
-SELECT id::text, status, provider, dataset_key, source_id::text, since_at, before_at,
+SELECT id::text, org_id, status, provider, dataset_key, source_id::text, since_at, before_at,
        cost_class, mode, error, result, processor_flags
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
@@ -421,7 +422,7 @@ ORDER BY id`, runID)
 			resultRaw    []byte
 			processorRaw []byte
 		)
-		if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.datasetKey, &unit.sourceID,
+		if err := rows.Scan(&unit.id, &unit.orgID, &unit.status, &unit.provider, &unit.datasetKey, &unit.sourceID,
 			&unit.sinceAt, &unit.beforeAt, &unit.costClass, &unit.mode,
 			&errorText, &resultRaw, &processorRaw); err != nil {
 			return nil, ErrFinalizeSyncRunUnavailable
@@ -712,6 +713,14 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 // insertComputeCheckpoint writes one checkpoint row inside its own
 // savepoint, rolling the savepoint back (not the enclosing transaction) on
 // any error so the caller's log-and-continue policy actually holds.
+//
+// org_id comes from the UNIT, not the run: Python's
+// `_checkpoint_successful_compute_inputs` builds
+// `SyncComputeCheckpoint(org_id=str(unit.org_id), ...)`. The schema links a
+// unit to its run only by sync_run_id, with no constraint forcing their
+// org_id columns to agree, so using run.orgID here would misattribute a
+// checkpoint's tenant for any unit whose own org_id ever diverges from its
+// run's (codex adversarial review round 2, CHAOS-4175).
 func (service *NativeFinalizeSyncRunService) insertComputeCheckpoint(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -732,7 +741,7 @@ INSERT INTO public.sync_compute_checkpoints (
     created_at, updated_at
 ) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13::json, $12, $12)
 ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
-		checkpointID, run.orgID, run.id, unit.id, unit.sourceID, unit.provider, unit.datasetKey,
+		checkpointID, unit.orgID, run.id, unit.id, unit.sourceID, unit.provider, unit.datasetKey,
 		syncComputeTypeWorkGraph, syncComputeCheckpointStatusOK, unit.sinceAt, unit.beforeAt,
 		checkpointedAt, encodedMetadata)
 	if execErr != nil {
@@ -899,13 +908,22 @@ SET status = CASE
 // must never be the thing that fails a finalization (same rule Python
 // states), so this runs in its own connection AFTER the finalizing
 // transaction has already committed and swallows its own errors.
+//
+// Python: `if isinstance(provider, str) and provider.strip(): return
+// provider.strip().lower()`. An earlier draft returned the raw column value,
+// so a mixed-case or whitespace-padded Integration.provider (e.g.
+// "PagerDuty") failed zeroUnitFinalizationProvider's case-sensitive known-set
+// lookup and silently misclassified as "unknown", hiding exactly the
+// provider-specific failure the counter exists to surface (codex adversarial
+// review round 2, CHAOS-4175).
 func resolveRunProviderBestEffort(ctx context.Context, pool *pgxpool.Pool, integrationID string) string {
 	var provider string
 	err := pool.QueryRow(ctx, `SELECT provider FROM public.integrations WHERE id = $1::uuid`, integrationID).Scan(&provider)
-	if err != nil || provider == "" {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if err != nil || normalized == "" {
 		return "unknown"
 	}
-	return provider
+	return normalized
 }
 
 // providersyncCapabilityLegacyTargets is the same registry-owned mapping

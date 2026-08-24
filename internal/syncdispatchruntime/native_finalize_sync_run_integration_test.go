@@ -562,3 +562,122 @@ SELECT count(*) FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_
 		t.Fatalf("unit B's checkpoint = %d rows, want 0 (its FK violation should have been rolled back to its own savepoint)", checkpointCountB)
 	}
 }
+
+// TestNativeFinalizeSyncRunCheckpointUsesUnitOrgIDNotRunOrgID (codex
+// adversarial review round 2, CHAOS-4175) pins that a compute checkpoint's
+// org_id comes from the UNIT row, not the run row -- sync_units.py's
+// _checkpoint_successful_compute_inputs builds
+// `SyncComputeCheckpoint(org_id=str(unit.org_id), ...)`. Every earlier test
+// in this file used the SAME org_id for the run and its unit, which can
+// never distinguish "read from run" from "read from unit" -- this is the
+// one test that gives the two sources different values.
+func TestNativeFinalizeSyncRunCheckpointUsesUnitOrgIDNotRunOrgID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createFinalizeTables(t, ctx, pool)
+	seedFinalizeRoute(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
+VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
+		t.Fatal(err)
+	}
+	// The unit's org_id deliberately DIFFERS from the run's org_id
+	// (finalizeTestOrg). Real production data should never actually diverge
+	// like this, but the port must read the field Python reads regardless.
+	unitOrgID := "00000000-0000-4000-8000-0000000000fd"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','commits',$4,'success')`,
+		finalizeTestUnit, unitOrgID, finalizeTestRun, finalizeTestSource); err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := NewNativeFinalizeSyncRunService(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	var checkpointOrgID string
+	if err := pool.QueryRow(ctx, `
+SELECT org_id FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_unit_id=$2`,
+		finalizeTestRun, finalizeTestUnit).Scan(&checkpointOrgID); err != nil {
+		t.Fatal(err)
+	}
+	if checkpointOrgID != unitOrgID {
+		t.Fatalf("checkpoint org_id=%q, want the UNIT's org_id=%q (not the run's org_id=%q)",
+			checkpointOrgID, unitOrgID, finalizeTestOrg)
+	}
+}
+
+// TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized (codex adversarial
+// review round 2, CHAOS-4175) pins that a mixed-case or whitespace-padded
+// Integration.provider value is normalized (trim + lowercase) before being
+// used as a telemetry label, matching sync_units.py::_run_provider's
+// `provider.strip().lower()` exactly. Without normalization, the label
+// would fail ZeroUnitFinalizationObserver's case-sensitive known-provider
+// check and silently collapse to "unknown", hiding the real provider.
+func TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createFinalizeTables(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
+		 VALUES ('finalize_sync_run','river',1,false,'celery')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sync_dispatch_outbox
+		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
+		 VALUES ($1,$2,$3,'finalize_sync_run','dispatched',now(),'river',1,now(),now())`,
+		finalizeTestOutbox, finalizeTestRun, finalizeTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	// Mixed-case, whitespace-padded provider -- exactly what
+	// _run_provider's .strip().lower() normalizes away.
+	if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, provider) VALUES ($1, '  PagerDuty  ')`, finalizeTestIntegration); err != nil {
+		t.Fatal(err)
+	}
+	insertZeroUnitRun(t, ctx, pool, "", "")
+
+	metrics, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewNativeFinalizeSyncRunService(pool, nil, metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if count := zeroUnitFinalizationCount(t, metrics, "pagerduty", zeroUnitGenericReason); count != 1 {
+		t.Fatalf("zero-unit counter[pagerduty,%s]=%d want=1 (mixed-case/whitespace provider must normalize)", zeroUnitGenericReason, count)
+	}
+	if count := zeroUnitFinalizationCount(t, metrics, "unknown", zeroUnitGenericReason); count != 0 {
+		t.Fatalf("zero-unit counter[unknown,%s]=%d want=0 (a real, known provider must never fall back to unknown)", zeroUnitGenericReason, count)
+	}
+}

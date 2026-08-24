@@ -213,11 +213,15 @@ stopped before routes moved forward.
 
 ## After cutover
 
-- Keep the Celery worker, Beat, and Valkey DB 0 definitions in place. The
-  Go-only overlays (`compose.go-workers-only.yml`, `go-workers-only.yaml`,
-  `values-go-workers-only.yaml`) scale them to zero rather than deleting them,
-  and Go-only remains a release gate, not a switch — see
+- **Compose:** keep the Celery worker, Beat, and Valkey DB 0 definitions in
+  place. The `compose.go-workers-only.yml` overlay scales them to zero rather
+  than deleting them, and Go-only remains a release gate, not a switch — see
   [`README.md` § Go-only is a release gate](./README.md).
+- **Helm/Kubernetes (CHAOS-4195):** there is nothing to keep in place — the
+  Celery `worker`/`beat` templates and manifests, and the
+  `go-workers-only.yaml`/`values-go-workers-only.yaml` scale-to-zero
+  overlays, are deleted. Helm/Kubernetes render only the Go topology; the
+  release-gate discipline still governs when you scale a group above zero.
 - `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` stays unset.
 - For failures after this point, use
   `docs/operate/runbooks/worker-or-queue-failure.md`, which carries the

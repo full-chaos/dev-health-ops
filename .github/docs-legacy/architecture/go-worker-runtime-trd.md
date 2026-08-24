@@ -1516,7 +1516,7 @@ Default configurations must keep total worst-case connections below the document
 - `src/dev_health_ops/workers/tasks.py`
 - `src/dev_health_ops/workers/async_runner.py`
 - `compose.yml`
-- `deploy/helm/dev-health/templates/worker-pools.yaml`
+- `deploy/helm/dev-health/templates/go-workers.yaml` (CHAOS-4195: replaced `worker-pools.yaml`, deleted with the Celery Helm templates)
 - `dev-health-acr/README.md`
 - `dev-health-acr/docs/service-shell.md`
 

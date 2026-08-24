@@ -179,12 +179,17 @@ sections.
    docker compose -f deploy/docker-compose/compose.production.yml \
      -f deploy/docker-compose/compose.go-workers.yml \
      --profile go-workers up -d --build
-   helm upgrade --install dev-health deploy/helm/dev-health \
-     -f deploy/helm/dev-health/values-go-workers-coexistence.yaml
-   kubectl -n dev-health apply -f deploy/kubernetes/go-workers.yaml
    docker stack deploy -c deploy/docker-swarm/stack.yml \
      -c deploy/docker-swarm/stack.go-workers.yml dev-health
    ```
+
+   **Helm/Kubernetes (CHAOS-4195):** the Celery `worker`/`beat` templates and
+   manifests, and the `values-go-workers-coexistence.yaml` overlay that
+   staged the Go path beside them, are deleted -- there is no Celery fleet
+   left to coexist with. `helm upgrade --install dev-health
+   deploy/helm/dev-health` and `kubectl apply -k deploy/kubernetes/` render
+   the Go topology (every group at `replicas: 0`) with no extra values file
+   or separate `apply`; scale groups per step 3 below.
 
    This bootstrap validates schema and contracts only. It does not invoke
    `dev-health-workerctl`, mutate a worker route, or transfer Celery/Beat
@@ -236,12 +241,17 @@ dev-health-workerctl workers queues undrain \
 
 ### Go-only is a release gate, not a switch
 
-The `compose.go-workers-only.yml`, `go-workers-only.yaml`, and
-`values-go-workers-only.yaml` are deliberately explicit topology overlays.
-They scale Celery worker/Beat consumers to zero but do not delete their
-definitions or Valkey DB 0. Use them only after all of the following are
-recorded in the owning route release: executable River handlers, explicit
-route/rollback ownership, cross-process quiescence, scheduler policy parity,
+The Compose `compose.go-workers-only.yml` overlay is a deliberately explicit
+topology overlay: it scales Celery worker/Beat consumers to zero but does not
+delete their definitions or Valkey DB 0. **Helm/Kubernetes are Go-only by
+construction since CHAOS-4195** (the Celery `worker`/`beat` templates,
+manifests, and the `go-workers-only.yaml`/`values-go-workers-only.yaml`
+scale-to-zero overlays that used to gate them are deleted, not retained at
+zero) -- there is nothing left to scale down on those two paths. This does
+not relax the release gate below: whichever path you deploy on, use it only
+after all of the following are recorded in the owning route release:
+executable River handlers, explicit route/rollback ownership, cross-process
+quiescence, scheduler policy parity,
 provider sync (`sync_provider`) contract support where applicable, and a
 successful coexistence canary. The current checked-in contract fails these
 conditions, so Go-only is not production-authorized.

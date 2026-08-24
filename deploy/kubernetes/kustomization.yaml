@@ -11,14 +11,18 @@ resources:
   - clickhouse.yaml
   - redis.yaml
   # NOTE (CHAOS-2304): Jobs do not gate Deployments. The migrate Job must
-  # complete before api/worker roll out — see migrate-job.yaml and README.md.
-  # Safety net: api/worker carry a read-only `wait-for-migrations`
+  # complete before api/go-workers roll out — see migrate-job.yaml and
+  # README.md. Safety net: api carries a read-only `wait-for-migrations`
   # initContainer that blocks app start until the schema is current, so a
   # naive `kubectl apply -k` cannot serve against an unmigrated schema.
   - migrate-job.yaml
   - api.yaml
-  - worker.yaml
-  - beat.yaml
+  # go-workers.yaml (CHAOS-3052) is the only worker topology this tree
+  # renders -- the Celery worker.yaml/beat.yaml manifests it replaced were
+  # deleted in CHAOS-4195 (production stopped running them 2026-08-19,
+  # CHAOS-4026). Every group deploys at replicas: 0; scale the ones you need
+  # (see README.md).
+  - go-workers.yaml
   - cronjobs.yaml
   - ingress.yaml
 

@@ -1,5 +1,6 @@
 ---
-# Valkey Deployment for Celery broker
+# Valkey Deployment. Was also the Celery broker/result backend before
+# CHAOS-4195; now backs the API's distributed rate limiter (REDIS_URL) only.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

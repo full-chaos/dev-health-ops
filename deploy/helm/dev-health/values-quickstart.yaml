@@ -29,6 +29,11 @@ clickhouse:
 valkey:
   enabled: true
 
+# goWorkers.pgbouncer's three River role passwords already ship a
+# chart-default placeholder (values.yaml); bundled PostgreSQL's
+# host/port/database are derived automatically once postgresql.enabled=true
+# above, so there is nothing go-worker-specific left to fill in here.
+
 # Pre-filled secrets with generated defaults
 secrets:
   create: true
@@ -64,28 +69,6 @@ api:
     limits:
       memory: "512Mi"
       cpu: "250m"
-
-worker:
-  replicas: 1
-  concurrency: 2
-  autoscaling:
-    enabled: false
-  resources:
-    requests:
-      memory: "128Mi"
-      cpu: "50m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-
-beat:
-  resources:
-    requests:
-      memory: "64Mi"
-      cpu: "25m"
-    limits:
-      memory: "256Mi"
-      cpu: "125m"
 
 web:
   replicas: 1

@@ -183,9 +183,12 @@ rather than silently stranding the batch.
 ## Deployment invariant: single replica, `--concurrency=1`
 
 Exactly ONE `worker-external-ingest` replica must run, at Celery
-`--concurrency=1`, across every deploy target (`compose.yml`,
-`compose.production.yml`, `docker-swarm/stack.yml`,
-`kubernetes/worker.yaml`, the Helm chart's `workerExternalIngest` pool).
+`--concurrency=1`, across every deploy target that still runs Celery
+(`compose.yml`, `compose.production.yml`, `docker-swarm/stack.yml`). Its Go
+successor is the `stream-external` group (`kubernetes/go-workers.yaml`, the
+Helm chart's `goWorkers.groups` entry of that name) -- CHAOS-4195 deleted
+`kubernetes/worker.yaml` and the Helm chart's `workerExternalIngest` pool,
+which this invariant no longer applies to.
 The reclaim design assumes a single logical consumer identity draining the
 PEL; scaling replicas without first revisiting reclaim semantics
 reintroduces the double-processing window the 15-minute `reclaim_idle_ms`

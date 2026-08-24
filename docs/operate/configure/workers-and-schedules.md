@@ -150,22 +150,20 @@ a bug and re-discover it from scratch.
   at all. The checked-in production compose file was already not the true
   source of prod's Celery topology before either side was archived; treat
   both as historical record of *a* Celery topology, not *the* deployed one.
-- **Helm/Kubernetes defaults still describe a Celery-primary deployment.**
-  `deploy/helm/dev-health/values.yaml` defaults `worker.enabled`,
+- **Helm/Kubernetes defaults matched compose (resolved, CHAOS-4195).** Before
+  this ticket, `deploy/helm/dev-health/values.yaml` defaulted `worker.enabled`,
   `workerIngest.enabled`, `workerExternalIngest.enabled`,
   `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
-  to `false`; `PAGERDUTY_WEBHOOK_TRANSPORT` there still defaults to `celery`.
-  `deploy/kubernetes/beat.yaml` and `worker.yaml` are the matching plain
-  manifests. None of this is what actual prod runs today -- the live prod
-  fleet this page describes was verified through `docker compose`, not `helm`
-  or `kubectl` -- but a reader following the Helm/Kubernetes path alone, with
-  no other context, would deploy the archived Celery fleet as primary and the
-  Go path as an opt-in add-on, the reverse of current reality. Left
-  unarchived here deliberately: fixing the Helm/Kubernetes chart is a
-  materially larger, riskier change than a compose-comment archival, and it
-  is not yet known whether that deployment path has any live consumer at
-  all. Tracked as CHAOS-4195, a CHAOS-4164-related follow-up; the
-  archive-vs-delete call there belongs to chris.
+  to `false`, with `PAGERDUTY_WEBHOOK_TRANSPORT` defaulting to `celery`;
+  `deploy/kubernetes/beat.yaml` and `worker.yaml` were the matching plain
+  manifests. Chris's ruling on CHAOS-4195 was delete, not archive (unlike the
+  compose surfaces above, which have no equivalent live-vs-checked-in
+  divergence to preserve): the Celery Helm templates and Kubernetes manifests
+  are gone, `goWorkers.enabled` and `deploy/kubernetes/go-workers.yaml`'s
+  presence in `kustomization.yaml` now default to `true`, and
+  `PAGERDUTY_WEBHOOK_TRANSPORT` defaults to `river`. Helm/Kubernetes now agree
+  with the compose reality this page describes: Go/River primary, no Celery
+  fleet to opt out of.
 
 ## PostgreSQL requirements
 

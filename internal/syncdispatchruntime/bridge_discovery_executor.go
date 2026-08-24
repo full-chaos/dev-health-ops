@@ -32,7 +32,13 @@ func NewBridgeDiscoveryExecutor(bridge *HTTPBridge) (*BridgeDiscoveryExecutor, e
 	return &BridgeDiscoveryExecutor{populator: bridge}, nil
 }
 
-func (executor *BridgeDiscoveryExecutor) Discover(ctx context.Context, orgID, runID string) (map[string]any, error) {
+// Discover ignores the caller-resolved authoritative provider: the wire
+// contract stays identifiers-only (organization_id/sync_run_id), matching
+// the narrow bridge endpoint's request shape exactly -- Python resolves its
+// own provider independently on its side of the boundary. The authoritative
+// provider exists for the CALLER (VerifiedDiscoveryExecutor) to check the
+// response against, not for this call to send.
+func (executor *BridgeDiscoveryExecutor) Discover(ctx context.Context, orgID, runID, _ string) (map[string]any, error) {
 	if executor == nil || executor.populator == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}

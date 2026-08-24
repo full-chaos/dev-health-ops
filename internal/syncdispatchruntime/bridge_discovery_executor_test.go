@@ -24,7 +24,7 @@ func (populator *fakeReferenceDiscoveryPopulator) PopulateReferenceDiscovery(_ c
 func TestBridgeDiscoveryExecutorDelegatesToThePopulateCall(t *testing.T) {
 	populator := &fakeReferenceDiscoveryPopulator{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
 	executor := &BridgeDiscoveryExecutor{populator: populator}
-	summary, err := executor.Discover(context.Background(), testOrg, testRun)
+	summary, err := executor.Discover(context.Background(), testOrg, testRun, "github")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestBridgeDiscoveryExecutorDelegatesToThePopulateCall(t *testing.T) {
 	}
 
 	populator.err = errors.New("populate failed")
-	if _, err := executor.Discover(context.Background(), testOrg, testRun); !errors.Is(err, populator.err) {
+	if _, err := executor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, populator.err) {
 		t.Fatalf("Discover error=%v want=%v", err, populator.err)
 	}
 }
@@ -56,11 +56,11 @@ func TestNewBridgeDiscoveryExecutorRejectsANilBridge(t *testing.T) {
 // a zero-value or nil-populator executor must return an error, not panic.
 func TestBridgeDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T) {
 	var nilExecutor *BridgeDiscoveryExecutor
-	if _, err := nilExecutor.Discover(context.Background(), testOrg, testRun); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
+	if _, err := nilExecutor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("nil executor error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
 	zeroExecutor := &BridgeDiscoveryExecutor{}
-	if _, err := zeroExecutor.Discover(context.Background(), testOrg, testRun); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
+	if _, err := zeroExecutor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("zero-value executor error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
 }

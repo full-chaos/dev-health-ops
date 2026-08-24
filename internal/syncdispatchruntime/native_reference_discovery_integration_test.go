@@ -42,7 +42,7 @@ CREATE TABLE sync_run_units (
  last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE integrations (
- id uuid PRIMARY KEY, provider text NOT NULL
+ id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL
 );
 CREATE TABLE integration_datasets (
  id uuid PRIMARY KEY, integration_id uuid NOT NULL, dataset_key text NOT NULL, is_enabled boolean NOT NULL
@@ -92,6 +92,11 @@ func seedDiscoveryRoute(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		         'reference_discovery','dispatched',now(),'river',1,now(),now())`,
 		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
 			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
+		// resolveAuthoritativeProvider (CHAOS-4175 round 2) joins sync_runs to
+		// integrations for every Discover() call now, not just the
+		// feature-gate tests -- every test in this file needs a real
+		// integrations row to reach the claimed-lease path at all.
+		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement); err != nil {
@@ -112,13 +117,15 @@ func newDiscoveryArgs() ReferenceDiscoveryArgs {
 // readback/populate-bridge chain: this test file's whole point is proving
 // the lease/claim/heartbeat/retry state machine independent of that chain.
 type fakeDiscoveryExecutor struct {
-	summary map[string]any
-	err     error
-	calls   int
+	summary     map[string]any
+	err         error
+	calls       int
+	gotProvider string
 }
 
-func (executor *fakeDiscoveryExecutor) Discover(ctx context.Context, orgID, runID string) (map[string]any, error) {
+func (executor *fakeDiscoveryExecutor) Discover(ctx context.Context, orgID, runID, provider string) (map[string]any, error) {
 	executor.calls++
+	executor.gotProvider = provider
 	return executor.summary, executor.err
 }
 

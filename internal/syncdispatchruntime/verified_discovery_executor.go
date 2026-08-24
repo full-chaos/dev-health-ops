@@ -13,11 +13,17 @@ import (
 // BridgeDiscoveryExecutor, so the populate call and the verify step stay
 // independently testable.
 //
-// provider comes from the inner executor's own summary["provider"] field
-// (run_team_autoimport_strict's Python return always sets this key) rather
-// than a second database round trip -- the populate call and the readback
-// check must agree on which provider's tables to look at, and re-deriving
-// it separately would risk the two disagreeing.
+// The provider used for readback is the caller-supplied AUTHORITATIVE
+// value (resolveAuthoritativeProvider), never the populate response's own
+// echoed "provider" field (CHAOS-4175 round 2): Python verifies with
+// context["provider"] from the integrations table and never trusts the
+// echo, so trusting the bridge's self-reported value here would be a
+// parity downgrade, not a shortcut. Under correct operation the two values
+// are always identical by construction (run_team_autoimport_strict just
+// re-normalizes whatever provider it was given), so this doubles as a
+// defense-in-depth check: Verify's own cross-check below fails closed if
+// they ever disagree, which only happens if the bridge response is broken
+// or lying.
 type VerifiedDiscoveryExecutor struct {
 	inner    DiscoveryExecutor
 	verifier *ReferenceReadbackVerifier
@@ -30,17 +36,17 @@ func NewVerifiedDiscoveryExecutor(inner DiscoveryExecutor, verifier *ReferenceRe
 	return &VerifiedDiscoveryExecutor{inner: inner, verifier: verifier}, nil
 }
 
-func (executor *VerifiedDiscoveryExecutor) Discover(ctx context.Context, orgID, runID string) (map[string]any, error) {
+func (executor *VerifiedDiscoveryExecutor) Discover(ctx context.Context, orgID, runID, provider string) (map[string]any, error) {
 	if executor == nil || executor.inner == nil || executor.verifier == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}
-	summary, err := executor.inner.Discover(ctx, orgID, runID)
+	summary, err := executor.inner.Discover(ctx, orgID, runID, provider)
 	if err != nil {
 		return nil, err
 	}
-	provider, ok := summary["provider"].(string)
-	if !ok || provider == "" {
-		return nil, fmt.Errorf("%w: populate summary carried no provider to verify readback against", ErrReferenceDiscoveryUnavailable)
+	echoedProvider, _ := summary["provider"].(string)
+	if echoedProvider != provider {
+		return nil, fmt.Errorf("%w: authoritative=%q echoed=%q", ErrDiscoveryProviderMismatch, provider, echoedProvider)
 	}
 	if err := executor.verifier.Verify(ctx, orgID, provider, summary); err != nil {
 		return nil, err

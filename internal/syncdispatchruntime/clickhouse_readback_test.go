@@ -14,11 +14,13 @@ import (
 // which lives behind the integration build tag and is unavailable to a
 // plain `go test` run of this file.
 type fakeVerifiedDiscoveryInner struct {
-	summary map[string]any
-	err     error
+	summary     map[string]any
+	err         error
+	gotProvider string
 }
 
-func (executor *fakeVerifiedDiscoveryInner) Discover(context.Context, string, string) (map[string]any, error) {
+func (executor *fakeVerifiedDiscoveryInner) Discover(_ context.Context, _, _, provider string) (map[string]any, error) {
+	executor.gotProvider = provider
 	return executor.summary, executor.err
 }
 
@@ -202,12 +204,15 @@ func TestVerifiedDiscoveryExecutorVerifiesReadbackAfterPopulating(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary, err := executor.Discover(context.Background(), testOrg, testRun)
+	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
 	if summary["provider"] != "linear" {
 		t.Fatalf("summary=%#v", summary)
+	}
+	if inner.gotProvider != "linear" {
+		t.Fatalf("inner saw provider=%q want=linear (the authoritative value, not derived from the response)", inner.gotProvider)
 	}
 	if checker.teamCalls != 1 {
 		t.Fatalf("teamCalls=%d want=1 (readback must run after a successful populate)", checker.teamCalls)
@@ -228,7 +233,7 @@ func TestVerifiedDiscoveryExecutorSkipsReadbackWhenPopulateFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executor.Discover(context.Background(), testOrg, testRun); !errors.Is(err, populateErr) {
+	if _, err := executor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, populateErr) {
 		t.Fatalf("Discover error=%v want=%v", err, populateErr)
 	}
 	if checker.teamCalls != 0 || checker.sprintCalls != 0 {
@@ -238,8 +243,12 @@ func TestVerifiedDiscoveryExecutorSkipsReadbackWhenPopulateFails(t *testing.T) {
 
 // TestVerifiedDiscoveryExecutorRejectsASummaryWithNoProvider pins a
 // defensive guard: a populate summary missing "provider" cannot be
-// verified (there is nothing to scope the readback query to), so this
-// must fail loudly rather than silently skip verification.
+// verified (there is nothing to scope the readback query to). Since an
+// empty echoed provider can never equal a real authoritative provider
+// string, this now fails via the SAME mismatch path
+// TestVerifiedDiscoveryExecutorRejectsAMismatchedProvider pins directly --
+// deliberately not a separate error class, so there is exactly one way
+// this trust boundary can fail, not two.
 func TestVerifiedDiscoveryExecutorRejectsASummaryWithNoProvider(t *testing.T) {
 	inner := &fakeVerifiedDiscoveryInner{summary: map[string]any{"status": "success"}}
 	checker := &fakeReadbackChecker{}
@@ -251,8 +260,45 @@ func TestVerifiedDiscoveryExecutorRejectsASummaryWithNoProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executor.Discover(context.Background(), testOrg, testRun); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
-		t.Fatalf("Discover error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
+	if _, err := executor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrDiscoveryProviderMismatch) {
+		t.Fatalf("Discover error=%v want=%v", err, ErrDiscoveryProviderMismatch)
+	}
+	if checker.teamCalls != 0 {
+		t.Fatal("readback must not run when the provider cannot be trusted")
+	}
+}
+
+// TestVerifiedDiscoveryExecutorRejectsAMismatchedProvider is CHAOS-4175
+// round 2's red-first pin: the bridge response echoing a DIFFERENT
+// provider than the one this process itself resolved from `integrations`
+// must fail closed rather than silently trusting the untrusted echo --
+// under correct operation the two are always identical by construction, so
+// a mismatch proves a broken or lying bridge. Also pins that the mismatch
+// error is retryable-bounded (wraps ErrBridgeRequest, CHAOS-4175 round 1's
+// classification), and that readback never runs against the wrong
+// provider's tables.
+func TestVerifiedDiscoveryExecutorRejectsAMismatchedProvider(t *testing.T) {
+	inner := &fakeVerifiedDiscoveryInner{summary: map[string]any{
+		"provider": "jira", "reference_team_keys": []any{"ENG"},
+	}}
+	checker := &fakeReadbackChecker{}
+	readbackVerifier, err := NewReferenceReadbackVerifier(checker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewVerifiedDiscoveryExecutor(inner, readbackVerifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executor.Discover(context.Background(), testOrg, testRun, "linear")
+	if !errors.Is(err, ErrDiscoveryProviderMismatch) {
+		t.Fatalf("Discover error=%v want=%v", err, ErrDiscoveryProviderMismatch)
+	}
+	if !isRetryableDiscoveryError(err) {
+		t.Fatalf("Discover error=%v want retryable (wraps ErrBridgeRequest)", err)
+	}
+	if checker.teamCalls != 0 {
+		t.Fatal("readback must never run against the untrusted echoed provider")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -17,6 +18,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrDiscoveryProviderMismatch reports the populate bridge's response
+// disagreeing with the authoritative provider this process resolved itself
+// from `integrations` (see resolveAuthoritativeProvider). Under correct
+// operation the two are always identical: run_team_autoimport_strict's
+// summary["provider"] is just a re-normalized echo of the provider it was
+// given, which came from this same authoritative source one Python-side
+// hop earlier. A mismatch means the bridge response cannot be trusted --
+// it proves a broken or lying bridge, not a legitimate race -- so this
+// wraps ErrBridgeRequest to inherit its retryable classification (CHAOS-4175
+// round 1): bounded by the same max-attempts cap as any other bridge
+// failure, not a silent substitution of the untrusted value.
+var ErrDiscoveryProviderMismatch = fmt.Errorf("%w: populate response provider does not match the authoritative integration provider", ErrBridgeRequest)
 
 var ErrReferenceDiscoveryUnavailable = errors.New("native reference discovery is unavailable")
 
@@ -48,8 +62,13 @@ const (
 // A caller whose error implements retryAfterProvider gets that hint honored
 // in the backoff calculation, matching Python's
 // `getattr(exc, "retry_after_seconds", None)`.
+// provider is the AUTHORITATIVE value the caller already resolved from
+// `integrations` (resolveAuthoritativeProvider) -- an implementation must
+// never treat a populate response's own echoed-back provider field as
+// authoritative in its place (CHAOS-4175 round 2: the bridge response is
+// untrusted network input).
 type DiscoveryExecutor interface {
-	Discover(ctx context.Context, orgID, runID string) (summary map[string]any, err error)
+	Discover(ctx context.Context, orgID, runID, provider string) (summary map[string]any, err error)
 }
 
 // retryAfterProvider is satisfied by a DiscoveryExecutor error that carries a
@@ -111,11 +130,40 @@ func (service *NativeReferenceDiscoveryService) Discover(ctx context.Context, ar
 	stopHeartbeat := service.startHeartbeat(args.SyncRunID(), leaseOwner, deadline)
 	defer stopHeartbeat()
 
-	summary, discoverErr := service.executor.Discover(ctx, args.OrganizationID(), args.SyncRunID())
+	// Python: `context = _load_discovery_context(run_uuid)` -- resolved in
+	// this SAME post-claim phase, so a failure here (integration not found,
+	// a transient DB error) flows through the identical retry/backoff path
+	// as a populate failure, exactly like Python's ValueError does when it
+	// propagates to the same outer except block.
+	provider, providerErr := service.resolveAuthoritativeProvider(ctx, args.OrganizationID(), args.SyncRunID())
+	if providerErr != nil {
+		return service.handleFailure(ctx, args.SyncRunID(), leaseOwner, providerErr)
+	}
+
+	summary, discoverErr := service.executor.Discover(ctx, args.OrganizationID(), args.SyncRunID(), provider)
 	if discoverErr != nil {
 		return service.handleFailure(ctx, args.SyncRunID(), leaseOwner, discoverErr)
 	}
 	return service.stampSuccess(ctx, args.OrganizationID(), args.SyncRunID(), leaseOwner, summary)
+}
+
+// resolveAuthoritativeProvider ports _load_discovery_context's provider
+// resolution (`str(integration.provider).strip().lower()`, tenant-fenced
+// by org_id) -- the authoritative source callers must verify a populate
+// response's own echoed provider field against, never trust the echo
+// alone (CHAOS-4175 round 2).
+func (service *NativeReferenceDiscoveryService) resolveAuthoritativeProvider(ctx context.Context, orgID, runID string) (string, error) {
+	var provider string
+	err := service.pool.QueryRow(ctx, `
+SELECT lower(trim(integrations.provider))
+FROM public.sync_runs
+JOIN public.integrations ON integrations.id = sync_runs.integration_id
+WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id = $2`,
+		runID, orgID).Scan(&provider)
+	if err != nil {
+		return "", ErrReferenceDiscoveryUnavailable
+	}
+	return provider, nil
 }
 
 // claim mirrors run_sync_reference_discovery's first `with

@@ -24,7 +24,7 @@ type enforceRunResult struct {
 	// each one's pre-promotion available_at, so a later stage that must
 	// withdraw the promotion (reconfirmCooldowns) can put the unit back
 	// exactly where it was.
-	surplusAdmittedUnitIDs map[string]bool
+	surplusAdmittedUnitIDs  map[string]bool
 	surplusPriorAvailableAt map[string]time.Time
 	// candidateUnits / estimatesByUnit / jitterSeconds: CHAOS-2760 TOCTOU
 	// closure -- the already-loaded, credential-decryption-free-to-reuse

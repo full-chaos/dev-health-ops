@@ -221,8 +221,8 @@ func TestEnforceRunDivertsACooldownGatedUnitBeforeBudgetAdmission(t *testing.T) 
 		})
 
 		estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{
-			cooldownGated:     estimateFor(60, "github", "rest_core", "work-items"),
-			fitsIfNotCharged:  estimateFor(50, "github", "rest_core", "work-items"), // 60+50=110>100 IF cooldownGated were charged
+			cooldownGated:    estimateFor(60, "github", "rest_core", "work-items"),
+			fitsIfNotCharged: estimateFor(50, "github", "rest_core", "work-items"), // 60+50=110>100 IF cooldownGated were charged
 		}}
 
 		tx, err := pool.Begin(ctx)

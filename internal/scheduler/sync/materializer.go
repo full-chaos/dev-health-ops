@@ -1292,13 +1292,20 @@ func applyDomainPlanMutations(ctx context.Context, tx pgx.Tx, loaded loadedMater
 	if loaded.ensureSecurityDataset {
 		// CHAOS-4203: the ON CONFLICT clause below only arbitrates the
 		// (org_id,integration_id,dataset_key) unique constraint. This row's
-		// id is ALSO fully deterministic (derived from IntegrationID
-		// alone), so two concurrent replays of the same occurrence race on
-		// the PRIMARY KEY too -- a conflict Postgres does not silently
-		// resolve for a non-arbiter index, even though it is the exact
-		// same logical "already ensured" outcome ON CONFLICT DO NOTHING
-		// exists to produce. A raw 23505 here means a concurrent replay
-		// already inserted this row; treat it like the DO NOTHING branch.
+		// id is ALSO fully deterministic (derived from IntegrationID plus a
+		// fixed "security" suffix), so two concurrent replays of the same
+		// occurrence race on the PRIMARY KEY too -- a conflict Postgres
+		// does not silently resolve for a non-arbiter index, even though
+		// it is the exact same logical "already ensured" outcome ON
+		// CONFLICT DO NOTHING exists to produce. A raw 23505 on either of
+		// this INSERT's two unique constraints (integration_datasets_pkey
+		// or uq_integration_datasets_org_integration_dataset, alembic
+		// 0015_add_integration_data_model.py) means a concurrent replay
+		// already inserted this exact row; treat it like the DO NOTHING
+		// branch. Any OTHER constraint name is a genuine, unrelated
+		// failure and must still surface -- deliberately not a bare
+		// SQLSTATE check, so a future unique constraint on this table
+		// cannot be silently swallowed by accident.
 		//
 		// The failing INSERT must run inside its own savepoint (a nested
 		// pgx.Tx): Postgres poisons the whole enclosing transaction after
@@ -1317,7 +1324,10 @@ VALUES ($1::uuid,$2,$3::uuid,'security',TRUE,'{"auto_enabled_by":"scheduled_code
 ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`, uuid.NewSHA1(materializerNamespace, []byte(loaded.input.IntegrationID+":dataset:security")).String(), loaded.input.OrgID, loaded.input.IntegrationID)
 		if execErr != nil {
 			var pgErr *pgconn.PgError
-			if !errors.As(execErr, &pgErr) || pgErr.Code != "23505" {
+			alreadyEnsured := errors.As(execErr, &pgErr) && pgErr.Code == "23505" &&
+				(pgErr.ConstraintName == "integration_datasets_pkey" ||
+					pgErr.ConstraintName == "uq_integration_datasets_org_integration_dataset")
+			if !alreadyEnsured {
 				_ = savepoint.Rollback(ctx)
 				return fmt.Errorf("ensure scheduled security dataset: %w", execErr)
 			}

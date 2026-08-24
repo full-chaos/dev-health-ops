@@ -795,31 +795,38 @@ func TestNativeMaterializerConcurrentReplayConverges(t *testing.T) {
 // TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges
 // reproduces CHAOS-4203: the "ensure scheduled security dataset" INSERT at
 // materializer.go:1293-1296 computes a fully deterministic id
-// (uuid.NewSHA1 over IntegrationID alone), so two concurrent replays of the
-// same occurrence always attempt to insert the SAME primary key -- but its
-// ON CONFLICT clause names only the (org_id,integration_id,dataset_key)
-// unique constraint as arbiter. integration_datasets ALSO has a separate
-// PRIMARY KEY on id (alembic 0015_add_integration_data_model.py). Postgres
-// only protects the SPECIFIED arbiter: when both inserts reach the
-// server's physical index-insertion phase before either commits, the
-// second one raises a raw duplicate-key error on the pkey instead of
-// waiting to recheck the (unaffected) arbiter, even though the rows are
-// byte-identical. Confirmed empirically (not by source inference): a
-// single racing pair hits this ~29% of the time locally (87/300 in a probe
-// run) -- consistent with CI's one observed flake under heavier load
-// against 4/4 clean isolated runs including -race (the isolation evidence
-// in CHAOS-4203). If the two inserts are instead forced to interleave
-// serially (one blocks server-side, confirmed via pg_stat_activity, before
-// the other commits), Postgres's arbiter-wait path resolves it silently
-// every time -- so only true concurrent racing reproduces the bug, not a
-// synchronized handoff.
+// (uuid.NewSHA1 over IntegrationID plus a fixed "security" suffix), so two
+// concurrent replays of the same occurrence always attempt to insert the
+// SAME primary key -- but its ON CONFLICT clause names only the
+// (org_id,integration_id,dataset_key) unique constraint as arbiter.
+// integration_datasets ALSO has a separate PRIMARY KEY on id (alembic
+// 0015_add_integration_data_model.py). Postgres only protects the
+// SPECIFIED arbiter: when both inserts reach the server's physical
+// index-insertion phase before either commits, the second one raises a
+// raw duplicate-key error on the pkey instead of waiting to recheck the
+// (unaffected) arbiter, even though the rows are byte-identical. Confirmed
+// empirically (not by source inference), including that a SERIALIZED
+// handoff (one insert blocks server-side, confirmed via pg_stat_activity,
+// before the other commits) does NOT reproduce it -- Postgres's
+// arbiter-wait path resolves that case silently every time. Only true
+// concurrent racing -- both inserts in flight, unresolved, at once --
+// reproduces the bug, which is why TestNativeMaterializerConcurrentReplayConverges
+// (using the same free-running two-goroutine shape as production replay)
+// only flaked once under CI's heavier scheduler load despite 4/4 clean
+// local runs including -race (the isolation evidence in CHAOS-4203).
 //
-// This test drives that same true race deterministically-in-practice: a
-// tight start-barrier pair, repeated. At the measured 29% per-attempt rate,
-// the probability of zero hits across 150 attempts is on the order of
-// 1e-19, so a pre-fix run fails within the first few iterations and a
-// post-fix run passing all 150 is a strong convergence guarantee -- far
-// beyond what CI's incidental load ever exercised.
+// This test forces that same true race on every attempt: both goroutines
+// open their transaction and signal ready BEFORE either is released past
+// the start barrier, so the INSERTs are issued as close to simultaneously
+// as the Go scheduler allows, then the attempt is repeated -- a single
+// racing pair only hits the window some of the time (measured ~29%, 87/300,
+// in a local probe using this exact shape), so pre-fix this test fails
+// within the first several attempts and post-fix all 150 must converge
+// silently, which is a much stronger guarantee than CI's incidental load
+// ever exercised. TestNativeMaterializerConcurrentReplayConverges (still
+// passing, unmodified) is what proves the surrounding persistDomainGraph
+// writes and the outer domain-transaction commit are unaffected by the
+// savepoint recovery -- this test isolates only the vulnerable statement.
 func TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	ctx := context.Background()
@@ -840,16 +847,19 @@ func TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges(
 		}
 		start := make(chan struct{})
 		errs := make(chan error, 2)
-		var group sync.WaitGroup
+		var ready, group sync.WaitGroup
+		ready.Add(2)
+		group.Add(2)
 		for range 2 {
-			group.Add(1)
 			go func() {
 				defer group.Done()
 				tx, err := fixture.pool.Begin(context.Background())
 				if err != nil {
+					ready.Done()
 					errs <- err
 					return
 				}
+				ready.Done()
 				<-start
 				err = applyDomainPlanMutations(context.Background(), tx, loaded, time.Now())
 				if err == nil {
@@ -860,6 +870,7 @@ func TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges(
 				errs <- err
 			}()
 		}
+		ready.Wait()
 		close(start)
 		group.Wait()
 		close(errs)

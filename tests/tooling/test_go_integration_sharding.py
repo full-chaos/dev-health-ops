@@ -422,7 +422,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # so the integration-tagged count stays 114. (The reachability proof
     # through the production handler lives in cmd/dev-health-worker and does
     # not move this count, matching CHAOS-4219's precedent above.)
-    assert len(expected_provider_tests) == 1028
+    #
+    # Its review round then added 1 more ordinary test (1028 -> 1029): the
+    # structured-log-fields pin for the totality gate's slog.Error line
+    # (org/dataset/sync_run_id/unit/repository/seen/unreadable), asserted on
+    # the captured record's attributes rather than rendered text -- the same
+    # observability standing order CHAOS-4194's membership-skip log tests
+    # apply. Drives the chunked route through an in-memory HTTP doer and
+    # touches no database, so the integration-tagged count stays 114.
+    assert len(expected_provider_tests) == 1029
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -439,7 +447,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1028
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1029
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -500,7 +508,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1028
+    assert len(selected_tests) == len(set(selected_tests)) == 1029
     assert set(selected_tests) == expected_tests
 
 

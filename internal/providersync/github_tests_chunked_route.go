@@ -132,7 +132,8 @@ func githubTestsCheckAllArtifactsUnreadable(
 	}
 	slog.Error(
 		"provider unit failing: every observed cicd artifact was unreadable",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"org", claim.OrgID, "sync_run_id", claim.SyncRunID, "unit", claim.ID,
 		"repository", cursor.Repo, "seen", seen, "unreadable", unreadable,
 	)
 	return fmt.Errorf("%w: seen=%d unreadable=%d", ErrGitHubTestsAllArtifactsUnreadable, seen, unreadable)

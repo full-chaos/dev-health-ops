@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,6 +86,44 @@ func TestGitHubTestsAllArtifactsUnreadableFailsTheUnit(t *testing.T) {
 	want := `dev_health_provider_all_artifacts_unreadable_total{provider="github",dataset="cicd"} 1`
 	if !strings.Contains(buffer.String(), want) {
 		t.Fatalf("metrics did not carry the totality failure:\nwant line: %s\ngot:\n%s", want, buffer.String())
+	}
+}
+
+// RED. A counter nothing logs is unqueryable in production: an operator
+// reading logs for one org/repo cannot find this failure without the durable
+// error text alone. Assertions are on the RECORD and its attributes, not
+// rendered text (see membershipLogHandler's rationale), and specifically on
+// org/repo/sync_run_id/seen/unreadable -- the exact standing-order fields.
+func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
+	client := githubTestsClient(t, doer)
+
+	if _, err := walkGitHubTestsChunksResult(t, client, 8); !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable", err)
+	}
+
+	var found *slog.Record
+	for index := range *records {
+		if (*records)[index].Level == slog.LevelError &&
+			(*records)[index].Message == "provider unit failing: every observed cicd artifact was unreadable" {
+			found = &(*records)[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no ERROR record with the totality message; got %d records", len(*records))
+	}
+	attrs := membershipLogAttrs(*found)
+	claim := nativeTestClaim("github", "cicd")
+	want := map[string]any{
+		"provider": claim.Provider, "dataset": claim.Dataset,
+		"org": claim.OrgID, "sync_run_id": claim.SyncRunID, "unit": claim.ID,
+		"repository": "Acme/API", "seen": int64(2), "unreadable": int64(2),
+	}
+	for key, wantValue := range want {
+		if got := attrs[key]; got != wantValue {
+			t.Fatalf("attr %q=%v (%T), want %v (%T)", key, got, got, wantValue, wantValue)
+		}
 	}
 }
 

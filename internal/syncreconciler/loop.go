@@ -30,6 +30,38 @@ var (
 	errLoopNotReady       = errors.New("sync dispatch observer loop has not completed a successful observation")
 )
 
+// ErrStepEnvelopeExceeded marks a Loop.step failure as CHAOS-4239 round 2's
+// second class of non-fatal degradation, alongside ErrDegradedStage: the
+// outer per-step envelope (LoopConfig.ObservationTimeout) itself expired,
+// rather than any individual stage's own bounded sub-context.
+//
+// This is reachable even after CHAOS-4239's per-stage budgets: an operator
+// can configure SYNC_OBSERVATION_TIMEOUT/--sync-observation-timeout below
+// what the mutation pipeline's composed stage-budget sum needs (WARNED but
+// still honored -- see cmd/dev-health-reconciler/dependencies.go and
+// config.Config.SyncObservationTimeoutExplicit), and in that case the outer
+// envelope, not any single stage's own budget, is what trips first. Without
+// this, that operator-supplied, WARNED-about choice could still resurrect
+// exactly the crash-loop this ticket exists to end, for the one input path
+// its own precedence fix deliberately still allows through (a codex
+// adversarial-review round-2 finding). Loop.run treats this identically to
+// ErrDegradedStage: log, keep ticking, self-heal on the next successful
+// tick that fits inside whatever envelope is actually configured.
+var ErrStepEnvelopeExceeded = errors.New("syncreconciler: step outer envelope exceeded")
+
+// stepEnvelopeError classifies a step-level context error against the
+// caller's own top-level ctx (NOT the derived, shorter-lived stepCtx),
+// distinguishing a real, in-flight shutdown (ctx.Err() != nil -- propagates
+// completely unchanged, exactly as before this sentinel existed) from this
+// step's own derived envelope expiring on its own while the loop itself was
+// never asked to stop (wrapped in ErrStepEnvelopeExceeded).
+func stepEnvelopeError(ctx context.Context, contextErr error) error {
+	if ctx.Err() != nil {
+		return contextErr
+	}
+	return fmt.Errorf("%w: %w", ErrStepEnvelopeExceeded, contextErr)
+}
+
 // Stepper is kept small so loop lifecycle has no database dependency in its
 // tests. Observer satisfies this interface.
 type Stepper interface {
@@ -196,7 +228,7 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.mu.Unlock()
 
 	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
-		if !errors.Is(err, ErrDegradedStage) {
+		if !errors.Is(err, ErrDegradedStage) && !errors.Is(err, ErrStepEnvelopeExceeded) {
 			loop.setFailed()
 			loop.logger().ErrorContext(ctx, "sync dispatch observer initial step failed", "error", err.Error())
 			cancel()
@@ -265,18 +297,25 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 				if isContextError(err) && (ctx.Err() != nil || loop.isStopping()) {
 					return
 				}
-				// CHAOS-4239: a stage of the mutation pipeline (only ever the
-				// observer -- see ErrDegradedStage's doc comment) exceeded its
-				// own bounded budget or errored. That stage already recorded
-				// itself loudly (syncreconciler.stage_failed,
-				// sync_reconciler_stage_failures_total); this branch's whole
-				// job is to make sure the OTHER five stages, and the process
-				// itself, are not held hostage by it. Readiness reflects the
-				// miss for this tick and self-heals on the next successful
-				// one; the loop keeps ticking instead of tearing the service
-				// down and re-relaying outbox work on every restart the way
-				// the pre-fix crash-loop did.
-				if errors.Is(err, ErrDegradedStage) {
+				// CHAOS-4239: two non-fatal degradation classes, both handled
+				// identically here. ErrDegradedStage is a stage of the
+				// mutation pipeline (only ever the observer -- see its doc
+				// comment) exceeding its own bounded budget or erroring;
+				// ErrStepEnvelopeExceeded (round 2) is the coarser outer
+				// per-step envelope itself expiring, which stays reachable
+				// even after per-stage budgets when an operator explicitly
+				// configures ObservationTimeout below what the composition
+				// needs (WARNED but honored -- see dependencies.go). Either
+				// way the failing stage or the outer deadline already
+				// recorded itself (syncreconciler.stage_failed,
+				// sync_reconciler_stage_failures_total, or this log line);
+				// this branch's whole job is to make sure the process itself
+				// is never held hostage by it. Readiness reflects the miss
+				// for this tick and self-heals on the next successful one;
+				// the loop keeps ticking instead of tearing the service down
+				// and re-relaying outbox work on every restart the way the
+				// pre-fix crash-loop did.
+				if errors.Is(err, ErrDegradedStage) || errors.Is(err, ErrStepEnvelopeExceeded) {
 					loop.setFailed()
 					loop.logger().WarnContext(ctx, "sync dispatch observer step degraded; continuing", "error", err.Error())
 					continue
@@ -324,7 +363,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 	}
 	loop.mu.Unlock()
 	if contextErr := stepCtx.Err(); contextErr != nil {
-		return contextErr
+		return stepEnvelopeError(ctx, contextErr)
 	}
 	if err != nil {
 		// The CHAOS-4097 gauges survive a failed pass, on the same principle
@@ -370,7 +409,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if err := stepCtx.Err(); err != nil {
-		return err
+		return stepEnvelopeError(ctx, err)
 	}
 	loop.mu.Lock()
 	if loop.stopping {
@@ -379,7 +418,7 @@ func (loop *Loop) step(ctx context.Context, now time.Time) error {
 	}
 	if err := stepCtx.Err(); err != nil {
 		loop.mu.Unlock()
-		return err
+		return stepEnvelopeError(ctx, err)
 	}
 	loop.observation = copyObservation(loop.carryUnmeasuredGaugesLocked(observation, true))
 	loop.lastOK = now

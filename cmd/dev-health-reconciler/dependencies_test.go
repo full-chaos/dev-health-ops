@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -237,6 +238,10 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 	t.Run("override reaches the loop", func(t *testing.T) {
 		cfg := reconcilerProductionShapedConfig(t)
 		cfg.SyncObservationTimeout = 7 * time.Second
+		// A hand-built override on a config.Config{} value must also flip
+		// the bool: SyncObservationTimeoutExplicit, not the value, is what
+		// dependencies.go now trusts (chris's ruling, CHAOS-4239 round 2).
+		cfg.SyncObservationTimeoutExplicit = true
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
 			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
@@ -247,6 +252,80 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		}
 		if captured != 7*time.Second {
 			t.Fatalf("ObservationTimeout = %s, want the configured 7s", captured)
+		}
+	})
+
+	// The three subtests below drive config.Load itself (not a hand-built
+	// config.Config{}) with a controlled SYNC_OBSERVATION_TIMEOUT lookup, per
+	// chris's CHAOS-4239 readiness/precedence ruling: (a) Load with the
+	// variable unset must still compose the 4s stage-budget envelope: (b) an
+	// operator who explicitly sets it to exactly 2s -- the one value
+	// indistinguishable from Load's own fallback by VALUE alone -- must still
+	// have it honored, with a WARN that it undercuts the composed budget; (c)
+	// a value clearly above the composed envelope is honored with no warning.
+
+	t.Run("Load with the variable unset composes the stage-budget envelope", func(t *testing.T) {
+		cfg := reconcilerProductionShapedConfig(t)
+		if cfg.SyncObservationTimeoutExplicit {
+			t.Fatal("reconcilerProductionShapedConfig sets no environment; SyncObservationTimeoutExplicit must be false")
+		}
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s", captured, want)
+		}
+	})
+
+	t.Run("an explicit 2s is honored and warns it undercuts the composed envelope", func(t *testing.T) {
+		cfg := reconcilerLoadedConfigWithSyncObservationTimeout(t, "2s")
+		if !cfg.SyncObservationTimeoutExplicit || cfg.SyncObservationTimeout != 2*time.Second {
+			t.Fatalf("test setup: SyncObservationTimeout=%s Set=%v, want 2s/true", cfg.SyncObservationTimeout, cfg.SyncObservationTimeoutExplicit)
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			logger, newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 2*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want the explicit 2s honored", captured)
+		}
+		if !strings.Contains(buf.String(), "sync_observation_timeout is below the composed") {
+			t.Fatalf("expected a WARN that the explicit value undercuts the composed envelope; log:\n%s", buf.String())
+		}
+	})
+
+	t.Run("an explicit 10s is honored without warning", func(t *testing.T) {
+		cfg := reconcilerLoadedConfigWithSyncObservationTimeout(t, "10s")
+		if !cfg.SyncObservationTimeoutExplicit || cfg.SyncObservationTimeout != 10*time.Second {
+			t.Fatalf("test setup: SyncObservationTimeout=%s Set=%v, want 10s/true", cfg.SyncObservationTimeout, cfg.SyncObservationTimeoutExplicit)
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			logger, newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 10*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want the explicit 10s honored", captured)
+		}
+		if strings.Contains(buf.String(), "sync_observation_timeout is below the composed") {
+			t.Fatalf("a value above the composed envelope must not warn; log:\n%s", buf.String())
 		}
 	})
 
@@ -776,6 +855,29 @@ func reconcilerProductionShapedConfig(t *testing.T) config.Config {
 	})
 	if err != nil {
 		t.Fatalf("loading a production-defaulted config for %q: %v", reconcilerSpec.Service, err)
+	}
+	return cfg
+}
+
+// reconcilerLoadedConfigWithSyncObservationTimeout is config.Load's own
+// output with every environment variable unset EXCEPT
+// SYNC_OBSERVATION_TIMEOUT, which is set to raw -- so
+// cfg.SyncObservationTimeoutExplicit comes out true the same way a real operator
+// setting the env var or --sync-observation-timeout flag would produce, not
+// hand-set on a config.Config{} literal.
+func reconcilerLoadedConfigWithSyncObservationTimeout(t *testing.T, raw string) config.Config {
+	t.Helper()
+	cfg, err := config.Load(config.Spec{
+		Service: reconcilerSpec.Service,
+		LookupEnv: func(key string) (string, bool) {
+			if key == "SYNC_OBSERVATION_TIMEOUT" {
+				return raw, true
+			}
+			return "", false
+		},
+	})
+	if err != nil {
+		t.Fatalf("loading a config with SYNC_OBSERVATION_TIMEOUT=%q for %q: %v", raw, reconcilerSpec.Service, err)
 	}
 	return cfg
 }

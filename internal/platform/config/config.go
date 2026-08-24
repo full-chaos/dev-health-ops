@@ -181,7 +181,20 @@ type Config struct {
 	// follow-up, not implemented here. It is a liveness knob, not a
 	// correctness one: syncreconciler.LoopConfig.validate bounds it to
 	// [10ms, 30s] regardless of what is configured here.
-	SyncObservationTimeout         time.Duration
+	SyncObservationTimeout time.Duration
+	// SyncObservationTimeoutExplicit is true only when SYNC_OBSERVATION_TIMEOUT /
+	// --sync-observation-timeout was actually present in the environment/CLI
+	// (CHAOS-4239). SyncObservationTimeout alone cannot tell "the operator
+	// explicitly chose this value" apart from "nobody configured anything and
+	// Load's own fallback (defaultSyncObservationTimeout) filled it in" --
+	// both produce the identical 2s. A caller that needs that distinction
+	// (cmd/dev-health-reconciler/dependencies.go, composing the mutation
+	// loop's outer envelope from syncreconciler.DefaultStageBudgets instead)
+	// reads this field rather than comparing the value to a sentinel, which
+	// would silently ignore an operator who deliberately chose exactly the
+	// package default and would need hand-updating every time that default
+	// number changed.
+	SyncObservationTimeoutExplicit bool
 	OperationalBridgeURL           string
 	OperationalBridgeToken         secrets.Value
 	OperationalBridgeTimeout       time.Duration
@@ -514,6 +527,14 @@ func Load(spec Spec) (Config, error) {
 	// re-checks them, so this is belt-and-suspenders against the two
 	// constant sets drifting, not the only enforcement.
 	if cfg.Service == "dev-health-reconciler" {
+		// Captured directly from lookup, ahead of durationEnv, because
+		// durationEnv's contract is "return the fallback when unset" -- it
+		// deliberately does not distinguish an absent variable from one set
+		// to the empty string, and by design returns the identical value
+		// either way an operator could reach by choice or by doing nothing.
+		// SyncObservationTimeoutExplicit exists specifically so a caller does not
+		// have to guess which happened from the value alone (CHAOS-4239).
+		cfg.SyncObservationTimeoutExplicit = settingConfigured(lookup, "SYNC_OBSERVATION_TIMEOUT")
 		cfg.SyncObservationTimeout, err = durationEnv(
 			lookup,
 			"SYNC_OBSERVATION_TIMEOUT",

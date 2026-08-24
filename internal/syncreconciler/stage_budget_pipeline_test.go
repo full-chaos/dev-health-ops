@@ -340,3 +340,83 @@ func TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess(t
 		t.Fatalf("readiness after the materializer's first success = %#v, want open", readiness)
 	}
 }
+
+// TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess is
+// codex adversarial-review round 2's finding on CHAOS-4239, proven end to
+// end through a real MutationPipeline wrapped in a real Loop (loop_test.go's
+// TestLoopPeriodicObservationDeadlineDegradesAndSelfHeals already covers the
+// generic Loop-level mechanism with a synthetic Stepper; this closes the
+// same gap at the seam codex actually flagged).
+//
+// An operator can explicitly configure LoopConfig.ObservationTimeout below
+// what the mutation pipeline's composed default stage-budget sum needs
+// (dependencies.go WARNs but still honors that choice --
+// config.Config.SyncObservationTimeoutExplicit). In that case the OUTER
+// envelope, not any single stage's own (comfortably sufficient) budget, is
+// what trips first. Before ErrStepEnvelopeExceeded this reproduced the exact
+// crash-loop CHAOS-4239 exists to end, for the one input path its own
+// precedence fix deliberately still allows through.
+func TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)}
+
+	// Every stage sleeps briefly, respecting ctx, comfortably inside its own
+	// generous default per-stage budget (400ms-1000ms) -- no stage fails on
+	// its own -- but five stages at 30ms each sum to ~150ms, well past a
+	// deliberately small 100ms outer envelope.
+	sleepBriefly := func(ctx context.Context) {
+		select {
+		case <-time.After(30 * time.Millisecond):
+		case <-ctx.Done():
+		}
+	}
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(ctx context.Context, _ time.Time, _ int) (LeaseRepairResult, error) {
+			sleepBriefly(ctx)
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(ctx context.Context, _ time.Time, _ int) (TerminalDeliveryRepairResult, error) {
+			sleepBriefly(ctx)
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(ctx context.Context, _ time.Time, _ time.Time, _ int) (MaterializerResult, error) {
+			sleepBriefly(ctx)
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(ctx context.Context, _ time.Time, _ int, _ time.Duration, _ AtLeastOncePublisher, _ PostSyncHandoff) (KernelResult, error) {
+			sleepBriefly(ctx)
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(ctx context.Context, _ time.Time, _ int) (Observation, error) {
+			sleepBriefly(ctx)
+			return testObservation(), nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+
+	// The explicit, WARNED-but-honored operator choice: below
+	// DefaultStageBudgets().Sum(), reproducing exactly the configuration
+	// dependencies.go's SyncObservationTimeoutExplicit path allows through.
+	loop, registry := newTestLoopWithTimeout(t, pipeline, clock, 100*time.Millisecond)
+	openReadinessGate(t, registry)
+
+	if startErr := loop.Start(context.Background()); startErr != nil {
+		t.Fatalf("Start() error = %v, want nil: an outer envelope below the stage-budget sum must degrade, not fail startup", startErr)
+	}
+	select {
+	case fatal := <-loop.Errors():
+		t.Fatalf("an explicit outer envelope below the stage-budget sum killed the process: %v", fatal)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if readiness := registry.Readiness(context.Background()); readiness.Ready {
+		t.Fatalf("readiness after the outer-envelope tick = %#v, want closed", readiness)
+	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

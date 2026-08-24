@@ -302,7 +302,15 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
+	finalizeSyncRun, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(
+		postgresDatabase.pools.Domain,
+		logger,
+		nil,
+	)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// A registered kind may only be consumed once its durable route permits

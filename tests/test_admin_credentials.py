@@ -590,6 +590,35 @@ async def test_gitlab_connection_helper_sanitizes_raw_response_body(monkeypatch)
     assert "[REDACTED]" in details["error"]
 
 
+GITLAB_URL_SHAPES = [
+    "https://gitlab.com",
+    "https://gitlab.com/",
+    "https://gitlab.com/api/v4",
+    "https://gitlab.example.com",
+    "https://gitlab.example.com/gitlab",
+    "https://gitlab.example.com/gitlab/",
+    "https://gitlab.example.com:8443/gitlab",
+]
+
+
+@pytest.mark.parametrize("stored_url", GITLAB_URL_SHAPES)
+def test_gitlab_probe_base_url_matches_what_the_sync_client_would_request(stored_url):
+    """CHAOS-4223: the probe must target the runtime's own endpoint.
+
+    The connection test exists to answer "would the sync reach this
+    instance", so its URL has to be built the way the sync builds it --
+    ``gitlab.Gitlab`` is the authority, not a normalization of our own.
+    Deriving the expectation from python-gitlab rather than restating it
+    means the two cannot drift apart again: a probe that normalizes a URL
+    the runtime would not is a test that passes for an endpoint the sync
+    cannot use.
+    """
+    import gitlab
+
+    expected = gitlab.Gitlab(stored_url, private_token="placeholder")._url
+    assert admin_router_module._gitlab_api_base_url(stored_url) == expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "creds",
@@ -597,134 +626,20 @@ async def test_gitlab_connection_helper_sanitizes_raw_response_body(monkeypatch)
         {"token": "placeholder", "url": "https://gitlab.com"},
         {"token": "placeholder", "base_url": "https://gitlab.com"},
         {"token": "placeholder", "gitlab_url": "https://gitlab.com"},
-        {"token": "placeholder", "url": "https://gitlab.com/api/v4"},
         {"token": "placeholder"},
     ],
-    ids=["url-root", "base_url-root", "gitlab_url-root", "url-api-v4", "no-url"],
+    ids=["url", "base_url", "gitlab_url", "no-url"],
 )
-async def test_gitlab_connection_helper_targets_the_v4_api_for_every_url_spelling(
+async def test_gitlab_connection_helper_probes_the_v4_api_for_every_url_alias(
     monkeypatch, creds
 ):
-    """CHAOS-4223: the stored GitLab URL is an instance root everywhere else.
+    """Every alias the credential resolver reads must reach the v4 API.
 
-    ``gitlab_credentials_from_mapping`` reads ``gitlab_url``/``url``/
-    ``base_url`` and hands the value straight to ``gitlab.Gitlab(...)``,
-    which appends ``/api/v4`` itself, and ``normalize_gitlab_instance``
-    explicitly ignores any path. This helper used to treat the same key as
-    an API base and append ``user`` to it, so the create-sync inline
-    credential modal's default ``https://gitlab.com`` was probed at
-    ``https://gitlab.com/user`` -- an HTML page -- and no token could ever
-    pass the test.
-    """
-
-    def _fake_getaddrinfo(*_args, **_kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
-
-    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
-
-    requested: list[str] = []
-
-    class _FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"username": "probe", "name": "Probe"}
-
-    class _FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args) -> bool:
-            return False
-
-        async def get(self, url, *args, **kwargs):
-            requested.append(url)
-            return _FakeResponse()
-
-    with patch("httpx.AsyncClient", _FakeAsyncClient):
-        success, details = await admin_router_module._test_gitlab_connection(creds)
-
-    assert requested == ["https://gitlab.com/api/v4/user"]
-    assert success is True
-    assert details["user"] == "probe"
-
-
-@pytest.mark.asyncio
-async def test_gitlab_connection_helper_honours_a_self_hosted_instance_root(
-    monkeypatch,
-):
-    """A self-hosted instance root must reach that instance's v4 API."""
-
-    def _fake_getaddrinfo(*_args, **_kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
-
-    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
-
-    requested: list[str] = []
-
-    class _FakeResponse:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"username": "probe", "name": "Probe"}
-
-    class _FakeAsyncClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args) -> bool:
-            return False
-
-        async def get(self, url, *args, **kwargs):
-            requested.append(url)
-            return _FakeResponse()
-
-    with patch("httpx.AsyncClient", _FakeAsyncClient):
-        success, _ = await admin_router_module._test_gitlab_connection(
-            {"token": "placeholder", "gitlab_url": "https://gitlab.example.com"}
-        )
-
-    assert requested == ["https://gitlab.example.com/api/v4/user"]
-    assert success is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "stored_url,expected",
-    [
-        (
-            "https://gitlab.example.com/gitlab",
-            "https://gitlab.example.com/gitlab/api/v4/user",
-        ),
-        (
-            "https://gitlab.example.com/gitlab/api/v4",
-            "https://gitlab.example.com/gitlab/api/v4/user",
-        ),
-        (
-            "https://gitlab.example.com/gitlab/",
-            "https://gitlab.example.com/gitlab/api/v4/user",
-        ),
-    ],
-    ids=["subpath", "subpath-with-api-v4", "subpath-trailing-slash"],
-)
-async def test_gitlab_connection_helper_keeps_a_subpath_install_on_its_own_path(
-    monkeypatch, stored_url, expected
-):
-    """A GitLab served under a subpath keeps that subpath.
-
-    python-gitlab is handed the stored URL verbatim and appends ``/api/v4``
-    to whatever path it carries, so ``https://host/gitlab`` is a real,
-    supported instance. Resolving the probe URL by discarding the path
-    would send the request -- and the token -- to the wrong application on
-    that host.
+    The helper used to read only ``url``/``base_url`` and treat the value
+    as an API base, so the inline credential modal's default
+    ``https://gitlab.com`` was probed at ``https://gitlab.com/user`` -- an
+    HTML login page -- and no token could pass. ``gitlab_url`` was ignored
+    outright, silently falling back to gitlab.com.
     """
 
     def _fake_getaddrinfo(*_args, **_kwargs):
@@ -758,13 +673,76 @@ async def test_gitlab_connection_helper_keeps_a_subpath_install_on_its_own_path(
             return _FakeResponse()
 
     with patch("httpx.AsyncClient", _FakeAsyncClient):
-        success, _ = await admin_router_module._test_gitlab_connection(
-            {"token": "placeholder", "url": stored_url}
-        )
+        success, details = await admin_router_module._test_gitlab_connection(creds)
 
-    assert requested == [expected]
+    assert requested == ["https://gitlab.com/api/v4/user"]
     assert sent_headers == [{"PRIVATE-TOKEN": "placeholder"}]
     assert success is True
+    assert details["user"] == "probe"
+
+
+@pytest.mark.asyncio
+async def test_gitlab_connection_helper_keeps_a_subpath_install_on_its_own_path(
+    monkeypatch,
+):
+    """A GitLab served under a subpath keeps that subpath.
+
+    python-gitlab appends ``/api/v4`` to whatever path the stored URL
+    carries, so ``https://host/gitlab`` is a real, supported instance.
+    Discarding the path would send the probe -- and the token -- to
+    whatever else runs at that host.
+    """
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
+
+    requested: list[str] = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"username": "probe", "name": "Probe"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            requested.append(url)
+            return _FakeResponse()
+
+    with patch("httpx.AsyncClient", _FakeAsyncClient):
+        success, _ = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder", "gitlab_url": "https://gitlab.example.com/gitlab"}
+        )
+
+    assert requested == ["https://gitlab.example.com/gitlab/api/v4/user"]
+    assert success is True
+
+
+def test_build_safe_url_drops_userinfo():
+    """Credentials embedded in a stored base URL never reach the wire.
+
+    Only the hostname is validated, so a ``user:password@`` prefix would
+    survive into the request and be replayed by the HTTP client as an
+    Authorization header alongside the provider token this request exists
+    to test.
+    """
+    built = admin_router_module._build_safe_url(
+        "https://someone:secret@gitlab.example.com:8443/gitlab/api/v4", "user"
+    )
+    assert built == "https://gitlab.example.com:8443/gitlab/api/v4/user"
+    assert "secret" not in built
 
 
 @pytest.mark.asyncio

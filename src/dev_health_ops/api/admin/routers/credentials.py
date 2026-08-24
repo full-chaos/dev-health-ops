@@ -76,22 +76,17 @@ def _github_credentials_or_400(creds: dict[str, Any]):
 def _gitlab_api_base_url(base_url: str | None) -> str:
     """Resolve a stored GitLab URL to that instance's v4 API root.
 
-    The stored value is an instance root everywhere else in the codebase:
-    ``gitlab.Gitlab(...)`` is handed it verbatim and appends ``/api/v4``
-    itself. A subpath install therefore keeps its subpath, and a value that
-    already names the API root does not gain a second suffix. The host is
-    never substituted -- an unusable URL has to fail the SSRF guard below
-    rather than quietly redirect a self-hosted instance's token to
-    gitlab.com.
+    Mirrors ``gitlab.utils.get_base_url`` + ``Gitlab.__init__`` byte for
+    byte -- strip trailing slashes, append ``/api/v4`` -- because the point
+    of this probe is to answer "would the sync reach this instance", and a
+    probe that normalizes a URL the runtime would not is a test that passes
+    for an endpoint the sync cannot use. A subpath install keeps its
+    subpath; the host is never substituted, so an unusable URL fails the
+    SSRF guard rather than quietly redirecting a self-hosted instance's
+    token to gitlab.com.
     """
     candidate = (base_url or "").strip() or _GITLAB_DEFAULT_URL
-    parsed = urlparse(candidate)
-    path = parsed.path.rstrip("/")
-    if path.endswith(_GITLAB_API_SUFFIX):
-        path = path[: -len(_GITLAB_API_SUFFIX)]
-    return urlunparse(
-        (parsed.scheme, parsed.netloc, f"{path}{_GITLAB_API_SUFFIX}", "", "", "")
-    )
+    return f"{candidate.rstrip('/')}{_GITLAB_API_SUFFIX}"
 
 
 def _validated_github_base_url(base_url: str | None) -> str:
@@ -508,7 +503,14 @@ def _build_safe_url(validated_base: str, path: str) -> str:
     safe_path = (
         f"{base_path}/{path.lstrip('/')}" if base_path else f"/{path.lstrip('/')}"
     )
-    return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
+    # Userinfo is dropped rather than carried through: only the hostname is
+    # ever validated above, and an embedded user:password would be replayed
+    # by the HTTP client as an Authorization header alongside the provider
+    # token this request is meant to be testing.
+    netloc = parsed.hostname or ""
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunparse((parsed.scheme, netloc, safe_path, "", "", ""))
 
 
 async def _github_repo_list_client(github_credentials: Any) -> GitHubCodeClient:

@@ -815,12 +815,15 @@ func TestNativeMaterializerConcurrentReplayConverges(t *testing.T) {
 // only flaked once under CI's heavier scheduler load despite 4/4 clean
 // local runs including -race (the isolation evidence in CHAOS-4203).
 //
-// This test forces that same true race on every attempt: both goroutines
-// open their transaction and signal ready BEFORE either is released past
-// the start barrier, so the INSERTs are issued as close to simultaneously
-// as the Go scheduler allows, then the attempt is repeated -- a single
-// racing pair only hits the window some of the time (measured ~29%, 87/300,
-// in a local probe using this exact shape), so pre-fix this test fails
+// This test forces that same close-simultaneity attempt every iteration:
+// both goroutines open their transaction and signal ready BEFORE either is
+// released past the start barrier, so the INSERTs are issued as close to
+// simultaneously as the Go scheduler allows -- it guarantees both
+// transactions are already open before either INSERT fires, not that the
+// two INSERTs' server-side execution actually overlaps. The attempt is
+// repeated because a single racing pair only hits the window some of the
+// time (measured ~29%, 87/300, in a local probe using this exact shape),
+// so pre-fix this test fails
 // within the first several attempts and post-fix all 150 must converge
 // silently, which is a much stronger guarantee than CI's incidental load
 // ever exercised. TestNativeMaterializerConcurrentReplayConverges (still

@@ -561,10 +561,16 @@ func (bridge *multiReplicaBridge) serveHTTP(output http.ResponseWriter, request 
 	block := false
 	bridge.first.Do(func() {
 		block = true
+		// parked must be true BEFORE the send: a receiver on firstStarted
+		// (waitForFirst) can observe the value and a caller can then check
+		// stillParked() before this goroutine gets scheduled again. Storing
+		// after the send left a real window where that check saw the zero
+		// value even though this handler was about to block (codex
+		// adversarial review, CHAOS-4235).
+		bridge.parked.Store(true)
 		bridge.firstStarted <- payload.ScheduledFor
 	})
 	if block {
-		bridge.parked.Store(true)
 		defer bridge.parked.Store(false)
 		select {
 		case <-bridge.releaseFirst:

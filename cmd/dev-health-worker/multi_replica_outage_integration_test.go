@@ -227,6 +227,15 @@ type databaseCutover struct {
 	mu    sync.Mutex
 	open  bool
 	conns []net.Conn
+	// generation increments on every cut() and never decreases. It exists
+	// because `open` alone cannot detect a full cut()+restore() cycle that
+	// happens entirely while a connection is mid-Dial: `open` would read
+	// true again by the time that dial finishes, even though a cut()
+	// happened in between and should have closed this connection. A
+	// captured generation that no longer matches the current one means
+	// exactly that: a cut() landed during this dial, regardless of what
+	// open reads afterward (codex adversarial review, CHAOS-4235).
+	generation int
 }
 
 func startDatabaseCutover(t *testing.T, upstream string) *databaseCutover {
@@ -257,6 +266,7 @@ func (cutover *databaseCutover) serve() {
 		}
 		cutover.mu.Lock()
 		open := cutover.open
+		generation := cutover.generation
 		cutover.mu.Unlock()
 		if !open {
 			_ = client.Close()
@@ -269,15 +279,17 @@ func (cutover *databaseCutover) serve() {
 			_ = client.Close()
 			continue
 		}
-		// CHAOS-4235 (codex adversarial review): re-check open UNDER THE SAME
-		// LOCK as the append below, not the earlier snapshot. cut() also
-		// takes this lock to flip open and close+clear conns; without this
-		// re-check, a cut() that ran entirely during the Dial above would
-		// close and clear conns BEFORE this pair exists to be in it, so
-		// nothing would ever close it -- one connection would silently keep
-		// bridging straight through the simulated outage.
+		// CHAOS-4235 (codex adversarial review): re-check UNDER THE SAME LOCK
+		// as the append below, not the earlier snapshot -- cut() also takes
+		// this lock to flip open, bump generation, and close+clear conns.
+		// Comparing generation, not just open, additionally catches a full
+		// cut()+restore() cycle that ran entirely during the Dial above:
+		// open would read true again by now even though a cut() happened in
+		// between, so this connection was never in the slice cut() closed
+		// and would otherwise silently keep bridging through the simulated
+		// outage.
 		cutover.mu.Lock()
-		if !cutover.open {
+		if !cutover.open || cutover.generation != generation {
 			cutover.mu.Unlock()
 			_ = client.Close()
 			_ = upstream.Close()
@@ -536,6 +548,7 @@ func (cutover *databaseCutover) cut() {
 	cutover.mu.Lock()
 	defer cutover.mu.Unlock()
 	cutover.open = false
+	cutover.generation++
 	for _, conn := range cutover.conns {
 		_ = conn.Close()
 	}

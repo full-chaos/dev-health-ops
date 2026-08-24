@@ -121,8 +121,22 @@ def _queue_concurrency(process: dict) -> str:
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_go_workers_require_the_pgbouncer_topology() -> None:
+    """CHAOS-4195: goWorkers.enabled and goWorkers.pgbouncer.enabled both
+    default to true now (there is no Celery baseline left to default to), so
+    plain `--set goWorkers.enabled=true` alone no longer changes anything --
+    prove the schema still rejects the pairing by explicitly disabling
+    pgbouncer while goWorkers stays enabled."""
     rejected = subprocess.run(
-        ["helm", "template", _RELEASE, _CHART, "--set", "goWorkers.enabled=true"],
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            _CHART,
+            "--set",
+            "goWorkers.enabled=true",
+            "--set",
+            "goWorkers.pgbouncer.enabled=false",
+        ],
         check=False,
         capture_output=True,
         text=True,

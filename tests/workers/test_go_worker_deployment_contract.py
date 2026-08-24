@@ -30,7 +30,9 @@ _GO_COMPOSE_ONLY = (
 _GO_SWARM = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
 _GO_SWARM_ONLY = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers-only.yml"
 _GO_KUBERNETES = _KUBERNETES / "go-workers.yaml"
-_GO_KUBERNETES_ONLY = _KUBERNETES / "go-workers-only.yaml"
+# go-workers-only.yaml (a Celery-scale-down patch) was deleted in CHAOS-4195
+# along with the worker.yaml/beat.yaml Deployments it patched -- there is no
+# Kubernetes "-only" overlay left, unlike the Compose/Swarm equivalents above.
 
 _PACKAGED_WORK_ITEM_CONFIG = {
     "status_mapping.yaml": "/app/config/status_mapping.yaml",
@@ -72,7 +74,13 @@ _API_BRIDGE_ENV = {
     "PAGERDUTY_WEBHOOK_TRANSPORT",
     "WORKER_OPERATIONAL_BRIDGE_TOKEN",
 }
+# Compose/Swarm still declare the unchanged Celery fleet, so their rendered
+# PAGERDUTY_WEBHOOK_TRANSPORT stays "celery" (matching the code's own
+# fail-safe default in webhook_transport.py / config.go, unrelated to this
+# ticket). Helm/Kubernetes deleted that fleet (CHAOS-4195) and now render
+# "river" explicitly -- there is no Celery consumer left for "celery" to name.
 _DEFAULT_WEBHOOK_TRANSPORT = "celery"
+_DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT = "river"
 # strconv.ParseBool's truthy spellings, lowercased.
 _TRUTHY = {"1", "t", "true"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -390,8 +398,12 @@ def test_go_worker_image_packages_lifecycle_route_operator() -> None:
 
 def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() -> None:
     """CHAOS-3052: every supported deploy surface renders an inert, hardened
-    topology. It must never change the default Celery/Beat/Valkey deployment
-    merely by being present in the repository.
+    topology -- every group/service still defaults replicas: 0, so merely
+    being present or (Helm/Kubernetes, CHAOS-4195) being the default-rendered
+    topology never puts a live Go pod up on its own. Compose/Swarm stay
+    additive beside the unchanged Celery/Beat/Valkey services there; Helm and
+    Kubernetes no longer have a Celery/Beat baseline to stay additive to --
+    they render only this topology.
     """
     expected_profiles = {
         process["name"] for process in _load_json(_DEPLOYMENT)["processes"]
@@ -491,7 +503,11 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     assert "dev-health.io/profile" not in provider_labels
 
     values = _load_yaml(_HELM_CHART / "values.yaml")
-    assert values["goWorkers"]["enabled"] is False
+    # CHAOS-4195: the Celery Helm templates/values keys and Kubernetes
+    # manifests were deleted, so goWorkers is the only topology left and
+    # defaults to enabled=true (each group still defaults replicas: 0, so
+    # a fresh install stays inert until an operator scales one).
+    assert values["goWorkers"]["enabled"] is True
     assert "profiles" not in values["goWorkers"]
     assert "groups" in values["goWorkers"]
     assert {
@@ -798,34 +814,24 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
     assert _load_json(_DEPLOYMENT)["deployment_state"] == "coexistence_disabled"
 
 
-@pytest.mark.parametrize(
-    "path", [_GO_COMPOSE_ONLY, _GO_SWARM_ONLY, _GO_KUBERNETES_ONLY]
-)
+@pytest.mark.parametrize("path", [_GO_COMPOSE_ONLY, _GO_SWARM_ONLY])
 def test_go_only_overlays_scale_but_do_not_remove_celery_baseline(path: Path) -> None:
+    """Compose/Swarm only: each "-only" overlay is a strategic scale-to-zero
+    patch that keeps the Celery service definitions in place. CHAOS-4195
+    deleted the Kubernetes equivalent (go-workers-only.yaml) along with the
+    worker.yaml/beat.yaml Deployments it patched -- Kubernetes has no Celery
+    baseline left to scale down, so there is nothing there for this overlay
+    shape to apply to."""
     documents = _load_yaml_documents(path)
-    if len(documents) == 1:
-        services = documents[0]["services"]
-        assert set(services) == {
-            "worker",
-            "worker-ingest",
-            "worker-external-ingest",
-            "worker-heavy",
-            "beat",
-        }
-        assert all(service["deploy"]["replicas"] == 0 for service in services.values())
-        return
-
-    deployments = {document["metadata"]["name"]: document for document in documents}
-    assert set(deployments) == {
-        "dev-health-worker",
-        "dev-health-worker-ingest",
-        "dev-health-worker-external-ingest",
-        "dev-health-worker-heavy",
-        "dev-health-beat",
+    services = documents[0]["services"]
+    assert set(services) == {
+        "worker",
+        "worker-ingest",
+        "worker-external-ingest",
+        "worker-heavy",
+        "beat",
     }
-    assert all(
-        deployment["spec"]["replicas"] == 0 for deployment in deployments.values()
-    )
+    assert all(service["deploy"]["replicas"] == 0 for service in services.values())
 
 
 def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
@@ -1244,25 +1250,21 @@ def test_compose_surfaces_render_complete_pagerduty_bridge_env(
         )
 
 
-@pytest.mark.parametrize(
-    ("path", "required_declaration"),
-    [(_GO_KUBERNETES, True), (_GO_KUBERNETES_ONLY, False)],
-)
-def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env(
-    path: Path, required_declaration: bool
-) -> None:
-    containers = _kubernetes_pagerduty_containers(path)
-    assert bool(containers) == required_declaration
+def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env() -> None:
+    """CHAOS-4195: go-workers.yaml is the only Kubernetes worker topology
+    now -- go-workers-only.yaml (the second, no-pagerduty case this test used
+    to also parametrize over) was a Celery-scale-down patch with nothing left
+    to patch, and was deleted with it."""
+    containers = _kubernetes_pagerduty_containers(_GO_KUBERNETES)
+    assert containers
 
     required = _pagerduty_required_env()
     for name, container in containers.items():
         missing = required - _kubernetes_container_env(container)
-        assert not missing, f"{path.name}:{name} drops {sorted(missing)}"
+        assert not missing, f"{_GO_KUBERNETES.name}:{name} drops {sorted(missing)}"
 
-    if not containers:
-        return
     config = _load_yaml(_KUBERNETES_CONFIGMAP)["data"]
-    assert config["PAGERDUTY_WEBHOOK_TRANSPORT"] == _DEFAULT_WEBHOOK_TRANSPORT
+    assert config["PAGERDUTY_WEBHOOK_TRANSPORT"] == _DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT
     _assert_insecure_optin_covers_endpoint(
         config["WORKER_OPERATIONAL_BRIDGE_URL"],
         config["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
@@ -1313,7 +1315,7 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
     missing = _pagerduty_required_env() - resolved
     assert not missing, f"helm values drop {sorted(missing)}"
     assert values["config"]["PAGERDUTY_WEBHOOK_TRANSPORT"] == (
-        _DEFAULT_WEBHOOK_TRANSPORT
+        _DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT
     )
     # An empty URL is auto-computed into the plaintext in-cluster API Service,
     # so the opt-in must hold for the derived endpoint as well.
@@ -1620,13 +1622,19 @@ def test_helm_api_deployment_carries_expected_worker_groups_only_when_go_workers
 ):
     """CHAOS-3942: render both states through the real templating engine --
     a string match on the template source cannot prove the conditional
-    actually gates the rendered manifest."""
+    actually gates the rendered manifest. CHAOS-4195 flipped goWorkers.enabled
+    to default true (there is no Celery baseline left to default to), so the
+    "disabled" state is no longer the bare-defaults render -- prove the gate
+    still holds by asserting it explicitly with --set goWorkers.enabled=false.
+    """
     disabled = subprocess.run(
         [
             "helm",
             "template",
             "phase1",
             str(_HELM_CHART),
+            "--set",
+            "goWorkers.enabled=false",
             "--show-only",
             "templates/api-deployment.yaml",
         ],

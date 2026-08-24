@@ -96,3 +96,26 @@ HPA requires a Prometheus Adapter for `worker_jobs_available`,
 scrape the shared `dev-health-go-workers` Service before enabling a group's
 autoscaler. See `../go-workers/README.md` for group semantics and rollout
 guidance.
+
+### Upgrading an existing installation that still runs the Celery fleet
+
+`kubectl apply -k` never deletes an object just because its manifest left
+`kustomization.yaml` -- it only stops managing it. If you have a prior
+installation of this tree with the Celery Deployments/HPA running (from
+before CHAOS-4195), applying this version leaves them running orphaned
+alongside the new Go topology: `dev-health-worker`,
+`dev-health-worker-ingest`, `dev-health-worker-external-ingest`,
+`dev-health-worker-heavy`, `dev-health-beat` (Deployments), and
+`dev-health-worker-hpa` (HorizontalPodAutoscaler). Delete them explicitly as
+part of the upgrade, after scaling up whichever Go groups replace the
+capacity you're removing:
+
+```bash
+kubectl -n dev-health delete deployment \
+  dev-health-worker dev-health-worker-ingest \
+  dev-health-worker-external-ingest dev-health-worker-heavy dev-health-beat \
+  --ignore-not-found
+kubectl -n dev-health delete hpa dev-health-worker-hpa --ignore-not-found
+```
+
+A fresh install has nothing to clean up here.

@@ -322,7 +322,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+			rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 			if parseErr != nil {
 				// Same disposition as the chunked route: an archive that will
 				// not open is skipped and the walk continues (CHAOS-4177).

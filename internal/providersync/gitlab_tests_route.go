@@ -293,7 +293,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, err := parseGitHubTestsArtifact(archive, repoID, runID, claim.OrgID, started, finished, normalizedAt)
+			rows, err := parseGitHubTestsArtifact(archive, jobID, repoID, runID, claim.OrgID, started, finished, normalizedAt)
 			if err != nil || rows.Skipped != 0 {
 				return CompleteRouteBatch{}, fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, err)
 			}

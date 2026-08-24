@@ -37,7 +37,7 @@ func TestGitHubTestsArtifactParsesJUnitCasesAndCoverage(t *testing.T) {
 			"reports/lcov.info": githubTestsLCOVFixture,
 			"ignored.txt":       "not a report",
 		}),
-		"c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
 		&started, &finished, normalizedAt,
 	)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestGitHubTestsArtifactSkipsMalformedMemberWithoutDroppingValidReports(t *t
 			"bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
 			"good.info": githubTestsLCOVFixture,
 		}),
-		"c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
 		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestGitHubTestsArtifactSkipsUnreadableMemberWithoutDroppingValidReports(t *
 	archive[index] ^= 0x01
 
 	rows, err := parseGitHubTestsArtifact(
-		archive, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
+		archive, "artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
 		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification(t *testing.T) {
 					unsafeName:          githubTestsJUnitFixture,
 					"reports/good.info": githubTestsLCOVFixture,
 				}),
-				"repo", "run", "org", nil, nil, time.Now(),
+				"artifact-1", "repo", "run", "org", nil, nil, time.Now(),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -185,7 +185,7 @@ func TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification(t *testing.T) {
 
 	rows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, map[string]string{"reports/nested/junit.xml": githubTestsJUnitFixture}),
-		"repo", "run", "org", nil, nil, time.Now(),
+		"artifact-1", "repo", "run", "org", nil, nil, time.Now(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestGitHubTestsArtifactEnforcesReportCountCap(t *testing.T) {
 	}
 	rows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, members),
-		"c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
 		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -216,14 +216,14 @@ func TestGitHubTestsArtifactEnforcesReportCountCap(t *testing.T) {
 func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
 	_, _, err := parseJUnitRows(
 		[]byte(`<!DOCTYPE testsuite><testsuite name="x"><testcase name="x"/></testsuite>`),
-		"repo", "run", "org", nil, nil, time.Now(),
+		"artifact-1", "repo", "run", "org", nil, nil, time.Now(),
 	)
 	if err == nil {
 		t.Fatal("entity-bearing document was accepted")
 	}
 	large := strings.Repeat("x", 5000)
 	body := []byte(`<testsuite name="x"><testcase name="x"><failure>` + large + `</failure></testcase></testsuite>`)
-	_, cases, err := parseJUnitRows(body, "repo", "run", "org", nil, nil, time.Now())
+	_, cases, err := parseJUnitRows(body, "artifact-1", "repo", "run", "org", nil, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
 func TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal(t *testing.T) {
 	_, err := parseLCOVRow(
 		[]byte("SF:main.go\nLF:1\nLH:2\nend_of_record\n"), "lcov.info",
-		"repo", "run", "org", time.Now(),
+		"artifact-1", "repo", "run", "org", time.Now(),
 	)
 	if err == nil {
 		t.Fatal("incoherent coverage row was accepted")
@@ -245,7 +245,7 @@ func TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal(t *testing.T) {
 func TestGitHubTestsCoverageFallsBackToUniqueDALines(t *testing.T) {
 	row, err := parseLCOVRow(
 		[]byte("SF:services/api/main.go\nDA:1,1\nDA:2,0\nDA:2,3\nend_of_record\n"),
-		"lcov.info", "repo", "run", "org", time.Now(),
+		"lcov.info", "artifact-1", "repo", "run", "org", time.Now(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ SF:services/web/router.go
 LF:1
 LH:1
 end_of_record
-`), "lcov.info", "repo", "run", "org", time.Now())
+`), "lcov.info", "artifact-1", "repo", "run", "org", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,12 +285,12 @@ end_of_record
 
 func TestGitHubTestsArtifactParsesCoberturaCoverage(t *testing.T) {
 	const cobertura = `<coverage lines-valid="2" lines-covered="1" branches-valid="2" branches-covered="1"><packages><package><classes><class filename="services/api/main.go"><lines><line number="1" hits="1" branch="true" condition-coverage="50% (1/2)"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`
-	if _, err := parseCoberturaRow([]byte(cobertura), "coverage.xml", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", time.Now()); err != nil {
+	if _, err := parseCoberturaRow([]byte(cobertura), "coverage.xml", "artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", time.Now()); err != nil {
 		t.Fatalf("parse cobertura: %v", err)
 	}
 	rows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, map[string]string{"coverage.xml": cobertura}),
-		"c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", nil, nil,
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a", nil, nil,
 		time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -326,7 +326,7 @@ func TestGitHubTestsArtifactDoesNotTraversePastPythonEntryCap(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "repo", "run", "org", nil, nil, time.Now())
+	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "artifact-1", "repo", "run", "org", nil, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestGitHubTestsArtifactSkipsPythonOverRatioMember(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "repo", "run", "org", nil, nil, time.Now())
+	rows, err := parseGitHubTestsArtifact(buffer.Bytes(), "artifact-1", "repo", "run", "org", nil, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

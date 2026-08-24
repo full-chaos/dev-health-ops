@@ -17,6 +17,19 @@ var gitLabTestsGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route effect boundary",
 }
 
+// gitLabTestsCoverageOracleGoOnlyFields extends the base exclusion set for
+// the coverage row pair only: parseLCOVRow now scopes coverage SnapshotID to
+// the artifact (here: the GitLab job) it was downloaded from, so two
+// distinct jobs of one pipeline never collide on WriteEffect's
+// recordGitHubTestsKey check (CHAOS-4190). Python's retired coverage
+// producer was never updated to match -- see
+// githubTestsReportOracleGoOnlyFields in github_tests_generic_oracle_test.go
+// for the full rationale (dead code post CHAOS-4026, different write model).
+var gitLabTestsCoverageOracleGoOnlyFields = map[string]string{
+	"last_synced": gitLabTestsGoOnlyFields["last_synced"],
+	"snapshot_id": "CHAOS-4190: Go scopes coverage SnapshotID per artifact/job; Python's retired producer does not",
+}
+
 func gitLabTestsOracleCase() oracleCase {
 	return oracleCase{ID: "active_gitlab_testops_rows", Input: map[string]any{
 		"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "org_id": "org-acme", "run_id": "9001",
@@ -85,7 +98,7 @@ func gitLabTestsGoRows(t *testing.T, input map[string]any) (githubTestsPipelineR
 	if err != nil || len(suites) != 1 || len(cases) != 1 {
 		t.Fatalf("native rows suites=%+v cases=%+v err=%v", suites, cases, err)
 	}
-	coverage, err := parseLCOVRow([]byte(input["lcov"].(string)), "reports/lcov.info", pipeline.RepoID, pipeline.RunID, claim.OrgID, at)
+	coverage, err := parseLCOVRow([]byte(input["lcov"].(string)), "reports/lcov.info", stringValue(rawJob.ID), pipeline.RepoID, pipeline.RunID, claim.OrgID, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +130,7 @@ func TestGenericOracleMatchesActivePythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/coverage", []oracleCase{testCase}, func(t *testing.T, input map[string]any) coverageSnapshotRow {
 		_, _, _, _, _, a := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsGoOnlyFields)
+	}, gitLabTestsCoverageOracleGoOnlyFields)
 }
 
 type gitLabTestsSelectionObservation struct {

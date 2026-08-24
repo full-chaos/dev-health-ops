@@ -373,9 +373,21 @@ type junitDetail struct {
 	Text    string `xml:",chardata"`
 }
 
+// artifactID scopes every SuiteID/CaseID/SnapshotID this parse produces to
+// the ONE artifact (GitHub) or job (GitLab) the archive was downloaded from.
+// Without it, two distinct artifacts of the same run that carry a suite/case
+// with the same name -- the ordinary shape of a matrix build, where every
+// leg uploads an identically-named JUnit report -- hash to the SAME natural
+// key. Both legs then land in the same run's EffectBatch, and
+// TestOpsClickHouseEffects.WriteEffect's recordGitHubTestsKey rejects the
+// second leg as a duplicate, returning the bare ErrInvalidConfiguration the
+// unit terminalizes on after 5 attempts (CHAOS-4190). Callers must pass a
+// value unique per download within the run: GitHub's artifact ID or GitLab's
+// job ID, both already validated non-empty before the download that
+// produced `archive`.
 func parseGitHubTestsArtifact(
 	archive []byte,
-	repoID, runID, orgID string,
+	artifactID, repoID, runID, orgID string,
 	startedAt, finishedAt *time.Time,
 	normalizedAt time.Time,
 ) (githubTestsReportRows, error) {
@@ -433,7 +445,7 @@ func parseGitHubTestsArtifact(
 		processed++
 		switch kind {
 		case "junit":
-			suites, cases, err := parseJUnitRows(body, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
 			if err != nil {
 				result.recordSkipped("malformed", false)
 				continue
@@ -441,7 +453,7 @@ func parseGitHubTestsArtifact(
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
 		case "coverage":
-			coverage, err := parseGitHubCoverageRow(body, name, repoID, runID, orgID, normalizedAt)
+			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
 				result.recordSkipped("malformed", false)
 				continue
@@ -486,15 +498,15 @@ type coberturaLine struct {
 	ConditionCoverage string `xml:"condition-coverage,attr"`
 }
 
-func parseGitHubCoverageRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
+func parseGitHubCoverageRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if strings.HasPrefix(strings.ToLower(trimmed), "<coverage") {
-		return parseCoberturaRow(body, reportPath, repoID, runID, orgID, normalizedAt)
+		return parseCoberturaRow(body, reportPath, artifactID, repoID, runID, orgID, normalizedAt)
 	}
-	return parseLCOVRow(body, reportPath, repoID, runID, orgID, normalizedAt)
+	return parseLCOVRow(body, reportPath, artifactID, repoID, runID, orgID, normalizedAt)
 }
 
-func parseCoberturaRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
+func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
 	upper := bytes.ToUpper(body)
 	if len(body) > githubTestsMaxReportBytes || bytes.Contains(upper, []byte("<!DOCTYPE")) || bytes.Contains(upper, []byte("<!ENTITY")) {
 		return coverageSnapshotRow{}, ErrGitHubTestsReportInvalid
@@ -588,7 +600,7 @@ func parseCoberturaRow(body []byte, reportPath, repoID, runID, orgID string, nor
 		}
 	}
 	format := "cobertura"
-	row := coverageSnapshotRow{RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, format, reportPath), ReportFormat: &format, LinesTotal: linesTotal, LinesCovered: linesCovered, BranchesTotal: branchesTotal, BranchesCovered: branchesCovered, ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt}
+	row := coverageSnapshotRow{RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, artifactID, format, reportPath), ReportFormat: &format, LinesTotal: linesTotal, LinesCovered: linesCovered, BranchesTotal: branchesTotal, BranchesCovered: branchesCovered, ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt}
 	row.LineCoveragePct = coveragePercent(row.LinesCovered, row.LinesTotal)
 	row.BranchCoveragePct = coveragePercent(row.BranchesCovered, row.BranchesTotal)
 	return row, nil
@@ -640,7 +652,7 @@ func classifyGitHubTestReport(name string, body []byte) string {
 }
 
 func parseJUnitRows(
-	body []byte, repoID, runID, orgID string,
+	body []byte, artifactID, repoID, runID, orgID string,
 	fallbackStarted, fallbackFinished *time.Time,
 	normalizedAt time.Time,
 ) ([]testSuiteResultRow, []testCaseResultRow, error) {
@@ -681,7 +693,7 @@ func parseJUnitRows(
 			name = "unnamed"
 		}
 		framework := inferJUnitFramework(suite)
-		suiteID := hashTestIdentifier(runID, name, "")
+		suiteID := hashTestIdentifier(runID, artifactID, name, "")
 		started := parseGitHubTestsTime(suite.Timestamp)
 		hasSuiteTimestamp := started != nil
 		if started == nil {
@@ -766,7 +778,7 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 	}
 }
 
-func parseLCOVRow(body []byte, reportPath, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
+func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID string, normalizedAt time.Time) (coverageSnapshotRow, error) {
 	var currentPath *string
 	var linesTotal, linesCovered, branchesTotal, branchesCovered, functionsTotal, functionsCovered *int64
 	lineNumbers := map[int64]struct{}{}
@@ -874,7 +886,7 @@ func parseLCOVRow(body []byte, reportPath, repoID, runID, orgID string, normaliz
 	}
 	format := "lcov"
 	row := coverageSnapshotRow{
-		RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, format, reportPath),
+		RepoID: repoID, RunID: runID, SnapshotID: hashTestIdentifier(runID, artifactID, format, reportPath),
 		ReportFormat: &format, LinesTotal: nilIfZero(aggregateLinesTotal), LinesCovered: nilIfZero(aggregateLinesCovered),
 		BranchesTotal: nilIfZero(aggregateBranchesTotal), BranchesCovered: nilIfZero(aggregateBranchesCovered),
 		FunctionsTotal: nilIfZero(aggregateFunctionsTotal), FunctionsCovered: nilIfZero(aggregateFunctionsCovered),

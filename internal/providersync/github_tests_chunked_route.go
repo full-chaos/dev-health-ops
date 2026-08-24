@@ -699,7 +699,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if len(archive) == 0 {
 							continue
 						}
-						rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+						rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
 						if parseErr != nil {
 							// An archive that will not open is provider data, not
 							// a fault of this unit. Skip it exactly as an expired

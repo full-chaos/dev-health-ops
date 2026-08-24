@@ -12,6 +12,17 @@ var githubTestsOracleGoOnlyFields = map[string]string{
 	"last_synced": "ClickHouse sinks stamp persistence time after Python's active report-ingestion boundary; Go stabilizes it in the effect row for crash recovery",
 }
 
+// CHAOS-4190: parseJUnitRows/parseGitHubCoverageRow now scope SuiteID/
+// CaseID/SnapshotID to the artifact the report came from, so two distinct
+// artifacts of the same run never hash to the same natural key and get
+// bare-rejected by WriteEffect's recordGitHubTestsKey. suite_id/case_id/
+// snapshot_id are NOT goOnlyFields -- Python's row carries them too, just
+// with a different value -- so the divergence is declared where it
+// belongs: each pair's own excluded_fields in testdata/oracle_pairs/
+// (github_tests_suite.py, github_tests_case.py, github_tests_coverage.py),
+// with the reachability rationale (manual-CLI-only, off the automated
+// dispatch path) spelled out there.
+
 var githubTestsProducerGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route boundary after the active Python producer returns its row",
 }
@@ -142,7 +153,7 @@ func githubTestsOracleReportRows(t *testing.T, input map[string]any) githubTests
 	}
 	started, finished, normalizedAt := githubTestsOracleTimes(t, input)
 	rows, err := parseGitHubTestsArtifact(
-		githubTestsZip(t, members), input["repo_id"].(string),
+		githubTestsZip(t, members), "artifact-1", input["repo_id"].(string),
 		input["run_id"].(string), input["org_id"].(string),
 		started, finished, normalizedAt,
 	)

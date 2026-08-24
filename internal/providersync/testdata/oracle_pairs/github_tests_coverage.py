@@ -17,5 +17,15 @@ oracle_registry.register(
         id="github/tests/coverage",
         build_row=_build,
         reflected_fields=lambda: reflected("CoverageSnapshotRow"),
+        excluded_fields={
+            "snapshot_id": "CHAOS-4190: the Go producer scopes coverage "
+            "SnapshotID to the artifact a report came from, so two "
+            "artifacts of one run with the same report path never collide "
+            "as duplicate natural keys. This Python function is reachable "
+            "only from the manual CLI (dev-hops sync --target tests|cicd), "
+            "unscheduled and off the automated dispatch path -- River/Go "
+            "owns 100% of worker-driven tests/cicd sync in production -- "
+            "and was intentionally not changed to match.",
+        },
     )
 )

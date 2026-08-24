@@ -606,7 +606,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						if len(archive) == 0 {
 							continue
 						}
-						rows, parseErr := parseGitHubTestsArtifact(archive, repoID, runID, claim.OrgID, started, finished, normalizedAt)
+						rows, parseErr := parseGitHubTestsArtifact(archive, stringValue(job.ID), repoID, runID, claim.OrgID, started, finished, normalizedAt)
 						if parseErr != nil || rows.Skipped != 0 {
 							return fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, parseErr)
 						}

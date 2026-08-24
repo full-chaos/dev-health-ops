@@ -17,6 +17,14 @@ var gitLabTestsGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route effect boundary",
 }
 
+// CHAOS-4190: parseLCOVRow now scopes coverage SnapshotID to the artifact
+// (here: the GitLab job) it was downloaded from, so two distinct jobs of
+// one pipeline never collide on WriteEffect's recordGitHubTestsKey check.
+// snapshot_id is NOT a goOnlyField -- Python's row carries it too, just
+// with a different value -- so the divergence is declared in the pair's
+// own excluded_fields (testdata/oracle_pairs/gitlab_tests_coverage.py),
+// with the reachability rationale spelled out there.
+
 func gitLabTestsOracleCase() oracleCase {
 	return oracleCase{ID: "active_gitlab_testops_rows", Input: map[string]any{
 		"repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "org_id": "org-acme", "run_id": "9001",
@@ -85,7 +93,7 @@ func gitLabTestsGoRows(t *testing.T, input map[string]any) (githubTestsPipelineR
 	if err != nil || len(suites) != 1 || len(cases) != 1 {
 		t.Fatalf("native rows suites=%+v cases=%+v err=%v", suites, cases, err)
 	}
-	coverage, err := parseLCOVRow([]byte(input["lcov"].(string)), "reports/lcov.info", pipeline.RepoID, pipeline.RunID, claim.OrgID, at)
+	coverage, err := parseLCOVRow([]byte(input["lcov"].(string)), "reports/lcov.info", stringValue(rawJob.ID), pipeline.RepoID, pipeline.RunID, claim.OrgID, at)
 	if err != nil {
 		t.Fatal(err)
 	}

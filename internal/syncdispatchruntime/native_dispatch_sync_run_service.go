@@ -26,16 +26,6 @@ import (
 // permanent verdict about the run.
 var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unavailable")
 
-// errDispatchNotYetImplemented marks the deliberate, visible stopping
-// point of this slice (the "decision.allowed == true" continuation --
-// concurrency partial-cap, BudgetGuard, claim/route/enqueue, and the
-// pending-unit-counts/redispatch/finalize tail -- lands in a follow-up
-// commit). Kept distinct from ErrDispatchSyncRunUnavailable so a test
-// reaching this point can assert PRECISELY "everything before here is
-// correct," not just "some error happened." Not exported: an internal-
-// development-only marker, not a caller-facing sentinel.
-var errDispatchNotYetImplemented = errors.New("dispatch_sync_run: allowed-pass continuation not yet implemented (CHAOS-4175 family 3)")
-
 // ErrDispatchProviderUnitRoute ports WorkerJobRouteError for THIS
 // producer's two raise sites verbatim: the sync.provider_unit job-kind
 // transport is not currently River-owned (resolve_worker_job_route /
@@ -119,12 +109,20 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 }
 
 // Dispatch is the native equivalent of bridge.Dispatch / Python's
-// dispatch_sync_run(sync_run_id). Ports the function's FIRST session block
-// verbatim through the total-cap hard-deny branch (workers/sync_units.py:
-// 772-935 roughly) -- authorize, feature-gate, and either deny the whole
-// pass or continue into budget admission and the claim/route/enqueue loop
-// (that continuation lands in a follow-up commit; see the TODO marker
-// below, which is a deliberate, visible stopping point, not a silent gap).
+// dispatch_sync_run(sync_run_id), ported verbatim end to end
+// (workers/sync_units.py:759-1158): the outbox-relay route fence, the
+// feature/reference-discovery/DispatchGuard gate chain and total-cap
+// denial (in the FIRST transaction), concurrency partial-cap, the full
+// BudgetGuard sequence, the sync.provider_unit route fence, the atomic
+// claim and per-unit validate+route+enqueue loop, the DISPATCHING status
+// flip (all still the SAME first transaction -- team-lead-confirmed
+// against origin/main: the claim/route/enqueue/status-flip is one
+// Postgres transaction in Python too, closing the producer kill window
+// its own comment names), and the tail (a SECOND transaction for
+// pending-unit-counts, deciding between a countdown/deferred redispatch
+// and arming finalize; scheduleRedispatch and armFinalizeSyncRunWakeup
+// each open their own transaction beyond that, matching Python's own
+// separate sessions for _schedule_redispatch calls).
 //
 // Idempotent / redispatchable, same as Python: nothing here assumes this
 // is the run's only or first dispatch attempt.
@@ -362,14 +360,72 @@ WHERE id = $1::uuid`,
 		return nil
 	}
 
-	// TODO(CHAOS-4175 family 3, next commit): river_queued == 0 -- the tail
-	// distinguishing "more work later" (pendingUnitCounts -> scheduleRedispatch)
-	// from "genuinely done" (finalize) via a SECOND, separate transaction,
-	// matching Python's own second `with get_postgres_session_sync()` block.
-	// Everything above this point is tested and committed; this return is
-	// the explicit, visible stopping point for this slice -- not a silent
-	// gap.
-	return errDispatchNotYetImplemented
+	// --- Tail: river_queued == 0 -- nothing was claimable this pass.
+	// SECOND, separate transaction (Python's own second
+	// `with get_postgres_session_sync() as session:` block, opened only
+	// after the first one above already committed).
+	tailTx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return ErrDispatchSyncRunUnavailable
+	}
+	counts, err := computePendingUnitCounts(ctx, tailTx, run.id, service.nowUTC())
+	if err != nil {
+		_ = tailTx.Rollback(ctx)
+		return err
+	}
+	if err := tailTx.Commit(ctx); err != nil {
+		return ErrDispatchSyncRunUnavailable
+	}
+
+	// a) Deferred work remains dispatchable now (a PLANNED unit, or a due
+	// RETRYING/stale-DISPATCHING one) -> countdown redispatch so it drains
+	// once slots free up. scheduleRedispatch's own exception-swallowing
+	// means the try/except Python wraps THIS call in can never actually
+	// fire (matching the dead-code precedent already found and NOT ported
+	// elsewhere in this function) -- nothing to replicate beyond the call
+	// itself.
+	if counts.dispatchable > 0 {
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		service.logger.InfoContext(ctx, "dispatch_sync_run.noop",
+			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("pending_units", counts.dispatchable))
+		return nil
+	}
+	// b) Nothing dispatchable, but something is genuinely in flight
+	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
+	// arm, this pass's job here is done.
+	if counts.inFlight > 0 {
+		service.logger.InfoContext(ctx, "dispatch_sync_run.waiting_inflight",
+			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("in_flight_units", counts.inFlight))
+		return nil
+	}
+	// c) Nothing dispatchable or in flight, but a RETRYING unit has a
+	// future available_at -- arm a redispatch for exactly that time rather
+	// than the default countdown, so a long backoff is honored instead of
+	// being polled early for nothing.
+	if counts.nextDeferredAt != nil {
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+		service.logger.InfoContext(ctx, "dispatch_sync_run.deferred",
+			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Time("next_deferred_at", *counts.nextDeferredAt))
+		return nil
+	}
+	// d) No pending work of any kind (a zero-unit run, or every unit
+	// already terminal) -- arm finalize (idempotent; handles both the
+	// zero-unit and already-finalized cases the same way
+	// finalize_sync_run's own entry logic already does). A redispatch here
+	// would loop forever with nothing left to ever claim.
+	service.logger.InfoContext(ctx, "dispatch_sync_run.noop_finalize", slog.String("sync_run_id", run.id), slog.Int("queued_units", 0))
+	finalizeTx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return ErrDispatchSyncRunUnavailable
+	}
+	defer func() { _ = finalizeTx.Rollback(ctx) }()
+	if err := armFinalizeSyncRunWakeup(ctx, finalizeTx, run.id, service.nowUTC()); err != nil {
+		return err
+	}
+	if err := finalizeTx.Commit(ctx); err != nil {
+		return ErrDispatchSyncRunUnavailable
+	}
+	return nil
 }
 
 // terminalizeFeatureDisabled ports the feature-gate denial branch verbatim:
@@ -437,7 +493,7 @@ func (service *NativeDispatchSyncRunService) denyRun(
 		if err != nil {
 			return err
 		}
-		if err := armDeniedActiveFinalize(ctx, tx, run.id, now); err != nil {
+		if err := armFinalizeSyncRunWakeup(ctx, tx, run.id, now); err != nil {
 			return err
 		}
 		service.logger.WarnContext(ctx, "dispatch_sync_run.denied_with_active_units",

@@ -412,13 +412,15 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 	})
 }
 
-// TestDispatchTerminalizesAnUnroutableUnitAndReachesTheTailStop pins the
-// unroutable-unit path wired into Dispatch(): a claimed unit whose
-// (provider, dataset) pair the capability matrix does not route gets
-// terminalized (CHAOS-3990), never enqueued -- and since river_queued
-// stays 0, Dispatch() reaches the deliberate not-yet-implemented stop for
-// the pending-unit-counts/redispatch/finalize tail, not "dispatched".
-func TestDispatchTerminalizesAnUnroutableUnitAndReachesTheTailStop(t *testing.T) {
+// TestDispatchTerminalizesAnUnroutableUnitAndArmsFinalize pins the
+// unroutable-unit path wired into Dispatch() all the way through the
+// tail: a claimed unit whose (provider, dataset) pair the capability
+// matrix does not route gets terminalized (CHAOS-3990), never enqueued --
+// river_queued stays 0, and since terminalizing it leaves NOTHING pending
+// (no other unit in the run), Dispatch() reaches the tail's case (d) and
+// arms a finalize wakeup, returning nil ("noop_finalize"), not
+// "dispatched".
+func TestDispatchTerminalizesAnUnroutableUnitAndArmsFinalize(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
@@ -432,9 +434,8 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 		}
 
 		service := newTestDispatchService(t, pool)
-		err := service.Dispatch(ctx, dispatchTestArgs())
-		if !errors.Is(err, errDispatchNotYetImplemented) {
-			t.Fatalf("Dispatch: %v, want errDispatchNotYetImplemented (river_queued stayed 0)", err)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil (noop_finalize)", err)
 		}
 
 		var unitStatus string
@@ -450,6 +451,14 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 		}
 		if outboxCount != 0 {
 			t.Fatalf("got %d worker_job_outbox rows, want 0 -- an unroutable unit must never be published", outboxCount)
+		}
+		var finalizeWakeups int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind=$2`,
+			discoveryTestRun, outboxKindFinalizeSyncRun).Scan(&finalizeWakeups); err != nil {
+			t.Fatal(err)
+		}
+		if finalizeWakeups != 1 {
+			t.Fatalf("got %d finalize wakeups, want 1 -- nothing left pending, so finalize must be armed", finalizeWakeups)
 		}
 	})
 }

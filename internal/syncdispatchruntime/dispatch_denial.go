@@ -163,27 +163,40 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 	return terminalized, nil
 }
 
-// armDeniedActiveFinalize ports _enqueue_denied_active_finalize -- NOT as
-// a literal Celery apply_async call, but by targeting the actual mechanism
-// finalize_sync_run runs through today. finalize_sync_run's transport
-// route is river (sync_dispatch_transport_routes), so a Celery
-// apply_async naming it is exactly the same thing every OTHER "get
-// finalize to run soon" call site in this codebase already does: arm a
-// finalize_sync_run outbox wakeup, via upsertDiscoveryOutboxWakeup
-// (already generic over kind -- the SAME call native_reference_discovery.go's
-// own terminal-failure path makes to arm finalize on ITS OWN denial path).
+// armFinalizeSyncRunWakeup ports BOTH of dispatch_sync_run's own "get
+// finalize to run soon" call sites onto the ONE mechanism finalize_sync_run
+// actually runs through today, not their two different literal Python
+// shapes:
+//   - _enqueue_denied_active_finalize's Celery apply_async(finalize_sync_run, ...)
+//     (the total-cap-denial-with-active-units branch); and
+//   - dispatch_sync_run's own bare, SYNCHRONOUS `finalize_sync_run(sync_run_id)`
+//     call (the "no pending work" tail branch, once river_queued and every
+//     pending-unit-counts check comes back empty).
 //
-// Runs in the CALLER's transaction, unlike scheduleRedispatch's own
-// separate session: this call site sits inside the SAME total-cap-denial
-// transaction that just failed the run's planned/retrying/stale-
-// dispatching units (failPlannedUnits/failStaleDispatchingUnits), and
-// committing the wakeup together with those writes is the identical
-// "terminal state + wakeup, one atomic unit" shape that precedent already
-// uses. This is not an improvement over Python's own ordering, since the
-// underlying mechanisms differ in a way that removes the question
-// entirely: the outbox is pull-based (a poller picks up an eligible row
-// whenever it next runs), unlike Celery's push-based apply_async, which
-// has no equivalent commit-ordering race to preserve or accidentally fix.
-func armDeniedActiveFinalize(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) error {
+// finalize_sync_run's transport route is river
+// (sync_dispatch_transport_routes), so both of those Python shapes reduce
+// to the SAME thing every OTHER "get finalize to run soon" call site in
+// this codebase already does: arm a finalize_sync_run outbox wakeup, via
+// upsertDiscoveryOutboxWakeup (already generic over kind -- the SAME call
+// native_reference_discovery.go's own terminal-failure path makes to arm
+// finalize on ITS OWN denial path). A direct in-process Finalize(...) call
+// was considered and rejected: Finalize's own precondition
+// (currentTransportReference) expects a real, committed outbox row with a
+// live route generation, which an ad-hoc synchronous call has no natural
+// way to construct -- the outbox-wakeup path is what lets the SAME relay
+// infrastructure build that context properly.
+//
+// Runs in the CALLER's transaction (unlike scheduleRedispatch's own
+// separate session) at BOTH call sites: the denial branch commits it
+// together with failPlannedUnits/failStaleDispatchingUnits as one atomic
+// "terminal state + wakeup" unit; the tail branch commits it as the sole
+// content of dispatch_sync_run's own third transaction. Neither is an
+// improvement over Python's ordering, since the underlying mechanisms
+// differ in a way that removes the question entirely: the outbox is
+// pull-based (a poller picks up an eligible row whenever it next runs),
+// unlike Celery's push-based apply_async or Python's own synchronous call,
+// neither of which has an equivalent commit-ordering race to preserve or
+// accidentally fix.
+func armFinalizeSyncRunWakeup(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) error {
 	return upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindFinalizeSyncRun, now)
 }

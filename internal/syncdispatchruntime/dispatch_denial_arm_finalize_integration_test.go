@@ -10,11 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TestArmDeniedActiveFinalizeArmsAFinalizeWakeupAtNow pins the target
+// TestArmFinalizeSyncRunWakeupArmsAFinalizeWakeupAtNow pins the target
 // mechanism: a finalize_sync_run outbox row is created (or upserted) with
 // available_at == now, in the caller's own transaction -- not a Celery
 // enqueue, and not a separate transaction.
-func TestArmDeniedActiveFinalizeArmsAFinalizeWakeupAtNow(t *testing.T) {
+func TestArmFinalizeSyncRunWakeupArmsAFinalizeWakeupAtNow(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := time.Now().UTC()
 
@@ -23,8 +23,8 @@ func TestArmDeniedActiveFinalizeArmsAFinalizeWakeupAtNow(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		if err := armDeniedActiveFinalize(ctx, tx, discoveryTestRun, now); err != nil {
-			t.Fatalf("armDeniedActiveFinalize: %v", err)
+		if err := armFinalizeSyncRunWakeup(ctx, tx, discoveryTestRun, now); err != nil {
+			t.Fatalf("armFinalizeSyncRunWakeup: %v", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
@@ -45,10 +45,10 @@ func TestArmDeniedActiveFinalizeArmsAFinalizeWakeupAtNow(t *testing.T) {
 	})
 }
 
-// TestArmDeniedActiveFinalizeRollsBackWithTheCallersTransaction pins the
+// TestArmFinalizeSyncRunWakeupRollsBackWithTheCallersTransaction pins the
 // "same transaction as the caller" property empirically: if the caller's
 // transaction never commits, the wakeup must not exist either.
-func TestArmDeniedActiveFinalizeRollsBackWithTheCallersTransaction(t *testing.T) {
+func TestArmFinalizeSyncRunWakeupRollsBackWithTheCallersTransaction(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := time.Now().UTC()
 
@@ -56,8 +56,8 @@ func TestArmDeniedActiveFinalizeRollsBackWithTheCallersTransaction(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := armDeniedActiveFinalize(ctx, tx, discoveryTestRun, now); err != nil {
-			t.Fatalf("armDeniedActiveFinalize: %v", err)
+		if err := armFinalizeSyncRunWakeup(ctx, tx, discoveryTestRun, now); err != nil {
+			t.Fatalf("armFinalizeSyncRunWakeup: %v", err)
 		}
 		if err := tx.Rollback(ctx); err != nil {
 			t.Fatal(err)

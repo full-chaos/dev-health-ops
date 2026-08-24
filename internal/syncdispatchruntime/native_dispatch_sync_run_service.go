@@ -196,15 +196,25 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// --- Feature gate (canonical incident ingestion) ---
 	// Python: `requires_canonical_feature = sync_run_requires_canonical_incident_feature(session, run)`
 	// then `require_canonical_incident_feature_for_update_sync` (which
-	// raises on denial). The Go port of the underlying decision
-	// (scheduledsync.CanonicalIncidentDecisionForUpdate) already returns
-	// (allowed, reason) directly -- no exception to catch, just an if.
+	// raises on denial, and LOCKS feature_flags/org_feature_overrides --
+	// sync_units.py:804). Go deliberately calls the NON-locking
+	// scheduledsync.CanonicalIncidentDecision here instead (CHAOS-4209
+	// ruling): this transaction runs on the domain role, which has SELECT
+	// only on those two tables (they are coordinator-exclusive), so a FOR
+	// UPDATE lock 42501s -- the same class CHAOS-4209 found in family 2's
+	// claim(). This is a recorded, deliberate divergence from Python's own
+	// locking call at this exact site, not an oversight: a stale
+	// non-locked read here is caught by feature_disabled_termination's own
+	// re-check at materialization time (CanonicalIncidentAllowedForUpdate/
+	// CanonicalIncidentDecisionForUpdate, which DO lock, on the coordinator
+	// role), so the entitlement decision this gate makes is never the last
+	// word either way.
 	requiresFeature, err := syncRunRequiresCanonicalIncidentFeature(ctx, tx, run.id, run.integrationID)
 	if err != nil {
 		return err
 	}
 	if requiresFeature {
-		allowed, reason, decisionErr := scheduledsync.CanonicalIncidentDecisionForUpdate(ctx, tx, run.orgID, now)
+		allowed, reason, decisionErr := scheduledsync.CanonicalIncidentDecision(ctx, tx, run.orgID, now)
 		if decisionErr != nil {
 			return ErrDispatchSyncRunUnavailable
 		}

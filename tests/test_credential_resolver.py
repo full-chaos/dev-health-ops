@@ -26,6 +26,7 @@ from dev_health_ops.credentials import (
     LinearCredentials,
     resolve_credentials_sync,
 )
+from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
 
 _GITHUB_APP_ENV_VARS = (
     "GITHUB_APP_ID",
@@ -791,8 +792,6 @@ class TestJiraStoredCredentialShapes:
         This is the literal stored shape of the credential on the local
         stack whose sync failed.
         """
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         creds = jira_credentials_from_mapping(
             {
                 "email": "user@example.com",
@@ -808,8 +807,6 @@ class TestJiraStoredCredentialShapes:
 
     def test_syncs_inline_modal_shape_resolves(self):
         """Admin > Syncs > JIRA > "+Add New" wrote api_token/server_url."""
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         creds = jira_credentials_from_mapping(
             {
                 "email": "user@example.com",
@@ -823,8 +820,6 @@ class TestJiraStoredCredentialShapes:
         assert creds.base_url == "https://acme.atlassian.net"
 
     def test_canonical_shape_still_resolves(self):
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         creds = jira_credentials_from_mapping(
             {
                 "email": "user@example.com",
@@ -842,8 +837,6 @@ class TestJiraStoredCredentialShapes:
         A mapping carrying both is a credential mid-migration; the key the
         resolver has always read must not be displaced by the alias.
         """
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         creds = jira_credentials_from_mapping(
             {
                 "email": "user@example.com",
@@ -857,8 +850,6 @@ class TestJiraStoredCredentialShapes:
         assert creds.api_token == "explicit"
 
     def test_a_base_url_outranks_both_url_aliases(self):
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         creds = jira_credentials_from_mapping(
             {
                 "email": "user@example.com",
@@ -873,8 +864,6 @@ class TestJiraStoredCredentialShapes:
         assert creds.base_url == "https://canonical.atlassian.net"
 
     def test_a_genuinely_incomplete_mapping_still_returns_none(self):
-        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
-
         assert (
             jira_credentials_from_mapping(
                 {"email": "user@example.com", "url": "https://acme.atlassian.net"}
@@ -889,8 +878,6 @@ class TestJiraStoredCredentialShapes:
         why, and the log line deliberately carries no detail. The counter
         is where "which field" now lives.
         """
-        import dev_health_ops.credentials.resolver as resolver_module
-
         recorded: list[dict[str, str]] = []
 
         def _capture(*, provider: str, missing_field: str) -> None:
@@ -901,7 +888,7 @@ class TestJiraStoredCredentialShapes:
             _capture,
         ):
             assert (
-                resolver_module.jira_credentials_from_mapping(
+                jira_credentials_from_mapping(
                     {"email": "user@example.com", "url": "https://acme.atlassian.net"}
                 )
                 is None
@@ -911,8 +898,6 @@ class TestJiraStoredCredentialShapes:
 
     def test_the_rejection_label_never_carries_credential_material(self):
         """The label vocabulary is the caller's field names, nothing else."""
-        import dev_health_ops.credentials.resolver as resolver_module
-
         recorded: list[str] = []
 
         def _capture(*, provider: str, missing_field: str) -> None:
@@ -922,7 +907,7 @@ class TestJiraStoredCredentialShapes:
             "dev_health_ops.metrics.prometheus.record_credential_mapping_rejected",
             _capture,
         ):
-            resolver_module.jira_credentials_from_mapping(
+            jira_credentials_from_mapping(
                 {"api_token": "s3cret-token-value", "url": "https://acme.atlassian.net"}
             )
 

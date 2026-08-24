@@ -82,6 +82,91 @@ ClickHouse writes must preserve:
 
 A missing provider transition or absent bounded-page result is unknown, not automatically a tombstone.
 
+## Work item to project: provider event to graph edge
+
+A work item's project used to be a plain overwrite column on `work_items`. That
+table is a `ReplacingMergeTree` keyed on the work item, so a reassignment
+overwrote `project_id` and the previous value was unrecoverable after
+compaction: presence was queryable, history never existed. CHAOS-4194 and
+CHAOS-4193 replace that with one representation -- an append-only event stream
+that presence projects from and validity intervals derive from -- rather than
+two parallel stores.
+
+Read this diagram for where a value can be LOST rather than only where it
+flows. Three edges below are refusals, and each one exists because the silent
+version of it was the actual defect.
+
+```mermaid
+flowchart TD
+    P["Provider event<br/>(Jira project / GitHub Projects V2 / Linear project)"]
+    B["External batch<br/>customer push, Postgres batch row"]
+    N["normalizeExternalRecords<br/>external_ingest.go"]
+    K{"kind registered for<br/>this source system?"}
+    V{"payload valid for<br/>the kind's schema?"}
+    R["externalRejection persisted on the batch<br/>code + kind + external id"]
+    M["worker_external_record_refused_total<br/>{source_system, reason}"]
+    S["ClickHouse sink<br/>external_clickhouse.go"]
+    T[("work_item_project_transitions<br/>ReplacingMergeTree(last_synced)<br/>ORDER BY org_id, work_item_id, occurred_at, event_id")]
+    MS["worker_external_project_transitions_sunk_total<br/>{provider}"]
+    PR[["work_item_project_presence<br/>view: latest transition, else work_items column"]]
+    W[("work_items FINAL<br/>current-value column, no history")]
+    CF["Context Fabric devhealthsource<br/>BELONGS_TO_PROJECT edge"]
+    RC["ExternalRecomputeScope<br/>coalesced in Valkey, scheduled after commit"]
+
+    P --> B --> N
+    N --> K
+    K -- "no" --> R
+    K -- "yes" --> V
+    V -- "no" --> R
+    V -- "yes" --> S
+    R --> M
+    S --> T
+    S --> MS
+    T --> PR
+    W -. "fallback arm: only for work items<br/>with no transition history" .-> PR
+    PR --> CF
+    S -- "after Complete commits" --> RC
+    RC -. "invalidates derived<br/>materializations" .-> CF
+```
+
+Load-bearing properties, and why each is where it is:
+
+- **Refusal, not a silent drop.** An unregistered kind is rejected with
+  `unsupported_kind_for_system` and the rejection is persisted on the batch. A
+  silent drop and a refusal look identical from the sink side -- zero rows
+  either way -- so a producer shipping against an unregistered kind would
+  otherwise see a clean successful sync and no data. Registration is per
+  `(source_system, kind)`, not global: a kind registered for github and not for
+  jira is refused for jira.
+- **Dedupe is the engine's job.** `event_id` is in the sorting key, so a
+  re-synced provider event collapses under `FINAL` instead of accumulating one
+  row per sync. Reads must use `SELECT ... FINAL`.
+- **`occurred_at` falls back to `last_synced`,** never to the zero time. It is
+  in the sorting key, so a zero would sort every timeless event ahead of all
+  real history and the presence projection -- latest transition wins -- would
+  answer with the oldest row.
+- **The presence fallback is a view arm, not a backfill.** Synthesising
+  transition rows for pre-CDC work items would put events into the history
+  table that no provider emitted, with a fabricated `event_id` and an
+  `occurred_at` that is really just "whenever we happened to sync". CHAOS-4193
+  derives validity intervals from that stream, so those rows would become
+  invented `ValidFrom` boundaries presented as observed fact. The `source`
+  column keeps the two provenances separable.
+- **Project is not team.** "Project" here means the provider PROJECT entity
+  only. Legacy Jira treated projects as teams; `work_items.native_team_key` is
+  a separate axis and no project transition may be derived from, or read as, a
+  team transition.
+- **Pull requests are refused at the schema boundary.** The table keys on
+  `work_item_id` and a PR has no `work_items` row to join. PR-to-project is an
+  open shape (CHAOS-4194), not an omission to paper over.
+
+The only cache hop is `ExternalRecomputeScope`: after `Complete` commits the
+batch outcome, the scope is handed to the recompute controller, which coalesces
+it in Valkey and dispatches downstream recomputation. It is best-effort by
+design -- a crash is recovered by the scheduler's pending-scope scan rather
+than by replaying already-terminal sink writes -- so a missed schedule delays
+derived materializations but never loses a transition row.
+
 ## Migration rules
 
 Every migration needs:

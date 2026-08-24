@@ -60,12 +60,19 @@ type candidateUnitFixture struct {
 	resultJSON       string
 	budgetFirstDefAt *time.Time
 	firstBlockedAt   *time.Time
+	// integrationID overrides the default fixed integration id when set --
+	// needed to put two units in the SAME budget bucket (which does not key
+	// on integration_id) but DIFFERENT cooldown scopes (which do).
+	integrationID string
 }
 
 func insertCandidateUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f candidateUnitFixture) {
 	t.Helper()
 	orgID := "org-1"
 	integrationID := "00000000-0000-4000-8000-000000000010"
+	if f.integrationID != "" {
+		integrationID = f.integrationID
+	}
 	sourceID := "00000000-0000-4000-8000-000000000011"
 	if f.resultJSON == "" {
 		f.resultJSON = "{}"

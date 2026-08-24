@@ -141,10 +141,13 @@ Load-bearing properties, and why each is where it is:
 - **Dedupe is the engine's job.** `event_id` is in the sorting key, so a
   re-synced provider event collapses under `FINAL` instead of accumulating one
   row per sync. Reads must use `SELECT ... FINAL`.
-- **`occurred_at` falls back to `last_synced`,** never to the zero time. It is
-  in the sorting key, so a zero would sort every timeless event ahead of all
-  real history and the presence projection -- latest transition wins -- would
-  answer with the oldest row.
+- **`occurred_at` must come from the provider.** It is in the sorting key, so a
+  sink-supplied timestamp differs on every re-sync of the same event: the keys
+  differ, `FINAL` keeps both, and the table accumulates one row per sync of a
+  single reassignment. The sink cannot invent a value stable across re-syncs;
+  only the producer can, so an event without one is refused. This deviates from
+  CHAOS-4194's provisional "else `last_synced`" default, which was written
+  before the interaction with the sorting key was noticed.
 - **The presence fallback is a view arm, not a backfill.** Synthesising
   transition rows for pre-CDC work items would put events into the history
   table that no provider emitted, with a fabricated `event_id` and an
@@ -156,9 +159,21 @@ Load-bearing properties, and why each is where it is:
   only. Legacy Jira treated projects as teams; `work_items.native_team_key` is
   a separate axis and no project transition may be derived from, or read as, a
   team transition.
-- **Pull requests are refused at the schema boundary.** The table keys on
-  `work_item_id` and a PR has no `work_items` row to join. PR-to-project is an
-  open shape (CHAOS-4194), not an omission to paper over.
+- **Pull requests are refused at the schema boundary,** and the refusal needs a
+  POSITIVE `"issue"` declaration rather than the absence of a `"pr"` one -- a PR
+  payload that merely omits the field would otherwise fall through to the
+  issue-shaped id derivation. The table keys on `work_item_id` and a PR has no
+  `work_items` row to join. PR-to-project is an open shape (CHAOS-4194), not an
+  omission to paper over.
+- **The subject id is derived from the record's own `repositoryExternalId`,**
+  matching `work_item.v1`. Deriving from the batch pointer alone -- which is
+  what the older `work_item_transition.v1` does -- gives a different id whenever
+  the source instance is an org and the records name org/repo, producing a
+  well-formed row that joins to nothing.
+- **A record may not claim a provider its batch did not come from.** Project
+  ids are provider-scoped, so a jira project id inside a github batch resolves
+  against the wrong catalogue. The schema enum cannot see this: it validates the
+  field in isolation, and the contradiction exists only relative to the pointer.
 
 The only cache hop is `ExternalRecomputeScope`: after `Complete` commits the
 batch outcome, the scope is handed to the recompute controller, which coalesces

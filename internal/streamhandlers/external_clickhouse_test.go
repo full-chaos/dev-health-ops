@@ -41,7 +41,7 @@ func TestClickHouseExternalSinkPersistsEveryV1KindWithProvenance(t *testing.T) {
 			"fromStatus": "todo", "toStatus": "in_progress",
 		}),
 		externalSinkFixture("work_item_project_transition.v1", map[string]any{
-			"externalKey": "7", "provider": "github", "eventId": "evt-1",
+			"externalKey": "7", "provider": "github", "eventId": "evt-1", "workItemType": "issue",
 			"occurredAt": "2026-07-22T11:30:00Z", "toProjectId": "ghprojv2:full-chaos#4",
 		}),
 		externalSinkFixture("work_item_dependency.v1", map[string]any{
@@ -171,7 +171,7 @@ func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyTwoKinds(t *testing.T) {
 			"fromStatus": "todo", "toStatus": "in_progress",
 		}),
 		externalSinkFixture("work_item_project_transition.v1", map[string]any{
-			"externalKey": "7", "provider": "github", "eventId": "evt-1",
+			"externalKey": "7", "provider": "github", "eventId": "evt-1", "workItemType": "issue",
 			"occurredAt": "2026-07-23T11:00:00Z", "toProjectId": "ghprojv2:full-chaos#4",
 		}),
 		externalSinkFixture("work_item_dependency.v1", map[string]any{

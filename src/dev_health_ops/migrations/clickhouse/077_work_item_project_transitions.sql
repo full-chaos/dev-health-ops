@@ -11,6 +11,15 @@
 -- Engine and read convention mirror work_item_transitions exactly:
 -- ReplacingMergeTree(last_synced), read through SELECT ... FINAL.
 --
+-- One case this key deliberately does NOT resolve: two records in the same
+-- batch carrying the same event_id but CONTRADICTING project values. They share
+-- a last_synced to the millisecond, so ReplacingMergeTree picks arbitrarily and
+-- FINAL is not deterministic between them. That is correct: the same provider
+-- event id asserting two different destinations is a producer contradiction
+-- with no right answer, and inventing a tiebreak would hide it. CHAOS-4193 owns
+-- the event_id derivation formula, and it must be content-determined so this
+-- shape cannot arise.
+--
 -- event_id is in the sorting key because ClickHouse has no unique constraint.
 -- Dedupe on re-sync is the ENGINE's job here, not the sink's: a provider that
 -- replays the same reassignment collapses to one row because the key matches,

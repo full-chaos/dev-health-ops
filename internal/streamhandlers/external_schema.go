@@ -92,23 +92,40 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 			"toStatus":   {kind: externalString, required: true, enum: workItemStatuses()},
 			"actor":      optionalString,
 		},
-		// CHAOS-4194 / CHAOS-4193 locked shape. `workItemType` deliberately
-		// admits only "issue": the locked table keys on work_item_id, and a
-		// pull request has no work_items row to join, so a "pr" subject here
-		// would mint a row nothing can resolve. PR->project is a separate,
-		// still-unagreed shape.
+		// CHAOS-4194 / CHAOS-4193 locked shape.
 		//
-		// `occurredAt` is OPTIONAL by the CHAOS-4194 provisional default -- the
-		// provider event time when the provider carries one, else the sink's
-		// own last_synced. `eventId` is not: it is a member of the sorting key
-		// and an empty one silently merges distinct reassignments.
+		// `workItemType` is REQUIRED and admits only "issue". The locked table
+		// keys on work_item_id and a pull request has no work_items row to
+		// join, so a "pr" subject would mint a row nothing can resolve. Leaving
+		// the field optional was not enough: a PR payload that simply OMITS it
+		// fell through to the issue-shaped id derivation and was accepted
+		// (codex adversarial review, round 1). Refusing needs a POSITIVE
+		// declaration, not the absence of a disqualifying one.
+		//
+		// `occurredAt` is REQUIRED, which DEVIATES from CHAOS-4194's provisional
+		// "else last_synced" default -- deliberately, because that default is
+		// incompatible with the locked sorting key. occurred_at is a key member,
+		// so a sink-supplied `now` differs on every re-sync of the same provider
+		// event, the keys differ, and FINAL returns one row per sync: the exact
+		// duplication event_id is in the key to prevent. The sink cannot invent
+		// a value stable across re-syncs; only the producer can. Raised with
+		// CHAOS-4193 -- if they need the fallback, occurred_at has to leave the
+		// sorting key.
+		//
+		// `repositoryExternalId` mirrors work_item.v1 so the work_item_id
+		// derived here matches the one work_item.v1 derives. Without it, a batch
+		// whose source instance is an org while its work items name org/repo
+		// produces a DIFFERENT id and the presence edge joins to nothing.
+		// work_item_transition.v1 has the same latent hole; this kind does not
+		// inherit it, because this is the kind that gets joined.
 		"work_item_project_transition.v1": {
-			"externalKey":   requiredString,
-			"provider":      {kind: externalString, required: true, enum: []string{"jira", "github", "gitlab", "linear"}},
-			"eventId":       requiredString,
-			"workItemType":  {kind: externalString, enum: []string{"issue"}},
-			"occurredAt":    optionalDate,
-			"fromProjectId": optionalString, "toProjectId": requiredString,
+			"externalKey":          requiredString,
+			"provider":             {kind: externalString, required: true, enum: []string{"jira", "github", "gitlab", "linear"}},
+			"eventId":              requiredString,
+			"workItemType":         {kind: externalString, required: true, enum: []string{"issue"}},
+			"occurredAt":           requiredDate,
+			"repositoryExternalId": optionalString,
+			"fromProjectId":        optionalString, "toProjectId": requiredString,
 			"fromProjectKey": optionalString, "toProjectKey": optionalString,
 			"actor": optionalString,
 		},

@@ -330,22 +330,27 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 // producer's value is the value.
 func externalProjectTransitionValues(source externalSinkBatch, payload map[string]any, now time.Time, scope *ExternalRecomputeScope) ([]any, error) {
 	system, sourceInstance := source.Pointer.SourceSystem, source.Pointer.SourceInstance
-	instance := externalWorkItemInstance(system, sourceInstance, "")
+	// The instance is derived from the record's own repositoryExternalId, the
+	// way externalWorkItemValues does it -- NOT from the pointer alone the way
+	// externalTransitionValues does. These rows are joined back to `work_items`
+	// by the presence projection, so the two derivations have to agree; a batch
+	// whose source instance is an org while its work items name org/repo would
+	// otherwise mint `gh:org#7` here against `gh:org/repo#7` there, and the
+	// edge would resolve to nothing while looking perfectly well-formed.
+	instance := externalWorkItemInstance(system, sourceInstance, stringField(payload, "repositoryExternalId"))
 	workItemID := externalWorkItemID(system, instance, stringField(payload, "externalKey"), stringField(payload, "workItemType"))
 	repoID := uuid.Nil
 	if system == "github" || system == "gitlab" {
 		repoID = externalRepoUUID(system, sourceInstance, instance)
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 	}
-	// occurred_at is in the sorting key. Falling back to `now` rather than the
-	// zero time keeps a provider that carries no event time from sorting its
-	// events ahead of all real history, which would make the presence
-	// projection (latest transition wins) answer with the oldest row.
-	occurredAt := now
-	if value, ok, err := externalOptionalTime(payload, "occurredAt"); err != nil {
+	// occurred_at is REQUIRED rather than falling back to `now`. It is a member
+	// of the sorting key, and a sink-supplied timestamp differs on every
+	// re-sync of the same provider event, so the fallback would defeat the
+	// dedupe event_id sits in the key to provide. See the schema entry.
+	occurredAt, err := externalTime(payload, "occurredAt")
+	if err != nil {
 		return nil, err
-	} else if ok {
-		occurredAt = value
 	}
 	trackExternalTime(scope, occurredAt)
 	// actor is the one Nullable column in the locked schema: an unattributed

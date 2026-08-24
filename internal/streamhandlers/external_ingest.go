@@ -163,6 +163,15 @@ func NewExternalIngestHandler(repository externalBatchRepository, sink externalB
 // whole batch re-normalized. Counting refusals before the outcome is durable
 // would multiply every refusal in a batch that also contained a record whose
 // write was slow to succeed.
+//
+// This position UNDERCOUNTS one case, and that is the deliberate half of the
+// trade (codex adversarial review, round 1). Write() sends one ClickHouse
+// batch per kind, so if the transition kind sends and a LATER kind exhausts
+// its retries, transition rows exist on disk while this never runs. The choice
+// is undercount-on-failure versus overcount-on-retry, and undercount is the
+// safer error: an exhausted batch is already loud -- the handler returns an
+// error, the stream retries it, and it eventually quarantines -- whereas an
+// inflated sunk counter is silent and would be read as healthy throughput.
 func (h *ExternalIngestHandler) observeOutcome(pointer externalPointer, counts map[string]int, rejections []externalRejection) {
 	if h.observer == nil {
 		return
@@ -411,6 +420,23 @@ func normalizeExternalRecords(pointer externalPointer, envelope externalEnvelope
 		}
 		if err := validateExternalRecord(record.Kind, record.Payload); err != nil {
 			rejections = append(rejections, rejection(index, record, "invalid_field", err.Error(), "payload"))
+			continue
+		}
+		// A project transition names a PROVIDER-SCOPED project id, so a record
+		// claiming a different provider than the batch it arrived in would file
+		// one provider's project identity under another's namespace -- a row
+		// that looks well-formed and resolves against the wrong catalogue.
+		// The schema enum cannot catch it: it validates the field in isolation,
+		// and the contradiction only exists relative to the pointer.
+		//
+		// Scoped to this kind deliberately. work_item.v1 and
+		// work_item_transition.v1 accept the same mismatch today, and widening
+		// the check to them is a behaviour change for existing producers that
+		// belongs in its own ticket, not smuggled in here.
+		if record.Kind == "work_item_project_transition.v1" &&
+			stringField(record.Payload, "provider") != pointer.SourceSystem {
+			rejections = append(rejections, rejection(index, record, "invalid_field",
+				"provider does not match the batch source system", "payload"))
 			continue
 		}
 		if isGitFamilyKind(record.Kind) && (pointer.SourceSystem == "github" || pointer.SourceSystem == "gitlab" || pointer.SourceSystem == "custom") {

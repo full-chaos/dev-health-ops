@@ -19,6 +19,7 @@ func externalProjectTransitionPayload(provider string, overrides map[string]any)
 	payload := map[string]any{
 		"externalKey": "7", "provider": provider,
 		"eventId":      "evt-1",
+		"workItemType": "issue",
 		"occurredAt":   "2026-07-22T11:00:00Z",
 		"toProjectId":  "ghprojv2:full-chaos#4",
 		"toProjectKey": "PLATFORM",
@@ -159,6 +160,149 @@ func TestExternalProjectTransitionRefusesPullRequestSubjects(t *testing.T) {
 			}
 		})
 	}
+	// The case an enum alone does not cover: a PR payload that simply omits the
+	// field. While workItemType was optional this fell through to the
+	// issue-shaped id derivation and was ACCEPTED -- the refusal has to require
+	// a positive "issue" declaration, not merely reject a disqualifying value.
+	t.Run("omitted", func(t *testing.T) {
+		payload := externalProjectTransitionPayload("github", nil)
+		delete(payload, "workItemType")
+		err := validateExternalRecord("work_item_project_transition.v1", payload)
+		if err == nil {
+			t.Fatal("an undeclared subject type was accepted; a PR payload need only omit the field")
+		}
+		if !strings.Contains(err.Error(), "workItemType") {
+			t.Fatalf("refusal does not name the offending field: %v", err)
+		}
+	})
+}
+
+// TestExternalProjectTransitionRequiresAProviderEventTime pins the deviation
+// from CHAOS-4194's provisional "occurred_at falls back to last_synced"
+// default. occurred_at is a member of the sorting key, so a sink-supplied
+// timestamp differs on every re-sync of the same provider event: the keys
+// differ, FINAL keeps both, and the table accumulates one row per sync of a
+// single reassignment -- exactly the duplication event_id is in the key to
+// prevent. The sink cannot invent a stable value; only the producer can.
+func TestExternalProjectTransitionRequiresAProviderEventTime(t *testing.T) {
+	payload := externalProjectTransitionPayload("github", nil)
+	delete(payload, "occurredAt")
+	err := validateExternalRecord("work_item_project_transition.v1", payload)
+	if err == nil {
+		t.Fatal("a transition with no provider event time was accepted; it cannot dedupe on re-sync")
+	}
+	if !strings.Contains(err.Error(), "occurredAt") {
+		t.Fatalf("refusal does not name the offending field: %v", err)
+	}
+}
+
+// TestExternalProjectTransitionIDMatchesItsWorkItemID is the join guarantee.
+// The presence projection resolves these rows against `work_items`, so the two
+// derivations must agree. They only do if this kind consults the record's own
+// repositoryExternalId the way work_item.v1 does: with a batch pointed at an
+// org while the records name org/repo, deriving from the pointer alone yields
+// `gh:full-chaos#7` against the work item's `gh:full-chaos/dev-health#7` -- a
+// well-formed row that joins to nothing.
+func TestExternalProjectTransitionIDMatchesItsWorkItemID(t *testing.T) {
+	pointer := externalTestPointer()
+	pointer.SourceInstance = "full-chaos"
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	build := func(kind string, payload map[string]any) []any {
+		t.Helper()
+		batch := &productBatch{}
+		connection := &productSink{batches: []*productBatch{batch}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		if _, err := sink.Write(context.Background(), externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(),
+			Records: []externalSinkRecord{externalSinkFixture(kind, payload)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return batch.rows[0]
+	}
+	workItemRow := build("work_item.v1", map[string]any{
+		"externalKey": "7", "provider": "github", "title": "Issue", "type": "issue",
+		"status": "todo", "createdAt": "2026-07-20T10:00:00Z",
+		"repositoryExternalId": "full-chaos/dev-health",
+	})
+	transitionRow := build("work_item_project_transition.v1",
+		externalProjectTransitionPayload("github", map[string]any{
+			"repositoryExternalId": "full-chaos/dev-health",
+		}))
+	// work_item.v1 column 1 is work_item_id; the transition's is column 3.
+	if workItemRow[1] != transitionRow[3] {
+		t.Fatalf("work_item_id mismatch: work_item.v1=%v transition=%v", workItemRow[1], transitionRow[3])
+	}
+	if transitionRow[3] != "gh:full-chaos/dev-health#7" {
+		t.Fatalf("derived work_item_id = %v", transitionRow[3])
+	}
+	// repo_id must agree too, or the row is scoped to a repository the work
+	// item does not belong to.
+	if workItemRow[0] != transitionRow[2] {
+		t.Fatalf("repo_id mismatch: work_item.v1=%v transition=%v", workItemRow[0], transitionRow[2])
+	}
+}
+
+// TestExternalProjectTransitionRefusesAProviderTheBatchDidNotComeFrom covers
+// the contradiction the schema enum cannot see, because it validates the field
+// in isolation while the conflict only exists relative to the batch pointer.
+// Project ids are provider-scoped, so filing a jira project id under a github
+// batch produces a row that resolves against the wrong catalogue.
+func TestExternalProjectTransitionRefusesAProviderTheBatchDidNotComeFrom(t *testing.T) {
+	pointer := externalTestPointer()
+	payload := externalTestPayload(t, pointer, "legacy", []map[string]any{{
+		"kind": "work_item_project_transition.v1", "externalId": "evt-1",
+		"payload": externalProjectTransitionPayload("jira", nil),
+	}})
+	repository := &externalRepositoryFake{
+		allowed: true,
+		batch: externalBatch{
+			Pointer: pointer, SourceID: uuid.New(), EntityFamily: "legacy",
+			ItemsReceived: 1, Payload: payload,
+		},
+	}
+	sink := &externalSinkFake{}
+	handler, err := NewExternalIngestHandler(repository, sink, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.backoff = nil
+	if err := handler.Handle(context.Background(), externalTestMessage(pointer)); err != nil {
+		t.Fatal(err)
+	}
+	completion := repository.completions[0]
+	if completion.Accepted != 0 || completion.Rejected != 1 {
+		t.Fatalf("a cross-provider transition was accepted: %#v", completion)
+	}
+	if completion.Rejections[0].Code != "invalid_field" ||
+		!strings.Contains(completion.Rejections[0].Message, "source system") {
+		t.Fatalf("refusal is not attributable: %#v", completion.Rejections[0])
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("the refused record reached the sink: %#v", sink.calls)
+	}
+}
+
+// TestExternalProjectTransitionRefusesBlankIdempotencyMembers proves the
+// required-string rule rejects whitespace, not merely absence. An empty
+// event_id is worse than a missing one: it validates as "present", lands in the
+// sorting key, and silently merges every timeless reassignment of a work item
+// into one row.
+func TestExternalProjectTransitionRefusesBlankIdempotencyMembers(t *testing.T) {
+	for _, field := range []string{"eventId", "toProjectId", "externalKey"} {
+		t.Run(field, func(t *testing.T) {
+			for _, blank := range []string{"", "   "} {
+				payload := externalProjectTransitionPayload("github", map[string]any{field: blank})
+				if err := validateExternalRecord("work_item_project_transition.v1", payload); err == nil {
+					t.Fatalf("%s = %q was accepted", field, blank)
+				}
+			}
+		})
+	}
 }
 
 // TestExternalProjectTransitionRequiresIdempotencyMembers pins the two payload
@@ -252,15 +396,19 @@ func TestClickHouseExternalSinkWritesProjectTransitionColumns(t *testing.T) {
 	}
 }
 
-// TestExternalProjectTransitionFallsBackToLastSyncedWhenProviderHasNoEventTime
-// pins the CHAOS-4194 provisional default: occurred_at is the provider event
-// time when present, else the sink's own observation time. It matters that the
-// fallback is last_synced and not the zero time -- occurred_at is in the
-// sorting key, so a zero would sort every timeless event ahead of real history
-// and the presence projection (latest transition wins) would answer with the
-// oldest one.
-func TestExternalProjectTransitionFallsBackToLastSyncedWhenProviderHasNoEventTime(t *testing.T) {
+// TestExternalProjectTransitionTracksItsKindAndTimeInTheRecomputeScope pins the
+// two things the sink must hand downstream: the kind, so the recompute
+// controller knows what changed, and the event time, so the recomputed window
+// covers the reassignment rather than only the sync.
+//
+// This replaces an earlier test asserting occurred_at fell back to last_synced
+// when the provider carried no event time. That fallback was removed: it put a
+// per-sync value into the sorting key and defeated dedupe on re-sync (codex
+// adversarial review, round 1). See
+// TestExternalProjectTransitionRequiresAProviderEventTime.
+func TestExternalProjectTransitionTracksItsKindAndTimeInTheRecomputeScope(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	occurred := time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC)
 	pointer := externalTestPointer()
 	batch := &productBatch{}
 	connection := &productSink{batches: []*productBatch{batch}}
@@ -269,21 +417,25 @@ func TestExternalProjectTransitionFallsBackToLastSyncedWhenProviderHasNoEventTim
 		t.Fatal(err)
 	}
 	sink.now = func() time.Time { return now }
-	payload := externalProjectTransitionPayload("github", nil)
-	delete(payload, "occurredAt")
 	scope, err := sink.Write(context.Background(), externalSinkBatch{
 		Pointer: pointer, SourceID: uuid.New(),
-		Records: []externalSinkRecord{externalSinkFixture("work_item_project_transition.v1", payload)},
+		Records: []externalSinkRecord{externalSinkFixture(
+			"work_item_project_transition.v1", externalProjectTransitionPayload("github", nil))},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := batch.rows[0]
-	if row[10] != now {
-		t.Fatalf("occurred_at = %#v, want the last_synced fallback %#v", row[10], now)
-	}
 	if !slices.Contains(scope.RecordKinds, "work_item_project_transition.v1") {
 		t.Fatalf("recompute scope omits the kind: %#v", scope.RecordKinds)
+	}
+	if batch.rows[0][10] != occurred {
+		t.Fatalf("occurred_at = %#v, want the provider event time %#v", batch.rows[0][10], occurred)
+	}
+	if batch.rows[0][11] != now {
+		t.Fatalf("last_synced = %#v, want the sink observation %#v", batch.rows[0][11], now)
+	}
+	if scope.WindowStart == nil || !scope.WindowStart.Equal(occurred) {
+		t.Fatalf("recompute window does not cover the reassignment: %#v", scope.WindowStart)
 	}
 }
 

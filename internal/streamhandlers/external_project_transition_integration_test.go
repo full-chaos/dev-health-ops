@@ -72,7 +72,7 @@ func TestProjectTransitionRoundTripsAndDedupesOnResync(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := externalSinkRecord{Index: 0, Kind: "work_item_project_transition.v1", ExternalID: "evt-1", Payload: map[string]any{
-		"externalKey": "7", "provider": "github", "eventId": "evt-1",
+		"externalKey": "7", "provider": "github", "eventId": "evt-1", "workItemType": "issue",
 		"occurredAt": "2026-07-22T11:00:00Z", "toProjectId": "ghprojv2:full-chaos#4",
 		"toProjectKey": "PLATFORM", "actor": "ada",
 	}}
@@ -171,12 +171,12 @@ func TestWorkItemProjectPresencePrefersTransitionsAndFallsBackToTheColumn(t *tes
 	// batch so the projection cannot pass by accident of insertion order.
 	records := []externalSinkRecord{
 		{Index: 0, Kind: "work_item_project_transition.v1", ExternalID: "evt-2", Payload: map[string]any{
-			"externalKey": "7", "provider": "github", "eventId": "evt-2",
+			"externalKey": "7", "provider": "github", "eventId": "evt-2", "workItemType": "issue",
 			"occurredAt": "2026-07-22T15:00:00Z", "fromProjectId": "ghprojv2:full-chaos#4",
 			"toProjectId": "ghprojv2:full-chaos#9", "toProjectKey": "RUNTIME",
 		}},
 		{Index: 1, Kind: "work_item_project_transition.v1", ExternalID: "evt-1", Payload: map[string]any{
-			"externalKey": "7", "provider": "github", "eventId": "evt-1",
+			"externalKey": "7", "provider": "github", "eventId": "evt-1", "workItemType": "issue",
 			"occurredAt": "2026-07-22T11:00:00Z", "toProjectId": "ghprojv2:full-chaos#4",
 			"toProjectKey": "PLATFORM",
 		}},
@@ -242,5 +242,66 @@ func TestWorkItemProjectPresencePrefersTransitionsAndFallsBackToTheColumn(t *tes
 	}
 	if withoutHistory.projectID == "" {
 		t.Errorf("fallback arm produced an empty project id: %#v", withoutHistory)
+	}
+}
+
+// TestSameSecondReassignmentsSurviveAsDistinctRows is the other half of the
+// dedupe claim, and the one a re-sync test cannot make. Bulk project moves land
+// in the same millisecond routinely, so if occurred_at alone decided identity
+// they would silently collapse into one row and the work item's history would
+// show a single move it never made. event_id in the sorting key is what keeps
+// them apart -- and the presence projection must still resolve to exactly one
+// of them rather than mixing their columns.
+func TestSameSecondReassignmentsSurviveAsDistinctRows(t *testing.T) {
+	ctx, conn := newProjectTransitionConn(t)
+	pointer := projectTransitionPointer()
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
+	shared := "2026-07-22T11:00:00.000Z"
+	records := []externalSinkRecord{}
+	for index, event := range []struct{ id, project, key string }{
+		{"evt-a", "ghprojv2:full-chaos#4", "PLATFORM"},
+		{"evt-b", "ghprojv2:full-chaos#9", "RUNTIME"},
+	} {
+		records = append(records, externalSinkRecord{
+			Index: index, Kind: "work_item_project_transition.v1", ExternalID: event.id,
+			Payload: map[string]any{
+				"externalKey": "7", "provider": "github", "eventId": event.id,
+				"workItemType": "issue", "occurredAt": shared,
+				"toProjectId": event.project, "toProjectKey": event.key,
+			},
+		})
+	}
+	if _, err := sink.Write(ctx, externalSinkBatch{
+		Pointer: pointer, SourceID: uuid.New(), Records: records,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var rows uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM work_item_project_transitions FINAL WHERE org_id = ?`,
+		projectTransitionTestOrg).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("same-timestamp reassignments collapsed to %d rows, want 2", rows)
+	}
+	// The projection picks ONE of them whole. Which one is decided by the
+	// event_id tiebreak, so it must not be a blend of both rows' columns.
+	var projectID, projectKey string
+	if err := conn.QueryRow(ctx,
+		`SELECT project_id, project_key FROM work_item_project_presence WHERE org_id = ?`,
+		projectTransitionTestOrg).Scan(&projectID, &projectKey); err != nil {
+		t.Fatal(err)
+	}
+	pairs := map[string]string{
+		"ghprojv2:full-chaos#4": "PLATFORM",
+		"ghprojv2:full-chaos#9": "RUNTIME",
+	}
+	if want, known := pairs[projectID]; !known || want != projectKey {
+		t.Fatalf("presence mixed columns from different rows: project_id=%q project_key=%q", projectID, projectKey)
 	}
 }

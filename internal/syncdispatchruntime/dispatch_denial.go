@@ -167,8 +167,8 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 // finalize to run soon" call sites onto the ONE mechanism finalize_sync_run
 // actually runs through today, not their two different literal Python
 // shapes:
-//   - _enqueue_denied_active_finalize's Celery apply_async(finalize_sync_run, ...)
-//     (the total-cap-denial-with-active-units branch); and
+//   - _enqueue_denied_active_finalize's Celery task-queue push of
+//     finalize_sync_run (the total-cap-denial-with-active-units branch); and
 //   - dispatch_sync_run's own bare, SYNCHRONOUS `finalize_sync_run(sync_run_id)`
 //     call (the "no pending work" tail branch, once river_queued and every
 //     pending-unit-counts check comes back empty).
@@ -194,9 +194,9 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 // improvement over Python's ordering, since the underlying mechanisms
 // differ in a way that removes the question entirely: the outbox is
 // pull-based (a poller picks up an eligible row whenever it next runs),
-// unlike Celery's push-based apply_async or Python's own synchronous call,
-// neither of which has an equivalent commit-ordering race to preserve or
-// accidentally fix.
+// unlike Celery's push-based task-queue send or Python's own synchronous
+// call, neither of which has an equivalent commit-ordering race to preserve
+// or accidentally fix.
 func armFinalizeSyncRunWakeup(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) error {
 	return upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindFinalizeSyncRun, now)
 }

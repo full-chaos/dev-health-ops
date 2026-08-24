@@ -980,6 +980,10 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		// CHAOS-4175 family 3's DispatchGuard total-cap read dual-granted this
+		// table; see the doc comment above domainPosture() in
+		// internal/storage/postgres/domain_authorization.go.
+		"CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key))",
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",

@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
@@ -565,26 +568,33 @@ CREATE TABLE sync_run_reference_discoveries (
  lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
  completed_at timestamptz NULL, error text NULL, result json NULL,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
-)`); err != nil {
+);
+CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key));
+`); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // TestDomainRoleStillLacksTheVerbsItWasNotGranted is the boundary half of this
-// suite, and it is what keeps the CHAOS-4209 widening from degrading into
-// "the domain role may do whatever it likes to these tables".
+// suite, and it is what keeps the CHAOS-4209 (and CHAOS-4175 family 3)
+// widening from degrading into "the domain role may do whatever it likes to
+// these tables".
 //
-// Six tables became dual-grant or gained a verb. For each, the manifest
-// deliberately withheld something, and a grant list is only a boundary if the
-// withheld verb is still refused. Asserting the PERMITTED half alone would
-// pass just as happily against GRANT ALL -- so every row here names a verb no
-// production statement issues, and every one must still raise 42501.
+// Seven tables became dual-grant or gained a verb: the original six from
+// CHAOS-4209, plus tier_limits from CHAOS-4175 family 3 (DispatchGuard's
+// total-cap resolution). For each, the manifest deliberately withheld
+// something, and a grant list is only a boundary if the withheld verb is
+// still refused. Asserting the PERMITTED half alone would pass just as
+// happily against GRANT ALL -- so every row here names a verb no production
+// statement issues, and every one must still raise 42501.
 //
 // Every table the change touches appears, not just the ones that were new.
 // An earlier revision covered only the four tables that gained their FIRST
 // domain grant and omitted the two that merely gained a verb
 // (sync_configurations, sync_compute_checkpoints); a later widening on either
-// would then have left this test green while the boundary moved.
+// would then have left this test green while the boundary moved. tier_limits
+// is SELECT-only, so all three write verbs are withheld and all three are
+// asserted here.
 func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -649,6 +659,26 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 			statement: "DELETE FROM public.sync_compute_checkpoints WHERE id = gen_random_uuid()",
 			why:       "checkpoints are the replay/audit record of what compute input was proven",
 		},
+		// tier_limits (CHAOS-4175 family 3): SELECT-only, so every write verb
+		// is withheld.
+		{
+			table:     "tier_limits",
+			verb:      "INSERT",
+			statement: "INSERT INTO public.tier_limits (tier, limit_key, limit_value) VALUES ('pro', 'max_sync_units', '10')",
+			why:       "tier limits are seeded by migration/admin tooling, not by the dispatcher that reads them",
+		},
+		{
+			table:     "tier_limits",
+			verb:      "UPDATE",
+			statement: "UPDATE public.tier_limits SET limit_value = '10' WHERE tier = 'pro' AND limit_key = 'max_sync_units'",
+			why:       "DispatchGuard's total-cap resolution only ever reads a limit, it never amends one",
+		},
+		{
+			table:     "tier_limits",
+			verb:      "DELETE",
+			statement: "DELETE FROM public.tier_limits WHERE tier = 'pro' AND limit_key = 'max_sync_units'",
+			why:       "a limit outlives every dispatch pass that consults it",
+		},
 	} {
 		tx, err := domain.Begin(ctx)
 		if err != nil {
@@ -707,6 +737,191 @@ func TestDomainRoleCanTakeTheAdvisoryLockFinalizeNeeds(t *testing.T) {
 			"invalidateSyncCoverageForIntegration fails in production: %v", err)
 	}
 	denials.assertNone(t, "finalize's advisory-lock pair (pg_advisory_xact_lock/hashtextextended)")
+}
+
+// createDispatchTables is createReferenceDiscoveryTables plus the extra
+// relations NativeDispatchSyncRunService touches that family 2 never does:
+// DispatchGuard's total-cap resolution (organizations/org_licenses/
+// tier_limits), the real River-outbox enqueue target (worker_job_outbox),
+// and BudgetGuard's cooldown read (provider_rate_limit_observations).
+// Everything else -- sync_run_units/sync_runs/feature_flags/
+// org_feature_overrides/backfill_jobs/job_runs/sync_run_reference_discoveries
+// -- is already there.
+func createDispatchTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text NULL);
+CREATE TABLE public.org_licenses (org_id uuid PRIMARY KEY, tier text NULL, limits_override jsonb NULL);
+CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key));
+CREATE TABLE public.worker_job_outbox (
+	id uuid PRIMARY KEY,
+	dedupe_key varchar(256) NOT NULL UNIQUE,
+	job_kind varchar(96) NOT NULL,
+	contract_version integer NOT NULL,
+	args json NOT NULL,
+	payload_hash varchar(71) NOT NULL,
+	queue varchar(96) NOT NULL,
+	priority smallint NOT NULL,
+	max_attempts smallint NOT NULL,
+	scheduled_at timestamptz NOT NULL,
+	status varchar(16) NOT NULL,
+	claim_token uuid,
+	claimed_at timestamptz,
+	claim_expires_at timestamptz,
+	attempt_count integer NOT NULL,
+	first_attempt_at timestamptz,
+	last_attempt_at timestamptz,
+	next_attempt_at timestamptz NOT NULL,
+	last_error_code varchar(64),
+	last_error_detail varchar(256),
+	last_error_at timestamptz,
+	river_job_id bigint UNIQUE,
+	delivered_at timestamptz,
+	prerequisite_completion_key text NULL,
+	created_at timestamptz NOT NULL,
+	updated_at timestamptz NOT NULL
+);
+CREATE TABLE public.provider_rate_limit_observations (
+ id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text NULL,
+ integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
+ route_family text NULL, route_family_attribution text NULL, dimension text NULL,
+ retry_after_seconds double precision NULL, reset_at timestamptz NULL, reason text NULL,
+ request_id text NULL, observed_at timestamptz NOT NULL
+);`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole is CHAOS-4175
+// family 3, folded into this suite on rebase per its own doc comment above.
+// Two arms, one container: a routable unit that reaches claim/publish/
+// DISPATCHING (exercising DispatchGuard's total-cap read, BudgetGuard's
+// cooldown read, and the real worker_job_outbox INSERT), and a
+// feature-gated unit denied by Dispatch's OWN feature gate (exercising
+// feature_flags/org_feature_overrides under the NON-locking
+// CanonicalIncidentDecision, and terminalizeFeatureDisabledGraph's
+// backfill_jobs/job_runs UPDATEs via observeTerminalSyncRun -- family 3's
+// own reach into those two tables, distinct from family 1's Finalize call
+// site the CHAOS-4209 suite above already proved).
+func TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, domain, denials := startDomainRoleHarness(t, ctx, createDispatchTables)
+	seedDispatchRoute(t, ctx, admin)
+	markReferenceDiscoverySucceeded(t, ctx, admin)
+
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO public.organizations (id, tier) VALUES ($1, 'community')`,
+		discoveryTestOrg); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := &fakeJobRegistry{
+		descriptors: map[string]jobruntime.Descriptor{
+			jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+		},
+	}
+	producer, err := joboutbox.NewProducer(domain, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewNativeDispatchSyncRunService(domain, nil, &fakeBudgetEstimator{}, producer, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Arm 1: a routable unit reaches claim, the real worker_job_outbox
+	// INSERT, and the run's status flip to DISPATCHING.
+	routableUnit := "00000000-0000-4000-8000-0000000000e1"
+	if _, err := admin.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',now())`,
+		routableUnit, discoveryTestOrg, discoveryTestRun); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatchErr := service.Dispatch(ctx, dispatchTestArgs())
+	denials.assertNone(t, "NativeDispatchSyncRunService success path (CHAOS-4175 family 3)")
+	if dispatchErr != nil {
+		t.Fatalf("Dispatch (success path): %v", dispatchErr)
+	}
+
+	var runStatus string
+	if err := admin.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, discoveryTestRun).
+		Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != syncRunStatusDispatching {
+		t.Fatalf("sync_runs.status=%q want %q -- Dispatch did not complete, so this run measured little",
+			runStatus, syncRunStatusDispatching)
+	}
+	assertSingleRow(t, ctx, admin,
+		"worker_job_outbox enqueue",
+		`SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`,
+		jobcontract.KindSyncProviderUnit)
+
+	// Arm 2, same venue: a feature-gated unit, with the feature disabled by
+	// an org override -- Dispatch's own gate must deny it before any claim,
+	// reading feature_flags/org_feature_overrides (non-locking) and then
+	// writing sync_run_units/sync_runs/backfill_jobs/job_runs/
+	// sync_run_reference_discoveries/sync_dispatch_outbox through
+	// terminalizeFeatureDisabledGraph.
+	if _, err := admin.Exec(ctx, `DELETE FROM sync_run_units WHERE sync_run_id=$1`, discoveryTestRun); err != nil {
+		t.Fatal(err)
+	}
+	gatedUnit := "00000000-0000-4000-8000-0000000000e2"
+	if _, err := admin.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'pagerduty','incidents','00000000-0000-4000-8000-0000000000ed','planned',now())`,
+		gatedUnit, discoveryTestOrg, discoveryTestRun); err != nil {
+		t.Fatal(err)
+	}
+	featureID := "00000000-0000-4000-8000-0000000000e3"
+	for _, statement := range []string{
+		`INSERT INTO feature_flags (id,key,min_tier,is_enabled)
+		 VALUES ('` + featureID + `','canonical_incident_ingestion','enterprise',true)`,
+		`INSERT INTO org_feature_overrides (id,org_id,feature_id,is_enabled,expires_at)
+		 VALUES ('00000000-0000-4000-8000-0000000000e4','` + discoveryTestOrg + `','` + featureID + `',false,NULL)`,
+		`INSERT INTO backfill_jobs (id,org_id,celery_task_id,status)
+		 VALUES ('00000000-0000-4000-8000-0000000000e5','` + discoveryTestOrg + `','sync_run:` + discoveryTestRun + `','running')`,
+		`INSERT INTO scheduled_jobs (id) VALUES ('00000000-0000-4000-8000-0000000000e6')`,
+		`INSERT INTO job_runs (id,job_id,status,result)
+		 VALUES ('00000000-0000-4000-8000-0000000000e7','00000000-0000-4000-8000-0000000000e6',0,
+		         '{"sync_run_id":"` + discoveryTestRun + `"}'::json)`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed %s: %v", collapseStatement(statement), err)
+		}
+	}
+
+	gateErr := service.Dispatch(ctx, dispatchTestArgs())
+	denials.assertNone(t, "NativeDispatchSyncRunService feature-disabled path (CHAOS-4175 family 3)")
+	if gateErr != nil {
+		t.Fatalf("Dispatch (feature-disabled path): %v", gateErr)
+	}
+	var gatedUnitStatus string
+	if err := admin.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, gatedUnit).
+		Scan(&gatedUnitStatus); err != nil {
+		t.Fatal(err)
+	}
+	if gatedUnitStatus != syncRunUnitStatusFailed {
+		t.Fatalf("gated unit status=%q want %q -- the feature-disabled path did not run, so its "+
+			"privileges were not measured", gatedUnitStatus, syncRunUnitStatusFailed)
+	}
+	// The feature-disabled path terminalizes the run as FAILED (see
+	// terminalizeFeatureDisabledGraph -> observeTerminalSyncRun with
+	// syncRunStatusFailed), so the satellite backfill_jobs row lands on
+	// 'failed', not 'completed' -- matching the job_runs assertion right
+	// below, which already expects jobRunStatusFailed.
+	assertSingleRow(t, ctx, admin,
+		"backfill_jobs terminalization (family 3's own reach)",
+		`SELECT count(*) FROM backfill_jobs WHERE org_id=$1 AND status='failed'`,
+		discoveryTestOrg)
+	assertSingleRow(t, ctx, admin,
+		"job_runs terminalization (family 3's own reach)",
+		`SELECT count(*) FROM job_runs WHERE id='00000000-0000-4000-8000-0000000000e7' AND status=$1`,
+		jobRunStatusFailed)
 }
 
 func assertOutboxWakeup(t *testing.T, ctx context.Context, admin *pgxpool.Pool, kind string) {

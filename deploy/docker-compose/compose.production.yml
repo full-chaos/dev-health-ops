@@ -257,6 +257,16 @@ services:
   # -- this checked-in file was never the deploy source of the real prod
   # topology and had already drifted from it before either was archived. See
   # docs/operate/configure/workers-and-schedules.md#known-divergences-local-vs-prod-worker-topology.
+  #
+  # THIS COMMENT IS NOT A GUARD. Nothing below is profile-gated or scaled to
+  # zero in this file: `docker compose -f compose.production.yml up -d` still
+  # starts all five of these services exactly as it did before this comment
+  # existed -- the archival above is a documentation claim about what prod
+  # actually runs, not an enforced property of this file. To force them off,
+  # apply the overlay at compose.go-workers-only.yml (sets replicas: 0); to
+  # remove the risk of an accidental redeploy resurrecting them, that overlay
+  # or an equivalent guard needs to become the default, which is tracked
+  # separately, not done here.
   # ---------------------------------------------------------------------------
 
   # Worker topology split by latency class (CHAOS-2278) so long-running batch

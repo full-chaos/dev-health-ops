@@ -356,6 +356,12 @@ services:
   # these depended on -> go-reconciler. Do not bring one of these back up to
   # diagnose a live incident: it has no consumers wired to current queues and
   # no operator has kept its routing current since the cutover.
+  #
+  # This comment is not a guard: nothing below is profile-gated, so a bare
+  # `docker compose up -d` from this file still starts them, same as before
+  # this archival -- intentional here (local-dev parity), unlike the
+  # production/swarm compose files where the same lack of gating is a real
+  # accidental-resurrection risk (see compose.production.yml's ARCHIVED note).
   # ---------------------------------------------------------------------------
 
   # ---------------------------------------------------------------------------

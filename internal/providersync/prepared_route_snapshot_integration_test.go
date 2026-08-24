@@ -69,7 +69,9 @@ func TestPostgresPreparedRouteSnapshotLifecycleAndFences(t *testing.T) {
 		t.Fatalf("prepared state=%+v", state)
 	}
 	manifest, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second))
-	if err != nil || len(manifest.Batch.Effects) != len(workItemRouteDestinations()) {
+	// The GITHUB list. This unit is inserted as ('github', 'work-items') below,
+	// and github writes two destinations the shared work-item family does not.
+	if err != nil || len(manifest.Batch.Effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("loaded manifest=%+v error=%v", manifest, err)
 	}
 

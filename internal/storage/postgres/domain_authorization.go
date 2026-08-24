@@ -684,8 +684,19 @@ func domainPosture() RolePosture {
 			{"external_ingest_recompute_jobs", true, false, false},
 			{"external_ingest_rejections", true, false, false},
 			{"external_ingest_sources", false, false, false},
-			{"feature_flags", false, false, false},
-			{"org_feature_overrides", false, false, false},
+			// UPDATE as of CHAOS-4209, and for the row LOCK only -- no domain
+			// statement mutates a column of either table. The CHAOS-4175
+			// reference-discovery port calls the canonical-incident entitlement
+			// gate from claim() (native_reference_discovery.go:252), and that
+			// gate's two reads end in FOR UPDATE
+			// (internal/scheduler/sync/materializer.go:1013,1034). PostgreSQL
+			// treats FOR UPDATE as an UPDATE-class privilege, so a SELECT-only
+			// grant passes every DML-verb reading of those queries and still
+			// raises 42501 at runtime. This is the identical requirement, for
+			// the identical reason, that coordinatorPosture already records for
+			// these two tables; the gate now runs on both pools.
+			{"feature_flags", false, true, false},
+			{"org_feature_overrides", false, true, false},
 			{"org_licenses", false, false, false},
 			{"provider_rate_limit_observations", false, true, true},
 			{"report_runs", false, true, false},

@@ -55,6 +55,17 @@ import (
 // that, a service that bailed out early -- an unseeded transport route, a
 // missing outbox row -- would issue almost no statements and "pass" this suite
 // while measuring nothing.
+//
+// What a green run does and does not prove: it proves the ARMS IT RAN issue no
+// denied statement, not that every branch of every service is privilege-clean.
+// The discovery test therefore drives three arms that touch different tables --
+// success, terminal failure, and the feature-disabled gate, the last of which
+// reaches a site in feature_disabled_termination.go that neither of the others
+// does. Branches deliberately left unrun (the retry arm, the already-dispatched
+// 23505 early return, the compute-checkpoint savepoint recovery arm) issue no
+// statement against a table or privilege some run arm has not already
+// exercised; a branch that grows one is a branch this suite must grow an arm
+// for.
 
 const (
 	privilegeDomainRole     = "grant_domain_runtime"
@@ -124,6 +135,15 @@ func (recorder *denialRecorder) assertNone(t *testing.T, service string) {
 	for index, denial := range recorder.denials {
 		t.Errorf("  [%d] %s\n       statement: %s", index, denial.message, denial.statement)
 	}
+}
+
+// reset drops everything recorded so far, so one harness can measure a second,
+// independent run. It exists only for the negative control below: the ordinary
+// tests must never discard a denial.
+func (recorder *denialRecorder) reset() {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	recorder.denials = nil
 }
 
 func collapseStatement(statement string) string {
@@ -293,6 +313,58 @@ VALUES ('00000000-0000-4000-8000-0000000000da',$1,$2,'github','commits',
 			status, discoveryStatusFailed)
 	}
 	assertOutboxWakeup(t, ctx, admin, outboxKindFinalizeSyncRun)
+
+	// The feature-disabled arm, on the same venue. claim() reaches
+	// terminalizeFeatureDisabledPlan (native_reference_discovery.go:257) before
+	// the ledger is even created, and that path
+	// (feature_disabled_termination.go:276) issues its own UPDATE against
+	// sync_run_reference_discoveries. It is a THIRD site for the table this
+	// ticket grants, reachable from the same domain-pool entry point and
+	// invisible to both arms above -- neither of which takes the gate branch.
+	//
+	// A pagerduty/incidents unit maps to a canonical-incident-gated legacy
+	// target, so claim() runs the entitlement gate. The flag row and a
+	// DISABLING org override are both seeded deliberately: the gate short
+	// circuits on ErrNoRows if the flag is absent, which would leave its SECOND
+	// locking read (org_feature_overrides) unexecuted and therefore unmeasured.
+	// Seeded this way the gate takes BOTH `FOR UPDATE` locks and still denies,
+	// so one arm proves both privileges and still reaches the termination path.
+	featureID := "00000000-0000-4000-8000-0000000000de"
+	for _, statement := range []string{
+		`DELETE FROM sync_run_reference_discoveries WHERE sync_run_id = '` + discoveryTestRun + `'`,
+		`DELETE FROM sync_run_units WHERE sync_run_id = '` + discoveryTestRun + `'`,
+		`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+		 VALUES ('00000000-0000-4000-8000-0000000000dc','` + discoveryTestOrg + `','` + discoveryTestRun + `',
+		         'pagerduty','incidents','00000000-0000-4000-8000-0000000000dd','planned',now())`,
+		`INSERT INTO feature_flags (id,key,min_tier,is_enabled)
+		 VALUES ('` + featureID + `','canonical_incident_ingestion','enterprise',true)`,
+		`INSERT INTO org_feature_overrides (id,org_id,feature_id,is_enabled,expires_at)
+		 VALUES ('00000000-0000-4000-8000-0000000000df','` + discoveryTestOrg + `','` + featureID + `',false,NULL)`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed %s: %v", collapseStatement(statement), err)
+		}
+	}
+	executor.calls = 0
+	executor.err = nil
+	gateErr := service.Discover(ctx, newDiscoveryArgs())
+	denials.assertNone(t, "NativeReferenceDiscoveryService feature-disabled path (CHAOS-4175 family 2)")
+	if gateErr != nil {
+		t.Fatalf("Discover (feature-disabled path): %v", gateErr)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("executor called %d times, want 0 -- a feature-disabled run must never be claimed",
+			executor.calls)
+	}
+	var unitStatus string
+	if err := admin.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`,
+		"00000000-0000-4000-8000-0000000000dc").Scan(&unitStatus); err != nil {
+		t.Fatalf("gated unit readback: %v", err)
+	}
+	if unitStatus != syncRunUnitStatusFailed {
+		t.Fatalf("gated unit status=%q want %q -- the feature-disabled path did not run, so its "+
+			"privileges were not measured", unitStatus, syncRunUnitStatusFailed)
+	}
 }
 
 // TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole is CHAOS-4209
@@ -390,6 +462,87 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 		"post_sync outbox wakeup",
 		`SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind='post_sync'`,
 		finalizeTestRun)
+}
+
+// TestDomainRoleDenialRecorderActuallyRecords is the negative control for the
+// two tests above, and it is not optional.
+//
+// Both of them assert `denials.assertNone(...)`. That assertion passes when the
+// role is clean AND when the recorder is broken -- a tracer never attached to
+// the pool's connections, a tracer that misses statements issued on a pgx.Tx, a
+// TraceQueryEnd that drops the error -- and those two outcomes are
+// indistinguishable from the test output. Every green run above would stay
+// green. So the oracle has to prove it can fail.
+//
+// It does that against a REVOKED grant rather than a fabricated error: one
+// privilege the discovery service genuinely needs is taken away, the service is
+// driven exactly as the other tests drive it, and the recorder must come back
+// with the 42501 AND the offending SQL text. Both halves matter -- a recorder
+// that counted denials but lost the statement would leave a failure naming no
+// code to look at, which is the failure mode this whole suite exists to remove.
+//
+// The revoked privilege is INSERT on sync_run_reference_discoveries, reached
+// through ensureReferenceDiscoveryLedger inside a pgx.Tx. The Tx path is the
+// deliberate choice: pooled connections and transaction-scoped statements are
+// exactly where a tracer is most likely to be silently absent.
+func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, domain, denials := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
+	seedDiscoveryRoute(t, ctx, admin)
+
+	if _, err := admin.Exec(ctx,
+		"REVOKE INSERT ON TABLE public.sync_run_reference_discoveries FROM "+privilegeDomainRole); err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := NewNativeReferenceDiscoveryService(
+		domain, nil, &fakeDiscoveryExecutor{summary: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The service collapses the denial into its sentinel, which is the whole
+	// reason the recorder exists. The returned error is not the assertion.
+	_ = service.Discover(ctx, newDiscoveryArgs())
+
+	denials.mutex.Lock()
+	recorded := append([]privilegeDenial(nil), denials.denials...)
+	denials.mutex.Unlock()
+
+	if len(recorded) == 0 {
+		t.Fatal("the recorder observed NO denial against a role whose INSERT was just revoked. " +
+			"The tracer is not seeing the statements these tests claim to measure, so every " +
+			"`assertNone` in this file is passing vacuously.")
+	}
+	var sawTable, sawStatement bool
+	for _, denial := range recorded {
+		if strings.Contains(denial.message, "sync_run_reference_discoveries") {
+			sawTable = true
+		}
+		if strings.Contains(denial.statement, "sync_run_reference_discoveries") {
+			sawStatement = true
+		}
+	}
+	if !sawTable {
+		t.Errorf("recorded %d denial(s) but none names sync_run_reference_discoveries: %+v",
+			len(recorded), recorded)
+	}
+	if !sawStatement {
+		t.Errorf("a denial was recorded without its statement text, so a real failure would name "+
+			"no SQL to look at: %+v", recorded)
+	}
+
+	// Restoring the grant must make the same run clean again. Without this the
+	// test could pass against a role that is broken for some unrelated reason.
+	if _, err := admin.Exec(ctx,
+		"GRANT INSERT ON TABLE public.sync_run_reference_discoveries TO "+privilegeDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	denials.reset()
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover after restoring the grant: %v", err)
+	}
+	denials.assertNone(t, "NativeReferenceDiscoveryService with the grant restored")
 }
 
 func assertOutboxWakeup(t *testing.T, ctx context.Context, admin *pgxpool.Pool, kind string) {

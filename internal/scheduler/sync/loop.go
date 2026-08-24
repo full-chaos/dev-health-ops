@@ -145,14 +145,15 @@ type Loop struct {
 	lastOK          time.Time
 	up              bool
 
-	occurrencesCompleted   uint64
-	occurrencesRetried     uint64
-	occurrencesQuarantined uint64
-	occurrencesMinted      uint64
-	occurrencesRepeated    uint64
-	idleDueWindows         uint64
-	skippedOrgMissing      uint64
-	skippedFeatureDisabled uint64
+	occurrencesCompleted     uint64
+	occurrencesRetried       uint64
+	occurrencesQuarantined   uint64
+	occurrencesMinted        uint64
+	occurrencesRepeated      uint64
+	idleDueWindows           uint64
+	skippedOrgMissing        uint64
+	skippedFeatureDisabled   uint64
+	skippedNotPlannerManaged uint64
 }
 
 func NewLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig) (*Loop, error) {
@@ -269,6 +270,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 		loop.invalidCron += uint64(result.InvalidCron)
 		loop.skippedOrgMissing += uint64(result.SkippedOrgMissing)
 		loop.skippedFeatureDisabled += uint64(result.SkippedFeatureDisabled)
+		loop.skippedNotPlannerManaged += uint64(result.SkippedNotPlannerManaged)
 		loop.mu.Unlock()
 		if err == nil {
 			return ErrSchedulerFallbackRequired
@@ -302,6 +304,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	loop.invalidCron += uint64(result.InvalidCron)
 	loop.skippedOrgMissing += uint64(result.SkippedOrgMissing)
 	loop.skippedFeatureDisabled += uint64(result.SkippedFeatureDisabled)
+	loop.skippedNotPlannerManaged += uint64(result.SkippedNotPlannerManaged)
 	loop.consecutive = 0
 	loop.lastOK, loop.up = now.UTC(), true
 	loop.ready.Store(true)
@@ -420,6 +423,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	quarantined := loop.occurrencesQuarantined
 	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
 	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
+	notPlannerManaged := loop.skippedNotPlannerManaged
 	loop.mu.Unlock()
 
 	age := 0.0
@@ -440,6 +444,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_occurrences_quarantined_total", "Pending scheduled sync occurrences terminally quarantined.", quarantined)
 	writeLoopCounter(&text, "sync_scheduler_skipped_org_missing_total", "Due candidates refused before minting because their organization no longer exists. Sustained growth means schedules are outliving the orgs that owned them.", orgMissing)
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
+	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_consecutive_failures Consecutive failed handoff windows.\n# TYPE sync_scheduler_consecutive_failures gauge\nsync_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP sync_scheduler_up Whether the scheduler has completed a current successful handoff window.\n# TYPE sync_scheduler_up gauge\nsync_scheduler_up ")
 	if up {

@@ -67,12 +67,15 @@ func lockedLedgerRow(
 	nextRunAt, lastOccurrenceAt *time.Time,
 ) []any {
 	row := lockedRow(configID, orgID, jobID, cron, createdAt, lastSyncAt)
+	// Indices below match readLockedCandidates' scan order: planner_managed
+	// (CHAOS-4174) shifted every column after Active up by one, so NextRunAt
+	// moved from 14 to 15 and LastOccurrenceAt (appended below) is now 16.
 	if nextRunAt != nil {
-		row[14] = nextRunAt.UTC()
+		row[15] = nextRunAt.UTC()
 	}
 	row = append(row, nil)
 	if lastOccurrenceAt != nil {
-		row[15] = lastOccurrenceAt.UTC()
+		row[16] = lastOccurrenceAt.UTC()
 	}
 	return row
 }
@@ -132,6 +135,7 @@ func TestCompletedSyncKeepsLastSyncBaseWhenItLeadsTheLedger(t *testing.T) {
 	evaluation := Evaluate(Candidate{
 		ConfigID:         "config-a",
 		Active:           true,
+		PlannerManaged:   true,
 		ScheduleCron:     "0 * * * *",
 		CreatedAt:        at("2026-08-01T00:00:00Z"),
 		LastSyncAt:       &lastSync,
@@ -260,6 +264,7 @@ func TestFutureDatedLedgerRowCannotSuppressADueOccurrence(t *testing.T) {
 	evaluation := Evaluate(Candidate{
 		ConfigID:         "config-skewed",
 		Active:           true,
+		PlannerManaged:   true,
 		ScheduleCron:     "0 * * * *",
 		CreatedAt:        at("2026-08-01T00:00:00Z"),
 		LastSyncAt:       &lastSync,
@@ -359,11 +364,12 @@ func TestPausedConfigMintsNoOccurrenceAcrossConsecutiveWindows(t *testing.T) {
 func TestPausedConfigEvaluatesInactiveRatherThanDue(t *testing.T) {
 	pausedSince := at("2026-08-14T01:21:00Z")
 	evaluation := Evaluate(Candidate{
-		ConfigID:     "config-paused",
-		Active:       false,
-		ScheduleCron: "* * * * *",
-		CreatedAt:    at("2026-08-01T00:00:00Z"),
-		LastSyncAt:   &pausedSince,
+		ConfigID:       "config-paused",
+		Active:         false,
+		PlannerManaged: true,
+		ScheduleCron:   "* * * * *",
+		CreatedAt:      at("2026-08-01T00:00:00Z"),
+		LastSyncAt:     &pausedSince,
 	}, at("2026-08-23T09:00:00Z"))
 	if evaluation.Due {
 		t.Fatalf("a paused config evaluated DUE: decision=%s", evaluation.Decision)

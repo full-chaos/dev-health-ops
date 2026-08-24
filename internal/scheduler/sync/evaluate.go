@@ -7,10 +7,11 @@ import (
 	"time"
 )
 
-// Evaluate mirrors the legacy Python scheduler's pure decision gates. It
-// deliberately omits organization and feature checks because those require
-// business services and are not part of this dormant read-only foundation.
-// A true TimingEligible result therefore must never authorize dispatch.
+// Evaluate mirrors the legacy Python scheduler's pure decision gates, plus one
+// gate Python never had: planner_managed (CHAOS-4174). It deliberately omits
+// organization and feature checks because those require business services and
+// are not part of this dormant read-only foundation. A true TimingEligible
+// result therefore must never authorize dispatch.
 func Evaluate(candidate Candidate, observedAt time.Time) Evaluation {
 	result, _ := evaluateContext(context.Background(), candidate, observedAt)
 	return result
@@ -32,6 +33,14 @@ func evaluateContext(ctx context.Context, candidate Candidate, observedAt time.T
 		Timezone:           "UTC",
 		EligibilityScope:   ScheduleMarkerEvaluationScope,
 		CronGrammarVersion: CronGrammarVersion,
+	}
+	// CHAOS-4174: checked first, ahead of every timing gate. A fixture / legacy
+	// fan-out config is never schedulable regardless of its cron or active
+	// state -- this is a structural fact about the config, not a timing
+	// outcome, so it takes priority over DecisionInactive and the rest.
+	if !candidate.PlannerManaged {
+		result.Decision = DecisionNotPlannerManaged
+		return result, nil
 	}
 	if !candidate.Active {
 		result.Decision = DecisionInactive

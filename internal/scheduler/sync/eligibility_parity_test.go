@@ -120,15 +120,39 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 			"Needs a red-first test before any fix.",
 	},
 	{
-		Name:       "planner_managed as an ELIGIBILITY gate",
-		Phase:      "A+B",
+		Name:       "config.planner_managed as an ELIGIBILITY gate",
+		Phase:      "A",
 		PythonSite: "ABSENT: sync_scheduler.py:410-411 filters on is_active only; _maybe_dispatch_config never reads the column",
-		GoSite:     "ABSENT",
-		Verdict:    verdictMatch,
-		Note: "Pinned deliberately as a MATCH-BY-ABSENCE. See " +
-			"TestPlannerManagedIsNotAnEligibilityPredicate for the full " +
-			"rationale and for why adding such a gate would CREATE a " +
-			"divergence rather than close one.",
+		GoSite:     "transaction.go:460 (candidate SQL); evaluate.go planner_managed check, first gate in evaluateContext",
+		Verdict:    verdictByDesign,
+		Decision:   DecisionNotPlannerManaged,
+		Note: "CHAOS-4174 (chris, 2026-08-23): \"That column is useless past " +
+			"something being a fixture trigger to not use. Fixtures will " +
+			"never be able to be run on a schedule.\" This row previously " +
+			"read verdictMatch \"MATCH-BY-ABSENCE\" and was enforced by " +
+			"TestPlannerManagedIsNotAnEligibilityPredicate, whose own doc " +
+			"comment anticipated exactly this reversal: \"If a " +
+			"planner_managed eligibility gate is ever genuinely wanted, it " +
+			"is a product decision that needs a backfill migration in the " +
+			"same change. Delete this test deliberately at that point; do " +
+			"not let it be deleted as collateral.\" That test is deleted " +
+			"here, deliberately, not as collateral -- superseded by " +
+			"TestPlannerManagedGateAndSourceScopingBothHold below. Its " +
+			"stated risk (every pre-0018 config has planner_managed=false " +
+			"with no backfill) is addressed, not ignored: a chris-granted " +
+			"read-only prod SELECT sized the legacy population created " +
+			"before migration 0018 with integration_id IS NOT NULL at ZERO " +
+			"rows, so no backfill migration is needed and none is added in " +
+			"this change. This is a deliberate Go-only divergence from " +
+			"Python, which is why the verdict is DIVERGENT-BY-DESIGN and " +
+			"not MATCH: Python is not being mirrored here, it is being " +
+			"knowingly diverged from. Python itself is retired in prod " +
+			"(CHAOS-4026, 2026-08-21: zero Python celery services run in " +
+			"prod since the 2026-08-19 stop; compose.py.workers.yml, which " +
+			"defines the beat service, is not included by the default " +
+			"compose.yml+compose.go.workers.yml stack, and " +
+			"deploy/values-go-workers-only.yaml sets beat.enabled: false) " +
+			"so there is no live Python surface to mirror this gate into.",
 	},
 	{
 		Name:       "planner_managed as SOURCE SCOPING for a planner-managed parent",
@@ -439,6 +463,14 @@ func TestParityTableClaimsEveryDeclaredDecision(t *testing.T) {
 // slip past this test -- that inversion is caught by
 // TestPhaseADecisionsMatchThePythonGates below and by the Postgres-backed
 // tests in transaction_integration_test.go. The three together are the pin.
+//
+// config.planner_managed (CHAOS-4174) is deliberately NOT in this list.
+// predicateColumns only scans the FROM-through-WHERE region, and
+// planner_managed is read in the SELECT list but never filtered in SQL --
+// like org_missing and feature_disabled before it, the refusal happens after
+// the row is read (evaluateContext, not a WHERE clause), so every candidate
+// still gets counted rather than silently vanishing from the window. See
+// TestPlannerManagedGateAndSourceScopingBothHold for the column's own pin.
 func TestCandidateSQLPredicateSurfaceIsPinned(t *testing.T) {
 	want := []string{
 		"config.id",
@@ -498,64 +530,54 @@ func TestLockedMaterializationPredicateSurfaceIsPinned(t *testing.T) {
 	}
 }
 
-// TestPlannerManagedIsNotAnEligibilityPredicate pins the single row this file
-// was written because of.
+// TestPlannerManagedGateAndSourceScopingBothHold supersedes (and deliberately
+// deletes) TestPlannerManagedIsNotAnEligibilityPredicate.
 //
-// On 2026-08-23 the Go scheduler was reported to be "ignoring the literal
-// planner_managed column", on the evidence that non-planner-managed PagerDuty
-// configs were minting occurrences. The audit did not support the premise:
+// That test was written on 2026-08-23 after an audit found the Go scheduler
+// never read planner_managed at all and concluded -- correctly, at the time --
+// that Python didn't either, so adding a gate would CREATE a divergence, not
+// close one. Its own doc comment named the exact condition that would flip
+// the answer: "If a planner_managed eligibility gate is ever genuinely
+// wanted, it is a product decision that needs a backfill migration in the
+// same change." Later that same day chris ruled it genuinely wanted
+// (CHAOS-4174): "That column is useless past something being a fixture
+// trigger to not use. Fixtures will never be able to be run on a schedule."
+// The backfill-migration condition is satisfied by proof rather than by a
+// migration: a chris-granted read-only prod SELECT sized the legacy
+// population (configs created before migration 0018 with integration_id IS
+// NOT NULL) at ZERO rows, so there is nothing for a backfill to fix and none
+// is added here.
 //
-//  1. The Python scheduler never gated on the column either. Its candidate
-//     query filters on is_active alone (sync_scheduler.py:410-411) and
-//     _maybe_dispatch_config never reads planner_managed.
-//  2. Both sides read the column in exactly one place, source scoping, and Go
-//     mirrors Python there including the PagerDuty carve-out (the two rows
-//     above this one).
-//  3. The checked-in Python-parity oracle builds its routing case with
-//     planner_managed=False and REQUIRES a plan to come back
-//     (testdata/python_planner_oracle.py:313 and the RuntimeError below it).
-//     Python has a named test asserting the same
-//     (tests/test_trigger_routing.py:318
-//     test_non_planner_managed_parent_keeps_all_enabled_semantics).
-//  4. Adding a scheduler-level gate would therefore not restore parity, it
-//     would create a NEW divergence, and it would be fail-dangerous: migration
-//     0018 added the column on 2026-06-19 with server_default false and there
-//     is no backfill migration, so every config predating that date carries
-//     false and would silently stop being scheduled.
-//
-// The observed symptom had a different cause: leaked test rows seeded by
-// tests/test_canonical_incident_scheduler_concurrency.py:42 via
-// tests/canonical_incident_orchestration_support.py:155-165, which write a
-// "* * * * *" cron and never clean up. Every-minute crons mint every minute.
-//
-// If a planner_managed eligibility gate is ever genuinely wanted, it is a
-// product decision that needs a backfill migration in the same change. Delete
-// this test deliberately at that point; do not let it be deleted as collateral.
-func TestPlannerManagedIsNotAnEligibilityPredicate(t *testing.T) {
-	for _, sql := range []struct {
-		name  string
-		query string
-	}{
-		{name: "schedulerHandoffCandidatesSQL", query: schedulerHandoffCandidatesSQL},
-		{name: "lockPendingOccurrenceSQL", query: lockPendingOccurrenceSQL},
-	} {
-		if strings.Contains(sql.query, "planner_managed") {
-			t.Errorf("%s now references planner_managed. Eligibility is not "+
-				"where that column belongs: Python never gated on it, and a "+
-				"gate here silently stops scheduling every config created "+
-				"before migration 0018, which has no backfill. Read this "+
-				"test's doc comment before changing it.", sql.name)
-		}
+// This test asserts the new state directly instead of leaving a hole where
+// the old test's protections were:
+//  1. The gate exists where the old test forbade it (schedulerHandoffCandidatesSQL
+//     now DOES reference planner_managed).
+//  2. The one property the old test protected alongside the absence -- that
+//     materializer.go still scopes a planner-managed parent to its tagged
+//     sources -- still holds. That source-scoping behaviour is UNCHANGED by
+//     this ticket: CHAOS-4174 adds an eligibility gate, it does not touch
+//     Phase B routing.
+//  3. lockPendingOccurrenceSQL (Phase B) still does NOT reference the column:
+//     the eligibility gate is Phase A only, mirroring how DecisionInactive
+//     etc. are also Phase-A-only concerns re-read separately under lock in
+//     Phase B (see the "config.is_active re-read under lock" row above).
+func TestPlannerManagedGateAndSourceScopingBothHold(t *testing.T) {
+	if !strings.Contains(schedulerHandoffCandidatesSQL, "planner_managed") {
+		t.Error("schedulerHandoffCandidatesSQL no longer references " +
+			"planner_managed. CHAOS-4174 requires the candidate query to read " +
+			"the column so evaluateContext can refuse a false value.")
 	}
-
-	// The column's one legitimate reader must still be reading it: this test
-	// forbids an eligibility gate, it must not be mistaken for permission to
-	// drop the source-scoping behaviour Python does have.
+	if strings.Contains(lockPendingOccurrenceSQL, "planner_managed") {
+		t.Error("lockPendingOccurrenceSQL now references planner_managed. " +
+			"CHAOS-4174's eligibility gate is Phase A only (evaluateContext); " +
+			"Phase B's existing source-scoping read in materializer.go is the " +
+			"column's only Phase B reader.")
+	}
 	if !sourceContainsStringLiteral(t, "materializer.go", "planner_managed_sync_config_id") {
 		t.Error("materializer.go no longer scopes a planner-managed parent to " +
-			"its tagged sources. That IS a real parity break against " +
-			"sync/trigger_routing.py:143-167 -- the opposite mistake from the " +
-			"one the rest of this test guards against.")
+			"its tagged sources (sync/trigger_routing.py:143-167). CHAOS-4174 " +
+			"adds a Phase-A eligibility gate; it must not regress this " +
+			"unrelated Phase-B routing behaviour.")
 	}
 }
 
@@ -590,10 +612,19 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 		want      Decision
 	}{
 		{
+			name:      "fixture-style config, planner_managed false",
+			predicate: "config.planner_managed as an ELIGIBILITY gate",
+			candidate: Candidate{
+				ConfigID: "c", Active: true, PlannerManaged: false, ScheduleCron: "0 * * * *",
+				CreatedAt: longAgo, Job: activeJob(nil),
+			},
+			want: DecisionNotPlannerManaged,
+		},
+		{
 			name:      "inactive config",
 			predicate: "config.is_active",
 			candidate: Candidate{
-				ConfigID: "c", Active: false, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: false, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo, Job: activeJob(nil),
 			},
 			want: DecisionInactive,
@@ -602,7 +633,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "manual-only config",
 			predicate: "config sync_options.schedule_cron is present",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "",
 				CreatedAt: longAgo, Job: activeJob(nil),
 			},
 			want: DecisionManual,
@@ -611,7 +642,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "paused job marker",
 			predicate: "job.status is ACTIVE",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job:       activeJob(func(job *Job) { job.Status = 1 }),
 			},
@@ -621,7 +652,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "fresh running marker",
 			predicate: "job.is_running blocks, with a 2h staleness escape",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job: activeJob(func(job *Job) {
 					job.IsRunning = true
@@ -634,7 +665,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "stale running marker does not block",
 			predicate: "job.is_running blocks, with a 2h staleness escape",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job: activeJob(func(job *Job) {
 					job.IsRunning = true
@@ -647,7 +678,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "next_run_at in the future",
 			predicate: "job.next_run_at is a do-not-re-dispatch-before marker",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job:       activeJob(func(job *Job) { job.NextRunAt = &future }),
 			},
@@ -657,7 +688,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "next_run_at gate precedes cron parsing, as in Python",
 			predicate: "job.next_run_at is a do-not-re-dispatch-before marker",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job: activeJob(func(job *Job) {
 					job.NextRunAt = &future
@@ -670,7 +701,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "malformed cron",
 			predicate: "the cron expression parses and is supported",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo,
 				Job:       activeJob(func(job *Job) { job.ScheduleCron = "not a cron" }),
 			},
@@ -680,7 +711,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "not yet due",
 			predicate: "the cron occurrence is due",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				LastSyncAt: &observedAt, CreatedAt: longAgo,
 				Job: activeJob(nil),
 			},
@@ -690,7 +721,7 @@ func TestPhaseADecisionsMatchThePythonGates(t *testing.T) {
 			name:      "due",
 			predicate: "everything passed: the schedule is due and may be handed off",
 			candidate: Candidate{
-				ConfigID: "c", Active: true, ScheduleCron: "0 * * * *",
+				ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *",
 				CreatedAt: longAgo, Job: activeJob(nil),
 			},
 			want: DecisionScheduleDue,

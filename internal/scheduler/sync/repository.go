@@ -107,7 +107,7 @@ func readCandidates(ctx context.Context, rows candidateRows, capacity int) ([]Ca
 		var jobIsRunning *bool
 		var lastSyncAt, lastRunAt, updatedAt, nextRunAt, lastOccurrenceAt *time.Time
 		if err := rows.Scan(
-			&candidate.ConfigID, &candidate.Active, &configCron, &configTimezone,
+			&candidate.ConfigID, &candidate.Active, &candidate.PlannerManaged, &configCron, &configTimezone,
 			&lastSyncAt, &candidate.CreatedAt,
 			&jobID, &jobCron, &jobTimezone, &jobStatus, &jobIsRunning,
 			&lastRunAt, &updatedAt, &nextRunAt, &lastOccurrenceAt,
@@ -153,6 +153,7 @@ const schedulerSnapshotSQL = `
 SELECT
     config.id::text,
     config.is_active,
+    config.planner_managed,
     config.sync_options->>'schedule_cron',
     config.sync_options->>'timezone',
     config.last_sync_at,

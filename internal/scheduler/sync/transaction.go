@@ -65,6 +65,12 @@ type HandoffResult struct {
 	// targets require the canonical-incident feature and the organization is
 	// not entitled to it, mirroring workers/sync_scheduler.py:207-219.
 	SkippedFeatureDisabled int
+	// SkippedNotPlannerManaged counts candidates refused because
+	// planner_managed is false, marking them a fixture / legacy fan-out config
+	// (CHAOS-4174). Unlike the other two Skipped counters this refusal happens
+	// in evaluateContext, not the Coordinator -- counted here in the same loop
+	// that classifies DecisionUnsupportedCron and DecisionInvalidCron.
+	SkippedNotPlannerManaged int
 	// Repeated is the subset of HandedOff that already existed when this
 	// window ran, so this window created no row for it. It exists because
 	// counting handoffs alone cannot tell a scheduler that is producing work
@@ -267,6 +273,8 @@ func (repository *Repository) HandoffDueResult(
 			result.UnsupportedCron++
 		case DecisionInvalidCron:
 			result.InvalidCron++
+		case DecisionNotPlannerManaged:
+			result.SkippedNotPlannerManaged++
 		}
 		if !evaluation.TimingEligible || evaluation.NextOccurrence == nil ||
 			locked.candidate.Job == nil {
@@ -388,6 +396,7 @@ func readLockedCandidates(
 			&locked.candidate.ConfigID,
 			&locked.orgID,
 			&locked.candidate.Active,
+			&locked.candidate.PlannerManaged,
 			&configCron,
 			&configTimezone,
 			&locked.candidate.LastSyncAt,
@@ -448,6 +457,7 @@ SELECT
     config.id::text,
     config.org_id,
     config.is_active,
+    config.planner_managed,
     config.sync_options->>'schedule_cron',
     COALESCE(config.sync_options->>'timezone', ''),
     config.last_sync_at,

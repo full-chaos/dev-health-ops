@@ -123,10 +123,11 @@ func TestRandomCronIsExplicitlyUnsupported(t *testing.T) {
 				t.Fatalf("NextOccurrence(%q) err=%v", expression, err)
 			}
 			got := Evaluate(Candidate{
-				ConfigID:     "random",
-				Active:       true,
-				ScheduleCron: expression,
-				CreatedAt:    at("2026-01-01T00:00:00Z"),
+				ConfigID:       "random",
+				Active:         true,
+				PlannerManaged: true,
+				ScheduleCron:   expression,
+				CreatedAt:      at("2026-01-01T00:00:00Z"),
 			}, at("2026-01-02T00:00:00Z"))
 			if got.Decision != DecisionUnsupportedCron || got.TimingEligible ||
 				got.CronGrammarVersion != CronGrammarVersion {
@@ -144,10 +145,11 @@ func TestRandomCronIsExplicitlyUnsupported(t *testing.T) {
 		"0 R(24-25) * * *",
 	} {
 		got := Evaluate(Candidate{
-			ConfigID:     "invalid",
-			Active:       true,
-			ScheduleCron: expression,
-			CreatedAt:    at("2026-01-01T00:00:00Z"),
+			ConfigID:       "invalid",
+			Active:         true,
+			PlannerManaged: true,
+			ScheduleCron:   expression,
+			CreatedAt:      at("2026-01-01T00:00:00Z"),
 		}, at("2026-01-02T00:00:00Z"))
 		if got.Decision != DecisionInvalidCron {
 			t.Fatalf("invalid cron %q classification = %#v", expression, got)
@@ -173,10 +175,11 @@ func TestMixedSpecialCronIsExplicitlyUnsupported(t *testing.T) {
 				t.Fatalf("NextOccurrence(%q) err=%v", expression, err)
 			}
 			got := Evaluate(Candidate{
-				ConfigID:     "mixed-special",
-				Active:       true,
-				ScheduleCron: expression,
-				CreatedAt:    at("2026-01-01T00:00:00Z"),
+				ConfigID:       "mixed-special",
+				Active:         true,
+				PlannerManaged: true,
+				ScheduleCron:   expression,
+				CreatedAt:      at("2026-01-01T00:00:00Z"),
 			}, at("2026-01-02T00:00:00Z"))
 			if got.Decision != DecisionUnsupportedCron || got.TimingEligible {
 				t.Fatalf("Evaluate(%q) = %#v", expression, got)
@@ -198,13 +201,13 @@ func TestEvaluateDueManualAndRunningMarkers(t *testing.T) {
 		due, timingEligible bool
 		running             RunningMarkerState
 	}{
-		{"not due", Candidate{ConfigID: "a", Active: true, ScheduleCron: "0 13 * * *", CreatedAt: base}, DecisionNotDue, false, false, RunningNotSet},
-		{"due from last sync", Candidate{ConfigID: "b", Active: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base)}, DecisionScheduleDue, true, true, RunningNotSet},
-		{"manual", Candidate{ConfigID: "c", Active: true, CreatedAt: base}, DecisionManual, false, false, RunningNotSet},
-		{"fresh running exact threshold", Candidate{ConfigID: "d", Active: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base), Job: &Job{Status: activeJobStatus, IsRunning: true, LastRunAt: pointer(fresh)}}, DecisionFreshRunning, false, false, RunningFresh},
-		{"stale running", Candidate{ConfigID: "e", Active: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base), Job: &Job{ScheduleCron: "0 * * * *", Status: activeJobStatus, IsRunning: true, LastRunAt: pointer(stale)}}, DecisionScheduleDue, true, true, RunningStale},
-		{"future persisted run precedes malformed cron", Candidate{ConfigID: "f", Active: true, ScheduleCron: "0 * * * *", CreatedAt: base, Job: &Job{ScheduleCron: "malformed", Timezone: "UTC", Status: activeJobStatus, NextRunAt: pointer(future)}}, DecisionNextRunGate, false, false, RunningNotSet},
-		{"future persisted run precedes cron not due", Candidate{ConfigID: "g", Active: true, ScheduleCron: "0 * * * *", CreatedAt: base, Job: &Job{ScheduleCron: "0 13 * * *", Timezone: "UTC", Status: activeJobStatus, NextRunAt: pointer(future)}}, DecisionNextRunGate, false, false, RunningNotSet},
+		{"not due", Candidate{ConfigID: "a", Active: true, PlannerManaged: true, ScheduleCron: "0 13 * * *", CreatedAt: base}, DecisionNotDue, false, false, RunningNotSet},
+		{"due from last sync", Candidate{ConfigID: "b", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base)}, DecisionScheduleDue, true, true, RunningNotSet},
+		{"manual", Candidate{ConfigID: "c", Active: true, PlannerManaged: true, CreatedAt: base}, DecisionManual, false, false, RunningNotSet},
+		{"fresh running exact threshold", Candidate{ConfigID: "d", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base), Job: &Job{Status: activeJobStatus, IsRunning: true, LastRunAt: pointer(fresh)}}, DecisionFreshRunning, false, false, RunningFresh},
+		{"stale running", Candidate{ConfigID: "e", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: now, LastSyncAt: pointer(base), Job: &Job{ScheduleCron: "0 * * * *", Status: activeJobStatus, IsRunning: true, LastRunAt: pointer(stale)}}, DecisionScheduleDue, true, true, RunningStale},
+		{"future persisted run precedes malformed cron", Candidate{ConfigID: "f", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: base, Job: &Job{ScheduleCron: "malformed", Timezone: "UTC", Status: activeJobStatus, NextRunAt: pointer(future)}}, DecisionNextRunGate, false, false, RunningNotSet},
+		{"future persisted run precedes cron not due", Candidate{ConfigID: "g", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: base, Job: &Job{ScheduleCron: "0 13 * * *", Timezone: "UTC", Status: activeJobStatus, NextRunAt: pointer(future)}}, DecisionNextRunGate, false, false, RunningNotSet},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := Evaluate(test.candidate, now)
@@ -234,11 +237,12 @@ func TestEvaluatePreservesPythonTimezoneFallbackSemantics(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := Evaluate(Candidate{
-				ConfigID:     "timezone",
-				Active:       true,
-				ScheduleCron: "0 * * * *",
-				ScheduleTZ:   test.timezone,
-				CreatedAt:    base,
+				ConfigID:       "timezone",
+				Active:         true,
+				PlannerManaged: true,
+				ScheduleCron:   "0 * * * *",
+				ScheduleTZ:     test.timezone,
+				CreatedAt:      base,
 			}, now)
 			if got.Timezone != "UTC" || got.TimezoneFallback != test.fallback ||
 				got.Decision != DecisionScheduleDue || !got.TimingEligible {
@@ -251,9 +255,9 @@ func TestEvaluatePreservesPythonTimezoneFallbackSemantics(t *testing.T) {
 func TestSnapshotSortsBoundsAndDigestsDeterministically(t *testing.T) {
 	observed := at("2026-01-01T12:00:00Z")
 	candidates := []Candidate{
-		{ConfigID: "b", Active: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T10:00:00Z")},
-		{ConfigID: "a", Active: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T11:00:00Z")},
-		{ConfigID: "c", Active: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T11:00:00Z")},
+		{ConfigID: "b", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T10:00:00Z")},
+		{ConfigID: "a", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T11:00:00Z")},
+		{ConfigID: "c", Active: true, PlannerManaged: true, ScheduleCron: "0 * * * *", CreatedAt: at("2026-01-01T11:00:00Z")},
 	}
 	snapshot, err := BuildSnapshot(observed, 2, candidates)
 	if err != nil {

@@ -62,6 +62,18 @@ const (
 	// entitlement guard (workers/sync_scheduler.py:207-219). Also a Coordinator
 	// decision, for the same reason.
 	DecisionFeatureDisabled Decision = "feature_disabled"
+	// DecisionNotPlannerManaged means the candidate's planner_managed column is
+	// false. CHAOS-4174 (chris, 2026-08-23): "That column is useless past
+	// something being a fixture trigger to not use. Fixtures will never be able
+	// to be run on a schedule." Unlike DecisionOrgMissing and
+	// DecisionFeatureDisabled this is produced by Evaluate itself, not the
+	// Coordinator: planner_managed is a plain column already present on every
+	// locked candidate row, so refusing on it needs no business-service lookup.
+	// It has no Python analogue -- Python never gated on this column at all
+	// (see the superseded MATCH-BY-ABSENCE row this decision replaces in
+	// schedulerEligibilityParity) -- so this is a deliberate Go-only divergence,
+	// not a parity fix.
+	DecisionNotPlannerManaged Decision = "not_planner_managed"
 )
 
 // ErrUnsupportedCron identifies syntax intentionally routed outside the
@@ -89,7 +101,14 @@ type Candidate struct {
 	// LastSyncAt -- which advances only when a run COMPLETES -- a run that
 	// fails, hangs, or is never consumed cannot pin it (CHAOS-3936).
 	LastOccurrenceAt *time.Time
-	Job              *Job
+	// PlannerManaged mirrors sync_configurations.planner_managed. False marks a
+	// fixture / legacy fan-out config; Evaluate refuses it before any timing
+	// check runs (CHAOS-4174). Every caller that builds a Candidate must
+	// populate this from the real column -- the Go zero value is false, which
+	// is the refusing value, so an unpopulated field fails closed rather than
+	// silently admitting a candidate whose real column is true.
+	PlannerManaged bool
+	Job            *Job
 }
 
 type Job struct {

@@ -781,6 +781,12 @@ func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) 
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
 			is_active boolean NOT NULL,
+			-- CHAOS-4174: defaults TRUE here (unlike prod migration 0018's
+			-- server_default FALSE) so the many existing tests in this file that
+			-- insert a config without naming the column keep exercising the
+			-- minting path they were written for. Tests of the new refusal gate
+			-- insert planner_managed explicitly.
+			planner_managed boolean NOT NULL DEFAULT TRUE,
 			sync_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
 			sync_options jsonb NOT NULL,
 			last_sync_at timestamptz,
@@ -849,4 +855,120 @@ func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) 
 		}
 	}
 	return nil
+}
+
+// TestHandoffDuePostgresRefusesNotPlannerManagedConfig is the CHAOS-4174
+// red-first proof. Before this change a fixture-style config
+// (planner_managed=false) with a due schedule dispatched exactly like a real
+// config: minted an occurrence and advanced its marker. chris ruled
+// (2026-08-23): "That column is useless past something being a fixture
+// trigger to not use. Fixtures will never be able to be run on a schedule."
+//
+// This asserts the OUTCOME, not the guard mechanics: a planner_managed=false
+// config with an otherwise-due schedule never mints a run, its marker stays
+// due (so it stays eligible for whenever it becomes planner-managed), and the
+// refusal is counted -- while a planner_managed=true config in the SAME
+// window still mints, proving the gate does not regress ordinary scheduling.
+func TestHandoffDuePostgresRefusesNotPlannerManagedConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	// createSchedulerIntegrationFixture seeds one planner_managed=true config
+	// (the DDL's default) -- config 00000000-0000-4000-8000-000000003038 /
+	// job 00000000-0000-4000-8000-000000003039, due at observedAt below. That
+	// config is this test's regression proof: it must still mint.
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		fixtureConfigID = "00000000-0000-4000-8000-00000000f001"
+		fixtureJobID    = "00000000-0000-4000-8000-00000000f002"
+	)
+	for _, statement := range []string{
+		`INSERT INTO public.sync_configurations (
+			id, org_id, is_active, planner_managed, sync_options, last_sync_at, created_at
+		) VALUES (
+			'` + fixtureConfigID + `', 'org-integration', TRUE, FALSE,
+			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
+			'2026-01-01T02:00:00-08:00', '2026-01-01T01:00:00-08:00'
+		)`,
+		`INSERT INTO public.scheduled_jobs (
+			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
+			status, is_running, updated_at
+		) VALUES (
+			'` + fixtureJobID + `', 'org-integration', '` + fixtureConfigID + `',
+			'sync', '0 * * * *', 'UTC', 0, FALSE, '2026-01-01T01:00:00-08:00'
+		)`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := at("2026-01-01T12:00:00Z")
+	result, err := repository.HandoffDueResult(ctx, observedAt, 4, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatalf("HandoffDueResult() error = %v", err)
+	}
+
+	if result.SkippedNotPlannerManaged != 1 {
+		t.Errorf("SkippedNotPlannerManaged = %d, want 1", result.SkippedNotPlannerManaged)
+	}
+	for _, occurrence := range result.HandedOff {
+		if occurrence.ConfigID == fixtureConfigID {
+			t.Fatalf("planner_managed=false config %s minted an occurrence", fixtureConfigID)
+		}
+	}
+	if result.Minted() != 1 {
+		t.Errorf("Minted() = %d, want 1 (only the planner_managed=true config)", result.Minted())
+	}
+
+	var fixtureNextRunAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT next_run_at FROM public.scheduled_jobs WHERE id = $1`, fixtureJobID,
+	).Scan(&fixtureNextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if fixtureNextRunAt != nil {
+		t.Errorf("planner_managed=false config's marker advanced to %v; a refused schedule must stay due", fixtureNextRunAt)
+	}
+	var fixtureOccurrences int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.scheduled_sync_occurrences WHERE sync_config_id = $1`, fixtureConfigID,
+	).Scan(&fixtureOccurrences); err != nil {
+		t.Fatal(err)
+	}
+	if fixtureOccurrences != 0 {
+		t.Errorf("planner_managed=false config has %d occurrence rows, want 0", fixtureOccurrences)
+	}
+
+	var realNextRunAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT next_run_at FROM public.scheduled_jobs WHERE id = '00000000-0000-4000-8000-000000003039'`,
+	).Scan(&realNextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if realNextRunAt == nil {
+		t.Error("planner_managed=true config's marker did not advance; the gate must not regress ordinary scheduling")
+	}
 }

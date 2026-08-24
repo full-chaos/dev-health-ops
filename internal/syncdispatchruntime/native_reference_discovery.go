@@ -2,11 +2,12 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -678,11 +679,16 @@ func retryAfterSecondsOf(err error) *float64 {
 
 // referenceDiscoveryBackoff ports _reference_discovery_backoff_seconds
 // verbatim, including the jitter, which Python draws from
-// random.randint(0, max(1, min(base, 30))). Go's math/rand default source is
-// unseeded-but-deterministic-per-process in the same way Python's unseeded
-// `random` module is process-global -- neither this port nor Python's own
-// function needs cryptographic randomness here, only enough spread to avoid
-// a thundering herd.
+// random.randint(0, max(1, min(base, 30))) -- a uniform draw over [0, bound]
+// inclusive. This does not need cryptographic randomness (it is retry
+// jitter, not a security control), but Semgrep's math/rand audit rule
+// flags any use of math/rand regardless of purpose, and repo policy
+// forbids nosemgrep suppressions -- so this draws from crypto/rand instead,
+// matching the precedent internal/providerfoundation/http.go's retryJitter
+// already established for the identical case (retry-backoff jitter, not a
+// hot loop, so crypto/rand's cost is irrelevant here). The DISTRIBUTION
+// stays identical to Python's: still a uniform draw over the same inclusive
+// [0, bound] range, only the entropy source changed.
 func referenceDiscoveryBackoff(attempts int, retryAfterSeconds *float64) time.Duration {
 	exponent := attempts - 1
 	if exponent < 0 {
@@ -711,8 +717,27 @@ func referenceDiscoveryBackoff(attempts int, retryAfterSeconds *float64) time.Du
 	if jitterBound < 1 {
 		jitterBound = 1
 	}
-	jitter := rand.Intn(jitterBound + 1)
+	jitter := referenceDiscoveryJitter(jitterBound + 1)
 	return time.Duration(base+jitter) * time.Second
+}
+
+// referenceDiscoveryJitter draws a uniform random integer in [0, bound) from
+// crypto/rand, matching math/rand's Intn(bound) shape exactly (same range,
+// same inclusive-exclusive convention) so the caller's "+1 to make the
+// original range inclusive" arithmetic needs no adjustment. Falls back to 0
+// on a read failure (an exhausted OS entropy source is not expected in
+// practice) -- a variance-free backoff still backs off correctly, it just
+// loses its thundering-herd spread for that one call, same fail-safe
+// retryJitter uses.
+func referenceDiscoveryJitter(bound int) int {
+	if bound <= 1 {
+		return 0
+	}
+	value, err := rand.Int(rand.Reader, big.NewInt(int64(bound)))
+	if err != nil {
+		return 0
+	}
+	return int(value.Int64())
 }
 
 func maxDiscoveryAttempts() int {

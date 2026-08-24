@@ -67,12 +67,17 @@ func finishCoordinatorSpan(span oteltrace.Span, err error) {
 // coordinator and never reported its handlers. Use
 // RegisterTeamAutoimportWorker so the caller owns both the route decision and
 // reporting the constructed spec through the canonical capability channel.
-func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge, postSync *NativePostSyncService) error {
-	if workers == nil || bridge == nil || postSync == nil {
+func RegisterWorkers(
+	workers *river.Workers,
+	bridge CoordinatorBridge,
+	postSync *NativePostSyncService,
+	finalizeSyncRun *NativeFinalizeSyncRunService,
+) error {
+	if workers == nil || bridge == nil || postSync == nil || finalizeSyncRun == nil {
 		return ErrWorkerRegistration
 	}
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
-		river.AddWorkerSafely(workers, &finalizeWorker{bridge: bridge}) != nil ||
+		river.AddWorkerSafely(workers, &finalizeWorker{service: finalizeSyncRun}) != nil ||
 		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
 		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil {
 		return ErrWorkerRegistration
@@ -125,16 +130,16 @@ func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchS
 
 type finalizeWorker struct {
 	river.WorkerDefaults[FinalizeSyncRunArgs]
-	bridge CoordinatorBridge
+	service *NativeFinalizeSyncRunService
 }
 
 func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeSyncRunArgs]) (err error) {
-	if worker == nil || worker.bridge == nil || job == nil {
+	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	defer func() { finishCoordinatorSpan(span, err) }()
-	err = worker.bridge.Finalize(ctx, job.Args)
+	err = worker.service.Finalize(ctx, job.Args)
 	return err
 }
 

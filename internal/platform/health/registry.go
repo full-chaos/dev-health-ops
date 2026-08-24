@@ -166,11 +166,19 @@ func (r *Registry) WriteMetricsPartial(output io.Writer) ([]MetricsSourceOutcome
 }
 
 // WriteMetrics writes registered sources in stable name order, failing on the
-// first source that errors. Prefer WriteMetricsPartial for anything serving a
-// scrape; this remains for callers that genuinely want all-or-nothing, and for
-// tests asserting a specific source's error. The caller is responsible for
-// buffering before committing an HTTP response so a source failure cannot
-// produce a partial scrape.
+// first source that errors, with NOTHING reaching output unless every source
+// succeeds. Prefer WriteMetricsPartial for anything serving a scrape; this
+// remains for callers that genuinely want all-or-nothing, and for tests
+// asserting a specific source's error.
+//
+// All sources are written into an internal buffer first and copied to output
+// in one final write only after every source has succeeded (CHAOS-4175). The
+// previous implementation wrote each source directly to output as it
+// iterated in sorted name order, so a source that sorted BEFORE the one that
+// ultimately failed had already landed real bytes in the caller's output —
+// "all-or-nothing" that depended on registration/name order rather than
+// holding unconditionally. See
+// TestWriteMetricsFailsClosedWithNoPartialBytesEvenWhenAnEarlierSourceSucceeded.
 func (r *Registry) WriteMetrics(output io.Writer) error {
 	if output == nil {
 		return fmt.Errorf("metrics output is required")
@@ -187,10 +195,14 @@ func (r *Registry) WriteMetrics(output io.Writer) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	var buffer bytes.Buffer
 	for _, name := range names {
-		if err := sources[name].WritePrometheus(output); err != nil {
+		if err := sources[name].WritePrometheus(&buffer); err != nil {
 			return fmt.Errorf("write metrics source %q: %w", name, err)
 		}
+	}
+	if _, err := output.Write(buffer.Bytes()); err != nil {
+		return fmt.Errorf("write metrics output: %w", err)
 	}
 	return nil
 }

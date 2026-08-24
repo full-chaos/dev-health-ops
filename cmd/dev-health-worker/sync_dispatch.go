@@ -261,7 +261,7 @@ func buildSyncCoordinatorWorker(
 	cfg config.Config,
 	database workerDatabase,
 	registry *jobruntime.Registry,
-	_ jobruntime.Observer,
+	observer jobruntime.Observer,
 	logger *slog.Logger,
 	workers *river.Workers,
 ) (workerFamily, error) {
@@ -302,7 +302,24 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
+	// The zero-unit finalization counter reports directly, the same way the
+	// work-graph store reports a release-lost lease directly (cmd/dev-health-worker/workgraph.go):
+	// generic runtime middleware has no way to know a run planned zero units
+	// or what cause finalize classified it under -- only this implementation
+	// does (CHAOS-4175).
+	var zeroUnitObservers []jobruntime.ZeroUnitFinalizationObserver
+	if zeroUnitObserver, ok := observer.(jobruntime.ZeroUnitFinalizationObserver); ok {
+		zeroUnitObservers = append(zeroUnitObservers, zeroUnitObserver)
+	}
+	finalizeSyncRun, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(
+		postgresDatabase.pools.Domain,
+		logger,
+		zeroUnitObservers...,
+	)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun); err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// A registered kind may only be consumed once its durable route permits

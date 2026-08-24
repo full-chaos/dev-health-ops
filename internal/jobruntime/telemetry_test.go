@@ -429,3 +429,159 @@ func TestMetricsCollectorRejectsUnregisteredIdempotencyRenewalReason(t *testing.
 		t.Fatal("unbounded retirement reason was accepted into a metric label")
 	}
 }
+
+// TestObserveZeroUnitFinalizationRecordsByProviderAndReason (CHAOS-4175)
+// pins the Go counterpart of Python's
+// devhealth_sync_run_zero_unit_finalizations_total: it must actually appear
+// in the exposition once observed, under the exact metric name Python uses.
+func TestObserveZeroUnitFinalizationRecordsByProviderAndReason(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("github", "pagerduty_credential_unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("github", "pagerduty_credential_unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("gitlab", "no_sync_units_planned"); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	if !strings.Contains(text, "# HELP devhealth_sync_run_zero_unit_finalizations_total ") {
+		t.Fatalf("missing HELP line:\n%s", text)
+	}
+	for _, want := range []string{
+		`devhealth_sync_run_zero_unit_finalizations_total{provider="github",reason="pagerduty_credential_unavailable"} 2`,
+		`devhealth_sync_run_zero_unit_finalizations_total{provider="gitlab",reason="no_sync_units_planned"} 1`,
+	} {
+		if !strings.Contains(text, want+"\n") {
+			t.Fatalf("missing exposition line %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestObserveZeroUnitFinalizationClampsUnknownProvider pins that an
+// Integration.provider value outside the known set (e.g. a future provider
+// not yet added here, or a genuinely missing one) reads as "unknown" --
+// the exact residual _run_provider itself falls back to -- rather than
+// growing the label set with an arbitrary string.
+func TestObserveZeroUnitFinalizationClampsUnknownProvider(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("some-future-provider", "no_sync_units_planned"); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	if strings.Contains(text, "some-future-provider") {
+		t.Fatalf("unknown provider leaked into exposition unclamped:\n%s", text)
+	}
+	want := `devhealth_sync_run_zero_unit_finalizations_total{provider="unknown",reason="no_sync_units_planned"} 1`
+	if !strings.Contains(text, want+"\n") {
+		t.Fatalf("missing clamped-provider exposition line %q:\n%s", want, text)
+	}
+}
+
+// TestObserveZeroUnitFinalizationRejectsInvalidReason pins that a reason
+// containing exposition-corrupting characters (a raw label injection
+// attempt, or genuinely malformed input) is refused rather than accepted
+// into a Prometheus label value verbatim.
+func TestObserveZeroUnitFinalizationRejectsInvalidReason(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("github", `bad"reason`); err == nil {
+		t.Fatal("exposition-corrupting reason was accepted into a metric label")
+	}
+}
+
+// TestObserveZeroUnitFinalizationCapsCardinality (CHAOS-4175) pins the
+// escape valve for reason's open cardinality: past
+// maxZeroUnitFinalizationSeries distinct (provider, reason) pairs, a NEW
+// combination collapses into the fixed overflow bucket instead of growing
+// the label set forever, while combinations already seen keep incrementing
+// their own series.
+func TestObserveZeroUnitFinalizationCapsCardinality(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxZeroUnitFinalizationSeries; index++ {
+		reason := fmt.Sprintf("reason_%d", index)
+		if err := collector.ObserveZeroUnitFinalization("github", reason); err != nil {
+			t.Fatalf("observe %s: %v", reason, err)
+		}
+	}
+	// One more already-seen reason: must NOT be treated as overflow.
+	if err := collector.ObserveZeroUnitFinalization("github", "reason_0"); err != nil {
+		t.Fatal(err)
+	}
+	// A genuinely new reason past the cap: must collapse to the overflow
+	// bucket rather than becoming series number maxZeroUnitFinalizationSeries+1.
+	if err := collector.ObserveZeroUnitFinalization("github", "reason_over_the_cap"); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	if strings.Contains(text, "reason_over_the_cap") {
+		t.Fatalf("overflow reason bypassed the cardinality cap:\n%s", text)
+	}
+	if !strings.Contains(text, `devhealth_sync_run_zero_unit_finalizations_total{provider="github",reason="reason_0"} 2`+"\n") {
+		t.Fatalf("already-seen reason was miscounted as overflow:\n%s", text)
+	}
+	// The overflow key is provider-independent ("unknown", not "github"):
+	// see TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider
+	// for why a per-provider overflow bucket would defeat the whole point of
+	// the cap.
+	if !strings.Contains(text, `devhealth_sync_run_zero_unit_finalizations_total{provider="unknown",reason="cardinality_capped"} 1`+"\n") {
+		t.Fatalf("missing overflow-bucket exposition line:\n%s", text)
+	}
+}
+
+// TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider
+// (CHAOS-4175, codex adversarial review) pins that the cardinality cap is a
+// GLOBAL bound on total series, not a per-provider one: if the overflow key
+// varied by provider, each distinct provider that independently exhausted
+// the cap would mint its OWN overflow series, so the total series count
+// could grow to maxZeroUnitFinalizationSeries + (number of distinct
+// providers seen) -- silently exceeding the stated bound while every
+// individual reason string still looked correctly capped.
+func TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxZeroUnitFinalizationSeries; index++ {
+		if err := collector.ObserveZeroUnitFinalization("github", fmt.Sprintf("reason_%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two DIFFERENT providers each overflow independently.
+	if err := collector.ObserveZeroUnitFinalization("github", "github_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("gitlab", "gitlab_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("jira", "jira_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	seriesCount := 0
+	for _, line := range strings.Split(collector.PrometheusText(), "\n") {
+		if strings.HasPrefix(line, "devhealth_sync_run_zero_unit_finalizations_total{") {
+			seriesCount++
+		}
+	}
+	if want := maxZeroUnitFinalizationSeries + 1; seriesCount != want {
+		t.Fatalf("total zero-unit-finalization series = %d, want exactly %d (cap + one SHARED overflow bucket, not one per provider that overflowed)",
+			seriesCount, want)
+	}
+}

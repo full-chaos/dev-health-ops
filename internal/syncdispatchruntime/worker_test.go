@@ -41,9 +41,9 @@ func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	if err := (&dispatchWorker{bridge: bridge}).Work(context.Background(), &river.Job[DispatchSyncRunArgs]{Args: DispatchSyncRunArgs{TransportArgs: base}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&finalizeWorker{bridge: bridge}).Work(context.Background(), &river.Job[FinalizeSyncRunArgs]{Args: FinalizeSyncRunArgs{TransportArgs: base}}); err != nil {
-		t.Fatal(err)
-	}
+	// finalizeWorker no longer holds a bridge (CHAOS-4175: finalize_sync_run
+	// is native) -- its own seam is exercised by
+	// native_finalize_sync_run_test.go against a real Postgres, not here.
 	if err := (&referenceDiscoveryWorker{bridge: bridge}).Work(context.Background(), &river.Job[ReferenceDiscoveryArgs]{Args: ReferenceDiscoveryArgs{TransportArgs: base}}); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	if err := (&teamAutoimportWorker{bridge: bridge}).Work(context.Background(), &river.Job[TeamAutoimportJobArgs]{Args: teamArgs}); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(bridge.calls), 4; got != want || bridge.calls[0] != "dispatch" || bridge.calls[1] != "finalize" || bridge.calls[2] != "discover" || bridge.calls[3] != "team_autoimport" {
+	if got, want := len(bridge.calls), 3; got != want || bridge.calls[0] != "dispatch" || bridge.calls[1] != "discover" || bridge.calls[2] != "team_autoimport" {
 		t.Fatalf("bridge calls=%#v", bridge.calls)
 	}
 	if bridge.teamReference != (DomainReference{OrganizationID: testOrg, SyncRunID: testRun}) {
@@ -73,6 +73,9 @@ func TestCoordinatorWorkersFailClosedWithoutBridgeOrJob(t *testing.T) {
 	}
 	if err := (&postSyncWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
 		t.Fatalf("post-sync worker error=%v", err)
+	}
+	if err := (&finalizeWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
+		t.Fatalf("finalize worker error=%v", err)
 	}
 	if err := (&teamAutoimportWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
 		t.Fatalf("team autoimport worker error=%v", err)

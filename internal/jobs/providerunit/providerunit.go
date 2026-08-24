@@ -97,6 +97,15 @@ const (
 	// addition, matching the precedent set by GitHubFilesInventoryFailureCategory
 	// and EffectRecoveryAmbiguousCategory above.
 	GitHubTestsArtifactOversizedCategory = "github_tests_artifact_oversized"
+	// FeatureDisabledCategory covers a unit refused by the execution-time
+	// canonical-incident entitlement re-check (Jira incidents and every
+	// PagerDuty dataset). Python's FEATURE_DISABLED_ERROR_CATEGORY
+	// (sync/canonical_incident_gate.py:24), stamped by _classify_error
+	// (workers/sync_units.py:266). Deterministic given the organization's
+	// current feature state: the same disabled feature refuses identically on
+	// every attempt, so retrying only re-reads the same rows five times before
+	// burying the real cause under provider_unit_exhausted (CHAOS-4219).
+	FeatureDisabledCategory = "feature_disabled"
 )
 
 func deterministicTerminalCategory(err error) (string, bool) {
@@ -115,6 +124,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrGitHubTestsArtifactOversized) {
 		return GitHubTestsArtifactOversizedCategory, true
+	}
+	if errors.Is(err, providersync.ErrIncidentEntitlementDisabled) {
+		return FeatureDisabledCategory, true
 	}
 	// Authentication and not-found are already non-retryable at the HTTP layer
 	// (providerfoundation.ProviderError.Retryable), so the unit handler was

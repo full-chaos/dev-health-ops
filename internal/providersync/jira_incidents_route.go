@@ -90,7 +90,7 @@ type jiraIncidentRow struct {
 }
 
 type JiraIncidentRouteHandler struct {
-	Entitlement JiraIncidentEntitlement
+	Entitlement IncidentEntitlement
 	MaxPages    int
 	MaxRows     int
 	PerPage     int
@@ -128,7 +128,9 @@ func (handler JiraIncidentRouteHandler) Collect(
 		handler.Entitlement == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
-	if err := handler.Entitlement.Require(ctx, claim.OrgID); err != nil {
+	if err := requireIncidentEntitlement(
+		ctx, handler.Entitlement, client.Metrics, claim, IncidentEntitlementSeamCollect,
+	); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	maxPages, maxRows, perPage, err := handler.limits()

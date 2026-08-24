@@ -55,8 +55,9 @@ func TestPagerDutyEscalationPoliciesEffectUsesMigratedClickHouseAndExactReplay(t
 		t.Fatal(err)
 	}
 	sink := PagerDutyEscalationPoliciesClickHouseEffects{
-		Conn:  conn,
-		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn,
+		Lease:       providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
 	if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectAbsent {
 		t.Fatalf("before write inspection=%s error=%v", inspection, err)

@@ -68,7 +68,8 @@ func TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantA
 		t.Fatal(err)
 	}
 	sink := PagerDutyServicesClickHouseEffects{
-		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 		ProviderInstanceID: "Acme", Now: func() time.Time { return initialAt },
 	}
 	if inspection, err := sink.InspectEffect(ctx, claim, serviceEffect); err != nil || inspection != EffectAbsent {
@@ -188,7 +189,8 @@ WHERE id = ?`,
 	// A lease loss at the durable write boundary must fail closed; the batch is
 	// prepared but never acknowledged as written.
 	leaseSink := PagerDutyServicesClickHouseEffects{
-		Conn: conn, ProviderInstanceID: "acme",
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, ProviderInstanceID: "acme",
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return providerfoundation.ErrLeaseLost }),
 	}
 	if err := leaseSink.WriteEffect(ctx, claim, updatedServiceEffect); !errors.Is(err, providerfoundation.ErrLeaseLost) {

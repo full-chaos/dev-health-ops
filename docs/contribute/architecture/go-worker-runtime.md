@@ -817,8 +817,8 @@ flowchart TD
   end
 
   subgraph WUNIT["dev-health-worker — provider-unit job execution"]
-    JIRA["Jira: PostgresJiraIncidentEntitlement.Require re-check<br/>[domain]"]
-    PD["PagerDuty: no execution-time re-check today (CHAOS-4219 gap)<br/>[domain]"]
+    JIRA["Jira incidents: PostgresIncidentEntitlement.Require re-check<br/>before fetch + at the ClickHouse write boundary<br/>[domain]"]
+    PD["PagerDuty (every dataset): the SAME PostgresIncidentEntitlement.Require<br/>re-check at the same two seams (CHAOS-4219)<br/>[domain]"]
     ARMFIN["Unit terminal path arms the finalize wakeup:<br/>sync_dispatch_outbox(kind=finalize_sync_run)<br/>[domain]"]
   end
 
@@ -888,7 +888,8 @@ coordinator pool at all, which is exactly why `DispatchGuard`'s `tier_limits`
 read had to be dual-granted rather than left coordinator-only (CHAOS-4175;
 see the dual-grant table list in `domainPosture()`'s doc comment).
 
-**Two gaps this diagram states explicitly rather than glossing over, matching
+**One gap this diagram states explicitly rather than glossing over, and one
+former gap kept here as its closure record, matching
 this page's own convention of naming a known gap in place rather than
 smoothing it into the happy path (see, elsewhere on this page, the
 `worker_job_routes`/sweep defect under [Which pool every component is
@@ -896,14 +897,24 @@ constructed on](#which-pool-every-component-is-constructed-on) and the
 CHAOS-4054/CHAOS-4075 documentation-currency gap under [Queue
 topology](#queue-topology)):**
 
-- **PagerDuty has no execution-time canonical-incident re-check.** Jira's unit
-  execution re-verifies entitlement at two points
-  (`internal/providersync/jira_incidents_route.go:131` and
-  `jira_incidents_effects_clickhouse.go:51`) before trusting the feature gate
-  Dispatch read earlier in the same pass. PagerDuty units have no equivalent
-  call anywhere. The window this leaves is bounded (one Dispatch pass) and
-  accepted as a tradeoff, not a bug, but it is real and asymmetric across the
-  two providers. Tracked as CHAOS-4219.
+- **PagerDuty execution-time canonical-incident re-check (closed, CHAOS-4219).**
+  Jira's unit execution re-verifies entitlement at two points before trusting
+  the feature gate Dispatch read earlier in the same pass; PagerDuty units
+  formerly had no equivalent call, an asymmetry that mattered once CHAOS-4209
+  ruled the Dispatch gate non-locking. Both providers now share ONE
+  implementation, `internal/providersync/incident_entitlement.go`
+  (`PostgresIncidentEntitlement.Require`, non-locking, called through
+  `requireIncidentEntitlement`), at the same two seams: every PagerDuty route
+  handler's `Collect` before the first provider request, and every PagerDuty
+  ClickHouse sink's `WriteEffect` before the connection is touched. A refusal
+  is counted on the single shared series
+  `dev_health_provider_incident_entitlement_refused_total{provider,dataset,seam}`
+  and terminalizes the unit as `feature_disabled`
+  (`internal/jobs/providerunit/providerunit.go`, `FeatureDisabledCategory`),
+  the category Python's `_classify_error` stamps for the same refusal. The
+  worker refuses to construct any PagerDuty executor without the entitlement
+  (`cmd/dev-health-worker/provider_sync.go`, `errWorkerDependencyUnavailable`),
+  the same fail-closed posture Jira incidents already had.
 - **Neither finalize path actively invalidates the coverage cache.**
   `invalidateSyncCoverageForIntegration` (`native_finalize_sync_run.go:813`)
   updates `sync_coverage_projections.invalidated_at` in Postgres on every

@@ -84,9 +84,10 @@ type pagerDutyOnCallRow struct {
 // normalization. Registration, matrix/config, and worker wiring stay in the
 // integration lane.
 type PagerDutyOnCallsRouteHandler struct {
-	MaxPages int
-	MaxRows  int
-	PerPage  int
+	Entitlement IncidentEntitlement
+	MaxPages    int
+	MaxRows     int
+	PerPage     int
 }
 
 type pagerDutyOnCallsCountingDoer struct {
@@ -128,6 +129,11 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 		claim.Provider != "pagerduty" || claim.Dataset != "on-calls" || client == nil ||
 		client.Provider != "pagerduty" || client.BaseURL == nil || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if err := requireIncidentEntitlement(
+		ctx, handler.Entitlement, client.Metrics, claim, IncidentEntitlementSeamCollect,
+	); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	maxPages, maxRows, perPage, err := handler.limits()
 	if err != nil {

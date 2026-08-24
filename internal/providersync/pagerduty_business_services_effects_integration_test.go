@@ -61,7 +61,8 @@ func TestPagerDutyBusinessServicesEffectUsesMigratedClickHouseTombstonesAndExact
 		t.Fatal(err)
 	}
 	sink := PagerDutyBusinessServicesClickHouseEffects{
-		Conn: conn, ProviderInstanceID: "Acme",
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn, ProviderInstanceID: "Acme",
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 		Now:   func() time.Time { return initialAt },
 	}

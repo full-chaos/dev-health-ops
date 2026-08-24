@@ -60,7 +60,8 @@ func TestPagerDutyServicesReadbackDoesNotClaimV2ColumnsFromActiveLegacySchema(t 
 	}
 	conn := &pagerDutyLegacySchemaProbeConn{}
 	sink := PagerDutyServicesClickHouseEffects{
-		Conn: conn,
+		Entitlement: allowIncidentEntitlement,
+		Conn:        conn,
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error {
 			return nil
 		}),

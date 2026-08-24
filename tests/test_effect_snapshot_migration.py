@@ -212,10 +212,7 @@ def test_integration_fixture_ddl_matches_snapshot_migrations() -> None:
         / "0093_tenant_fence_effect_snapshots.py"
     ).read_text(encoding="utf-8")
     fixture_source = (
-        _REPO_ROOT
-        / "internal"
-        / "providersync"
-        / "repository_postgres_integration_test.go"
+        _REPO_ROOT / "internal" / "testsupport" / "providersyncschema" / "schema.go"
     ).read_text(encoding="utf-8")
     fixture_ddl = fixture_source.split("const snapshotFixtureDDL = `", maxsplit=1)[1]
     fixture_ddl = fixture_ddl.split("`", maxsplit=1)[0]

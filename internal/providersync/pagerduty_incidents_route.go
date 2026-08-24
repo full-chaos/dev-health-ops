@@ -30,6 +30,7 @@ const (
 // cap, and completion rules while keeping one typed effect per Python sink
 // boundary. It intentionally does not register or activate a worker route.
 type PagerDutyIncidentFamilyRouteHandler struct {
+	Entitlement   IncidentEntitlement
 	MaxPages      int
 	MaxRows       int
 	PerPage       int
@@ -364,6 +365,11 @@ func (handler PagerDutyIncidentFamilyRouteHandler) Collect(
 	if claim.Dataset != "incidents" && claim.Dataset != "incident-alerts" &&
 		claim.Dataset != "incident-log-entries" && claim.Dataset != "incident-notes" {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if err := requireIncidentEntitlement(
+		ctx, handler.Entitlement, client.Metrics, claim, IncidentEntitlementSeamCollect,
+	); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	maxPages, maxRows, perPage, cap, err := pagerDutyIncidentFamilyLimits(handler)
 	if err != nil {

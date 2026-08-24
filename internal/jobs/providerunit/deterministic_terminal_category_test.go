@@ -61,6 +61,16 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			category: GitHubTestsArtifactOversizedCategory,
 		},
 		{
+			// Deterministic given the organization's current feature state:
+			// the execution-time canonical-incident re-check (Jira incidents
+			// and every PagerDuty dataset) reads the same disabled feature on
+			// every attempt. Python stamps the same category from
+			// _classify_error (CHAOS-4219).
+			name:     "canonical incident entitlement disabled",
+			err:      providersync.ErrIncidentEntitlementDisabled,
+			category: FeatureDisabledCategory,
+		},
+		{
 			// Already non-retryable at the HTTP layer; the unit handler was
 			// still spending four more executions against a dead credential.
 			name:     "authentication",
@@ -130,6 +140,11 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 		// this mapper at all.
 		providersync.ErrGitHubTestsIncomplete,
 		providersync.ErrGitHubTestsArtifactUnavailable,
+		// An entitlement that could not be READ is an infrastructure fault,
+		// not a policy decision: it must retry, and must never be swept into
+		// feature_disabled with the sibling sentinel it fails closed beside.
+		providersync.ErrIncidentEntitlementUnavailable,
+		fmt.Errorf("%w: %w", providersync.ErrIncidentEntitlementUnavailable, errors.New("pool exhausted")),
 	} {
 		if category, ok := deterministicTerminalCategory(err); ok {
 			t.Errorf("deterministicTerminalCategory(%v) = (%q, true), want retryable",

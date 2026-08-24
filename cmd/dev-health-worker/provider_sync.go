@@ -86,6 +86,8 @@ func pagerDutyEffectsFactory(
 	dataset string,
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	entitlement providersync.IncidentEntitlement,
+	metrics *providerfoundation.Metrics,
 ) providersync.CompleteRouteEffectsFactory {
 	return func(
 		credential providerfoundation.Credential,
@@ -101,34 +103,42 @@ func pagerDutyEffectsFactory(
 		switch dataset {
 		case "services":
 			effects = providersync.PagerDutyServicesClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "business-services":
 			effects = providersync.PagerDutyBusinessServicesClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "escalation-policies":
 			effects = providersync.PagerDutyEscalationPoliciesClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease,
 			}
 		case "schedules":
 			effects = providersync.PagerDutySchedulesClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "on-calls":
 			effects = providersync.PagerDutyOnCallsClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "users":
 			effects = providersync.PagerDutyUsersClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "teams":
 			effects = providersync.PagerDutyTeamsClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		case "incidents", "incident-alerts", "incident-log-entries", "incident-notes":
 			effects = providersync.PagerDutyIncidentFamilyClickHouseEffects{
+				Entitlement: entitlement, Metrics: metrics,
 				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
 			}
 		default:
@@ -157,13 +167,13 @@ func buildProviderSyncHandler(
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
 	domainPool *pgxpool.Pool,
-	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	incidentEntitlement providersync.IncidentEntitlement,
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, decryptor, clickhouseConnection, valkeyClient,
-		domainPool, jiraIncidentEntitlement, collector, logger,
+		domainPool, incidentEntitlement, collector, logger,
 		workItemsRuntimeConfig{},
 	)
 }
@@ -177,14 +187,14 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
 	domainPool *pgxpool.Pool,
-	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	incidentEntitlement providersync.IncidentEntitlement,
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	githubWorkItemsRuntime githubWorkItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, decryptor, clickhouseConnection, valkeyClient,
-		domainPool, jiraIncidentEntitlement, collector, logger,
+		domainPool, incidentEntitlement, collector, logger,
 		githubWorkItemsRuntime,
 	)
 }
@@ -195,14 +205,14 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
 	domainPool *pgxpool.Pool,
-	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	incidentEntitlement providersync.IncidentEntitlement,
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	workItemsRuntime workItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithRuntimeDependencies(
 		repository, decryptor, nil, clickhouseConnection, valkeyClient,
-		domainPool, jiraIncidentEntitlement, collector, logger, workItemsRuntime,
+		domainPool, incidentEntitlement, collector, logger, workItemsRuntime,
 	)
 }
 
@@ -213,7 +223,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
 	domainPool *pgxpool.Pool,
-	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	incidentEntitlement providersync.IncidentEntitlement,
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	workItemsRuntime workItemsRuntimeConfig,
@@ -544,19 +554,19 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				sink, readback = ghCommitStatsSink, ghCommitStatsSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "incidents":
-				if jiraIncidentEntitlement == nil {
+				if incidentEntitlement == nil {
 					return providersync.CompleteRouteExecutor{},
 						errWorkerDependencyUnavailable
 				}
 				jiraSink := providersync.JiraIncidentClickHouseEffects{
 					Writer: clickhouseConnection, Lease: session,
-					Entitlement: jiraIncidentEntitlement,
+					Entitlement: incidentEntitlement, Metrics: providerMetrics,
 				}
 				jiraReadback := providersync.JiraIncidentClickHouseReadback{
 					Conn: clickhouseConnection, Lease: session,
 				}
 				routeHandler = providersync.JiraIncidentRouteHandler{
-					Entitlement: jiraIncidentEntitlement,
+					Entitlement: incidentEntitlement,
 				}
 				sink, readback = jiraSink, jiraReadback
 			case session.Claim.Provider == "github" &&
@@ -578,28 +588,54 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				routeHandler = providersync.GitHubTestsRouteHandler{}
 				sink, readback = ghTestsSink, ghTestsSink
 			case session.Claim.Provider == "pagerduty":
+				// Every PagerDuty dataset is canonical-incident gated
+				// (sync/datasets.py _GATED_SYNC_TARGETS), so the same
+				// execution-time entitlement Jira incidents carry is a hard
+				// dependency here too: without it the route would pass a
+				// disabled organization through, which is the CHAOS-4219 gap.
+				if incidentEntitlement == nil {
+					return providersync.CompleteRouteExecutor{},
+						errWorkerDependencyUnavailable
+				}
 				switch session.Claim.Dataset {
 				case "services":
-					routeHandler = providersync.PagerDutyServicesRouteHandler{}
+					routeHandler = providersync.PagerDutyServicesRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "business-services":
-					routeHandler = providersync.PagerDutyBusinessServicesRouteHandler{}
+					routeHandler = providersync.PagerDutyBusinessServicesRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "escalation-policies":
-					routeHandler = providersync.PagerDutyEscalationPoliciesRouteHandler{}
+					routeHandler = providersync.PagerDutyEscalationPoliciesRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "schedules":
-					routeHandler = providersync.PagerDutySchedulesRouteHandler{}
+					routeHandler = providersync.PagerDutySchedulesRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "on-calls":
-					routeHandler = providersync.PagerDutyOnCallsRouteHandler{}
+					routeHandler = providersync.PagerDutyOnCallsRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "users":
-					routeHandler = providersync.PagerDutyUsersRouteHandler{}
+					routeHandler = providersync.PagerDutyUsersRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "teams":
-					routeHandler = providersync.PagerDutyTeamsRouteHandler{}
+					routeHandler = providersync.PagerDutyTeamsRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				case "incidents", "incident-alerts", "incident-log-entries", "incident-notes":
-					routeHandler = providersync.PagerDutyIncidentFamilyRouteHandler{}
+					routeHandler = providersync.PagerDutyIncidentFamilyRouteHandler{
+						Entitlement: incidentEntitlement,
+					}
 				default:
 					return providersync.CompleteRouteExecutor{}, errWorkerDependencyUnavailable
 				}
 				effectsFactory = pagerDutyEffectsFactory(
 					session.Claim.Dataset, clickhouseConnection, session,
+					incidentEntitlement, providerMetrics,
 				)
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
@@ -771,7 +807,7 @@ func constructProviderSyncWorkerWithDependencies(
 			AppClientSecret: cfg.PagerDutyOAuthSecret,
 		},
 		clickhouseConnection, valkeyClient, postgresDatabase.pools.Domain,
-		providersync.PostgresJiraIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
+		providersync.PostgresIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
 		collector, logger, workItemsRuntime,
 	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](

@@ -15,7 +15,8 @@ const jiraIncidentColumns = "org_id,provider,provider_instance_id,source_entity_
 type JiraIncidentClickHouseEffects struct {
 	Writer      jiraIncidentBatchPreparer
 	Lease       providerfoundation.LeaseGuard
-	Entitlement JiraIncidentEntitlement
+	Entitlement IncidentEntitlement
+	Metrics     *providerfoundation.Metrics
 }
 
 // JiraIncidentClickHouseReadback deliberately has no entitlement dependency.
@@ -48,7 +49,9 @@ func (sink JiraIncidentClickHouseEffects) WriteEffect(
 	// Preserve Python's second entitlement check at the actual persistence
 	// boundary. Provider collection and effect-ledger preparation can take long
 	// enough for an earlier grant to be revoked.
-	if err := sink.Entitlement.Require(ctx, claim.OrgID); err != nil {
+	if err := requireIncidentEntitlement(
+		ctx, sink.Entitlement, sink.Metrics, claim, IncidentEntitlementSeamWrite,
+	); err != nil {
 		return err
 	}
 	if len(rows) == 0 {

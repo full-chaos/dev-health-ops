@@ -27,6 +27,7 @@ import contextlib
 import json
 import os
 import sys
+from typing import Any
 
 
 def main() -> int:
@@ -60,7 +61,7 @@ def main() -> int:
         for case in aggregate_cases
     ]
 
-    reason_cases = [
+    reason_cases: list[dict[str, Any]] = [
         {"planner_result": {"reason": "pagerduty_credential_unavailable"}},
         {"planner_result": {"error_category": "feature_disabled"}},
         {

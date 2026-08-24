@@ -792,6 +792,107 @@ func TestNativeMaterializerConcurrentReplayConverges(t *testing.T) {
 	}
 }
 
+// TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges
+// reproduces CHAOS-4203: the "ensure scheduled security dataset" INSERT at
+// materializer.go:1293-1296 computes a fully deterministic id
+// (uuid.NewSHA1 over IntegrationID plus a fixed "security" suffix), so two
+// concurrent replays of the same occurrence always attempt to insert the
+// SAME primary key -- but its ON CONFLICT clause names only the
+// (org_id,integration_id,dataset_key) unique constraint as arbiter.
+// integration_datasets ALSO has a separate PRIMARY KEY on id (alembic
+// 0015_add_integration_data_model.py). Postgres only protects the
+// SPECIFIED arbiter: when both inserts reach the server's physical
+// index-insertion phase before either commits, the second one raises a
+// raw duplicate-key error on the pkey instead of waiting to recheck the
+// (unaffected) arbiter, even though the rows are byte-identical. Confirmed
+// empirically (not by source inference), including that a SERIALIZED
+// handoff (one insert blocks server-side, confirmed via pg_stat_activity,
+// before the other commits) does NOT reproduce it -- Postgres's
+// arbiter-wait path resolves that case silently every time. Only true
+// concurrent racing -- both inserts in flight, unresolved, at once --
+// reproduces the bug, which is why TestNativeMaterializerConcurrentReplayConverges
+// (using the same free-running two-goroutine shape as production replay)
+// only flaked once under CI's heavier scheduler load despite 4/4 clean
+// local runs including -race (the isolation evidence in CHAOS-4203).
+//
+// This test forces that same close-simultaneity attempt every iteration:
+// both goroutines open their transaction and signal ready BEFORE either is
+// released past the start barrier, so the INSERTs are issued as close to
+// simultaneously as the Go scheduler allows -- it guarantees both
+// transactions are already open before either INSERT fires, not that the
+// two INSERTs' server-side execution actually overlaps. The attempt is
+// repeated because a single racing pair only hits the window some of the
+// time (measured ~29%, 87/300, in a local probe using this exact shape),
+// so pre-fix this test fails
+// within the first several attempts and post-fix all 150 must converge
+// silently, which is a much stronger guarantee than CI's incidental load
+// ever exercised. TestNativeMaterializerConcurrentReplayConverges (still
+// passing, unmodified) is what proves the surrounding persistDomainGraph
+// writes and the outer domain-transaction commit are unaffected by the
+// savepoint recovery -- this test isolates only the vulnerable statement.
+func TestApplyDomainPlanMutationsEnsureSecurityDatasetConcurrentInsertConverges(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	ctx := context.Background()
+
+	var integrationID string
+	if err := fixture.pool.QueryRow(ctx, `SELECT integration_id::text FROM sync_configurations WHERE id=$1::uuid`, fixture.occurrence.ConfigID).Scan(&integrationID); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadedMaterializationPlan{
+		ensureSecurityDataset: true,
+		input:                 PlannerInput{OrgID: fixture.occurrence.OrgID, IntegrationID: integrationID},
+	}
+
+	const attempts = 150
+	for attempt := range attempts {
+		if _, err := fixture.pool.Exec(ctx, `DELETE FROM integration_datasets WHERE org_id=$1 AND integration_id=$2::uuid AND dataset_key='security'`, loaded.input.OrgID, integrationID); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var ready, group sync.WaitGroup
+		ready.Add(2)
+		group.Add(2)
+		for range 2 {
+			go func() {
+				defer group.Done()
+				tx, err := fixture.pool.Begin(context.Background())
+				if err != nil {
+					ready.Done()
+					errs <- err
+					return
+				}
+				ready.Done()
+				<-start
+				err = applyDomainPlanMutations(context.Background(), tx, loaded, time.Now())
+				if err == nil {
+					err = tx.Commit(context.Background())
+				} else {
+					_ = tx.Rollback(context.Background())
+				}
+				errs <- err
+			}()
+		}
+		ready.Wait()
+		close(start)
+		group.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("attempt %d: concurrent replay of the ensure-INSERT for the same (org,integration,dataset) did not converge: %v", attempt, err)
+			}
+		}
+	}
+
+	var rowCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM integration_datasets WHERE org_id=$1 AND integration_id=$2::uuid AND dataset_key='security'`, loaded.input.OrgID, integrationID).Scan(&rowCount); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("concurrent replay left %d security dataset rows, want 1", rowCount)
+	}
+}
+
 func TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan(t *testing.T) {
 	fixture := startMaterializerPostgres(t)
 	const missingCredential = "00000000-0000-4000-8000-000000009999"

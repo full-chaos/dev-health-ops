@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, timedelta
 from typing import Any
 
+from dev_health_ops.core.cache import TTLCache
+from dev_health_ops.core.cache_epoch_telemetry import CACHE_EPOCH_UNREADABLE_TOTAL
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.utils.datetime import utc_today
 
@@ -13,6 +16,8 @@ from ..queries.scopes import (
     resolve_repo_ids,
     resolve_repo_ids_for_teams,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def filter_cache_key(
@@ -30,6 +35,44 @@ def filter_cache_key(
     payload["_org_id"] = org_id
     serialized = json.dumps(payload, sort_keys=True, default=str)
     return f"{prefix}:{serialized}"
+
+
+def epoch_cache_key(
+    cache: TTLCache,
+    prefix: str,
+    org_id: str,
+    filters: MetricFilter,
+    extra: dict[str, Any] | None = None,
+) -> str | None:
+    """``filter_cache_key`` scoped by the org's cache epoch (CHAOS-4226).
+
+    One backend GET reads the epoch; a bump by the Go finalize (or by
+    ``core.cache_invalidation``) changes the key, so the next read misses
+    and recomputes instead of serving the pre-finalize entry until TTL.
+    Returns None when the epoch is UNREADABLE (backend error): the caller
+    must then bypass the cache for this request -- neither read nor write
+    -- because guessing epoch 0 could serve a pre-bump entry. An absent
+    epoch key is 0, not None. The entry-TTL ceiling is enforced once at
+    construction (``core.cache.epoch_scoped``), not here.
+    """
+    epoch = cache.org_epoch(org_id)
+    if epoch is None:
+        # A bypass is neither a hit nor a consumed invalidation; make it
+        # visible on its own series and log line (CHAOS-4226).
+        CACHE_EPOCH_UNREADABLE_TOTAL.labels(prefix=prefix).inc()
+        logger.warning(
+            "cache.epoch_unreadable",
+            extra={
+                "prefix": prefix,
+                "org_id": org_id,
+                "error": cache.last_epoch_error(org_id),
+            },
+        )
+        return None
+    scoped = {"_cache_epoch": epoch}
+    if extra:
+        scoped = {**extra, **scoped}
+    return filter_cache_key(prefix, org_id, filters, extra=scoped)
 
 
 def time_window(filters: MetricFilter) -> tuple[date, date, date, date]:

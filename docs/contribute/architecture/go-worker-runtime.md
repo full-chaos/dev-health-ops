@@ -829,11 +829,15 @@ flowchart TD
 
   subgraph WFIN["dev-health-worker — NativeFinalizeSyncRunService"]
     TERM["Terminalize sync_runs / sync_run_units;<br/>observeTerminalSyncRun updates backfill_jobs / job_runs<br/>[domain]"]
-    COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at<br/>[domain]"]
+    COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at<br/>(once-only branch, inside the finalizing tx)<br/>[domain]"]
+    COMMIT["tx.Commit"]
+    EPOCH["invalidateCoverageCache (CHAOS-4226): INCR + EXPIRE<br/>cache_epoch:org:{org_id} via VALKEY_URI (DB 1), 5s bound,<br/>AFTER commit, once-only branch only; failure is logged +<br/>counted, never fails the committed finalize<br/>[external — Valkey, no Postgres role]"]
+    CNT["emitted_total{provider}++ always;<br/>consumed_total{provider}++ only on Valkey ACK<br/>(devhealth_sync_coverage_cache_invalidations_*)"]
   end
 
-  subgraph CACHEHOP["Python API — home dashboard"]
-    VALKEY["TTLCache (Valkey/Redis backend) serves the next /home read.<br/>NativeFinalizeSyncRunService has no hook into it -- neither did<br/>Python's finalize_sync_run. The ONLY active invalidation path today<br/>is inbound provider webhooks (system_webhooks.py), unrelated to this<br/>pathway; otherwise it's TTL-expiry only (CHAOS-4226)<br/>[external — Valkey, no Postgres role]"]
+  subgraph CACHEHOP["Python API — home / explain read path"]
+    EPOCHREAD["epoch_cache_key: ONE GET of cache_epoch:org:{org_id}<br/>via REDIS_URL (same Valkey, DB 1); absent / memory fallback = 0<br/>[external — Valkey, no Postgres role]"]
+    VALKEY["TTLCache entry home:{filters, _org_id, _cache_epoch}.<br/>Epoch changed ⇒ miss ⇒ recompute from ClickHouse +<br/>sync_coverage_projections; old entries age out by TTL (60s/120s)<br/>[external — Valkey; recompute reads ClickHouse + domain]"]
   end
 
   MATREAD --> MATDOMAIN --> MATOUTBOX --> KDISP --> PUBDISP --> GATE --> BUDGET --> CLAIM --> PUB --> RESOLVE
@@ -844,7 +848,8 @@ flowchart TD
   INSERTUNIT --> PD
   JIRA --> ARMFIN
   PD --> ARMFIN
-  ARMFIN --> KFIN --> PUBFIN --> TERM --> COV --> VALKEY
+  ARMFIN --> KFIN --> PUBFIN --> TERM --> COV --> COMMIT --> EPOCH --> CNT
+  EPOCH -.->|"INCR lands in the shared keyspace"| EPOCHREAD --> VALKEY
 ```
 
 **Reading the pathway by role, not by process:** the same three-role split
@@ -888,8 +893,8 @@ coordinator pool at all, which is exactly why `DispatchGuard`'s `tier_limits`
 read had to be dual-granted rather than left coordinator-only (CHAOS-4175;
 see the dual-grant table list in `domainPosture()`'s doc comment).
 
-**One gap this diagram states explicitly rather than glossing over, and one
-former gap kept here as its closure record, matching
+**Two former gaps this diagram once stated explicitly rather than glossing
+over, both kept here as their closure records, matching
 this page's own convention of naming a known gap in place rather than
 smoothing it into the happy path (see, elsewhere on this page, the
 `worker_job_routes`/sweep defect under [Which pool every component is
@@ -915,29 +920,48 @@ topology](#queue-topology)):**
   worker refuses to construct any PagerDuty executor without the entitlement
   (`cmd/dev-health-worker/provider_sync.go`, `errWorkerDependencyUnavailable`),
   the same fail-closed posture Jira incidents already had.
-- **Neither finalize path actively invalidates the coverage cache.**
-  `invalidateSyncCoverageForIntegration` (`native_finalize_sync_run.go:813`)
-  updates `sync_coverage_projections.invalidated_at` in Postgres on every
-  finalize — parity with Python's own `finalize_sync_run`
-  (`sync_units.py`), which calls the same
-  `invalidate_sync_coverage_projection_sync` and nothing else. Neither
-  finalize path calls into
-  `dev_health_ops.core.cache_invalidation.invalidate_cache_for_event`. That
-  function is NOT dead code, though — an earlier version of this note
-  claimed it had zero callers anywhere, which codex round 3 caught as false:
-  `invalidate_on_sync_complete`/`invalidate_on_metrics_update` wrap it and
-  ARE called, from `system_webhooks.py`'s inbound-webhook handler
-  (`_invalidate_sync_cache`, triggered by a provider pushing a webhook TO
-  this service) and from the daily-metrics worker — both a completely
-  different trigger than a scheduled sync run finishing. So the home
-  dashboard's Valkey-backed `TTLCache`
-  (`dev_health_ops/api/services/home.py`, `core/cache.py`) DOES get
-  invalidated on some events, just never on "this scheduled sync run just
-  finished" — an organization that syncs on schedule with no inbound
-  webhook traffic sees stale coverage until the TTL expires regardless.
-  Filed as CHAOS-4226: the durable Postgres signal exists and is correct;
-  scheduled-sync completion specifically has no hook into the cache layer
-  that already exists and already reacts to other triggers.
+- **The finalize → cache hop (CHAOS-4226, closed).** Before CHAOS-4226 the
+  native finalize's only invalidation was the Postgres one
+  (`invalidateSyncCoverageForIntegration`, `native_finalize_sync_run.go`),
+  so the home dashboard's Valkey-backed `TTLCache` served pre-finalize
+  coverage until TTL; the hop cost three investigation rounds on
+  2026-08-22. Worse than the ticket recorded: the wrappers that looked
+  like the cache's invalidation path (`invalidate_on_sync_complete` from
+  `workers/system_webhooks.py`, `invalidate_on_metrics_update` from
+  `workers/metrics_daily.py`) invalidate by `gql_tag:` index, and
+  `GraphQLCacheManager.set_query_result` — the only writer of that index —
+  has no caller in `src/`, so both had always invalidated zero keys.
+  The fix is a per-org **cache epoch**: the home/explain keys embed the
+  full filter payload and cannot be enumerated, so instead every org has
+  one key `cache_epoch:org:{org_id}` (contract:
+  `contracts/cache-invalidation/v1/org_cache_epoch_key.json`, regenerated
+  from the Python producer `core.cache.org_cache_epoch_key` and asserted by
+  `internal/cacheinvalidation/contract_test.go`). Readers fold its value
+  into the key (`api/services/filtering.py::epoch_cache_key`, one GET per
+  request; absent = 0, UNREADABLE = bypass the cache for that request rather
+  than guess 0); the Go finalize INCR+EXPIREs it **after**
+  `tx.Commit` on the once-only branch (the `already_dispatched` re-finalize
+  skips it, exactly like the Postgres invalidation), bounded to 5s, and a
+  failure is logged (`finalize_sync_run.coverage_cache_invalidation_failed`
+  with `sync_run_id`/`org_id`/`integration_id`/`provider`) and counted but
+  never fails the committed finalize. Telemetry pair:
+  `devhealth_sync_coverage_cache_invalidations_emitted_total{provider}` and
+  `..._consumed_total{provider}`; `emitted - consumed > 0` is the alert.
+  `invalidate_cache_for_event` now bumps the same epoch, so the webhook
+  producer clears the home cache too. **Deployment coupling:** the Python
+  API reads `REDIS_URL`, the Go worker reads `VALKEY_URI`; both must name
+  the SAME Valkey and DB — every checked-in deployment uses
+  `redis://valkey:6379/1`, and `internal/storage/valkey/factory.go`'s
+  `Validate` refuses any DB but 1 (pinned by
+  `TestValkeyFactoryPinsTheSharedKeyspace`). `buildSyncCoordinatorWorker`
+  refuses to build without `VALKEY_URI`, the same way it refuses without
+  ClickHouse. The epoch key's expiry (30 days, refreshed on every bump)
+  exceeds the longest epoch-scoped entry TTL Python allows (3600s) by a
+  factor of 100 so an expired epoch can never resurrect live entries.
+  **Scope:** only the epoch-scoped caches (`HOME_CACHE`, `EXPLAIN_CACHE`)
+  react; the GraphQL `CachedDataLoader` entries
+  (`api/graphql/loaders/base.py`, `make_cache_key` + `mget`, 300 s TTL) are
+  not epoch-aware and stay TTL-only — a follow-up, not part of CHAOS-4226.
 
 ## Deployment couplings
 
@@ -1102,10 +1126,13 @@ a new contract version; adding an optional field does not.
   re-check, unlike Jira's two-site re-verification; a bounded, accepted
   staleness window with no backstop today. See [The native sync-dispatch
   coordinator pathway](#the-native-sync-dispatch-coordinator-pathway)
-- CHAOS-4226 — the home dashboard's Valkey-backed coverage cache is never
-  actively invalidated when a scheduled sync run finishes (neither the
-  native nor the Python finalize path hooks into it); the invalidation
-  machinery itself is live and already reacts to inbound provider webhooks
-  and daily-metrics updates, just not to this trigger. See [The native
-  sync-dispatch coordinator
+- CHAOS-4226 (closed) — the native finalize now bumps the per-org cache
+  epoch in Valkey after commit and the home/explain read path folds it
+  into its key; `emitted - consumed` on
+  `devhealth_sync_coverage_cache_invalidations_*_total` is the alert. Left
+  as ticket candidates, not changed here: `workers/metrics_daily.py`
+  passes `org_id=""` to `_invalidate_metrics_cache` (no org to bump), and
+  `core/cache_invalidation.py`'s `publish_invalidation_event` /
+  `subscribe_to_invalidation_events` pub/sub pair has no caller. See [The
+  native sync-dispatch coordinator
   pathway](#the-native-sync-dispatch-coordinator-pathway)

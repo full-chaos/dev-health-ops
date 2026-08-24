@@ -43,6 +43,7 @@ from dev_health_ops.api.internal.worker_workgraph import (
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
+from dev_health_ops.core.cache import epoch_scoped
 from dev_health_ops.llm import get_provider
 from dev_health_ops.llm.errors import (
     LLMAuthError,
@@ -154,8 +155,11 @@ from .services.work_unit_explain import explain_work_unit
 from .services.work_units import build_work_unit_investments
 from .webhooks import router as webhooks_router
 
-HOME_CACHE = create_cache(ttl_seconds=60)
-EXPLAIN_CACHE = create_cache(ttl_seconds=120)
+# Both are epoch-scoped (CHAOS-4226): their keys fold in the per-org cache
+# epoch the Go finalize bumps, and epoch_scoped() pins the entry TTL under
+# the epoch key's expiry margin once, here, rather than per request.
+HOME_CACHE = epoch_scoped(create_cache(ttl_seconds=60))
+EXPLAIN_CACHE = epoch_scoped(create_cache(ttl_seconds=120))
 WORK_UNITS_MAX_LIMIT = 1000
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ from ..queries.explain import fetch_metric_contributors, fetch_metric_driver_del
 from ..queries.metrics import fetch_metric_value
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
-from .filtering import filter_cache_key, scope_filter_for_metric, time_window
+from .filtering import epoch_cache_key, scope_filter_for_metric, time_window
 from .identity import (
     looks_like_uuid,
     resolve_scope_display_names,
@@ -126,8 +126,11 @@ async def build_explain_response(
     cache: TTLCache,
     org_id: str = "",
 ) -> ExplainResponse:
-    cache_key = filter_cache_key("explain", org_id, filters, extra={"metric": metric})
-    cached = cache.get(cache_key)
+    cache_key = epoch_cache_key(
+        cache, "explain", org_id, filters, extra={"metric": metric}
+    )
+    # None = org epoch unreadable: bypass the cache for this request.
+    cached = cache.get(cache_key) if cache_key is not None else None
     if cached is not None:
         try:
             return ExplainResponse.model_validate(cached)
@@ -253,7 +256,8 @@ async def build_explain_response(
         },
     )
 
-    cache.set(cache_key, response.model_dump(mode="json"))
+    if cache_key is not None:
+        cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

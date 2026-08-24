@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,20 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 		defer closeCancel()
 		if err := clickhouseInstance.Close(closeCtx); err != nil {
 			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	// CHAOS-4226: the coordinator's finalize now bumps the home-dashboard
+	// cache epoch in Valkey, so Valkey is a hard build dependency of this
+	// family the same way ClickHouse became one under CHAOS-4175.
+	valkeyInstance, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := valkeyInstance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Valkey: %v", err)
 		}
 	})
 
@@ -80,6 +95,7 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 					OperationalBridgeTimeout:       time.Second,
 					OperationalBridgeAllowInsecure: true,
 					ClickHouseURI:                  secrets.NewValue(clickhouseInstance.URI),
+					ValkeyURI:                      secrets.NewValue(valkeyInstance.URI),
 				},
 				reportBuilderDatabase(t),
 				registry,
@@ -114,5 +130,49 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 				t.Fatalf("reported queues = %#v", family.queues)
 			}
 		})
+	}
+}
+
+// TestSyncCoordinatorRefusesToBuildWithoutValkeyConfigured is the
+// discriminating half of the CHAOS-4226 reachability proof: with the SAME
+// reachable ClickHouse the happy path above builds against, leaving only
+// VALKEY_URI unconfigured must refuse the family. A coordinator that built
+// without Valkey would finalize forever with the cache-invalidation hop
+// silently skipped (a permanent emitted - consumed gap at best).
+func TestSyncCoordinatorRefusesToBuildWithoutValkeyConfigured(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = clickhouseInstance.Close(closeCtx)
+	})
+	registry, _ := demotedContractRoot(t, jobcontract.KindTeamAutoimport)
+	_, err = buildSyncCoordinatorWorker(
+		ctx,
+		config.Config{
+			Queues:                         []string{"sync", "sync_provider"},
+			WorkerQueueConcurrency:         map[string]int{"sync": 13, "sync_provider": 7},
+			RiverDatabaseSchema:            "river",
+			OperationalBridgeURL:           "http://localhost",
+			OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout:       time.Second,
+			OperationalBridgeAllowInsecure: true,
+			ClickHouseURI:                  secrets.NewValue(clickhouseInstance.URI),
+			// ValkeyURI deliberately left unconfigured.
+		},
+		reportBuilderDatabase(t),
+		registry,
+		reportTestObserver(t),
+		slog.Default(),
+		river.NewWorkers(),
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("buildSyncCoordinatorWorker error=%v want=%v", err, errWorkerDependencyUnavailable)
 	}
 }

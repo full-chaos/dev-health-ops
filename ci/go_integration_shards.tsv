@@ -20,6 +20,7 @@ shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
+internal/cacheinvalidation	2
 internal/externalrecompute	15
 internal/joboperator	13
 internal/joboutbox	12

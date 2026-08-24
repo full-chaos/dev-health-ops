@@ -528,6 +528,11 @@ secrets:
     DATABASE_URI: ""
     CLICKHOUSE_URI: ""
     REDIS_URL: ""
+    # Go workers' Valkey URL. Leave empty to derive it from the in-chart
+    # valkey (same host and DB 1 as REDIS_URL); if you pin an external one,
+    # pin REDIS_URL to the SAME host and DB or the CHAOS-4226 cache
+    # invalidation the Go finalize emits never reaches the API's cache.
+    VALKEY_URI: ""
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""

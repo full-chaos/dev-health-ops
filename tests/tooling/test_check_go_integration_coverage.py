@@ -35,4 +35,6 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-4194 added internal/streamhandlers (28 -> 29): the project
     # membership sink is proved against the real migration chain in a real
     # container, so the package grew its first -tags integration file.
-    assert "29 package(s) discovered, 0 denylisted, 29 will run" in result.stdout
+    # CHAOS-4226 added internal/cacheinvalidation (29 -> 30): the per-org
+    # cache epoch bump is proved against a real Valkey container.
+    assert "30 package(s) discovered, 0 denylisted, 30 will run" in result.stdout

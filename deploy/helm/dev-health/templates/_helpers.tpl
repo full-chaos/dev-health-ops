@@ -108,12 +108,16 @@ ConfigMap name
 {{- end }}
 
 {{/*
-Redis URL — auto-computed when valkey.enabled, otherwise empty (the caller
-falls back to secrets.data.REDIS_URL, an explicit external Redis/Valkey URL).
+Redis/Valkey URL — auto-computed when valkey.enabled, otherwise empty (the
+caller falls back to secrets.data.REDIS_URL / secrets.data.VALKEY_URI, an
+explicit external Redis/Valkey URL). ONE URL serves both the Python API
+(REDIS_URL) and the Go workers (VALKEY_URI), on DB 1: the Go client refuses
+any other DB (internal/storage/valkey/factory.go), and the CHAOS-4226 cache
+epoch the Go finalize bumps must land in the keyspace the API's cache reads.
 */}}
 {{- define "dev-health.redisURL" -}}
 {{- if .Values.valkey.enabled }}
-{{- printf "redis://%s-valkey:6379/0" (include "dev-health.fullname" .) }}
+{{- printf "redis://%s-valkey:6379/1" (include "dev-health.fullname" .) }}
 {{- end }}
 {{- end }}
 
@@ -228,6 +232,13 @@ chart's regular resources are created).
 {{- end }}
 {{- if $redisAuto }}
 REDIS_URL: {{ include "dev-health.redisURL" . | quote }}
+{{- end }}
+{{- /* The Go workers read VALKEY_URI (internal/platform/config). Derive it
+   from the same URL unless the caller pinned an explicit external one via
+   the VALKEY_URI Secret key. */}}
+{{- $valkeyAuto := and .Values.valkey.enabled (not (index .Values.secrets.data "VALKEY_URI")) }}
+{{- if $valkeyAuto }}
+VALKEY_URI: {{ include "dev-health.redisURL" . | quote }}
 {{- end }}
 {{- if not (index .Values.config "WORKER_OPERATIONAL_BRIDGE_URL") }}
 WORKER_OPERATIONAL_BRIDGE_URL: {{ include "dev-health.operationalBridgeURL" . | quote }}

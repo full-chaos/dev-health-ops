@@ -103,6 +103,18 @@ type ZeroUnitFinalizationObserver interface {
 	ObserveZeroUnitFinalization(provider, reason string) error
 }
 
+// CoverageCacheInvalidationObserver is the narrow capability the native
+// finalize_sync_run port depends on after its transaction commits
+// (CHAOS-4226). Every finalize that reaches the once-only branch EMITS one
+// coverage-cache invalidation; only a Valkey-acknowledged epoch bump is
+// CONSUMED. The two are exposed as a pair so `emitted - consumed` is a
+// number from the first sample and a non-zero gap is alertable: it means
+// the home dashboard is serving pre-finalize coverage until TTL -- the
+// exact hop that cost three investigation rounds on 2026-08-22.
+type CoverageCacheInvalidationObserver interface {
+	ObserveCoverageCacheInvalidation(provider string, consumed bool) error
+}
+
 // BudgetEstimateFailureObserver is the narrow capability the native
 // dispatch_sync_run port depends on (CHAOS-4175 codex round 2): only the
 // dispatch implementation knows when its BudgetGuard estimate-bridge fetch

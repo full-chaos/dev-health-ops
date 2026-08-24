@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from dev_health_ops.core.cache import GraphQLCacheManager
+from dev_health_ops.core.cache import GraphQLCacheManager, TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +90,29 @@ def invalidate_cache_for_event(
     """
     if isinstance(cache, GraphQLCacheManager):
         manager = cache
+        ttl_cache = cache._cache
     else:
         manager = GraphQLCacheManager(cache)
+        ttl_cache = cache
 
     total_invalidated = 0
+    # CHAOS-4226: the tag index below is only populated by
+    # GraphQLCacheManager.set_query_result, which nothing in src/ calls, so
+    # tag invalidation alone has always been a no-op. The epoch bump is what
+    # actually unreaches the filter-scoped home/explain entries (see
+    # core.cache.org_cache_epoch_key); it is the same key the Go native
+    # finalize bumps. An empty org_id has no epoch to bump.
+    if event.org_id and isinstance(ttl_cache, TTLCache):
+        epoch = ttl_cache.bump_org_epoch(event.org_id)
+        if epoch is None:
+            logger.warning(
+                "Failed to bump cache epoch for org (event: %s)", event.event_type
+            )
+        else:
+            total_invalidated += 1
+            logger.info(
+                "Bumped cache epoch to %d for org (event: %s)", epoch, event.event_type
+            )
     tags = event.get_tags_to_invalidate()
 
     for tag in tags:

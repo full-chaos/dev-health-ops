@@ -241,6 +241,12 @@ type MetricsCollector struct {
 	remainingReleaseLost      uint64
 	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
 
+	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
+	// provider. Both maps gain the key on the first emit so the consumed
+	// series is present (at 0) whenever the emitted series is.
+	coverageCacheInvalidationsEmitted  map[string]uint64
+	coverageCacheInvalidationsConsumed map[string]uint64
+
 	// External ingest, work_item -> project reassignment (CHAOS-4194).
 	//
 	// These two are a PAIR and only mean something together. The sunk counter
@@ -307,6 +313,7 @@ var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
+var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -319,41 +326,43 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 
 	collector := &MetricsCollector{
-		allowedJobs:                    make(map[JobLabels]struct{}, len(dimensions.Jobs)),
-		allowedQueues:                  make(map[queueLabels]struct{}),
-		allowedKinds:                   make(map[string]struct{}),
-		allowedDomains:                 make(map[string]struct{}, len(dimensions.DomainTypes)),
-		allowedSyncLeases:              make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
-		allowedStreams:                 make(map[StreamLabels]struct{}, len(dimensions.Streams)),
-		allowedBudgets:                 make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
-		allowedConcurrencyBudgets:      make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
-		jobsAvailable:                  make(map[JobLabels]int64, len(dimensions.Jobs)),
-		jobOldestAge:                   make(map[queueLabels]float64),
-		jobsRunning:                    make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation:            make(map[queueLabels]float64),
-		jobWait:                        make(map[JobLabels]*histogram, len(dimensions.Jobs)),
-		jobDuration:                    make(map[jobResultLabels]*histogram),
-		jobAttempts:                    make(map[attemptLabels]uint64),
-		jobPanics:                      make(map[string]uint64),
-		cancellations:                  make(map[cancellationLabels]uint64),
-		domainMismatch:                 make(map[string]uint64, len(dimensions.DomainTypes)),
-		syncLeaseExpired:               make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
-		reportRunLeaseExpired:          make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
-		idempotencyRenewalRetired:      make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
-		dailyMetricsLease:              make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
-		zeroUnitFinalizations:          make(map[zeroUnitFinalizationLabels]uint64),
-		externalProjectMembershipsSunk: make(map[string]uint64),
-		externalRecordRefusals:         make(map[externalRefusalLabels]uint64),
-		streamLag:                      make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamPending:                  make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamOldestPending:            make(map[StreamLabels]float64, len(dimensions.Streams)),
-		budgetWait:                     make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
-		concurrencyBudgetCapacity:      make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetLeased:        make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetWait:          make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetEvents:        make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
-		poolSaturation:                 map[string]float64{poolDomain: 0, poolQueueControl: 0},
-		poolAcquire:                    make(map[poolAcquireLabels]*histogram, 8),
+		allowedJobs:                        make(map[JobLabels]struct{}, len(dimensions.Jobs)),
+		allowedQueues:                      make(map[queueLabels]struct{}),
+		allowedKinds:                       make(map[string]struct{}),
+		allowedDomains:                     make(map[string]struct{}, len(dimensions.DomainTypes)),
+		allowedSyncLeases:                  make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
+		allowedStreams:                     make(map[StreamLabels]struct{}, len(dimensions.Streams)),
+		allowedBudgets:                     make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
+		allowedConcurrencyBudgets:          make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		jobsAvailable:                      make(map[JobLabels]int64, len(dimensions.Jobs)),
+		jobOldestAge:                       make(map[queueLabels]float64),
+		jobsRunning:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
+		executionSaturation:                make(map[queueLabels]float64),
+		jobWait:                            make(map[JobLabels]*histogram, len(dimensions.Jobs)),
+		jobDuration:                        make(map[jobResultLabels]*histogram),
+		jobAttempts:                        make(map[attemptLabels]uint64),
+		jobPanics:                          make(map[string]uint64),
+		cancellations:                      make(map[cancellationLabels]uint64),
+		domainMismatch:                     make(map[string]uint64, len(dimensions.DomainTypes)),
+		syncLeaseExpired:                   make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
+		reportRunLeaseExpired:              make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		idempotencyRenewalRetired:          make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
+		dailyMetricsLease:                  make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
+		zeroUnitFinalizations:              make(map[zeroUnitFinalizationLabels]uint64),
+		coverageCacheInvalidationsEmitted:  make(map[string]uint64),
+		coverageCacheInvalidationsConsumed: make(map[string]uint64),
+		externalProjectMembershipsSunk:     make(map[string]uint64),
+		externalRecordRefusals:             make(map[externalRefusalLabels]uint64),
+		streamLag:                          make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamPending:                      make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamOldestPending:                make(map[StreamLabels]float64, len(dimensions.Streams)),
+		budgetWait:                         make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
+		concurrencyBudgetCapacity:          make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetLeased:            make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetWait:              make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetEvents:            make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
+		poolSaturation:                     map[string]float64{poolDomain: 0, poolQueueControl: 0},
+		poolAcquire:                        make(map[poolAcquireLabels]*histogram, 8),
 	}
 	for _, labels := range dimensions.Jobs {
 		if err := validateJobLabels(labels); err != nil {
@@ -748,6 +757,25 @@ func (collector *MetricsCollector) ObserveZeroUnitFinalization(provider, reason 
 		}
 	}
 	collector.zeroUnitFinalizations[key]++
+	return nil
+}
+
+// ObserveCoverageCacheInvalidation records one finalize that decided to
+// invalidate the home-dashboard coverage cache (emitted) and whether Valkey
+// acknowledged the epoch bump (consumed). Same post-commit rule as
+// ObserveZeroUnitFinalization: the caller must only report after the
+// finalizing transaction durably committed. Provider is clamped to the same
+// closed set as the zero-unit counter.
+func (collector *MetricsCollector) ObserveCoverageCacheInvalidation(provider string, consumed bool) error {
+	provider = zeroUnitFinalizationProvider(provider)
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.coverageCacheInvalidationsEmitted[provider]++
+	if consumed {
+		collector.coverageCacheInvalidationsConsumed[provider]++
+	} else {
+		collector.coverageCacheInvalidationsConsumed[provider] += 0
+	}
 	return nil
 }
 
@@ -1194,6 +1222,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeZeroUnitFinalizations(&output)
+	collector.writeCoverageCacheInvalidations(&output)
 	collector.writeExternalIngest(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
@@ -1376,6 +1405,30 @@ func (collector *MetricsCollector) writeZeroUnitFinalizations(output *strings.Bu
 		writeUintSample(output, "devhealth_sync_run_zero_unit_finalizations_total", []metricLabel{
 			{"provider", key.Provider}, {"reason", key.Reason},
 		}, collector.zeroUnitFinalizations[key])
+	}
+}
+
+func (collector *MetricsCollector) writeCoverageCacheInvalidations(output *strings.Builder) {
+	providers := make([]string, 0, len(collector.coverageCacheInvalidationsEmitted))
+	for provider := range collector.coverageCacheInvalidationsEmitted {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	writeMetadata(output, "devhealth_sync_coverage_cache_invalidations_emitted_total",
+		"Sync-run finalizations that decided to invalidate the home-dashboard coverage cache, by provider.",
+		"counter")
+	for _, provider := range providers {
+		writeUintSample(output, "devhealth_sync_coverage_cache_invalidations_emitted_total", []metricLabel{
+			{"provider", provider},
+		}, collector.coverageCacheInvalidationsEmitted[provider])
+	}
+	writeMetadata(output, "devhealth_sync_coverage_cache_invalidations_consumed_total",
+		"Coverage-cache invalidations Valkey acknowledged (epoch bump applied), by provider; emitted minus consumed is the alertable gap.",
+		"counter")
+	for _, provider := range providers {
+		writeUintSample(output, "devhealth_sync_coverage_cache_invalidations_consumed_total", []metricLabel{
+			{"provider", provider},
+		}, collector.coverageCacheInvalidationsConsumed[provider])
 	}
 }
 

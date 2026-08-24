@@ -39,16 +39,22 @@ def epoch_cache_key(
     org_id: str,
     filters: MetricFilter,
     extra: dict[str, Any] | None = None,
-) -> str:
+) -> str | None:
     """``filter_cache_key`` scoped by the org's cache epoch (CHAOS-4226).
 
     One backend GET reads the epoch; a bump by the Go finalize (or by
     ``core.cache_invalidation``) changes the key, so the next read misses
     and recomputes instead of serving the pre-finalize entry until TTL.
-    The entry-TTL ceiling is enforced once at construction
-    (``core.cache.epoch_scoped``), not here.
+    Returns None when the epoch is UNREADABLE (backend error): the caller
+    must then bypass the cache for this request -- neither read nor write
+    -- because guessing epoch 0 could serve a pre-bump entry. An absent
+    epoch key is 0, not None. The entry-TTL ceiling is enforced once at
+    construction (``core.cache.epoch_scoped``), not here.
     """
-    scoped = {"_cache_epoch": cache.org_epoch(org_id)}
+    epoch = cache.org_epoch(org_id)
+    if epoch is None:
+        return None
+    scoped = {"_cache_epoch": epoch}
     if extra:
         scoped = {**extra, **scoped}
     return filter_cache_key(prefix, org_id, filters, extra=scoped)

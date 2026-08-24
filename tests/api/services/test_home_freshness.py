@@ -46,7 +46,7 @@ async def test_cached_home_response_refreshes_latest_successful_sync(monkeypatch
         events=[],
     )
     cache.set(
-        epoch_cache_key(cache, "home", "org-1", filters),
+        epoch_cache_key(cache, "home", "org-1", filters) or "",
         cached_response.model_dump(mode="json"),
     )
     semantic_session = MagicMock(spec=AsyncSession)
@@ -103,7 +103,7 @@ async def test_cached_home_response_survives_sync_freshness_query_failure(monkey
         events=[],
     )
     cache.set(
-        epoch_cache_key(cache, "home", "org-1", filters),
+        epoch_cache_key(cache, "home", "org-1", filters) or "",
         cached_response.model_dump(mode="json"),
     )
 

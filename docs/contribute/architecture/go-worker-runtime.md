@@ -938,7 +938,8 @@ topology](#queue-topology)):**
   from the Python producer `core.cache.org_cache_epoch_key` and asserted by
   `internal/cacheinvalidation/contract_test.go`). Readers fold its value
   into the key (`api/services/filtering.py::epoch_cache_key`, one GET per
-  request, absent = 0); the Go finalize INCR+EXPIREs it **after**
+  request; absent = 0, UNREADABLE = bypass the cache for that request rather
+  than guess 0); the Go finalize INCR+EXPIREs it **after**
   `tx.Commit` on the once-only branch (the `already_dispatched` re-finalize
   skips it, exactly like the Postgres invalidation), bounded to 5s, and a
   failure is logged (`finalize_sync_run.coverage_cache_invalidation_failed`
@@ -957,6 +958,10 @@ topology](#queue-topology)):**
   ClickHouse. The epoch key's expiry (30 days, refreshed on every bump)
   exceeds the longest epoch-scoped entry TTL Python allows (3600s) by a
   factor of 100 so an expired epoch can never resurrect live entries.
+  **Scope:** only the epoch-scoped caches (`HOME_CACHE`, `EXPLAIN_CACHE`)
+  react; the GraphQL `CachedDataLoader` entries
+  (`api/graphql/loaders/base.py`, `make_cache_key` + `mget`, 300 s TTL) are
+  not epoch-aware and stay TTL-only — a follow-up, not part of CHAOS-4226.
 
 ## Deployment couplings
 

@@ -137,3 +137,30 @@ def test_metrics_update_with_empty_org_does_not_write_a_global_epoch():
     cache = TTLCache(ttl_seconds=60)
     invalidate_on_metrics_update(cache, "", "2026-08-22")
     assert cache.get(org_cache_epoch_key("")) is None
+
+
+def test_redis_backend_epoch_read_is_tri_state(monkeypatch):
+    """value / 0 when absent / None when unreadable -- never a guessed 0 on
+    a backend error (codex R2, CHAOS-4226)."""
+    fake = fakeredis.FakeValkey(decode_responses=True)
+    monkeypatch.setattr("valkey.from_url", lambda *_a, **_k: fake, raising=False)
+    backend = RedisBackend("redis://contract-test/1")
+    key = org_cache_epoch_key("org-a")
+    assert backend.get_epoch(key) == 0
+    fake.incr(key)
+    fake.incr(key)
+    assert backend.get_epoch(key) == 2
+
+    def _boom(*_a, **_k):
+        raise TimeoutError("simulated")
+
+    monkeypatch.setattr(fake, "get", _boom)
+    assert backend.get_epoch(key) is None
+    assert TTLCache(ttl_seconds=60, backend=backend).org_epoch("org-a") is None
+
+
+def test_memory_backend_epoch_read_never_reports_unreadable():
+    backend = MemoryBackend()
+    assert backend.get_epoch(org_cache_epoch_key("org-a")) == 0
+    backend.incr(org_cache_epoch_key("org-a"), ttl_seconds=60)
+    assert backend.get_epoch(org_cache_epoch_key("org-a")) == 1

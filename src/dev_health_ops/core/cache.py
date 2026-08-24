@@ -89,6 +89,18 @@ def epoch_scoped(cache: TTLCache) -> TTLCache:
     return cache
 
 
+def _decode_epoch(raw: Any) -> int:
+    """Absent (None) reads as 0; anything that is not a non-negative int is 0
+    as well -- an epoch never goes backwards from an unexpected shape."""
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        return max(raw, 0)
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return 0
+
+
 def org_cache_epoch_key(org_id: str) -> str:
     """The Valkey key holding an organization's cache epoch.
 
@@ -135,6 +147,16 @@ class CacheBackend(ABC):
         value = (int(current) if isinstance(current, int) else 0) + 1
         self.set(key, value, ttl_seconds)
         return value
+
+    def get_epoch(self, key: str) -> int | None:
+        """Tri-state read of an integer epoch: value, 0 when ABSENT, or None
+        when UNREADABLE (backend error). ``get`` collapses absent and error
+        into one None; an epoch reader must not, because "unknown epoch"
+        treated as 0 would let a stale epoch-0 entry serve after a bump
+        (codex R2, CHAOS-4226). The memory backend cannot fail, so the
+        default never returns None.
+        """
+        return _decode_epoch(self.get(key))
 
 
 class MemoryBackend(CacheBackend):
@@ -227,6 +249,26 @@ class RedisBackend(CacheBackend):
                 exc_info=True,
             )
 
+    def get_epoch(self, key: str) -> int | None:
+        if not self._available:
+            return self._fallback.get_epoch(key)
+        try:
+            raw = self._client.get(key)
+        except Exception as e:
+            logger.warning(
+                "Redis epoch get failed for key=%s: %s", _safe_key_label(key), e
+            )
+            return None
+        if raw is None:
+            return 0
+        try:
+            return _decode_epoch(json.loads(raw))
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "Redis epoch value undecodable for key=%s: %s", _safe_key_label(key), e
+            )
+            return None
+
     def incr(self, key: str, ttl_seconds: int) -> int | None:
         """INCR + EXPIRE in one pipeline -- the same two commands the Go
         finalize issues (internal/cacheinvalidation), so a Python-side bump
@@ -280,17 +322,12 @@ class TTLCache:
     def set(self, key: str, value: Any) -> None:
         self._backend.set(key, value, self.ttl_seconds)
 
-    def org_epoch(self, org_id: str) -> int:
-        """Current cache epoch for an org: ONE backend GET; absent/unreadable
-        reads as 0 so the memory fallback and a fresh org are deterministic."""
-        raw = self._backend.get(org_cache_epoch_key(org_id))
-        if isinstance(raw, bool):
-            return 0
-        if isinstance(raw, int):
-            return raw
-        if isinstance(raw, str) and raw.isdigit():
-            return int(raw)
-        return 0
+    def org_epoch(self, org_id: str) -> int | None:
+        """Current cache epoch for an org: ONE backend GET. Absent reads as 0
+        (a fresh org, or the memory fallback) so the key is deterministic;
+        UNREADABLE (a backend error) reads as None so the caller bypasses
+        the cache instead of guessing an epoch."""
+        return self._backend.get_epoch(org_cache_epoch_key(org_id))
 
     def bump_org_epoch(self, org_id: str) -> int | None:
         """Invalidate every epoch-scoped entry of an org in one write."""

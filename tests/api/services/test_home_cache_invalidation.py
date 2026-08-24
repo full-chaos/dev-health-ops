@@ -113,6 +113,7 @@ async def test_home_read_after_finalize_does_not_serve_pre_finalize_value(monkey
 
     # A read BEFORE any finalize populates the cache under epoch 0.
     pre_key = epoch_cache_key(cache, "home", ORG, filters)
+    assert pre_key is not None
     cache.set(pre_key, _response(50.0).model_dump(mode="json"))
     served = await home_service.build_home_response(
         db_url="clickhouse://unused", filters=filters, cache=cache, org_id=ORG
@@ -201,3 +202,38 @@ def test_epoch_scoped_cache_refuses_a_ttl_that_breaks_the_epoch_margin():
         epoch_scoped(too_long)
     fits = TTLCache(ttl_seconds=EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS)
     assert epoch_scoped(fits) is fits
+
+
+@pytest.mark.asyncio
+async def test_unreadable_epoch_bypasses_the_cache_instead_of_guessing_zero(
+    monkeypatch,
+):
+    """Codex R2 (CHAOS-4226): a transient failure of the epoch GET must not
+    read as epoch 0 -- that would serve a still-live epoch-0 entry after the
+    Go finalize bumped the epoch. Unreadable epoch => bypass the cache and
+    recompute; absent epoch (no key) is still 0."""
+    cache, fake = _valkey_cache(monkeypatch)
+    filters = _filters()
+    _stub_recompute(monkeypatch)
+
+    stale_key = filter_cache_key("home", ORG, filters, extra={"_cache_epoch": 0})
+    cache.set(stale_key, _response(50.0).model_dump(mode="json"))
+    assert _go_finalize_bump(fake, ORG) == 1
+
+    epoch_key = org_cache_epoch_key(ORG)
+    real_get = fake.get
+
+    def _flaky_get(key, *args, **kwargs):
+        if key == epoch_key:
+            raise ConnectionError("simulated one-command Valkey failure")
+        return real_get(key, *args, **kwargs)
+
+    monkeypatch.setattr(fake, "get", _flaky_get)
+    assert cache.org_epoch(ORG) is None
+    assert epoch_cache_key(cache, "home", ORG, filters) is None
+    with pytest.raises(RecomputeAttempted):
+        await home_service.build_home_response(
+            db_url="clickhouse://unused", filters=filters, cache=cache, org_id=ORG
+        )
+    # The stale epoch-0 entry was neither served nor overwritten.
+    assert cache.get(stale_key) is not None

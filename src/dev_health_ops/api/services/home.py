@@ -972,7 +972,9 @@ async def build_home_response(
     semantic_session: AsyncSession | None = None,
 ) -> HomeResponse:
     cache_key = epoch_cache_key(cache, "home", org_id, filters)
-    cached = cache.get(cache_key)
+    # cache_key is None when the org epoch is unreadable: bypass the cache
+    # for this request rather than risk serving a pre-finalize entry.
+    cached = cache.get(cache_key) if cache_key is not None else None
     if semantic_session is None:
         if cached is not None:
             return HomeResponse.model_validate(cached)
@@ -1224,7 +1226,8 @@ async def build_home_response(
             data_confidence=data_confidence,
         )
 
-    cache.set(cache_key, response.model_dump(mode="json"))
+    if cache_key is not None:
+        cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

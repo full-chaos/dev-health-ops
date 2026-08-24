@@ -129,7 +129,8 @@ async def build_explain_response(
     cache_key = epoch_cache_key(
         cache, "explain", org_id, filters, extra={"metric": metric}
     )
-    cached = cache.get(cache_key)
+    # None = org epoch unreadable: bypass the cache for this request.
+    cached = cache.get(cache_key) if cache_key is not None else None
     if cached is not None:
         try:
             return ExplainResponse.model_validate(cached)
@@ -255,7 +256,8 @@ async def build_explain_response(
         },
     )
 
-    cache.set(cache_key, response.model_dump(mode="json"))
+    if cache_key is not None:
+        cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

@@ -148,6 +148,13 @@ class CacheBackend(ABC):
         self.set(key, value, ttl_seconds)
         return value
 
+    # Reason the most recent get_epoch returned None, for the bypass log
+    # line; backends that cannot fail leave it empty.
+    _last_epoch_error: str = ""
+
+    def last_epoch_error(self) -> str:
+        return self._last_epoch_error
+
     def get_epoch(self, key: str) -> int | None:
         """Tri-state read of an integer epoch: value, 0 when ABSENT, or None
         when UNREADABLE (backend error). ``get`` collapses absent and error
@@ -255,6 +262,7 @@ class RedisBackend(CacheBackend):
         try:
             raw = self._client.get(key)
         except Exception as e:
+            self._last_epoch_error = f"{type(e).__name__}: {e}"
             logger.warning(
                 "Redis epoch get failed for key=%s: %s", _safe_key_label(key), e
             )
@@ -264,6 +272,7 @@ class RedisBackend(CacheBackend):
         try:
             return _decode_epoch(json.loads(raw))
         except (TypeError, ValueError) as e:
+            self._last_epoch_error = f"undecodable epoch value: {type(e).__name__}"
             logger.warning(
                 "Redis epoch value undecodable for key=%s: %s", _safe_key_label(key), e
             )
@@ -328,6 +337,12 @@ class TTLCache:
         UNREADABLE (a backend error) reads as None so the caller bypasses
         the cache instead of guessing an epoch."""
         return self._backend.get_epoch(org_cache_epoch_key(org_id))
+
+    def last_epoch_error(self, org_id: str) -> str:
+        """Why the most recent ``org_epoch`` read returned None (empty if it
+        did not); consumed by the bypass log line."""
+        del org_id  # one backend per cache; the key is implied
+        return self._backend.last_epoch_error()
 
     def bump_org_epoch(self, org_id: str) -> int | None:
         """Invalidate every epoch-scoped entry of an org in one write."""

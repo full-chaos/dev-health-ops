@@ -237,3 +237,54 @@ async def test_unreadable_epoch_bypasses_the_cache_instead_of_guessing_zero(
         )
     # The stale epoch-0 entry was neither served nor overwritten.
     assert cache.get(stale_key) is not None
+
+
+class _RecordingCounter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[dict[str, str], float]] = []
+
+    def labels(self, **values: str) -> _RecordingCounter:
+        self._pending = values
+        return self
+
+    def inc(self, amount: float = 1) -> None:
+        self.calls.append((dict(self._pending), amount))
+
+
+def test_epoch_bypass_is_counted_and_logged_with_org_and_error(monkeypatch, caplog):
+    """Team-lead ruling on codex R2: a bypass is neither a hit nor a consumed
+    invalidation, so it carries its own series
+    (devhealth_cache_epoch_unreadable_total{prefix}) and a structured
+    `cache.epoch_unreadable` line with prefix, org_id and the backend error."""
+    import logging
+
+    from dev_health_ops.api.services import filtering
+
+    counter = _RecordingCounter()
+    monkeypatch.setattr(filtering, "CACHE_EPOCH_UNREADABLE_TOTAL", counter)
+    cache, fake = _valkey_cache(monkeypatch)
+    filters = _filters()
+
+    def _boom(*_a, **_k):
+        raise TimeoutError("valkey read timed out")
+
+    monkeypatch.setattr(fake, "get", _boom)
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.api.services.filtering"
+    ):
+        assert filtering.epoch_cache_key(cache, "home", ORG, filters) is None
+        assert filtering.epoch_cache_key(cache, "explain", ORG, filters) is None
+
+    assert counter.calls == [({"prefix": "home"}, 1), ({"prefix": "explain"}, 1)]
+    bypass = [r for r in caplog.records if r.getMessage() == "cache.epoch_unreadable"]
+    assert len(bypass) == 2
+    assert bypass[0].prefix == "home"
+    assert bypass[0].org_id == ORG
+    assert "TimeoutError: valkey read timed out" == bypass[0].error
+
+    # A readable epoch neither counts nor logs.
+    monkeypatch.setattr(fake, "get", type(fake).get.__get__(fake))
+    caplog.clear()
+    assert filtering.epoch_cache_key(cache, "home", ORG, filters) is not None
+    assert counter.calls[2:] == []
+    assert not [r for r in caplog.records if r.getMessage() == "cache.epoch_unreadable"]

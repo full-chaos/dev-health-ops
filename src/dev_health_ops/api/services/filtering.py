@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, timedelta
 from typing import Any
 
 from dev_health_ops.core.cache import TTLCache
+from dev_health_ops.core.cache_epoch_telemetry import CACHE_EPOCH_UNREADABLE_TOTAL
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.utils.datetime import utc_today
 
@@ -14,6 +16,8 @@ from ..queries.scopes import (
     resolve_repo_ids,
     resolve_repo_ids_for_teams,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def filter_cache_key(
@@ -53,6 +57,17 @@ def epoch_cache_key(
     """
     epoch = cache.org_epoch(org_id)
     if epoch is None:
+        # A bypass is neither a hit nor a consumed invalidation; make it
+        # visible on its own series and log line (CHAOS-4226).
+        CACHE_EPOCH_UNREADABLE_TOTAL.labels(prefix=prefix).inc()
+        logger.warning(
+            "cache.epoch_unreadable",
+            extra={
+                "prefix": prefix,
+                "org_id": org_id,
+                "error": cache.last_epoch_error(org_id),
+            },
+        )
         return None
     scoped = {"_cache_epoch": epoch}
     if extra:

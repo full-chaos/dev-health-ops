@@ -25,7 +25,7 @@ CREATE TABLE public.sync_run_units (
  lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
  rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
  budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL
+ first_blocked_at timestamptz NULL, last_retry_reason text NULL
 )`)
 	if err != nil {
 		t.Fatal(err)

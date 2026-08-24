@@ -34,6 +34,20 @@ var ErrDiscoveryProviderMismatch = fmt.Errorf("%w: populate response provider do
 
 var ErrReferenceDiscoveryUnavailable = errors.New("native reference discovery is unavailable")
 
+// ErrDiscoveryTransientFailure marks a Postgres operation in the post-claim
+// discovery phase (resolveAuthoritativeProvider, stampSuccess) that failed
+// to EXECUTE at all -- a connection reset, a context deadline, a lost
+// connection mid-transaction -- as retryable (CHAOS-4175 round 3). This is
+// deliberately distinct from ErrReferenceDiscoveryUnavailable's much
+// broader everyday use throughout this file (malformed args, a genuine
+// pgx.ErrNoRows "the row really isn't there", JSON decode failures): those
+// stay non-retryable by default because most of them are permanent and
+// retrying would only delay an inevitable failure. A bare execution
+// failure on an otherwise-well-formed query is different -- it is exactly
+// the class of transient blip retry-with-backoff exists for, bounded by
+// the same max-attempts cap as any other retryable cause.
+var ErrDiscoveryTransientFailure = errors.New("transient database failure during reference discovery")
+
 // Discovery ledger statuses mirror
 // reference_discovery.py's DISCOVERY_STATUS_* constants exactly.
 const (
@@ -144,7 +158,19 @@ func (service *NativeReferenceDiscoveryService) Discover(ctx context.Context, ar
 	if discoverErr != nil {
 		return service.handleFailure(ctx, args.SyncRunID(), leaseOwner, discoverErr)
 	}
-	return service.stampSuccess(ctx, args.OrganizationID(), args.SyncRunID(), leaseOwner, summary)
+
+	// Python: the success-stamp `with get_postgres_session_sync() as
+	// session:` block sits INSIDE the same outer try as populate/readback,
+	// so a stamp failure there flows to the identical
+	// `except Exception as exc: _handle_reference_discovery_failure(...)`.
+	// Routing stampSuccess's error through handleFailure here restores that
+	// parity (codex round 3): a Begin/marshal/UPDATE/outbox-upsert/Commit
+	// failure now retries with backoff (or terminalizes on exhaustion)
+	// instead of silently stranding a running lease with no wakeup armed.
+	if err := service.stampSuccess(ctx, args.OrganizationID(), args.SyncRunID(), leaseOwner, summary); err != nil {
+		return service.handleFailure(ctx, args.SyncRunID(), leaseOwner, err)
+	}
+	return nil
 }
 
 // resolveAuthoritativeProvider ports _load_discovery_context's provider
@@ -160,8 +186,20 @@ FROM public.sync_runs
 JOIN public.integrations ON integrations.id = sync_runs.integration_id
 WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id = $2`,
 		runID, orgID).Scan(&provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Python: `if integration is None: raise ValueError("integration not
+		// found...")` -- a genuine, permanent data-integrity failure (the
+		// row really isn't there), not a transient one. Stays non-retryable.
+		return "", fmt.Errorf("%w: integration not found for sync run %s", ErrReferenceDiscoveryUnavailable, runID)
+	}
 	if err != nil {
-		return "", ErrReferenceDiscoveryUnavailable
+		// The query itself failed to execute (connection reset, context
+		// deadline, ...) rather than cleanly finding nothing -- retryable
+		// (codex round 3): a bare ErrReferenceDiscoveryUnavailable here
+		// would discard that distinction and misclassify a transient DB
+		// blip as permanent, same defect class round 1 fixed for the
+		// populate bridge.
+		return "", fmt.Errorf("%w: resolve authoritative provider: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return provider, nil
 }
@@ -296,13 +334,19 @@ func (service *NativeReferenceDiscoveryService) stampSuccess(
 ) error {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
-		return ErrReferenceDiscoveryUnavailable
+		// A bare execution failure (connection reset, deadline, ...), not a
+		// permanent one -- retryable via handleFailure (codex round 3).
+		return fmt.Errorf("%w: begin stamp-success transaction: %w", ErrDiscoveryTransientFailure, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	completedAt := service.nowUTC()
 	encodedSummary, err := json.Marshal(summary)
 	if err != nil {
+		// An in-memory summary that can't marshal is a deterministic,
+		// permanent defect (not a DB blip) -- stays non-retryable, matching
+		// ErrReferenceDiscoveryUnavailable's existing "JSON decode
+		// failures" bucket.
 		return ErrReferenceDiscoveryUnavailable
 	}
 	tag, err := tx.Exec(ctx, `
@@ -313,17 +357,24 @@ WHERE sync_run_id = $1::uuid AND status = $5 AND lease_owner = $6
   AND lease_expires_at IS NOT NULL AND lease_expires_at > $3`,
 		runID, discoverySuccessLiteral(), completedAt, encodedSummary, discoveryStatusRunning, leaseOwner)
 	if err != nil {
-		return ErrReferenceDiscoveryUnavailable
+		return fmt.Errorf("%w: stamp success update: %w", ErrDiscoveryTransientFailure, err)
 	}
 	if tag.RowsAffected() == 0 {
 		// Python: `return {"status": "skipped", "reason": "lease_lost"}`.
-		return tx.Commit(ctx)
+		// A legitimate no-op, not a failure: nil on success flows straight
+		// through Discover() without ever reaching handleFailure. A commit
+		// failure IN this branch is still a bare execution failure, so it
+		// gets the same transient wrapping as every other commit site here.
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("%w: commit lease-lost skip: %w", ErrDiscoveryTransientFailure, err)
+		}
+		return nil
 	}
 	if err := upsertDiscoveryOutboxWakeup(ctx, tx, orgID, runID, outboxKindDispatchSyncRun, completedAt); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ErrReferenceDiscoveryUnavailable
+		return fmt.Errorf("%w: commit stamp success: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return nil
 }
@@ -604,7 +655,7 @@ func isRetryableDiscoveryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrBridgeRequest) || errors.Is(err, ErrInvalidBridge) {
+	if errors.Is(err, ErrBridgeRequest) || errors.Is(err, ErrInvalidBridge) || errors.Is(err, ErrDiscoveryTransientFailure) {
 		return true
 	}
 	message := strings.ToLower(err.Error())

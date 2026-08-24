@@ -549,3 +549,114 @@ VALUES ($1,$2,$3,'github','prs',$4,'planned')`,
 		t.Fatalf("ledger status=%q want=success", status)
 	}
 }
+
+// TestResolveAuthoritativeProviderTreatsAQueryFailureAsRetryable pins codex
+// round 3 finding 1: a run id that fails the query's own ::uuid cast makes
+// resolveAuthoritativeProvider's query fail to EXECUTE at all -- a genuine
+// Postgres error, not pgx.ErrNoRows -- and that must be classified as a
+// transient, retryable failure, not folded into the permanent
+// "integration not found" bucket ErrNoRows maps to.
+func TestResolveAuthoritativeProviderTreatsAQueryFailureAsRetryable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, &fakeDiscoveryExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.resolveAuthoritativeProvider(ctx, discoveryTestOrg, "not-a-valid-uuid")
+	if err == nil {
+		t.Fatal("resolveAuthoritativeProvider: want an error for a malformed run id, got nil")
+	}
+	if !errors.Is(err, ErrDiscoveryTransientFailure) {
+		t.Fatalf("resolveAuthoritativeProvider error=%v, want it to wrap ErrDiscoveryTransientFailure", err)
+	}
+	if !isRetryableDiscoveryError(err) {
+		t.Fatalf("resolveAuthoritativeProvider error=%v, want isRetryableDiscoveryError=true", err)
+	}
+	if errors.Is(err, ErrReferenceDiscoveryUnavailable) {
+		t.Fatalf("resolveAuthoritativeProvider error=%v must NOT also match the permanent integration-not-found case", err)
+	}
+}
+
+// TestNativeReferenceDiscoveryRoutesAStampSuccessFailureThroughHandleFailure
+// pins codex round 3 finding 2: before this fix, Discover() returned
+// stampSuccess's error directly -- bypassing handleFailure entirely, so the
+// lease stayed RUNNING with no retry wakeup armed and the run would hang
+// forever with no dispatcher watching it. This forces stampSuccess's own
+// UPDATE to fail with a genuine Postgres error (the result column can no
+// longer hold the json value it writes) after populate/readback both
+// succeeded, then asserts the failure now flows through the ordinary
+// retry state machine, matching what a populate/readback failure already
+// does.
+func TestNativeReferenceDiscoveryRoutesAStampSuccessFailureThroughHandleFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+
+	// Break stampSuccess's UPDATE at the database level -- not a Go-level
+	// mock -- so it fails to EXECUTE exactly like a real transient DB
+	// blip would.
+	if _, err := pool.Exec(ctx, `ALTER TABLE sync_run_reference_discoveries ALTER COLUMN result TYPE integer USING NULL`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor called %d times, want 1", executor.calls)
+	}
+
+	var status string
+	var attempts int
+	var leaseOwner *string
+	if err := pool.QueryRow(ctx, `SELECT status, attempts, lease_owner FROM sync_run_reference_discoveries WHERE sync_run_id=$1`,
+		discoveryTestRun).Scan(&status, &attempts, &leaseOwner); err != nil {
+		t.Fatal(err)
+	}
+	if status != discoveryStatusRetrying || attempts != 1 {
+		t.Fatalf("status=%q attempts=%d, want retrying/1 (a stampSuccess failure must route through handleFailure, not strand the lease)", status, attempts)
+	}
+	if leaseOwner != nil {
+		t.Fatalf("leaseOwner=%v, want nil (lease released by handleFailure's retry path)", *leaseOwner)
+	}
+
+	var selfWakeupRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind='reference_discovery'`,
+		discoveryTestRun).Scan(&selfWakeupRows); err != nil {
+		t.Fatal(err)
+	}
+	if selfWakeupRows != 1 {
+		t.Fatalf("reference_discovery self-wakeup rows=%d want=1", selfWakeupRows)
+	}
+}

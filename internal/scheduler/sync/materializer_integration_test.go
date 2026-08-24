@@ -193,7 +193,7 @@ func startMaterializerPostgres(t *testing.T) materializerFixture {
 		ID: "occurrence:v1:scheduled", IdentityVersion: OccurrenceIdentityVersion,
 		OrgID: orgID, ConfigID: configID, JobID: jobID,
 		ScheduledFor: time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
-		ConfigActive: true, JobStatus: 0, JobType: "sync",
+		ConfigActive: true, ConfigPlannerManaged: true, JobStatus: 0, JobType: "sync",
 	}}
 }
 
@@ -670,6 +670,44 @@ func TestNativeMaterializerRevalidatesScheduleAndOrganizationEligibility(t *test
 		}
 		if count != 0 {
 			t.Errorf("ineligible plan wrote %s", table)
+		}
+	}
+}
+
+// TestNativeMaterializerRejectsAPendingOccurrenceForANotPlannerManagedConfig
+// is the CHAOS-4174 Phase-B companion to the Phase-A red-first proof in
+// transaction_integration_test.go. It closes a codex-review finding: Phase
+// A's refusal in evaluateContext cannot protect an occurrence that was
+// already minted before this gate existed (or minted by an old binary still
+// running mid-rollout) -- without a Phase B re-check, that pending occurrence
+// would still materialize into a real sync run for a fixture/legacy config.
+//
+// This simulates exactly that: a pending occurrence for a config whose
+// planner_managed column is FALSE, exactly as lockPendingOccurrence would
+// read it under lock. Materialize must refuse it and write nothing.
+func TestNativeMaterializerRejectsAPendingOccurrenceForANotPlannerManagedConfig(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE sync_configurations SET planner_managed = FALSE`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.occurrence.ID = "occurrence:v1:not-planner-managed"
+	fixture.occurrence.ConfigPlannerManaged = false
+	if _, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence); !errors.Is(err, ErrOccurrenceIneligible) {
+		t.Fatalf("planner_managed=false config error=%v, want ineligible", err)
+	}
+	for _, table := range []string{"sync_runs", "sync_run_units", "job_runs", "sync_run_reference_discoveries", "sync_dispatch_outbox"} {
+		var count int
+		if err := fixture.pool.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Errorf("planner_managed=false occurrence wrote %s", table)
 		}
 	}
 }

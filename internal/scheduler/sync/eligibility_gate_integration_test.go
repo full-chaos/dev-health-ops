@@ -89,6 +89,11 @@ func seedEligibilityFixture(ctx context.Context, pool *pgxpool.Pool, fixture eli
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
 			is_active boolean NOT NULL,
+			-- CHAOS-4174: defaults TRUE (unlike prod migration 0018's
+			-- server_default FALSE) so this file's org_missing/feature_disabled
+			-- fixtures, which never name the column, keep exercising the
+			-- Coordinator refusals they were written for.
+			planner_managed boolean NOT NULL DEFAULT TRUE,
 			sync_targets jsonb NOT NULL,
 			sync_options jsonb NOT NULL,
 			last_sync_at timestamptz,

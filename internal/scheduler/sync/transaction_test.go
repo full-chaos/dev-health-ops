@@ -119,6 +119,7 @@ func lockedRow(
 		configID,
 		orgID,
 		true,
+		true, // planner_managed: these fixtures represent real schedulable configs
 		cron,
 		"UTC",
 		lastSyncAt,

@@ -65,6 +65,12 @@ type HandoffResult struct {
 	// targets require the canonical-incident feature and the organization is
 	// not entitled to it, mirroring workers/sync_scheduler.py:207-219.
 	SkippedFeatureDisabled int
+	// SkippedNotPlannerManaged counts candidates refused because
+	// planner_managed is false, marking them a fixture / legacy fan-out config
+	// (CHAOS-4174). Unlike the other two Skipped counters this refusal happens
+	// in evaluateContext, not the Coordinator -- counted here in the same loop
+	// that classifies DecisionUnsupportedCron and DecisionInvalidCron.
+	SkippedNotPlannerManaged int
 	// Repeated is the subset of HandedOff that already existed when this
 	// window ran, so this window created no row for it. It exists because
 	// counting handoffs alone cannot tell a scheduler that is producing work
@@ -267,6 +273,8 @@ func (repository *Repository) HandoffDueResult(
 			result.UnsupportedCron++
 		case DecisionInvalidCron:
 			result.InvalidCron++
+		case DecisionNotPlannerManaged:
+			result.SkippedNotPlannerManaged++
 		}
 		if !evaluation.TimingEligible || evaluation.NextOccurrence == nil ||
 			locked.candidate.Job == nil {
@@ -388,6 +396,7 @@ func readLockedCandidates(
 			&locked.candidate.ConfigID,
 			&locked.orgID,
 			&locked.candidate.Active,
+			&locked.candidate.PlannerManaged,
 			&configCron,
 			&configTimezone,
 			&locked.candidate.LastSyncAt,
@@ -443,11 +452,23 @@ func newOccurrence(
 // Both rows are locked so multiple scheduler replicas cannot hand off the same
 // occurrence. SQL gates reduce lock contention; evaluateContext is the final
 // source of timing truth after the locks are held.
+//
+// CHAOS-4174: `NOT config.planner_managed` leads the ORDER BY so a refused
+// planner_managed=false row is DEPRIORITIZED, not excluded, within the bounded
+// LIMIT window. planner_managed=false never advances its own ordering key
+// (evaluateContext refuses before the marker write, so next_run_at/
+// last_sync_at stay frozen), so without this a fixture-style config that
+// happens to be the most-overdue row would occupy the same window slot on
+// every poll forever, starving every real due config that ranks after it.
+// Deprioritizing still counts every refusal via SkippedNotPlannerManaged --
+// the row is read and rejected, only its priority for a scarce slot changes.
+// Confirmed with TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit.
 const schedulerHandoffCandidatesSQL = `
 SELECT
     config.id::text,
     config.org_id,
     config.is_active,
+    config.planner_managed,
     config.sync_options->>'schedule_cron',
     COALESCE(config.sync_options->>'timezone', ''),
     config.last_sync_at,
@@ -480,7 +501,7 @@ WHERE config.is_active = TRUE
         OR COALESCE(job.last_run_at, job.updated_at) IS NULL
         OR COALESCE(job.last_run_at, job.updated_at) < $1 - INTERVAL '2 hours'
     )
-ORDER BY COALESCE(job.next_run_at, config.last_sync_at, config.created_at), config.id
+ORDER BY NOT config.planner_managed, COALESCE(job.next_run_at, config.last_sync_at, config.created_at), config.id
 FOR UPDATE OF config, job SKIP LOCKED
 LIMIT $2
 `

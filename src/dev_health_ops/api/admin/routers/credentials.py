@@ -85,7 +85,7 @@ def _gitlab_api_base_url(base_url: str | None) -> str:
     SSRF guard rather than quietly redirecting a self-hosted instance's
     token to gitlab.com.
     """
-    candidate = (base_url or "").strip() or _GITLAB_DEFAULT_URL
+    candidate = base_url or _GITLAB_DEFAULT_URL
     return f"{candidate.rstrip('/')}{_GITLAB_API_SUFFIX}"
 
 
@@ -471,6 +471,15 @@ def _validate_external_url(url: str) -> tuple[bool, str | None]:
     if not hostname:
         return False, "No hostname in URL"
 
+    # Embedded credentials are rejected rather than scrubbed at each
+    # consumer. Only the hostname below is validated, and every HTTP client
+    # in this file replays userinfo as an Authorization header -- which both
+    # leaks the embedded secret and silently displaces the provider token
+    # the request exists to test. One refusal here covers the callers that
+    # rebuild the URL and the GitHub App token exchange that does not.
+    if parsed.username or parsed.password:
+        return False, "Credentials must not be embedded in the URL"
+
     blocked_hostnames = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
     if hostname.lower() in blocked_hostnames:
         return False, "Connection to localhost is not allowed"
@@ -503,14 +512,7 @@ def _build_safe_url(validated_base: str, path: str) -> str:
     safe_path = (
         f"{base_path}/{path.lstrip('/')}" if base_path else f"/{path.lstrip('/')}"
     )
-    # Userinfo is dropped rather than carried through: only the hostname is
-    # ever validated above, and an embedded user:password would be replayed
-    # by the HTTP client as an Authorization header alongside the provider
-    # token this request is meant to be testing.
-    netloc = parsed.hostname or ""
-    if parsed.port is not None:
-        netloc = f"{netloc}:{parsed.port}"
-    return urlunparse((parsed.scheme, netloc, safe_path, "", "", ""))
+    return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
 
 
 async def _github_repo_list_client(github_credentials: Any) -> GitHubCodeClient:

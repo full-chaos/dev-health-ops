@@ -598,6 +598,7 @@ GITLAB_URL_SHAPES = [
     "https://gitlab.example.com/gitlab",
     "https://gitlab.example.com/gitlab/",
     "https://gitlab.example.com:8443/gitlab",
+    "https://[2001:db8::1]:8443/gitlab",
 ]
 
 
@@ -730,19 +731,53 @@ async def test_gitlab_connection_helper_keeps_a_subpath_install_on_its_own_path(
     assert success is True
 
 
-def test_build_safe_url_drops_userinfo():
-    """Credentials embedded in a stored base URL never reach the wire.
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://someone:secret@gitlab.example.com/gitlab",
+        "https://someone@ghe.example.com/api/v3",
+        "https://someone:secret@acme.atlassian.net",
+    ],
+    ids=["gitlab", "github", "jira"],
+)
+def test_validate_external_url_rejects_embedded_credentials(url):
+    """A stored base URL may never carry userinfo.
 
-    Only the hostname is validated, so a ``user:password@`` prefix would
-    survive into the request and be replayed by the HTTP client as an
-    Authorization header alongside the provider token this request exists
-    to test.
+    Only the hostname is validated, and every HTTP client reached from
+    this module replays userinfo as an Authorization header -- leaking the
+    embedded secret and displacing the provider token the request exists
+    to test. Refusing it once here covers the callers that rebuild the URL
+    through _build_safe_url and the GitHub App token exchange that does
+    not, which is why this is a validation rule rather than a scrub at
+    each consumer.
     """
-    built = admin_router_module._build_safe_url(
-        "https://someone:secret@gitlab.example.com:8443/gitlab/api/v4", "user"
-    )
-    assert built == "https://gitlab.example.com:8443/gitlab/api/v4/user"
-    assert "secret" not in built
+    is_valid, error = _call_validate_external_url(url)
+    assert is_valid is False
+    assert error == "Credentials must not be embedded in the URL"
+
+
+@pytest.mark.asyncio
+async def test_gitlab_connection_helper_refuses_a_url_with_embedded_credentials(
+    monkeypatch,
+):
+    """The refusal reaches the provider helper, not just the guard."""
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
+
+    class _ExplodingAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("no request may be made for a URL carrying userinfo")
+
+    with patch("httpx.AsyncClient", _ExplodingAsyncClient):
+        success, details = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder", "url": "https://someone:secret@gitlab.example.com"}
+        )
+
+    assert success is False
+    assert details["error"] == "Credentials must not be embedded in the URL"
 
 
 @pytest.mark.asyncio

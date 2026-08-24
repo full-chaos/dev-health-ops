@@ -694,6 +694,13 @@ async def resolve_analytics(
                             ON wure.org_id = work_unit_investments.org_id
                             AND wure.work_unit_id = work_unit_investments.work_unit_id
                         LEFT JOIN repos AS r ON toString(r.id) = toString(wure.repo_id)
+                        LEFT JOIN (
+                            SELECT org_id, work_unit_id, count() AS repo_row_count
+                            FROM latest_work_unit_repo_effort
+                            GROUP BY org_id, work_unit_id
+                        ) AS wure_counts
+                            ON wure_counts.org_id = work_unit_investments.org_id
+                            AND wure_counts.work_unit_id = work_unit_investments.work_unit_id
                         """
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
@@ -748,7 +755,24 @@ async def resolve_analytics(
                         else (
                             "if(wure.work_unit_id != '', "
                             "if(work_unit_investments.effort_value > 0, "
-                            "wure.repo_effort_value / work_unit_investments.effort_value, 0.0), "
+                            "wure.repo_effort_value / work_unit_investments.effort_value, "
+                            # CHAOS-4241 codex round 2: effort_value <= 0 (a
+                            # zero-churn or non-LOC-metric work unit) made
+                            # every one of its repo-allocation rows divide to
+                            # 0, so the whole unit silently vanished from the
+                            # COUNT-weighted coverage denominator even though
+                            # the Sankey's SUM(subcategory_kv.2) -- which
+                            # never touches effort_value -- still counts it
+                            # as exactly 1. Fall back to 1/N (N = this unit's
+                            # own repo-allocation row count, from the
+                            # `wure_counts` join below) so its rows still sum
+                            # to 1.0 total regardless of fan-out, instead of
+                            # 0. A plain `count(*) OVER (PARTITION BY ...)`
+                            # does not work here -- ClickHouse rejects a
+                            # window function nested inside sum()/sumIf()
+                            # (ILLEGAL_AGGREGATION) -- so the count is
+                            # precomputed via a joined aggregate instead.
+                            "1.0 / wure_counts.repo_row_count), "
                             "1.0)"
                         )
                     )

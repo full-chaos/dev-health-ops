@@ -477,3 +477,146 @@ async def test_coverage_matches_work_unit_count_not_fanned_rows(sink):
         assert coverage.repo_coverage < 0.99, coverage
     finally:
         _cleanup(sink, org)
+
+
+def _seed_zero_effort_fixture(sink: Any, org: str) -> None:
+    """Two team-assigned work units with effort_value=0 (codex round 2):
+
+    * wu-zero-single: ONE repo-allocation row, effort_value=0.
+    * wu-zero-multi: TWO repo-allocation rows (fanned by the wure LEFT JOIN),
+      effort_value=0.
+
+    Both must still count as exactly ONE work unit each in COUNT-weighted
+    coverage -- the Sankey's SUM(subcategory_kv.2) never touches
+    effort_value, so it counts them as 1 regardless. Dividing
+    repo_effort_value / effort_value (0) would silently drop wu-zero-single
+    entirely and, without the 1/N-rows fallback, either drop or double-count
+    wu-zero-multi depending on how many allocation rows it fanned into.
+    """
+    feature = {"Feature Delivery.product": 1.0}
+    repo_a = uuid.uuid4()
+    repo_b = uuid.uuid4()
+    repo_c = uuid.uuid4()
+
+    single_issue = "ZERO-SINGLE-1"
+    multi_issue = "ZERO-MULTI-1"
+
+    sink.client.insert(
+        "work_unit_investments",
+        [
+            [
+                "wu-zero-single",
+                FROM_TS,
+                TO_TS,
+                None,
+                "churn_loc",
+                0.0,
+                feature,
+                f'{{"issues": ["{single_issue}"]}}',
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-zero-multi",
+                FROM_TS,
+                TO_TS,
+                None,
+                "churn_loc",
+                0.0,
+                feature,
+                f'{{"issues": ["{multi_issue}"]}}',
+                COMPUTED_AT,
+                org,
+            ],
+        ],
+        column_names=_wui_cols(),
+    )
+
+    sink.client.insert(
+        "work_unit_repo_effort",
+        [
+            [
+                "wu-zero-single",
+                repo_a,
+                "churn_loc",
+                0.0,
+                1.0,
+                "structural",
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-zero-multi",
+                repo_b,
+                "churn_loc",
+                0.0,
+                0.5,
+                "structural",
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-zero-multi",
+                repo_c,
+                "churn_loc",
+                0.0,
+                0.5,
+                "structural",
+                COMPUTED_AT,
+                org,
+            ],
+        ],
+        column_names=_wure_cols(),
+    )
+
+    sink.write_work_item_team_attributions(
+        [
+            WorkItemTeamAttributionRecord(
+                work_item_id=single_issue,
+                provider="github",
+                source="native_team",
+                is_primary=1,
+                confidence="high",
+                evidence="native_team_key=team-zero",
+                computed_at=COMPUTED_AT,
+                repo_id=repo_a,
+                team_id="team-zero",
+                team_name="Team Zero",
+                org_id=org,
+            ),
+            WorkItemTeamAttributionRecord(
+                work_item_id=multi_issue,
+                provider="github",
+                source="native_team",
+                is_primary=1,
+                confidence="high",
+                evidence="native_team_key=team-zero",
+                computed_at=COMPUTED_AT,
+                repo_id=repo_b,
+                team_id="team-zero",
+                team_name="Team Zero",
+                org_id=org,
+            ),
+        ]
+    )
+
+
+async def test_coverage_zero_effort_units_still_count_as_one(sink):
+    """CHAOS-4241 codex round 2 (HIGH): a zero-effort work unit must still
+    contribute exactly 1 to COUNT-weighted coverage, whether it has one
+    repo-allocation row or several (the fan-out must not double-count it
+    either). See `_seed_zero_effort_fixture`.
+    """
+    org = f"test-chaos-4241-zero-effort-{uuid.uuid4()}"
+    try:
+        _seed_zero_effort_fixture(sink, org)
+
+        coverage = await _resolve_coverage(sink, org)
+
+        # Both units are team- and repo-assigned -> both cards must read
+        # 1.0, not <1.0 (units silently dropped by the /0 division) and not
+        # >1.0-equivalent skew from the multi-repo unit's fan-out.
+        assert coverage.team_coverage == pytest.approx(1.0, abs=0.01), coverage
+        assert coverage.repo_coverage == pytest.approx(1.0, abs=0.01), coverage
+    finally:
+        _cleanup(sink, org)

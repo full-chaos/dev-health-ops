@@ -42,6 +42,24 @@ var ErrGitHubTestsIncomplete = errors.New("github tests inventory incomplete")
 // earlier).
 var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", ErrGitHubTestsIncomplete)
 
+// ErrGitHubTestsArtifactOversized narrows ErrGitHubTestsIncomplete to the
+// download-time bound violation: the artifact body exceeded
+// githubTestsMaxDownloadSize. Unlike ErrGitHubTestsArtifactUnavailable above,
+// this stays a UNIT-level failure rather than a per-artifact skip -- it is
+// the download-time sibling of the in-archive archive_bounds/report_cap
+// bounds (github_tests_reports.go), which fail the batch closed rather than
+// silently drop what breached a safety bound.
+//
+// It exists as its OWN sentinel, distinct from a plain read error, because it
+// is deterministic: the same artifact is the same size on every attempt, so
+// the generic bounded-retry path (providerunit.deterministicTerminalCategory)
+// would otherwise burn every River attempt re-downloading it before
+// collapsing into the generic exhausted category -- the same repeated-refusal
+// waste CHAOS-3871 fixed for a pagination cap refusal. A genuine read error
+// stays retryable: unlike a fixed artifact size, a dropped connection can
+// succeed on retry (CHAOS-4191).
+var ErrGitHubTestsArtifactOversized = fmt.Errorf("%w: artifact oversized", ErrGitHubTestsIncomplete)
+
 type githubTestsPipelineRow struct {
 	OrgID           string     `json:"org_id"`
 	RepoID          string     `json:"repo_id"`
@@ -659,7 +677,7 @@ func downloadGitHubTestsArtifact(ctx context.Context, client *providerfoundation
 	if len(body) > githubTestsMaxDownloadSize {
 		return nil, requests, fmt.Errorf(
 			"%w: artifact exceeds max download size %d bytes",
-			ErrGitHubTestsIncomplete, githubTestsMaxDownloadSize,
+			ErrGitHubTestsArtifactOversized, githubTestsMaxDownloadSize,
 		)
 	}
 	return body, requests, nil

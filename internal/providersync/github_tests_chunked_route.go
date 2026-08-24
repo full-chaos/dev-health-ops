@@ -853,6 +853,24 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							return downloadErr
 						}
 						if len(archive) == 0 {
+							// A 2xx download with a truly empty body is not a
+							// legitimate GitHub response (a real artifact
+							// either has bytes or the download errors); it is
+							// the same "answers every request with an empty
+							// document" edge condition the totality gate
+							// exists to catch, just without even a malformed
+							// payload to reject. Recording it as unreadable
+							// -- exactly like a container that downloaded but
+							// would not open -- closes the gap where a
+							// broken proxy returning empty bodies for every
+							// artifact would otherwise finalize the unit as
+							// healthy with zero report rows (CHAOS-4185
+							// codex round 2).
+							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+								githubTestsUnreadableArchiveCause,
+							)
+							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
 						rows, parseErr := parseGitHubTestsArtifact(archive, string(artifact.ID), repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)

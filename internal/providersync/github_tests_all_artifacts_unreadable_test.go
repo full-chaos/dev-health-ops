@@ -480,3 +480,66 @@ func TestGitHubTestsAllArtifactsUnreadableOrdinaryResumeKeepsCountersKnown(t *te
 		t.Fatalf("err=%v, want seen=2 unreadable=2", err)
 	}
 }
+
+// githubTestsEmptyArtifactDoer serves `runs` workflow runs, each with one
+// artifact whose download answers 200 OK with a TRULY EMPTY body -- not an
+// HTTP error, and not even a malformed payload to reject. A real GitHub
+// artifact download either has bytes or errors; a 2xx-with-nothing is the
+// same "broken edge answers every request" condition the totality gate
+// exists to catch, just via the emptiest possible non-answer.
+type githubTestsEmptyArtifactDoer struct {
+	t               *testing.T
+	runs            int
+	archiveRequests int
+}
+
+func (doer *githubTestsEmptyArtifactDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}}
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api":
+		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+	case path == "/repos/acme/api/actions/runs":
+		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(1, doer.runs)), nil
+	case strings.HasSuffix(path, "/jobs"):
+		return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+	case strings.HasSuffix(path, "/artifacts"):
+		return githubTestsHTTPResponse(request, header, githubTestsArtifactsFixture(1)), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		doer.archiveRequests++
+		return githubTestsHTTPResponse(request, header, ""), nil
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+// RED (codex round 2, MEDIUM). Two runs, each with one artifact whose
+// download body is empty: before this fix, `len(archive) == 0` silently
+// `continue`d without incrementing ArchivesUnreadable or recording any
+// incomplete evidence, so ArchivesSeen grew (2) while ArchivesUnreadable
+// stayed 0 -- the totality gate never fired, and a broken proxy/edge
+// returning empty bodies for every artifact would finalize the unit as
+// healthy having ingested zero report rows. The exact failure this whole
+// ticket exists to close, reachable through the one path the corrupt-body
+// fixtures never exercised.
+func TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable(t *testing.T) {
+	doer := &githubTestsEmptyArtifactDoer{t: t, runs: 2}
+	client := githubTestsClient(t, doer)
+
+	walk, err := walkGitHubTestsChunksResult(t, client, 8)
+	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable: empty artifact bodies "+
+			"must count toward totality exactly like an unreadable archive", err)
+	}
+	if doer.archiveRequests != 2 {
+		t.Fatalf("downloaded %d archives, want 2 (both observed before failing)", doer.archiveRequests)
+	}
+	if !strings.Contains(err.Error(), "seen=2") || !strings.Contains(err.Error(), "unreadable=2") {
+		t.Fatalf("err=%v, want it to carry seen=2 unreadable=2", err)
+	}
+	if walk.final.Result != nil {
+		t.Fatalf("final batch=%#v, want no final emission on a totality failure", walk.final)
+	}
+}

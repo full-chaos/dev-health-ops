@@ -450,7 +450,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # ticket's own already-accepted bypass trade-off, not a new defect -- add
     # tests in internal/jobs/providerunit, a package this providersync-scoped
     # census does not track.)
-    assert len(expected_provider_tests) == 1030
+    #
+    # A second codex round (MEDIUM) then found a 2xx download with a TRULY
+    # EMPTY body silently continued without incrementing ArchivesUnreadable
+    # or recording any incomplete evidence -- ArchivesSeen grew while
+    # ArchivesUnreadable stayed 0, so the totality gate never fired and a
+    # broken proxy/edge answering every artifact with an empty body could
+    # finalize the unit as healthy having ingested zero report rows. +1
+    # ordinary test (1030 -> 1031):
+    # TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable. Drives the chunked
+    # route through an in-memory HTTP doer and touches no database, so the
+    # integration-tagged count stays 114.
+    assert len(expected_provider_tests) == 1031
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -467,7 +478,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1030
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1031
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -528,7 +539,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1030
+    assert len(selected_tests) == len(set(selected_tests)) == 1031
     assert set(selected_tests) == expected_tests
 
 

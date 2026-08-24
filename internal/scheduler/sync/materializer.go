@@ -389,7 +389,8 @@ func (materializer *NativeMaterializer) Materialize(
 	if materializer == nil || materializer.domainPool == nil || ctx == nil || coordinatorTx == nil {
 		return PlanResult{}, ErrInvalidMaterializer
 	}
-	if !occurrence.ConfigActive || occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
+	if !occurrence.ConfigActive || !occurrence.ConfigPlannerManaged ||
+		occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
 		return PlanResult{}, ErrOccurrenceIneligible
 	}
 	materializer.maybeRefreshExecutedProof(ctx)

@@ -26,6 +26,12 @@ CREATE TABLE public.sync_configurations (
     id uuid PRIMARY KEY,
     org_id text NOT NULL,
     is_active boolean NOT NULL,
+    -- CHAOS-4174: defaults TRUE (unlike prod migration 0018's server_default
+    -- FALSE) so this file's existing reconciler fixtures, which never name
+    -- the column, keep exercising the materialization paths they were
+    -- written for. The dedicated refusal test inserts planner_managed
+    -- explicitly.
+    planner_managed boolean NOT NULL DEFAULT TRUE,
     sync_options jsonb NOT NULL,
     last_sync_at timestamptz,
     created_at timestamptz NOT NULL

@@ -113,7 +113,7 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 		Name:       "config sync_options.schedule_cron re-read under lock before materializing",
 		Phase:      "B",
 		PythonSite: "sync/execution_trigger.py:367-370, raises \"manual-only\"",
-		GoSite:     "ABSENT: lockPendingOccurrenceSQL selects no cron and materializer.go:392 checks only ConfigActive/JobStatus/JobType",
+		GoSite:     "ABSENT: lockPendingOccurrenceSQL selects no cron and materializer.go:392 checks only ConfigActive/ConfigPlannerManaged/JobStatus/JobType",
 		Verdict:    verdictGap,
 		Note: "GAP-1. A config switched to manual-only between minting and " +
 			"materialization still materializes in Go; Python refused it. " +
@@ -123,7 +123,7 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 		Name:       "config.planner_managed as an ELIGIBILITY gate",
 		Phase:      "A",
 		PythonSite: "ABSENT: sync_scheduler.py:410-411 filters on is_active only; _maybe_dispatch_config never reads the column",
-		GoSite:     "transaction.go:460 (candidate SQL); evaluate.go planner_managed check, first gate in evaluateContext",
+		GoSite:     "transaction.go:460 (candidate SQL); evaluate.go planner_managed check, first gate in evaluateContext. The Phase B re-check under lock is a separate row below (\"config.planner_managed re-read under lock before materializing\").",
 		Verdict:    verdictByDesign,
 		Decision:   DecisionNotPlannerManaged,
 		Note: "CHAOS-4174 (chris, 2026-08-23): \"That column is useless past " +
@@ -160,7 +160,24 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 		PythonSite: "sync/trigger_routing.py:184-199 and _planner_scoped_source_ids :143-167",
 		GoSite:     "materializer.go:1000 via loadPlanSources :994",
 		Verdict:    verdictMatch,
-		Note:       "This is the ONE place either side reads the column.",
+		Note: "Unrelated to the CHAOS-4174 eligibility gate below: this is " +
+			"routing (which sources a planner-managed parent's run covers), " +
+			"not a schedulability decision.",
+	},
+	{
+		Name:       "config.planner_managed re-read under lock before materializing",
+		Phase:      "B",
+		PythonSite: "ABSENT -- Python never gated on this column (see the Phase-A row above)",
+		GoSite:     "occurrence_reconciler.go lockPendingOccurrenceSQL + PendingOccurrence.ConfigPlannerManaged; materializer.go:392 (alongside ConfigActive)",
+		Verdict:    verdictByDesign,
+		Note: "Added after a codex review of this changeset (2026-08-23): Phase " +
+			"A's refusal in evaluateContext cannot protect an occurrence that " +
+			"was already minted before this gate existed, or minted by an old " +
+			"binary still running mid-rollout. Without this re-check that " +
+			"pending occurrence would still materialize into a real sync run " +
+			"for a fixture/legacy config. Mirrors \"config.is_active re-read " +
+			"under lock before materializing\" above exactly: same locked " +
+			"config row, same ineligibility branch in materializer.go:392.",
 	},
 	{
 		Name:       "PagerDuty is exempt from planner tag scoping",
@@ -494,11 +511,19 @@ func TestCandidateSQLPredicateSurfaceIsPinned(t *testing.T) {
 // phase-B claim query. The absence of a schedule_cron column here IS GAP-1:
 // the row is pinned so that closing the gap is a deliberate edit to both this
 // list and the parity table, and so the gap cannot quietly become folklore.
+//
+// config.planner_managed (CHAOS-4174) IS present here, unlike GAP-1's missing
+// schedule_cron: a pending occurrence minted before this ticket's Phase-A gate
+// existed (or by an old binary mid-rollout) must not be allowed to
+// materialize a real sync run for a fixture/legacy config just because it was
+// already sitting in the table. See materializer.go:392, which re-checks it
+// exactly like ConfigActive.
 func TestLockedMaterializationPredicateSurfaceIsPinned(t *testing.T) {
 	want := []string{
 		"config.id",
 		"config.is_active",
 		"config.org_id",
+		"config.planner_managed",
 		"job.id",
 		"job.job_type",
 		"job.org_id",
@@ -555,29 +580,41 @@ func TestLockedMaterializationPredicateSurfaceIsPinned(t *testing.T) {
 //  2. The one property the old test protected alongside the absence -- that
 //     materializer.go still scopes a planner-managed parent to its tagged
 //     sources -- still holds. That source-scoping behaviour is UNCHANGED by
-//     this ticket: CHAOS-4174 adds an eligibility gate, it does not touch
-//     Phase B routing.
-//  3. lockPendingOccurrenceSQL (Phase B) still does NOT reference the column:
-//     the eligibility gate is Phase A only, mirroring how DecisionInactive
-//     etc. are also Phase-A-only concerns re-read separately under lock in
-//     Phase B (see the "config.is_active re-read under lock" row above).
+//     this ticket.
+//  3. lockPendingOccurrenceSQL (Phase B) ALSO now references the column, added
+//     after a codex review of this changeset found that Phase A's refusal
+//     could not protect a pending occurrence minted before this gate existed
+//     (or by an old binary mid-rollout): without a Phase B re-check, that
+//     occurrence would still materialize into a real sync run. This mirrors
+//     config.is_active exactly (see "config.is_active re-read under lock"
+//     above) -- Phase A refuses before minting, Phase B refuses again before
+//     materializing, because a decision made once at mint time is not
+//     guaranteed to still hold by the time a pending row is consumed.
 func TestPlannerManagedGateAndSourceScopingBothHold(t *testing.T) {
 	if !strings.Contains(schedulerHandoffCandidatesSQL, "planner_managed") {
 		t.Error("schedulerHandoffCandidatesSQL no longer references " +
 			"planner_managed. CHAOS-4174 requires the candidate query to read " +
 			"the column so evaluateContext can refuse a false value.")
 	}
-	if strings.Contains(lockPendingOccurrenceSQL, "planner_managed") {
-		t.Error("lockPendingOccurrenceSQL now references planner_managed. " +
-			"CHAOS-4174's eligibility gate is Phase A only (evaluateContext); " +
-			"Phase B's existing source-scoping read in materializer.go is the " +
-			"column's only Phase B reader.")
+	if !strings.Contains(lockPendingOccurrenceSQL, "planner_managed") {
+		t.Error("lockPendingOccurrenceSQL no longer references planner_managed. " +
+			"A pending occurrence for a fixture/legacy config must be refused " +
+			"again under lock before materialization, not just at mint time -- " +
+			"see materializer.go:392's ConfigPlannerManaged check.")
 	}
 	if !sourceContainsStringLiteral(t, "materializer.go", "planner_managed_sync_config_id") {
 		t.Error("materializer.go no longer scopes a planner-managed parent to " +
 			"its tagged sources (sync/trigger_routing.py:143-167). CHAOS-4174 " +
-			"adds a Phase-A eligibility gate; it must not regress this " +
-			"unrelated Phase-B routing behaviour.")
+			"adds an eligibility gate; it must not regress this unrelated " +
+			"routing behaviour.")
+	}
+	materializerSource, err := os.ReadFile("materializer.go")
+	if err != nil {
+		t.Fatalf("read materializer.go: %v", err)
+	}
+	if !strings.Contains(string(materializerSource), "ConfigPlannerManaged") {
+		t.Error("materializer.go no longer re-checks ConfigPlannerManaged before " +
+			"materializing a locked pending occurrence.")
 	}
 }
 

@@ -452,6 +452,17 @@ func newOccurrence(
 // Both rows are locked so multiple scheduler replicas cannot hand off the same
 // occurrence. SQL gates reduce lock contention; evaluateContext is the final
 // source of timing truth after the locks are held.
+//
+// CHAOS-4174: `NOT config.planner_managed` leads the ORDER BY so a refused
+// planner_managed=false row is DEPRIORITIZED, not excluded, within the bounded
+// LIMIT window. planner_managed=false never advances its own ordering key
+// (evaluateContext refuses before the marker write, so next_run_at/
+// last_sync_at stay frozen), so without this a fixture-style config that
+// happens to be the most-overdue row would occupy the same window slot on
+// every poll forever, starving every real due config that ranks after it.
+// Deprioritizing still counts every refusal via SkippedNotPlannerManaged --
+// the row is read and rejected, only its priority for a scarce slot changes.
+// Confirmed with TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit.
 const schedulerHandoffCandidatesSQL = `
 SELECT
     config.id::text,
@@ -490,7 +501,7 @@ WHERE config.is_active = TRUE
         OR COALESCE(job.last_run_at, job.updated_at) IS NULL
         OR COALESCE(job.last_run_at, job.updated_at) < $1 - INTERVAL '2 hours'
     )
-ORDER BY COALESCE(job.next_run_at, config.last_sync_at, config.created_at), config.id
+ORDER BY NOT config.planner_managed, COALESCE(job.next_run_at, config.last_sync_at, config.created_at), config.id
 FOR UPDATE OF config, job SKIP LOCKED
 LIMIT $2
 `

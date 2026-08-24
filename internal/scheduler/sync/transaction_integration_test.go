@@ -972,3 +972,107 @@ func TestHandoffDuePostgresRefusesNotPlannerManagedConfig(t *testing.T) {
 		t.Error("planner_managed=true config's marker did not advance; the gate must not regress ordinary scheduling")
 	}
 }
+
+// TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit is a codex-review
+// finding (validated here before being accepted): a planner_managed=false
+// config never advances its own ordering key once refused -- evaluateContext
+// refuses it before the marker write, so next_run_at/last_sync_at stay
+// exactly as overdue as they were. Without deprioritizing it in
+// schedulerHandoffCandidatesSQL's ORDER BY, the most-overdue fixture-style
+// config would occupy the SAME bounded window slot on every single poll
+// forever, permanently starving a real planner_managed=true config that is
+// also due but ranks after it.
+//
+// This seeds a planner_managed=false config that is MORE overdue than the
+// createSchedulerIntegrationFixture config (planner_managed=true, the
+// default), then runs three consecutive windows with limit=1 -- the tightest
+// possible bound. If the refused row were not deprioritized, all three
+// windows would spend their one slot on it and the real config would never
+// mint. With the fix, the real config must win the very first window despite
+// being less overdue by wall-clock time.
+func TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	// createSchedulerIntegrationFixture's config (...3038 / job ...3039) is
+	// planner_managed=true (the DDL default) with last_sync_at
+	// 2026-01-01T10:00:00Z. This is the "real" config that must not starve.
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		staleConfigID = "00000000-0000-4000-8000-00000000e101"
+		staleJobID    = "00000000-0000-4000-8000-00000000e102"
+	)
+	for _, statement := range []string{
+		// last_sync_at is a full 10 hours older than the real config's, so it
+		// ranks first in schedulerHandoffCandidatesSQL's ORDER BY on plain
+		// due-ness -- exactly the condition that starves without the fix.
+		`INSERT INTO public.sync_configurations (
+			id, org_id, is_active, planner_managed, sync_options, last_sync_at, created_at
+		) VALUES (
+			'` + staleConfigID + `', 'org-integration', TRUE, FALSE,
+			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
+			'2026-01-01T00:00:00Z', '2025-12-31T00:00:00Z'
+		)`,
+		`INSERT INTO public.scheduled_jobs (
+			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
+			status, is_running, updated_at
+		) VALUES (
+			'` + staleJobID + `', 'org-integration', '` + staleConfigID + `',
+			'sync', '0 * * * *', 'UTC', 0, FALSE, '2025-12-31T00:00:00Z'
+		)`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := at("2026-01-01T12:00:00Z")
+
+	first, err := repository.HandoffDueResult(ctx, observedAt, 1, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatalf("first window: HandoffDueResult() error = %v", err)
+	}
+	if first.Minted() != 1 || len(first.HandedOff) != 1 || first.HandedOff[0].ConfigID != "00000000-0000-4000-8000-000000003038" {
+		t.Fatalf("first window did not prioritize the real config despite being "+
+			"less overdue: Minted=%d HandedOff=%v (want the real config minted "+
+			"first, ahead of the more-overdue but refused config)",
+			first.Minted(), first.HandedOff)
+	}
+	if first.SkippedNotPlannerManaged != 0 {
+		t.Errorf("first window SkippedNotPlannerManaged = %d, want 0: with only "+
+			"one slot it must go to the real config, not spend the window "+
+			"reading and refusing the stale one", first.SkippedNotPlannerManaged)
+	}
+
+	// The second window's one slot is free to reach the refused config now
+	// that the real one no longer occupies the front of the order.
+	second, err := repository.HandoffDueResult(ctx, observedAt, 1, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatalf("second window: HandoffDueResult() error = %v", err)
+	}
+	if second.SkippedNotPlannerManaged != 1 {
+		t.Errorf("second window SkippedNotPlannerManaged = %d, want 1", second.SkippedNotPlannerManaged)
+	}
+}

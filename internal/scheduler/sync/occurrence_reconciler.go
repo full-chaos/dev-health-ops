@@ -75,8 +75,17 @@ type PendingOccurrence struct {
 	// and are used only for identity validation, never to re-decide due-ness:
 	// the due time is already fixed by the persisted occurrence.
 	ConfigActive bool
-	JobStatus    int
-	JobType      string
+	// ConfigPlannerManaged mirrors sync_configurations.planner_managed, locked
+	// at materialization time exactly like ConfigActive (CHAOS-4174). Phase A
+	// (evaluateContext) refuses a false value before minting, but that refusal
+	// cannot protect an occurrence that was already minted before this gate
+	// existed, or minted by a process still running the old binary during a
+	// rolling deploy -- this is what closes that window: a pending occurrence
+	// for a fixture/legacy config must not be allowed to materialize into a
+	// real sync run even if it is already sitting in the table.
+	ConfigPlannerManaged bool
+	JobStatus            int
+	JobType              string
 }
 
 // PlanResult is the authoritative graph one materialization produced.
@@ -516,6 +525,7 @@ func lockPendingOccurrence(
 		&occurrence.ScheduledFor,
 		&occurrence.AttemptCount,
 		&occurrence.ConfigActive,
+		&occurrence.ConfigPlannerManaged,
 		&occurrence.JobStatus,
 		&occurrence.JobType,
 	)
@@ -593,6 +603,7 @@ SELECT
     occurrence.scheduled_for,
     occurrence.reconcile_attempt_count,
     config.is_active,
+    config.planner_managed,
     job.status,
     job.job_type
 FROM public.scheduled_sync_occurrences AS occurrence

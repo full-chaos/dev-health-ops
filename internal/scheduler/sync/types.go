@@ -17,10 +17,15 @@ const (
 	// EvaluationVersion identifies the timing rules. v2 adds the occurrence
 	// ledger to the cron base (CHAOS-3936) and is therefore deliberately NOT
 	// Python-compatible for a config whose run never completed: Python freezes
-	// on last_sync_at there and Go keeps advancing. The version is part of the
-	// candidate digest so a cross-runtime comparison cannot silently read a
-	// v2 digest as if both runtimes still applied the same rule.
-	EvaluationVersion = "sync_scheduler_timing_evaluation_v2"
+	// on last_sync_at there and Go keeps advancing. v3 adds the
+	// planner_managed refusal (CHAOS-4174), a Go-only gate with no Python
+	// analogue at all. The version is part of the candidate digest so a
+	// cross-runtime -- or cross-binary, across a rolling deploy -- comparison
+	// cannot silently read a v3 digest as if it still applied v2's rules:
+	// raised in a codex review of this changeset, which pointed out that a
+	// snapshot containing a refused candidate would otherwise advertise the
+	// same evaluation version as one that could never produce that decision.
+	EvaluationVersion = "sync_scheduler_timing_evaluation_v3"
 	// CronGrammarVersion identifies the deterministic five-field Croniter
 	// subset. Random R expressions and optional sixth/seventh fields are
 	// explicitly outside this grammar.

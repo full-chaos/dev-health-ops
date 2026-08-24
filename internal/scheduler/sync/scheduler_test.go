@@ -272,9 +272,10 @@ func TestSnapshotSortsBoundsAndDigestsDeterministically(t *testing.T) {
 		!strings.HasPrefix(snapshot.CandidateDigest, "sha256:") || len(snapshot.CandidateDigest) != len("sha256:")+64 {
 		t.Fatalf("snapshot digest = %#v", snapshot)
 	}
-	// Re-pinned for EvaluationVersion v2 (CHAOS-3936): the evaluation version
-	// is a digest input precisely so a timing-rule change cannot pass silently.
-	if snapshot.CandidateDigest != "sha256:0b8279af3cb555f3d65e4025a0272dcaf479c5516758ef45a00f7d8e42e4550d" {
+	// Re-pinned for EvaluationVersion v3 (CHAOS-4174, the planner_managed
+	// refusal): the evaluation version is a digest input precisely so a
+	// timing-rule change cannot pass silently.
+	if snapshot.CandidateDigest != "sha256:9aaa352b185e0b3b4f7f33e0b716cfc42db985971e2c508ac4f451bc466c8881" {
 		t.Fatalf("candidate digest = %s", snapshot.CandidateDigest)
 	}
 	again, err := BuildSnapshot(observed, 2, []Candidate{candidates[2], candidates[0], candidates[1]})

@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,13 +30,37 @@ CREATE TABLE sync_dispatch_outbox (
  UNIQUE (sync_run_id, kind)
 );
 CREATE TABLE sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL, error text NULL
+ id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
+ status text NOT NULL DEFAULT 'dispatching', total_units int NOT NULL DEFAULT 0,
+ completed_units int NOT NULL DEFAULT 0, failed_units int NOT NULL DEFAULT 0,
+ completed_at timestamptz NULL, result json NULL, error text NULL
 );
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
  dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
- error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
+ available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
  last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE integrations (
+ id uuid PRIMARY KEY, provider text NOT NULL
+);
+CREATE TABLE integration_datasets (
+ id uuid PRIMARY KEY, integration_id uuid NOT NULL, dataset_key text NOT NULL, is_enabled boolean NOT NULL
+);
+CREATE TABLE feature_flags (
+ id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL, is_enabled boolean NOT NULL
+);
+CREATE TABLE backfill_jobs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
+ total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
+ failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
+);
+CREATE TABLE scheduled_jobs (
+ id uuid PRIMARY KEY
+);
+CREATE TABLE job_runs (
+ id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
+ status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
 );
 CREATE TABLE sync_run_reference_discoveries (
  id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
@@ -382,5 +407,131 @@ VALUES ($1,$2,$3,'success',1,now(),now(),'{}'::json)`,
 	}
 	if status != discoveryStatusSuccess {
 		t.Fatalf("status=%q want=success (the actual winner's result must survive untouched)", status)
+	}
+}
+
+// TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled pins the
+// gate-check wiring in claim(): a run whose only unit targets a
+// canonical-incident-gated dataset (pagerduty/incidents -> legacy_targets
+// "operational", one of the two gated targets) must never be claimed at
+// all when the feature is disabled org-wide (no feature_flags row --
+// canonicalIncidentAllowed's ErrNoRows branch) -- terminalizeFeatureDisabledPlan
+// runs instead, Discover returns nil (a clean terminal outcome, not an
+// error, matching Python's `return {"status": "feature_disabled", ...}`),
+// and the executor is never invoked.
+func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+	unitID := "00000000-0000-4000-8000-0000000000d9"
+	sourceID := "00000000-0000-4000-8000-0000000000da"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
+		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &fakeDiscoveryExecutor{summary: map[string]any{"ok": true}}
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	if executor.calls != 0 {
+		t.Fatalf("executor.calls=%d want=0 (a feature-disabled run must never reach the executor)", executor.calls)
+	}
+	var unitStatus, unitError string
+	if err := pool.QueryRow(ctx, `SELECT status, error FROM sync_run_units WHERE id=$1`, unitID).
+		Scan(&unitStatus, &unitError); err != nil {
+		t.Fatal(err)
+	}
+	if unitStatus != syncRunUnitStatusFailed {
+		t.Fatalf("unit status=%q want=failed", unitStatus)
+	}
+	if !strings.Contains(unitError, "canonical incident ingestion is disabled") {
+		t.Fatalf("unit error=%q want feature-disabled message", unitError)
+	}
+	var runStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != syncRunStatusFailed {
+		t.Fatalf("run status=%q want=failed", runStatus)
+	}
+	// No ledger row is created for a run denied before the claim step --
+	// terminalizeFeatureDisabledGraph's ledger UPDATE is a conditional
+	// no-op against a table with no matching row, exactly like Python's.
+	var ledgerCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_run_reference_discoveries WHERE sync_run_id=$1`, discoveryTestRun).
+		Scan(&ledgerCount); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerCount != 0 {
+		t.Fatalf("ledger rows=%d want=0 (denied before the ledger is ever created)", ledgerCount)
+	}
+}
+
+// TestNativeReferenceDiscoveryProceedsWhenFeatureNotRequired pins the other
+// half: a run whose unit targets an UNGATED dataset must sail through the
+// gate-check straight into a normal claim, with the executor invoked
+// exactly once -- proving the new gate-check call in claim() doesn't
+// misfire false positives on ordinary, non-gated sync runs.
+func TestNativeReferenceDiscoveryProceedsWhenFeatureNotRequired(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+	unitID := "00000000-0000-4000-8000-0000000000db"
+	sourceID := "00000000-0000-4000-8000-0000000000dc"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','prs',$4,'planned')`,
+		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &fakeDiscoveryExecutor{summary: map[string]any{"ok": true}}
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor.calls=%d want=1 (an ungated run must proceed through the normal claim path)", executor.calls)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_reference_discoveries WHERE sync_run_id=$1`, discoveryTestRun).
+		Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != discoveryStatusSuccess {
+		t.Fatalf("ledger status=%q want=success", status)
 	}
 }

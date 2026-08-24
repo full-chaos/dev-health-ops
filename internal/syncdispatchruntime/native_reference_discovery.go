@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -119,11 +120,12 @@ func (service *NativeReferenceDiscoveryService) Discover(ctx context.Context, ar
 
 // claim mirrors run_sync_reference_discovery's first `with
 // get_postgres_session_sync()` block: validate the transport reference is
-// current, load the run, ensure a ledger row exists (planned, if this is the
-// first attempt), and atomically claim it. Returns claimed=false for every
-// Python "return {status: ...}" branch that isn't a hard failure (stale
-// transport reference, missing run, or lost claim race) -- all of those are
-// legitimate no-ops for a River job, not errors.
+// current, load the run, check (and possibly enforce) the canonical-incident
+// feature gate, ensure a ledger row exists (planned, if this is the first
+// attempt), and atomically claim it. Returns claimed=false for every Python
+// "return {status: ...}" branch that isn't a hard failure (stale transport
+// reference, missing run, feature-disabled denial, or a lost claim race) --
+// all of those are legitimate no-ops for a River job, not errors.
 func (service *NativeReferenceDiscoveryService) claim(
 	ctx context.Context, args ReferenceDiscoveryArgs,
 ) (claimed bool, leaseOwner string, deadline time.Time, err error) {
@@ -141,14 +143,40 @@ func (service *NativeReferenceDiscoveryService) claim(
 		return false, "", time.Time{}, nil
 	}
 
-	var runExists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.sync_runs WHERE id = $1::uuid)`, args.SyncRunID()).
-		Scan(&runExists); err != nil {
-		return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
+	run, err := loadFinalizeRun(ctx, tx, args.OrganizationID(), args.SyncRunID())
+	if err != nil {
+		return false, "", time.Time{}, err
 	}
-	if !runExists {
+	if run == nil {
 		// Python: `if run is None: return {"status": "skipped", "reason": "missing_run"}`.
 		return false, "", time.Time{}, nil
+	}
+
+	// Python: `if sync_run_requires_canonical_incident_feature(session, run):
+	// require_canonical_incident_feature_for_update_sync(session, run.org_id)`
+	// -- the row-locking (FOR UPDATE) phase-B check, run BEFORE the ledger is
+	// even created, so a denied run never gets claimed at all.
+	requiresFeature, err := syncRunRequiresCanonicalIncidentFeature(ctx, tx, run.id, run.integrationID)
+	if err != nil {
+		return false, "", time.Time{}, err
+	}
+	if requiresFeature {
+		gateNow := service.nowUTC()
+		allowed, err := scheduledsync.CanonicalIncidentAllowedForUpdate(ctx, tx, run.orgID, gateNow)
+		if err != nil {
+			return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
+		}
+		if !allowed {
+			if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, gateNow); err != nil {
+				return false, "", time.Time{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
+			}
+			// Python: `return {"status": "feature_disabled", ...}` -- a
+			// legitimate terminal outcome, not a claim.
+			return false, "", time.Time{}, nil
+		}
 	}
 
 	ledgerID, err := ensureReferenceDiscoveryLedger(ctx, tx, args.OrganizationID(), args.SyncRunID(), service.nowUTC())

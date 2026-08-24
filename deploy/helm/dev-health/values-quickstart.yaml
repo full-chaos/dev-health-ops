@@ -3,6 +3,22 @@
 # Usage: helm install dev-health ./deploy/helm/dev-health -f values-quickstart.yaml
 # =============================================================================
 # WARNING: Default credentials are for evaluation only. Do NOT use in production.
+#
+# "Zero configuration" covers what helm install renders, not what's ready to
+# scale: this chart provisions no PostgreSQL roles (see values.yaml's
+# goWorkers KNOWN GAP comment), so the bundled PostgreSQL StatefulSet below
+# creates only its own `devhealth` login -- not the devhealth_domain/
+# devhealth_queue/devhealth_coordinator roles the placeholder passwords a
+# few lines down are for. Before scaling any Go worker group, port-forward
+# the bundled PostgreSQL and run the provisioning script once:
+#
+#   kubectl -n <namespace> port-forward svc/<release>-postgresql 5432:5432 &
+#   PGPASSWORD=devhealth psql --host=localhost --username=devhealth \
+#     --dbname=devhealth \
+#     --set=domain_password=change-me-river-domain-password \
+#     --set=queue_password=change-me-river-queue-password \
+#     --set=coordinator_password=change-me-river-coordinator-password \
+#     --file=scripts/worker/provision_river_roles.sql
 
 # All databases run in-cluster
 postgresql:

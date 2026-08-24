@@ -98,6 +98,19 @@ billingEdge:
 # operator deliberately scales the groups it needs (see
 # deploy/go-workers/README.md); pgbouncer is required (see values.schema.json)
 # because every group dials it for domain/queue/coordinator connections.
+#
+# KNOWN GAP: this chart provisions no PostgreSQL roles. Before scaling ANY
+# group, create the three roles named by RIVER_DOMAIN_DATABASE_ROLE /
+# RIVER_QUEUE_DATABASE_ROLE / RIVER_COORDINATOR_DATABASE_ROLE (config,
+# default devhealth_domain/devhealth_queue/devhealth_coordinator) with
+# passwords matching goWorkers.pgbouncer.secret.data below -- run
+# scripts/worker/provision_river_roles.sql against your PostgreSQL server
+# (the compose topology automates this step as go-river-provision; there is
+# no Helm/Kubernetes equivalent yet). RuntimeConfig.Validate
+# (internal/storage/postgres/runtime.go) rejects a DSN whose login doesn't
+# equal the configured role, so a worker fails readiness on first scale-up
+# without this -- including with the bundled quickstart PostgreSQL, which
+# creates only its own postgresql.credentials.user login.
 goWorkers:
   enabled: true
   # -- River/queue-consumer worker groups the API's /health/workers checks

@@ -83,7 +83,29 @@ everything else. It replaces the Celery `worker.yaml`/`beat.yaml` manifests
 deleted in CHAOS-4195 (production stopped running them on 2026-08-19,
 CHAOS-4026). Every group deploys at `replicas: 0` so a fresh apply stays
 inert until an operator deliberately scales the groups it needs, after the
-migration Job has completed:
+migration Job has completed.
+
+**Provision the PostgreSQL roles first.** This tree provisions no PostgreSQL
+roles automatically. `dev-health-go-worker-secrets` (`secrets.yaml`)
+authenticates as `devhealth_domain`/`devhealth_queue`/`devhealth_coordinator`
+-- matching `RIVER_DOMAIN_DATABASE_ROLE`/`RIVER_QUEUE_DATABASE_ROLE`/
+`RIVER_COORDINATOR_DATABASE_ROLE` in `configmap.yaml` -- and
+`RuntimeConfig.Validate` (`internal/storage/postgres/runtime.go`) rejects any
+DSN whose login doesn't equal the configured role, so a worker fails
+readiness on first scale-up without these roles existing. Create them once
+against your PostgreSQL server (the compose topology automates this as
+`go-river-provision`; there is no Kubernetes equivalent yet):
+
+```bash
+PGPASSWORD=<admin password> psql --host=<postgres host> --username=<admin user> \
+  --dbname=devhealth \
+  --set=domain_password=<match POSTGRES_URI's password in secrets.yaml> \
+  --set=queue_password=<match WORKER_DATABASE_URI's password> \
+  --set=coordinator_password=<match COORDINATOR_DATABASE_URI's password> \
+  --file=scripts/worker/provision_river_roles.sql
+```
+
+Then scale a group:
 
 ```bash
 kubectl -n dev-health scale deployment/dev-health-go-worker-heavy --replicas=1

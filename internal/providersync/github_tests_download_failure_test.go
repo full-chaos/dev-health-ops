@@ -265,6 +265,9 @@ func TestGitHubTestsArtifactDownloadReadFailureCarriesCause(t *testing.T) {
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
 	}
+	if errors.Is(err, ErrGitHubTestsArtifactOversized) {
+		t.Fatalf("error=%v, a genuine read failure must not be misclassified as oversized", err)
+	}
 	if err.Error() == ErrGitHubTestsIncomplete.Error() {
 		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
 	}
@@ -292,6 +295,53 @@ func TestGitHubTestsArtifactDownloadOversizedCarriesCause(t *testing.T) {
 	)
 	if !errors.Is(err, ErrGitHubTestsIncomplete) {
 		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
+	}
+	if !errors.Is(err, ErrGitHubTestsArtifactOversized) {
+		t.Fatalf("error=%v, want it to satisfy ErrGitHubTestsArtifactOversized", err)
+	}
+	if err.Error() == ErrGitHubTestsIncomplete.Error() {
+		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(githubTestsMaxDownloadSize)) {
+		t.Fatalf("error=%q does not carry the max-download-size bound", err.Error())
+	}
+}
+
+// The two terminal cases above only drove the non-chunked oracle. Production
+// dispatch always executes CollectChunks (execution_registry.go marks github
+// cicd/tests Chunked unconditionally), so without an equivalent here a
+// regression in the chunked route's error propagation could ship while these
+// oracle-only tests kept passing.
+func TestGitHubTestsChunkedArtifactDownloadReadFailureCarriesCause(t *testing.T) {
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, readError: map[int]bool{1: true}}
+
+	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if !errors.Is(err, ErrGitHubTestsIncomplete) {
+		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
+	}
+	if errors.Is(err, ErrGitHubTestsArtifactOversized) {
+		t.Fatalf("error=%v, a genuine read failure must not be misclassified as oversized", err)
+	}
+	if err.Error() == ErrGitHubTestsIncomplete.Error() {
+		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
+	}
+	if !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Fatalf("error=%q does not carry the underlying read failure", err.Error())
+	}
+}
+
+func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, oversized: map[int]bool{1: true}}
+
+	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if !errors.Is(err, ErrGitHubTestsIncomplete) {
+		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
+	}
+	// This is the mechanism providerunit.deterministicTerminalCategory keys
+	// on to terminalize on the first attempt instead of burning every River
+	// attempt re-downloading the same oversized bytes (CHAOS-4191).
+	if !errors.Is(err, ErrGitHubTestsArtifactOversized) {
+		t.Fatalf("error=%v, want it to satisfy ErrGitHubTestsArtifactOversized", err)
 	}
 	if err.Error() == ErrGitHubTestsIncomplete.Error() {
 		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())

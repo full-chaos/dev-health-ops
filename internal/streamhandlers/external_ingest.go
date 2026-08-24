@@ -26,6 +26,7 @@ const (
 	externalRefusalInvalidField        = "invalid_field"
 	externalRefusalUnresolvableProject = "unresolvable_project_entity"
 	externalRefusalContradictoryEvent  = "contradictory_event_id"
+	externalRefusalNamelessMembership  = "membership_event_names_no_project"
 )
 
 var externalSystems = map[string]struct{}{
@@ -545,20 +546,36 @@ func refuseProjectMembershipContradiction(pointer externalPointer, payload map[s
 				"a github work_item subject requires repositoryExternalId to derive a joinable subject id"
 		}
 	}
-	// "" in BOTH destination fields is the ruled unassignment sentinel --
-	// removed from every project. Only ONE half of that is a contradiction: a
-	// destination named by a key with no id cannot resolve to a `projects` row
-	// (whose identity is (provider, id)), so it is neither an assignment the
-	// graph can follow nor the sentinel. Refusing it is what lets the presence
-	// view test the sentinel with `project_id != ''` alone instead of carrying
-	// a second clause that could never decide anything on its own.
+	// A row names the project JOINED in to_project_id and the project LEFT in
+	// from_project_id, either of which may be "": add is ("", P), remove is
+	// (P, ""), a move is (P, Q) in one row (Context Fabric, 2026-08-24).
+	//
+	// ("", "") names NEITHER, and is refused. It reads like "removed from every
+	// project", and under the earlier one-project-per-subject keying that is
+	// what it meant -- but presence is now keyed per (subject, project), so a
+	// removal has to say WHICH membership it ends. A bare ("", "") row would be
+	// an event about no project at all: it could not retire anything, and it
+	// would sit in the history looking like a removal that silently did
+	// nothing. Refusing it is what lets the view trust that every row it reads
+	// names at least one project.
+	fromID := stringField(payload, "fromProjectId")
+	toID, toKey := stringField(payload, "toProjectId"), stringField(payload, "toProjectKey")
+	// Checked BEFORE the names-no-project rule below, because both fire on a
+	// payload carrying only a destination key and this is the more specific
+	// diagnosis: the producer did name a destination, it just named one that
+	// cannot resolve. A `projects` row's identity is (provider, id), so a key
+	// with no id is neither an assignment the graph can follow nor a removal.
 	//
 	// The MIRROR case is deliberately allowed: an id with no key is normal.
 	// GitHub Projects V2 boards have a number and a title and no key concept at
 	// all, so requiring one would refuse every github membership row.
-	toID, toKey := stringField(payload, "toProjectId"), stringField(payload, "toProjectKey")
 	if toID == "" && toKey != "" {
 		return externalRefusalInvalidField, "a destination key with no project id resolves to no projects row"
+	}
+
+	if fromID == "" && toID == "" {
+		return externalRefusalNamelessMembership,
+			"a membership event must name the project joined, the project left, or both"
 	}
 	// The vocabulary constraint. "" is the single value exempt from it, because
 	// it is the sentinel rather than a project. Anything else must at least be

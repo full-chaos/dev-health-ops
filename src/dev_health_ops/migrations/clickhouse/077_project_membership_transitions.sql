@@ -60,20 +60,24 @@
 -- work_item_transitions. from_project_id/from_project_key are "" on a first
 -- assignment for the same reason from_status is.
 --
--- to_project_id = '' AND to_project_key = '' is the UNASSIGNMENT sentinel:
--- the subject was removed from every project. It is the single value exempt
--- from the resolve-to-`projects` constraint below, and the presence view's
--- transition arm yields NO row for it -- deliberately NOT falling through to
--- the column arm, which would resurrect the stale current value as if the
--- removal had never been observed.
+-- from_project_id is the project LEFT and to_project_id the project JOINED, so
+-- one row carries both sides of a move (Context Fabric, 2026-08-24): an add is
+-- ("", P), a removal is (P, ""), and a move is (P, Q). Keeping both sides in a
+-- single row is what lets the presence view retire P and create Q from one
+-- observed event, rather than making a consumer pair up two rows and guess
+-- whether a missing partner means "not yet synced" or "never happened".
 --
--- The view tests that sentinel with `to_project_id = ''` ALONE, not the
--- conjunction, and that is exact rather than sloppy: the sink refuses a
--- destination key with no project id, so an empty id already implies an empty
--- key by the time a row exists. Writing the conjunction anyway would add a
--- clause whose removal changes no behaviour -- a coverage claim nothing backs.
--- An id with NO key is the opposite case and is entirely normal: GitHub
--- Projects V2 boards have a number and a title and no key concept at all.
+-- A removal MUST name the board it left. ("", "") is refused by the sink,
+-- because presence is keyed per (subject, project): a row naming neither side
+-- could not retire or create any membership, and would sit in the history
+-- looking like a removal that silently did nothing. Under the earlier
+-- one-project-per-subject keying that shape meant "removed from everything",
+-- but it has no meaning now, so it is a contradiction rather than a sentinel.
+--
+-- An id with NO key is entirely normal and stays accepted: GitHub Projects V2
+-- boards have a number and a title and no key concept at all. The mirror --- a
+-- key with no id --- is refused, since (provider, id) is what resolves to a
+-- `projects` row.
 --
 -- VOCABULARY CONSTRAINT: these rows carry provider PROJECT entities only --
 -- (provider, project_id) must resolve to a row in `projects`. There is a THIRD
@@ -110,75 +114,96 @@ CREATE TABLE IF NOT EXISTS project_membership_transitions (
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id);
 
--- Presence projection (CHAOS-4194 deliverable 2). The current-value
--- subject -> project edge, derived from the event stream, with a fallback to
--- the pre-CDC work_items column for work items that have no transition history
--- yet.
+-- Presence projection (CHAOS-4194 deliverable 2), keyed PER (subject, project)
+-- as Context Fabric ruled on 2026-08-24.
 --
--- This is a VIEW and not a backfill INSERT on purpose. The alternative --
--- synthesising one transition row per existing work_items.project_id -- would
--- put events into CHAOS-4193's history table that no provider ever emitted,
--- with a fabricated event_id and an occurred_at that is really just "whenever
--- we happened to sync". CHAOS-4193 derives validity intervals from that
--- stream, so those rows would become invented ValidFrom boundaries presented as
--- observed fact. The fallback arm answers the same presence question without
--- writing anything, and the `source` column keeps the two provenances
--- distinguishable instead of blending them: 'transition' rows are observed
--- events, 'work_item_column' rows are the current value with no history behind
--- them. A consumer that needs history can filter to the former and get an
--- honest empty answer rather than a plausible fabricated one.
+-- A subject can hold several memberships at once. GitHub Projects V2 puts one
+-- pull request on as many boards as someone adds it to, and the producer emits
+-- one row per board. An earlier version of this view argMax'd a single project
+-- per subject, which answered "the most recently joined board" and silently
+-- dropped the rest. Worse, it did not degrade gracefully: removing the subject
+-- from the LATEST board made the transition arm yield nothing at all, so a PR
+-- still on board A disappeared from presence entirely because it had left
+-- board B. One correct answer became none.
 --
--- argMax over the (occurred_at, event_id) tuple, not over occurred_at alone:
--- two reassignments can share a timestamp (bulk moves land in the same second
--- routinely), and argMax with a non-unique ordering column returns an
--- arbitrary one of the tied rows. event_id is already the tiebreaker in the
--- sorting key, so reusing it here makes the projection deterministic and makes
--- it agree with the table's own order.
+-- The row shape carries both sides of a move: from_project_id is the project
+-- LEFT and to_project_id the project JOINED, so an add is ("", P), a removal is
+-- (P, ""), and a move is (P, Q) in a single row. Each row therefore TOUCHES up
+-- to two memberships, and each membership is decided independently:
 --
--- The three argMax calls are INDEPENDENT aggregates, so nothing structurally
--- forces them to describe the same row -- they agree only because
--- (occurred_at, event_id) is unique within each group. That uniqueness comes
--- from FINAL plus the sorting key, which is why the FINAL below is load-bearing
--- and not merely conventional. Drop it and a duplicate part could hand
--- project_id from one row and project_key from another, which reads as a real
--- edge and joins to nothing.
+--   (subject, P) is ACTIVE iff the latest row by (occurred_at, event_id)
+--   among the rows touching P has to_project_id = P.
 --
--- The unassignment filter is `project_id != ''` (see the sentinel note above
--- for why that is exact), and the column arm's anti-join runs against the
--- UNFILTERED latest_transition.
--- Both halves are load-bearing: a subject whose latest observed event removed
--- it from every project yields no presence row at all, and specifically does
--- NOT reappear through the column arm carrying the stale work_items value.
--- Anti-joining against the filtered set instead would do exactly that.
+-- Read that as "the last thing that happened to this membership was joining
+-- it". A move (P, Q) is the last word on BOTH memberships at once -- it retires
+-- P and creates Q -- which is exactly why both sides live in one row instead of
+-- two rows a consumer would have to pair up.
 --
--- The column arm's provider predicate is the vocabulary fence. gitlab is
--- excluded outright: GitLab's "project" IS a repository in this schema, so
--- work_items.project_id is never a project entity there. github is admitted
--- only for the `ghprojv2:` prefix the Projects V2 route mints
--- (providersync/github_work_items_projects_v2.go), because the external-ingest
--- path writes the repository full name into the same column
--- (external_clickhouse.go:556-574) and a repo full name resolves to no
--- `projects` row. jira and linear have no repo-as-project ambiguity -- their
--- column already holds the provider's own project key/id -- so no prefix
--- applies to them.
+-- ("", "") cannot occur: the sink refuses it, because a row naming neither side
+-- could not retire or create any membership and would sit in the history
+-- looking like a removal that did nothing. That refusal is what lets the
+-- arrayFilter below assume every row contributes at least one touch.
 --
--- The column arm emits subject_kind = 'work_item' only. There is no pull-request
--- current-value column anywhere to fall back to: git_pull_requests carries no
--- project fields, which is the defect this ticket exists to fix. A PR therefore
--- appears here exactly when a transition observed it, and never otherwise.
+-- The FINAL inside the CTE is load-bearing, not conventional: argMax over
+-- (occurred_at, event_id) is deterministic only because that pair is unique
+-- within a group, which is what FINAL plus the sorting key provide. Without it
+-- a duplicate part could hand back the project id from one row and the project
+-- key from another -- an edge that reads as real and joins to nothing. The id
+-- and key are carried as a TUPLE through the arrayJoin for the same reason:
+-- from_project_key belongs to from_project_id and to_project_key to
+-- to_project_id, and unpivoting them separately would let a row's key drift
+-- onto the other row's id.
+--
+-- arrayDistinct guards the degenerate (P, P) row -- a provider re-asserting a
+-- membership it already had. Without it that row would contribute the same
+-- touch twice, which changes no verdict but makes the intermediate result
+-- misleading to anyone reading it.
+--
+-- The COLUMN arm is deliberately NOT keyed per project. work_items.project_id
+-- holds one current value and carries no history, so it can only ever describe
+-- a single membership, and it is excluded exactly when the subject has ANY
+-- transition row, not when it has a row for that particular project. A subject
+-- with observed history is answered by that history, whole -- mixing the
+-- history-less column value into a per-project answer would invent a membership
+-- nobody observed.
+--
+-- Single-project subjects degenerate to the previous shape: one touched
+-- project, one active row. jira and linear work items, which belong to one
+-- project at a time, are unaffected by this keying.
 CREATE OR REPLACE VIEW project_membership_presence AS
-WITH latest_transition AS (
+WITH touched AS (
     SELECT
         org_id,
         subject_kind,
         repo_id,
         subject_id,
-        argMax(provider, (occurred_at, event_id)) AS provider,
-        argMax(to_project_id, (occurred_at, event_id)) AS project_id,
-        argMax(to_project_key, (occurred_at, event_id)) AS project_key,
-        max(occurred_at) AS observed_at
+        provider,
+        occurred_at,
+        event_id,
+        to_project_id,
+        arrayJoin(arrayDistinct(arrayFilter(
+            pair -> pair.1 != '',
+            [(to_project_id, to_project_key), (from_project_id, from_project_key)]
+        ))) AS touch
     FROM project_membership_transitions FINAL
-    GROUP BY org_id, subject_kind, repo_id, subject_id
+),
+latest_membership AS (
+    SELECT
+        org_id,
+        subject_kind,
+        repo_id,
+        subject_id,
+        touch.1 AS project_id,
+        argMax(touch.2, (occurred_at, event_id)) AS project_key,
+        argMax(provider, (occurred_at, event_id)) AS provider,
+        argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id,
+        max(occurred_at) AS observed_at
+    FROM touched
+    GROUP BY org_id, subject_kind, repo_id, subject_id, project_id
+),
+subjects_with_history AS (
+    SELECT DISTINCT org_id, subject_kind, repo_id, subject_id
+    FROM project_membership_transitions FINAL
 )
 SELECT
     org_id,
@@ -190,8 +215,8 @@ SELECT
     project_key,
     observed_at,
     'transition' AS source
-FROM latest_transition
-WHERE project_id != ''
+FROM latest_membership
+WHERE latest_to_project_id = project_id
 UNION ALL
 SELECT
     w.org_id AS org_id,
@@ -208,5 +233,5 @@ WHERE w.project_id != ''
     AND w.provider != 'gitlab'
     AND (w.provider != 'github' OR startsWith(w.project_id, 'ghprojv2:'))
     AND (w.org_id, 'work_item', w.repo_id, w.work_item_id) NOT IN (
-        SELECT org_id, subject_kind, repo_id, subject_id FROM latest_transition
+        SELECT org_id, subject_kind, repo_id, subject_id FROM subjects_with_history
     );

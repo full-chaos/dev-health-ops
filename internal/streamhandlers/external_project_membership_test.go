@@ -488,27 +488,57 @@ func TestExternalProjectMembershipRefusesRepoAsProjectValues(t *testing.T) {
 	}
 }
 
-// TestExternalProjectMembershipAcceptsTheUnassignmentSentinel pins the ruled
-// meaning of an empty destination and the one shape adjacent to it that has no
-// honest reading.
+// TestExternalProjectMembershipRequiresAnEventToNameAProject pins the shape
+// rules Context Fabric ruled on 2026-08-24, once presence became keyed per
+// (subject, project).
 //
-// Empty BOTH means removed from every project -- a real observed event, and the
-// single value exempt from the resolve-to-`projects` constraint. Empty ONE of
-// the two is a producer contradiction: the projection would either present an
-// empty-string project as a real current value or silently drop a destination
-// the producer did name. Refusing it at the boundary is what keeps the sentinel
-// unambiguous.
-func TestExternalProjectMembershipAcceptsTheUnassignmentSentinel(t *testing.T) {
+// A row names the project JOINED in to_project_id and the project LEFT in
+// from_project_id: an add is ("", P), a removal is (P, ""), a move is (P, Q).
+//
+// ("", "") is now REFUSED, and this reverses an earlier build. Under the
+// previous one-project-per-subject keying it was the sentinel for "removed from
+// every project"; per-project, it names nothing, so it could not retire or
+// create any membership and would sit in the history looking like a removal
+// that silently did nothing. A removal has to say WHICH membership it ends.
+func TestExternalProjectMembershipRequiresAnEventToNameAProject(t *testing.T) {
 	pointer := externalTestPointer()
-	t.Run("both_empty_is_the_sentinel", func(t *testing.T) {
-		payload := externalProjectMembershipPayload("github",
-			map[string]any{"toProjectId": "", "toProjectKey": ""})
+	t.Run("names_neither_side", func(t *testing.T) {
+		payload := externalProjectMembershipPayload("github", map[string]any{
+			"fromProjectId": "", "fromProjectKey": "", "toProjectId": "", "toProjectKey": "",
+		})
 		if err := validateExternalRecord("project_membership_transition.v1", payload); err != nil {
-			t.Fatalf("the unassignment sentinel was refused by the field table: %v", err)
+			t.Fatalf("the field table should accept it; the whole-record check owns this: %v", err)
 		}
+		code, message := refuseProjectMembershipContradiction(pointer, payload, map[string]string{})
+		if code != externalRefusalNamelessMembership {
+			t.Fatalf("code = %q, want %q", code, externalRefusalNamelessMembership)
+		}
+		if !strings.Contains(message, "joined") || !strings.Contains(message, "left") {
+			t.Fatalf("refusal does not say what is missing: %q", message)
+		}
+	})
+	// A removal that NAMES the board left is the correct shape and must be
+	// accepted -- it is how every membership is ever retired.
+	t.Run("removal_naming_the_board_left", func(t *testing.T) {
+		payload := externalProjectMembershipPayload("github", map[string]any{
+			"fromProjectId": "ghprojv2:full-chaos#4", "fromProjectKey": "PLATFORM",
+			"toProjectId": "", "toProjectKey": "",
+		})
 		if code, message := refuseProjectMembershipContradiction(
 			pointer, payload, map[string]string{}); code != "" {
-			t.Fatalf("the unassignment sentinel was refused: %s / %s", code, message)
+			t.Fatalf("a removal naming its board was refused: %s / %s", code, message)
+		}
+	})
+	// A move carries both sides in ONE row, which is what lets the view retire
+	// one membership and create another from a single observed event.
+	t.Run("move_carries_both_sides", func(t *testing.T) {
+		payload := externalProjectMembershipPayload("github", map[string]any{
+			"fromProjectId": "ghprojv2:full-chaos#4", "fromProjectKey": "PLATFORM",
+			"toProjectId": "ghprojv2:full-chaos#9", "toProjectKey": "RUNTIME",
+		})
+		if code, message := refuseProjectMembershipContradiction(
+			pointer, payload, map[string]string{}); code != "" {
+			t.Fatalf("a move was refused: %s / %s", code, message)
 		}
 	})
 	t.Run("key_without_id_is_refused", func(t *testing.T) {
@@ -524,8 +554,7 @@ func TestExternalProjectMembershipAcceptsTheUnassignmentSentinel(t *testing.T) {
 	})
 	// The mirror case is NORMAL and must stay accepted. GitHub Projects V2
 	// boards have a number and a title and no key concept at all, so refusing
-	// an id without a key would refuse every github membership row -- which is
-	// the whole subject kind this ticket exists to add.
+	// an id without a key would refuse every github membership row.
 	t.Run("id_without_key_is_normal", func(t *testing.T) {
 		payload := externalProjectMembershipPayload("github",
 			map[string]any{"toProjectId": "ghprojv2:full-chaos#4", "toProjectKey": ""})

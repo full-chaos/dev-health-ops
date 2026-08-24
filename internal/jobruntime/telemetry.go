@@ -774,6 +774,12 @@ const (
 	// records in one batch asserting the same event_id with different content.
 	ExternalRefusedUnresolvableProject = "unresolvable_project_entity"
 	ExternalRefusedContradictoryEvent  = "contradictory_event_id"
+	// ExternalRefusedNamelessMembership is a membership event naming neither
+	// the project joined nor the project left. Presence is keyed per
+	// (subject, project), so such a row could not retire or create any
+	// membership -- it would sit in the history looking like a removal that
+	// silently did nothing.
+	ExternalRefusedNamelessMembership = "membership_event_names_no_project"
 )
 
 var externalRefusalReasons = []string{
@@ -783,6 +789,7 @@ var externalRefusalReasons = []string{
 	ExternalRefusedOutsideSourceInstance,
 	ExternalRefusedUnresolvableProject,
 	ExternalRefusedContradictoryEvent,
+	ExternalRefusedNamelessMembership,
 }
 
 const externalTelemetryUnknownSystem = "unknown"

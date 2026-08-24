@@ -399,18 +399,142 @@ func TestPresenceColumnArmRefusesRepoAsProjectValues(t *testing.T) {
 	}
 }
 
-// TestUnassignmentRetiresThePresenceEdgeWithoutFallingBack pins the ruled
-// unassignment sentinel end to end.
+// membershipPresence reads every active (subject, project) pair for one
+// subject. Returning the SET rather than one row is the whole point of the
+// per-project keying: a query that scanned a single row could not tell "one
+// active membership" from "two, one of which we lost".
+func membershipPresence(t *testing.T, ctx context.Context, conn driver.Conn, subjectID string) map[string]string {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+SELECT project_id, source FROM project_membership_presence
+WHERE org_id = ? AND subject_id = ?`, projectMembershipTestOrg, subjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := map[string]string{}
+	for rows.Next() {
+		var projectID, source string
+		if err := rows.Scan(&projectID, &source); err != nil {
+			t.Fatal(err)
+		}
+		if previous, duplicate := found[projectID]; duplicate {
+			t.Fatalf("%s/%s appears twice (%s and %s)", subjectID, projectID, previous, source)
+		}
+		found[projectID] = source
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+func membershipRecord(index int, eventID, subjectKind, externalKey, repository, occurredAt, from, to string) externalSinkRecord {
+	payload := map[string]any{
+		"externalKey": externalKey, "provider": "github", "eventId": eventID,
+		"subjectKind": subjectKind, "repositoryExternalId": repository,
+		"occurredAt": occurredAt, "fromProjectId": from, "toProjectId": to,
+	}
+	if subjectKind == "work_item" {
+		payload["workItemType"] = "issue"
+	}
+	return externalSinkRecord{
+		Index: index, Kind: "project_membership_transition.v1",
+		ExternalID: eventID, Payload: payload,
+	}
+}
+
+// TestASubjectHoldsSeveralBoardsAtOnceAndLosesThemIndependently is the
+// acceptance claim for Context Fabric's per-(subject, project) presence ruling,
+// and it is the test the previous view could not have passed.
 //
-// to_project_id = ” AND to_project_key = ” means the subject was removed from
-// every project. The dangerous failure is not that the transition arm might
-// emit an empty project -- it is that the arm could yield nothing and the
-// subject then FALL THROUGH to the work_items column arm, resurrecting the
-// stale current value as if the removal had never been observed. That is why
-// the column arm anti-joins against the UNFILTERED transition set, and why this
-// test seeds a work_items row for the very subject being unassigned: without
-// it, the fall-through would be invisible.
-func TestUnassignmentRetiresThePresenceEdgeWithoutFallingBack(t *testing.T) {
+// A GitHub pull request goes on as many boards as someone adds it to. The
+// earlier view argMax'd ONE project per subject, so the second board silently
+// replaced the first -- and removing the subject from that second board made
+// the transition arm yield nothing at all, so a PR still on board A vanished
+// from presence entirely because it had left board B. One correct answer became
+// none, which is worse than the incomplete answer it started from.
+//
+// The three phases are asserted in sequence against the same subject, because
+// each one is only meaningful given the last: two active memberships, then a
+// removal that takes exactly one of them, then a move that retires and creates
+// in a single observed event.
+func TestASubjectHoldsSeveralBoardsAtOnceAndLosesThemIndependently(t *testing.T) {
+	ctx, conn := newProjectMembershipConn(t)
+	pointer := projectMembershipPointer()
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
+	write := func(records ...externalSinkRecord) {
+		t.Helper()
+		if _, err := sink.Write(ctx, externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(), Records: records,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		boardA = "ghprojv2:full-chaos#4"
+		boardB = "ghprojv2:full-chaos#9"
+		boardC = "ghprojv2:full-chaos#11"
+	)
+
+	// Added to A, then to B. Both are additions -- ("", P) -- and neither
+	// mentions the other, so nothing in the data pairs them up except the
+	// subject they share.
+	write(
+		membershipRecord(0, "evt-a", "pull_request", "42", pointer.SourceInstance,
+			"2026-07-22T11:00:00Z", "", boardA),
+		membershipRecord(1, "evt-b", "pull_request", "42", pointer.SourceInstance,
+			"2026-07-22T15:00:00Z", "", boardB),
+	)
+	active := membershipPresence(t, ctx, conn, "42")
+	if len(active) != 2 || active[boardA] != "transition" || active[boardB] != "transition" {
+		t.Fatalf("a PR on two boards resolved to %#v, want both active", active)
+	}
+
+	// Removed from B only. B must go; A must be untouched. Under the previous
+	// keying this step returned NOTHING for the subject.
+	write(membershipRecord(0, "evt-c", "pull_request", "42", pointer.SourceInstance,
+		"2026-07-23T11:00:00Z", boardB, ""))
+	active = membershipPresence(t, ctx, conn, "42")
+	if len(active) != 1 || active[boardA] != "transition" {
+		t.Fatalf("after leaving one board the PR resolved to %#v, want only board A", active)
+	}
+
+	// Moved A -> C in a single row. One observed event retires one membership
+	// and creates another, which is why both sides live in the same row.
+	write(membershipRecord(0, "evt-d", "pull_request", "42", pointer.SourceInstance,
+		"2026-07-24T11:00:00Z", boardA, boardC))
+	active = membershipPresence(t, ctx, conn, "42")
+	if len(active) != 1 || active[boardC] != "transition" {
+		t.Fatalf("after a move the PR resolved to %#v, want only board C", active)
+	}
+
+	// The history keeps every observed event. Only presence changes.
+	var events uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM project_membership_transitions FINAL WHERE org_id = ? AND subject_id = '42'`,
+		projectMembershipTestOrg).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 4 {
+		t.Fatalf("transition history = %d rows, want all four observed events", events)
+	}
+}
+
+// TestASingleProjectSubjectIsUnaffectedByPerProjectKeying pins the degeneracy
+// Context Fabric's ruling promised. jira and linear work items belong to one
+// project at a time, so the per-(subject, project) keying must give them
+// exactly the answer the per-subject keying did -- one active membership after
+// an add, and none after the removal that names the project left.
+//
+// Without this the ruling would have been adopted on the strength of the
+// multi-board case alone, and a regression for the single-project majority
+// would have shipped behind a green multi-board test.
+func TestASingleProjectSubjectIsUnaffectedByPerProjectKeying(t *testing.T) {
 	ctx, conn := newProjectMembershipConn(t)
 	linear := linearMembershipPointer()
 	sink, err := NewClickHouseExternalBatchSink(conn)
@@ -420,8 +544,10 @@ func TestUnassignmentRetiresThePresenceEdgeWithoutFallingBack(t *testing.T) {
 	sink.now = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
 	if _, err := sink.Write(ctx, externalSinkBatch{
 		Pointer: linear, SourceID: uuid.New(), Records: []externalSinkRecord{
+			// A work_items row for the same subject, so a fall-through would be
+			// visible rather than silent.
 			{Index: 0, Kind: "work_item.v1", ExternalID: "ENG-8", Payload: map[string]any{
-				"externalKey": "ENG-8", "provider": "linear", "title": "Removed from its project",
+				"externalKey": "ENG-8", "provider": "linear", "title": "One project at a time",
 				"type": "issue", "status": "todo", "createdAt": "2026-07-20T10:00:00Z",
 				"projectId": "linear-project-1", "projectName": "Runtime",
 			}},
@@ -431,44 +557,33 @@ func TestUnassignmentRetiresThePresenceEdgeWithoutFallingBack(t *testing.T) {
 				"occurredAt":  "2026-07-22T11:00:00Z",
 				"toProjectId": "linear-project-1", "toProjectKey": "RUNTIME",
 			}},
-			{Index: 2, Kind: "project_membership_transition.v1", ExternalID: "evt-2", Payload: map[string]any{
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active := membershipPresence(t, ctx, conn, "linear:ENG-8")
+	if len(active) != 1 || active["linear-project-1"] != "transition" {
+		t.Fatalf("single-project subject resolved to %#v", active)
+	}
+
+	// The removal NAMES the project left, as the ruling requires. The subject
+	// keeps its work_items row, so if the column arm resurrected it this would
+	// report a membership nobody currently holds.
+	if _, err := sink.Write(ctx, externalSinkBatch{
+		Pointer: linear, SourceID: uuid.New(), Records: []externalSinkRecord{
+			{Index: 0, Kind: "project_membership_transition.v1", ExternalID: "evt-2", Payload: map[string]any{
 				"externalKey": "ENG-8", "provider": "linear", "eventId": "evt-2",
 				"subjectKind": "work_item", "workItemType": "issue",
-				"occurredAt":  "2026-07-23T11:00:00Z",
+				"occurredAt":    "2026-07-23T11:00:00Z",
+				"fromProjectId": "linear-project-1", "fromProjectKey": "RUNTIME",
 				"toProjectId": "", "toProjectKey": "",
 			}},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The removal is DURABLE -- it is an observed event and the history has to
-	// keep it. Only the presence projection drops it.
-	var events uint64
-	if err := conn.QueryRow(ctx,
-		`SELECT count() FROM project_membership_transitions FINAL WHERE org_id = ? AND subject_id = 'linear:ENG-8'`,
-		projectMembershipTestOrg).Scan(&events); err != nil {
-		t.Fatal(err)
-	}
-	if events != 2 {
-		t.Fatalf("transition history = %d rows, want both the assignment and the removal", events)
-	}
-	rows, err := conn.Query(ctx,
-		`SELECT project_id, source FROM project_membership_presence WHERE org_id = ? AND subject_id = 'linear:ENG-8'`,
-		projectMembershipTestOrg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var projectID, source string
-		if err := rows.Scan(&projectID, &source); err != nil {
-			t.Fatal(err)
-		}
-		t.Fatalf("an unassigned subject still projects project_id=%q via %q -- the removal was not honoured",
-			projectID, source)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
+	if active := membershipPresence(t, ctx, conn, "linear:ENG-8"); len(active) != 0 {
+		t.Fatalf("a removed subject still resolves to %#v -- the column arm resurrected it", active)
 	}
 }
 

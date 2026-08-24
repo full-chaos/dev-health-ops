@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -147,6 +147,53 @@ def test_provider_artifact_skip_alert_for_duration_exceeds_lookback_window() -> 
         f"`for` ({for_value}) must be strictly longer than the lookback "
         f"window ({window_match.group(0)}) or a single isolated skip can "
         "satisfy `for` before its sample ages out of the window"
+    )
+
+
+def test_provider_artifact_skip_alert_window_covers_every_tier_sync_floor() -> None:
+    """Adversarial codex review, round 3 (real finding, CONFIRMED): an
+    earlier draft sized the window off the doc'd "hourly" incremental-sync
+    example, which is not a floor -- `TIER_LIMITS_DEFAULTS` in
+    `src/dev_health_ops/models/licensing.py` sets `min_sync_interval_hours`
+    (the FASTEST allowed custom schedule, i.e. the shortest legitimate gap
+    between two consecutive runs) at 24h for Community and 6h for Team. A
+    window narrower than the slowest of those floors goes quiet between two
+    perfectly healthy runs, so the alert can never fire at all for that
+    tier -- not a false positive, a permanent false negative. This test
+    pins the window against the real, imported constants (not retyped
+    numbers) so a future tier-limit change that widens the floor further
+    is caught here rather than silently reopening the gap.
+
+    `min_sync_interval_hours` is a floor, not a ceiling -- an operator can
+    still configure an even slower custom cron. Covering an unbounded slow
+    schedule is out of scope (documented as a known limitation in the
+    rule's own comment); this test only pins the window against the
+    documented, code-enforced floors.
+    """
+    from dev_health_ops.models.licensing import TIER_LIMITS_DEFAULTS
+
+    floor_hours = [
+        float(cast(dict[str, Any], limits)["min_sync_interval_hours"])
+        for limits in TIER_LIMITS_DEFAULTS.values()
+        if cast(dict[str, Any], limits).get("min_sync_interval_hours") is not None
+    ]
+    assert floor_hours, "TIER_LIMITS_DEFAULTS carried no min_sync_interval_hours values"
+    slowest_floor_hours = max(floor_hours)
+
+    alert = _skip_alert()
+    window_match = re.search(
+        r"increase\(\s*dev_health_provider_artifact_skipped_total\[(\d+)h\]\)",
+        str(alert["expr"]),
+    )
+    assert window_match, "expected an increase(...[<N>h]) lookback window"
+    window_hours = int(window_match.group(1))
+
+    assert window_hours >= slowest_floor_hours, (
+        f"lookback window ({window_hours}h) is narrower than the slowest "
+        f"documented tier sync floor ({slowest_floor_hours}h) -- two "
+        "consecutive healthy runs on that tier's fastest allowed schedule "
+        "would never both land inside one window, so the alert could never "
+        "fire for it at all"
     )
 
 

@@ -354,43 +354,83 @@ groups:
       # in the pipeline notices, and the counter sits unwatched.
       #
       # Window vs `for`, and why `for` is LONGER than the window. Skips land
-      # in bursts, once per sync run, not as a continuous stream --
-      # incremental syncs run on the operator's configured cadence, hourly by
-      # default (docs/operate/run/ingestion-and-backfills.md: "On an hourly
-      # schedule..."). A single isolated burst keeps
-      # increase(...[2h]) > 0 true for at most two hours after it lands --
-      # exactly as long as that sample stays inside the window -- and then it
-      # ages out and the value returns to 0. If `for` were <= the window, that
-      # lone burst could still satisfy `for` before aging out, i.e. the alert
-      # would fire on one bad artifact, which the ticket explicitly forbids
-      # ("isolated bad artifacts are expected... fire on sustained... not on
-      # a single event"). Setting `for` STRICTLY LONGER than the window is
-      # what makes the aging-out boundary do the filtering: a lone burst's
-      # truthy stretch cannot exceed the window's length, so it can never
-      # sustain a `for` duration greater than the window -- the condition
-      # goes false again before `for` elapses, and the alert never fires. A
-      # RECURRING skip (every run, or every few runs, closer together than
-      # the window) keeps re-arming the window before it empties, so the
-      # truthy stretch never breaks and `for` eventually does elapse.
+      # in bursts, once per sync run, not as a continuous stream. A single
+      # isolated burst keeps increase(...[window]) > 0 true for at most
+      # `window` after it lands -- exactly as long as that sample stays
+      # inside the lookback range -- and then it ages out and the value
+      # returns to 0. If `for` were <= the window, that lone burst could
+      # still satisfy `for` before aging out, i.e. the alert would fire on
+      # one bad artifact, which the ticket explicitly forbids ("isolated bad
+      # artifacts are expected... fire on sustained... not on a single
+      # event"). Setting `for` STRICTLY LONGER than the window is what makes
+      # the aging-out boundary do the filtering: a lone burst's truthy
+      # stretch cannot exceed the window's length, so it can never sustain a
+      # `for` duration greater than the window -- the condition goes false
+      # again before `for` elapses, and the alert never fires. A RECURRING
+      # skip (every run, or every few runs, closer together than the window)
+      # keeps re-arming the window before it empties, so the truthy stretch
+      # never breaks and `for` eventually does elapse.
       #
-      # 2h comfortably covers one missed/delayed hourly tick without
-      # false-negatively going quiet between genuinely back-to-back runs; 3h
-      # (> the 2h window) is the shortest `for` that still guarantees
-      # single-burst immunity, and pages same-day instead of waiting out a
-      # full day of trickle.
+      # Picking the window: it must be wide enough that two CONSECUTIVE
+      # legitimate sync runs always land inside one lookback, or the
+      # in-between gap reads as the burst aging out rather than as
+      # recurrence, and the alert can never fire at all for a slower-synced
+      # source. This is NOT "hourly" -- an earlier version of this rule
+      # assumed the doc'd incremental-sync example
+      # (docs/operate/run/ingestion-and-backfills.md: "on an hourly
+      # schedule...") was the floor, and adversarial codex review (round 3)
+      # caught that this misses supported cadences: `min_sync_interval_hours`
+      # in `src/dev_health_ops/models/licensing.py` /
+      # `src/dev_health_ops/alembic/versions/0003_add_tier_limits_table.py`
+      # sets the FASTEST allowed custom schedule per tier at 6h for Team and
+      # 24h for Community (Enterprise: 0.25h) -- `min_sync_interval_hours`
+      # is a floor, not a ceiling, so an operator can configure an even
+      # SLOWER cron; there is no enforced maximum anywhere. 24h is the
+      # slowest documented, code-enforced tier floor, so the window is set
+      # to 25h (padding for scheduling jitter/a late run) -- this covers
+      # every tier's fastest-allowed schedule with margin. A custom schedule
+      # configured SLOWER than 24h (an operator choice, not a tier floor) is
+      # a known, accepted gap: this alert cannot distinguish "slower than
+      # 25h" recurrence from a one-off burst, and closing that gap would
+      # need a per-source cadence signal this metric does not carry (same
+      # closed-vocabulary constraint as everywhere else on this counter).
       #
-      # KNOWN LIMITATION, stated deliberately (adversarial codex review,
+      # `for: 26h` (> the 25h window) is the shortest `for` that still
+      # guarantees single-burst immunity at this window. This makes
+      # time-to-page roughly a day for the fastest-syncing sources too --
+      # slower than the earlier 2h/3h draft, but that is now the honest
+      # number once the real floor is 24h, not 1h, and it still matches the
+      # ticket's own illustrative bad scenario almost exactly ("20% of
+      # artifacts failing on one provider for A DAY").
+      #
+      # KNOWN LIMITATION 1, stated deliberately (adversarial codex review,
       # round 1): this construction detects RECURRENCE across runs, not
-      # MAGNITUDE within a run. One skip roughly every run for 3h+ satisfies
-      # it exactly the same as 20% of a run's artifacts skipping for 3h+ --
-      # there is no ratio/count threshold, because this metric has no
-      # total-artifacts-read counterpart to normalize against (unlike e.g.
-      # APIHighErrorRate). The `for > window` relationship only proves "not
-      # a single isolated event"; it cannot answer "how bad". A true rate
-      # alert needs a denominator metric this package does not expose today
-      # -- adding one is out of CHAOS-4184's scope (a new Go-side counter,
-      # not a rule change) and is filed separately as CHAOS-4240 rather than
-      # invented here.
+      # MAGNITUDE within a run. One skip roughly every run for 26h+
+      # satisfies it exactly the same as 20% of a run's artifacts skipping
+      # for 26h+ -- there is no ratio/count threshold, because this metric
+      # has no total-artifacts-read counterpart to normalize against (unlike
+      # e.g. APIHighErrorRate). The `for > window` relationship only proves
+      # "not a single isolated event"; it cannot answer "how bad". A true
+      # rate alert needs a denominator metric this package does not expose
+      # today -- adding one is out of CHAOS-4184's scope (a new Go-side
+      # counter, not a rule change) and is filed separately as CHAOS-4240
+      # rather than invented here.
+      #
+      # KNOWN LIMITATION 2, stated deliberately (adversarial codex review,
+      # round 3): `sum by (provider, dataset)` aggregates ACROSS EVERY
+      # ORGANIZATION sharing that provider+dataset pair, because the metric
+      # carries no org/tenant label at all (the platform bans org identity
+      # on metric labels; see internal/providerfoundation/budget.go's closed
+      # vocabularies). A "sustained" reading can therefore be several
+      # DIFFERENT organizations' independent, genuinely isolated skips
+      # landing within the same 25h window rather than one organization's
+      # real recurring problem -- the alert cannot tell those apart, and
+      # neither can any alert in this file built on a dev_health_provider_*
+      # series (none of them carry an org label either). This is an accepted
+      # trade-off of the metric's org-blind design, not something CHAOS-4184
+      # can fix without violating that platform policy; a scoped signal
+      # would need a bounded, non-identifying attribution dimension that
+      # does not exist today.
       #
       # No source label, and the alert says so. `provider`/`dataset` are the
       # metric's only bounded dimensions -- repository names are unbounded
@@ -413,9 +453,9 @@ groups:
       - alert: ProviderArtifactSkipsSustained
         expr: |
           sum by (provider, dataset) (
-            increase(dev_health_provider_artifact_skipped_total[2h])
+            increase(dev_health_provider_artifact_skipped_total[25h])
           ) > 0
-        for: 3h
+        for: 26h
         labels:
           severity: warning
           team: platform
@@ -424,18 +464,22 @@ groups:
           description: |
             dev_health_provider_artifact_skipped_total has stayed above zero
             for {{ $labels.provider }}/{{ $labels.dataset }} for at least
-            three hours -- a RECURRING partial failure, not an isolated bad
+            26 hours -- a RECURRING partial failure, not an isolated bad
             artifact (CHAOS-4184, follow-up to CHAOS-4177). This does not
             measure how large a share of artifacts is failing, only that
             skips keep recurring; check the raw counter and WARN log volume
-            to judge severity. This metric carries no repository/run/unit
-            label by design, so it cannot say WHICH source is affected.
-            Localize from the per-skip WARNING log line instead, which
-            carries `repository`, `run`, and `unit`. A unit-level failure
-            naming its own source on the sync board when EVERY artifact in
-            a walk is unreadable is tracked separately under CHAOS-4185 and
-            is NOT implemented yet -- do not expect a sync-board cause for
-            this alert today. The metric's `reason` label
+            to judge severity. It also aggregates across every organization
+            sharing this provider/dataset (the metric carries no org label
+            by design), so a sustained reading can be several different
+            organizations' independent isolated skips rather than one
+            organization's real recurring problem. This metric carries no
+            repository/run/unit label either. Localize from the per-skip
+            WARNING log line instead, which carries `repository`, `run`,
+            and `unit`. A unit-level failure naming its own source on the
+            sync board when EVERY artifact in a walk is unreadable is
+            tracked separately under CHAOS-4185 and is NOT implemented yet
+            -- do not expect a sync-board cause for this alert today. The
+            metric's `reason` label
             (unreadable_archive / artifact_unavailable / other) narrows the
             failure shape.
 

@@ -464,8 +464,11 @@ func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T
 			if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 				t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 			}
-			if len(batch.Effects) != len(workItemRouteDestinations())+1 {
-				t.Fatalf("effects=%d want=%d", len(batch.Effects), len(workItemRouteDestinations())+1)
+			// +3: worklogs plus CHAOS-4193's project_membership_transitions
+			// and projects, neither of which is in the shared
+			// workItemRouteDestinations() list (gitlab must never see them).
+			if len(batch.Effects) != len(workItemRouteDestinations())+3 {
+				t.Fatalf("effects=%d want=%d", len(batch.Effects), len(workItemRouteDestinations())+3)
 			}
 			seen := make(map[string]int, len(batch.Effects))
 			for _, effect := range batch.Effects {
@@ -476,7 +479,8 @@ func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T
 					t.Fatalf("canonical destination %q count=%d", destination, seen[destination])
 				}
 			}
-			if seen["worklogs"] != 1 || len(seen) != len(workItemRouteDestinations())+1 {
+			if seen["worklogs"] != 1 || seen["project_membership_transitions"] != 1 ||
+				seen["projects"] != 1 || len(seen) != len(workItemRouteDestinations())+3 {
 				t.Fatalf("destination set=%v", seen)
 			}
 			summary, ok := batch.Result["jira_work_items"].(JiraAtlassianWorkItemsResult)

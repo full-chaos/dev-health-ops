@@ -252,8 +252,14 @@ func Descriptor(
 			descriptor.PreparedManifestRecovery = true
 		}
 	case provider == "linear" && workItemAlias:
+		// CHAOS-4193: linear's own internal sync route now writes board
+		// memberships and the `projects` catalogue row directly, the same
+		// way github's does (CHAOS-4194) -- not through the external-ingest
+		// path FamilyRouteDestinations' own doc comment assumed when it was
+		// written. gitlab does NOT get this: its "project" concept IS
+		// repo_id, so it stays on the plain shared list below.
 		descriptor.RouteDataset = "work-items"
-		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.Destinations = append(workItemRouteDestinations(), "project_membership_transitions", "projects")
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true
@@ -265,8 +271,9 @@ func Descriptor(
 			descriptor.Plannable = true
 		}
 	case provider == "jira" && workItemAlias:
+		// CHAOS-4193: same addition as linear, immediately above.
 		descriptor.RouteDataset = "work-items"
-		descriptor.Destinations = append(workItemRouteDestinations(), "worklogs")
+		descriptor.Destinations = append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true

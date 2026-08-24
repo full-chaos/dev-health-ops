@@ -94,8 +94,8 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
-	if len(batch.Effects) != 17 {
-		t.Fatalf("effects=%d want=17 (six canonical facts, worklogs, and ten derived)", len(batch.Effects))
+	if len(batch.Effects) != 19 {
+		t.Fatalf("effects=%d want=19 (six canonical facts, worklogs, two project-membership, and ten derived)", len(batch.Effects))
 	}
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
@@ -176,7 +176,7 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 	if batch.Watermark != nil {
 		t.Fatalf("optional worklog failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 17 {
+	if len(batch.Effects) != 19 {
 		t.Fatalf("optional worklog failure dropped recoverable effects: %d", len(batch.Effects))
 	}
 	incomplete, ok := batch.Result["incomplete"].([]string)
@@ -204,7 +204,7 @@ func TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark(t *t
 	if batch.Watermark != nil {
 		t.Fatalf("reference sink failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 17 {
+	if len(batch.Effects) != 19 {
 		t.Fatalf("reference sink failure dropped recoverable effects: %d", len(batch.Effects))
 	}
 	incomplete, ok := batch.Result["incomplete"].([]string)
@@ -246,8 +246,8 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 	if !observation.GraphQLAttempted || !observation.GraphQLSucceeded || observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 0 {
 		t.Fatalf("GraphQL observation=%+v", observation)
 	}
-	if len(batch.Effects) != 17 {
-		t.Fatalf("effects=%d want=17", len(batch.Effects))
+	if len(batch.Effects) != 19 {
+		t.Fatalf("effects=%d want=19", len(batch.Effects))
 	}
 	var worklog jiraWorklogRow
 	for _, effect := range batch.Effects {

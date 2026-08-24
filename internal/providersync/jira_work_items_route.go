@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 const (
@@ -86,18 +88,29 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	}
 
 	rows := jiraWorkItemRows{
-		WorkItems:    make([]jiraWorkItemRow, 0, len(issues)),
-		Transitions:  make([]jiraWorkItemTransitionRow, 0),
-		Dependencies: make([]jiraWorkItemDependencyRow, 0),
-		ReopenEvents: make([]jiraWorkItemReopenRow, 0),
-		Interactions: make([]jiraWorkItemInteractionRow, 0),
-		Sprints:      make([]jiraSprintRow, 0),
+		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),
+		Transitions:        make([]jiraWorkItemTransitionRow, 0),
+		Dependencies:       make([]jiraWorkItemDependencyRow, 0),
+		ReopenEvents:       make([]jiraWorkItemReopenRow, 0),
+		Interactions:       make([]jiraWorkItemInteractionRow, 0),
+		Sprints:            make([]jiraSprintRow, 0),
+		ProjectMemberships: make([]projectmembership.Row, 0),
+		Projects:           make([]projectmembership.CatalogRow, 0),
 	}
 	optionalIncomplete := make([]string, 0)
 	requests := searchPages
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
 	sprintIDs := make(map[string]struct{})
+	// jiraProjectCache resolves a project id to (key, name) at most once per
+	// Collect call, mirroring sprintCache's own per-run cache below.
+	// unresolvedProjectMemberships counts CHAOS-4193's ruled "unresolvable ->
+	// drop + counter": in practice this stays at 0 for jira (the changelog's
+	// own toString/fromString already supply a usable name, so a failed live
+	// lookup falls back rather than dropping the row), but the counter exists
+	// per the shared contract every producer of this table honors.
+	jiraProjectCache := make(map[string]jiraProjectCatalogEntry)
+	unresolvedProjectMemberships := 0
 	sprintCache := make(map[string]jiraSprintRow, len(handler.ReferenceSprints))
 	for _, sprint := range handler.ReferenceSprints {
 		if sprint.Provider != "jira" || sprint.OrgID != claim.OrgID || sprint.SprintID == "" {
@@ -121,6 +134,54 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		dependencies := normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)
 		rows.Dependencies = append(rows.Dependencies, dependencies...)
 		rows.ReopenEvents = append(rows.ReopenEvents, jiraReopenEvents(claim, transitions, normalizedAt)...)
+
+		for _, move := range jiraIssueProjectMoves(jiraWorkItemFixtureInput{Raw: issue}, handler.Identity) {
+			if move.OccurredAt.IsZero() {
+				unresolvedProjectMemberships++
+				continue
+			}
+			toEntry, ok := resolveJiraProjectCatalog(
+				ctx, client, jiraProjectCache, &requests, move.ToProjectID, move.ToProjectName,
+				derefString(item.ProjectID), derefString(item.ProjectKey),
+			)
+			if !ok {
+				unresolvedProjectMemberships++
+				continue
+			}
+			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
+				claim.OrgID, "jira", move.ToProjectID, toEntry.Key, toEntry.Name, normalizedAt,
+			))
+			fromProjectID, fromProjectKey := "", ""
+			if move.FromProjectID != "" {
+				// An unresolvable FROM side does not drop the row:
+				// to_project_id is what presence actually resolves on, and
+				// degrading to "" here is the same honest "we don't know
+				// what it moved from" shape the first-assignment sentinel
+				// already carries, not a fabricated value.
+				if fromEntry, ok := resolveJiraProjectCatalog(
+					ctx, client, jiraProjectCache, &requests, move.FromProjectID, move.FromProjectName,
+					derefString(item.ProjectID), derefString(item.ProjectKey),
+				); ok {
+					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
+						claim.OrgID, "jira", move.FromProjectID, fromEntry.Key, fromEntry.Name, normalizedAt,
+					))
+					fromProjectID, fromProjectKey = move.FromProjectID, fromEntry.Key
+				}
+			}
+			membership := projectmembership.Row{
+				OrgID: claim.OrgID, RepoID: uuid.Nil, SubjectKind: projectmembership.SubjectWorkItem,
+				SubjectID: item.WorkItemID, Provider: "jira",
+				FromProjectID: fromProjectID, ToProjectID: move.ToProjectID,
+				FromProjectKey: fromProjectKey, ToProjectKey: toEntry.Key,
+				Actor: move.Actor, OccurredAt: move.OccurredAt.UTC(), LastSynced: normalizedAt.UTC(),
+			}
+			if move.EventID != "" {
+				membership.EventID = move.EventID
+			} else {
+				membership.EventID = projectmembership.EventID(membership)
+			}
+			rows.ProjectMemberships = append(rows.ProjectMemberships, membership)
+		}
 
 		if fetchComments {
 			comments, commentPages, commentErr := collectJiraIssueComments(
@@ -180,19 +241,26 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 	}
+	for _, row := range rows.ProjectMemberships {
+		if err := validateJiraProjectMembership(row, claim); err != nil {
+			return CompleteRouteBatch{}, err
+		}
+	}
 
 	effects, err := BuildJiraWorkItemEffects(rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	result := map[string]any{
-		"work_items_synced":    len(rows.WorkItems),
-		"transitions_synced":   len(rows.Transitions),
-		"dependencies_synced":  len(rows.Dependencies),
-		"reopen_events_synced": len(rows.ReopenEvents),
-		"interactions_synced":  len(rows.Interactions),
-		"sprints_synced":       len(rows.Sprints),
-		"project_key":          projectKey,
+		"work_items_synced":              len(rows.WorkItems),
+		"transitions_synced":             len(rows.Transitions),
+		"dependencies_synced":            len(rows.Dependencies),
+		"reopen_events_synced":           len(rows.ReopenEvents),
+		"interactions_synced":            len(rows.Interactions),
+		"sprints_synced":                 len(rows.Sprints),
+		"project_memberships_synced":     len(rows.ProjectMemberships),
+		"unresolved_project_memberships": unresolvedProjectMemberships,
+		"project_key":                    projectKey,
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
@@ -331,6 +399,87 @@ func fetchJiraSprint(
 	var payload map[string]any
 	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/sprint/"+url.PathEscape(sprintID), nil, &payload)
 	return payload, err
+}
+
+// fetchJiraProject resolves a Jira internal numeric project id to its current
+// key/name, for CHAOS-4193's project-membership catalog rows. A changelog
+// "project" item's own fromString/toString are the project NAME already
+// (confirmed live, CHAOS-4193 probe) but never necessarily the KEY -- Collect
+// tries this live lookup for the real key and falls back to the changelog's
+// own name, rather than dropping the membership row, when it fails.
+func fetchJiraProject(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	projectID string,
+) (key, name string, err error) {
+	var payload map[string]any
+	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
+		return "", "", err
+	}
+	return stringFrom(payload["key"]), stringFrom(payload["name"]), nil
+}
+
+type jiraProjectCatalogEntry struct {
+	Key  string
+	Name string
+}
+
+// resolveJiraProjectCatalog resolves one Jira project id to (key, name) at
+// most once per Collect call (results cache across every issue/move in the
+// run), trying fetchJiraProject first and falling back to the changelog's own
+// display name when the live lookup fails. Only a blank id is unresolvable --
+// once an id is known, the id itself is what project_membership_presence
+// resolves on, so a lookup failure degrades the row to a blank key and/or
+// blank name rather than dropping it (codex review finding, CHAOS-4193): an
+// empty display name is exactly the shape Linear's own from-side catalog rows
+// already carry (no live lookup, ruled), not a new kind of incompleteness.
+//
+// currentProjectID/currentProjectKey are the ISSUE's own, already-resolved
+// current project (from fields.project, never the changelog). When id
+// matches it and the live lookup fails to return a key, that known key is
+// used instead of leaving the key blank: an empty key here suppresses
+// project_membership_presence's work_items fallback arm, and Jira ownership
+// records resolve teams by key (team_autoimport_jira.py), so losing a key we
+// already had on hand for free would silently break attribution (codex
+// review finding, CHAOS-4193).
+//
+// Every resolution is cached, complete or not -- a persistently unavailable
+// project (deleted, out of scope) would otherwise retry its live lookup on
+// every single move that ever references it, turning one outage into
+// thousands of redundant requests within a run (codex review finding,
+// CHAOS-4193). A cache HIT still checks the known-key fallback and upgrades
+// the stored entry in place: an earlier issue that only touched this id
+// historically must not permanently freeze it blank for a LATER issue whose
+// own current project this id actually is (codex review finding, CHAOS-4193).
+func resolveJiraProjectCatalog(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	cache map[string]jiraProjectCatalogEntry,
+	requests *int,
+	id, changelogName string,
+	currentProjectID, currentProjectKey string,
+) (jiraProjectCatalogEntry, bool) {
+	if id == "" {
+		return jiraProjectCatalogEntry{}, false
+	}
+	if cached, ok := cache[id]; ok {
+		if cached.Key == "" && id == currentProjectID && currentProjectID != "" {
+			cached.Key = currentProjectKey
+			cache[id] = cached
+		}
+		return cached, true
+	}
+	key, name, err := fetchJiraProject(ctx, client, id)
+	*requests++
+	if err != nil || name == "" {
+		name = changelogName
+	}
+	if key == "" && id == currentProjectID && currentProjectID != "" {
+		key = currentProjectKey
+	}
+	entry := jiraProjectCatalogEntry{Key: key, Name: name}
+	cache[id] = entry
+	return entry, true
 }
 
 func jiraFetchObject(

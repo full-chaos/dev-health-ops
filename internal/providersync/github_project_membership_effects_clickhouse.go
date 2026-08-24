@@ -299,5 +299,52 @@ func projectCatalogSortingKey(row projectmembership.CatalogRow) string {
 	return projectCatalogStored(row).SortingKey()
 }
 
+// existenceOnlyProjectCatalogReadback answers "does the projects table already
+// carry a resolvable row at this row's key", independent of which writer's
+// version currently wins there. An ensure-only catalog writer -- Jira's and
+// Linear's project-membership producers, unlike this file's own
+// GitHubProjectCatalogClickHouseAdapter -- must use this instead of
+// InspectGitHubWorkItemEffect's version-comparing readback above: its whole
+// job is making a foreign key resolvable, and a newer row from ANY writer at
+// that same key already satisfies that job just as well as its own row
+// would. Comparing versions instead reports EffectConflict on a perfectly
+// fine convergence and permanently wedges recovery the moment a second
+// writer instance (a later sync unit, a richer reference-catalog sync) ever
+// touches the same key first (codex review finding, CHAOS-4193).
+func existenceOnlyProjectCatalogReadback(
+	ctx context.Context, conn driver.Conn, rows []projectmembership.CatalogRow,
+) (EffectInspection, error) {
+	rows = dedupeBySortingKey(rows, projectCatalogSortingKey)
+	if len(rows) == 0 {
+		return emptyEffectInspection(), nil
+	}
+	return foldWorkItemInspections(rows, func(row projectmembership.CatalogRow) (EffectInspection, error) {
+		result, err := conn.Query(ctx, gitHubProjectCatalogSelect, row.OrgID, row.Provider, row.ID)
+		if err != nil {
+			return EffectConflict, err
+		}
+		defer result.Close()
+		found := 0
+		for result.Next() {
+			var discard projectmembership.CatalogRow
+			var projectKey *string
+			if err := result.Scan(
+				&discard.ID, &discard.OrgID, &discard.Provider, &projectKey,
+				&discard.Name, &discard.IsActive, &discard.UpdatedAt, &discard.LastSynced,
+			); err != nil {
+				return EffectConflict, err
+			}
+			found++
+		}
+		if err := result.Err(); err != nil {
+			return EffectConflict, err
+		}
+		if verdict, final := workItemReadbackVerdict(found); final {
+			return verdict, nil
+		}
+		return EffectExact, nil
+	})
+}
+
 var _ GitHubWorkItemEffectAdapter = GitHubProjectMembershipClickHouseAdapter{}
 var _ GitHubWorkItemEffectAdapter = GitHubProjectCatalogClickHouseAdapter{}

@@ -97,9 +97,13 @@ func GitHubEffectDestinations() []string {
 // It stops short of GitHubEffectDestinations by exactly the two CHAOS-4194
 // surfaces. GitLab must never write them -- GitLab's own "project" concept IS
 // this schema's repo_id, which is why gitlab is not registered for the
-// membership kind at all -- and jira and linear reach the same table through
-// the external-ingest sink rather than through this effects list. Advertising
-// them under those providers would publish a capability none of them has.
+// membership kind at all. Jira and Linear DO now write them too (CHAOS-4193,
+// each from its own native producer: Jira's project-move changelog, Linear's
+// issue history), but through a provider-specific append onto this shared
+// base in execution_registry.go's Descriptor(), not through a manifest tag
+// here -- this function stays the true "every work-item route writes these"
+// floor, and would misrepresent gitlab's exclusion if it grew a Jira/Linear
+// tag of its own.
 func FamilyRouteDestinations() []string {
 	return destinationNames(func(destination Destination) bool {
 		return destination.FamilyRoute

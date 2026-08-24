@@ -115,7 +115,7 @@ func TestLinearWorkItemsRouteNormalizesLiveIssueAndHistory(t *testing.T) {
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
 	}
-	if len(byDestination) != 6 || len(byDestination["work_items"].Rows) != 1 ||
+	if len(byDestination) != 8 || len(byDestination["work_items"].Rows) != 1 ||
 		len(byDestination["work_item_transitions"].Rows) != 2 {
 		t.Fatalf("effects=%+v", batch.Effects)
 	}

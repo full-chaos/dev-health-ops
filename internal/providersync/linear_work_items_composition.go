@@ -95,7 +95,7 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 	sortEffectBatches(effects)
 	raw.Effects = effects
 	if err := raw.validate(CompleteRouteDescriptor{
-		Destinations: workItemRouteDestinations(),
+		Destinations: linearFamilyRawDestinations(),
 	}); err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -140,6 +140,12 @@ func NewLinearWorkItemFamilyClickHouseEffects(
 			Sprints: LinearSprintsClickHouseAdapter{
 				Delegate: GitHubSprintsClickHouseAdapter{Conn: conn},
 			},
+			ProjectMemberships: LinearProjectMembershipClickHouseAdapter{
+				Delegate: GitHubProjectMembershipClickHouseAdapter{Conn: conn},
+			},
+			Projects: LinearProjectCatalogClickHouseAdapter{
+				Delegate: GitHubProjectCatalogClickHouseAdapter{Conn: conn},
+			},
 		},
 		Derived: derived,
 	}
@@ -162,8 +168,8 @@ func (sink LinearWorkItemFamilyClickHouseEffects) MissingDestinations() []string
 	}
 	rawReady := sink.Raw.Lease != nil
 	derivedReady := sink.Derived.Lease != nil
-	missing := make([]string, 0, len(workItemRouteDestinations()))
-	for _, destination := range workItemRouteDestinations() {
+	missing := make([]string, 0, len(linearFamilyRawDestinations()))
+	for _, destination := range linearFamilyRawDestinations() {
 		switch {
 		case linearWorkItemDestination(destination):
 			_, adapterMissing := rawMissing[destination]
@@ -184,6 +190,16 @@ func (sink LinearWorkItemFamilyClickHouseEffects) MissingDestinations() []string
 
 func (sink LinearWorkItemFamilyClickHouseEffects) complete() bool {
 	return len(sink.MissingDestinations()) == 0
+}
+
+// linearFamilyRawDestinations is workItemRouteDestinations() plus CHAOS-4193's
+// two project-membership surfaces. Not workItemRouteDestinations itself,
+// which stays the gitlab-safe shared list (see its own doc comment) --
+// linear's own internal route writes these two directly, same as github's,
+// so linear's OWN completeness/validation views need to know about them even
+// though gitlab's must never see them.
+func linearFamilyRawDestinations() []string {
+	return append(workItemRouteDestinations(), "project_membership_transitions", "projects")
 }
 
 func (sink LinearWorkItemFamilyClickHouseEffects) WriteEffect(

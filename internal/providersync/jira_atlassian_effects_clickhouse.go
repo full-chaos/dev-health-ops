@@ -19,6 +19,13 @@ var jiraAtlassianEffectDestinations = []string{
 	"work_item_transitions",
 	"work_items",
 	"worklogs",
+	// CHAOS-4193: project-membership history and the projects catalog rows
+	// that make it resolvable. This is the PRODUCTION jira route -- the
+	// plain JiraWorkItemsRouteHandler these mirror is not what
+	// cmd/dev-health-worker/provider_sync.go constructs for a live jira
+	// claim.
+	"project_membership_transitions",
+	"projects",
 }
 
 func JiraAtlassianEffectDestinations() []string {
@@ -34,6 +41,10 @@ func BuildJiraAtlassianEffects(rows jiraAtlassianRows) ([]EffectBatch, error) {
 		"work_item_transitions":   func(value jiraAtlassianRows) []json.RawMessage { return marshalJiraRows(value.Transitions) },
 		"work_items":              func(value jiraAtlassianRows) []json.RawMessage { return marshalJiraRows(value.WorkItems) },
 		"worklogs":                func(value jiraAtlassianRows) []json.RawMessage { return marshalJiraRows(value.Worklogs) },
+		"project_membership_transitions": func(value jiraAtlassianRows) []json.RawMessage {
+			return marshalJiraRows(value.ProjectMemberships)
+		},
+		"projects": func(value jiraAtlassianRows) []json.RawMessage { return marshalJiraRows(value.Projects) },
 	}
 	if len(projections) != len(jiraAtlassianEffectDestinations) {
 		return nil, ErrInvalidConfiguration
@@ -78,26 +89,30 @@ func (adapter jiraAtlassianGitHubAdapter) InspectJiraAtlassianEffect(ctx context
 // the Atlassian route.  Worklogs use a provider-local adapter because their
 // DateTime64(6) schema is not compatible with the six DateTime64(3) adapters.
 type JiraAtlassianClickHouseEffects struct {
-	Lease        providerfoundation.LeaseGuard
-	Sprints      JiraWorkItemEffectAdapter
-	Dependencies JiraWorkItemEffectAdapter
-	Interactions JiraWorkItemEffectAdapter
-	Reopens      JiraWorkItemEffectAdapter
-	Transitions  JiraWorkItemEffectAdapter
-	WorkItems    JiraWorkItemEffectAdapter
-	Worklogs     JiraAtlassianWorklogEffectAdapter
+	Lease              providerfoundation.LeaseGuard
+	Sprints            JiraWorkItemEffectAdapter
+	Dependencies       JiraWorkItemEffectAdapter
+	Interactions       JiraWorkItemEffectAdapter
+	Reopens            JiraWorkItemEffectAdapter
+	Transitions        JiraWorkItemEffectAdapter
+	WorkItems          JiraWorkItemEffectAdapter
+	Worklogs           JiraAtlassianWorklogEffectAdapter
+	ProjectMemberships JiraWorkItemEffectAdapter
+	Projects           JiraWorkItemEffectAdapter
 }
 
 func NewJiraAtlassianClickHouseEffects(conn driver.Conn, lease providerfoundation.LeaseGuard) JiraAtlassianClickHouseEffects {
 	return JiraAtlassianClickHouseEffects{
-		Lease:        lease,
-		Sprints:      GitHubSprintsClickHouseAdapter{Conn: conn},
-		Dependencies: GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
-		Interactions: GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
-		Reopens:      GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},
-		Transitions:  GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
-		WorkItems:    GitHubWorkItemsClickHouseAdapter{Conn: conn},
-		Worklogs:     JiraWorklogsClickHouseAdapter{Conn: conn},
+		Lease:              lease,
+		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn},
+		Dependencies:       GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
+		Interactions:       GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
+		Reopens:            GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},
+		Transitions:        GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
+		WorkItems:          GitHubWorkItemsClickHouseAdapter{Conn: conn},
+		Worklogs:           JiraWorklogsClickHouseAdapter{Conn: conn},
+		ProjectMemberships: GitHubProjectMembershipClickHouseAdapter{Conn: conn},
+		Projects:           JiraProjectCatalogClickHouseAdapter{Delegate: GitHubProjectCatalogClickHouseAdapter{Conn: conn}},
 	}
 }
 
@@ -203,6 +218,16 @@ func (sink JiraAtlassianClickHouseEffects) adapterForDestination(destination str
 			return nil, false
 		}
 		return sink.Worklogs, true
+	case "project_membership_transitions":
+		if sink.ProjectMemberships == nil {
+			return nil, false
+		}
+		return jiraAtlassianGitHubAdapter{sink.ProjectMemberships}, true
+	case "projects":
+		if sink.Projects == nil {
+			return nil, false
+		}
+		return jiraAtlassianGitHubAdapter{sink.Projects}, true
 	default:
 		return nil, false
 	}

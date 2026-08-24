@@ -7,8 +7,54 @@ import (
 	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// JiraProjectCatalogClickHouseAdapter wraps GitHubProjectCatalogClickHouseAdapter
+// with an existence-only readback for Jira's ensure-only project catalog
+// rows. Jira issues an EnsureProjectsRow write per membership-owning issue,
+// stamped with that sync unit's own normalizedAt as updated_at
+// (jira_work_items_route.go's resolveJiraProjectCatalog callers) -- so two
+// independent Jira sync units for the SAME project can legitimately write
+// two different versions of the same (org_id, provider, id) key. If one
+// crashes mid-write and a later, unrelated unit writes a newer version
+// before the crashed unit's recovery readback runs, the delegated GitHub
+// readback's version comparison reports EffectConflict even though the
+// newer row already satisfies the ensure, permanently wedging the older
+// unit's recovery (codex review finding, CHAOS-4193) -- the identical class
+// of bug already fixed for Linear's equivalent adapter.
+type JiraProjectCatalogClickHouseAdapter struct {
+	Delegate GitHubProjectCatalogClickHouseAdapter
+}
+
+func (adapter JiraProjectCatalogClickHouseAdapter) WriteGitHubWorkItemEffect(
+	ctx context.Context, identity GitHubWorkItemEffectIdentity, effect EffectBatch,
+) error {
+	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, identity, effect)
+}
+
+func (adapter JiraProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect(
+	ctx context.Context, identity GitHubWorkItemEffectIdentity, effect EffectBatch,
+) (EffectInspection, error) {
+	rows, err := decodeEffectRows[projectmembership.CatalogRow](effect)
+	if err != nil {
+		return EffectConflict, err
+	}
+	if err := workItemAdapterGuard(
+		ctx, identity, effect, "projects", adapter.Delegate.Conn, len(rows),
+	); err != nil {
+		return EffectConflict, err
+	}
+	for _, row := range rows {
+		if row.OrgID != identity.OrgID {
+			return EffectConflict, ErrInvalidConfiguration
+		}
+	}
+	return existenceOnlyProjectCatalogReadback(ctx, adapter.Delegate.Conn, rows)
+}
+
+var _ GitHubWorkItemEffectAdapter = JiraProjectCatalogClickHouseAdapter{}
 
 // Jira's first canonical slice owns the six direct fact destinations emitted
 // by fetch_jira_work_items_with_extras.  The five historical aliases collapse
@@ -21,6 +67,11 @@ var jiraWorkItemEffectDestinations = []string{
 	"work_item_reopen_events",
 	"work_item_transitions",
 	"work_items",
+	// CHAOS-4193: project-membership history and the projects catalog rows
+	// that make it resolvable, per the CHAOS-4193/4194 lock's ensureProjectsRow
+	// contract (projectmembership.EnsureProjectsRow's own doc comment).
+	"project_membership_transitions",
+	"projects",
 }
 
 func JiraWorkItemEffectDestinations() []string {
@@ -29,12 +80,14 @@ func JiraWorkItemEffectDestinations() []string {
 
 func BuildJiraWorkItemEffects(rows jiraWorkItemRows) ([]EffectBatch, error) {
 	projections := map[string]func(jiraWorkItemRows) []json.RawMessage{
-		"sprints":                 func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Sprints) },
-		"work_item_dependencies":  func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Dependencies) },
-		"work_item_interactions":  func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Interactions) },
-		"work_item_reopen_events": func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.ReopenEvents) },
-		"work_item_transitions":   func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Transitions) },
-		"work_items":              func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.WorkItems) },
+		"sprints":                        func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Sprints) },
+		"work_item_dependencies":         func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Dependencies) },
+		"work_item_interactions":         func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Interactions) },
+		"work_item_reopen_events":        func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.ReopenEvents) },
+		"work_item_transitions":          func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Transitions) },
+		"work_items":                     func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.WorkItems) },
+		"project_membership_transitions": func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.ProjectMemberships) },
+		"projects":                       func(value jiraWorkItemRows) []json.RawMessage { return marshalJiraRows(value.Projects) },
 	}
 	if len(projections) != len(jiraWorkItemEffectDestinations) {
 		return nil, ErrInvalidConfiguration
@@ -81,13 +134,15 @@ type JiraWorkItemEffectAdapter = GitHubWorkItemEffectAdapter
 // storage boundary; the Jira identity and manifest fence this dispatcher
 // before any write or readback is attempted.
 type JiraWorkItemClickHouseEffects struct {
-	Lease        providerfoundation.LeaseGuard
-	Sprints      JiraWorkItemEffectAdapter
-	Dependencies JiraWorkItemEffectAdapter
-	Interactions JiraWorkItemEffectAdapter
-	Reopens      JiraWorkItemEffectAdapter
-	Transitions  JiraWorkItemEffectAdapter
-	WorkItems    JiraWorkItemEffectAdapter
+	Lease              providerfoundation.LeaseGuard
+	Sprints            JiraWorkItemEffectAdapter
+	Dependencies       JiraWorkItemEffectAdapter
+	Interactions       JiraWorkItemEffectAdapter
+	Reopens            JiraWorkItemEffectAdapter
+	Transitions        JiraWorkItemEffectAdapter
+	WorkItems          JiraWorkItemEffectAdapter
+	ProjectMemberships JiraWorkItemEffectAdapter
+	Projects           JiraWorkItemEffectAdapter
 }
 
 // NewJiraWorkItemClickHouseEffects wires the six provider-local destinations
@@ -98,13 +153,15 @@ func NewJiraWorkItemClickHouseEffects(
 	lease providerfoundation.LeaseGuard,
 ) JiraWorkItemClickHouseEffects {
 	return JiraWorkItemClickHouseEffects{
-		Lease:        lease,
-		Sprints:      GitHubSprintsClickHouseAdapter{Conn: conn},
-		Dependencies: GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
-		Interactions: GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
-		Reopens:      GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},
-		Transitions:  GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
-		WorkItems:    GitHubWorkItemsClickHouseAdapter{Conn: conn},
+		Lease:              lease,
+		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn},
+		Dependencies:       GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
+		Interactions:       GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
+		Reopens:            GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},
+		Transitions:        GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
+		WorkItems:          GitHubWorkItemsClickHouseAdapter{Conn: conn},
+		ProjectMemberships: GitHubProjectMembershipClickHouseAdapter{Conn: conn},
+		Projects:           JiraProjectCatalogClickHouseAdapter{Delegate: GitHubProjectCatalogClickHouseAdapter{Conn: conn}},
 	}
 }
 
@@ -198,6 +255,10 @@ func (sink JiraWorkItemClickHouseEffects) adapterForDestination(
 		return sink.Transitions, true
 	case "work_items":
 		return sink.WorkItems, true
+	case "project_membership_transitions":
+		return sink.ProjectMemberships, true
+	case "projects":
+		return sink.Projects, true
 	default:
 		return nil, false
 	}

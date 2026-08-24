@@ -1,6 +1,13 @@
 # Explicit go-only topology overlay. Use only after the route-owner release
 # gates in deploy/go-workers/README.md are satisfied. It scales the Celery
 # consumer services to zero; it does not delete Celery, Beat, or Valkey DB 0.
+#
+# ARCHIVED (CHAOS-4164, 2026-08-23): the five services scaled to zero below
+# are themselves marked archived at their definition in compose.production.yml
+# -- Go has been the sole production owner of every current job and schedule
+# since CHAOS-4026 (2026-08-21). This overlay's runtime scale:0 override is
+# what actually stops the containers; the archival comment is what stops a
+# reader from mistaking the definition for live topology. Keep both.
 services:
   worker:
     deploy: {replicas: 0}

@@ -23,6 +23,16 @@ change the canonical job-kind-to-queue mapping. This page still needs a full
 rewrite around the Go-only runtime (tracked separately); until then, treat
 the sections below that still show `dev-hops workers start-*` commands as
 historical, not runnable.
+
+**CHAOS-4164 (2026-08-23):** the checked-in `compose.yml`,
+`deploy/docker-compose/compose.production.yml`, and
+`deploy/docker-swarm/stack.yml` still define the Celery `worker`/`beat` fleet
+directly (not deleted -- local-dev parity and historical reference) and are
+now marked ARCHIVED at each definition so they no longer read as live
+topology. See
+[Workers, schedules, and queues § Historical Celery topology (dormant)](../configure/workers-and-schedules.md#historical-celery-topology-dormant)
+and [§ Known divergences](../configure/workers-and-schedules.md#known-divergences-local-vs-prod-worker-topology)
+for the archival record and the local/prod parity gaps found alongside it.
 {: .fc-page-lede }
 
 The Go worker, scheduler, reconciler, and stream-runner binaries are separate

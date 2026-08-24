@@ -34,6 +34,16 @@ this page does not repeat that content.
 
 ## Historical Celery topology (dormant)
 
+**ARCHIVED (CHAOS-4164, 2026-08-23):** every checked-in compose surface that
+still defines the `worker`/`worker-ingest`/`worker-external-ingest`/
+`worker-heavy`/`beat` Celery services -- `compose.yml`,
+`deploy/docker-compose/compose.production.yml`, and
+`deploy/docker-swarm/stack.yml` -- now carries an ARCHIVED banner comment at
+the service definition itself, so a reader of the compose file alone (not
+just this doc) sees that the fleet is not live topology. Nothing below
+changes what those files run; this only makes their own text match what this
+page already said.
+
 Kept for context, not for operation. Before 2026-08-19 these were configured together:
 
 - broker and result backend;
@@ -95,6 +105,67 @@ A route change must still identify the job kind and contract version and
 prove that no duplicate or missing domain effect occurs; it no longer needs
 to preserve a Celery rollback path, because there is no live Celery consumer
 left to roll back to.
+
+## Known divergences: local vs prod worker topology
+
+Recorded under the standing order that local/prod divergence is itself a
+defect (CHAOS-4164). These are known, not fixed here -- each is a rationale
+for why `docker compose config` on a laptop and the same command on the prod
+host legitimately disagree, so a future reader does not mistake one gap for
+a bug and re-discover it from scratch.
+
+- **Worker topology naming.** Prod splits `go-worker-sync` (`--queues=sync`)
+  and `go-worker-sync-provider` (`--queues=sync_provider`) as two services.
+  Local merges both into one service named `go-worker`
+  (`--queues=sync,sync_provider`, `compose.yml`, with
+  `PROVIDER_SYNC_QUEUES_ENABLED: "true"`). Queue *coverage* is equivalent --
+  `sync_provider` has a consumer locally, so this is not a missing-consumer
+  bug -- but process isolation differs (one saturated queue can starve the
+  other locally) and anything keying off service *name* (dashboards, alert
+  `job` regexes, runbooks) cannot match both shapes at once.
+- **Profile gating.** Prod's `go-*` services sit behind the `go-workers`
+  compose profile, which is why bringing the fleet up on the prod host is a
+  two-pass `pull` then `up --profile go-workers`: a plain `pull` before the
+  profile is selected silently skips pulling the profiled images, so the
+  first `up` under the profile can start stale or missing images without
+  erroring. Local's `go-*` services are not profile-gated.
+- **Replica defaults.** `deploy/docker-compose/compose.go-workers.yml` sets
+  `replicas: 0` as the compose *default* for `go-worker-heavy`; prod's actual
+  replica count (3) comes from the deploy records, not the checked-in file. A
+  reader of the file alone concludes heavy work is not running.
+- **Service-list deltas.** Prod-only: `go-river-migrate`, `acr-material-init`.
+  Local-only: `bugsink`, `mailpit`, `falkordb`, `riverui`,
+  `go-worker-consumers-ready`, `go-worker-ready`, the `*-route-activate`
+  services, `go-worker-migrate`. `go-worker-heavy`
+  (`investment,metrics,reports,workgraph`) and `go-worker-ops`
+  (`coverage,heartbeat,retention,webhooks`) are identical in both.
+- **Archived Celery naming, checked-in vs. actually deployed.** The Celery
+  service names archived in this repo's `compose.production.yml`
+  (`worker`, `worker-ingest`, `worker-external-ingest`, `worker-heavy`,
+  `beat`) do not match the fleet a live prod-host `docker compose config`
+  snapshot showed at the time this was filed (`worker`, `worker-backfill`,
+  `worker-bg`, `worker-heavy`, `worker-ingest`, `worker-wi`, `beat`) --
+  `worker-external-ingest` has no counterpart in that snapshot, and
+  `worker-backfill`/`worker-bg`/`worker-wi` have no counterpart in this repo
+  at all. The checked-in production compose file was already not the true
+  source of prod's Celery topology before either side was archived; treat
+  both as historical record of *a* Celery topology, not *the* deployed one.
+- **Helm/Kubernetes defaults still describe a Celery-primary deployment.**
+  `deploy/helm/dev-health/values.yaml` defaults `worker.enabled`,
+  `workerIngest.enabled`, `workerExternalIngest.enabled`,
+  `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
+  to `false`; `PAGERDUTY_WEBHOOK_TRANSPORT` there still defaults to `celery`.
+  `deploy/kubernetes/beat.yaml` and `worker.yaml` are the matching plain
+  manifests. None of this is what actual prod runs today -- the live prod
+  fleet this page describes was verified through `docker compose`, not `helm`
+  or `kubectl` -- but a reader following the Helm/Kubernetes path alone, with
+  no other context, would deploy the archived Celery fleet as primary and the
+  Go path as an opt-in add-on, the reverse of current reality. Left
+  unarchived here deliberately: fixing the Helm/Kubernetes chart is a
+  materially larger, riskier change than a compose-comment archival, and it
+  is not yet known whether that deployment path has any live consumer at
+  all. Tracked as CHAOS-4195, a CHAOS-4164-related follow-up; the
+  archive-vs-delete call there belongs to chris.
 
 ## PostgreSQL requirements
 

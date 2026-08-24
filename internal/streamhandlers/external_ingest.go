@@ -525,6 +525,25 @@ func refuseProjectMembershipContradiction(pointer externalPointer, payload map[s
 		if stringField(payload, "workItemType") != "issue" {
 			return externalRefusalInvalidField, "a work_item subject must declare workItemType issue"
 		}
+		// And the repository, for the repo-scoped providers. Leaving it
+		// optional left the old fallback reachable by simply not sending it:
+		// externalWorkItemInstance drops back to the BATCH POINTER, so an
+		// org-scoped github batch naming work item 7 with no repository derives
+		// `gh:acme#7` while the work item it means is `gh:acme/api#7`. That row
+		// joins nothing AND suppresses the presence view's column arm for the
+		// subject, because the anti-join matches on the id nobody else uses --
+		// two wrong answers from one omitted field. The earlier build fixed the
+		// derivation to consult the record's own repository; this closes the
+		// hole where the record declines to have one.
+		//
+		// github only. jira and linear are repo-less: their subject ids carry
+		// no instance at all (`jira:KEY`, `linear:KEY`), so no fallback can
+		// change what they derive, and demanding a repository from a provider
+		// that has none would refuse every valid row.
+		if pointer.SourceSystem == "github" && stringField(payload, "repositoryExternalId") == "" {
+			return externalRefusalInvalidField,
+				"a github work_item subject requires repositoryExternalId to derive a joinable subject id"
+		}
 	}
 	// "" in BOTH destination fields is the ruled unassignment sentinel --
 	// removed from every project. Only ONE half of that is a contradiction: a

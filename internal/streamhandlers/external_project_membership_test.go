@@ -26,6 +26,15 @@ func externalProjectMembershipPayload(provider string, overrides map[string]any)
 		"toProjectKey": "PLATFORM",
 		"actor":        "ada",
 	}
+	// github carries its repository; jira and linear are repo-less and must
+	// not, or the fixture would assert a field their producers never send.
+	// Deliberately the DEFAULT rather than an opt-in override: a fixture that
+	// omitted it would make every other test in this file exercise the
+	// org-scoped fallback path instead of the shape production sends, and the
+	// refusal that closes that path would then be the only thing they proved.
+	if provider == "github" {
+		payload["repositoryExternalId"] = "full-chaos/dev-health"
+	}
 	for key, value := range overrides {
 		payload[key] = value
 	}
@@ -851,5 +860,57 @@ func TestExternalIngestHandlesABatchWithoutAnObserver(t *testing.T) {
 	}
 	if len(sink.calls) != 1 || len(sink.calls[0].Records) != 1 {
 		t.Fatalf("record did not reach the sink without an observer: %#v", sink.calls)
+	}
+}
+
+// TestExternalProjectMembershipRequiresARepositoryForGithubWorkItems closes the
+// last way a work_item row could be well-formed and join to nothing (codex
+// adversarial review, round 1, finding 1).
+//
+// `repositoryExternalId` was optional, and externalWorkItemInstance falls back
+// to the BATCH POINTER when it is absent. For an org-scoped github batch that
+// fallback is silently wrong: a record naming work item 7 with no repository
+// derives `gh:acme#7`, while the work item it means -- written by work_item.v1
+// from its own `repositoryExternalId` -- is `gh:acme/api#7`. The membership row
+// then joins nothing, AND it suppresses the presence view's column arm for that
+// subject, because the anti-join matches on the id nobody else uses. Two wrong
+// answers from one omitted field.
+//
+// The earlier build fixed the DERIVATION (consult the record's own repository
+// rather than the pointer) but left the field optional, so the fallback was
+// still reachable by simply not sending it. Requiring it is the other half.
+//
+// Required for github only, because that is where the ambiguity exists: jira
+// and linear are repo-less providers whose subject ids carry no instance at all
+// (`jira:KEY`, `linear:KEY`), so no fallback can change what they derive.
+func TestExternalProjectMembershipRequiresARepositoryForGithubWorkItems(t *testing.T) {
+	pointer := externalTestPointer()
+	pointer.SourceInstance = "acme"
+	payload := externalProjectMembershipPayload("github", nil)
+	delete(payload, "repositoryExternalId")
+	if err := validateExternalRecord("project_membership_transition.v1", payload); err != nil {
+		t.Fatalf("the field table should accept the payload; the whole-record check owns this: %v", err)
+	}
+	code, message := refuseProjectMembershipContradiction(pointer, payload, map[string]string{})
+	if code != externalRefusalInvalidField {
+		t.Fatalf("a github work_item with no repository was accepted (code %q); it derives gh:acme#7 and joins nothing", code)
+	}
+	if !strings.Contains(message, "repositoryExternalId") {
+		t.Fatalf("refusal does not name the offending field: %q", message)
+	}
+	// jira and linear must NOT be caught by this: their subject ids carry no
+	// instance, so there is no fallback to be wrong about, and requiring a
+	// repository from a repo-less provider would refuse every valid row.
+	for _, provider := range []string{"jira", "linear"} {
+		t.Run(provider+"_needs_no_repository", func(t *testing.T) {
+			providerPointer := externalTestPointer()
+			providerPointer.SourceSystem = provider
+			repoless := externalProjectMembershipPayload(provider, map[string]any{"toProjectId": "PLATFORM"})
+			delete(repoless, "repositoryExternalId")
+			if code, message := refuseProjectMembershipContradiction(
+				providerPointer, repoless, map[string]string{}); code != "" {
+				t.Fatalf("%s membership refused for want of a repository: %s / %s", provider, code, message)
+			}
+		})
 	}
 }

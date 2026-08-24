@@ -200,6 +200,19 @@ services:
       - dev-health-internal
       - dev-health-public
 
+  # ---------------------------------------------------------------------------
+  # ARCHIVED (CHAOS-4164, 2026-08-23): Python/Celery worker fleet.
+  #
+  # Go owns every current production job and schedule; every Python Celery
+  # worker and Beat service was stopped in production 2026-08-19 (CHAOS-4026).
+  # The five services below (worker, worker-ingest, worker-external-ingest,
+  # worker-heavy, beat) are NOT live topology -- kept defined, not deleted,
+  # for historical reference only (see
+  # docs/operate/configure/workers-and-schedules.md#historical-celery-topology-dormant).
+  # Go equivalents: worker/worker-heavy -> go-worker-sync, go-worker-sync-provider,
+  # go-worker-heavy, go-worker-ops; beat -> go-scheduler.
+  # ---------------------------------------------------------------------------
+
   # Worker topology split by latency class (CHAOS-2278); cost-class sub-queues
   # (CHAOS-2517) ride along: light/medium on `worker`, heavy on `worker-heavy`.
   worker: &worker-base

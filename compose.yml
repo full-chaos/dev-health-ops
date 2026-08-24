@@ -344,7 +344,22 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # Celery workers — split topology (CHAOS-2278)
+  # ARCHIVED (CHAOS-4164, 2026-08-23): Python/Celery worker fleet.
+  #
+  # Go owns every current production job and schedule; every Python Celery
+  # worker and Beat service was stopped in production 2026-08-19 (CHAOS-4026).
+  # The five services below are NOT live topology -- kept defined, not
+  # deleted, for local-dev parity and historical reference only (see
+  # docs/operate/configure/workers-and-schedules.md#historical-celery-topology-dormant).
+  # Go equivalents: worker/worker-heavy -> go-worker-sync, go-worker-sync-provider,
+  # go-worker-heavy, go-worker-ops; beat -> go-scheduler; the outbox relay
+  # these depended on -> go-reconciler. Do not bring one of these back up to
+  # diagnose a live incident: it has no consumers wired to current queues and
+  # no operator has kept its routing current since the cutover.
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Celery workers — split topology (CHAOS-2278) [historical rationale]
   #
   # One shared pool let ~250s blocking stream consumers (ingest) and
   # multi-minute syncs starve latency-sensitive work (Sync Now, webhooks)

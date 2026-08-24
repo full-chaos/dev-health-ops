@@ -72,10 +72,16 @@ services:
   # DSNs below resolve to `devhealth` from their own defaults, which happen to
   # agree.
   #
-  # Celery and Beat remain the only scheduler and the owner of every route.
-  # Starting these containers does not transfer a queue or reroute a job: the
-  # durable route lives in worker_job_routes plus the checked-in policy at
-  # ops/contracts/jobs/v1/migration-state.json, and neither is touched here.
+  # UPDATED (CHAOS-4164, 2026-08-23): Go has been the sole production owner
+  # of every current job and schedule since CHAOS-4026 (2026-08-21) -- Celery
+  # and Beat are stopped there, and the root compose.yml's Celery/Beat service
+  # definitions the sibling overlay (docker-compose/compose.go-workers-only.yml)
+  # scales to zero are archived, not live topology. The
+  # mechanical point below still holds regardless of which fleet is scheduler:
+  # starting these containers does not by itself transfer a queue or reroute a
+  # job. The durable route lives in worker_job_routes plus the checked-in
+  # policy at ops/contracts/jobs/v1/migration-state.json, and neither is
+  # touched here.
   #
   # NOTE: this is the `dev-health` project. ops/compose.yml is a SEPARATE
   # project (dev-health-ops) with its own volumes — running `up` from that file

@@ -502,21 +502,29 @@ func TestExternalProjectMembershipAcceptsTheUnassignmentSentinel(t *testing.T) {
 			t.Fatalf("the unassignment sentinel was refused: %s / %s", code, message)
 		}
 	})
-	for name, overrides := range map[string]map[string]any{
-		"id_without_key": {"toProjectId": "ghprojv2:full-chaos#4", "toProjectKey": ""},
-		"key_without_id": {"toProjectId": "", "toProjectKey": "PLATFORM"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			payload := externalProjectMembershipPayload("github", overrides)
-			code, message := refuseProjectMembershipContradiction(pointer, payload, map[string]string{})
-			if code != externalRefusalInvalidField {
-				t.Fatalf("a half-empty destination was accepted (code %q)", code)
-			}
-			if !strings.Contains(message, "half-empty") {
-				t.Fatalf("refusal does not say what is wrong: %q", message)
-			}
-		})
-	}
+	t.Run("key_without_id_is_refused", func(t *testing.T) {
+		payload := externalProjectMembershipPayload("github",
+			map[string]any{"toProjectId": "", "toProjectKey": "PLATFORM"})
+		code, message := refuseProjectMembershipContradiction(pointer, payload, map[string]string{})
+		if code != externalRefusalInvalidField {
+			t.Fatalf("a key-only destination was accepted (code %q)", code)
+		}
+		if !strings.Contains(message, "project id") {
+			t.Fatalf("refusal does not say what is wrong: %q", message)
+		}
+	})
+	// The mirror case is NORMAL and must stay accepted. GitHub Projects V2
+	// boards have a number and a title and no key concept at all, so refusing
+	// an id without a key would refuse every github membership row -- which is
+	// the whole subject kind this ticket exists to add.
+	t.Run("id_without_key_is_normal", func(t *testing.T) {
+		payload := externalProjectMembershipPayload("github",
+			map[string]any{"toProjectId": "ghprojv2:full-chaos#4", "toProjectKey": ""})
+		if code, message := refuseProjectMembershipContradiction(
+			pointer, payload, map[string]string{}); code != "" {
+			t.Fatalf("a keyless github destination was refused: %s / %s", code, message)
+		}
+	})
 }
 
 // TestExternalProjectMembershipRefusesContradictoryEventIDs takes the option

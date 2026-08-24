@@ -380,8 +380,26 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if len(result.Rows.WorkItems) != 1 || len(result.Rows.StatusTransitions) != 2 {
 		t.Fatalf("rows=%+v", result.Rows)
 	}
-	if result.Evidence.Pages != 3 || result.Evidence.Requests != 3 || result.Evidence.Records != 3 {
+	// Records is 4, not 3: one work item, two status transitions, and the
+	// `projects` catalogue row for the configured board (CHAOS-4194). The PR
+	// item in this fixture carries no repository and no createdAt, so it
+	// produces NO membership row -- and is counted rather than dropped
+	// silently, which is the behaviour the ticket exists to end.
+	if result.Evidence.Pages != 3 || result.Evidence.Requests != 3 || result.Evidence.Records != 4 {
 		t.Fatalf("evidence=%+v", result.Evidence)
+	}
+	if len(result.Rows.Projects) != 1 || result.Rows.Projects[0].ID != "ghprojv2:acme#3" ||
+		result.Rows.Projects[0].Provider != "github" || result.Rows.Projects[0].OrgID != claim.OrgID {
+		t.Fatalf("projects=%+v", result.Rows.Projects)
+	}
+	if len(result.Rows.ProjectMemberships) != 0 {
+		t.Fatalf("an unidentifiable PR produced a membership row: %+v", result.Rows.ProjectMemberships)
+	}
+	if result.MembershipSkips["pull_request_incomplete"] != 1 {
+		t.Fatalf("the incomplete PR was not counted: %+v", result.MembershipSkips)
+	}
+	if result.MembershipSkips["issue_deferred_to_snapshot_diff"] != 1 {
+		t.Fatalf("the issue skip was not counted: %+v", result.MembershipSkips)
 	}
 	if got := result.Rows.WorkItems[0]; got.WorkItemID != "gh:acme/api#7" || got.RepoID != nil || got.ProjectID == nil || *got.ProjectID != "ghprojv2:acme#3" {
 		t.Fatalf("work item=%+v", got)
@@ -577,4 +595,105 @@ type gitHubProjectV2Reservation struct{ budget *gitHubProjectV2Budget }
 func (reservation gitHubProjectV2Reservation) Release(context.Context) error {
 	reservation.budget.releases++
 	return nil
+}
+
+// TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership is CHAOS-4194's
+// producer-side acceptance claim, and the direct reversal of the drop this
+// ticket was filed for.
+//
+// Before this change a fully hydrated PullRequest board item was fetched and
+// then discarded by the normalizer with no counter and no log -- the GraphQL
+// query already selected the `... on PullRequest` fragment, so nothing was
+// missing but the decision to keep it. The assertions below are the three
+// things that make the resulting row joinable rather than merely present:
+// subject_id is the PR number verbatim, repo_id is the SAME uuid
+// repositoryIdentity derives for that repository (so it joins to
+// git_pull_requests), and occurred_at is the item's own createdAt rather than
+// the sync clock -- which is what makes the content-determined event_id stable
+// across re-syncs.
+func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
+	doer := &gitHubProjectV2Doer{t: t, replies: []string{
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+	}}
+	client := githubProjectV2TestClient(t, doer)
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	result, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim, credential, client, normalizedAt, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A pull request is NOT a work item and must not become one. The fix is
+	// that its board membership stops being discarded, not that PRs start
+	// appearing in `work_items`.
+	if len(result.Rows.WorkItems) != 0 {
+		t.Fatalf("a pull request was normalized into a work item: %+v", result.Rows.WorkItems)
+	}
+	if len(result.Rows.ProjectMemberships) != 1 {
+		t.Fatalf("memberships=%+v", result.Rows.ProjectMemberships)
+	}
+	row := result.Rows.ProjectMemberships[0]
+	identity, err := repositoryIdentity("acme/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.SubjectKind != "pull_request" || row.SubjectID != "42" || row.RepoID.String() != identity {
+		t.Fatalf("subject identity = %s / %s / %s, want the (repo_id, number) pair",
+			row.SubjectKind, row.SubjectID, row.RepoID)
+	}
+	if row.ToProjectID != "ghprojv2:acme#3" || row.FromProjectID != "" || row.ToProjectKey != "" {
+		t.Fatalf("destination = %+v", row)
+	}
+	if !row.OccurredAt.Equal(time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)) {
+		t.Fatalf("occurred_at = %s, want the item's own createdAt", row.OccurredAt)
+	}
+	if row.LastSynced != normalizedAt {
+		t.Fatalf("last_synced = %s, want the unit's normalizedAt", row.LastSynced)
+	}
+	if row.EventID == "" || len(row.EventID) != 32 {
+		t.Fatalf("event_id = %q, want the 32-char content hash", row.EventID)
+	}
+	if result.MembershipSkips["pull_request_incomplete"] != 0 {
+		t.Fatalf("an emitted PR was also counted as skipped: %+v", result.MembershipSkips)
+	}
+}
+
+// TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs is the property the
+// whole event_id formula exists for, and the one a single-fetch test cannot
+// state.
+//
+// event_id is a sorting-key member, so if it varied with observation time a
+// re-sync of ONE unchanged membership would mint a new key and
+// ReplacingMergeTree would keep both rows -- the table would grow one row per
+// sync of a board that never changed. The two fetches below differ only in
+// normalizedAt, which is exactly the difference a re-sync makes.
+func TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs(t *testing.T) {
+	reply := `{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
+	eventIDs := []string{}
+	for _, normalizedAt := range []time.Time{
+		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC),
+	} {
+		doer := &gitHubProjectV2Doer{t: t, replies: []string{reply}}
+		result, err := (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim, credential, githubProjectV2TestClient(t, doer), normalizedAt, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Rows.ProjectMemberships) != 1 {
+			t.Fatalf("memberships=%+v", result.Rows.ProjectMemberships)
+		}
+		eventIDs = append(eventIDs, result.Rows.ProjectMemberships[0].EventID)
+	}
+	if eventIDs[0] != eventIDs[1] {
+		t.Fatalf("event_id changed across re-sync: %q then %q -- the table would keep both rows",
+			eventIDs[0], eventIDs[1])
+	}
 }

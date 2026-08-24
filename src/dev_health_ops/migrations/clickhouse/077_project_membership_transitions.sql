@@ -65,8 +65,15 @@
 -- from the resolve-to-`projects` constraint below, and the presence view's
 -- transition arm yields NO row for it -- deliberately NOT falling through to
 -- the column arm, which would resurrect the stale current value as if the
--- removal had never been observed. A half-empty destination (one of the two
--- blank) is a producer contradiction and is refused at the sink.
+-- removal had never been observed.
+--
+-- The view tests that sentinel with `to_project_id = ''` ALONE, not the
+-- conjunction, and that is exact rather than sloppy: the sink refuses a
+-- destination key with no project id, so an empty id already implies an empty
+-- key by the time a row exists. Writing the conjunction anyway would add a
+-- clause whose removal changes no behaviour -- a coverage claim nothing backs.
+-- An id with NO key is the opposite case and is entirely normal: GitHub
+-- Projects V2 boards have a number and a title and no key concept at all.
 --
 -- VOCABULARY CONSTRAINT: these rows carry provider PROJECT entities only --
 -- (provider, project_id) must resolve to a row in `projects`. There is a THIRD
@@ -136,8 +143,9 @@ ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id);
 -- project_id from one row and project_key from another, which reads as a real
 -- edge and joins to nothing.
 --
--- The unassignment filter is `NOT (project_id = '' AND project_key = '')`, and
--- the column arm's anti-join runs against the UNFILTERED latest_transition.
+-- The unassignment filter is `project_id != ''` (see the sentinel note above
+-- for why that is exact), and the column arm's anti-join runs against the
+-- UNFILTERED latest_transition.
 -- Both halves are load-bearing: a subject whose latest observed event removed
 -- it from every project yields no presence row at all, and specifically does
 -- NOT reappear through the column arm carrying the stale work_items value.
@@ -183,7 +191,7 @@ SELECT
     observed_at,
     'transition' AS source
 FROM latest_transition
-WHERE NOT (project_id = '' AND project_key = '')
+WHERE project_id != ''
 UNION ALL
 SELECT
     w.org_id AS org_id,

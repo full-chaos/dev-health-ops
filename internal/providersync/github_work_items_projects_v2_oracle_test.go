@@ -81,25 +81,98 @@ func TestGitHubProjectV2TransitionMatchesLivePythonProductionRow(t *testing.T) {
 	)
 }
 
-func TestGitHubProjectV2PullRequestSkipMatchesLivePythonProductionDecision(t *testing.T) {
+// TestGitHubProjectV2PullRequestEmissionDivergesFromLivePythonDecision is a
+// DOCUMENTED DIVERGENCE, and it used to be a parity pin.
+//
+// Python drops a PullRequest board item outright (normalize.py:514) and so did
+// Go (:452-454) -- the pin recorded that agreement. chris ruled on 2026-08-23
+// that "if there's a project mapping it should be in the graph ... especially
+// PRs", and Context Fabric ruled the shape on 2026-08-24, so Go now EMITS a
+// board-membership row where Python emits nothing. That reverses the pin's
+// direction, and this is the one case where the pair's own excluded_fields
+// convention applies rather than goOnlyFields: `emitted` is a field BOTH sides
+// produce and now genuinely disagree on, not a Go-only column Python lacks.
+//
+// The pin is not deleted, and that matters. `transition_count` stays compared,
+// so the other half of the decision -- that a PR board item still contributes
+// no status transitions, its `changes` history being CHAOS-4221's problem --
+// remains pinned to live Python. Deleting the pair would have thrown that away
+// to record one divergence.
+//
+// The case input gained a repository and a createdAt so the divergence is real
+// rather than incidental. Without them Go would decline to emit for lack of a
+// subject identity, the two sides would agree by accident, and the exclusion
+// below would be documenting a disagreement that never happened.
+func TestGitHubProjectV2PullRequestEmissionDivergesFromLivePythonDecision(t *testing.T) {
 	input := map[string]any{
 		"project_scope_id": "ghprojv2:acme#3",
 		"item_node": map[string]any{
-			"id": "PVTI_PR", "content": map[string]any{"__typename": "PullRequest", "number": 9, "title": "PR"},
+			"id": "PVTI_PR", "createdAt": "2026-08-01T08:00:00Z",
+			"content": map[string]any{
+				"__typename": "PullRequest", "number": 9, "title": "PR",
+				"repository": map[string]any{"nameWithOwner": "acme/api"},
+			},
 			"fieldValues": map[string]any{"nodes": []any{}}, "changes": map[string]any{"nodes": []any{}},
 		},
 	}
-	_, transitions, emitted := buildGitHubProjectV2OracleRowsWithDefaults(t, input)
-	if emitted || len(transitions) != 0 {
+	membership, transitions, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
+	if !emitted || len(transitions) != 0 {
 		t.Fatalf("Go Projects v2 PR decision emitted=%t transitions=%d", emitted, len(transitions))
+	}
+	// The divergence is only worth recording if what Go emits is joinable. A
+	// row that emitted but keyed to nothing would be a worse outcome than the
+	// drop it replaced.
+	if membership.SubjectKind != "pull_request" || membership.SubjectID != "9" {
+		t.Fatalf("emitted membership does not identify the PR: %+v", membership)
 	}
 	compareRowsAgainstPythonOracle(
 		t, "github/work-items-project-v2/pr-skip", []oracleCase{{ID: "pull_request", Input: input}},
 		func(t *testing.T, input map[string]any) gitHubProjectV2DecisionOracleRow {
-			_, transitions, emitted := buildGitHubProjectV2OracleRowsWithDefaults(t, input)
+			_, transitions, emitted := buildGitHubProjectV2OracleDecision(t, withOracleOrg(input))
 			return gitHubProjectV2DecisionOracleRow{Emitted: emitted, TransitionCount: len(transitions)}
 		}, nil,
 	)
+}
+
+// buildGitHubProjectV2OracleDecision answers the inclusion question the pair
+// actually asks -- "does this board item produce a durable row?" -- across BOTH
+// row families the loop now produces, because that is the question Python's
+// single normalizer answers with one boolean. Asking only the work-item
+// normalizer would report `emitted=false` for a PR whose membership row was
+// written moments later, which is the shape that hid this defect.
+func buildGitHubProjectV2OracleDecision(
+	t *testing.T, input map[string]any,
+) (projectMembershipRow, []githubWorkItemTransitionRow, bool) {
+	t.Helper()
+	raw, err := json.Marshal(input["item_node"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var item gitHubProjectV2ItemPayload
+	if err := decoder.Decode(&item); err != nil {
+		t.Fatal(err)
+	}
+	claim := githubWorkItemOracleClaim()
+	claim.OrgID = input["org_id"].(string)
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	scopeID := input["project_scope_id"].(string)
+	membership, hasMembership := githubProjectV2MembershipRow(claim, item, scopeID, normalizedAt)
+	_, transitions, emittedWorkItem, err := normalizeGitHubProjectV2Item(claim, item, scopeID, nil, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return membership, transitions, hasMembership || emittedWorkItem
+}
+
+func withOracleOrg(input map[string]any) map[string]any {
+	copied := make(map[string]any, len(input)+1)
+	for key, value := range input {
+		copied[key] = value
+	}
+	copied["org_id"] = "org-acme"
+	return copied
 }
 
 func TestGitHubProjectV2TargetParserMatchesLivePythonValidTargetSemantics(t *testing.T) {

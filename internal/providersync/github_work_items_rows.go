@@ -157,6 +157,13 @@ type githubWorkItemRows struct {
 	Interactions      []githubWorkItemInteractionRow
 	Sprints           []githubSprintRow
 	AIAttributions    []githubAIAttributionRow
+	// ProjectMemberships and Projects are CHAOS-4194's additions. They are on
+	// this struct rather than a parallel one because the Projects v2 fetcher
+	// produces them from the SAME items connection it produces work items
+	// from -- a board holds issues and pull requests together, and splitting
+	// the return would let the two halves of one fetch drift apart.
+	ProjectMemberships []projectMembershipRow
+	Projects           []projectCatalogRow
 }
 
 type githubWorkItemUserPayload struct {

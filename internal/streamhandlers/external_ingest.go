@@ -527,12 +527,19 @@ func refuseProjectMembershipContradiction(pointer externalPointer, payload map[s
 		}
 	}
 	// "" in BOTH destination fields is the ruled unassignment sentinel --
-	// removed from every project. One of the two blank is a contradiction with
-	// no honest reading: the projection would either present an empty project
-	// as a real current value or drop a destination the producer did name.
+	// removed from every project. Only ONE half of that is a contradiction: a
+	// destination named by a key with no id cannot resolve to a `projects` row
+	// (whose identity is (provider, id)), so it is neither an assignment the
+	// graph can follow nor the sentinel. Refusing it is what lets the presence
+	// view test the sentinel with `project_id != ''` alone instead of carrying
+	// a second clause that could never decide anything on its own.
+	//
+	// The MIRROR case is deliberately allowed: an id with no key is normal.
+	// GitHub Projects V2 boards have a number and a title and no key concept at
+	// all, so requiring one would refuse every github membership row.
 	toID, toKey := stringField(payload, "toProjectId"), stringField(payload, "toProjectKey")
-	if (toID == "") != (toKey == "") {
-		return externalRefusalInvalidField, "a half-empty destination is neither an assignment nor the unassignment sentinel"
+	if toID == "" && toKey != "" {
+		return externalRefusalInvalidField, "a destination key with no project id resolves to no projects row"
 	}
 	// The vocabulary constraint. "" is the single value exempt from it, because
 	// it is the sentinel rather than a project. Anything else must at least be

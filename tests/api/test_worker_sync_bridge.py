@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import uuid
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from dev_health_ops.api.internal.worker_sync import _units_belong_to_run
 from dev_health_ops.api.main import app
+from dev_health_ops.models import Base
+from tests._helpers import seed_sync_dispatch_transport_routes
+from tests.test_sync_units import _seed_run
 
 _REFERENCE = {
     "organization_id": "00000000-0000-4000-8000-000000000010",
@@ -450,3 +457,59 @@ def test_dispatch_budget_estimate_bridge_returns_the_batch_estimator_result(
         }
     }
     estimate.assert_called_once()
+
+
+def _units_belong_to_run_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    seed_sync_dispatch_transport_routes(session)
+    return session
+
+
+def test_units_belong_to_run_is_true_when_every_unit_belongs() -> None:
+    session = _units_belong_to_run_session()
+    run, unit = _seed_run(session)
+
+    assert (
+        _units_belong_to_run(session, run.id, uuid.UUID(run.org_id), [unit.id]) is True
+    )
+
+
+def test_units_belong_to_run_is_false_for_a_unit_from_a_different_run() -> None:
+    """The mismatched-batch case: a unit id that genuinely belongs to a
+    DIFFERENT sync run (and org) must be rejected, not silently treated as
+    a match -- this is the real query exercised directly, not the endpoint
+    mocking the function away.
+    """
+    session = _units_belong_to_run_session()
+    run_a, unit_a = _seed_run(session)
+    run_b, unit_b = _seed_run(session)
+    assert run_a.org_id != run_b.org_id  # _seed_run mints a fresh org_id each call
+
+    assert (
+        _units_belong_to_run(
+            session, run_a.id, uuid.UUID(run_a.org_id), [unit_a.id, unit_b.id]
+        )
+        is False
+    )
+    # And the reverse must also reject -- the check is not order-dependent.
+    assert (
+        _units_belong_to_run(
+            session, run_b.id, uuid.UUID(run_b.org_id), [unit_b.id, unit_a.id]
+        )
+        is False
+    )
+
+
+def test_units_belong_to_run_is_false_for_a_unit_id_that_does_not_exist() -> None:
+    session = _units_belong_to_run_session()
+    run, unit = _seed_run(session)
+    missing_unit_id = uuid.uuid4()
+
+    assert (
+        _units_belong_to_run(
+            session, run.id, uuid.UUID(run.org_id), [unit.id, missing_unit_id]
+        )
+        is False
+    )

@@ -538,14 +538,26 @@ SET status = CASE
 const outboxKindDispatchSyncRun = "dispatch_sync_run"
 
 // isRetryableDiscoveryError ports _is_retryable_discovery_error's
-// message/type-name substring classification. Python also special-cases
-// RateLimitException/TimeoutError/SoftTimeLimitExceeded by TYPE; the native
-// port has no equivalent typed exceptions yet (the populate bridge hasn't
-// landed), so this is deliberately the substring-only fallback for now --
-// revisited once the bridge's real error shapes exist.
+// message/type-name substring classification, PLUS one case Python's
+// original function structurally never needed to handle: a failure of the
+// populate bridge call itself (ErrBridgeRequest/ErrInvalidBridge). Python's
+// populate step ran the team-autoimport populator in-process; this port
+// puts a network hop (Go worker -> Python HTTP endpoint) in front of it
+// that did not exist before (CHAOS-4175). A transient outage of that hop --
+// connection refused, a 503, a deadline -- is not a provider-API rate
+// limit, so it would never match Python's substring markers, but it is
+// exactly the kind of transient failure retry-with-backoff exists for: a
+// bridge call that fails once should not permanently fail the whole sync
+// run when the very next attempt might succeed. Bounded by the same
+// _max_attempts() cap as every other retryable cause, so misclassifying a
+// genuinely permanent bridge failure (e.g. a bad token) as retryable only
+// costs a few bounded, backed-off attempts before it still terminalizes.
 func isRetryableDiscoveryError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, ErrBridgeRequest) || errors.Is(err, ErrInvalidBridge) {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	for _, marker := range []string{"timeout", "rate", "429", "temporar", "transient", "too many"} {

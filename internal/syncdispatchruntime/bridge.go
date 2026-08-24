@@ -183,7 +183,12 @@ func (bridge *HTTPBridge) do(ctx context.Context, path string, payload any) (*ht
 	request.Header.Set("Content-Type", "application/json")
 	response, err := bridge.client.Do(request)
 	if err != nil {
-		return nil, ErrBridgeRequest
+		// Preserve the real transport failure (connection refused, DNS
+		// failure, TLS handshake timeout, context deadline) instead of
+		// discarding it -- callers that classify retryability from the
+		// error text (isRetryableDiscoveryError) need it, and a bare
+		// sentinel with no detail is useless in an incident.
+		return nil, fmt.Errorf("%w: %v", ErrBridgeRequest, err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		defer response.Body.Close()

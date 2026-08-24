@@ -91,6 +91,68 @@ func checkedInSchedules() []Schedule {
 				"01:00 daily metrics dispatch so joined deployments exist.",
 		},
 		{
+			ID: "extra_metrics_daily_fanout",
+			// CHAOS-4243: no legacy Celery Beat entry ever existed for this
+			// family -- grepped the full beat_schedule at caca3371c^ (19
+			// entries) and none names compounding-risk/testops-risk/
+			// benchmarking. Python computed all three inline inside
+			// job_daily.py's per-org daily batch (run_daily_metrics_batch,
+			// lines ~1371-1444), chained off the SAME run-daily-metrics
+			// 01:00 Beat dispatch that daily_metrics_fanout replaces, and
+			// was never post-sync-triggered (post_sync_dispatch.py at
+			// caca3371c^ has zero references to any of these computes).
+			// Native, like daily_metrics_fanout itself, for the same reason:
+			// there is no single legacy Beat row to bind a bidirectional
+			// LegacyBeatInventory entry to.
+			Native:           true,
+			Cadence:          DailyAt(1, 45),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpBounded,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRemainingExtraMetrics,
+			ProducerID:       ProducerRemainingMetricsFanout,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "CHAOS-4243: compounding_risk_daily/testops_release_confidence/" +
+				"testops_quality_drag/testops_pipeline_stability/testops_benchmark_insights " +
+				"had zero producer after the cutover (registered handler, never enqueued). " +
+				"Scheduled after release_impact_daily_fanout (01:30) because compounding-risk " +
+				"reads repo_metrics_daily + repo_complexity_daily, which the 01:00/00:45 " +
+				"fanouts must have already materialized for the day.",
+		},
+		{
+			ID: "team_metrics_daily_fanout",
+			// CHAOS-4243: same absence as extra_metrics_daily_fanout above --
+			// no legacy Beat entry, computed inline in the same job_daily.py
+			// per-org batch (team wellbeing ~line 1057, ic landscape/user
+			// metrics finalize ~line 1437), never post-sync-triggered.
+			// Native for the same reason: no single Beat row to bind to.
+			//
+			// This family's tables (team_metrics_daily, user_metrics_daily,
+			// ic_landscape_rolling_30d) read fresh locally despite zero
+			// metrics.remaining.team_metrics runs ever -- but `rg` across the
+			// whole Go tree finds NO code writing any of the three tables
+			// (families.json marks team_wellbeing "next_core" and ic_finalize
+			// "pending" in internal/jobs/metrics/daily, neither has a Go
+			// implementation). The local freshness is almost certainly
+			// dev-hops fixture-seeded data, not live compute proof, so this
+			// family is wired for real rather than treated as a safe-to-skip
+			// duplicate of core coverage that does not exist yet.
+			Native:           true,
+			Cadence:          DailyAt(2, 15),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpBounded,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRemainingTeamMetrics,
+			ProducerID:       ProducerRemainingMetricsFanout,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "CHAOS-4243: team_metrics_daily/user_metrics_daily/ic_landscape_rolling_30d " +
+				"had zero producer after the cutover (registered handler, never enqueued). " +
+				"Scheduled after recommendations_daily_fanout (02:00), mirroring its own " +
+				"legacy dependency on already-persisted user_metrics/work-item user metrics.",
+		},
+		{
 			ID: "recommendations_daily_fanout",
 			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-recommendations"
 			// (and its run_recommendations_job Celery task) was deleted -- Celery

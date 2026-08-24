@@ -616,6 +616,22 @@ func NewRemainingMetricsFanoutProducer(
 				// this family and rejects one for every other.
 				RequiresSeed: true,
 			},
+			"extra_metrics_daily_fanout": {
+				Family: "extra_metrics",
+				Scope: func(day string) (json.RawMessage, error) {
+					return json.Marshal(map[string]any{
+						"version": 1, "day": day, "backfill_days": 1,
+					})
+				},
+			},
+			"team_metrics_daily_fanout": {
+				Family: "team_metrics",
+				Scope: func(day string) (json.RawMessage, error) {
+					return json.Marshal(map[string]any{
+						"version": 1, "day": day, "backfill_days": 1,
+					})
+				},
+			},
 		},
 	}, nil
 }

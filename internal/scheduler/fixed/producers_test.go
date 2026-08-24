@@ -665,6 +665,36 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 	}
 }
 
+// remainingBridgeFamilies is the checked-in set of metrics.remaining families
+// whose DB CHECK constraint (ck_remaining_metric_run_family, migration for
+// remaining_metric_runs) and internal/jobs/metrics/remaining/families.json
+// both declare. dora and capacity are deliberately excluded: dora has no
+// fixed-schedule fanout by design (post-sync only, CHAOS-4242 territory) and
+// capacity is already bound below -- this list exists to catch a family with
+// NO fixed-schedule producer at all, which is exactly the CHAOS-4243 gap.
+var remainingBridgeFamiliesRequiringAFixedSchedule = []string{
+	"complexity", "release_impact", "recommendations", "membership_backfill",
+	"capacity", "extra_metrics", "team_metrics",
+}
+
+// TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer is the CHAOS-4243
+// red-first inventory test: extra_metrics and team_metrics are registered
+// handlers (cmd/dev-health-worker/daily.go) with zero producer anywhere, so
+// this test fails until byScheduleID binds a schedule to each. Mutation proof:
+// deleting either binding below must turn this red again.
+func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
+	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
+	boundFamilies := make(map[string]bool, len(producer.byScheduleID))
+	for _, binding := range producer.byScheduleID {
+		boundFamilies[binding.Family] = true
+	}
+	for _, family := range remainingBridgeFamiliesRequiringAFixedSchedule {
+		if !boundFamilies[family] {
+			t.Errorf("remaining-metrics family %q has no fixed-schedule producer binding", family)
+		}
+	}
+}
+
 func TestFanoutScopesAreAcceptedByTheRemainingMetricsContract(t *testing.T) {
 	// The scope shapes are validated inside the remaining-metrics store, so a
 	// wrong field would only surface at runtime. Round-tripping them here keeps

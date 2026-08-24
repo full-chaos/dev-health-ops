@@ -11,6 +11,8 @@ source_of_truth:
   - internal/platform/config/config.go (WorkerGroup contract)
   - compose.yml and deploy/docker-compose/compose.production.yml (dormant Celery -Q service definitions)
   - contracts/jobs/v1/migration-state.json (per-kind rollout state/route/rollback_route)
+  - internal/syncdispatchruntime/ (native dispatch_sync_run/finalize_sync_run/reference_discovery)
+  - internal/scheduler/sync/materializer.go (native scheduled-sync materialization)
 applicability: current
 lifecycle: active
 ---
@@ -776,6 +778,120 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
 
+## The native sync-dispatch coordinator pathway
+
+CHAOS-4175 ported the last of three sync-dispatch families
+(`finalize_sync_run`, `run_sync_reference_discovery`, `dispatch_sync_run`) off
+the HTTP compatibility bridge onto native Go. This is the full pathway a
+scheduled sync now runs end to end, one hop per process/pool boundary. Every
+node is tagged with the database role it actually executes as — **domain**,
+**queue** (queue-control), or **coordinator** — using the same three-role
+vocabulary as [Three database roles, and pool-per-query](#three-database-roles-and-pool-per-query).
+A hop with no Postgres role at all (an HTTP call, a cache read) is tagged
+**external**.
+
+```mermaid
+flowchart TD
+  subgraph SCHED["dev-health-scheduler"]
+    MAT["OccurrenceReconciler.Materialize<br/>writes sync_runs / sync_run_units<br/>+ inserts sync_dispatch_outbox(kind=dispatch)<br/>[coordinator]"]
+  end
+
+  subgraph RECON1["dev-health-reconciler — dispatch wakeup drain"]
+    KDISP["MutationPipeline kernel claims the outbox row<br/>[domain]"]
+    PUBDISP["publisher.Publish inserts the River dispatch_sync_run job<br/>[queue]"]
+  end
+
+  subgraph WDISPATCH["dev-health-worker — NativeDispatchSyncRunService.Dispatch"]
+    GATE["Gate chain: stale-reference / missing-run / feature gate<br/>(CanonicalIncidentDecision, non-locking) / reference-discovery /<br/>DispatchGuard total-cap (tier_limits + organizations + org_licenses)<br/>[domain]"]
+    BUDGET["BudgetGuard: observe / enforce / cooldowns,<br/>chunked estimate-bridge call to the Python HTTP bridge<br/>[domain, plus external HTTP to Python]"]
+    CLAIM["Atomic claim + ValidateClaim +<br/>providersync route-ready/plannable check<br/>[domain]"]
+    PUB["producer.Publish inserts worker_job_outbox<br/>[domain]"]
+  end
+
+  subgraph RECON2["dev-health-reconciler — joboutbox.Relay.Step"]
+    RESOLVE["routes.Resolve(kind) per claim<br/>[queue]"]
+    HOLD["celery / paused route: releaseClaim, hold — no River insert<br/>[queue]"]
+    INSERTUNIT["river-routed: RiverInserter inserts the provider-unit job<br/>[queue]"]
+  end
+
+  subgraph WUNIT["dev-health-worker — provider-unit job execution"]
+    JIRA["Jira: PostgresJiraIncidentEntitlement.Require re-check<br/>[domain]"]
+    PD["PagerDuty: no execution-time re-check today (CHAOS-4219 gap)<br/>[domain]"]
+    ARMFIN["Unit terminal path arms the finalize wakeup:<br/>sync_dispatch_outbox(kind=finalize_sync_run)<br/>[domain]"]
+  end
+
+  subgraph RECON3["dev-health-reconciler — finalize wakeup drain"]
+    KFIN["kernel claims the outbox row [domain]"]
+    PUBFIN["publisher.Publish inserts the River finalize_sync_run job [queue]"]
+  end
+
+  subgraph WFIN["dev-health-worker — NativeFinalizeSyncRunService"]
+    TERM["Terminalize sync_runs / sync_run_units;<br/>observeTerminalSyncRun updates backfill_jobs / job_runs<br/>[domain]"]
+    COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at<br/>[domain]"]
+  end
+
+  subgraph CACHEHOP["Python API — home dashboard"]
+    VALKEY["TTLCache (Valkey/Redis backend) serves the next /home read.<br/>Not actively invalidated — TTL-expiry only.<br/>CacheInvalidationEvent / invalidate_cache_for_event exist but are<br/>never called (CHAOS-4226)<br/>[external — Valkey, no Postgres role]"]
+  end
+
+  MAT --> KDISP --> PUBDISP --> GATE --> BUDGET --> CLAIM --> PUB --> RESOLVE
+  RESOLVE -->|route ready| INSERTUNIT
+  RESOLVE -->|celery or paused| HOLD
+  HOLD -.->|route resumes, next Step| RESOLVE
+  INSERTUNIT --> JIRA
+  INSERTUNIT --> PD
+  JIRA --> ARMFIN
+  PD --> ARMFIN
+  ARMFIN --> KFIN --> PUBFIN --> TERM --> COV --> VALKEY
+```
+
+**Reading the pathway by role, not by process:** the same three-role split
+this page documents everywhere else holds here too. Materialization runs on
+the **coordinator** pool because it is the one place Option B deliberately
+widens the coordinator role to write domain-owned tables in the same
+transaction as its own (see the `daily_metrics_runs`/`organizations` dual-role
+reasoning in `internal/storage/postgres/domain_authorization.go`'s
+`coordinatorPosture()` doc comment — Celery Beat, which this replaces, already
+spanned both table sets under one identity). Every outbox **drain** (claim on
+domain, River insert on queue) repeats the same pattern
+`worker_job_outbox`/`joboutbox.Producer` already uses: the row that identifies
+work is a domain write, and only the transport that delivers it is
+queue-control. `NativeDispatchSyncRunService` and `NativeFinalizeSyncRunService`
+run entirely on the **domain** pool — `dev-health-worker` never opens a
+coordinator pool at all, which is exactly why `DispatchGuard`'s `tier_limits`
+read had to be dual-granted rather than left coordinator-only (CHAOS-4175;
+see the dual-grant table list in `domainPosture()`'s doc comment).
+
+**Two gaps this diagram states explicitly rather than glossing over, matching
+this page's own convention of naming a known gap in place rather than
+smoothing it into the happy path (see, elsewhere on this page, the
+`worker_job_routes`/sweep defect under [Which pool every component is
+constructed on](#which-pool-every-component-is-constructed-on) and the
+CHAOS-4054/CHAOS-4075 documentation-currency gap under [Queue
+topology](#queue-topology)):**
+
+- **PagerDuty has no execution-time canonical-incident re-check.** Jira's unit
+  execution re-verifies entitlement at two points
+  (`internal/providersync/jira_incidents_route.go:131` and
+  `jira_incidents_effects_clickhouse.go:51`) before trusting the feature gate
+  Dispatch read earlier in the same pass. PagerDuty units have no equivalent
+  call anywhere. The window this leaves is bounded (one Dispatch pass) and
+  accepted as a tradeoff, not a bug, but it is real and asymmetric across the
+  two providers. Tracked as CHAOS-4219.
+- **The coverage cache is never actively invalidated.**
+  `invalidateSyncCoverageForIntegration` (`native_finalize_sync_run.go:813`)
+  updates `sync_coverage_projections.invalidated_at` in Postgres on every
+  finalize, but nothing calls into
+  `dev_health_ops.core.cache_invalidation.invalidate_cache_for_event` —
+  that function and `CacheInvalidationEvent` are fully implemented and have
+  zero callers anywhere in the codebase (confirmed by repository-wide search,
+  2026-08-24). The home dashboard's Valkey-backed `TTLCache`
+  (`dev_health_ops/api/services/home.py`, `core/cache.py`) therefore serves
+  whatever coverage state it cached until its TTL expires, even for an
+  organization whose sync just finished and just invalidated the Postgres
+  row. Filed as CHAOS-4226: the durable signal exists and is correct; the
+  layer that should react to it does not yet.
+
 ## Deployment couplings
 
 ### Ordering is a dependency chain, not a convention
@@ -929,3 +1045,18 @@ a new contract version; adding an optional field does not.
   is either staged in the durable `sync.provider_unit` outbox for River or
   terminalized as `feature_disabled` — there is no second runtime to fall
   through to. See [Two planes, not a route-flag plane](#two-planes-not-a-route-flag-plane-what-runs-vs-where-its-served)
+- CHAOS-4175 — the last of the three sync-dispatch families
+  (`dispatch_sync_run`) ported off the HTTP compatibility bridge to native Go;
+  the fold-in of its own domain-role privilege proof found `tier_limits` was
+  never granted to the domain role at all, the fifth such gap this family of
+  ports has surfaced. See [The native sync-dispatch coordinator
+  pathway](#the-native-sync-dispatch-coordinator-pathway)
+- CHAOS-4219 — PagerDuty units have no execution-time canonical-incident
+  re-check, unlike Jira's two-site re-verification; a bounded, accepted
+  staleness window with no backstop today. See [The native sync-dispatch
+  coordinator pathway](#the-native-sync-dispatch-coordinator-pathway)
+- CHAOS-4226 — the home dashboard's Valkey-backed coverage cache is never
+  actively invalidated on sync completion; `invalidate_cache_for_event` and
+  `CacheInvalidationEvent` exist fully implemented and uncalled. See [The
+  native sync-dispatch coordinator
+  pathway](#the-native-sync-dispatch-coordinator-pathway)

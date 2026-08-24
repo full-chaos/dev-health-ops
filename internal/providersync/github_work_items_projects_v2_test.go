@@ -50,7 +50,7 @@ func TestGitHubProjectV2RatificationCompletesActivatedRouteContract(t *testing.T
 		t.Fatal("github/work-items capability disappeared")
 	}
 	if !descriptor.RouteReady || !descriptor.Plannable || !descriptor.PreparedManifestRecovery ||
-		!reflect.DeepEqual(descriptor.Destinations, workItemRouteDestinations()) {
+		!reflect.DeepEqual(descriptor.Destinations, githubWorkItemRouteDestinations()) {
 		t.Fatalf("github/work-items descriptor=%+v", descriptor)
 	}
 	if _, policyPending := githubWorkItemsOptionalIncompleteComponents["projects_v2"]; policyPending {

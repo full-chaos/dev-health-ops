@@ -233,6 +233,8 @@ func Descriptor(
 	workItemAlias := isWorkItemFamilyDataset(dataset)
 	switch {
 	case provider == "github" && workItemAlias:
+		// github advertises TWO MORE than the shared family: the Projects V2
+		// route writes board memberships and the `projects` catalogue row.
 		// The five Python dataset identities describe one indivisible work-item
 		// crawl. The capability matrix deliberately reports all five as native
 		// and ready so producer/matrix drift cannot re-open one partial alias.
@@ -240,7 +242,7 @@ func Descriptor(
 		// family into dataset="work-items" plus per-alias processor flags. A
 		// direct sibling alias is malformed persisted state and must trip the
 		// providerunit route-reconciliation guard before construction/I/O.
-		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.Destinations = githubWorkItemRouteDestinations()
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true
@@ -515,9 +517,15 @@ func githubPRSocialRouteDestinations() []string {
 	return []string{"git_pull_requests", "git_pull_request_reviews"}
 }
 
+// workItemRouteDestinations is what a provider DESCRIPTOR advertises: the
+// destinations every work-item provider's route writes.
+//
+// It is deliberately NOT githubWorkItemRouteDestinations. Since CHAOS-4194 the
+// GitHub effects sink owns two surfaces no other provider writes, and this
+// value is published in contracts/provider-matrix/v1/matrix.json for gitlab,
+// jira and linear as well as github. Reusing the GitHub list would advertise
+// project_membership_transitions under gitlab -- a provider whose "project"
+// concept IS repo_id, and which is refused for that kind by construction.
 func workItemRouteDestinations() []string {
-	// The effect construction manifest is the neutral semantic owner of the
-	// GitHub family. Linear expired-lease recovery retains an independent retry
-	// eligibility policy, even where it currently names the same destinations.
-	return githubWorkItemRouteDestinations()
+	return workItemFamilyRouteDestinations()
 }

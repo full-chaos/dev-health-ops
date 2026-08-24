@@ -47,6 +47,7 @@ EXPECTED_PACKAGES = {
     "internal/scheduler/sync",
     "internal/storage/postgres",
     "internal/storage/river",
+    "internal/streamhandlers",
     "internal/streamrunner",
     "internal/syncdispatchruntime",
     "internal/syncreconciler",
@@ -201,8 +202,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-3092 P0 added internal/testsupport/computeparity (27 -> 28): the
     # whole-table parity harness is integration-tagged because it provisions
     # two migrated scratch stores in a real container.
-    assert "28 package(s) discovered, 0 denylisted, 28 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 28 package(s)" in result.stdout
+    # CHAOS-4194 added internal/streamhandlers (28 -> 29): the project
+    # membership sink is proved against the real migration chain in a real
+    # container, so the package grew its first -tags integration file.
+    assert "29 package(s) discovered, 0 denylisted, 29 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 29 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -228,7 +232,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 28
+    assert len(flattened) == len(set(flattened)) == 29
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -362,8 +366,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # driven through both the chunked route and the non-chunked oracle. All
     # seven drive the routes through in-memory HTTP doers and touch no
     # database, so the integration-tagged count stays 113.
-    assert len(expected_provider_tests) == 1002
-    assert len(expected_integration_tests) == 113
+    #
+    # CHAOS-4194 then added 5 more ordinary top-level providersync tests
+    # (1002 -> 1007): the GitHub Projects V2 pull-request board-membership
+    # emission and its re-sync-stable event_id, plus three covering the
+    # structured membership-skip log (its fields, its silence when nothing was
+    # skipped, and the INFO/WARN level split). All five drive the fetcher
+    # through in-memory HTTP doers and a captured slog handler and touch no
+    # database.
+    #
+    # It also added ONE integration-tagged test (1007 -> 1008 total, 113 -> 114
+    # integration): the reachability proof that a fetched pull-request board
+    # item travels through the effects builder and the ClickHouse adapters into
+    # the migrated tables. That one genuinely provisions a container, which is
+    # why it moves the integration count and the other five do not.
+    assert len(expected_provider_tests) == 1008
+    assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -379,7 +397,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1002
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1008
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -423,7 +441,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 27
+    assert len(selected_packages) == len(set(selected_packages)) == 28
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -440,7 +458,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1002
+    assert len(selected_tests) == len(set(selected_tests)) == 1008
     assert set(selected_tests) == expected_tests
 
 

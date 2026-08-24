@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -183,7 +184,7 @@ func (GitHubProjectV2Fetcher) Fetch(
 			Dependencies: []githubWorkItemDependencyRow{}, ReopenEvents: []githubWorkItemReopenRow{},
 			Interactions: []githubWorkItemInteractionRow{}, Sprints: []githubSprintRow{},
 			AIAttributions:     []githubAIAttributionRow{},
-			ProjectMemberships: []projectMembershipRow{}, Projects: []projectCatalogRow{},
+			ProjectMemberships: []projectmembership.Row{}, Projects: []projectmembership.CatalogRow{},
 		},
 		MembershipSkips: map[string]int{},
 		Evidence:        FetchEvidence{Provider: "github", Dataset: "projects-v2"},
@@ -216,7 +217,7 @@ func (GitHubProjectV2Fetcher) Fetch(
 		// by the resolve-to-`projects` constraint. `projects` is a
 		// ReplacingMergeTree keyed (org_id, provider, id), so emitting it once
 		// per sync converges rather than accumulating.
-		result.Rows.Projects = append(result.Rows.Projects, ensureProjectsRow(
+		result.Rows.Projects = append(result.Rows.Projects, projectmembership.EnsureProjectsRow(
 			claim.OrgID, "github", projectScopeID, "",
 			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
 		))
@@ -577,26 +578,26 @@ func githubProjectV2MembershipRow(
 	item gitHubProjectV2ItemPayload,
 	projectScopeID string,
 	normalizedAt time.Time,
-) (projectMembershipRow, bool) {
+) (projectmembership.Row, bool) {
 	if claim.Validate() != nil || item.Content.Typename != "PullRequest" ||
 		strings.TrimSpace(projectScopeID) == "" || normalizedAt.IsZero() {
-		return projectMembershipRow{}, false
+		return projectmembership.Row{}, false
 	}
 	repository := strings.TrimSpace(item.Content.Repository.NameWithOwner)
 	addedAt := parseGitHubWorkItemTime(item.CreatedAt)
 	if repository == "" || item.Content.Number <= 0 || addedAt == nil {
-		return projectMembershipRow{}, false
+		return projectmembership.Row{}, false
 	}
 	identity, err := repositoryIdentity(repository)
 	if err != nil {
-		return projectMembershipRow{}, false
+		return projectmembership.Row{}, false
 	}
 	repoID, err := uuid.Parse(identity)
 	if err != nil {
-		return projectMembershipRow{}, false
+		return projectmembership.Row{}, false
 	}
-	row := projectMembershipRow{
-		OrgID: claim.OrgID, SubjectKind: "pull_request",
+	row := projectmembership.Row{
+		OrgID: claim.OrgID, SubjectKind: projectmembership.SubjectPullRequest,
 		SubjectID: strconv.Itoa(item.Content.Number), RepoID: repoID,
 		Provider: "github",
 		// from_* is empty: a snapshot observation of current membership has no
@@ -610,7 +611,7 @@ func githubProjectV2MembershipRow(
 		ToProjectID: projectScopeID,
 		OccurredAt:  addedAt.UTC(), LastSynced: normalizedAt.UTC(),
 	}
-	row.EventID = projectMembershipEventID(row)
+	row.EventID = projectmembership.EventID(row)
 	return row, true
 }
 
@@ -843,8 +844,8 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 	// facts keyed on their own identity, so the work-item merge's
 	// overwrite-by-id rule does not apply to them; taking `merged := repository`
 	// alone would silently drop everything the Projects v2 half produced.
-	merged.ProjectMemberships = append(append([]projectMembershipRow{}, repository.ProjectMemberships...), projects.ProjectMemberships...)
-	merged.Projects = append(append([]projectCatalogRow{}, repository.Projects...), projects.Projects...)
+	merged.ProjectMemberships = append(append([]projectmembership.Row{}, repository.ProjectMemberships...), projects.ProjectMemberships...)
+	merged.Projects = append(append([]projectmembership.CatalogRow{}, repository.Projects...), projects.Projects...)
 	return merged
 }
 

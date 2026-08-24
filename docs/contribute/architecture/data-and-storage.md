@@ -103,6 +103,10 @@ CHAOS-4222.
 flowchart TD
     P["Provider event<br/>(Jira project / GitHub Projects V2 / Linear project)"]
     G["GitHub Projects V2 sync<br/>providersync, board items"]
+    RE["github work-items route<br/>mergeGitHubProjectV2Rows"]
+    EB["effects builder<br/>one EffectBatch per declared destination"]
+    AD["membership adapter<br/>write + readback-fenced inspect"]
+    AC["projects adapter<br/>ensureProjectsRow, base 051 columns"]
     GS["worker/github MembershipSkips<br/>{issue_deferred, draft_issue, pr_incomplete, unknown}"]
     PJ[("projects<br/>ensureProjectsRow, base 051 columns")]
     B["External batch<br/>customer push, Postgres batch row"]
@@ -122,9 +126,14 @@ flowchart TD
 
     P --> B --> N
     P --> G
-    G -- "PullRequest items<br/>(repo_id, number)" --> T
+    G -- "PullRequest items<br/>(repo_id, number)" --> RE
     G -. "no membership row,<br/>counted not dropped" .-> GS
-    G -- "one row per configured board" --> PJ
+    G -- "one row per configured board" --> RE
+    RE --> EB
+    EB -- "project_membership_transitions" --> AD
+    EB -- "projects" --> AC
+    AD --> T
+    AC --> PJ
     N --> K
     K -- "no" --> R
     K -- "yes" --> V
@@ -215,6 +224,25 @@ Load-bearing properties, and why each is where it is:
   subject does not fall through and resurrect the value the removal retired. A
   destination key with NO id is refused; an id with no key is normal, since a
   GitHub board has a number and a title and no key at all.
+- **The effects hop is where the rows were lost the SECOND time,** and it is
+  drawn because a diagram that stops at the fetch result would have hidden it
+  exactly as the tests did. The route merges the producer's rows, the effects
+  builder serializes one `EffectBatch` per DECLARED destination, and each
+  destination has a ClickHouse adapter that both writes and reads its row back.
+  A family with no declared destination is not a degraded write — it is silence:
+  the rows are built, merged, and never serialized. That is what happened to
+  both families here until this change, one layer past the normalizer that used
+  to drop them. The declaration list is owned by `workitemcontract`, and the
+  sink refuses to write anything at all while any destination lacks an adapter,
+  so a half-wired family fails closed instead of quietly writing fifteen of
+  seventeen tables.
+- **The destination list is per-consumer, and these two are github-only.** The
+  published capability matrix advertises a destination set per provider, so
+  adding these to the shared list would have told other teams that gitlab
+  writes project memberships — a provider whose "project" concept IS `repo_id`
+  and which is refused for the kind by construction. github advertises two more
+  than the shared work-item family; the Linear expired-lease retry policy
+  advertises two fewer, because no retry-safety proof exists for either.
 - **`projects` rows are ensured by the producer.** GitHub Projects V2 wrote no
   `projects` row anywhere before CHAOS-4194 -- the fetcher stamped the id onto
   work items and the entity it named was never created -- so every github

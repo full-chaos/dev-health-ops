@@ -1,10 +1,13 @@
 // Package workitemcontract owns the small, provider-neutral contract shared by
 // the work-item route and the expired-lease repair policy.
 //
-// The two consumers intentionally select their own eligibility tag. They name
-// the same destinations today, but GitHub effect construction and Linear retry
-// safety have independent correctness proofs and may diverge without creating
-// a second hand-maintained list.
+// The two consumers intentionally select their own eligibility tag. GitHub
+// effect construction and Linear retry safety have independent correctness
+// proofs, and since CHAOS-4194 the two selections genuinely DIVERGE: the
+// project-membership and projects destinations are GitHub-effect surfaces with
+// no Linear expired-lease retry proof behind them. That divergence is the
+// design working, not a gap -- the alternative was a second hand-maintained
+// list, or claiming a safety proof nobody made.
 package workitemcontract
 
 import (
@@ -19,25 +22,48 @@ type Destination struct {
 	Name                    string
 	GitHubEffect            bool
 	LinearExpiredLeaseRetry bool
+	// FamilyRoute marks a destination EVERY work-item provider's route writes.
+	// It is what the published capability matrix advertises per provider, so a
+	// destination only one provider writes must not carry it -- the matrix is a
+	// cross-team contract, and listing a surface under gitlab that gitlab can
+	// never write is a false claim other teams would build against.
+	FamilyRoute bool
 }
 
 var destinationManifest = [...]Destination{
-	{Name: "ai_attribution", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "investment_classifications_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "investment_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "issue_type_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "sprints", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_cycle_times", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_dependencies", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_interactions", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_reopen_events", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_state_durations_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_team_attributions", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_item_user_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true},
-	{Name: "work_items", GitHubEffect: true, LinearExpiredLeaseRetry: true},
+	{Name: "ai_attribution", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "investment_classifications_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "investment_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "issue_type_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "sprints", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_cycle_times", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_dependencies", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_interactions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_reopen_events", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_state_durations_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_team_attributions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_user_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_items", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	// CHAOS-4194. The FIRST two destinations where the two consumers diverge,
+	// which is the case this package's two independent tags were built for.
+	//
+	// GitHubEffect: the GitHub Projects V2 route produces both -- board
+	// memberships for pull requests, and the `projects` catalogue row that
+	// makes their destination resolvable. Before this they were built and then
+	// dropped at the effect boundary, which is the defect CHAOS-4194 closes.
+	//
+	// LinearExpiredLeaseRetry: FALSE, and the falseness is the claim. Linear's
+	// route produces neither family, and no expired-lease retry safety proof
+	// exists for either; marking them true would assert a proof that has never
+	// been made, on a policy whose whole job is deciding what is safe to redo
+	// after a lease expires. Marking them false costs nothing today -- there is
+	// nothing for Linear to retry -- and it keeps the retry list a list of
+	// surfaces someone has actually reasoned about.
+	{Name: "project_membership_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
+	{Name: "projects", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
 }
 
 // Destinations returns a defensive copy of the full semantic manifest. It is
@@ -52,6 +78,22 @@ func Destinations() []Destination {
 func GitHubEffectDestinations() []string {
 	return destinationNames(func(destination Destination) bool {
 		return destination.GitHubEffect
+	})
+}
+
+// FamilyRouteDestinations returns the destinations EVERY work-item provider's
+// route writes, and therefore the set the published capability matrix
+// advertises for gitlab, jira and linear.
+//
+// It stops short of GitHubEffectDestinations by exactly the two CHAOS-4194
+// surfaces. GitLab must never write them -- GitLab's own "project" concept IS
+// this schema's repo_id, which is why gitlab is not registered for the
+// membership kind at all -- and jira and linear reach the same table through
+// the external-ingest sink rather than through this effects list. Advertising
+// them under those providers would publish a capability none of them has.
+func FamilyRouteDestinations() []string {
+	return destinationNames(func(destination Destination) bool {
+		return destination.FamilyRoute
 	})
 }
 

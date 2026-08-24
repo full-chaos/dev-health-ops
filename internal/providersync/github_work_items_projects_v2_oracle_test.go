@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 )
 
 type gitHubProjectV2DecisionOracleRow struct {
@@ -142,7 +144,7 @@ func TestGitHubProjectV2PullRequestEmissionDivergesFromLivePythonDecision(t *tes
 // written moments later, which is the shape that hid this defect.
 func buildGitHubProjectV2OracleDecision(
 	t *testing.T, input map[string]any,
-) (projectMembershipRow, []githubWorkItemTransitionRow, bool) {
+) (projectmembership.Row, []githubWorkItemTransitionRow, bool) {
 	t.Helper()
 	raw, err := json.Marshal(input["item_node"])
 	if err != nil {

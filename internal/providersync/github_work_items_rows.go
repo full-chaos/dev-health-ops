@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
@@ -162,8 +163,8 @@ type githubWorkItemRows struct {
 	// produces them from the SAME items connection it produces work items
 	// from -- a board holds issues and pull requests together, and splitting
 	// the return would let the two halves of one fetch drift apart.
-	ProjectMemberships []projectMembershipRow
-	Projects           []projectCatalogRow
+	ProjectMemberships []projectmembership.Row
+	Projects           []projectmembership.CatalogRow
 }
 
 type githubWorkItemUserPayload struct {

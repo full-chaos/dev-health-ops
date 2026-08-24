@@ -96,9 +96,21 @@ func TestClickHouseExternalSinkPersistsEveryV1KindWithProvenance(t *testing.T) {
 		if !batch.sent || len(batch.rows) != 1 {
 			t.Fatalf("sink batch %d not durable: %#v", index, batch)
 		}
+		// Either shape counts as provenance. Most tables declare source_id as a
+		// bare UUID and the sink appends the value; project_membership_
+		// transitions declares it Nullable, so the shared row carries a pointer
+		// to express the NULL a Go-sync-route writer needs. Accepting only the
+		// bare value would fail a row that is MORE precise about the column it
+		// is writing, not less.
 		if !slices.ContainsFunc(batch.rows[0], func(value any) bool {
-			id, ok := value.(uuid.UUID)
-			return ok && id == sourceID
+			switch id := value.(type) {
+			case uuid.UUID:
+				return id == sourceID
+			case *uuid.UUID:
+				return id != nil && *id == sourceID
+			default:
+				return false
+			}
 		}) {
 			t.Fatalf("sink batch %d omitted source provenance: %#v", index, batch.rows[0])
 		}

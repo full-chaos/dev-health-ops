@@ -662,8 +662,12 @@ func TestClickHouseExternalSinkWritesProjectMembershipColumns(t *testing.T) {
 		t.Fatalf("row width %d does not match %d locked columns", len(row), len(columns))
 	}
 	want := map[string]any{
-		"org_id":           pointer.OrgID,
-		"source_id":        sourceID,
+		"org_id": pointer.OrgID,
+		// A POINTER, not a value: source_id is the schema's only Nullable
+		// column, so the shared row types it as one. Asserting the pointed-to
+		// value below rather than the pointer itself, since the address is not
+		// stable.
+		"source_id":        "checked separately",
 		"repo_id":          uuid.MustParse("00b02aea-81bc-1244-b364-f93a0276ede5"),
 		"subject_kind":     "work_item",
 		"subject_id":       "gh:full-chaos/dev-health#7",
@@ -682,6 +686,13 @@ func TestClickHouseExternalSinkWritesProjectMembershipColumns(t *testing.T) {
 		"event_id":    "evt-1",
 	}
 	for index, column := range columns {
+		if column == "source_id" {
+			stored, ok := row[index].(*uuid.UUID)
+			if !ok || stored == nil || *stored != sourceID {
+				t.Errorf("source_id = %#v, want a pointer to %s", row[index], sourceID)
+			}
+			continue
+		}
 		if row[index] != want[column] {
 			t.Errorf("%s = %#v, want %#v", column, row[index], want[column])
 		}

@@ -438,7 +438,14 @@ func validateGitHubWorkItemsProjectResult(
 		len(result.Rows.AIAttributions) != 0 {
 		return ErrInvalidConfiguration
 	}
-	if result.Evidence.Records != len(result.Rows.WorkItems)+len(result.Rows.StatusTransitions) {
+	// REGRESSION FIXED HERE, and it is worth naming. CHAOS-4194 added the two
+	// membership families to the fetch result's Records count without widening
+	// this comparison, so every github integration with a configured Projects
+	// V2 target failed its whole work-items route with ErrInvalidConfiguration
+	// -- the `projects` row alone makes Records one higher on every sync. The
+	// check is right to exist; it was simply not told about the new families.
+	if result.Evidence.Records != len(result.Rows.WorkItems)+len(result.Rows.StatusTransitions)+
+		len(result.Rows.ProjectMemberships)+len(result.Rows.Projects) {
 		return ErrInvalidConfiguration
 	}
 	for _, row := range result.Rows.WorkItems {
@@ -463,7 +470,7 @@ func addGitHubWorkItemsEvidence(target *FetchEvidence, source FetchEvidence) {
 func countGitHubWorkItemRows(rows githubWorkItemRows) int {
 	return len(rows.WorkItems) + len(rows.StatusTransitions) + len(rows.Dependencies) +
 		len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) +
-		len(rows.AIAttributions)
+		len(rows.AIAttributions) + len(rows.ProjectMemberships) + len(rows.Projects)
 }
 
 func finishGitHubWorkItemsEvidence(evidence *FetchEvidence, rows githubWorkItemRows) {
@@ -519,6 +526,20 @@ func buildGitHubWorkItemsRouteEffects(
 	if err != nil {
 		return nil, err
 	}
+	// CHAOS-4194. Without these two the Projects V2 producer's rows reached
+	// this function and stopped: they were merged into `rows` by
+	// mergeGitHubProjectV2Rows and then never serialized, so a board membership
+	// was built and discarded one layer past the normalizer that used to
+	// discard it. Every test of that producer asserted on the fetch result,
+	// which is precisely where the value still existed.
+	directMemberships, err := githubWorkItemsRawMessages(rows.ProjectMemberships)
+	if err != nil {
+		return nil, err
+	}
+	directProjects, err := githubWorkItemsRawMessages(rows.Projects)
+	if err != nil {
+		return nil, err
+	}
 	return BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{
 		AIAttribution:                  directAI,
 		EstimateCoverageMetricsDaily:   derived["estimate_coverage_metrics_daily"],
@@ -536,6 +557,8 @@ func buildGitHubWorkItemsRouteEffects(
 		WorkItemTransitions:            directTransitions,
 		WorkItemUserMetricsDaily:       derived["work_item_user_metrics_daily"],
 		WorkItems:                      directItems,
+		ProjectMembershipTransitions:   directMemberships,
+		Projects:                       directProjects,
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
@@ -77,15 +78,19 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{
-		"repository.v1":                    "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
-		"commit.v1":                        "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
-		"pull_request.v1":                  "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
-		"review.v1":                        "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                          "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
-		"identity.v1":                      "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
-		"work_item.v1":                     "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
-		"work_item_transition.v1":          "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
-		"project_membership_transition.v1": "INSERT INTO project_membership_transitions (org_id,source_id,repo_id,subject_kind,subject_id,provider,from_project_id,to_project_id,from_project_key,to_project_key,actor,occurred_at,last_synced,event_id)",
+		"repository.v1":           "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
+		"commit.v1":               "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
+		"pull_request.v1":         "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
+		"review.v1":               "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
+		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
+		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
+		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
+		// The statement is NOT spelled here. projectmembership owns it, because
+		// the providersync effect adapter writes the same table and two
+		// independently maintained column lists agree only until someone edits
+		// one of them.
+		"project_membership_transition.v1": projectmembership.TransitionsInsert,
 		"work_item_dependency.v1":          "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
 		"operational_service.v1":           "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
 		"operational_incident.v1":          "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
@@ -312,13 +317,13 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 	}, nil
 }
 
-// externalSubject* are the two subject kinds project_membership_transition.v1
-// admits. They are the schema enum's values, spelled once, because the sink
-// branches its whole identity derivation on them and a typo would silently take
-// the work_item branch for a pull request.
+// externalSubject* alias the shared subject-kind vocabulary. The values live in
+// projectmembership because both writers into this table branch their identity
+// derivation on them; the aliases keep this package's call sites reading in its
+// own idiom without minting a second copy of the strings.
 const (
-	externalSubjectWorkItem    = "work_item"
-	externalSubjectPullRequest = "pull_request"
+	externalSubjectWorkItem    = projectmembership.SubjectWorkItem
+	externalSubjectPullRequest = projectmembership.SubjectPullRequest
 )
 
 // externalProjectMembershipValues builds one `project_membership_transitions`
@@ -388,13 +393,28 @@ func externalProjectMembershipValues(source externalSinkBatch, payload map[strin
 	if raw := stringField(payload, "actor"); raw != "" {
 		actor = externalIdentity(system, raw)
 	}
-	return []any{
-		source.Pointer.OrgID, source.SourceID, repoID, subjectKind, subjectID,
-		stringField(payload, "provider"),
-		stringField(payload, "fromProjectId"), stringField(payload, "toProjectId"),
-		stringField(payload, "fromProjectKey"), stringField(payload, "toProjectKey"),
-		actor, occurredAt, now, stringField(payload, "eventId"),
-	}, nil
+	// Built as the shared Row and projected by the shared Values, never as a
+	// literal slice here. The column ORDER is the half of this contract a test
+	// in this package cannot see -- it lives in the INSERT statement, in
+	// another file -- so both halves are owned together in projectmembership
+	// and the adapter that writes the same table cannot drift from this one.
+	// source_id is the one Nullable column, so the shared Row types it as a
+	// POINTER -- this path always has an integration source and passes its
+	// address, while the providersync effect adapter writes NULL because a Go
+	// sync route's rows carry no external ingest source. A bare value could not
+	// express the second case.
+	sourceID := source.SourceID
+	return projectmembership.Row{
+		OrgID: source.Pointer.OrgID, SourceID: &sourceID,
+		RepoID: repoID, SubjectKind: subjectKind, SubjectID: subjectID,
+		Provider:       stringField(payload, "provider"),
+		FromProjectID:  stringField(payload, "fromProjectId"),
+		ToProjectID:    stringField(payload, "toProjectId"),
+		FromProjectKey: stringField(payload, "fromProjectKey"),
+		ToProjectKey:   stringField(payload, "toProjectKey"),
+		Actor:          actor, OccurredAt: occurredAt, LastSynced: now,
+		EventID: stringField(payload, "eventId"),
+	}.Values(), nil
 }
 
 // externalProjectEntityID reports whether a NON-EMPTY project id can be a

@@ -15,9 +15,9 @@
 -- Why one table for both subjects rather than two. GitHub Projects V2 puts
 -- issues and pull requests on the SAME board through the same items
 -- connection, so the membership fact is one fact with two subject shapes.
--- subject_kind carries the shape; splitting it into two tables would fork the
--- presence projection and the CHAOS-4193 validity-interval derivation for no
--- semantic gain.
+-- subject_kind carries the shape, and splitting it into two tables would fork
+-- the presence projection and the CHAOS-4193 validity-interval derivation for
+-- no semantic gain.
 --
 -- Engine and read convention mirror work_item_transitions exactly:
 -- ReplacingMergeTree(last_synced), read through SELECT ... FINAL.
@@ -80,7 +80,7 @@
 -- meaning of "project" in this schema that must never reach here: the
 -- external-ingest path writes the REPOSITORY full name into
 -- work_items.project_id for github and gitlab (external_clickhouse.go:556-574).
--- The sink refuses such a value on the way in; the presence view's column arm
+-- The sink refuses such a value on the way in, and the presence view's arm
 -- filters it out on the way back (see the arm below). gitlab is not registered
 -- for this kind at all -- GitLab's own "project" concept IS this schema's
 -- repo_id, so a gitlab row would violate the constraint by construction and

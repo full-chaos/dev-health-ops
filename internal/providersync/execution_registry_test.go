@@ -153,10 +153,24 @@ func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 		"work_item_metrics_daily", "work_item_reopen_events",
 		"work_item_state_durations_daily", "work_item_team_attributions",
 		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
+		// CHAOS-4194: github writes two surfaces no other work-item provider
+		// does. This list is the GITHUB one; the shared family list that gitlab,
+		// jira and linear advertise deliberately stops before these two, which
+		// is asserted directly below.
+		"project_membership_transitions", "projects",
 	}
-	got := workItemRouteDestinations()
+	got := githubWorkItemRouteDestinations()
 	if !slices.Equal(got, want) {
 		t.Fatalf("github work-item destinations=%v want=%v", got, want)
+	}
+	// The divergence, asserted rather than implied. gitlab must never write a
+	// project membership -- its "project" concept IS repo_id, which is why it
+	// is refused for that kind by construction -- so publishing these two under
+	// the shared family list would advertise a capability gitlab cannot have.
+	for _, destination := range []string{"project_membership_transitions", "projects"} {
+		if slices.Contains(workItemRouteDestinations(), destination) {
+			t.Fatalf("%q entered the shared work-item family route", destination)
+		}
 	}
 	effects, err := BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{})
 	if err != nil {
@@ -214,7 +228,7 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 		descriptor, ok := Descriptor("github", dataset)
 		if !ok || descriptor.NativeShadow || !descriptor.RouteReady ||
 			descriptor.Executor != ExecutorNativeGo ||
-			!slices.Equal(descriptor.Destinations, workItemRouteDestinations()) {
+			!slices.Equal(descriptor.Destinations, githubWorkItemRouteDestinations()) {
 			t.Fatalf("github/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
 		if dataset == "work-items" {
@@ -236,6 +250,8 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 		}
 	}
 	for _, provider := range []string{"gitlab", "jira", "linear"} {
+		// The SHARED family list: this loop covers gitlab, jira and linear,
+		// none of which write the two github-only membership surfaces.
 		wantDestinations := workItemRouteDestinations()
 		if provider == "jira" {
 			wantDestinations = append(wantDestinations, "worklogs")

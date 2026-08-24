@@ -854,6 +854,37 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
 
+### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: no pathway change (CHAOS-4243)
+
+Both kinds were registered handlers (`cmd/dev-health-worker/daily.go`) with
+zero producer anywhere — the fixed-schedule fanout (`internal/scheduler/fixed
+/producers.go`'s `RemainingMetricsFanoutProducer.byScheduleID`) and the
+post-sync scope switch (`cmd/dev-health-worker/sync_dispatch.go`'s
+`postSyncRemainingScope`) both skipped them, so no partition was ever
+enqueued in either environment. CHAOS-4243 adds two Native fixed-schedule
+entries, `extra_metrics_daily_fanout` (01:45 UTC) and
+`team_metrics_daily_fanout` (02:15 UTC), in
+[`internal/scheduler/fixed/inventory.go`](../../../internal/scheduler/fixed/inventory.go).
+
+This is not a new pathway and has no diagram of its own to update: both
+schedules bind into the SAME `RemainingMetricsFanoutProducer` →
+`remaining.PostgresStore.StartRunTx` → durable partition →
+`HTTPCompatibilityExecutor` bridge mechanism that
+`complexity_daily_fanout`/`release_impact_daily_fanout`/
+`recommendations_daily_fanout`/`membership_backfill_daily_fanout` already run
+through — same producer type, same store, same compatibility executor, only
+the `family`/`Scope` binding and cadence differ. No section of this document
+diagrams that fixed-schedule → fanout-producer → compatibility-bridge
+mechanism at any granularity finer than the queue-map table above, so there
+is no existing diagram to extend.
+
+Neither schedule is wired into `postSyncRemainingScope`: unlike
+`complexity`/`dora`/`membership_backfill`, which the legacy Python dispatcher
+also triggered on a post-sync event, `extra_metrics` and `team_metrics` were
+computed inline inside `job_daily.py`'s per-org daily batch with no
+independent Celery Beat entry and no post-sync trigger of their own (see the
+schedule declaration comments in `inventory.go` for the source citation).
+
 ## The native sync-dispatch coordinator pathway
 
 CHAOS-4175 ported the last of three sync-dispatch families

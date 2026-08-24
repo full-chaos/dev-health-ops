@@ -249,7 +249,7 @@ type MetricsCollector struct {
 	// and opposite operational situations. Before this, a producer shipping
 	// against an unregistered kind saw a clean successful sync and no rows,
 	// with nothing outward to look at.
-	externalProjectTransitionsSunk map[string]uint64
+	externalProjectMembershipsSunk map[string]uint64
 	externalRecordRefusals         map[externalRefusalLabels]uint64
 
 	// Native DORA compute (CHAOS-3092 R1). The HTTP compatibility bridge could
@@ -334,7 +334,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		idempotencyRenewalRetired:      make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
 		dailyMetricsLease:              make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		zeroUnitFinalizations:          make(map[zeroUnitFinalizationLabels]uint64),
-		externalProjectTransitionsSunk: make(map[string]uint64),
+		externalProjectMembershipsSunk: make(map[string]uint64),
 		externalRecordRefusals:         make(map[externalRefusalLabels]uint64),
 		streamLag:                      make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamPending:                  make(map[StreamLabels]int64, len(dimensions.Streams)),
@@ -768,6 +768,12 @@ const (
 	ExternalRefusedEntityFamilyMismatch  = "entity_family_mismatch"
 	ExternalRefusedInvalidField          = "invalid_field"
 	ExternalRefusedOutsideSourceInstance = "record_outside_source_instance"
+	// ExternalRefusedUnresolvableProject and ExternalRefusedContradictoryEvent
+	// are project_membership_transition.v1's own refusals (CHAOS-4194): a
+	// from/to project id that cannot be a provider PROJECT entity, and two
+	// records in one batch asserting the same event_id with different content.
+	ExternalRefusedUnresolvableProject = "unresolvable_project_entity"
+	ExternalRefusedContradictoryEvent  = "contradictory_event_id"
 )
 
 var externalRefusalReasons = []string{
@@ -775,6 +781,8 @@ var externalRefusalReasons = []string{
 	ExternalRefusedEntityFamilyMismatch,
 	ExternalRefusedInvalidField,
 	ExternalRefusedOutsideSourceInstance,
+	ExternalRefusedUnresolvableProject,
+	ExternalRefusedContradictoryEvent,
 }
 
 const externalTelemetryUnknownSystem = "unknown"
@@ -791,7 +799,7 @@ func externalTelemetrySystem(system string) string {
 	return externalTelemetryUnknownSystem
 }
 
-// ObserveExternalProjectTransitionsSunk records work_item_project_transition.v1
+// ObserveExternalProjectMembershipsSunk records project_membership_transition.v1
 // rows that reached ClickHouse, by the provider that pushed them (CHAOS-4194).
 //
 // Callers must call this AFTER the sink write has returned successfully, for
@@ -799,9 +807,9 @@ func externalTelemetrySystem(system string) string {
 // transaction: the external ingest handler RETRIES a transient sink failure,
 // so counting at append time would count every attempt of a write that
 // eventually succeeds once.
-func (collector *MetricsCollector) ObserveExternalProjectTransitionsSunk(provider string, rows int) error {
+func (collector *MetricsCollector) ObserveExternalProjectMembershipsSunk(provider string, rows int) error {
 	if rows < 0 {
-		return errors.New("sunk project transition rows cannot be negative")
+		return errors.New("sunk project membership rows cannot be negative")
 	}
 	if rows == 0 {
 		return nil
@@ -809,10 +817,10 @@ func (collector *MetricsCollector) ObserveExternalProjectTransitionsSunk(provide
 	provider = externalTelemetrySystem(provider)
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if collector.externalProjectTransitionsSunk == nil {
-		collector.externalProjectTransitionsSunk = map[string]uint64{}
+	if collector.externalProjectMembershipsSunk == nil {
+		collector.externalProjectMembershipsSunk = map[string]uint64{}
 	}
-	collector.externalProjectTransitionsSunk[provider] += uint64(rows)
+	collector.externalProjectMembershipsSunk[provider] += uint64(rows)
 	return nil
 }
 
@@ -1330,16 +1338,16 @@ func (collector *MetricsCollector) writeZeroUnitFinalizations(output *strings.Bu
 }
 
 func (collector *MetricsCollector) writeExternalIngest(output *strings.Builder) {
-	writeMetadata(output, "worker_external_project_transitions_sunk_total",
-		"work_item_project_transition.v1 rows durably written to ClickHouse, by source system.", "counter")
-	providers := make([]string, 0, len(collector.externalProjectTransitionsSunk))
-	for provider := range collector.externalProjectTransitionsSunk {
+	writeMetadata(output, "worker_external_project_memberships_sunk_total",
+		"project_membership_transition.v1 rows durably written to ClickHouse, by source system.", "counter")
+	providers := make([]string, 0, len(collector.externalProjectMembershipsSunk))
+	for provider := range collector.externalProjectMembershipsSunk {
 		providers = append(providers, provider)
 	}
 	sort.Strings(providers)
 	for _, provider := range providers {
-		writeUintSample(output, "worker_external_project_transitions_sunk_total",
-			[]metricLabel{{"provider", provider}}, collector.externalProjectTransitionsSunk[provider])
+		writeUintSample(output, "worker_external_project_memberships_sunk_total",
+			[]metricLabel{{"provider", provider}}, collector.externalProjectMembershipsSunk[provider])
 	}
 	writeMetadata(output, "worker_external_record_refused_total",
 		"External-ingest records refused by the kind registry, by source system and refusal reason.", "counter")

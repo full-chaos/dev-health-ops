@@ -101,7 +101,7 @@ func TestExternalProfileWiresReachableIngestCounters(t *testing.T) {
 			}
 			// A live observer that no scrape reads is the same as no observer,
 			// so the counters must also appear in the operator exposition.
-			if err := observer.ObserveExternalProjectTransitionsSunk("github", 1); err != nil {
+			if err := observer.ObserveExternalProjectMembershipsSunk("github", 1); err != nil {
 				t.Fatal(err)
 			}
 			if err := observer.ObserveExternalKindRefused("github", "unsupported_kind_for_system"); err != nil {
@@ -118,7 +118,7 @@ func TestExternalProfileWiresReachableIngestCounters(t *testing.T) {
 				}
 			}
 			for _, want := range []string{
-				`worker_external_project_transitions_sunk_total{provider="github"} 1`,
+				`worker_external_project_memberships_sunk_total{provider="github"} 1`,
 				`worker_external_record_refused_total{source_system="github",reason="unsupported_kind_for_system"} 1`,
 			} {
 				if !strings.Contains(exposition.String(), want) {

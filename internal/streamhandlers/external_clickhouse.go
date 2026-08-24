@@ -77,28 +77,28 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{
-		"repository.v1":                   "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
-		"commit.v1":                       "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
-		"pull_request.v1":                 "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
-		"review.v1":                       "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                         "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
-		"identity.v1":                     "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
-		"work_item.v1":                    "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
-		"work_item_transition.v1":         "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
-		"work_item_project_transition.v1": "INSERT INTO work_item_project_transitions (org_id,source_id,repo_id,work_item_id,provider,from_project_id,to_project_id,from_project_key,to_project_key,actor,occurred_at,last_synced,event_id)",
-		"work_item_dependency.v1":         "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
-		"operational_service.v1":          "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
-		"operational_incident.v1":         "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
-		"operational_alert.v1":            "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
-		"incident_timeline_event.v1":      "INSERT INTO operational_incident_timeline_events (" + operationalBaseColumns + ",incident_id,event_type,body,actor_type,actor_id,occurred_at)",
-		"incident_note.v1":                "INSERT INTO operational_incident_notes (" + operationalBaseColumns + ",incident_id,body,author_user_id,created_at)",
-		"incident_responder.v1":           "INSERT INTO operational_incident_responders (" + operationalBaseColumns + ",incident_id,user_id,responder_name,role,responder_assignment_id,requested_at,assigned_at,acknowledged_at,completed_at)",
-		"escalation_policy.v1":            "INSERT INTO operational_escalation_policies (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
-		"on_call_schedule.v1":             "INSERT INTO operational_on_call_schedules (" + operationalBaseColumns + ",name,description,timezone,is_deleted,deleted_at)",
-		"on_call_assignment.v1":           "INSERT INTO operational_on_call_assignments (" + operationalBaseColumns + ",schedule_id,user_id,escalation_policy_id,escalation_level,starts_at,ends_at)",
-		"operational_team.v1":             "INSERT INTO operational_teams (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
-		"operational_user.v1":             "INSERT INTO operational_users (" + operationalBaseColumns + ",display_name,email,is_deleted,deleted_at)",
-		"service_repository_mapping.v1":   "INSERT INTO operational_service_repository_mappings (" + operationalBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active)",
+		"repository.v1":                    "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
+		"commit.v1":                        "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
+		"pull_request.v1":                  "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
+		"review.v1":                        "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
+		"team.v1":                          "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"identity.v1":                      "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
+		"work_item.v1":                     "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
+		"work_item_transition.v1":          "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
+		"project_membership_transition.v1": "INSERT INTO project_membership_transitions (org_id,source_id,repo_id,subject_kind,subject_id,provider,from_project_id,to_project_id,from_project_key,to_project_key,actor,occurred_at,last_synced,event_id)",
+		"work_item_dependency.v1":          "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
+		"operational_service.v1":           "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
+		"operational_incident.v1":          "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
+		"operational_alert.v1":             "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
+		"incident_timeline_event.v1":       "INSERT INTO operational_incident_timeline_events (" + operationalBaseColumns + ",incident_id,event_type,body,actor_type,actor_id,occurred_at)",
+		"incident_note.v1":                 "INSERT INTO operational_incident_notes (" + operationalBaseColumns + ",incident_id,body,author_user_id,created_at)",
+		"incident_responder.v1":            "INSERT INTO operational_incident_responders (" + operationalBaseColumns + ",incident_id,user_id,responder_name,role,responder_assignment_id,requested_at,assigned_at,acknowledged_at,completed_at)",
+		"escalation_policy.v1":             "INSERT INTO operational_escalation_policies (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
+		"on_call_schedule.v1":              "INSERT INTO operational_on_call_schedules (" + operationalBaseColumns + ",name,description,timezone,is_deleted,deleted_at)",
+		"on_call_assignment.v1":            "INSERT INTO operational_on_call_assignments (" + operationalBaseColumns + ",schedule_id,user_id,escalation_policy_id,escalation_level,starts_at,ends_at)",
+		"operational_team.v1":              "INSERT INTO operational_teams (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
+		"operational_user.v1":              "INSERT INTO operational_users (" + operationalBaseColumns + ",display_name,email,is_deleted,deleted_at)",
+		"service_repository_mapping.v1":    "INSERT INTO operational_service_repository_mappings (" + operationalBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active)",
 	}
 	query, ok := queries[kind]
 	if !ok {
@@ -221,8 +221,8 @@ func externalRecordValues(
 		return externalWorkItemValues(source, payload, now, scope)
 	case "work_item_transition.v1":
 		return externalTransitionValues(source, payload, now, scope)
-	case "work_item_project_transition.v1":
-		return externalProjectTransitionValues(source, payload, now, scope)
+	case "project_membership_transition.v1":
+		return externalProjectMembershipValues(source, payload, now, scope)
 	case "work_item_dependency.v1":
 		sourceID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "sourceExternalKey"), stringField(payload, "sourceWorkItemType"))
 		targetID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "targetExternalKey"), stringField(payload, "targetWorkItemType"))
@@ -312,36 +312,63 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 	}, nil
 }
 
-// externalProjectTransitionValues builds one `work_item_project_transitions`
-// row for the CHAOS-4193 locked schema.
+// externalSubject* are the two subject kinds project_membership_transition.v1
+// admits. They are the schema enum's values, spelled once, because the sink
+// branches its whole identity derivation on them and a typo would silently take
+// the work_item branch for a pull request.
+const (
+	externalSubjectWorkItem    = "work_item"
+	externalSubjectPullRequest = "pull_request"
+)
+
+// externalProjectMembershipValues builds one `project_membership_transitions`
+// row for the final CHAOS-4194 shape.
 //
-// The work_item_id derivation is deliberately the SAME call
-// externalTransitionValues and externalWorkItemValues make. It has to be: the
-// presence projection joins these rows back to `work_items`, and a
-// second, locally-reasonable derivation here would produce ids that look right
-// in isolation and join to nothing.
+// The two subject kinds derive their (repo_id, subject_id) pair DIFFERENTLY,
+// each mirroring the table its rows are joined back to -- that is the whole
+// reason subject_kind is a key member and not a label:
+//
+//   - work_item: the same externalWorkItemID call externalWorkItemValues
+//     makes, off the record's own repositoryExternalId. The presence
+//     projection joins these rows to `work_items`, and a second,
+//     locally-reasonable derivation here would produce ids that look right in
+//     isolation and join to nothing. repo_id likewise matches work_item.v1's,
+//     staying uuid.Nil for the repo-less providers (jira, linear).
+//   - pull_request: the repo uuid pull_request.v1 derives, plus the PR number
+//     verbatim as a decimal string. A PR has no work_items row and no
+//     work_item_id; minting one would key the row to a row that does not
+//     exist.
 //
 // Project identity is passed through verbatim rather than run through
 // externalProjectScope. That helper answers "what does this provider call the
 // work item's project column", and for github/gitlab it answers with the
-// REPOSITORY -- repo-as-project, which is exactly the conflation CHAOS-4194's
-// ruling forbids. A project transition names a provider PROJECT entity
-// (Jira project / GitHub Projects V2 / Linear project) and nothing else, so the
-// producer's value is the value.
-func externalProjectTransitionValues(source externalSinkBatch, payload map[string]any, now time.Time, scope *ExternalRecomputeScope) ([]any, error) {
+// REPOSITORY -- repo-as-project, which is exactly the conflation the
+// vocabulary ruling forbids. A membership transition names a provider PROJECT
+// entity (Jira project / GitHub Projects V2 / Linear project) and nothing
+// else, so the producer's value is the value -- after
+// refuseProjectMembershipContradiction has checked it is one.
+func externalProjectMembershipValues(source externalSinkBatch, payload map[string]any, now time.Time, scope *ExternalRecomputeScope) ([]any, error) {
 	system, sourceInstance := source.Pointer.SourceSystem, source.Pointer.SourceInstance
-	// The instance is derived from the record's own repositoryExternalId, the
-	// way externalWorkItemValues does it -- NOT from the pointer alone the way
-	// externalTransitionValues does. These rows are joined back to `work_items`
-	// by the presence projection, so the two derivations have to agree; a batch
-	// whose source instance is an org while its work items name org/repo would
-	// otherwise mint `gh:org#7` here against `gh:org/repo#7` there, and the
-	// edge would resolve to nothing while looking perfectly well-formed.
-	instance := externalWorkItemInstance(system, sourceInstance, stringField(payload, "repositoryExternalId"))
-	workItemID := externalWorkItemID(system, instance, stringField(payload, "externalKey"), stringField(payload, "workItemType"))
-	repoID := uuid.Nil
-	if system == "github" || system == "gitlab" {
-		repoID = externalRepoUUID(system, sourceInstance, instance)
+	repository := stringField(payload, "repositoryExternalId")
+	subjectKind := stringField(payload, "subjectKind")
+	repoID, subjectID := uuid.Nil, ""
+	if subjectKind == externalSubjectPullRequest {
+		repoID = externalRepoUUID(system, sourceInstance, repository)
+		subjectID = strings.TrimSpace(stringField(payload, "externalKey"))
+	} else {
+		// The instance is derived from the record's own repositoryExternalId,
+		// the way externalWorkItemValues does it -- NOT from the pointer alone
+		// the way externalTransitionValues does. A batch whose source instance
+		// is an org while its work items name org/repo would otherwise mint
+		// `gh:org#7` here against `gh:org/repo#7` there, and the edge would
+		// resolve to nothing while looking perfectly well-formed.
+		instance := externalWorkItemInstance(system, sourceInstance, repository)
+		subjectID = externalWorkItemID(system, instance, stringField(payload, "externalKey"), stringField(payload, "workItemType"))
+		if system == "github" || system == "gitlab" {
+			repoID = externalRepoUUID(system, sourceInstance, instance)
+		}
+	}
+	if repoID != uuid.Nil {
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 	}
 	// occurred_at is REQUIRED rather than falling back to `now`. It is a member
@@ -353,20 +380,47 @@ func externalProjectTransitionValues(source externalSinkBatch, payload map[strin
 		return nil, err
 	}
 	trackExternalTime(scope, occurredAt)
-	// actor is the one Nullable column in the locked schema: an unattributed
-	// reassignment is a real, common event (provider automation, bulk moves),
-	// and "unknown" would be a fabricated identity that joins to `identities`.
-	var actor any
+	// actor is a bare String, not Nullable: shared columns mirror
+	// work_item_transitions exactly (Context Fabric correction, 2026-08-24),
+	// and an unattributed reassignment writes "" the way that table already
+	// does. source_id is the one Nullable column in this schema.
+	actor := ""
 	if raw := stringField(payload, "actor"); raw != "" {
 		actor = externalIdentity(system, raw)
 	}
 	return []any{
-		source.Pointer.OrgID, source.SourceID, repoID, workItemID,
+		source.Pointer.OrgID, source.SourceID, repoID, subjectKind, subjectID,
 		stringField(payload, "provider"),
 		stringField(payload, "fromProjectId"), stringField(payload, "toProjectId"),
 		stringField(payload, "fromProjectKey"), stringField(payload, "toProjectKey"),
 		actor, occurredAt, now, stringField(payload, "eventId"),
 	}, nil
+}
+
+// externalProjectEntityID reports whether a NON-EMPTY project id can be a
+// provider PROJECT entity for this provider, i.e. whether it could resolve to a
+// `projects` row rather than being the repo-as-project value the external
+// ingest path writes into work_items.project_id for github and gitlab
+// (external_clickhouse.go's externalProjectScope).
+//
+// Only github has an ambiguity to resolve, and it resolves by prefix: the Go
+// Projects V2 route mints exactly `ghprojv2:<org>#<n>`
+// (providersync/github_work_items_projects_v2.go), while the repo-as-project
+// value is a bare `owner/name`. jira and linear carry the provider's own
+// project key/id in that column already and have no second meaning to exclude,
+// so there is no prefix to check for them -- claiming one would be a fence
+// around nothing. gitlab is not registered for this kind at all.
+//
+// This is a NECESSARY condition, not the full resolve-to-`projects` join. The
+// sink cannot query ClickHouse on the write path, and doing so would make
+// ingest depend on catalogue sync order. What it can do cheaply is refuse the
+// values that are provably not project entities, which is the case the ruling
+// names.
+func externalProjectEntityID(provider, projectID string) bool {
+	if provider == "github" {
+		return strings.HasPrefix(projectID, "ghprojv2:")
+	}
+	return true
 }
 
 type externalOperationalSinkSpec struct {

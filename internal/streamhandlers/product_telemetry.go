@@ -2,7 +2,7 @@
 // for the existing stream payload contracts.
 //
 // The provider-event-to-graph-edge pathway these handlers sit on -- external
-// batch, kind registry refusal, ClickHouse sink, work_item_project_transitions,
+// batch, kind registry refusal, ClickHouse sink, project_membership_transitions,
 // the presence projection, and the Context Fabric edge that reads it -- is
 // drawn in docs/contribute/architecture/data-and-storage.md, under "Work item
 // to project: provider event to graph edge". Read it before adding a kind: the

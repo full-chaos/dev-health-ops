@@ -20,13 +20,13 @@ func newExternalTelemetryCollector(t *testing.T) *MetricsCollector {
 // it or the signal is unreadable.
 func TestExternalIngestCountersExposeBothHalvesOfTheOutcome(t *testing.T) {
 	collector := newExternalTelemetryCollector(t)
-	if err := collector.ObserveExternalProjectTransitionsSunk("github", 3); err != nil {
+	if err := collector.ObserveExternalProjectMembershipsSunk("github", 3); err != nil {
 		t.Fatal(err)
 	}
-	if err := collector.ObserveExternalProjectTransitionsSunk("github", 2); err != nil {
+	if err := collector.ObserveExternalProjectMembershipsSunk("github", 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := collector.ObserveExternalProjectTransitionsSunk("linear", 1); err != nil {
+	if err := collector.ObserveExternalProjectMembershipsSunk("linear", 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := collector.ObserveExternalKindRefused("jira", ExternalRefusedUnsupportedKind); err != nil {
@@ -40,11 +40,11 @@ func TestExternalIngestCountersExposeBothHalvesOfTheOutcome(t *testing.T) {
 	}
 	text := collector.PrometheusText()
 	for _, want := range []string{
-		`worker_external_project_transitions_sunk_total{provider="github"} 5`,
-		`worker_external_project_transitions_sunk_total{provider="linear"} 1`,
+		`worker_external_project_memberships_sunk_total{provider="github"} 5`,
+		`worker_external_project_memberships_sunk_total{provider="linear"} 1`,
 		`worker_external_record_refused_total{source_system="jira",reason="invalid_field"} 1`,
 		`worker_external_record_refused_total{source_system="jira",reason="unsupported_kind_for_system"} 2`,
-		"# TYPE worker_external_project_transitions_sunk_total counter",
+		"# TYPE worker_external_project_memberships_sunk_total counter",
 		"# TYPE worker_external_record_refused_total counter",
 	} {
 		if !strings.Contains(text, want) {
@@ -61,7 +61,7 @@ func TestExternalIngestCountersBoundTheirLabels(t *testing.T) {
 	// An unrecognised source system folds into a single shared bucket rather
 	// than minting a series per value seen.
 	for _, system := range []string{"attacker-controlled-1", "attacker-controlled-2", ""} {
-		if err := collector.ObserveExternalProjectTransitionsSunk(system, 1); err != nil {
+		if err := collector.ObserveExternalProjectMembershipsSunk(system, 1); err != nil {
 			t.Fatal(err)
 		}
 		if err := collector.ObserveExternalKindRefused(system, ExternalRefusedInvalidField); err != nil {
@@ -69,7 +69,7 @@ func TestExternalIngestCountersBoundTheirLabels(t *testing.T) {
 		}
 	}
 	text := collector.PrometheusText()
-	if !strings.Contains(text, `worker_external_project_transitions_sunk_total{provider="unknown"} 3`) {
+	if !strings.Contains(text, `worker_external_project_memberships_sunk_total{provider="unknown"} 3`) {
 		t.Errorf("unknown source systems did not fold into one series:\n%s", text)
 	}
 	if !strings.Contains(text, `worker_external_record_refused_total{source_system="unknown",reason="invalid_field"} 3`) {
@@ -109,13 +109,13 @@ func TestExternalRefusalReasonSetMatchesTheIngestPath(t *testing.T) {
 // that ever pushed anything.
 func TestExternalProjectTransitionsSunkIgnoresEmptyBatches(t *testing.T) {
 	collector := newExternalTelemetryCollector(t)
-	if err := collector.ObserveExternalProjectTransitionsSunk("github", 0); err != nil {
+	if err := collector.ObserveExternalProjectMembershipsSunk("github", 0); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(collector.PrometheusText(), `worker_external_project_transitions_sunk_total{provider="github"}`) {
+	if strings.Contains(collector.PrometheusText(), `worker_external_project_memberships_sunk_total{provider="github"}`) {
 		t.Error("a batch with no project transitions minted a provider series")
 	}
-	if err := collector.ObserveExternalProjectTransitionsSunk("github", -1); err == nil {
+	if err := collector.ObserveExternalProjectMembershipsSunk("github", -1); err == nil {
 		t.Error("a negative row count was accepted")
 	}
 }

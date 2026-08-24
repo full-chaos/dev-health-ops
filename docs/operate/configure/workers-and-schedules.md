@@ -164,9 +164,8 @@ a bug and re-discover it from scratch.
   unarchived here deliberately: fixing the Helm/Kubernetes chart is a
   materially larger, riskier change than a compose-comment archival, and it
   is not yet known whether that deployment path has any live consumer at
-  all. Tracked as a CHAOS-4164-related follow-up (ticket number pending from
-  team-lead at time of writing); the archive-vs-delete call there belongs to
-  chris.
+  all. Tracked as CHAOS-4195, a CHAOS-4164-related follow-up; the
+  archive-vs-delete call there belongs to chris.
 
 ## PostgreSQL requirements
 

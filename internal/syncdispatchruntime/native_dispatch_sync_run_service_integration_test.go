@@ -46,6 +46,17 @@ func providerUnitDescriptor(route string) jobruntime.Descriptor {
 		CurrentVersion:    jobcontract.ContractVersionV1,
 		SupportedVersions: []int{jobcontract.ContractVersionV1},
 		Queue:             "sync",
+		// River's InsertOpts.Priority defaults 0 to PriorityDefault (1) --
+		// leaving this at the Go zero value made a route-hold integration
+		// test's relay.Step land on ErrPolicyRejected the first time this
+		// descriptor was actually pushed through RiverInserter.Insert
+		// (every earlier test using it only checked Producer.Publish's own
+		// outbox row, never a real River delivery, so the mismatch between
+		// the row's stamped Priority=0 and River's substituted Priority=1
+		// was never exercised until then). Set to a real, valid (1-4)
+		// value so this descriptor is safe for any future test that DOES
+		// push it all the way through delivery.
+		Priority:          2,
 		MaxAttempts:       5,
 		DomainLink:        "sync_run_unit",
 		OrganizationScope: "tenant",

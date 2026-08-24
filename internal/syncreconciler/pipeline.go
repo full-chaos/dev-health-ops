@@ -196,9 +196,19 @@ func NewMutationPipeline(
 		// return check error text" invariant already protects.
 		for _, stage := range orderedStages {
 			stage := stage
+			budget := config.StageBudgets[stage]
 			checkErr := config.Registry.RegisterRequired(stageReadinessCheckName(stage), func(context.Context) error {
 				if pipeline.stages.isDegraded(stage) {
 					return errStageDegraded
+				}
+				// CHAOS-4239 round 3: a stage that ignores its own stageCtx
+				// and never returns produces no failure and no success --
+				// isDegraded above would never see it. detectOverrun is
+				// evaluated HERE, on the readyz poller's own goroutine,
+				// completely independent of whatever goroutine is stuck
+				// inside the stage's call.
+				if pipeline.stages.detectOverrun(stage, budget+stepOverrunMargin) {
+					return errStepOverrun
 				}
 				return nil
 			})
@@ -218,6 +228,14 @@ func NewMutationPipeline(
 var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
 	fmt.Sprintf("%d consecutive ticks", consecutiveFailureDegradeThreshold))
 
+// errStepOverrun is never returned to a caller or exposed on the HTTP
+// surface -- see errStageDegraded's doc comment for the same contract. It
+// distinguishes "still running, past its budget plus margin" from
+// errStageDegraded's "has already returned and failed repeatedly" in logs
+// and in which of the two sentinels a reader searches for, even though both
+// fail the identical readyz check by the identical name.
+var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
+
 // runStage bounds one stage call to its own budget instead of letting it
 // share the whole tick's envelope with its five siblings (CHAOS-4239), and
 // records the outcome unconditionally: a stage that runs to completion inside
@@ -234,6 +252,14 @@ func (pipeline *MutationPipeline) runStage(
 	budget := pipeline.config.StageBudgets[stage]
 	stageCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+
+	// markRunning/markIdle bracket the call so a stage that ignores stageCtx
+	// and never returns is still visible to detectOverrun from a completely
+	// different goroutine (CHAOS-4239 round 3) -- everything below this line
+	// only runs once fn actually returns, which is exactly the case this
+	// pair exists to cover for.
+	pipeline.stages.markRunning(stage)
+	defer pipeline.stages.markIdle(stage)
 
 	start := time.Now()
 	err := fn(stageCtx)
@@ -634,27 +660,116 @@ func (pipeline *MutationPipeline) Step(
 // streak.
 const consecutiveFailureDegradeThreshold = 3
 
+// stepOverrunMargin pads a stage's own budget before its in-flight duration
+// counts as an overrun (CHAOS-4239 round 3). It exists for the same reason
+// stageBudgetOuterEnvelopeMargin does in dependencies.go: a stage that
+// returns right at its own deadline should not immediately read as stuck.
+const stepOverrunMargin = 250 * time.Millisecond
+
 // stageTelemetry is the CHAOS-4239 metrics fragment: a lifetime failure
-// counter, a last-observed-duration gauge, and a readiness-affecting
-// consecutive-failure streak per stage, keyed the same way
-// sync_dispatch_observer's own WritePrometheus keys its fixed kinds -- every
-// known stage always exports a line, zero until it first runs or fails, so a
-// stage that has never failed is visibly zero rather than absent.
+// counter, a last-observed-duration gauge, a readiness-affecting
+// consecutive-failure streak, and in-flight overrun tracking per stage,
+// keyed the same way sync_dispatch_observer's own WritePrometheus keys its
+// fixed kinds -- every known stage always exports a line, zero until it
+// first runs or fails, so a stage that has never failed is visibly zero
+// rather than absent.
 type stageTelemetry struct {
 	mu          sync.Mutex
 	failures    map[StageName]uint64
 	durations   map[StageName]time.Duration
 	consecutive map[StageName]int
 	degraded    map[StageName]bool
+
+	// running, runningSince, overruns and overrunCounted answer a question
+	// none of the fields above can: a stage whose call IGNORES its own
+	// stageCtx and simply never returns produces no failure, no success, and
+	// no duration sample -- runStage is itself blocked inside fn(stageCtx)
+	// and nothing about that call graph ever reaches recordFailure or
+	// recordSuccess. Every non-fatal-degradation mechanism this file builds
+	// (ErrDegradedStage, ErrStepEnvelopeExceeded) depends on the call
+	// RETURNING eventually; a stage that never returns is invisible to all
+	// of them, which would make CHAOS-4239's "process stays up" fix trade a
+	// loud crash-loop for a silent zombie hang (chris's round-3 finding).
+	//
+	// The fix does not need a background watchdog goroutine: runStage marks
+	// a stage running the instant it starts (before calling fn) and idle the
+	// instant it returns, and detectOverrun below is evaluated LAZILY --
+	// from a completely different goroutine than the one stuck inside fn --
+	// by whichever poller asks first: the health.Registry readiness check
+	// registered per stage, or a /metrics scrape. Either one recomputes
+	// "has this stage been running longer than its own budget plus margin"
+	// from a wall-clock comparison against runningSince, which needs no
+	// cooperation at all from the stuck call.
+	running        map[StageName]bool
+	runningSince   map[StageName]time.Time
+	overruns       map[StageName]uint64
+	overrunCounted map[StageName]bool
 }
 
 func newStageTelemetry() stageTelemetry {
 	return stageTelemetry{
-		failures:    make(map[StageName]uint64, len(orderedStages)),
-		durations:   make(map[StageName]time.Duration, len(orderedStages)),
-		consecutive: make(map[StageName]int, len(orderedStages)),
-		degraded:    make(map[StageName]bool, len(orderedStages)),
+		failures:       make(map[StageName]uint64, len(orderedStages)),
+		durations:      make(map[StageName]time.Duration, len(orderedStages)),
+		consecutive:    make(map[StageName]int, len(orderedStages)),
+		degraded:       make(map[StageName]bool, len(orderedStages)),
+		running:        make(map[StageName]bool, len(orderedStages)),
+		runningSince:   make(map[StageName]time.Time, len(orderedStages)),
+		overruns:       make(map[StageName]uint64, len(orderedStages)),
+		overrunCounted: make(map[StageName]bool, len(orderedStages)),
 	}
+}
+
+// markRunning records that a stage's call has started, for detectOverrun to
+// compare against later from another goroutine. Call this BEFORE invoking
+// the stage's own function, never after -- the whole point is visibility
+// into a call that might never return.
+func (telemetry *stageTelemetry) markRunning(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.running[stage] = true
+	telemetry.runningSince[stage] = time.Now()
+	telemetry.overrunCounted[stage] = false
+}
+
+// markIdle clears a stage's in-flight state once its call returns, however
+// it returned. Call via defer immediately after markRunning so it always
+// runs, on every exit path.
+func (telemetry *stageTelemetry) markIdle(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.running[stage] = false
+}
+
+// detectOverrun answers "is this stage still running, past threshold" from
+// whichever goroutine polls it, and increments the overrun counter exactly
+// once per in-flight episode (guarded by overrunCounted, reset the moment
+// markRunning starts a fresh one) regardless of how many times or how many
+// different callers (a readyz check, a metrics scrape) ask while it is
+// still true.
+func (telemetry *stageTelemetry) detectOverrun(stage StageName, threshold time.Duration) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	if !telemetry.running[stage] {
+		return false
+	}
+	if time.Since(telemetry.runningSince[stage]) <= threshold {
+		return false
+	}
+	if !telemetry.overrunCounted[stage] {
+		telemetry.overruns[stage]++
+		telemetry.overrunCounted[stage] = true
+	}
+	return true
+}
+
+func (telemetry *stageTelemetry) overrunSnapshot() map[StageName]uint64 {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	overruns := make(map[StageName]uint64, len(telemetry.overruns))
+	for stage, count := range telemetry.overruns {
+		overruns[stage] = count
+	}
+	return overruns
 }
 
 // recordFailure is called ONLY for a failure runStage has already decided is
@@ -739,8 +854,16 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	stages := make([]string, 0, len(orderedStages))
 	for _, stage := range orderedStages {
 		stages = append(stages, string(stage))
+		// A metrics scrape is an equally valid poller for detectOverrun as
+		// the readyz check registered in NewMutationPipeline (CHAOS-4239
+		// round 3) -- a deployment that scrapes /metrics but never polls
+		// /readyz must still see and count a stuck stage. overrunCounted's
+		// per-episode guard keeps this from double-counting against the
+		// readyz check also calling it.
+		pipeline.stages.detectOverrun(stage, budgets[stage]+stepOverrunMargin)
 	}
 	sort.Strings(stages)
+	overruns := pipeline.stages.overrunSnapshot()
 
 	var text strings.Builder
 	text.WriteString("# HELP sync_reconciler_stage_failures_total Pipeline stage passes that exceeded their own budget or errored (CHAOS-4239). The pipeline continues past every stage except lease_repair and kernel; a stage climbing here degrades only its own work, never the process.\n# TYPE sync_reconciler_stage_failures_total counter\n")
@@ -762,6 +885,10 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 			value = 1
 		}
 		fmt.Fprintf(&text, "sync_reconciler_stage_degraded{stage=%q} %d\n", name, value)
+	}
+	text.WriteString("# HELP sync_reconciler_step_overrun_total Stage calls that ignored their own bounded context and were still running past their budget plus margin the last time this was checked (CHAOS-4239 round 3). Unlike sync_reconciler_stage_failures_total, this counts calls that never returned at all -- the only way such a call is visible.\n# TYPE sync_reconciler_step_overrun_total counter\n")
+	for _, name := range stages {
+		fmt.Fprintf(&text, "sync_reconciler_step_overrun_total{stage=%q} %d\n", name, overruns[StageName(name)])
 	}
 	_, err := io.WriteString(output, text.String())
 	return err

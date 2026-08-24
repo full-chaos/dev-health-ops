@@ -420,3 +420,139 @@ func TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess(t *
 		t.Fatal(err)
 	}
 }
+
+// TestStageIgnoringContextFlipsReadinessAndClearsOnReturn is chris's
+// CHAOS-4239 round-3 requirement: every non-fatal degradation mechanism this
+// file builds (ErrDegradedStage, ErrStepEnvelopeExceeded, the
+// consecutive-failure degrade) depends on a stage's call actually
+// RETURNING. A stage that ignores its own stageCtx and blocks forever
+// produces no failure, no success, and no duration sample -- it would be
+// completely invisible, trading CHAOS-4239's loud pre-fix crash-loop for a
+// silent zombie hang.
+//
+// This stubs a stage that deliberately never checks ctx.Done() and blocks
+// on a channel the test controls, proving detectOverrun (evaluated lazily
+// from the readiness-check goroutine, not a background timer, since the
+// goroutine actually running the stub stays genuinely blocked the whole
+// time) flips readyz -- naming the exact stage -- once its budget plus
+// margin has elapsed, and clears the moment the call is unblocked and
+// returns.
+func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	openReadinessGate(t, registry)
+
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	materializerCalls := 0
+
+	config := DefaultMutationPipelineConfig()
+	config.Registry = registry
+	// A tiny budget keeps the test fast: detectOverrun's threshold is
+	// budget+stepOverrunMargin, and stepOverrunMargin (250ms) dominates
+	// regardless, so this does not need to be unrealistically small to prove
+	// the mechanism -- it only needs to not be the multi-hundred-ms default.
+	config.StageBudgets = budgetsWithOverride(StageMaterializer, 10*time.Millisecond)
+
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(ctx context.Context, _ time.Time, _ time.Time, _ int) (MaterializerResult, error) {
+			materializerCalls++
+			if materializerCalls == 1 {
+				// Deliberately does NOT select on ctx.Done() -- this is
+				// exactly the bug class this test exists to catch: a call
+				// that ignores cancellation entirely, the way a wedged
+				// driver or a genuine deadlock would.
+				close(entered)
+				<-unblock
+			}
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
+		config,
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+
+	stepDone := make(chan struct{})
+	go func() {
+		defer close(stepDone)
+		pipeline.Step(context.Background(), time.Now().UTC(), 10)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("materializer stub never started")
+	}
+
+	wantName := stageReadinessCheckName(StageMaterializer)
+	deadline := time.After(5 * time.Second)
+	for {
+		readiness := registry.Readiness(context.Background())
+		if !readiness.Ready {
+			for _, check := range readiness.Checks {
+				if check.Name == wantName && check.Failed {
+					goto flagged
+				}
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("readiness never named the stuck materializer stage")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+flagged:
+
+	var metrics strings.Builder
+	if err := pipeline.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), `sync_reconciler_step_overrun_total{stage="materializer"} 1`) {
+		t.Fatalf("metrics missing the overrun counter:\n%s", metrics.String())
+	}
+
+	// Unblock the stuck call -- the operator fixed it, or it was never truly
+	// infinite, whichever story this maps to in production -- and confirm
+	// readiness clears once it actually returns.
+	close(unblock)
+	select {
+	case <-stepDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline.Step never returned after the stub was unblocked")
+	}
+	deadline = time.After(5 * time.Second)
+	for {
+		if registry.Readiness(context.Background()).Ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("readiness never cleared after the stuck stage returned")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	// The next (fresh, non-blocking) tick must stay healthy -- the overrun
+	// was a one-time episode, not a stuck flag.
+	if _, stepErr := pipeline.Step(context.Background(), time.Now().UTC(), 10); stepErr != nil {
+		t.Fatalf("next tick: Step() error = %v, want nil", stepErr)
+	}
+	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("readiness after the next healthy tick = %#v, want open", readiness)
+	}
+}

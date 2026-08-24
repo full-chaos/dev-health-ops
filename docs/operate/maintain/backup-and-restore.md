@@ -82,13 +82,16 @@ and the isolation posture in
 Both snippets below are self-contained — they source `ops/.env` for
 credentials rather than assuming the values are already in your shell
 (they will not be, in a clean shell, and both commands would otherwise
-silently run with empty credentials). Run from the `ops` repo root, and
-substitute the real `<ts>`/`<db>` filenames from the backup directory:
+silently run with empty credentials, since `source`-ing a missing/wrong
+path is not fail-fast). **Run these from inside the backup directory
+itself** (`dev-health/backups/<ts>/`, so the bare `<ts>`/`<db>` filenames
+below resolve directly) — `../../ops/.env` from there is
+`dev-health/ops/.env`, the real credentials file:
 
 Postgres (against the `compose.yml` container at `localhost:5432`):
 
 ```bash
-set -a; source ops/.env; set +a  # POSTGRES_USER, POSTGRES_PASSWORD
+set -a; source ../../ops/.env; set +a  # POSTGRES_USER, POSTGRES_PASSWORD
 set -o pipefail
 gunzip -c postgres-all-<ts>.sql.gz \
   | PGPASSWORD="$POSTGRES_PASSWORD" psql -h localhost -p 5432 \
@@ -104,7 +107,7 @@ can exit 0 having silently restored only part of the dump.
 ClickHouse (against the `compose.yml` container), per database:
 
 ```bash
-set -a; source ops/.env; set +a  # CLICKHOUSE_USER, CLICKHOUSE_PASSWORD
+set -a; source ../../ops/.env; set +a  # CLICKHOUSE_USER, CLICKHOUSE_PASSWORD
 docker cp clickhouse-<db>-<ts>.zip \
   dev-health-clickhouse-1:/var/lib/clickhouse/backups/<db>-<ts>.zip
 docker exec dev-health-clickhouse-1 clickhouse-client \

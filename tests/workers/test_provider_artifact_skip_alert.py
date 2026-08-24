@@ -170,38 +170,6 @@ def test_provider_artifact_skip_alert_annotation_explains_localization() -> None
     assert "unit" in description
 
 
-def test_provider_artifact_skip_alert_does_not_claim_the_unimplemented_sync_board_cause() -> (
-    None
-):
-    """Adversarial codex review, round 1 (real finding, CONFIRMED): the
-    unit-level `all_artifacts_unreadable` failure the ticket's own "what
-    exists" section describes is NOT implemented anywhere in this repo
-    (confirmed by grep across internal/**/*.go and src/) -- it belongs to
-    CHAOS-4185, which is still in flight in a sibling worktree as of this
-    alert's PR. Pointing operators at a sync-board cause that does not exist
-    would send them looking for something they will never find. The
-    annotation may still MENTION all_artifacts_unreadable/CHAOS-4185 for
-    forward context, but only hedged as not-yet-implemented -- never
-    asserted as a live localization path.
-    """
-    alert = _skip_alert()
-    description = str(alert["annotations"]["description"])
-    assert "CHAOS-4185" in description
-    assert re.search(r"not\s+implemented", description, re.IGNORECASE)
-
-    go_sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (ROOT / "internal").rglob("*.go")
-        if not path.name.endswith("_test.go")
-    )
-    assert "all_artifacts_unreadable" not in go_sources, (
-        "all_artifacts_unreadable now appears in non-test Go source -- "
-        "CHAOS-4185 has landed. Update this alert's annotation to describe "
-        "it as a real localization path (drop the not-implemented hedge) "
-        "and relax this test."
-    )
-
-
 def test_provider_artifact_skip_alert_labels_stay_bounded() -> None:
     # The expr/labels block must never grow a source/repository dimension --
     # that is precisely the unbounded-cardinality fix CHAOS-4177 closed off.

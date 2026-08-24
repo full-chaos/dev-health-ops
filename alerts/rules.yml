@@ -389,7 +389,7 @@ groups:
       # a single isolated event"; it cannot answer "how bad". A true rate
       # alert needs a denominator metric this package does not expose today
       # -- adding one is out of CHAOS-4184's scope (a new Go-side counter,
-      # not a rule change) and is called out to the ticket owner rather than
+      # not a rule change) and is filed separately as CHAOS-4240 rather than
       # invented here.
       #
       # No source label, and the alert says so. `provider`/`dataset` are the

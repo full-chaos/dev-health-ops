@@ -982,6 +982,19 @@ func CanonicalIncidentDecisionForUpdate(ctx context.Context, tx pgx.Tx, orgID st
 // The rule, stated once: DOMAIN-SIDE GATES READ ENTITLEMENT WITHOUT LOCKING;
 // ONLY THE COORDINATOR'S MATERIALIZER TAKES FOR UPDATE.
 //
+// Be precise about what is given up, because "we dropped a lock" is easy to
+// wave away and this one is real. FOR UPDATE NARROWED this window; it never
+// closed it. Under READ COMMITTED a locking read blocks on an administrator's
+// UNCOMMITTED disable and then re-reads the new row version, so that one
+// interleaving was refused; a plain read sees the old snapshot and proceeds.
+// The immediately adjacent interleaving -- a disable committing just after the
+// read -- was never refused by either form, because the external side effect
+// (executor.Discover) happens past the commit that releases the lock. So the
+// lock bought one interleaving, not the property. Closing the class needs a
+// re-check at the seam that actually precedes the side effect, which is
+// CHAOS-4219; this gate's job is to refuse runs that were disabled BEFORE it
+// looked, and that it still does.
+//
 // The window this gives up -- the flag changing between this read and the
 // caller's commit -- is bounded in both directions and neither direction
 // strands a run:

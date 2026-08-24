@@ -442,6 +442,7 @@ func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 		"complexity_daily_fanout":          CatchUpBounded,
 		"release_impact_daily_fanout":      CatchUpBounded,
 		"recommendations_daily_fanout":     CatchUpBounded,
+		"dora_daily_fanout":                CatchUpBounded,
 		"membership_backfill_daily_fanout": CatchUpBounded,
 		"capacity_forecast_weekly_fanout":  CatchUpBounded,
 		"sync_coverage_refresh":            CatchUpSkip,

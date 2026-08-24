@@ -301,6 +301,19 @@ ORDER BY partition.ordinal`, runID)
 	return result, nil
 }
 
+// ClaimPartition MUST return the partition's scope.
+//
+// CHAOS-4242: HTTPCompatibilityExecutor.ComputePartition never reads
+// Partition.Scope at all -- it posts run_id/partition_id to the Python
+// bridge, which re-loads scope itself. DORAExecutor and CapacityExecutor
+// (CHAOS-3092 R1 / CUT-20 R2) are the first two callers of ComputePartition
+// that decode Partition.Scope directly, and this RETURNING clause was never
+// updated for them: it claimed the row but always handed back a zero-value
+// json.RawMessage, so every native-executor partition failed
+// json.Unmarshal in under a millisecond, before any ClickHouse read or
+// write -- on every attempt, for every partition, in both environments.
+// Dropping the scope column here again would silently resurrect that exact
+// regression for these two kinds while leaving every bridge kind green.
 func (store *PostgresStore) ClaimPartition(ctx context.Context, partitionID string) (*Claim, error) {
 	if !store.valid() || !validUUID(partitionID) {
 		return nil, ErrUnavailable
@@ -320,15 +333,18 @@ WHERE partition.id = $4::uuid AND (
       SELECT 1 FROM public.remaining_metric_runs AS run
       WHERE run.id = partition.run_id AND run.status IN ('pending', 'running')
   )
-RETURNING partition.id::text, partition.run_id::text, partition.ordinal, partition.claim_token::text
+RETURNING partition.id::text, partition.run_id::text, partition.ordinal, partition.scope, partition.claim_token::text
 ), activated_run AS (
     UPDATE public.remaining_metric_runs AS run
     SET status = 'running', updated_at = $1
     WHERE run.id = (SELECT run_id::uuid FROM claimed) AND run.status = 'pending'
 )
-SELECT id, run_id, ordinal, claim_token FROM claimed`,
+SELECT id, run_id, ordinal, scope, claim_token FROM claimed`,
 		now, token, now.Add(store.lease), partitionID,
-	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Partition.Ordinal, &claim.Token)
+	).Scan(
+		&claim.Partition.ID, &claim.Partition.RunID, &claim.Partition.Ordinal,
+		&claim.Partition.Scope, &claim.Token,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, store.unclaimableReason(ctx, partitionID, now)
 	}

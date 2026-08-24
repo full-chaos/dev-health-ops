@@ -10,6 +10,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
@@ -150,18 +151,26 @@ func (executor *DORAExecutor) ComputePartition(
 		return errDORAUnavailable
 	}
 	if strings.TrimSpace(run.OrganizationID) == "" {
-		return fmt.Errorf("%w: partition %s has no organization", ErrInvalidState, partition.ID)
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s has no organization", ErrInvalidState, partition.ID))
 	}
 	var scope doraScope
 	if err := json.Unmarshal(partition.Scope, &scope); err != nil {
-		return fmt.Errorf("%w: partition %s scope: %v", ErrInvalidState, partition.ID, err)
+		// CHAOS-4242: this is the precondition that failed on every real
+		// attempt -- PostgresStore.ClaimPartition returned an empty scope.
+		// Static format, partition ID plus the decoder's own message; no
+		// upstream content. Safe to surface at WARN (jobruntime.WithSafeCause).
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 	day, err := time.Parse("2006-01-02", scope.Day)
 	if err != nil {
-		return fmt.Errorf("%w: partition %s day %q", ErrInvalidState, partition.ID, scope.Day)
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s day %q", ErrInvalidState, partition.ID, scope.Day))
 	}
 	if scope.BackfillDays < 1 {
-		return fmt.Errorf("%w: partition %s backfill_days", ErrInvalidState, partition.ID)
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s backfill_days", ErrInvalidState, partition.ID))
 	}
 
 	// One stamp for the whole partition, before the day loop -- see (2) above.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -332,6 +333,114 @@ func TestAdapterAllowsAuditedManualRetryAttemptCeiling(t *testing.T) {
 	job.MaxAttempts = 4
 	if err := adapter.Work(context.Background(), job); err != nil {
 		t.Fatalf("manual retry: %v", err)
+	}
+}
+
+// TestAdapterLogsTheWrappedCauseBehindAFailedJob is the red-first pin for
+// CHAOS-4242 step 1. Before this fix, every job failure logged only
+// "job finished" with error_category set to the bounded category -- the
+// cause a handler returned never reached any log line anywhere, in either
+// environment, which is why the native-DORA regression took direct
+// measurement against a live stack to diagnose instead of a grep. This
+// asserts the WARN "job failed" line carries a WithSafeCause-marked cause,
+// plus kind/job_id/attempt/error_category, while the outbound River error
+// (transportError) stays the unchanged bounded safeError -- the fix must
+// not widen what crosses into River, only what reaches structured logs.
+//
+// The cause must be wrapped with WithSafeCause to surface at all -- see
+// TestAdapterNeverLogsAnUnmarkedHandlerErrorsCause immediately below, which
+// pins the opposite and more important half of this contract.
+func TestAdapterLogsTheWrappedCauseBehindAFailedJob(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	observer := &recordingObserver{}
+	innerCause := errors.New("partition 28f8b70b scope: unexpected end of JSON input")
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return Retryable(WithSafeCause(fmt.Errorf("remaining metrics durable state is invalid: %w", innerCause)))
+	}), observer, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &logs)
+	job := retentionJob(t, 1)
+
+	workErr := adapter.Work(context.Background(), job)
+	if workErr == nil {
+		t.Fatal("expected a retryable transport error")
+	}
+	if workErr.Error() != "dev-health job failed [retryable]" {
+		t.Fatalf(
+			"the bounded River-facing error widened: %q -- transportError must "+
+				"still be built from choice.category alone, never from the cause",
+			workErr.Error(),
+		)
+	}
+
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line is not JSON: %v: %s", err, line)
+		}
+		if record["msg"] != "job failed" {
+			continue
+		}
+		found = true
+		if record["level"] != "WARN" {
+			t.Errorf("job failed log level = %v, want WARN", record["level"])
+		}
+		cause, _ := record["cause"].(string)
+		if !strings.Contains(cause, innerCause.Error()) {
+			t.Errorf("cause = %q, want it to contain %q", cause, innerCause.Error())
+		}
+		if record["error_category"] != string(CategoryRetryable) {
+			t.Errorf("error_category = %v, want %q", record["error_category"], CategoryRetryable)
+		}
+		if record["kind"] != jobcontract.KindRetentionCleanup {
+			t.Errorf("kind = %v, want %q", record["kind"], jobcontract.KindRetentionCleanup)
+		}
+		if _, ok := record["job_id"]; !ok {
+			t.Error("job_id missing from job failed log line")
+		}
+		if _, ok := record["attempt"]; !ok {
+			t.Error("attempt missing from job failed log line")
+		}
+	}
+	if !found {
+		t.Fatalf("no WARN \"job failed\" log line found; logs:\n%s", logs.String())
+	}
+}
+
+// TestAdapterNeverLogsAnUnmarkedHandlerErrorsCause is the more important
+// half of the CHAOS-4242 logging contract: an ordinary handler error --
+// exactly the shape TestAdapterMiddlewareOutcomesAreSafeAndDeterministic
+// plants fake secrets in -- must not have its text surfaced by logCause just
+// because it happens to wrap something. A handler error can legitimately
+// carry upstream response bodies, tokens, or other caller-supplied content
+// the runtime cannot vet, so surfacing a cause is opt-in (WithSafeCause)
+// per call site, never automatic. This failed during development of the
+// CHAOS-4242 fix itself, against the exact secret strings
+// TestAdapterMiddlewareOutcomesAreSafeAndDeterministic already plants --
+// which is exactly why that test caught it and why this one pins the fix.
+func TestAdapterNeverLogsAnUnmarkedHandlerErrorsCause(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	observer := &recordingObserver{}
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return Retryable(fmt.Errorf("wrapped: %w", errors.New("credential=do-not-log")))
+	}), observer, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &logs)
+	job := retentionJob(t, 1)
+
+	if err := adapter.Work(context.Background(), job); err == nil {
+		t.Fatal("expected a retryable transport error")
+	}
+	if strings.Contains(logs.String(), "do-not-log") {
+		t.Fatalf("unmarked handler error text leaked into logs: %s", logs.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line is not JSON: %v: %s", err, line)
+		}
+		if record["msg"] == "job failed" {
+			t.Fatalf("a \"job failed\" WARN line was emitted for an unmarked cause: %v", record)
+		}
 	}
 }
 

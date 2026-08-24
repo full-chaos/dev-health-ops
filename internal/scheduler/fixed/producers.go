@@ -543,6 +543,19 @@ func NewRemainingMetricsFanoutProducer(
 					})
 				},
 			},
+			"dora_daily_fanout": {
+				Family: "dora",
+				// version/day/backfill_days/sink/interval are exactly what
+				// validateFamilyScope's "dora" case (scopes.go) requires;
+				// repo_id/repo_name/metrics stay unset, matching every other
+				// fanout's whole-organization scope.
+				Scope: func(day string) (json.RawMessage, error) {
+					return json.Marshal(map[string]any{
+						"version": 1, "day": day, "backfill_days": 1,
+						"sink": "auto", "interval": "daily",
+					})
+				},
+			},
 			"recommendations_daily_fanout": {
 				Family: "recommendations",
 				Scope: func(string) (json.RawMessage, error) {

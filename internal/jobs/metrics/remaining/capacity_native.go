@@ -10,6 +10,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
@@ -111,18 +112,24 @@ func (executor *CapacityExecutor) ComputePartition(
 		return errCapacityUnavailable
 	}
 	if strings.TrimSpace(run.OrganizationID) == "" {
-		return fmt.Errorf("%w: partition %s has no organization", ErrInvalidState, partition.ID)
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s has no organization", ErrInvalidState, partition.ID))
 	}
 	// The seed is what makes this family reproducible at all, and the run
 	// table enforces its presence for capacity (postgres.go:557). Checking
 	// again here keeps the executor honest on its own terms rather than
 	// trusting an invariant enforced elsewhere.
 	if run.Seed == nil {
-		return fmt.Errorf("%w: partition %s", ErrCapacitySeedMissing, partition.ID)
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s", ErrCapacitySeedMissing, partition.ID))
 	}
 	var scope capacityScope
 	if err := json.Unmarshal(partition.Scope, &scope); err != nil {
-		return fmt.Errorf("%w: partition %s scope: %v", ErrInvalidState, partition.ID, err)
+		// CHAOS-4242: the same claim-path precondition failure DORA hit --
+		// static format, partition ID plus the decoder's own message; no
+		// upstream content. Safe to surface at WARN.
+		return jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 
 	today := executor.nowUTC()
@@ -166,9 +173,9 @@ func (executor *CapacityExecutor) ComputePartition(
 		if scope.TargetDate != nil && *scope.TargetDate != "" {
 			parsed, err := time.Parse("2006-01-02", *scope.TargetDate)
 			if err != nil {
-				return fmt.Errorf(
+				return jobruntime.WithSafeCause(fmt.Errorf(
 					"%w: partition %s target_date %q", ErrInvalidState,
-					partition.ID, *scope.TargetDate)
+					partition.ID, *scope.TargetDate))
 			}
 			parsed = parsed.UTC()
 			request.TargetDate = &parsed

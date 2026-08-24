@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,121 @@ func TestGitHubTestsCrossArtifactBatchCommitsBothArtifactsWithoutError(t *testin
 	}
 	if batchConn.batch == nil || batchConn.batch.appends != 2 {
 		t.Fatalf("committed appends=%v, want both artifacts' rows written", batchConn.batch)
+	}
+}
+
+// TestGitHubTestsWriteEffectDuplicateKeyErrorNamesTheCollidingKey pins the
+// cause-erasure fix ordered alongside CHAOS-4190: a batch that DOES contain a
+// genuine duplicate natural key (same content re-sent, a real upstream bug
+// elsewhere, anything other than the cross-artifact case this ticket fixed)
+// must still be refused -- recordGitHubTestsKey is a correct, deliberate
+// guard -- but the refusal must name which destination and which key
+// collided. The bare "provider sync configuration is invalid" this replaces
+// is exactly the defect class CHAOS-4191 is chasing: an error with no
+// context a reader can act on.
+func TestGitHubTestsWriteEffectDuplicateKeyErrorNamesTheCollidingKey(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	row := testSuiteResultRow{
+		OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "9001",
+		SuiteID: "duplicate-suite-id", SuiteName: "dup", LastSynced: now,
+	}
+	effect, err := effectBatchFromValues("test_suite_results", EffectReadbackRequired, []testSuiteResultRow{row, row})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sink := TestOpsClickHouseEffects{
+		Conn:  &githubTestsDuplicateKeyConn{},
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	err = sink.WriteEffect(context.Background(), claim, effect)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("WriteEffect error=%v, want ErrInvalidConfiguration", err)
+	}
+	for _, want := range []string{"test_suite_results", row.RunID, row.SuiteID} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error=%q does not name the colliding key: missing %q", err.Error(), want)
+		}
+	}
+}
+
+// TestGitHubTestsCrossArtifactSameReportPathCoverageGetsDistinctSnapshotIDs
+// is codex's gap, closed: the suite/case tests above only exercised the
+// JUnit path. Coverage SnapshotID is hashed independently
+// (parseGitHubCoverageRow -> parseCoberturaRow / parseLCOVRow,
+// github_tests_reports.go) and needs its own proof that two DISTINCT
+// artifacts of one run, each contributing a coverage report at the SAME
+// path (the ordinary shape of a matrix build where every leg uploads
+// "coverage.info"), get distinct SnapshotIDs instead of colliding.
+func TestGitHubTestsCrossArtifactSameReportPathCoverageGetsDistinctSnapshotIDs(t *testing.T) {
+	repoID, runID, orgID := "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a"
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+
+	lcovA := "SF:services/api/main.go\nDA:1,1\nDA:2,0\nLF:2\nLH:1\nend_of_record\n"
+	lcovB := "SF:services/api/main.go\nDA:1,1\nDA:2,1\nLF:2\nLH:2\nend_of_record\n"
+
+	rowsA, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"coverage.info": lcovA}), "artifact-a", repoID, runID, orgID, &now, &now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowsB, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"coverage.info": lcovB}), "artifact-b", repoID, runID, orgID, &now, &now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rowsA.Coverage) != 1 || len(rowsB.Coverage) != 1 {
+		t.Fatalf("coverage rows A=%+v B=%+v", rowsA.Coverage, rowsB.Coverage)
+	}
+	if rowsA.Coverage[0].SnapshotID == "" || rowsA.Coverage[0].SnapshotID == rowsB.Coverage[0].SnapshotID {
+		t.Fatalf("CHAOS-4190: LCOV coverage snapshot ids=%q,%q from two DISTINCT artifacts at the same report path collided",
+			rowsA.Coverage[0].SnapshotID, rowsB.Coverage[0].SnapshotID)
+	}
+}
+
+// TestGitHubTestsCrossArtifactSameReportPathCoberturaGetsDistinctSnapshotIDs
+// mirrors the LCOV case above for the Cobertura report format, the other
+// branch inside parseGitHubCoverageRow.
+func TestGitHubTestsCrossArtifactSameReportPathCoberturaGetsDistinctSnapshotIDs(t *testing.T) {
+	repoID, runID, orgID := "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a"
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	cobertura := `<coverage lines-valid="2" lines-covered="1" branches-valid="2" branches-covered="1"><packages><package><classes><class filename="services/api/main.go"><lines><line number="1" hits="1"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`
+
+	rowA, err := parseGitHubCoverageRow([]byte(cobertura), "coverage.xml", "artifact-a", repoID, runID, orgID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowB, err := parseGitHubCoverageRow([]byte(cobertura), "coverage.xml", "artifact-b", repoID, runID, orgID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowA.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
+		t.Fatalf("CHAOS-4190: Cobertura coverage snapshot ids=%q,%q from two DISTINCT artifacts at the same report path collided",
+			rowA.SnapshotID, rowB.SnapshotID)
+	}
+}
+
+// TestGitLabTestsCrossJobSameReportPathCoverageGetsDistinctSnapshotIDs
+// closes codex's gap for the GitLab path: two distinct jobs of one pipeline
+// (GitLab's analogue of "artifact") each downloading a coverage report at
+// the same path must not collide either.
+func TestGitLabTestsCrossJobSameReportPathCoverageGetsDistinctSnapshotIDs(t *testing.T) {
+	repoID, runID, orgID := "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a"
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	lcov := "SF:services/api/main.go\nDA:1,1\nDA:2,0\nLF:2\nLH:1\nend_of_record\n"
+
+	rowA, err := parseLCOVRow([]byte(lcov), "reports/coverage.info", "job-11", repoID, runID, orgID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowB, err := parseLCOVRow([]byte(lcov), "reports/coverage.info", "job-12", repoID, runID, orgID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowA.SnapshotID == "" || rowA.SnapshotID == rowB.SnapshotID {
+		t.Fatalf("CHAOS-4190: GitLab coverage snapshot ids=%q,%q from two DISTINCT jobs at the same report path collided",
+			rowA.SnapshotID, rowB.SnapshotID)
 	}
 }
 

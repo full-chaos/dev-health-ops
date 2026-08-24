@@ -17,18 +17,13 @@ var gitLabTestsGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route effect boundary",
 }
 
-// gitLabTestsCoverageOracleGoOnlyFields extends the base exclusion set for
-// the coverage row pair only: parseLCOVRow now scopes coverage SnapshotID to
-// the artifact (here: the GitLab job) it was downloaded from, so two
-// distinct jobs of one pipeline never collide on WriteEffect's
-// recordGitHubTestsKey check (CHAOS-4190). Python's retired coverage
-// producer was never updated to match -- see
-// githubTestsReportOracleGoOnlyFields in github_tests_generic_oracle_test.go
-// for the full rationale (dead code post CHAOS-4026, different write model).
-var gitLabTestsCoverageOracleGoOnlyFields = map[string]string{
-	"last_synced": gitLabTestsGoOnlyFields["last_synced"],
-	"snapshot_id": "CHAOS-4190: Go scopes coverage SnapshotID per artifact/job; Python's retired producer does not",
-}
+// CHAOS-4190: parseLCOVRow now scopes coverage SnapshotID to the artifact
+// (here: the GitLab job) it was downloaded from, so two distinct jobs of
+// one pipeline never collide on WriteEffect's recordGitHubTestsKey check.
+// snapshot_id is NOT a goOnlyField -- Python's row carries it too, just
+// with a different value -- so the divergence is declared in the pair's
+// own excluded_fields (testdata/oracle_pairs/gitlab_tests_coverage.py),
+// with the reachability rationale spelled out there.
 
 func gitLabTestsOracleCase() oracleCase {
 	return oracleCase{ID: "active_gitlab_testops_rows", Input: map[string]any{
@@ -130,7 +125,7 @@ func TestGenericOracleMatchesActivePythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/coverage", []oracleCase{testCase}, func(t *testing.T, input map[string]any) coverageSnapshotRow {
 		_, _, _, _, _, a := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsCoverageOracleGoOnlyFields)
+	}, gitLabTestsGoOnlyFields)
 }
 
 type gitLabTestsSelectionObservation struct {

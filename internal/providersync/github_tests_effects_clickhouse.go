@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -71,7 +72,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return err
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID)
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.PipelineName, row.Provider, row.Status, row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, row.QueueSeconds, row.RetryCount, row.CancelReason, row.TriggerSource, row.CommitHash, row.Branch, row.PRNumber, row.TeamID, row.ServiceID, row.LastSynced); err != nil {
 				return err
@@ -100,7 +101,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return ErrInvalidConfiguration
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.JobID) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "job_id", row.JobID)
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.JobID, row.JobName, row.Stage, row.Status, row.StartedAt, row.FinishedAt, row.DurationSeconds, row.RunnerType, row.RetryAttempt, row.LastSynced); err != nil {
 				return err
@@ -132,7 +133,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return err
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.CheckKey) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "check_key", row.CheckKey)
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.CheckKey, row.CheckName, row.Provider, row.Requirement, row.Result, row.RuleVersion, row.Provenance, row.TargetBranch, row.PRNumber, row.SourceURL, row.ObservedAt, row.LastSynced); err != nil {
 				return err
@@ -161,7 +162,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return ErrInvalidConfiguration
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SuiteID) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID)
 			}
 			counts, err := gitHubTestsCounts(row.TotalCount, row.PassedCount, row.FailedCount, row.SkippedCount, row.ErrorCount, row.QuarantinedCount, row.RetriedCount)
 			if err != nil {
@@ -194,7 +195,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return ErrInvalidConfiguration
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.CaseID) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID, "case_id", row.CaseID)
 			}
 			retry, err := gitHubTestsUint32(row.RetryAttempt)
 			if err != nil {
@@ -227,7 +228,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				return ErrInvalidConfiguration
 			}
 			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SnapshotID) {
-				return ErrInvalidConfiguration
+				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "snapshot_id", row.SnapshotID)
 			}
 			linesTotal, err := gitHubTestsNullableUint32(row.LinesTotal)
 			if err != nil {
@@ -273,6 +274,24 @@ func recordGitHubTestsKey(seen map[string]struct{}, parts ...string) bool {
 	}
 	seen[key] = struct{}{}
 	return true
+}
+
+// duplicateNaturalKeyError names the destination and the colliding natural
+// key on a recordGitHubTestsKey rejection. Before CHAOS-4190 this site
+// returned the bare, context-free ErrInvalidConfiguration -- a duplicate
+// batch always failed the SAME way whether it was two rows the caller
+// re-sent verbatim, an upstream bug producing a genuine collision, or (until
+// CHAOS-4190's fix) two distinct artifacts of one run that never should have
+// collided at all -- and nothing in the error said which. fields must be
+// passed as alternating name/value pairs in the same order recordGitHubTestsKey
+// was called with, so the message and the actual dedup key never drift apart.
+func duplicateNaturalKeyError(destination string, fields ...string) error {
+	pairs := make([]string, 0, len(fields)/2)
+	for index := 0; index+1 < len(fields); index += 2 {
+		pairs = append(pairs, fields[index]+"="+fields[index+1])
+	}
+	return fmt.Errorf("%w: duplicate natural key in %s batch (%s)",
+		ErrInvalidConfiguration, destination, strings.Join(pairs, " "))
 }
 
 func gitHubTestsUint32(value int64) (uint32, error) {

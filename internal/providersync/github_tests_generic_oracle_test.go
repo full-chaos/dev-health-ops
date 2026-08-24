@@ -12,44 +12,16 @@ var githubTestsOracleGoOnlyFields = map[string]string{
 	"last_synced": "ClickHouse sinks stamp persistence time after Python's active report-ingestion boundary; Go stabilizes it in the effect row for crash recovery",
 }
 
-// The three maps below extend the base exclusion set for the suite/case/
-// coverage row pairs: parseJUnitRows/parseGitHubCoverageRow now scope
-// SuiteID/CaseID/SnapshotID to the artifact the report came from (CHAOS-4190),
-// so two distinct artifacts of the same run never hash to the same natural
-// key and get bare-rejected by WriteEffect's recordGitHubTestsKey. Python's
-// retired ingest_report_members/build_suite_id
-// (src/dev_health_ops/processors/testops_tests.py) was never updated to
-// match -- it is dead code post CHAOS-4026 (Celery retirement) and its own
-// write path (per-artifact ClickHouse upsert into a ReplacingMergeTree)
-// never hit this failure mode in the first place, it silently kept
-// whichever leg landed last. Fixing only the still-live Go producer is a
-// deliberate, one-directional divergence, not an accidental one.
-//
-// Each pair gets ONLY the id fields its own row type actually carries:
-// checkExclusionIntegrity (internal/testsupport/oraclecompare) fails a
-// declared goOnlyFields entry that never matches a key in that pair's Go
-// row as a stale exclusion, so a shared map across all three would flag
-// case_id as stale on the suite pair and suite_id/case_id as stale on the
-// coverage pair.
-const githubTestsCHAOS4190SuiteIDReason = "CHAOS-4190: Go scopes SuiteID per artifact; Python's retired producer does not"
-const githubTestsCHAOS4190CaseIDReason = "CHAOS-4190: CaseID inherits the artifact-scoped SuiteID; Python's retired producer does not"
-const githubTestsCHAOS4190SnapshotIDReason = "CHAOS-4190: Go scopes coverage SnapshotID per artifact; Python's retired producer does not"
-
-var githubTestsSuiteOracleGoOnlyFields = map[string]string{
-	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
-	"suite_id":    githubTestsCHAOS4190SuiteIDReason,
-}
-
-var githubTestsCaseOracleGoOnlyFields = map[string]string{
-	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
-	"suite_id":    githubTestsCHAOS4190SuiteIDReason,
-	"case_id":     githubTestsCHAOS4190CaseIDReason,
-}
-
-var githubTestsCoverageOracleGoOnlyFields = map[string]string{
-	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
-	"snapshot_id": githubTestsCHAOS4190SnapshotIDReason,
-}
+// CHAOS-4190: parseJUnitRows/parseGitHubCoverageRow now scope SuiteID/
+// CaseID/SnapshotID to the artifact the report came from, so two distinct
+// artifacts of the same run never hash to the same natural key and get
+// bare-rejected by WriteEffect's recordGitHubTestsKey. suite_id/case_id/
+// snapshot_id are NOT goOnlyFields -- Python's row carries them too, just
+// with a different value -- so the divergence is declared where it
+// belongs: each pair's own excluded_fields in testdata/oracle_pairs/
+// (github_tests_suite.py, github_tests_case.py, github_tests_coverage.py),
+// with the reachability rationale (manual-CLI-only, off the automated
+// dispatch path) spelled out there.
 
 var githubTestsProducerGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route boundary after the active Python producer returns its row",
@@ -221,7 +193,7 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsSuiteRow(t *testing.T) {
 				t.Fatalf("suites=%+v", rows.Suites)
 			}
 			return rows.Suites[0]
-		}, githubTestsSuiteOracleGoOnlyFields)
+		}, githubTestsOracleGoOnlyFields)
 }
 
 func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
@@ -234,7 +206,7 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
 				t.Fatalf("cases=%+v", rows.Cases)
 			}
 			return rows.Cases[1]
-		}, githubTestsCaseOracleGoOnlyFields)
+		}, githubTestsOracleGoOnlyFields)
 }
 
 func TestGenericOracleMatchesLivePythonForGitHubTestsCoverageRow(t *testing.T) {
@@ -260,5 +232,5 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsCoverageRow(t *testing.T) {
 				t.Fatalf("coverage=%+v", rows.Coverage)
 			}
 			return rows.Coverage[0]
-		}, githubTestsCoverageOracleGoOnlyFields)
+		}, githubTestsOracleGoOnlyFields)
 }

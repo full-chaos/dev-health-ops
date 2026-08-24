@@ -625,11 +625,11 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 		// widening on either would not have failed anything here, so this test
 		// did not prove the least-privilege boundary it claims to cover.
 		{
-			table:     "sync_configurations",
-			verb:      "INSERT",
+			table: "sync_configurations",
+			verb:  "INSERT",
 			statement: "INSERT INTO public.sync_configurations (id,org_id,integration_id,sync_options,created_at) " +
 				"VALUES (gen_random_uuid(),'org',gen_random_uuid(),'{}'::json,now())",
-			why:       "finalize stamps last_sync_* on an EXISTING config; creating one is the scheduler's job",
+			why: "finalize stamps last_sync_* on an EXISTING config; creating one is the scheduler's job",
 		},
 		{
 			table:     "sync_configurations",

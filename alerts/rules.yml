@@ -388,12 +388,32 @@ groups:
       # SLOWER cron; there is no enforced maximum anywhere. 24h is the
       # slowest documented, code-enforced tier floor, so the window is set
       # to 25h (padding for scheduling jitter/a late run) -- this covers
-      # every tier's fastest-allowed schedule with margin. A custom schedule
-      # configured SLOWER than 24h (an operator choice, not a tier floor) is
-      # a known, accepted gap: this alert cannot distinguish "slower than
-      # 25h" recurrence from a one-off burst, and closing that gap would
-      # need a per-source cadence signal this metric does not carry (same
-      # closed-vocabulary constraint as everywhere else on this counter).
+      # every tier's fastest-allowed schedule with margin, AS SHIPPED.
+      #
+      # KNOWN LIMITATION 1a, stated deliberately (adversarial codex review,
+      # round 4): "as shipped" is doing real work in that sentence.
+      # `TierLimitService._resolve_tier_limits`
+      # (src/dev_health_ops/api/services/licensing.py:352-399) resolves
+      # `min_sync_interval_hours` from THREE layers, in order: a per-org
+      # `OrgLicense.limits_override` JSON column, then the `tier_limits` DB
+      # table, then `TIER_LIMITS_DEFAULTS` last. Both of the first two are
+      # runtime-configurable WITHOUT a code deploy. If either is ever set
+      # ABOVE 24h for a tier or a specific org -- raising the floor itself,
+      # not just an operator choosing a slower cron within an unchanged
+      # floor -- this alert can go silently blind for that scope, exactly
+      # like the slower-custom-schedule gap below, and nothing here detects
+      # the drift. The window/test below is pinned against the CODE-DEFAULT
+      # floor only; it cannot see a DB-table or per-org override change.
+      # Closing this would need either a live query against that runtime
+      # state (out of reach for a static Prometheus rule) or a metric
+      # exposing the effective floor, neither of which exists today.
+      #
+      # KNOWN LIMITATION 1b: a custom schedule configured SLOWER than 24h
+      # (an operator choice within an unraised floor) is a known, accepted
+      # gap: this alert cannot distinguish "slower than 25h" recurrence from
+      # a one-off burst, and closing that gap would need a per-source
+      # cadence signal this metric does not carry (same closed-vocabulary
+      # constraint as everywhere else on this counter).
       #
       # `for: 26h` (> the 25h window) is the shortest `for` that still
       # guarantees single-burst immunity at this window. This makes
@@ -403,7 +423,7 @@ groups:
       # ticket's own illustrative bad scenario almost exactly ("20% of
       # artifacts failing on one provider for A DAY").
       #
-      # KNOWN LIMITATION 1, stated deliberately (adversarial codex review,
+      # KNOWN LIMITATION 2, stated deliberately (adversarial codex review,
       # round 1): this construction detects RECURRENCE across runs, not
       # MAGNITUDE within a run. One skip roughly every run for 26h+
       # satisfies it exactly the same as 20% of a run's artifacts skipping
@@ -416,7 +436,7 @@ groups:
       # counter, not a rule change) and is filed separately as CHAOS-4240
       # rather than invented here.
       #
-      # KNOWN LIMITATION 2, stated deliberately (adversarial codex review,
+      # KNOWN LIMITATION 3, stated deliberately (adversarial codex review,
       # round 3): `sum by (provider, dataset)` aggregates ACROSS EVERY
       # ORGANIZATION sharing that provider+dataset pair, because the metric
       # carries no org/tenant label at all (the platform bans org identity
@@ -431,6 +451,28 @@ groups:
       # can fix without violating that platform policy; a scoped signal
       # would need a bounded, non-identifying attribution dimension that
       # does not exist today.
+      #
+      # KNOWN LIMITATION 4, stated deliberately (adversarial codex review,
+      # round 4): `providerfoundation.Metrics` is constructed exactly once
+      # per worker process (`NewMetrics()`, cmd/dev-health-worker/
+      # provider_sync.go's comment: "constructed exactly once per worker
+      # process ... so dev_health_provider_* actually accumulates across
+      # dispatches") with a plain in-memory map -- there is no persistence
+      # across restarts. Every restart/redeploy resets every label combo's
+      # count to absent-until-next-skip. Prometheus's own counter-reset
+      # compensation in increase()/rate() is designed to handle an ordinary
+      # restart correctly (a value drop is treated as "reset to 0, then grew
+      # to the new value", not as negative growth), so a ROUTINE restart
+      # with zero subsequent skips should read as zero added increase, not a
+      # phantom positive one -- but this repo has no promtool/live-Prometheus
+      # rule-evaluation harness to prove that behaviorally against a
+      # crash-looping worker (restarts faster than the 60s group-evaluation
+      # interval, or faster than the scrape interval) over a real 25h/26h
+      # window, and codex round 4 flagged that gap as unverified rather than
+      # confirmed-safe. Treat this as an open, documented risk rather than a
+      # closed one: if this alert is ever seen firing with no matching WARN
+      # log volume, check for a crash-looping worker before trusting the
+      # page.
       #
       # No source label, and the alert says so. `provider`/`dataset` are the
       # metric's only bounded dimensions -- repository names are unbounded

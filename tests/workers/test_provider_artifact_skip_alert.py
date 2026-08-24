@@ -164,21 +164,44 @@ def test_provider_artifact_skip_alert_window_covers_every_tier_sync_floor() -> N
     numbers) so a future tier-limit change that widens the floor further
     is caught here rather than silently reopening the gap.
 
-    `min_sync_interval_hours` is a floor, not a ceiling -- an operator can
-    still configure an even slower custom cron. Covering an unbounded slow
-    schedule is out of scope (documented as a known limitation in the
-    rule's own comment); this test only pins the window against the
-    documented, code-enforced floors.
+    Hardened per round 4 (also real, CONFIRMED): the first version of this
+    test silently dropped any tier missing a `min_sync_interval_hours` key,
+    so a typo'd or removed key would still pass; it also used `>=` while the
+    rule comment claims 25h "pads" the 24h floor, an unenforced claim. This
+    version asserts the exact tier set and a strict margin.
+
+    Two things this test deliberately does NOT cover, both documented as
+    open limitations in the rule's own comment rather than silently
+    accepted: (1) `min_sync_interval_hours` is a FLOOR here, not a ceiling
+    -- an operator can still configure an even slower custom cron, which
+    this test cannot detect. (2) `TIER_LIMITS_DEFAULTS` is the CODE-DEFAULT
+    fallback only -- `TierLimitService` (src/dev_health_ops/api/services/
+    licensing.py) resolves a per-org `OrgLicense.limits_override` or a
+    `tier_limits` DB row ABOVE these defaults at runtime, without a code
+    deploy; this test has no way to see that (a live DB query is out of
+    reach for a unit test and irrelevant to what this rule can statically
+    guarantee).
     """
     from dev_health_ops.models.licensing import TIER_LIMITS_DEFAULTS
 
-    floor_hours = [
-        float(cast(dict[str, Any], limits)["min_sync_interval_hours"])
-        for limits in TIER_LIMITS_DEFAULTS.values()
-        if cast(dict[str, Any], limits).get("min_sync_interval_hours") is not None
-    ]
-    assert floor_hours, "TIER_LIMITS_DEFAULTS carried no min_sync_interval_hours values"
-    slowest_floor_hours = max(floor_hours)
+    expected_tiers = {"community", "team", "enterprise"}
+    actual_tiers = {tier.value for tier in TIER_LIMITS_DEFAULTS}
+    assert actual_tiers == expected_tiers, (
+        f"TIER_LIMITS_DEFAULTS tier set changed: expected {expected_tiers}, "
+        f"got {actual_tiers} -- update this test deliberately if a tier was "
+        "added or removed, don't just widen the set"
+    )
+
+    floor_hours: dict[str, float] = {}
+    for tier, limits in TIER_LIMITS_DEFAULTS.items():
+        value = cast(dict[str, Any], limits).get("min_sync_interval_hours")
+        assert value is not None, (
+            f"{tier.value} tier has no min_sync_interval_hours in "
+            "TIER_LIMITS_DEFAULTS -- this alert's window can no longer be "
+            "verified against that tier's real sync floor"
+        )
+        floor_hours[tier.value] = float(value)
+    slowest_floor_hours = max(floor_hours.values())
 
     alert = _skip_alert()
     window_match = re.search(
@@ -188,12 +211,17 @@ def test_provider_artifact_skip_alert_window_covers_every_tier_sync_floor() -> N
     assert window_match, "expected an increase(...[<N>h]) lookback window"
     window_hours = int(window_match.group(1))
 
-    assert window_hours >= slowest_floor_hours, (
-        f"lookback window ({window_hours}h) is narrower than the slowest "
+    # Strict, not >=: the rule comment claims the window PADS the slowest
+    # floor for scheduling jitter, not merely matches it. If a future tier
+    # floor lands exactly on the current window, that claim goes false --
+    # this should fail loudly and force a deliberate re-pick of the margin,
+    # not silently degrade to zero jitter tolerance.
+    assert window_hours > slowest_floor_hours, (
+        f"lookback window ({window_hours}h) does not exceed the slowest "
         f"documented tier sync floor ({slowest_floor_hours}h) -- two "
         "consecutive healthy runs on that tier's fastest allowed schedule "
-        "would never both land inside one window, so the alert could never "
-        "fire for it at all"
+        "would never both land inside one window with any jitter margin, "
+        "so the alert could go permanently silent for it"
     )
 
 

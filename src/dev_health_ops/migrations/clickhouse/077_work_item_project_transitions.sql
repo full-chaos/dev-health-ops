@@ -80,6 +80,14 @@ ORDER BY (org_id, work_item_id, occurred_at, event_id);
 -- sorting key, so reusing it here makes the projection deterministic and makes
 -- it agree with the table's own order.
 --
+-- The four argMax calls are INDEPENDENT aggregates, so nothing structurally
+-- forces them to describe the same row -- they agree only because
+-- (occurred_at, event_id) is unique within each (org_id, work_item_id) group.
+-- That uniqueness comes from FINAL plus the sorting key, which is why the FINAL
+-- below is load-bearing and not merely conventional. Drop it and a duplicate
+-- part could hand project_id from one row and project_key from another, which
+-- reads as a real edge and joins to nothing.
+--
 -- The `project_id != ''` filter on the transition arm is what lets a future
 -- unassignment event (to_project_id empty) retire an edge instead of
 -- projecting an empty-string project. Nothing emits one today -- the schema
@@ -120,8 +128,7 @@ SELECT
     w.updated_at AS observed_at,
     'work_item_column' AS source
 FROM work_items AS w FINAL
-WHERE w.org_id != ''
-    AND w.project_id != ''
+WHERE w.project_id != ''
     AND (w.org_id, w.work_item_id) NOT IN (
         SELECT org_id, work_item_id FROM latest_transition
     );

@@ -69,7 +69,7 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 		return nil, ErrCredentialInvalid
 	}
 	email, _ := credential.Secret("email")
-	token, _ := credential.Secret("api_token")
+	token := firstConfiguredSecret(credential, jiraAPITokenAliases)
 	auth := func(request *http.Request) error {
 		if !email.Configured() || !token.Configured() {
 			return ErrCredentialInvalid
@@ -79,7 +79,7 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 		request.Header.Set("Content-Type", "application/json")
 		return nil
 	}
-	return NewHTTPClient("jira", credentialBaseURL(credential, ""), doer, auth, retry, lease)
+	return NewHTTPClient("jira", jiraCredentialBaseURL(credential), doer, auth, retry, lease)
 }
 
 func NewLinearClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
@@ -164,6 +164,42 @@ func credentialValue(credential Credential, name string) string {
 		return strings.TrimSpace(value.Reveal())
 	}
 	return strings.TrimSpace(credential.Config[name])
+}
+
+// firstConfiguredSecret returns the first alias the credential actually
+// carries, so precedence lives in one ordered list rather than a chain of
+// lookups that has to be edited in step everywhere it appears.
+func firstConfiguredSecret(credential Credential, names []string) secrets.Value {
+	for _, name := range names {
+		if value, ok := credential.Secret(name); ok && value.Configured() {
+			return value
+		}
+	}
+	return secrets.Value{}
+}
+
+// jiraCredentialBaseURL mirrors Python's jira_credentials_from_mapping over
+// the merged mapping _credential_mapping builds: the canonical key wins, then
+// the aliases the web credential surfaces wrote.
+//
+// A decrypted key that is PRESENT shadows the config column even when it is
+// empty, because Python merges `{**config, **decrypted}` before reading — so
+// an empty stored base_url hides a config base_url there, and falling through
+// to the config value here would send the token to a different host than the
+// sync uses.
+func jiraCredentialBaseURL(credential Credential) string {
+	for _, name := range jiraBaseURLAliases {
+		if value, ok := credential.Secret(name); ok {
+			if value.Configured() {
+				return value.Reveal()
+			}
+			continue
+		}
+		if value := strings.TrimSpace(credential.Config[name]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func credentialBaseURL(credential Credential, fallback string) string {

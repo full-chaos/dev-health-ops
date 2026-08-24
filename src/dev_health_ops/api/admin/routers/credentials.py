@@ -24,7 +24,11 @@ from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
 )
 from dev_health_ops.api.utils.errors import error_detail
-from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.credentials.resolver import (
+    github_credentials_from_mapping,
+    gitlab_credentials_from_mapping,
+    jira_credentials_from_mapping,
+)
 from dev_health_ops.exceptions import (
     APIException,
     AuthenticationException,
@@ -41,6 +45,9 @@ from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from .common import get_session
 
 logger = logging.getLogger(__name__)
+
+_GITLAB_DEFAULT_URL = "https://gitlab.com"
+_GITLAB_API_SUFFIX = "/api/v4"
 
 router = APIRouter()
 
@@ -65,6 +72,22 @@ def _github_credentials_or_400(creds: dict[str, Any]):
             ),
         )
     return github_credentials
+
+
+def _gitlab_api_base_url(base_url: str | None) -> str:
+    """Resolve a stored GitLab URL to that instance's v4 API root.
+
+    Mirrors ``gitlab.utils.get_base_url`` + ``Gitlab.__init__`` byte for
+    byte -- strip trailing slashes, append ``/api/v4`` -- because the point
+    of this probe is to answer "would the sync reach this instance", and a
+    probe that normalizes a URL the runtime would not is a test that passes
+    for an endpoint the sync cannot use. A subpath install keeps its
+    subpath; the host is never substituted, so an unusable URL fails the
+    SSRF guard rather than quietly redirecting a self-hosted instance's
+    token to gitlab.com.
+    """
+    candidate = base_url or _GITLAB_DEFAULT_URL
+    return f"{candidate.rstrip('/')}{_GITLAB_API_SUFFIX}"
 
 
 def _validated_github_base_url(base_url: str | None) -> str:
@@ -449,6 +472,15 @@ def _validate_external_url(url: str) -> tuple[bool, str | None]:
     if not hostname:
         return False, "No hostname in URL"
 
+    # Embedded credentials are rejected rather than scrubbed at each
+    # consumer. Only the hostname below is validated, and every HTTP client
+    # in this file replays userinfo as an Authorization header -- which both
+    # leaks the embedded secret and silently displaces the provider token
+    # the request exists to test. One refusal here covers the callers that
+    # rebuild the URL and the GitHub App token exchange that does not.
+    if parsed.username or parsed.password:
+        return False, "Credentials must not be embedded in the URL"
+
     blocked_hostnames = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
     if hostname.lower() in blocked_hostnames:
         return False, "Connection to localhost is not allowed"
@@ -645,15 +677,12 @@ async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
 async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    token = creds.get("token")
-    if not token:
+    gitlab_credentials = gitlab_credentials_from_mapping(creds)
+    if gitlab_credentials is None:
         return False, {"error": "No token provided"}
 
-    base_url = (
-        _string_value(creds.get("url"))
-        or _string_value(creds.get("base_url"))
-        or "https://gitlab.com/api/v4"
-    )
+    token = gitlab_credentials.token
+    base_url = _gitlab_api_base_url(gitlab_credentials.base_url)
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:
         return False, {"error": error}
@@ -686,16 +715,19 @@ async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
 async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    email = _string_value(creds.get("email"))
-    api_token = _string_value(creds.get("token")) or _string_value(
-        creds.get("api_token")
-    )
-    base_url = _string_value(creds.get("url")) or _string_value(creds.get("base_url"))
-
-    if email is None or api_token is None or base_url is None:
+    # Read through the same resolver the sync uses (CHAOS-4224). Hand-rolling
+    # the lookup here is how this endpoint came to accept `token` while the
+    # runtime did not: a credential passed its own connection test and then
+    # authenticated nothing.
+    jira_credentials = jira_credentials_from_mapping(creds)
+    if jira_credentials is None:
         return False, {
             "error": "Missing required credentials (email, api_token, base_url)"
         }
+
+    email = jira_credentials.email
+    api_token = jira_credentials.api_token
+    base_url = jira_credentials.base_url
 
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:

@@ -157,6 +157,27 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 	return Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields}, nil
 }
 
+// jiraAPITokenAliases lists the spellings a stored Jira credential may use for
+// its API token, most canonical first. The web wrote `token` from Admin >
+// Providers > JIRA > "Create New" long before anything read it, so the aliases
+// are not a convenience -- without them those rows authenticate nothing
+// (CHAOS-4224). Kept in step with `jira_credentials_from_mapping`, which this
+// function's own contract below promises to mirror.
+var jiraAPITokenAliases = []string{"api_token", "apiToken", "token"}
+
+// jiraBaseURLAliases does the same for the instance URL: Admin > Syncs > JIRA >
+// "+Add New" wrote `server_url`.
+var jiraBaseURLAliases = []string{"base_url", "baseUrl", "url", "server_url"}
+
+func hasAny(credential Credential, names []string) bool {
+	for _, name := range names {
+		if value, ok := credential.Secret(name); ok && value.Configured() {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateCredentialShape keeps auth construction explicit. It accepts only
 // the auth fields that the current Python resolver accepts for this provider.
 func ValidateCredentialShape(credential Credential) error {
@@ -173,7 +194,7 @@ func ValidateCredentialShape(credential Credential) error {
 			return ErrCredentialInvalid
 		}
 	case "jira":
-		if !has("api_token") || !has("email") {
+		if !hasAny(credential, jiraAPITokenAliases) || !has("email") {
 			return ErrCredentialInvalid
 		}
 	case "linear":

@@ -112,6 +112,16 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    CREDENTIAL_MAPPING_REJECTED_TOTAL = _prometheus_client_module.Counter(
+        "credential_mapping_rejected_total",
+        "Stored credentials a provider resolver refused to build, by the "
+        "field it could not find. The resolver returns None and the sync "
+        "reports only that the mapping was invalid, so without this the "
+        "failure is indistinguishable from having no credential at all "
+        "(CHAOS-4224)",
+        ["provider", "missing_field"],
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -359,6 +369,7 @@ else:
     REPORT_RUN_LEASE_EXPIRED_TOTAL = _noop_counter()
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
+    CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     LLM_REQUESTS_TOTAL = _noop_counter()
@@ -443,6 +454,20 @@ def record_byo_llm_base_url_fallback_alert(
     BYO_LLM_BASE_URL_FALLBACK_ALERT_TOTAL.labels(
         provider=provider,
         reason_code=reason_code,
+    ).inc()
+
+
+def record_credential_mapping_rejected(*, provider: str, missing_field: str) -> None:
+    """Record a stored credential a resolver could not build.
+
+    ``missing_field`` is drawn from a fixed per-provider vocabulary by the
+    caller, never from credential contents -- an unbounded label here would
+    be both a cardinality problem and a way for credential material to
+    reach the metrics endpoint.
+    """
+    CREDENTIAL_MAPPING_REJECTED_TOTAL.labels(
+        provider=provider,
+        missing_field=missing_field,
     ).inc()
 
 

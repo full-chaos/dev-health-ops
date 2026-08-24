@@ -29,7 +29,10 @@ from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
 from dev_health_ops.api.services.configuration.clickhouse_team_drift import (
     ClickHouseTeamDriftService,
 )
-from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.credentials.resolver import (
+    github_credentials_from_mapping,
+    jira_credentials_from_mapping,
+)
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 from .common import get_clickhouse_store, get_session
@@ -297,13 +300,10 @@ async def discover_teams(
             )
         teams = await discovery_svc.discover_linear(api_key=api_key)
     else:
-        email = decrypted.get("email")
-        api_token = decrypted.get("api_token") or decrypted.get("token")
-        jira_config_url = config.get("url")
-        jira_url = jira_config_url if isinstance(jira_config_url, str) else None
-        if jira_url is None:
-            decrypted_url = decrypted.get("url")
-            jira_url = decrypted_url if isinstance(decrypted_url, str) else None
+        jira_credentials = jira_credentials_from_mapping({**config, **decrypted})
+        email = jira_credentials.email if jira_credentials else None
+        api_token = jira_credentials.api_token if jira_credentials else None
+        jira_url = jira_credentials.base_url if jira_credentials else None
         if not email or not api_token or not jira_url:
             raise HTTPException(
                 status_code=400,

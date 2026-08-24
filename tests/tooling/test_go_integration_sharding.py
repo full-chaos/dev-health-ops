@@ -409,7 +409,20 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # through a fake row scanner and a captured slog handler; the end-to-end
     # reachability proof lives in cmd/dev-health-worker and does not move
     # this count. Integration-tagged stays 114.
-    assert len(expected_provider_tests) == 1017
+    #
+    # CHAOS-4185 then added 11 more ordinary top-level providersync tests
+    # (1017 -> 1028) in github_tests_all_artifacts_unreadable_test.go: the
+    # totality-fires and below-the-floor pair, the partial-degradation
+    # non-firing control, four decode-invariant tests for the new
+    # ArchivesSeen/ArchivesUnreadable cursor counters, the legacy-cursor
+    # (pre-deploy, unknown counters) non-firing test, the cross-continuation
+    # accumulation test, the done-resume no-reevaluate/no-double-count test,
+    # and the re-anchor-replay equality-preservation test. All eleven drive
+    # the chunked route through in-memory HTTP doers and touch no database,
+    # so the integration-tagged count stays 114. (The reachability proof
+    # through the production handler lives in cmd/dev-health-worker and does
+    # not move this count, matching CHAOS-4219's precedent above.)
+    assert len(expected_provider_tests) == 1028
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -426,7 +439,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1017
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1028
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -487,7 +500,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1017
+    assert len(selected_tests) == len(set(selected_tests)) == 1028
     assert set(selected_tests) == expected_tests
 
 

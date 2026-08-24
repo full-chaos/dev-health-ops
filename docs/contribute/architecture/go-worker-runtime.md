@@ -407,15 +407,41 @@ size-bound breach is treated the same as the in-archive `archive_bounds` /
 `report_cap` bounds below — a property of the bytes serious enough to fail the
 unit closed rather than silently drop.
 
-**Total** unreadability — every artifact the walk downloaded failing to open —
+**Total** unreadability — every artifact the walk observed failing to read —
 is a systematic route condition, such as a proxy or auth edge answering every
 request with an error document. It cannot improve by being retried, so it
-should fail the unit with its own cause rather than report a success that
-ingested nothing. **That escalation is deliberately deferred and NOT yet
-implemented** (CHAOS-4185): today such a walk completes, and the only signals
-are `dev_health_provider_artifact_skipped_total`, the per-skip warning log, and
-a withheld watermark that keeps re-walking the window. Coverage never silently
-advances, which is why deferring it was safe.
+fails the unit with its own durable cause rather than report a success that
+ingested nothing (CHAOS-4185).
+
+The gate has three deliberate guards against turning it into a new false
+failure, closing the three defects an earlier, reverted CHAOS-4177 attempt
+shipped:
+
+- **A sample floor.** Totality only fires once the walk has observed at
+  least two archives (`githubTestsAllArtifactsUnreadableFloor`). One
+  workflow run with one corrupt archive is ordinary item noise, not evidence
+  of a systematic condition, and satisfies `unreadable == seen` trivially at
+  1/1.
+- **Absent counters mean UNKNOWN, never zero.** The two counters
+  (`ArchivesSeen`/`ArchivesUnreadable`) are cursor pointer fields, so a
+  cursor written before they existed decodes them as `nil`, and the gate
+  skips whenever either is unknown. A walk spanning the deploy that reads
+  several good archives on the old binary and then resumes on the new one
+  is therefore bounded and self-healing rather than failed on the strength
+  of only the post-deploy tail.
+- **Terminal on the first attempt.** `ErrGitHubTestsAllArtifactsUnreadable`
+  maps to its own `deterministicTerminalCategory` entry
+  (`all_artifacts_unreadable`), so the unit fails once rather than burning
+  its retry budget re-observing the identical total failure and then
+  recording the generic `provider_unit_exhausted` category over the real
+  cause.
+
+Partial degradation's existing signals
+(`dev_health_provider_artifact_skipped_total`, the per-skip warning log, and
+a withheld watermark that keeps re-walking the window) are unchanged and
+still fire underneath total unreadability up to the point it terminalizes;
+`dev_health_provider_all_artifacts_unreadable_total` is the new, separate
+signal for the terminal condition itself.
 
 The general rule this expresses: degrade quietly where the data still worth
 having outweighs what was lost, and fail loudly where it does not. A condition

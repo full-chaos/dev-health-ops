@@ -97,6 +97,15 @@ const (
 	// addition, matching the precedent set by GitHubFilesInventoryFailureCategory
 	// and EffectRecoveryAmbiguousCategory above.
 	GitHubTestsArtifactOversizedCategory = "github_tests_artifact_oversized"
+	// AllArtifactsUnreadableCategory covers a github tests/cicd unit whose
+	// every observed artifact failed to read -- a proxy or auth edge
+	// answering every artifact request with a 2xx error document. Given the
+	// source's current state, every retry re-observes the identical total
+	// failure, so it terminalizes on the first attempt instead of burying
+	// the specific cause under provider_unit_exhausted (CHAOS-4185). No
+	// Python equivalent exists: like GitHubTestsArtifactOversizedCategory,
+	// this route is Go-only.
+	AllArtifactsUnreadableCategory = "all_artifacts_unreadable"
 	// FeatureDisabledCategory covers a unit refused by the execution-time
 	// canonical-incident entitlement re-check (Jira incidents and every
 	// PagerDuty dataset). Python's FEATURE_DISABLED_ERROR_CATEGORY
@@ -124,6 +133,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrGitHubTestsArtifactOversized) {
 		return GitHubTestsArtifactOversizedCategory, true
+	}
+	if errors.Is(err, providersync.ErrGitHubTestsAllArtifactsUnreadable) {
+		return AllArtifactsUnreadableCategory, true
 	}
 	if errors.Is(err, providersync.ErrIncidentEntitlementDisabled) {
 		return FeatureDisabledCategory, true

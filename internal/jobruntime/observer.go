@@ -103,6 +103,15 @@ type ZeroUnitFinalizationObserver interface {
 	ObserveZeroUnitFinalization(provider, reason string) error
 }
 
+// BudgetEstimateFailureObserver is the narrow capability the native
+// dispatch_sync_run port depends on (CHAOS-4175 codex round 2): only the
+// dispatch implementation knows when its BudgetGuard estimate-bridge fetch
+// fell open, and why. Direct Go counterpart of the standing order that new
+// fail-open logic must carry a counter with a bounded reason label.
+type BudgetEstimateFailureObserver interface {
+	ObserveBudgetEstimateFailure(reason string) error
+}
+
 // RegisterRuntime validates the low-cardinality scrape-presence identity
 // before passing it to an Observer.
 func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) error {

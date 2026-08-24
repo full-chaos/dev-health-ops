@@ -17,6 +17,18 @@ import (
 var (
 	ErrInvalidBridge = errors.New("invalid sync dispatch bridge")
 	ErrBridgeRequest = errors.New("sync dispatch bridge request failed")
+	// ErrBridgeContractRejected wraps ErrBridgeRequest (so every existing
+	// errors.Is(err, ErrBridgeRequest) classification still matches
+	// unchanged) and additionally distinguishes the one 4xx class a caller
+	// may need to treat differently from a 5xx/transport failure: the
+	// endpoint rejected the REQUEST SHAPE itself as invalid (a programming
+	// error on this side -- an oversized batch, a malformed field), not an
+	// estimate/discovery outage on the far side. CHAOS-4175's BudgetGuard
+	// chunking (budget_estimate_bridge.go) is the first caller that needs
+	// this distinction: a batch that exceeds the endpoint's own documented
+	// size limit must fail the pass loudly, not silently admit every unit
+	// with zero budget checked.
+	ErrBridgeContractRejected = fmt.Errorf("%w: bridge rejected the request as malformed", ErrBridgeRequest)
 )
 
 // CoordinatorBridge is the reference-only execution seam used by River
@@ -193,6 +205,16 @@ func (bridge *HTTPBridge) do(ctx context.Context, path string, payload any) (*ht
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		defer response.Body.Close()
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4097))
+		// A 4xx means the endpoint parsed and rejected THIS request's own
+		// shape (bounded batch size, malformed field, bad auth) -- distinct
+		// from a 5xx or transport failure, where the request itself may
+		// have been fine and the far side (or the network) is what's
+		// unavailable. Every existing errors.Is(err, ErrBridgeRequest)
+		// check still matches either way, since ErrBridgeContractRejected
+		// wraps it.
+		if response.StatusCode >= http.StatusBadRequest && response.StatusCode < http.StatusInternalServerError {
+			return nil, fmt.Errorf("%w: status=%d", ErrBridgeContractRejected, response.StatusCode)
+		}
 		return nil, fmt.Errorf("%w: status=%d", ErrBridgeRequest, response.StatusCode)
 	}
 	return response, nil

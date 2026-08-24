@@ -59,22 +59,36 @@ func observeRun(
 	consumedByBucket := map[string]int{}
 	var observations []map[string]any
 
+	unitsByID := make(map[string]budgetUnit, len(units))
 	unitIDs := make([]string, len(units))
 	for i, unit := range units {
 		unitIDs[i] = unit.id
+		unitsByID[unit.id] = unit
 	}
-	estimatesByUnit, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, unitIDs)
-	if bridgeErr != nil {
-		// Same choice as enforceRun's own whole-batch-failure handling:
-		// Python's per-unit try/except has no precedent for a batched
-		// failure, so every unit in this pass degrades to "no estimate"
-		// and is logged individually under Python's own per-unit failure
-		// message name.
-		for _, unit := range units {
-			logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_dry_run_failed",
-				attrsToAny(append(unitLogAttrs(syncRunID, unit), slog.String("error", bridgeErr.Error())))...)
+	// Chunked at the estimate bridge's own request-size ceiling (codex
+	// round 2, CHAOS-4175). Deliberately stays fail-OPEN per chunk even for
+	// a contract rejection -- unlike enforceRun, this whole function is
+	// read-only shadow telemetry with zero effect on real admission (see
+	// this function's own doc comment); aborting the REAL dispatch pass
+	// because dry-run numbers couldn't be fetched would be a worse outcome
+	// than just missing them for this pass.
+	estimatesByUnit := map[string][]budgetEstimate{}
+	for _, chunk := range chunkUnitIDs(unitIDs) {
+		chunkEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, chunk)
+		if bridgeErr != nil {
+			// Same choice as before chunking existed: Python's per-unit
+			// try/except has no precedent for a batched failure, so every
+			// unit in this chunk degrades to "no estimate" and is logged
+			// individually under Python's own per-unit failure message name.
+			for _, unitID := range chunk {
+				logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_dry_run_failed",
+					attrsToAny(append(unitLogAttrs(syncRunID, unitsByID[unitID]), slog.String("error", bridgeErr.Error())))...)
+			}
+			continue
 		}
-		return nil, nil
+		for _, unitID := range chunk {
+			estimatesByUnit[unitID] = chunkEstimates[unitID]
+		}
 	}
 
 	for _, unit := range units {

@@ -51,7 +51,7 @@ func TestEnforceRunReturnsEmptyResultWithoutCallingTheBridge(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, time.Now())
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, time.Now(), nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v", err)
 		}
@@ -94,7 +94,7 @@ func TestEnforceRunAdmitsWhatFitsAndDefersWhatDoesNot(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now)
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now, nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v", err)
 		}
@@ -152,7 +152,7 @@ func TestEnforceRunTerminalizesAnExhaustedPermanentMisfit(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now)
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now, nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v", err)
 		}
@@ -230,7 +230,7 @@ func TestEnforceRunDivertsACooldownGatedUnitBeforeBudgetAdmission(t *testing.T) 
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now)
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, nil, now, nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v", err)
 		}
@@ -286,7 +286,7 @@ func TestEnforceRunAdmitsASurplusCandidateWhenHeadroomAllows(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, slotHeadroom, now)
+		result, err := enforceRun(ctx, tx, estimator, nil, "org-1", budgetCandidatesRunID, nil, slotHeadroom, now, nil)
 		if err != nil {
 			t.Fatalf("enforceRun: %v", err)
 		}

@@ -7,6 +7,36 @@ import (
 	"io"
 )
 
+// dispatchBudgetEstimateMaxUnitIDs is the estimate bridge's own documented
+// request-size ceiling -- src/dev_health_ops/api/internal/worker_sync.py's
+// DispatchBudgetEstimateReference.unit_ids: Field(min_length=1,
+// max_length=500). Pinned equal by
+// tests/api/test_worker_sync_bridge.py::test_dispatch_budget_estimate_request_unit_ids_cap_matches_go
+// (Python is the source of truth: Pydantic enforces it at the schema
+// level; this constant exists only so every Go caller chunks BELOW that
+// ceiling instead of ever discovering it via a 422 -- codex round 2,
+// CHAOS-4175).
+const dispatchBudgetEstimateMaxUnitIDs = 500
+
+// chunkUnitIDs splits unitIDs into contiguous slices no larger than
+// dispatchBudgetEstimateMaxUnitIDs, preserving order. A nil/empty input
+// yields no chunks, matching every caller's own "nothing to estimate"
+// short-circuit.
+func chunkUnitIDs(unitIDs []string) [][]string {
+	if len(unitIDs) == 0 {
+		return nil
+	}
+	chunks := make([][]string, 0, (len(unitIDs)+dispatchBudgetEstimateMaxUnitIDs-1)/dispatchBudgetEstimateMaxUnitIDs)
+	for start := 0; start < len(unitIDs); start += dispatchBudgetEstimateMaxUnitIDs {
+		end := start + dispatchBudgetEstimateMaxUnitIDs
+		if end > len(unitIDs) {
+			end = len(unitIDs)
+		}
+		chunks = append(chunks, unitIDs[start:end])
+	}
+	return chunks
+}
+
 // budgetEstimateBucket mirrors worker_sync.py's BudgetEstimateBucketPayload
 // field-for-field -- the closed schema half of the estimate-only bridge
 // contract (CHAOS-4175 family 3 BudgetGuard ruling): identifiers in, this

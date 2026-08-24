@@ -2,11 +2,14 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
 // enforceRunResult ports BudgetGuardResult verbatim (frozen dataclass ->
@@ -87,6 +90,7 @@ func unitIDSet(units map[string]time.Time) map[string]bool {
 func enforceRun(
 	ctx context.Context, tx pgx.Tx, bridge budgetEstimator, logger *slog.Logger,
 	orgID, syncRunID string, cappedUnitIDs map[string]bool, slotHeadroom map[dispatchBucket]int, now time.Time,
+	observer jobruntime.BudgetEstimateFailureObserver,
 ) (enforceRunResult, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -119,33 +123,59 @@ func enforceRun(
 	allCandidates = append(allCandidates, units...)
 	allCandidates = append(allCandidates, surplusCandidates...)
 	allUnitIDs := make([]string, len(allCandidates))
+	allCandidatesByID := make(map[string]budgetUnit, len(allCandidates))
 	for i, unit := range allCandidates {
 		allUnitIDs[i] = unit.id
+		allCandidatesByID[unit.id] = unit
 	}
 
+	// Chunked at the estimate bridge's own documented request-size ceiling
+	// (dispatchBudgetEstimateMaxUnitIDs, codex round 2, CHAOS-4175): Python
+	// has no equivalent ceiling to exceed at all (SyncTaskBootstrap.load
+	// runs per unit, in-process, no HTTP hop), so a batch this large hitting
+	// the bridge's own limit is a Go-only failure mode with no Python
+	// precedent either way -- not something Python's per-unit fail-open
+	// discipline actually covers, whatever an earlier version of this
+	// comment implied.
+	//
+	// Disposition per chunk: a CONTRACT rejection (the bridge parsed and
+	// refused this chunk's shape -- malformed field, or a chunk that STILL
+	// exceeds the ceiling, which chunking here should make unreachable in
+	// practice) fails the whole pass CLOSED. It is a programming error on
+	// this side, not an estimate outage, and admitting a chunk's units with
+	// silently zero budget checked is the wrong disposition for "this code
+	// sent a bad request" -- unlike a genuine bridge/estimator failure,
+	// where Python's own per-unit catch-all (budget_guard.py's bare `except
+	// Exception`) already fails open unconditionally, so Go matching that
+	// for a transport/5xx/decode failure IS byte-for-byte parity.
 	estimatesByUnit := map[string][]budgetEstimate{}
-	if len(allUnitIDs) > 0 {
-		bridgeEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, allUnitIDs)
+	for _, chunk := range chunkUnitIDs(allUnitIDs) {
+		bridgeEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, chunk)
 		if bridgeErr != nil {
-			// No per-unit precedent for a whole-batch failure (Python calls
-			// SyncTaskBootstrap.load per unit, each independently
-			// try/excepted) -- degrading every unit in this batch to "no
-			// estimate" and logging each individually is the same choice
-			// activeBudgetConsumption makes for a failed group, extending
-			// Python's per-unit fail-open discipline to the batched case.
-			for _, unit := range allCandidates {
+			if errors.Is(bridgeErr, ErrBridgeContractRejected) {
+				return enforceRunResult{}, bridgeErr
+			}
+			// Genuine bridge/estimator unavailability: fail this CHUNK's
+			// units open, exactly as Python's per-unit try/except would for
+			// any of them individually, and log each individually under the
+			// existing message name.
+			if observer != nil {
+				_ = observer.ObserveBudgetEstimateFailure(jobruntime.BudgetEstimateFailureBridgeUnavailable)
+			}
+			for _, unitID := range chunk {
+				unit := allCandidatesByID[unitID]
 				logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_enforce_failed",
 					attrsToAny(append(unitLogAttrs(syncRunID, unit), slog.String("error", bridgeErr.Error())))...)
 			}
-		} else {
-			for _, unit := range allCandidates {
-				// A unit id absent from the response, or mapped to an empty
-				// slice, both mean "no budget constraint for this unit" --
-				// see dispatchBudgetEstimateResponse's doc comment. A Go map
-				// read on a missing key already returns nil, so no
-				// special-casing is needed here.
-				estimatesByUnit[unit.id] = bridgeEstimates[unit.id]
-			}
+			continue
+		}
+		for _, unitID := range chunk {
+			// A unit id absent from the response, or mapped to an empty
+			// slice, both mean "no budget constraint for this unit" -- see
+			// dispatchBudgetEstimateResponse's doc comment. A Go map read on
+			// a missing key already returns nil, so no special-casing is
+			// needed here.
+			estimatesByUnit[unitID] = bridgeEstimates[unitID]
 		}
 	}
 

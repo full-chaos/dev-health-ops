@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -101,6 +102,15 @@ func (f *fakeBudgetEstimator) DispatchBudgetEstimate(ctx context.Context, orgID,
 	sorted := append([]string(nil), unitIDs...)
 	sort.Strings(sorted)
 	f.calls = append(f.calls, fakeEstimatorCall{orgID: orgID, runID: runID, unitIDs: sorted})
+	// Mirrors the REAL bridge's own documented ceiling
+	// (DispatchBudgetEstimateReference.unit_ids: max_length=500) exactly --
+	// a fake that never enforces this could pass every test while the real
+	// endpoint 422s on the first oversized batch it ever sees (codex round
+	// 2, CHAOS-4175).
+	if len(unitIDs) > dispatchBudgetEstimateMaxUnitIDs {
+		return nil, fmt.Errorf("%w: status=422 (fake: batch of %d exceeds the %d-id cap)",
+			ErrBridgeContractRejected, len(unitIDs), dispatchBudgetEstimateMaxUnitIDs)
+	}
 	if f.failFor[orgID+":"+runID] {
 		return nil, errors.New("simulated bridge failure")
 	}

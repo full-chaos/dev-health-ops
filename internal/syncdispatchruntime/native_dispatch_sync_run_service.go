@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -56,6 +57,7 @@ type NativeDispatchSyncRunService struct {
 	bridge   budgetEstimator
 	producer *joboutbox.Producer
 	registry joboutbox.PolicyRegistry
+	observer jobruntime.BudgetEstimateFailureObserver
 	now      func() time.Time
 }
 
@@ -69,12 +71,17 @@ type NativeDispatchSyncRunService struct {
 // deliberately no jobroute.Controller here (CHAOS-4175 ruling, see Dispatch's
 // doc comment): this service's transaction runs on the domain role, which
 // has no grant on worker_job_routes.
+// observers follows NewNativeFinalizeSyncRunService's own variadic-observer
+// convention: at most the first is used, and it is optional -- a caller
+// that doesn't care about budget-estimate-failure telemetry (a unit test,
+// say) can omit it entirely rather than threading a stub through.
 func NewNativeDispatchSyncRunService(
 	pool *pgxpool.Pool,
 	logger *slog.Logger,
 	bridge budgetEstimator,
 	producer *joboutbox.Producer,
 	registry joboutbox.PolicyRegistry,
+	observers ...jobruntime.BudgetEstimateFailureObserver,
 ) (*NativeDispatchSyncRunService, error) {
 	if pool == nil || bridge == nil || producer == nil || registry == nil {
 		return nil, ErrDispatchSyncRunUnavailable
@@ -82,9 +89,13 @@ func NewNativeDispatchSyncRunService(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var observer jobruntime.BudgetEstimateFailureObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	return &NativeDispatchSyncRunService{
 		pool: pool, logger: logger, bridge: bridge,
-		producer: producer, registry: registry,
+		producer: producer, registry: registry, observer: observer,
 		now: time.Now,
 	}, nil
 }
@@ -277,7 +288,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 
 	enforcedAt := service.nowUTC()
-	budgetResult, err := enforceRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, decision.slotHeadroom, enforcedAt)
+	budgetResult, err := enforceRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, decision.slotHeadroom, enforcedAt, service.observer)
 	if err != nil {
 		return err
 	}

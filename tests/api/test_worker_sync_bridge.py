@@ -273,6 +273,21 @@ def test_dispatch_budget_estimate_request_is_identifiers_only() -> None:
     assert DispatchBudgetEstimateReference.model_config.get("extra") == "forbid"
 
 
+def test_dispatch_budget_estimate_request_unit_ids_cap_matches_go() -> None:
+    """Pins the request's own size ceiling (CHAOS-4175 codex round 2): Go's
+    BudgetGuard port chunks its estimate-bridge calls at
+    dispatchBudgetEstimateMaxUnitIDs (budget_estimate_bridge.go), a literal
+    Go constant that has no way to introspect this Pydantic model at
+    runtime. Python is the source of truth here -- this test is what makes
+    a change to unit_ids' max_length a REVIEWED, visible break instead of a
+    silent drift the Go constant would only ever discover via a live 422.
+    """
+    from dev_health_ops.api.internal.worker_sync import DispatchBudgetEstimateReference
+
+    schema = DispatchBudgetEstimateReference.model_json_schema()
+    assert schema["properties"]["unit_ids"]["maxItems"] == 500
+
+
 def test_dispatch_budget_estimate_response_is_the_closed_estimate_schema() -> None:
     """Pins the response payload shape on the OTHER direction: only the
     fields BudgetEstimate/BudgetBucketKey actually carry, nothing else --

@@ -139,25 +139,39 @@ ORDER BY id`,
 
 	for _, key := range groupKeys {
 		units := unitsByGroup[key]
+		unitsByID := make(map[string]budgetUnit, len(units))
 		unitIDs := make([]string, len(units))
 		for i, unit := range units {
 			unitIDs[i] = unit.id
+			unitsByID[unit.id] = unit
 		}
 
-		estimatesByUnit, err := bridge.DispatchBudgetEstimate(ctx, key.orgID, key.syncRunID, unitIDs)
-		if err != nil {
-			for _, unit := range units {
-				logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_active_estimate_failed",
-					attrsToAny(append(unitLogAttrs(key.syncRunID, unit), slog.String("error", err.Error())))...)
+		// Chunked at the estimate bridge's own request-size ceiling (codex
+		// round 2, CHAOS-4175) -- same reasoning as enforceRun's own chunk
+		// loop. Unlike enforceRun, a chunk failure here (including a
+		// contract rejection) stays fail-OPEN for just that chunk: this
+		// query is GLOBAL across every active run, not scoped to the one
+		// Dispatch pass in progress, so one unrelated run's oversized
+		// active-unit group must never abort every OTHER run's admission
+		// decision. It only degrades the durable-consumption BASELINE for
+		// that one group's buckets, exactly as an outright bridge failure
+		// already did before chunking existed.
+		for _, chunk := range chunkUnitIDs(unitIDs) {
+			estimatesByUnit, err := bridge.DispatchBudgetEstimate(ctx, key.orgID, key.syncRunID, chunk)
+			if err != nil {
+				for _, unitID := range chunk {
+					logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_active_estimate_failed",
+						attrsToAny(append(unitLogAttrs(key.syncRunID, unitsByID[unitID]), slog.String("error", err.Error())))...)
+				}
+				continue
 			}
-			continue
-		}
 
-		for _, estimates := range estimatesByUnit {
-			for _, estimate := range estimates {
-				budgetKey := budgetKeyFor(estimate.Bucket, estimate.RouteFamily)
-				if budgetKeys[budgetKey] {
-					consumedByBucket[budgetKey] += estimate.EstimatedUnits
+			for _, estimates := range estimatesByUnit {
+				for _, estimate := range estimates {
+					budgetKey := budgetKeyFor(estimate.Bucket, estimate.RouteFamily)
+					if budgetKeys[budgetKey] {
+						consumedByBucket[budgetKey] += estimate.EstimatedUnits
+					}
 				}
 			}
 		}

@@ -377,23 +377,39 @@ groups:
       # false-negatively going quiet between genuinely back-to-back runs; 3h
       # (> the 2h window) is the shortest `for` that still guarantees
       # single-burst immunity, and pages same-day instead of waiting out a
-      # full day of trickle. No ratio/count threshold is used instead,
-      # because this metric has no total-artifacts-read counterpart to
-      # normalize against (unlike e.g. APIHighErrorRate) -- the `for >
-      # window` relationship carries the entire "sustained, not isolated"
-      # semantics here.
+      # full day of trickle.
+      #
+      # KNOWN LIMITATION, stated deliberately (adversarial codex review,
+      # round 1): this construction detects RECURRENCE across runs, not
+      # MAGNITUDE within a run. One skip roughly every run for 3h+ satisfies
+      # it exactly the same as 20% of a run's artifacts skipping for 3h+ --
+      # there is no ratio/count threshold, because this metric has no
+      # total-artifacts-read counterpart to normalize against (unlike e.g.
+      # APIHighErrorRate). The `for > window` relationship only proves "not
+      # a single isolated event"; it cannot answer "how bad". A true rate
+      # alert needs a denominator metric this package does not expose today
+      # -- adding one is out of CHAOS-4184's scope (a new Go-side counter,
+      # not a rule change) and is called out to the ticket owner rather than
+      # invented here.
       #
       # No source label, and the alert says so. `provider`/`dataset` are the
       # metric's only bounded dimensions -- repository names are unbounded
       # cardinality, and the label vocabularies in
       # internal/providerfoundation/budget.go are closed by design precisely
       # to stop a route opening an unbounded label dimension. So this alert
-      # cannot say WHICH repository or run is affected -- only that
-      # {{ $labels.provider }}/{{ $labels.dataset }} is affected. That answer
-      # lives in two other places: the per-skip slog.Warn carries
-      # `repository` and `run`, and a unit that fails with cause
-      # `all_artifacts_unreadable` names its own source on the sync board.
-      # This alert answers "is this happening"; those answer "where".
+      # cannot say WHICH repository, run, or unit is affected -- only that
+      # {{ $labels.provider }}/{{ $labels.dataset }} is affected. That
+      # answer lives in the per-skip slog.Warn ("provider artifact skipped;
+      # inventory continued", internal/providersync/github_tests_chunked_route.go),
+      # which carries `repository`, `run`, and `unit`. A unit-level failure
+      # naming its own source on the sync board when EVERY artifact in a
+      # walk is unreadable is tracked separately under CHAOS-4185 and is NOT
+      # implemented as of this alert shipping -- verified against
+      # internal/providersync source, which the ticket's own "what exists"
+      # section overstated (the doc at
+      # docs/contribute/architecture/go-worker-runtime.md correctly calls it
+      # deferred). Do not point operators at a sync-board cause that does
+      # not exist yet; once CHAOS-4185 lands, update this annotation.
       - alert: ProviderArtifactSkipsSustained
         expr: |
           sum by (provider, dataset) (
@@ -408,15 +424,20 @@ groups:
           description: |
             dev_health_provider_artifact_skipped_total has stayed above zero
             for {{ $labels.provider }}/{{ $labels.dataset }} for at least
-            three hours -- a sustained partial failure, not an isolated bad
-            artifact (CHAOS-4184, follow-up to CHAOS-4177). This metric
-            carries no repository/run label by design, so it cannot say
-            WHICH source is affected. Localize from two other places
-            instead: the per-skip WARNING log line, which carries
-            `repository` and `run`, or a unit on the sync board that failed
-            with cause `all_artifacts_unreadable`, which names its own
-            source. The metric's `reason` label (unreadable_archive /
-            artifact_unavailable / other) narrows the failure shape.
+            three hours -- a RECURRING partial failure, not an isolated bad
+            artifact (CHAOS-4184, follow-up to CHAOS-4177). This does not
+            measure how large a share of artifacts is failing, only that
+            skips keep recurring; check the raw counter and WARN log volume
+            to judge severity. This metric carries no repository/run/unit
+            label by design, so it cannot say WHICH source is affected.
+            Localize from the per-skip WARNING log line instead, which
+            carries `repository`, `run`, and `unit`. A unit-level failure
+            naming its own source on the sync board when EVERY artifact in
+            a walk is unreadable is tracked separately under CHAOS-4185 and
+            is NOT implemented yet -- do not expect a sync-board cause for
+            this alert today. The metric's `reason` label
+            (unreadable_archive / artifact_unavailable / other) narrows the
+            failure shape.
 
   # ---------------------------------------------------------------------------
   # LLM API

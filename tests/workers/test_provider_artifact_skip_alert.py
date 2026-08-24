@@ -45,6 +45,26 @@ def _skip_alert() -> dict[str, Any]:
     return next(rule for rule in rules if rule["alert"] == ALERT_NAME)
 
 
+def _write_prometheus_body() -> str:
+    """Isolate the live `func (m *Metrics) WritePrometheus(...)` body.
+
+    Anchoring the metric-name pin to this specific function's source range --
+    not the whole file -- means a dead, commented-out, or alternate call
+    elsewhere in budget.go cannot satisfy the pin; only the one function that
+    actually renders the scraped /metrics output can.
+    """
+    text = BUDGET_GO_PATH.read_text(encoding="utf-8")
+    start_match = re.search(
+        r"^func \(m \*Metrics\) WritePrometheus\(", text, re.MULTILINE
+    )
+    assert start_match, "could not find func (m *Metrics) WritePrometheus( in budget.go"
+    next_func = re.search(r"^func ", text[start_match.end() :], re.MULTILINE)
+    end = start_match.end() + (
+        next_func.start() if next_func else len(text) - start_match.end()
+    )
+    return text[start_match.start() : end]
+
+
 def _real_metric_name_and_labels() -> tuple[str, str]:
     """Pin the metric name and its third label from the Go source itself,
     rather than retyping a string a refactor could silently drift from.
@@ -53,21 +73,24 @@ def _real_metric_name_and_labels() -> tuple[str, str]:
     `WritePrometheus` serializes that map through
     `writeProviderDatasetReasonCounter(writer, <name>, <help>, <label>,
     m.artifactSkipped)` -- provider and dataset are baked into that helper's
-    output format, and <label> is the third, reason.
+    output format, and <label> is the third, reason. The search is scoped to
+    WritePrometheus's own body (see `_write_prometheus_body`), so this cannot
+    be satisfied by a call that isn't actually on the live scrape path.
     """
-    text = BUDGET_GO_PATH.read_text(encoding="utf-8")
+    body = _write_prometheus_body()
     match = re.search(
         r"writeProviderDatasetReasonCounter\(\s*"
         r'writer,\s*"(?P<name>[^"]+)",\s*'
         r'"(?P<help>[^"]+)",\s*'
         r'"(?P<label>[^"]+)",\s*m\.artifactSkipped,',
-        text,
+        body,
         re.DOTALL,
     )
     assert match, (
         "could not find the writeProviderDatasetReasonCounter(...) call for "
-        "m.artifactSkipped in budget.go -- has RecordArtifactSkipped's "
-        "wiring changed shape?"
+        "m.artifactSkipped inside WritePrometheus's own body in budget.go -- "
+        "has RecordArtifactSkipped's wiring changed shape, or moved off the "
+        "live scrape path?"
     )
     return match.group("name"), match.group("label")
 
@@ -144,7 +167,39 @@ def test_provider_artifact_skip_alert_annotation_explains_localization() -> None
     description = str(alert["annotations"]["description"])
     assert "repository" in description
     assert "run" in description
-    assert "all_artifacts_unreadable" in description
+    assert "unit" in description
+
+
+def test_provider_artifact_skip_alert_does_not_claim_the_unimplemented_sync_board_cause() -> (
+    None
+):
+    """Adversarial codex review, round 1 (real finding, CONFIRMED): the
+    unit-level `all_artifacts_unreadable` failure the ticket's own "what
+    exists" section describes is NOT implemented anywhere in this repo
+    (confirmed by grep across internal/**/*.go and src/) -- it belongs to
+    CHAOS-4185, which is still in flight in a sibling worktree as of this
+    alert's PR. Pointing operators at a sync-board cause that does not exist
+    would send them looking for something they will never find. The
+    annotation may still MENTION all_artifacts_unreadable/CHAOS-4185 for
+    forward context, but only hedged as not-yet-implemented -- never
+    asserted as a live localization path.
+    """
+    alert = _skip_alert()
+    description = str(alert["annotations"]["description"])
+    assert "CHAOS-4185" in description
+    assert re.search(r"not\s+implemented", description, re.IGNORECASE)
+
+    go_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "internal").rglob("*.go")
+        if not path.name.endswith("_test.go")
+    )
+    assert "all_artifacts_unreadable" not in go_sources, (
+        "all_artifacts_unreadable now appears in non-test Go source -- "
+        "CHAOS-4185 has landed. Update this alert's annotation to describe "
+        "it as a real localization path (drop the not-implemented hedge) "
+        "and relax this test."
+    )
 
 
 def test_provider_artifact_skip_alert_labels_stay_bounded() -> None:

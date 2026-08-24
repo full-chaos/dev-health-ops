@@ -338,6 +338,87 @@ groups:
             has been unavailable for five minutes.
 
   # ---------------------------------------------------------------------------
+  # Provider artifact integrity (CHAOS-4184, follow-up to CHAOS-4177)
+  # ---------------------------------------------------------------------------
+  - name: provider_artifact_integrity
+    interval: 60s
+    rules:
+      # CHAOS-4177 made ONE unreadable artifact survivable: it is skipped,
+      # counted (dev_health_provider_artifact_skipped_total{provider,dataset,
+      # reason}), and the walk continues. That is correct -- an occasional
+      # corrupt archive or a 404'd blob is expected and must not page. What
+      # CHAOS-4177 left quiet ON PURPOSE is the middle case: a SLICE of
+      # artifacts failing across many units for hours (say 20% of one
+      # provider's artifacts, all day) still produces successful units, an
+      # advancing coverage board, and reports_complete=true -- nothing else
+      # in the pipeline notices, and the counter sits unwatched.
+      #
+      # Window vs `for`, and why `for` is LONGER than the window. Skips land
+      # in bursts, once per sync run, not as a continuous stream --
+      # incremental syncs run on the operator's configured cadence, hourly by
+      # default (docs/operate/run/ingestion-and-backfills.md: "On an hourly
+      # schedule..."). A single isolated burst keeps
+      # increase(...[2h]) > 0 true for at most two hours after it lands --
+      # exactly as long as that sample stays inside the window -- and then it
+      # ages out and the value returns to 0. If `for` were <= the window, that
+      # lone burst could still satisfy `for` before aging out, i.e. the alert
+      # would fire on one bad artifact, which the ticket explicitly forbids
+      # ("isolated bad artifacts are expected... fire on sustained... not on
+      # a single event"). Setting `for` STRICTLY LONGER than the window is
+      # what makes the aging-out boundary do the filtering: a lone burst's
+      # truthy stretch cannot exceed the window's length, so it can never
+      # sustain a `for` duration greater than the window -- the condition
+      # goes false again before `for` elapses, and the alert never fires. A
+      # RECURRING skip (every run, or every few runs, closer together than
+      # the window) keeps re-arming the window before it empties, so the
+      # truthy stretch never breaks and `for` eventually does elapse.
+      #
+      # 2h comfortably covers one missed/delayed hourly tick without
+      # false-negatively going quiet between genuinely back-to-back runs; 3h
+      # (> the 2h window) is the shortest `for` that still guarantees
+      # single-burst immunity, and pages same-day instead of waiting out a
+      # full day of trickle. No ratio/count threshold is used instead,
+      # because this metric has no total-artifacts-read counterpart to
+      # normalize against (unlike e.g. APIHighErrorRate) -- the `for >
+      # window` relationship carries the entire "sustained, not isolated"
+      # semantics here.
+      #
+      # No source label, and the alert says so. `provider`/`dataset` are the
+      # metric's only bounded dimensions -- repository names are unbounded
+      # cardinality, and the label vocabularies in
+      # internal/providerfoundation/budget.go are closed by design precisely
+      # to stop a route opening an unbounded label dimension. So this alert
+      # cannot say WHICH repository or run is affected -- only that
+      # {{ $labels.provider }}/{{ $labels.dataset }} is affected. That answer
+      # lives in two other places: the per-skip slog.Warn carries
+      # `repository` and `run`, and a unit that fails with cause
+      # `all_artifacts_unreadable` names its own source on the sync board.
+      # This alert answers "is this happening"; those answer "where".
+      - alert: ProviderArtifactSkipsSustained
+        expr: |
+          sum by (provider, dataset) (
+            increase(dev_health_provider_artifact_skipped_total[2h])
+          ) > 0
+        for: 3h
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Provider {{ $labels.provider }}/{{ $labels.dataset }} is sustaining artifact skips"
+          description: |
+            dev_health_provider_artifact_skipped_total has stayed above zero
+            for {{ $labels.provider }}/{{ $labels.dataset }} for at least
+            three hours -- a sustained partial failure, not an isolated bad
+            artifact (CHAOS-4184, follow-up to CHAOS-4177). This metric
+            carries no repository/run label by design, so it cannot say
+            WHICH source is affected. Localize from two other places
+            instead: the per-skip WARNING log line, which carries
+            `repository` and `run`, or a unit on the sync board that failed
+            with cause `all_artifacts_unreadable`, which names its own
+            source. The metric's `reason` label (unreadable_archive /
+            artifact_unavailable / other) narrows the failure shape.
+
+  # ---------------------------------------------------------------------------
   # LLM API
   # ---------------------------------------------------------------------------
   - name: llm

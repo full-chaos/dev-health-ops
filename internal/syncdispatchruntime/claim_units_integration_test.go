@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 )
 
 type claimedUnitRowResult struct {
@@ -211,6 +213,61 @@ func TestClaimUnitsExcludesCappedUnitIDsFromEveryClaimPath(t *testing.T) {
 		got := idsOf(units)
 		if len(got) != 1 || !got[uncappedPlanned] {
 			t.Fatalf("got=%v want exactly [%s] -- every capped id must be excluded from every claim path", got, uncappedPlanned)
+		}
+	})
+}
+
+// TestClaimUnitsRoundTripsProcessorFlagsForValidateClaim is the
+// mismatched-value fixture team-lead asked for: a claimed unit's
+// processor_flags column must decode into EXACTLY the shape
+// providerfamilycontract.ValidateClaim consumes -- proven here by feeding
+// a claimed unit's own processorFlags into ValidateClaim directly, both a
+// COMPLETE atomic-family flag set (must be admitted) and one missing a
+// required flag (must be refused), rather than asserting on the decoded
+// map's shape in isolation.
+func TestClaimUnitsRoundTripsProcessorFlagsForValidateClaim(t *testing.T) {
+	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC()
+		complete := "00000000-0000-4000-8000-000000000621"
+		incomplete := "00000000-0000-4000-8000-000000000622"
+
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{
+			id: complete, status: syncRunUnitStatusPlanned, updatedAt: now, datasetKey: "work-items",
+			processorFlagsJSON: `{"family_dataset_work_items":true,"family_dataset_work_item_labels":true,` +
+				`"family_dataset_work_item_projects":true,"family_dataset_work_item_history":true,` +
+				`"family_dataset_work_item_comments":true}`,
+		})
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{
+			id: incomplete, status: syncRunUnitStatusPlanned, updatedAt: now, datasetKey: "work-items",
+			// Missing family_dataset_work_item_comments -- an incomplete
+			// family claim, the exact malformed-persisted-state case
+			// ValidateClaim exists to reject.
+			processorFlagsJSON: `{"family_dataset_work_items":true,"family_dataset_work_item_labels":true,` +
+				`"family_dataset_work_item_projects":true,"family_dataset_work_item_history":true}`,
+		})
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		if err != nil {
+			t.Fatalf("claimUnits: %v", err)
+		}
+		byID := map[string]budgetUnit{}
+		for _, unit := range units {
+			byID[unit.id] = unit
+		}
+		if len(byID) != 2 {
+			t.Fatalf("got %d claimed units, want 2", len(byID))
+		}
+
+		if err := providerfamilycontract.ValidateClaim(byID[complete].provider, byID[complete].datasetKey, byID[complete].processorFlags, true); err != nil {
+			t.Fatalf("ValidateClaim(complete): %v, want nil -- the full family flag set was round-tripped correctly", err)
+		}
+		if err := providerfamilycontract.ValidateClaim(byID[incomplete].provider, byID[incomplete].datasetKey, byID[incomplete].processorFlags, true); err == nil {
+			t.Fatal("ValidateClaim(incomplete): want an error -- a claimed unit missing one family flag must be refused, not silently admitted")
 		}
 	})
 }

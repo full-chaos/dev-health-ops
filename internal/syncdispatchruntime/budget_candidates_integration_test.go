@@ -25,7 +25,7 @@ CREATE TABLE public.sync_run_units (
  lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
  rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
  budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL, last_retry_reason text NULL
+ first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
 )`)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +64,11 @@ type candidateUnitFixture struct {
 	// needed to put two units in the SAME budget bucket (which does not key
 	// on integration_id) but DIFFERENT cooldown scopes (which do).
 	integrationID string
+	// datasetKey/processorFlagsJSON override the fixed defaults ('commits'
+	// / none) -- needed to exercise validate_provider_family_claim's own
+	// atomic-family bitset via a claimed unit's real processor_flags column.
+	datasetKey         string
+	processorFlagsJSON string
 }
 
 func insertCandidateUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f candidateUnitFixture) {
@@ -77,14 +82,23 @@ func insertCandidateUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	if f.resultJSON == "" {
 		f.resultJSON = "{}"
 	}
+	datasetKey := "commits"
+	if f.datasetKey != "" {
+		datasetKey = f.datasetKey
+	}
+	var processorFlagsJSON *string
+	if f.processorFlagsJSON != "" {
+		processorFlagsJSON = &f.processorFlagsJSON
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units
  (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, available_at, updated_at, result, budget_first_deferred_at, first_blocked_at)
-VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, 'github', 'commits', 'rest_core',
-        $6, $7, $8, $9::json, $10, $11)`,
+  status, available_at, updated_at, result, budget_first_deferred_at, first_blocked_at, processor_flags)
+VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, 'github', $12, 'rest_core',
+        $6, $7, $8, $9::json, $10, $11, $13::json)`,
 		f.id, budgetCandidatesRunID, orgID, integrationID, sourceID,
-		f.status, f.availableAt, f.updatedAt, f.resultJSON, f.budgetFirstDefAt, f.firstBlockedAt); err != nil {
+		f.status, f.availableAt, f.updatedAt, f.resultJSON, f.budgetFirstDefAt, f.firstBlockedAt,
+		datasetKey, processorFlagsJSON); err != nil {
 		t.Fatal(err)
 	}
 }

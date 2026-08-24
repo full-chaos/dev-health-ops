@@ -20,25 +20,26 @@ id::text, org_id, integration_id::text, source_id::text, provider, dataset_key, 
 since_at, before_at, status, available_at, updated_at,
 lease_owner, lease_expires_at, last_heartbeat_at,
 rate_limit_deferrals, rate_limit_first_seen_at,
-budget_deferrals, budget_first_deferred_at, first_blocked_at, result`
+budget_deferrals, budget_first_deferred_at, first_blocked_at, result, processor_flags`
 
 // scanBudgetUnit reads one budgetUnitSelectColumns row. syncRunID is not a
 // SELECT column (see budgetUnitSelectColumns) so it is stamped onto every
 // row by the caller, who already knows it from its own WHERE clause.
 func scanBudgetUnit(rows pgx.Rows, syncRunID string) (budgetUnit, error) {
 	var unit budgetUnit
-	var resultRaw []byte
+	var resultRaw, processorFlagsRaw []byte
 	if err := rows.Scan(
 		&unit.id, &unit.orgID, &unit.integrationID, &unit.sourceID, &unit.provider, &unit.datasetKey, &unit.costClass,
 		&unit.sinceAt, &unit.beforeAt, &unit.status, &unit.availableAt, &unit.updatedAt,
 		&unit.leaseOwner, &unit.leaseExpiresAt, &unit.lastHeartbeat,
 		&unit.rateLimitDeferrals, &unit.rateLimitFirstSeenAt,
-		&unit.budgetDeferrals, &unit.budgetFirstDeferredAt, &unit.firstBlockedAt, &resultRaw,
+		&unit.budgetDeferrals, &unit.budgetFirstDeferredAt, &unit.firstBlockedAt, &resultRaw, &processorFlagsRaw,
 	); err != nil {
 		return budgetUnit{}, err
 	}
 	unit.syncRunID = syncRunID
 	unit.result = decodeUnitResult(resultRaw)
+	unit.processorFlags = decodeProcessorFlags(processorFlagsRaw)
 	return unit, nil
 }
 

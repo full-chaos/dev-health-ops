@@ -89,6 +89,12 @@ type budgetUnit struct {
 	firstBlockedAt *time.Time
 
 	result map[string]any
+	// processorFlags carries validate_provider_family_claim's own
+	// family_dataset_* bitset (SyncRunUnit.processor_flags), needed only by
+	// Dispatch()'s own provider-family admission check right before
+	// enqueueing a claimed unit -- every other reader of budgetUnit ignores
+	// this field.
+	processorFlags map[string]bool
 }
 
 // lastErrorCategory ports _unit_last_error_category verbatim: the unit's
@@ -138,6 +144,22 @@ func decodeUnitResult(raw []byte) map[string]any {
 		return nil
 	}
 	return decoded
+}
+
+// decodeProcessorFlags decodes sync_run_units.processor_flags (a JSON
+// object of family_dataset_* flag -> bool) into the map[string]bool shape
+// providerfamilycontract.ValidateClaim expects. A malformed or absent
+// value decodes to an empty, non-nil map -- ValidateClaim's own logic
+// already treats "flag absent" as false via a plain map lookup, so this
+// only needs to guarantee a non-nil map to range over, not distinguish
+// "malformed JSON" from "no flags set".
+func decodeProcessorFlags(raw []byte) map[string]bool {
+	flags := map[string]bool{}
+	if len(raw) == 0 {
+		return flags
+	}
+	_ = json.Unmarshal(raw, &flags)
+	return flags
 }
 
 // staleDispatchCutoff ports budget_guard.py's _stale_dispatch_cutoff,

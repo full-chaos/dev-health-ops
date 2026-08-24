@@ -186,9 +186,37 @@ func NewMutationPipeline(
 		if err := config.Registry.RegisterMetrics("sync_reconciler_pipeline", pipeline); err != nil {
 			return nil, fmt.Errorf("register sync reconciler pipeline metrics: %w", err)
 		}
+		// One required readiness check per stage, healthy by default (a
+		// stage that has not yet run, or has not yet failed
+		// consecutiveFailureDegradeThreshold times, must never hold up
+		// startup readiness on its own). CheckStatus.Name is a bounded,
+		// pre-registered identifier -- the same safety property every other
+		// required check in this codebase relies on -- so naming the exact
+		// degraded stage on readyz costs nothing the HTTP surface's "never
+		// return check error text" invariant already protects.
+		for _, stage := range orderedStages {
+			stage := stage
+			checkErr := config.Registry.RegisterRequired(stageReadinessCheckName(stage), func(context.Context) error {
+				if pipeline.stages.isDegraded(stage) {
+					return errStageDegraded
+				}
+				return nil
+			})
+			if checkErr != nil {
+				return nil, fmt.Errorf("register sync reconciler stage %q readiness: %w", stage, checkErr)
+			}
+		}
 	}
 	return pipeline, nil
 }
+
+// errStageDegraded is never returned to a caller or exposed on the HTTP
+// surface -- health.CheckFunc's contract already keeps check error TEXT off
+// /readyz (see health/registry.go's doc comment); only the pre-registered
+// check NAME (stageReadinessCheckName) is exposed, which is what names the
+// stage.
+var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
+	fmt.Sprintf("%d consecutive ticks", consecutiveFailureDegradeThreshold))
 
 // runStage bounds one stage call to its own budget instead of letting it
 // share the whole tick's envelope with its five siblings (CHAOS-4239), and
@@ -213,6 +241,7 @@ func (pipeline *MutationPipeline) runStage(
 	pipeline.stages.recordDuration(stage, elapsed)
 
 	if err == nil {
+		pipeline.stages.recordSuccess(stage)
 		return nil
 	}
 	if ctx.Err() != nil {
@@ -595,28 +624,68 @@ func (pipeline *MutationPipeline) Step(
 	return observation, nil
 }
 
-// stageTelemetry is the CHAOS-4239 metrics fragment: a failure counter and a
-// last-observed-duration gauge per stage, keyed the same way
+// consecutiveFailureDegradeThreshold is chris's readiness ruling on
+// CHAOS-4239: a single stage blip must not flap the reconciler's overall
+// readiness (that's the false-alarm failure mode), but a stage failing on
+// EVERY tick -- the shape the ticket's own cold-start symptom took -- must be
+// visible on readyz by name, not only to someone reading a Prometheus
+// counter. Three consecutive failures is the line; one success clears it
+// immediately, so a stage that recovers is never held degraded by a stale
+// streak.
+const consecutiveFailureDegradeThreshold = 3
+
+// stageTelemetry is the CHAOS-4239 metrics fragment: a lifetime failure
+// counter, a last-observed-duration gauge, and a readiness-affecting
+// consecutive-failure streak per stage, keyed the same way
 // sync_dispatch_observer's own WritePrometheus keys its fixed kinds -- every
 // known stage always exports a line, zero until it first runs or fails, so a
 // stage that has never failed is visibly zero rather than absent.
 type stageTelemetry struct {
-	mu        sync.Mutex
-	failures  map[StageName]uint64
-	durations map[StageName]time.Duration
+	mu          sync.Mutex
+	failures    map[StageName]uint64
+	durations   map[StageName]time.Duration
+	consecutive map[StageName]int
+	degraded    map[StageName]bool
 }
 
 func newStageTelemetry() stageTelemetry {
 	return stageTelemetry{
-		failures:  make(map[StageName]uint64, len(orderedStages)),
-		durations: make(map[StageName]time.Duration, len(orderedStages)),
+		failures:    make(map[StageName]uint64, len(orderedStages)),
+		durations:   make(map[StageName]time.Duration, len(orderedStages)),
+		consecutive: make(map[StageName]int, len(orderedStages)),
+		degraded:    make(map[StageName]bool, len(orderedStages)),
 	}
 }
 
+// recordFailure is called ONLY for a failure runStage has already decided is
+// a real stage failure (not a parent-context cancellation -- see runStage).
+// It both grows the lifetime counter and advances the readiness-affecting
+// consecutive streak.
 func (telemetry *stageTelemetry) recordFailure(stage StageName) {
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.failures[stage]++
+	telemetry.consecutive[stage]++
+	if telemetry.consecutive[stage] >= consecutiveFailureDegradeThreshold {
+		telemetry.degraded[stage] = true
+	}
+}
+
+// recordSuccess clears the consecutive-failure streak the moment a stage
+// succeeds. One success is enough -- there is no separate "recovered N times"
+// threshold on the way back down, so a stage does not stay marked degraded
+// on readyz after it has visibly started working again.
+func (telemetry *stageTelemetry) recordSuccess(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.consecutive[stage] = 0
+	telemetry.degraded[stage] = false
+}
+
+func (telemetry *stageTelemetry) isDegraded(stage StageName) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	return telemetry.degraded[stage]
 }
 
 func (telemetry *stageTelemetry) recordDuration(stage StageName, elapsed time.Duration) {
@@ -639,6 +708,24 @@ func (telemetry *stageTelemetry) snapshot() (map[StageName]uint64, map[StageName
 	return failures, durations
 }
 
+func (telemetry *stageTelemetry) degradedSnapshot() map[StageName]bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	degraded := make(map[StageName]bool, len(telemetry.degraded))
+	for stage, isDegraded := range telemetry.degraded {
+		degraded[stage] = isDegraded
+	}
+	return degraded
+}
+
+// stageReadinessCheckName is the health.Registry required-check name for a
+// stage's degraded state, sharing sync_reconciler_stage_*'s prefix so an
+// operator can go from a metric label straight to the matching readyz check
+// name without translating between two vocabularies.
+func stageReadinessCheckName(stage StageName) string {
+	return "sync_reconciler_stage_" + string(stage)
+}
+
 // WritePrometheus satisfies health.MetricsSource. It is registered only when
 // MutationPipelineConfig.Registry is set.
 func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
@@ -646,6 +733,7 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 		return errors.New("Prometheus output is required")
 	}
 	failures, durations := pipeline.stages.snapshot()
+	degraded := pipeline.stages.degradedSnapshot()
 	budgets := pipeline.config.StageBudgets
 
 	stages := make([]string, 0, len(orderedStages))
@@ -666,6 +754,14 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	text.WriteString("# HELP sync_reconciler_stage_budget_seconds The bounded sub-context this stage runs under. Static per deployment; exported so elapsed and budget can be read from the same dashboard without checking the source.\n# TYPE sync_reconciler_stage_budget_seconds gauge\n")
 	for _, name := range stages {
 		fmt.Fprintf(&text, "sync_reconciler_stage_budget_seconds{stage=%q} %s\n", name, formatSeconds(budgets[StageName(name)]))
+	}
+	fmt.Fprintf(&text, "# HELP sync_reconciler_stage_degraded Whether this stage has failed its last %d consecutive ticks. Matches the sync_reconciler_stage_<name> readyz check by name; one success clears both.\n# TYPE sync_reconciler_stage_degraded gauge\n", consecutiveFailureDegradeThreshold)
+	for _, name := range stages {
+		value := 0
+		if degraded[StageName(name)] {
+			value = 1
+		}
+		fmt.Fprintf(&text, "sync_reconciler_stage_degraded{stage=%q} %d\n", name, value)
 	}
 	_, err := io.WriteString(output, text.String())
 	return err

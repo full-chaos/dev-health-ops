@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -254,5 +255,88 @@ func TestRunStageDoesNotTelemeterParentCancellation(t *testing.T) {
 	// tick exactly the way any other repair failure does.
 	if _, found := findSlogRecord(*captured, "syncreconciler.stage_failed"); found {
 		t.Fatal("parent cancellation must not be telemetered as a stage failure")
+	}
+}
+
+// TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess
+// pins chris's CHAOS-4239 readiness ruling: counters alone are not enough --
+// a stage failing on EVERY tick (the ticket's own cold-start symptom shape)
+// must be visible on readyz BY STAGE NAME, not only to someone reading a
+// Prometheus counter. But a single blip must not flap overall readiness, so
+// the threshold is consecutiveFailureDegradeThreshold (3) failures in a row,
+// and one success clears it immediately.
+func TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	openReadinessGate(t, registry)
+
+	materializerCalls := 0
+	config := DefaultMutationPipelineConfig()
+	config.Registry = registry
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			materializerCalls++
+			if materializerCalls <= consecutiveFailureDegradeThreshold {
+				return MaterializerResult{}, errors.New("scripted materializer failure")
+			}
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
+		config,
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+
+	for tick := 1; tick <= consecutiveFailureDegradeThreshold; tick++ {
+		if _, stepErr := pipeline.Step(context.Background(), time.Now().UTC(), 10); stepErr != nil {
+			t.Fatalf("tick %d: Step() error = %v, want nil: materializer is continue-safe", tick, stepErr)
+		}
+	}
+	// A single blip must not have already flapped readiness -- only the
+	// THIRD consecutive failure crosses the threshold, so check it stayed
+	// open through ticks 1 and 2 by construction (nothing to assert
+	// mid-loop here beyond Step() succeeding, already checked above); the
+	// real assertion is the state after all three.
+	readiness := registry.Readiness(context.Background())
+	if readiness.Ready {
+		t.Fatalf("readiness after %d consecutive materializer failures = %#v, want degraded",
+			consecutiveFailureDegradeThreshold, readiness)
+	}
+	wantName := stageReadinessCheckName(StageMaterializer)
+	found := false
+	for _, check := range readiness.Checks {
+		if check.Name != wantName {
+			continue
+		}
+		found = true
+		if !check.Failed {
+			t.Fatalf("check %q = %#v, want Failed", wantName, check)
+		}
+	}
+	if !found {
+		t.Fatalf("readyz did not name the degraded stage %q: %#v", wantName, readiness.Checks)
+	}
+
+	// One success clears it immediately -- no separate recovery threshold.
+	if _, stepErr := pipeline.Step(context.Background(), time.Now().UTC(), 10); stepErr != nil {
+		t.Fatalf("recovery tick: Step() error = %v, want nil", stepErr)
+	}
+	readiness = registry.Readiness(context.Background())
+	if !readiness.Ready {
+		t.Fatalf("readiness after the materializer's first success = %#v, want open", readiness)
 	}
 }

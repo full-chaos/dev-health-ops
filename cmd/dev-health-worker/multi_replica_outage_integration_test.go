@@ -51,14 +51,17 @@ const workerPresenceTTLProof = 35 * time.Second
 // SAME replica when its producer simply polled first (that replica's own
 // heartbeat queue has one worker slot, so the second job then just waited
 // its turn locally after the first one finished -- no fleet-lease contention
-// at all). 85 local trials of that shape passed every single time without
-// ever exercising the cross-replica race CI hit, because the test could pass
-// while never reaching it. Job 2 is now inserted only after job 1 is claimed
-// AND parked in the bridge, which occupies its replica's one heartbeat
-// worker slot and forces job 2 onto the sibling -- genuine fleet-lease
-// contention, deterministically, every run (confirmed 40/40 with forced
-// contention across two local configurations, one a simulated loaded/shared
-// 2-vCPU runner, 0 failures; see CHAOS-4235).
+// at all). Ad hoc local investigation loops of that shape (dozens of runs,
+// not checked into this tree -- see AGENTS.md on why a trial harness does
+// not belong in the repo) never once exercised the cross-replica race CI
+// hit, because the test could pass while never reaching it. Job 2 is now
+// inserted only after job 1 is claimed AND parked in the bridge, which
+// occupies its replica's one heartbeat worker slot and forces job 2 onto
+// the sibling -- genuine fleet-lease contention, deterministically, every
+// run: this ordering, not a trial count, is what makes contention no
+// longer optional (CHAOS-4235). The reachability guarantee is enforced
+// below by two runtime assertions, not just this comment: stillParked()
+// before job 2 is inserted, and an AttemptedBy-owner mismatch check after.
 func TestMultiReplicaFleetSurvivesDatabaseOutage(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	// Wide enough that the outage-recovery backstop below, not this context, is
@@ -118,6 +121,20 @@ func TestMultiReplicaFleetSurvivesDatabaseOutage(t *testing.T) {
 		row, err := readRiverJob(ctx, admin, firstJob.Job.ID)
 		return err == nil && len(row.AttemptedBy) == 1, err
 	})
+
+	// The reachability guarantee below depends on job 1's handler still
+	// occupying its replica's one heartbeat worker slot. That handler's own
+	// HTTP call is bounded by OperationalBridgeTimeout (20s); under enough
+	// load for setup to have taken that long, it could already have exited
+	// on its own request context and freed the slot, silently defeating the
+	// forced distribution. Assert the barrier explicitly instead of assuming
+	// elapsed time was short enough (codex adversarial review, CHAOS-4235).
+	if !bridge.stillParked() {
+		t.Fatal("setup took long enough that job 1's handler is no longer parked " +
+			"in the bridge -- it likely hit its own OperationalBridgeTimeout before " +
+			"job 2 could be inserted, which would silently defeat the forced " +
+			"cross-replica distribution below")
+	}
 
 	// job 2: only inserted now. The parked replica has no free heartbeat
 	// slot, so this is forced onto the sibling -- guaranteed cross-replica
@@ -245,12 +262,27 @@ func (cutover *databaseCutover) serve() {
 			_ = client.Close()
 			continue
 		}
+		// Dialing happens without the lock held: it is the slow step, and
+		// cut() must not block on it.
 		upstream, err := net.Dial("tcp", cutover.target)
 		if err != nil {
 			_ = client.Close()
 			continue
 		}
+		// CHAOS-4235 (codex adversarial review): re-check open UNDER THE SAME
+		// LOCK as the append below, not the earlier snapshot. cut() also
+		// takes this lock to flip open and close+clear conns; without this
+		// re-check, a cut() that ran entirely during the Dial above would
+		// close and clear conns BEFORE this pair exists to be in it, so
+		// nothing would ever close it -- one connection would silently keep
+		// bridging straight through the simulated outage.
 		cutover.mu.Lock()
+		if !cutover.open {
+			cutover.mu.Unlock()
+			_ = client.Close()
+			_ = upstream.Close()
+			continue
+		}
 		cutover.conns = append(cutover.conns, client, upstream)
 		cutover.mu.Unlock()
 		go func() { _, _ = io.Copy(upstream, client); _ = upstream.Close() }()
@@ -271,16 +303,29 @@ func (cutover *databaseCutover) serve() {
 //     re-enqueues into the completer's in-memory backlog for the next tick).
 //     That requeue never touches river_job at all: until some round's write
 //     finally lands, the job sits in `running` with `attempt`, `errors`, and
-//     every other river_job column completely unchanged -- which is the
-//     state CI reported (CHAOS-4235: Attempt frozen at 1 for 258+ seconds).
-//     This is architecturally unbounded, by design (River's durability
-//     guarantee never gives up on a claimed job's completion write) -- it is
-//     not a hang in our runtime, and CHAOS-4235's isolated diagnostic (30
-//     trials driving the same TCP-level outage directly against a blocked
-//     budget.Acquire poll) never reproduced a context-cancellation hang
-//     anywhere in our own code. See completerProgressHandler below: it is
-//     the one in-process signal that a completer round is still working
-//     even though river_job has not moved.
+//     every other river_job column completely unchanged. This is
+//     architecturally unbounded, by design (River's durability guarantee
+//     never gives up on a claimed job's completion write).
+//
+//     This is CHAOS-4235's best-supported hypothesis for the CI failure,
+//     not a proven-live root cause: it is the only mechanism found that
+//     reproduces every observed symptom (Attempt frozen at 1, zero row
+//     changes, no error ever recorded, for 258+ seconds) and it is
+//     code-verified against the vendored library's own source and its own
+//     documented worst-case timing -- but no local trial (85 across four
+//     configurations, including a simulated loaded/shared 2-vCPU runner)
+//     ever caught a completer round actually failing to land for that long,
+//     so causation was never observed directly, only inferred. What CHAOS-
+//     4235's isolated diagnostic DID rule out directly: a context-
+//     cancellation hang in our own runtime (30 trials driving the same
+//     TCP-level outage against a blocked budget.Acquire poll near its
+//     deadline, 0 hangs -- every trial failed fast on a real DB error well
+//     inside its deadline). See completerProgressHandler below: it is the
+//     one in-process signal available today that a completer round is
+//     still working even though river_job has not moved -- it does not
+//     make a stuck round land, and CHAOS-4249 tracks giving production the
+//     same visibility.
+//
 //   - Only once that transition lands is the job rescheduled. Our adapter
 //     supplies River's optional NextRetry, but jobruntime.NextRetryAt returns
 //     a zero time for any contract whose retry_policy is not
@@ -291,6 +336,7 @@ func (cutover *databaseCutover) serve() {
 //     multiReplicaRetryAttempts, so only the ~1s and ~16s retries are
 //     reachable -- a third failure is discarded, which the assertions below
 //     already catch.
+//
 //   - The rescheduled handler then waits on our own fleet concurrency lease
 //     (internal/jobruntime/budget_postgres.go), polling every 100ms inside
 //     the job's 30s contract deadline, until the parked handler releases it.

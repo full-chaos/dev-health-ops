@@ -23,13 +23,22 @@ const (
 	// diagnostic (30 trials driving a real TCP-level outage against a blocked
 	// Acquire poll) never observed that watcher fail to fire -- every trial
 	// failed fast on a "conn closed" error well inside its deadline. The
-	// actual CHAOS-4235 mechanism was River's own BatchCompleter requeue loop
-	// silently retrying forever without writing river_job (see
-	// multi_replica_outage_integration_test.go's completerProgressHandler).
-	// This bound exists so that if some future pgx/network edge case ever
-	// does let a single DB call outlive its caller's context, one poll
-	// iteration still cannot run unbounded -- it fails closed into the next
-	// retry instead.
+	// best-supported hypothesis for CHAOS-4235's actual mechanism was River's
+	// own BatchCompleter requeue loop silently retrying forever without
+	// writing river_job (see multi_replica_outage_integration_test.go's
+	// completerProgressHandler) -- code-verified against the vendored
+	// library's source, though never caught live in any local trial.
+	//
+	// This bound exists only so a single DB round-trip cannot itself run
+	// unbounded inside one poll iteration. It must NOT change observable
+	// Acquire behavior for the normal case: when only this sub-timeout (not
+	// the caller's own ctx) fires, Acquire treats it exactly like finding no
+	// capacity yet -- another iteration, not a returned error. A first
+	// version of this returned the sub-timeout as a terminal error, which a
+	// codex adversarial review caught: it meant a legitimately slow-but-
+	// successful DB round-trip (lock contention, a loaded database, nothing
+	// to do with an outage) failed the whole Acquire call outright instead
+	// of just that one iteration.
 	acquireQueryTimeout = 5 * time.Second
 )
 
@@ -95,12 +104,26 @@ func (store *PostgresConcurrencyBudget) Acquire(
 	}
 	for {
 		// Bounded defensively to acquireQueryTimeout in addition to ctx: see
-		// the constant's doc comment.
+		// the constant's doc comment. A codex adversarial review on
+		// CHAOS-4235 caught the first version of this: wrapping ctx
+		// unconditionally and returning ANY resulting error meant one
+		// legitimately slow-but-successful DB round-trip (lock contention,
+		// a loaded database, nothing to do with an outage) failed the whole
+		// Acquire call outright instead of just that one poll iteration --
+		// an externally visible behavior change with no evidence it was
+		// needed. Only the bounded sub-context's OWN deadline firing (ctx
+		// itself is still live) is treated as "try again", identically to
+		// finding no capacity yet below; a real tryAcquire error, or ctx
+		// itself expiring, still propagates exactly as before this constant
+		// existed.
 		iterCtx, iterCancel := context.WithTimeout(ctx, acquireQueryTimeout)
 		lease, leased, expired, acquireErr := store.tryAcquire(iterCtx, request, key)
 		iterCancel()
 		if acquireErr != nil {
-			return nil, acquireErr
+			if ctx.Err() != nil || !errors.Is(acquireErr, context.DeadlineExceeded) {
+				return nil, acquireErr
+			}
+			lease, leased, expired = nil, -1, 0
 		}
 		if expired > 0 {
 			_ = store.observeExpiry(labels, "expired", expired)

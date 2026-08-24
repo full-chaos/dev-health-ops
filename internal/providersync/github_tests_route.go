@@ -30,6 +30,18 @@ const (
 
 var ErrGitHubTestsIncomplete = errors.New("github tests inventory incomplete")
 
+// ErrGitHubTestsArtifactUnavailable narrows ErrGitHubTestsIncomplete to the
+// one download-time case that is a property of THIS ONE ARTIFACT rather than
+// of the run or the unit: GitHub answered the artifact-download redirect with
+// no Location header, so there was nothing to follow and its bytes could
+// never be obtained. It is the download-time sibling of
+// ErrGitHubTestsArchiveUnreadable (github_tests_reports.go), which narrows
+// the same way for a container that WAS obtained but would not open -- both
+// mean "skip this one artifact and keep walking, this is not a fault of the
+// caller" (CHAOS-4191, extending CHAOS-4177's disposition one raise site
+// earlier).
+var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", ErrGitHubTestsIncomplete)
+
 type githubTestsPipelineRow struct {
 	OrgID           string     `json:"org_id"`
 	RepoID          string     `json:"repo_id"`
@@ -317,6 +329,16 @@ func (handler GitHubTestsRouteHandler) Collect(
 			archive, used, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
 			requests += used
 			if downloadErr != nil {
+				// Same disposition as an unreadable container below: an
+				// artifact whose bytes could never be fetched is skipped and
+				// the walk continues (CHAOS-4191, extending CHAOS-4177).
+				if errors.Is(downloadErr, ErrGitHubTestsArtifactUnavailable) {
+					incomplete = recordGitHubTestsSkippedArtifact(
+						incomplete, client, claim, claim.SourceName, pipeline.RunID,
+						githubTestsArtifactUnavailableCause,
+					)
+					continue
+				}
 				return CompleteRouteBatch{}, downloadErr
 			}
 			if len(archive) == 0 {
@@ -327,8 +349,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 				// Same disposition as the chunked route: an archive that will
 				// not open is skipped and the walk continues (CHAOS-4177).
 				if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
-					incomplete = recordGitHubTestsUnreadableArchive(
+					incomplete = recordGitHubTestsSkippedArtifact(
 						incomplete, client, claim, claim.SourceName, pipeline.RunID,
+						githubTestsUnreadableArchiveCause,
 					)
 					continue
 				}
@@ -609,7 +632,10 @@ func downloadGitHubTestsArtifact(ctx context.Context, client *providerfoundation
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, ErrGitHubTestsIncomplete
+			return nil, requests, fmt.Errorf(
+				"%w: redirect status=%d carried no Location header",
+				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
+			)
 		}
 		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
 		requests++
@@ -625,8 +651,16 @@ func downloadGitHubTestsArtifact(ctx context.Context, client *providerfoundation
 		return nil, requests, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, githubTestsMaxDownloadSize+1))
-	if readErr != nil || len(body) > githubTestsMaxDownloadSize {
-		return nil, requests, ErrGitHubTestsIncomplete
+	if readErr != nil {
+		return nil, requests, fmt.Errorf(
+			"%w: artifact download read failed: %v", ErrGitHubTestsIncomplete, readErr,
+		)
+	}
+	if len(body) > githubTestsMaxDownloadSize {
+		return nil, requests, fmt.Errorf(
+			"%w: artifact exceeds max download size %d bytes",
+			ErrGitHubTestsIncomplete, githubTestsMaxDownloadSize,
+		)
 	}
 	return body, requests, nil
 }

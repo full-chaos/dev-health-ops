@@ -174,35 +174,39 @@ func recordGitHubTestsPerRunTruncation(
 	return cursor
 }
 
-// recordGitHubTestsUnreadableArchive records ONE skipped artifact and returns
-// the updated observation slice. It serves BOTH tests routes -- the chunked one
-// keeps its observations on the cursor, the non-chunked oracle on a local
-// slice -- so the vocabulary, the counter and the log line cannot drift apart
-// between them (CHAOS-4177).
-func recordGitHubTestsUnreadableArchive(
+// recordGitHubTestsSkippedArtifact records ONE skipped artifact under `cause`
+// and returns the updated observation slice. It serves BOTH tests routes --
+// the chunked one keeps its observations on the cursor, the non-chunked
+// oracle on a local slice -- so the vocabulary, the counter and the log line
+// cannot drift apart between them (CHAOS-4177). It also serves BOTH skip
+// mechanisms within report_member: an archive that downloaded but would not
+// open (unreadable_archive) and an artifact whose bytes could never be
+// downloaded at all (artifact_unavailable, CHAOS-4191) -- the caller supplies
+// which one happened so the durable evidence and the caller-visible fact
+// never drift apart.
+func recordGitHubTestsSkippedArtifact(
 	incomplete []GitHubTestsIncomplete,
 	client *providerfoundation.HTTPClient,
 	claim Claim,
 	repo string,
 	runID string,
+	cause string,
 ) []GitHubTestsIncomplete {
 	incomplete = mergeGitHubTestsIncomplete(incomplete, GitHubTestsIncomplete{
 		Component: githubTestsReportMemberComponent,
-		Cause:     githubTestsUnreadableArchiveCause,
+		Cause:     cause,
 		Count:     1,
 	})
 	if client != nil {
-		client.Metrics.RecordArtifactSkipped(
-			claim.Provider, claim.Dataset, githubTestsUnreadableArchiveCause,
-		)
+		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, cause)
 	}
 	// The run id is provider-supplied and unbounded, so it belongs in the log
 	// line, never in the durable observation.
 	slog.Warn(
-		"provider artifact archive unreadable; artifact skipped and inventory continued",
+		"provider artifact skipped; inventory continued",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", repo, "component", githubTestsReportMemberComponent,
-		"cause", githubTestsUnreadableArchiveCause, "run", runID,
+		"cause", cause, "run", runID,
 	)
 	return incomplete
 }
@@ -694,6 +698,20 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						archive, used, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
 						cursor.Requests += used
 						if downloadErr != nil {
+							// An artifact whose bytes could never be
+							// downloaded is provider data, not a fault of
+							// this unit. Skip it exactly as an unreadable
+							// container is skipped below, and keep walking:
+							// one bad artifact must not cost the healthy ones
+							// or the whole unit (CHAOS-4191, extending
+							// CHAOS-4177).
+							if errors.Is(downloadErr, ErrGitHubTestsArtifactUnavailable) {
+								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+									githubTestsArtifactUnavailableCause,
+								)
+								continue
+							}
 							return downloadErr
 						}
 						if len(archive) == 0 {
@@ -707,8 +725,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// keep walking: one bad artifact must not cost the
 							// healthy ones or the whole unit (CHAOS-4177).
 							if errors.Is(parseErr, ErrGitHubTestsArchiveUnreadable) {
-								cursor.Incomplete = recordGitHubTestsUnreadableArchive(
+								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+									githubTestsUnreadableArchiveCause,
 								)
 								continue
 							}

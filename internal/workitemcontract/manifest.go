@@ -36,6 +36,32 @@ var destinationManifest = [...]Destination{
 	{Name: "investment_classifications_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "investment_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "issue_type_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	// CHAOS-4194. The FIRST two destinations where the two consumers diverge,
+	// which is the case this package's two independent tags were built for.
+	//
+	// Placed in ALPHABETICAL position, not appended. The declaration order is
+	// canonical and is the order effects are built and indexed in, and this list
+	// has always been alphabetical -- so appending at the end silently moved
+	// work_items from index 15 to 17 relative to anything that sorts the same
+	// names, and an effect ledger written at one index was then read at another.
+	// The invariant was never written down because nothing had tested it; it is
+	// written down now.
+	//
+	// GitHubEffect: the GitHub Projects V2 route produces both -- board
+	// memberships for pull requests, and the `projects` catalogue row that
+	// makes their destination resolvable.
+	//
+	// LinearExpiredLeaseRetry: FALSE, and the falseness is the claim. Linear's
+	// route produces neither family, and no expired-lease retry safety proof
+	// exists for either; marking them true would assert a proof that has never
+	// been made, on a policy whose whole job is deciding what is safe to redo
+	// after a lease expires.
+	//
+	// FamilyRoute: FALSE. The published capability matrix advertises this set
+	// per provider, and gitlab's "project" concept IS repo_id -- listing these
+	// under it would publish a capability it cannot have.
+	{Name: "project_membership_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
+	{Name: "projects", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
 	{Name: "sprints", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "work_item_cycle_times", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "work_item_dependencies", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
@@ -47,23 +73,6 @@ var destinationManifest = [...]Destination{
 	{Name: "work_item_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "work_item_user_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "work_items", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	// CHAOS-4194. The FIRST two destinations where the two consumers diverge,
-	// which is the case this package's two independent tags were built for.
-	//
-	// GitHubEffect: the GitHub Projects V2 route produces both -- board
-	// memberships for pull requests, and the `projects` catalogue row that
-	// makes their destination resolvable. Before this they were built and then
-	// dropped at the effect boundary, which is the defect CHAOS-4194 closes.
-	//
-	// LinearExpiredLeaseRetry: FALSE, and the falseness is the claim. Linear's
-	// route produces neither family, and no expired-lease retry safety proof
-	// exists for either; marking them true would assert a proof that has never
-	// been made, on a policy whose whole job is deciding what is safe to redo
-	// after a lease expires. Marking them false costs nothing today -- there is
-	// nothing for Linear to retry -- and it keeps the retry list a list of
-	// surfaces someone has actually reasoned about.
-	{Name: "project_membership_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
-	{Name: "projects", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
 }
 
 // Destinations returns a defensive copy of the full semantic manifest. It is

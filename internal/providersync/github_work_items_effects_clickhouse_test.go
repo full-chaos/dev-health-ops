@@ -58,8 +58,15 @@ func TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 	if len(first[1].Rows) != 0 {
 		t.Fatalf("conditional-empty destination was dropped or populated: %+v", first[1])
 	}
-	if len(first[5].Rows) != 1 || first[5].Destination != "sprints" {
-		t.Fatalf("sprint effect=%+v", first[5])
+	// Located by NAME, not by index. The index moved when CHAOS-4194 inserted
+	// two destinations alphabetically ahead of sprints, and a positional
+	// assertion turns any future insertion into a failure that names the wrong
+	// destination and says nothing about ordering.
+	sprints := slices.IndexFunc(first, func(effect EffectBatch) bool {
+		return effect.Destination == "sprints"
+	})
+	if sprints < 0 || len(first[sprints].Rows) != 1 {
+		t.Fatalf("sprint effect index=%d effects=%+v", sprints, first)
 	}
 }
 

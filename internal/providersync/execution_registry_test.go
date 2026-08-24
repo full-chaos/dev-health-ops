@@ -153,12 +153,15 @@ func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 		"work_item_metrics_daily", "work_item_reopen_events",
 		"work_item_state_durations_daily", "work_item_team_attributions",
 		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
-		// CHAOS-4194: github writes two surfaces no other work-item provider
-		// does. This list is the GITHUB one; the shared family list that gitlab,
-		// jira and linear advertise deliberately stops before these two, which
-		// is asserted directly below.
-		"project_membership_transitions", "projects",
 	}
+	// CHAOS-4194: github writes two surfaces no other work-item provider does,
+	// and they sit in ALPHABETICAL position because the manifest's declaration
+	// order is the order effects are built and ledger-indexed in. The shared
+	// family list that gitlab, jira and linear advertise deliberately stops
+	// before these two, which is asserted directly below.
+	want = slices.Concat(
+		want[:5], []string{"project_membership_transitions", "projects"}, want[5:],
+	)
 	got := githubWorkItemRouteDestinations()
 	if !slices.Equal(got, want) {
 		t.Fatalf("github work-item destinations=%v want=%v", got, want)

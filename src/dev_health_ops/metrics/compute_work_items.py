@@ -430,6 +430,35 @@ def resolve_team_attribution(
                     _identity_key(assignee_identity),
                 )
             )
+        # CHAOS-4244: a PR/MR's reporter (the author) is a membership signal
+        # GitHub's own "assignee" field never carries -- GitHub distinguishes
+        # the two, and most PRs are opened with no assignee set at all. This
+        # reuses the SAME member_by_identity resolution the assignee loop
+        # above uses (still rank 4, assignee_membership) rather than adding a
+        # new precedence tier, so no ClickHouse enum widening is needed. See
+        # docs/contribute/architecture/team-attribution.md "Why this exists":
+        # author membership was previously skipped as unreliable ALONE, but a
+        # match is still a strictly better signal than the unassigned floor
+        # it used to fall to, and it never outranks a real assignee, repo, or
+        # project ownership fact.
+        #
+        # Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped
+        # signal is only usable "where the reporter's membership is
+        # unambiguous (exactly one team)" -- a person on 2+ teams gives no
+        # reason to prefer one, and blanket-stamping a whole org's authorless
+        # PRs to a single team was exactly the outcome chris ruled against
+        # (CHAOS-3975's cancellation, CHAOS-4110 comment thread). An assignee
+        # keeps no such gate: it is the pre-existing rank-4 mechanism, not the
+        # new one this ticket is adding. Reporter contributes NOTHING when its
+        # membership resolves to more than one distinct team.
+        if item.reporter:
+            reporter_candidates = _context_candidates(
+                attribution_context.member_by_identity,
+                item.provider,
+                _identity_key(item.reporter),
+            )
+            if len({c.team_id for c in reporter_candidates}) == 1:
+                candidates_by_source["assignee_membership"].extend(reporter_candidates)
 
     assignee: str | None = item.assignees[0] if item.assignees else None
     team_id, team_name = _resolve_team(team_resolver, assignee)
@@ -445,6 +474,22 @@ def resolve_team_attribution(
                 specificity=50,
             )
         )
+    if item.reporter:
+        reporter_team_id, reporter_team_name = _resolve_team(
+            team_resolver, item.reporter
+        )
+        if reporter_team_id is not None:
+            candidates_by_source["assignee_membership"].append(
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id=reporter_team_id,
+                    team_name=reporter_team_name or reporter_team_id,
+                    confidence="medium",
+                    evidence=f"reporter={item.reporter}",
+                    is_primary=1,
+                    specificity=50,
+                )
+            )
 
     if attribution_context is not None and attribution_context.manual_fallbacks:
         candidates_by_source["manual_fallback"].extend(

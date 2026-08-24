@@ -377,6 +377,15 @@ if _PROMETHEUS_AVAILABLE:
         ["family", "cause"],
     )
 
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_work_item_team_attributions_written_total",
+        "work_item_team_attributions rows written, by provider and winning "
+        "source (CHAOS-4244). source='unassigned' is the residual: "
+        "sum(...{source='unassigned'}) / sum(...) is chris's <=2% target, "
+        "readable per provider without a ClickHouse query.",
+        ["provider", "source"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -414,6 +423,7 @@ else:
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

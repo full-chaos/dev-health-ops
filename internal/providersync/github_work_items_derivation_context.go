@@ -42,7 +42,14 @@ type githubWorkItemDerivationSubject struct {
 	ProjectID     *string
 	ProjectName   *string
 	Assignees     []string
-	OrgID         string
+	// Reporter is the item's author (e.g. a PR's opener). CHAOS-4244: GitHub's
+	// "assignee" field is distinct from and far less commonly set than the
+	// author, so a PR opened by a team member with no assignee, no
+	// repo_patterns row, and no linked issue used to resolve unassigned. This
+	// mirrors compute_work_items.py's resolve_team_attribution, which now
+	// feeds item.reporter into the SAME assignee_membership candidate list.
+	Reporter *string
+	OrgID    string
 }
 
 type githubWorkItemDerivationTeamFact struct {
@@ -457,7 +464,8 @@ func githubWorkItemDerivationSubjectFromRow(row githubWorkItemRow) githubWorkIte
 		WorkItemID: row.WorkItemID, Provider: row.Provider, RepoID: repoID,
 		NativeTeamKey: row.NativeTeamKey, ProjectKey: row.ProjectKey,
 		ProjectID: row.ProjectID, ProjectName: row.ProjectName,
-		Assignees: append([]string(nil), row.Assignees...), OrgID: row.OrgID,
+		Assignees: append([]string(nil), row.Assignees...),
+		Reporter:  row.Reporter, OrgID: row.OrgID,
 	}
 }
 
@@ -640,6 +648,22 @@ func (derived githubWorkItemDerivationContext) resolve(
 			bySource["assignee_membership"],
 			derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(assignee))]...,
 		)
+	}
+	// CHAOS-4244: mirrors compute_work_items.py's resolve_team_attribution --
+	// the reporter (author) is a membership signal GitHub's "assignee" field
+	// never carries. Still rank 4 (assignee_membership); no new precedence
+	// tier and no ClickHouse enum widening.
+	//
+	// Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped signal
+	// is only usable "where the reporter's membership is unambiguous (exactly
+	// one team)". Reporter contributes NOTHING when its membership resolves
+	// to more than one distinct team -- an assignee keeps no such gate, it is
+	// the pre-existing rank-4 mechanism, not the new one this ticket adds.
+	if subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
+		reporterCandidates := derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(*subject.Reporter))]
+		if githubWorkItemDerivationSingleTeam(reporterCandidates) {
+			bySource["assignee_membership"] = append(bySource["assignee_membership"], reporterCandidates...)
+		}
 	}
 	bySource["manual_fallback"] = append(
 		bySource["manual_fallback"], derived.manualCandidates(subject)...,
@@ -1377,6 +1401,20 @@ func githubWorkItemDerivationStringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// githubWorkItemDerivationSingleTeam reports whether a candidate list names
+// exactly one distinct team_id. CHAOS-4244's reporter ambiguity gate: a
+// person's membership resolving to zero candidates or to two+ different
+// teams gives no signal to prefer one, so the caller must contribute
+// nothing. An empty list is NOT single -- it is handled by the caller
+// appending nothing either way, but this keeps the predicate's name honest.
+func githubWorkItemDerivationSingleTeam(candidates []githubWorkItemDerivationCandidate) bool {
+	teams := map[string]struct{}{}
+	for _, candidate := range candidates {
+		teams[githubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}
+	}
+	return len(teams) == 1
 }
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {

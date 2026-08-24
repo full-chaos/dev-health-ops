@@ -48,7 +48,7 @@ func TestNewGitHubWorkItemClickHouseEffectsRejectsMissingDependencies(t *testing
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			sink, err := NewGitHubWorkItemClickHouseEffects(testCase.conn, testCase.lease)
+			sink, err := NewGitHubWorkItemClickHouseEffects(testCase.conn, testCase.lease, nil)
 			if !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
 			}
@@ -69,7 +69,7 @@ func TestNewGitHubWorkItemClickHouseEffectsRejectsMissingDependencies(t *testing
 func TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen(t *testing.T) {
 	t.Parallel()
 	sink, err := NewGitHubWorkItemClickHouseEffects(
-		stubWorkItemConn{}, githubWorkItemCompositionLease(),
+		stubWorkItemConn{}, githubWorkItemCompositionLease(), nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -841,7 +841,7 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 		// construction; the composite gate must still refuse EVERY destination,
 		// not merely the missing one.
 		sink, err := NewGitHubWorkItemClickHouseEffects(
-			stubWorkItemConn{}, githubWorkItemCompositionLease(),
+			stubWorkItemConn{}, githubWorkItemCompositionLease(), nil,
 		)
 		if err != nil {
 			t.Fatal(err)

@@ -21,6 +21,7 @@ from typing import Any
 import clickhouse_connect
 
 from dev_health_ops.clickhouse_dedup import dedup_from
+from dev_health_ops.metrics.prometheus import WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL
 from dev_health_ops.metrics.schemas import (
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -373,6 +374,15 @@ class ClickHouseCore(BaseMetricsSink):
             self.client.insert(
                 "work_item_team_attributions", matrix, column_names=column_names
             )
+        # CHAOS-4244: written distribution by (provider, winning source).
+        # source='unassigned' is the residual chris's <=2% target measures
+        # against -- one counter answers both "is attribution running" and
+        # "how much is still falling through" without a ClickHouse query.
+        for row in rows:
+            if row.is_primary:
+                WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL.labels(
+                    provider=row.provider, source=row.source
+                ).inc()
 
     def write_manual_attribution_fallbacks(
         self, rows: Sequence[ManualAttributionFallbackRecord]

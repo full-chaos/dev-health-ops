@@ -51,6 +51,13 @@ type GitHubEstimateCoverageClickHouseEffects struct {
 type GitHubWorkItemTeamAttributionsClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
+	// Metrics records dev_health_work_item_team_attributions_written_total
+	// (CHAOS-4244). Nil is safe -- see NewGitHubWorkItemClickHouseEffects.
+	// Only the GitHub construction path wires this today; GitLab/Jira/Linear
+	// share this same writer type but are out of CHAOS-4244's scope, so their
+	// constructors still pass a nil Metrics and simply do not emit this
+	// series yet.
+	Metrics *providerfoundation.Metrics
 }
 
 // GitHubWorkItemStateDurationsClickHouseEffects writes and verifies
@@ -442,11 +449,43 @@ is_primary, confidence, evidence, computed_at)`)
 		); err != nil {
 			return err
 		}
+		// CHAOS-4244: only the PRIMARY row is the winner this series counts --
+		// candidate rows for lower-precedence sources are provenance, not the
+		// outcome chris's <=2% target measures.
+		if row.IsPrimary == 1 {
+			sink.Metrics.RecordWorkItemTeamAttributionWritten(
+				row.Provider, githubWorkItemTeamAttributionMetricSource(row),
+			)
+		}
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
 	return batch.Send()
+}
+
+// githubWorkItemTeamAttributionMetricSource maps a written row onto
+// CHAOS-4244's coarser written-source vocabulary (author/assignee/
+// linked_issue/project/repo/unassigned; anything else collapses to "other"
+// via MetricWorkItemTeamAttributionSourceLabel). "author" and "assignee" both
+// carry Source "assignee_membership" in the stored precedence enum -- they
+// only differ in Evidence's identity prefix, which resolve_team_attribution
+// (mirrored here in derived.resolve) always stamps as "reporter=" or
+// "assignee=" (github_work_items_derivation_context.go:597-646).
+func githubWorkItemTeamAttributionMetricSource(row githubWorkItemTeamAttributionRow) string {
+	switch row.Source {
+	case "assignee_membership":
+		if strings.HasPrefix(row.Evidence, "reporter=") {
+			return "author"
+		}
+		return "assignee"
+	case "project_ownership", "issue_project":
+		return "project"
+	case "repo_ownership":
+		return "repo"
+	default:
+		return row.Source
+	}
 }
 
 func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkItemEffect(

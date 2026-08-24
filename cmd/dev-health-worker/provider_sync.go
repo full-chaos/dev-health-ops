@@ -326,7 +326,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
 				ghSink, err := providersync.NewGitHubWorkItemClickHouseEffects(
-					clickhouseConnection, session,
+					clickhouseConnection, session, providerMetrics,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err

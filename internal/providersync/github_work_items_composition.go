@@ -48,9 +48,14 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // that accepts a guard. The seven direct adapters deliberately hold no guard of
 // their own -- the composite asserts the lease before and after each write on
 // their behalf -- so the guard here is the only one they get.
+// metrics is CHAOS-4244's dev_health_work_item_team_attributions_written_total
+// series (providerfoundation.Metrics.RecordWorkItemTeamAttributionWritten). A
+// nil metrics keeps the sink working with no live series, matching every
+// other optional dependency in this package (see BudgetWaitObserver's doc).
 func NewGitHubWorkItemClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (GitHubWorkItemClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return GitHubWorkItemClickHouseEffects{}, ErrInvalidConfiguration
@@ -94,7 +99,7 @@ func NewGitHubWorkItemClickHouseEffects(
 			Conn: conn, Lease: lease,
 		},
 		WorkItemTeamAttributions: GitHubWorkItemTeamAttributionsClickHouseEffects{
-			Conn: conn, Lease: lease,
+			Conn: conn, Lease: lease, Metrics: metrics,
 		},
 		InvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{
 			Conn: conn, Lease: lease,
@@ -194,6 +199,16 @@ func (deriver *GitHubWorkItemDeriver) StoredEdgeMergeObservation() githubWorkIte
 		return githubWorkItemStoredEdgeMergeObservation{}
 	}
 	return deriver.observations.storedEdgeMergeSnapshot()
+}
+
+// TeamAttributionWrittenObservation reports this unit's PRIMARY
+// team_attribution rows tallied by source (CHAOS-4244) -- a
+// `source="unassigned"` count is the residual chris's <=2% target measures.
+func (deriver *GitHubWorkItemDeriver) TeamAttributionWrittenObservation() map[string]int {
+	if deriver == nil {
+		return map[string]int{}
+	}
+	return deriver.observations.teamAttributionBySourceSnapshot()
 }
 
 // NewGitHubWorkItemDeriver is the only production construction path that can
@@ -397,6 +412,9 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 		if err := githubWorkItemMergeDerivedRows(derived, surfaceRows); err != nil {
 			return nil, err
 		}
+		// CHAOS-4244: tally written team_attribution rows by source, for the
+		// route's observations map (see workItemDerivationObservations doc).
+		deriver.observations.recordTeamAttributionRows(surfaces.TeamAttributions)
 		if deriver.engine == nil {
 			continue
 		}

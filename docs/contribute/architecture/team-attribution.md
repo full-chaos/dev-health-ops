@@ -61,6 +61,24 @@ The fix adds a fourth, **provider-agnostic** tier: a work item with no team of
 its own inherits the team of an issue it links to via `work_item_dependencies`.
 A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 
+> **CHAOS-4244 (2026-08-24).** "Author often isn't a team member" was true but
+> incomplete: `assignee_membership` (rank 4) only ever read the item's
+> **assignee** — GitHub's assignee field, distinct from and far less commonly
+> set than the PR's **author**. A PR opened by a team member with no assignee,
+> no repo_patterns row, and no linked issue fell all the way through to
+> `unassigned` even though the author WAS resolvable — 18.47% of local work
+> units, all PR-only evidence against this project's own repos, no linked
+> issue. The fix widens `assignee_membership`'s candidate pool to also include
+> the item's reporter (author) — still rank 4, same evidence contract, no new
+> precedence tier and no `Enum8` widening — so an author who *is* a team
+> member now contributes a candidate instead of contributing nothing. No
+> pathway change: GitHub PRs were already modeled as `WorkItem`s and already
+> flowed into this resolver (`providers/github/normalize.py:541` /
+> `internal/providersync/github_work_items_rows.go:517`); only the candidate
+> POOL fed into the existing rank-4 stage changed. See
+> `metrics/compute_work_items.py:425-471` and
+> `internal/providersync/github_work_items_derivation_context.go:597-646`.
+
 ---
 
 ## 0. Target state (CHAOS-2600) — ClickHouse-only team attribution
@@ -137,7 +155,7 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM{"4 · assignee_membership candidate?"}
+    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee OR reporter/author identity, CHAOS-4244)"}
     AM -->|"yes"| Win
     AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
@@ -192,7 +210,7 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | 1 | `issue_project` | native issue project → owning team | high | 2–7 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–7 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–7 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–7 | 0–3 | `member_id, identity` |
+| 4 | `assignee_membership` | `team_memberships` (assignee OR reporter/author identity, CHAOS-4244) | medium | 5–7 | 0–3 | `member_id, identity` (evidence text: `assignee=<id>` or `reporter=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |

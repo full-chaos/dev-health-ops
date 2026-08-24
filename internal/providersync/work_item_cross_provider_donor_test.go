@@ -530,6 +530,73 @@ func TestDeriverReportsStoredEdgeObservationToTheRoute(t *testing.T) {
 	}
 }
 
+// TestDeriverReportsTeamAttributionTallyToTheRoute closes the same
+// derivation-to-payload path for CHAOS-4244's written-by-source tally:
+// providersync still has no metrics registry, so this observation IS the
+// operator-visible surface until one exists.
+func TestDeriverReportsTeamAttributionTallyToTheRoute(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	claim := crossProviderClaim()
+	since := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	source := &fakeGitHubWorkItemDerivationContextSource{
+		facts:       crossProviderDonorFacts(claim),
+		storedEdges: []githubWorkItemDependencyRow{crossProviderStoredEdge(claim, now.AddDate(0, 0, -40))},
+	}
+	deriver := &GitHubWorkItemDeriver{
+		Source: source, engine: githubWorkItemStubEngine{},
+		observations: newWorkItemDerivationObservations(),
+	}
+	if _, err := deriver.Derive(
+		context.Background(), claim, crossProviderRows(claim), now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// crossProviderRows carries exactly one work item that can only resolve
+	// via the linked_issue donor edge (see crossProviderWorkItem's doc), and
+	// CHAOS-3494 means the day loop re-emits it once per day in the window --
+	// here a single day.
+	tally := deriver.TeamAttributionWrittenObservation()
+	if tally["linked_issue"] != 1 {
+		t.Fatalf("tally = %#v, want linked_issue=1", tally)
+	}
+
+	result := attachGitHubWorkItemTeamAttributionObservation(map[string]any{
+		"observations": map[string]any{"provider_usage": "kept"},
+	}, deriver)
+	observations, ok := result["observations"].(map[string]any)
+	if !ok {
+		t.Fatalf("result observations = %#v", result["observations"])
+	}
+	if observations["provider_usage"] != "kept" {
+		t.Fatal("attaching the team-attribution observation dropped an existing observation")
+	}
+	got, ok := observations[githubWorkItemTeamAttributionResultKey].(map[string]int)
+	if !ok || got["linked_issue"] != 1 {
+		t.Fatalf("result observation = %#v, want map with linked_issue=1", observations[githubWorkItemTeamAttributionResultKey])
+	}
+}
+
+// TestGitHubWorkItemTeamAttributionObservationAttachesZeroesForANonObserver
+// proves the same "absent key would mean cannot-see, zero means saw-nothing"
+// contract as the stored-edge observation: a deriver double that does not
+// implement the GitHub-only observer interface must still get a present,
+// empty tally rather than no key at all.
+func TestGitHubWorkItemTeamAttributionObservationAttachesZeroesForANonObserver(t *testing.T) {
+	t.Parallel()
+	result := attachGitHubWorkItemTeamAttributionObservation(map[string]any{}, "not-a-deriver")
+	observations, ok := result["observations"].(map[string]any)
+	if !ok {
+		t.Fatalf("result observations = %#v", result["observations"])
+	}
+	tally, ok := observations[githubWorkItemTeamAttributionResultKey].(map[string]int)
+	if !ok || len(tally) != 0 {
+		t.Fatalf("tally = %#v, want present empty map", observations[githubWorkItemTeamAttributionResultKey])
+	}
+}
+
 // TestStoredInheritableEdgeQueryIsBoundedAndRetried covers the ClickHouse
 // implementation itself: the read must stay a keyed lookup (never a history
 // scan), and one transient blip must not be allowed to become a silent

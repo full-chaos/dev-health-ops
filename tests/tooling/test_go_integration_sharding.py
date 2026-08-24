@@ -541,7 +541,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # a board of only draft issues, an unrecognised content typename, a
     # fully identified mixed board) -- the original pagination test only
     # exercised the mixed case incidentally.
-    assert len(expected_provider_tests) == 1059
+    #
+    # CHAOS-4244 then added 8 more ordinary top-level providersync tests
+    # (1059 -> 1067, developed in parallel with CHAOS-4193(d) above and
+    # rebased onto it -- the two branches' counts are additive, not the same
+    # 1059 both happened to reach independently): three in
+    # github_work_items_derivation_context_test.go pinning the reporter/author
+    # membership candidate (resolves via the existing assignee_membership
+    # rank, stays unassigned with neither an assignee nor a reporter, and
+    # never outranks a repo_ownership fact), two more in the same file pinning
+    # the CHAOS-4110 ambiguity gate (a reporter whose membership resolves to
+    # two DIFFERENT teams contributes nothing; multiple candidate rows naming
+    # the SAME team still resolve), two in work_item_cross_provider_donor_test.go
+    # pinning the written-by-source observation tally reaching the route's
+    # result map (and that a non-observer deriver still gets a present, empty
+    # tally rather than no key at all), and one in
+    # github_work_item_derived_effects_test.go pinning the written-source
+    # metric-label mapping the ClickHouse writer feeds to
+    # dev_health_work_item_team_attributions_written_total (author vs
+    # assignee split on the SAME stored assignee_membership source, via the
+    # evidence prefix). All eight drive the resolver/observation/label code
+    # directly over in-memory fixtures and touch no database, so the
+    # integration-tagged count stays 116 (unchanged by this ticket).
+    assert len(expected_provider_tests) == 1067
     assert len(expected_integration_tests) == 116
     assert expected_integration_tests < expected_provider_tests
 
@@ -558,7 +580,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1059
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1067
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -619,7 +641,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1059
+    assert len(selected_tests) == len(set(selected_tests)) == 1067
     assert set(selected_tests) == expected_tests
 
 

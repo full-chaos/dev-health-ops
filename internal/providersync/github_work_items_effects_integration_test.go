@@ -249,7 +249,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 		t.Fatal("prepared manifest has no work_items effect")
 	}
 	firstSink, err := NewGitHubWorkItemClickHouseEffects(
-		conn, leaseGuardAt(repository, claim, normalizedAt.Add(time.Second)),
+		conn, leaseGuardAt(repository, claim, normalizedAt.Add(time.Second)), nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 	}
 
 	recoveredSink, err := NewGitHubWorkItemClickHouseEffects(
-		conn, leaseGuardAt(repository, recovered, recoveryNow),
+		conn, leaseGuardAt(repository, recovered, recoveryNow), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

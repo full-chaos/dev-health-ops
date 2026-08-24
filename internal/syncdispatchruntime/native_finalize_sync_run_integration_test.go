@@ -4,13 +4,36 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// zeroUnitFinalizationCount reads back one (provider, reason) series from a
+// real *jobruntime.MetricsCollector's exposition text -- the collector has
+// no exported per-series accessor (by design: WritePrometheus/PrometheusText
+// is the only sanctioned read path), so tests observe it the same way an
+// operator's scrape would.
+func zeroUnitFinalizationCount(t *testing.T, collector *jobruntime.MetricsCollector, provider, reason string) uint64 {
+	t.Helper()
+	text := collector.PrometheusText()
+	prefix := fmt.Sprintf(`devhealth_sync_run_zero_unit_finalizations_total{provider=%q,reason=%q} `, provider, reason)
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			var value uint64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, prefix), "%d", &value); err != nil {
+				t.Fatalf("parse counter line %q: %v", line, err)
+			}
+			return value
+		}
+	}
+	return 0
+}
 
 func createFinalizeTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
@@ -164,7 +187,10 @@ func TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause(t *testing.T) {
 		`{"reason":"pagerduty_credential_unavailable","error_category":"pagerduty_credential_unavailable"}`,
 		"PagerDuty credential is missing for this integration")
 
-	metrics := NewZeroUnitFinalizationMetrics()
+	metrics, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := NewNativeFinalizeSyncRunService(pool, nil, metrics)
 	if err != nil {
 		t.Fatal(err)
@@ -195,10 +221,10 @@ func TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause(t *testing.T) {
 	// Telemetry: exactly one zero-unit finalization, labeled with the
 	// planner's cause, not the generic residual -- incremented only AFTER
 	// commit.
-	if count := metrics.countFor("github", "pagerduty_credential_unavailable"); count != 1 {
+	if count := zeroUnitFinalizationCount(t, metrics, "github", "pagerduty_credential_unavailable"); count != 1 {
 		t.Fatalf("zero-unit counter[github,pagerduty_credential_unavailable]=%d want=1", count)
 	}
-	if count := metrics.countFor("github", zeroUnitGenericReason); count != 0 {
+	if count := zeroUnitFinalizationCount(t, metrics, "github", zeroUnitGenericReason); count != 0 {
 		t.Fatalf("zero-unit counter[github,%s]=%d want=0 (must not fall back to generic when planner recorded a cause)", zeroUnitGenericReason, count)
 	}
 
@@ -207,7 +233,7 @@ func TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause(t *testing.T) {
 	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
 		t.Fatalf("second Finalize: %v", err)
 	}
-	if count := metrics.countFor("github", "pagerduty_credential_unavailable"); count != 1 {
+	if count := zeroUnitFinalizationCount(t, metrics, "github", "pagerduty_credential_unavailable"); count != 1 {
 		t.Fatalf("zero-unit counter after re-finalize=%d want=1 (must not double count)", count)
 	}
 	var dispatchRows int
@@ -247,7 +273,10 @@ func TestNativeFinalizeSyncRunZeroUnitFallsBackToGenericCause(t *testing.T) {
 	seedFinalizeRoute(t, ctx, pool)
 	insertZeroUnitRun(t, ctx, pool, "", "")
 
-	metrics := NewZeroUnitFinalizationMetrics()
+	metrics, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := NewNativeFinalizeSyncRunService(pool, nil, metrics)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +295,7 @@ func TestNativeFinalizeSyncRunZeroUnitFallsBackToGenericCause(t *testing.T) {
 	if resultError != zeroUnitGenericError {
 		t.Fatalf("error=%q want generic %q", resultError, zeroUnitGenericError)
 	}
-	if count := metrics.countFor("github", zeroUnitGenericReason); count != 1 {
+	if count := zeroUnitFinalizationCount(t, metrics, "github", zeroUnitGenericReason); count != 1 {
 		t.Fatalf("zero-unit counter[github,%s]=%d want=1", zeroUnitGenericReason, count)
 	}
 
@@ -330,7 +359,7 @@ INSERT INTO job_runs (id, job_id, status, result) VALUES ($1, $1, 0, $2::json)`,
 		t.Fatal(err)
 	}
 
-	service, err := NewNativeFinalizeSyncRunService(pool, nil, NewZeroUnitFinalizationMetrics())
+	service, err := NewNativeFinalizeSyncRunService(pool, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,20 +45,28 @@ var ErrFinalizeSyncRunUnavailable = errors.New("native finalize_sync_run is unav
 //     key either (grepped). So it is deliberately NOT reproduced here -- there
 //     is no return-value channel for it to occupy.
 type NativeFinalizeSyncRunService struct {
-	pool    *pgxpool.Pool
-	logger  *slog.Logger
-	metrics *ZeroUnitFinalizationMetrics
-	now     func() time.Time
+	pool     *pgxpool.Pool
+	logger   *slog.Logger
+	observer jobruntime.ZeroUnitFinalizationObserver
+	now      func() time.Time
 }
 
 // NewNativeFinalizeSyncRunService constructs the native finalize_sync_run
-// executor. A nil metrics falls back to the process-wide singleton (mirrors
-// NewNativePostSyncService's nil-logger fallback) so callers that don't care
-// about metrics registration in tests don't have to thread one through.
+// executor. observers follows workgraph.NewPostgresStore's variadic-observer
+// convention: at most the first is used, and it is optional -- a caller that
+// doesn't care about zero-unit telemetry (a unit test, say) can omit it
+// entirely rather than threading a stub through. This is the SAME
+// jobruntime.MetricsCollector every other worker-runtime counter lives on
+// (registered once as the "worker_runtime" health.Registry source), not a
+// standalone collector: CHAOS-4175's review found this codebase already has
+// four bounded-cardinality multi-dimension counters on that one collector
+// (sync lease results, idempotency renewal, daily-metrics lease, DORA/
+// capacity refusals) and ruled the zero-unit counter belongs there too,
+// rather than inventing a second, unregistered collector alongside it.
 func NewNativeFinalizeSyncRunService(
 	pool *pgxpool.Pool,
 	logger *slog.Logger,
-	metrics *ZeroUnitFinalizationMetrics,
+	observers ...jobruntime.ZeroUnitFinalizationObserver,
 ) (*NativeFinalizeSyncRunService, error) {
 	if pool == nil {
 		return nil, ErrFinalizeSyncRunUnavailable
@@ -64,10 +74,11 @@ func NewNativeFinalizeSyncRunService(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if metrics == nil {
-		metrics = zeroUnitFinalizationMetrics
+	var observer jobruntime.ZeroUnitFinalizationObserver
+	if len(observers) > 0 {
+		observer = observers[0]
 	}
-	return &NativeFinalizeSyncRunService{pool: pool, logger: logger, metrics: metrics, now: time.Now}, nil
+	return &NativeFinalizeSyncRunService{pool: pool, logger: logger, observer: observer, now: time.Now}, nil
 }
 
 const (
@@ -157,20 +168,32 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	if aggregate.errorCategory != "" {
 		resultPayload["error_category"] = aggregate.errorCategory
 	}
-	if aggregate.errorCategory == featureDisabledErrorCategory && isBlank(newError) {
+	// Python: `if error_category == FEATURE_DISABLED_ERROR_CATEGORY and
+	// run.error is None:` -- a STRICT None check, not the whitespace-aware
+	// blank check the zero-unit branch below uses. An explicitly-empty-string
+	// run.error (however that could arise) must NOT be overwritten here.
+	if aggregate.errorCategory == featureDisabledErrorCategory && newError == nil {
 		newError = aggregate.firstFailedUnitError
 	}
 	var zeroUnitReason string
 	isZeroUnit := len(units) == 0
 	if isZeroUnit {
 		plannerResult := run.result
+		// Python: `if isinstance(planner_category, str) and planner_category:`
+		// -- plain truthiness (a whitespace-only string IS truthy in
+		// Python), not the .strip()-based blank check zeroUnitReasonFrom
+		// applies to the SAME map one line below. Two different predicates
+		// over the same key, ported as written rather than unified.
 		if plannerCategory, ok := stringField(plannerResult, "error_category"); ok && plannerCategory != "" {
 			if _, already := resultPayload["error_category"]; !already {
 				resultPayload["error_category"] = plannerCategory
 			}
 		}
 		zeroUnitReason = zeroUnitReasonFrom(plannerResult)
-		if isBlank(newError) {
+		// Python: `if run.error is None or not run.error.strip():` --
+		// None OR whitespace-only counts as absent here (unlike the
+		// feature_disabled check above, which is a strict None check).
+		if newError == nil || strings.TrimSpace(*newError) == "" {
 			generic := zeroUnitGenericError
 			newError = &generic
 		} else {
@@ -194,9 +217,13 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	runSuccess := newStatus == syncRunStatusSuccess
 	var stampError *string
 	if !runSuccess {
-		fallback := "Sync run completed with failed units"
-		source := fallback
-		if !isBlank(newError) {
+		// Python: `run.error or "Sync run completed with failed units"` --
+		// `or` treats None AND "" as falsy, but NOT a whitespace-only
+		// string (any non-empty Python string is truthy). Deliberately not
+		// the same predicate as the zero-unit branch's `.strip()` check
+		// above.
+		source := "Sync run completed with failed units"
+		if newError != nil && *newError != "" {
 			source = *newError
 		}
 		sanitized := sanitizeErrorText(source)
@@ -259,7 +286,13 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 		if reason == "" {
 			reason = zeroUnitGenericReason
 		}
-		service.metrics.observe(provider, reason)
+		if service.observer != nil {
+			// Metric failures are dropped, matching every other Observe call
+			// site in this tree (e.g. workgraph.PostgresStore.observeReleaseLost):
+			// telemetry must never decide whether a durably-committed
+			// finalization can be reported successful.
+			_ = service.observer.ObserveZeroUnitFinalization(provider, reason)
+		}
 		service.logger.InfoContext(ctx, "finalize_sync_run.zero_unit_finalized",
 			slog.String("sync_run_id", run.id),
 			slog.String("provider", provider),
@@ -458,12 +491,16 @@ func aggregateRunStatus(totalCount, successCount, failedCount int) string {
 	return syncRunStatusPartialFailed
 }
 
-// zeroUnitReasonFrom ports sync_units.py:_zero_unit_reason: prefers an
-// explicit "reason", falls back to "error_category", else the generic
-// residual. A blank/non-string value counts as absent.
+// zeroUnitReasonFrom ports sync_units.py:_zero_unit_reason verbatim: prefers
+// an explicit "reason", falls back to "error_category", else the generic
+// residual. Python's predicate is `isinstance(value, str) and value.strip()`
+// -- a non-string, blank, OR WHITESPACE-ONLY value counts as absent (unlike
+// the plain-truthiness check the caller applies to the same map's
+// "error_category" key one branch up in Finalize -- ported as two distinct
+// predicates because that is what the Python source has).
 func zeroUnitReasonFrom(plannerResult map[string]any) string {
 	for _, key := range []string{"reason", "error_category"} {
-		if value, ok := stringField(plannerResult, key); ok && value != "" {
+		if value, ok := stringField(plannerResult, key); ok && strings.TrimSpace(value) != "" {
 			return value
 		}
 	}
@@ -480,10 +517,6 @@ func stringField(source map[string]any, key string) (string, bool) {
 	}
 	text, ok := raw.(string)
 	return text, ok
-}
-
-func isBlank(value *string) bool {
-	return value == nil || *value == ""
 }
 
 func writeFinalizeRun(

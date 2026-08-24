@@ -239,6 +239,7 @@ type MetricsCollector struct {
 	dailyMetricsLease         map[dailyMetricsLeaseLabels]uint64
 	workGraphReleaseLost      uint64
 	remainingReleaseLost      uint64
+	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
 
 	// Native DORA compute (CHAOS-3092 R1). The HTTP compatibility bridge could
 	// only ever report a status code, so a partition that computed nothing and
@@ -286,6 +287,7 @@ var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
+var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -320,6 +322,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		reportRunLeaseExpired:     make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
 		idempotencyRenewalRetired: make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
 		dailyMetricsLease:         make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
+		zeroUnitFinalizations:     make(map[zeroUnitFinalizationLabels]uint64),
 		streamLag:                 make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamPending:             make(map[StreamLabels]int64, len(dimensions.Streams)),
 		streamOldestPending:       make(map[StreamLabels]float64, len(dimensions.Streams)),
@@ -656,6 +659,67 @@ func (collector *MetricsCollector) ObserveDailyMetricsLease(
 	return nil
 }
 
+// zeroUnitFinalizationLabels are (provider, reason) for
+// ObserveZeroUnitFinalization. Provider is clamped to a closed, known set
+// (zeroUnitFinalizationProvider); reason is NOT a closed enum -- unlike
+// every other multi-dimension counter in this file, CHAOS-4159's whole
+// premise is that new planner code paths keep adding new reason values over
+// time, and the metric's job is to make an as-yet-unclassified one visible,
+// not to reject it. maxZeroUnitFinalizationSeries bounds the resulting
+// cardinality risk instead: once that many distinct (provider, reason) pairs
+// have been observed, anything new collapses into a fixed overflow bucket
+// rather than growing the label set without limit.
+type zeroUnitFinalizationLabels struct {
+	Provider string
+	Reason   string
+}
+
+// zeroUnitFinalizationProviders mirrors the closed provider set
+// providerfoundation/budget.go's cost-class switch and _run_provider's own
+// "unknown" residual both use. Any other value is folded into "unknown" --
+// the exact string Python's _run_provider itself falls back to when an
+// Integration row has no usable provider.
+var zeroUnitFinalizationProviders = map[string]struct{}{
+	"github": {}, "gitlab": {}, "jira": {}, "linear": {},
+	"launchdarkly": {}, "pagerduty": {},
+}
+
+const zeroUnitFinalizationUnknownProvider = "unknown"
+
+const maxZeroUnitFinalizationSeries = 64
+
+const zeroUnitFinalizationOverflowReason = "cardinality_capped"
+
+func zeroUnitFinalizationProvider(provider string) string {
+	if _, known := zeroUnitFinalizationProviders[provider]; known {
+		return provider
+	}
+	return zeroUnitFinalizationUnknownProvider
+}
+
+// ObserveZeroUnitFinalization records one sync run that finalized with zero
+// planned units, labeled by provider and by the cause finalize classified it
+// under (CHAOS-4175, CHAOS-4159's Go counterpart). Callers must call this
+// AFTER the finalizing transaction has durably committed: a counter bumped
+// inside a transaction that later rolls back would overcount every retry of
+// a finalization that eventually succeeds once (see
+// zero_unit_telemetry.py's module docstring for the same rule in Python).
+func (collector *MetricsCollector) ObserveZeroUnitFinalization(provider, reason string) error {
+	if !metricIdentifier(reason, 128) {
+		return errors.New("zero unit finalization reason is invalid")
+	}
+	provider = zeroUnitFinalizationProvider(provider)
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	key := zeroUnitFinalizationLabels{Provider: provider, Reason: reason}
+	if _, seen := collector.zeroUnitFinalizations[key]; !seen &&
+		len(collector.zeroUnitFinalizations) >= maxZeroUnitFinalizationSeries {
+		key = zeroUnitFinalizationLabels{Provider: provider, Reason: zeroUnitFinalizationOverflowReason}
+	}
+	collector.zeroUnitFinalizations[key]++
+	return nil
+}
+
 // ObserveWorkGraphLeaseReleaseLost records a work-graph claimant that could not
 // stand its own row down because its lease had already expired (CHAOS-4002).
 // Unlike the daily-metrics lease, work-graph has one lease-fenced release path
@@ -960,6 +1024,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsLeases(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
+	collector.writeZeroUnitFinalizations(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
 	collector.writeConcurrencyBudgets(&output)
@@ -1120,6 +1185,27 @@ func (collector *MetricsCollector) writeIdempotencyRenewalRetired(output *string
 		writeUintSample(output, "worker_idempotency_renewal_retired_total", []metricLabel{
 			{"reason", string(reason)},
 		}, collector.idempotencyRenewalRetired[reason])
+	}
+}
+
+func (collector *MetricsCollector) writeZeroUnitFinalizations(output *strings.Builder) {
+	writeMetadata(output, "devhealth_sync_run_zero_unit_finalizations_total",
+		"Sync runs finalized with zero planned units, by provider and by the cause finalize classified them under.",
+		"counter")
+	keys := make([]zeroUnitFinalizationLabels, 0, len(collector.zeroUnitFinalizations))
+	for key := range collector.zeroUnitFinalizations {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].Provider != keys[right].Provider {
+			return keys[left].Provider < keys[right].Provider
+		}
+		return keys[left].Reason < keys[right].Reason
+	})
+	for _, key := range keys {
+		writeUintSample(output, "devhealth_sync_run_zero_unit_finalizations_total", []metricLabel{
+			{"provider", key.Provider}, {"reason", key.Reason},
+		}, collector.zeroUnitFinalizations[key])
 	}
 }
 

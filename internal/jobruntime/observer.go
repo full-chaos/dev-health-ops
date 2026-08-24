@@ -89,6 +89,20 @@ type DailyMetricsLeaseObserver interface {
 	ObserveDailyMetricsLease(DailyMetricsLeaseStage, DailyMetricsLeaseResult) error
 }
 
+// ZeroUnitFinalizationObserver is the narrow capability the native
+// finalize_sync_run port depends on (CHAOS-4175) after classifying a
+// zero-unit sync run's cause. Generic runtime middleware cannot infer this:
+// only the finalize implementation knows a run planned zero units, and what
+// cause -- the planner's own recorded diagnosis, or the generic residual --
+// it classified the run under. Direct Go counterpart of Python's
+// devhealth_sync_run_zero_unit_finalizations_total (CHAOS-4159); see that
+// counter's docstring for why the reason axis exists at all: a series
+// dominated by the generic residual is itself the signal that an upstream
+// planner path is still discarding its own diagnosis.
+type ZeroUnitFinalizationObserver interface {
+	ObserveZeroUnitFinalization(provider, reason string) error
+}
+
 // RegisterRuntime validates the low-cardinality scrape-presence identity
 // before passing it to an Observer.
 func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) error {

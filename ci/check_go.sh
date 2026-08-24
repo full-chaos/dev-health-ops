@@ -477,6 +477,26 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+
+  printf 'go test -count=1: internal/syncdispatchruntime (CHAOS-4175 native finalize_sync_run zero-unit classification vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 ./internal/syncdispatchruntime/...
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/sync-dispatch-finalize"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: native finalize_sync_run live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
   rm -rf -- "${proof_dir}"
 }
 

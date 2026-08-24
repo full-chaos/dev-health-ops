@@ -545,6 +545,135 @@ func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
 	denials.assertNone(t, "NativeReferenceDiscoveryService with the grant restored")
 }
 
+// createBoundaryTables is the finalize venue plus the discovery ledger, so one
+// venue carries all four tables CHAOS-4209 widened.
+//
+// Both DDL sets are needed and neither is sufficient: createFinalizeTables has
+// the post-dispatch ledger, job_runs and backfill_jobs but no
+// sync_run_reference_discoveries, and createReferenceDiscoveryTables is the
+// mirror image. A missing table would make the boundary assertion below raise
+// undefined_table (42P01) during parse analysis, BEFORE the permission check --
+// so the row would report "a different failure" rather than silently passing,
+// but it would still be measuring nothing.
+func createBoundaryTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	createFinalizeTables(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE sync_run_reference_discoveries (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
+ status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
+ lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
+ completed_at timestamptz NULL, error text NULL, result json NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDomainRoleStillLacksTheVerbsItWasNotGranted is the boundary half of this
+// suite, and it is what keeps the CHAOS-4209 widening from degrading into
+// "the domain role may do whatever it likes to these tables".
+//
+// Four tables became dual-grant or gained a verb. For each, the manifest
+// deliberately withheld something, and a grant list is only a boundary if the
+// withheld verb is still refused. Asserting the PERMITTED half alone would
+// pass just as happily against GRANT ALL -- so every row here names a verb no
+// production statement issues, and every one must still raise 42501.
+//
+// DELETE is the verb chosen throughout because it is the destructive one and
+// because no native sync-dispatch statement deletes from any of these: the
+// discovery ledger and the post-dispatch ledger are durable evidence, and
+// job_runs / backfill_jobs rows outlive the run that terminalized them.
+func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, domain, _ := startDomainRoleHarness(t, ctx, createBoundaryTables)
+
+	for _, withheld := range []struct {
+		table     string
+		statement string
+		why       string
+	}{
+		{
+			table:     "sync_run_reference_discoveries",
+			statement: "DELETE FROM public.sync_run_reference_discoveries WHERE sync_run_id = gen_random_uuid()",
+			why:       "the ledger IS the durable evidence that discovery ran; nothing removes it",
+		},
+		{
+			table:     "sync_run_post_dispatches",
+			statement: "DELETE FROM public.sync_run_post_dispatches WHERE sync_run_id = gen_random_uuid()",
+			why:       "once-only dispatch evidence; a run that could delete it could re-dispatch",
+		},
+		{
+			table:     "job_runs",
+			statement: "DELETE FROM public.job_runs WHERE id = gen_random_uuid()",
+			why:       "the domain worker closes job runs, it does not open or destroy them",
+		},
+		{
+			table:     "backfill_jobs",
+			statement: "DELETE FROM public.backfill_jobs WHERE id = gen_random_uuid()",
+			why:       "the domain worker terminalizes backfills, it does not create or remove them",
+		},
+	} {
+		tx, err := domain.Begin(ctx)
+		if err != nil {
+			t.Fatalf("%s: begin: %v", withheld.table, err)
+		}
+		_, execErr := tx.Exec(ctx, withheld.statement)
+		_ = tx.Rollback(ctx)
+
+		if execErr == nil {
+			t.Errorf("%s: the domain role was PERMITTED a verb the manifest withholds.\n"+
+				"  reason it is withheld: %s\n  statement: %s",
+				withheld.table, withheld.why, withheld.statement)
+			continue
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(execErr, &pgErr) || pgErr.Code != "42501" {
+			// Not a pass. A different SQLSTATE means the statement never
+			// reached the permission check -- an undefined table or column is
+			// raised during parse analysis first -- so this row would be
+			// measuring nothing, which is the failure mode this file exists
+			// to remove.
+			t.Errorf("%s: expected insufficient_privilege (42501), got a different failure: %v\n  statement: %s",
+				withheld.table, execErr, withheld.statement)
+		}
+	}
+}
+
+// TestDomainRoleCanTakeTheAdvisoryLockFinalizeNeeds probes an assumption the
+// grant work rests on rather than asserting it in prose.
+//
+// runtimeGrantStatements runs `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA
+// public FROM PUBLIC, <domain>, <queue>`, and
+// invalidateSyncCoverageForIntegration calls pg_advisory_xact_lock(
+// hashtextextended(...)) once per resolved sync configuration
+// (native_finalize_sync_run.go:824). Those two are only compatible because the
+// functions live in pg_catalog, not public -- which is a claim about where
+// PostgreSQL puts them, and claims about the server belong in a test against
+// the server. If a future migration ever installed either into public, the
+// REVOKE would silently disarm coverage invalidation.
+func TestDomainRoleCanTakeTheAdvisoryLockFinalizeNeeds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, domain, denials := startDomainRoleHarness(t, ctx, createBoundaryTables)
+
+	tx, err := domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// The production shape, verbatim: an xact-scoped advisory lock keyed by a
+	// hashed name, not a bare pg_advisory_xact_lock(1).
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		"sync-coverage:org:config"); err != nil {
+		t.Fatalf("the domain role cannot take finalize's advisory lock, so "+
+			"invalidateSyncCoverageForIntegration fails in production: %v", err)
+	}
+	denials.assertNone(t, "finalize's advisory-lock pair (pg_advisory_xact_lock/hashtextextended)")
+}
+
 func assertOutboxWakeup(t *testing.T, ctx context.Context, admin *pgxpool.Pool, kind string) {
 	t.Helper()
 	assertSingleRow(t, ctx, admin, kind+" outbox wakeup",

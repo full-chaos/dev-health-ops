@@ -684,19 +684,18 @@ func domainPosture() RolePosture {
 			{"external_ingest_recompute_jobs", true, false, false},
 			{"external_ingest_rejections", true, false, false},
 			{"external_ingest_sources", false, false, false},
-			// UPDATE as of CHAOS-4209, and for the row LOCK only -- no domain
-			// statement mutates a column of either table. The CHAOS-4175
-			// reference-discovery port calls the canonical-incident entitlement
-			// gate from claim() (native_reference_discovery.go:252), and that
-			// gate's two reads end in FOR UPDATE
-			// (internal/scheduler/sync/materializer.go:1013,1034). PostgreSQL
-			// treats FOR UPDATE as an UPDATE-class privilege, so a SELECT-only
-			// grant passes every DML-verb reading of those queries and still
-			// raises 42501 at runtime. This is the identical requirement, for
-			// the identical reason, that coordinatorPosture already records for
-			// these two tables; the gate now runs on both pools.
-			{"feature_flags", false, true, false},
-			{"org_feature_overrides", false, true, false},
+			// Deliberately SELECT-only, and CHAOS-4209 KEPT it that way. The
+			// CHAOS-4175 reference-discovery port reached the canonical-incident
+			// entitlement gate through its locking form, whose FOR UPDATE is an
+			// UPDATE-class privilege on both tables. Granting that would let the
+			// role handling third-party provider payloads rewrite global feature
+			// enablement and tenant overrides -- the exact property the split
+			// exists to protect. The call site moved to the non-locking gate
+			// instead (scheduledsync.CanonicalIncidentDecision); the manifest did
+			// not move. Domain-side gates read entitlement without locking; only
+			// the coordinator's materializer takes FOR UPDATE.
+			{"feature_flags", false, false, false},
+			{"org_feature_overrides", false, false, false},
 			{"org_licenses", false, false, false},
 			{"provider_rate_limit_observations", false, true, true},
 			{"report_runs", false, true, false},

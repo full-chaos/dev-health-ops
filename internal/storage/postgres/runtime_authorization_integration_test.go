@@ -123,7 +123,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + runtimeAuthorizationDomainRole,
@@ -154,9 +154,6 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		// exactly what domainPosture() declares -- a venue granting more or less
 		// than the manifest fails CheckDomainAuthorization in both directions.
 		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + runtimeAuthorizationDomainRole,
-		// CHAOS-4209: UPDATE for the canonical-incident entitlement gate's FOR
-		// UPDATE locks only -- no domain statement mutates either table.
-		"GRANT SELECT, UPDATE ON TABLE public.feature_flags, public.org_feature_overrides TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,

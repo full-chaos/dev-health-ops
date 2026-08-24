@@ -236,7 +236,13 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	if err := observeTerminalSyncRun(ctx, tx, run, *completedAt, newStatus, aggregate.successCount, aggregate.failedCount, resultPayload, stampError); err != nil {
 		return err
 	}
-	service.checkpointSuccessfulComputeInputs(ctx, tx, run, units, *completedAt)
+	if err := service.checkpointSuccessfulComputeInputs(ctx, tx, run, units, *completedAt); err != nil {
+		// A FATAL checkpoint failure (failed ROLLBACK TO SAVEPOINT or failed
+		// RELEASE SAVEPOINT, not an ordinary recovered insert error) --
+		// abort the whole Finalize rather than risk committing against a
+		// transaction/connection that may no longer be usable.
+		return err
+	}
 
 	nested, err := tx.Begin(ctx)
 	if err != nil {
@@ -674,13 +680,20 @@ WHERE status IN ($5, $6) AND result->>'sync_run_id' = $7`,
 // the run's status, canonical config stamp, observers, and post-sync
 // handoff (the same defect class the review flagged: log-and-continue
 // without a savepoint is not what it looks like in Postgres).
+// checkpointSuccessfulComputeInputs returns a non-nil error only when a
+// FATAL failure occurred (see insertComputeCheckpoint) -- the caller
+// (Finalize) must abort the whole finalization in that case, the same way
+// native_post_sync.go's publishTeamAutoimport skips the outer Commit on a
+// failed RELEASE SAVEPOINT. An ordinary, cleanly-rolled-back checkpoint
+// failure is logged and finalization continues to the next unit, matching
+// Python's own log-and-continue SQLAlchemyError branch.
 func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 	ctx context.Context,
 	tx pgx.Tx,
 	run *finalizeSyncRun,
 	units []finalizeSyncRunUnit,
 	checkpointedAt time.Time,
-) {
+) error {
 	for _, unit := range units {
 		if unit.status != syncRunUnitStatusSuccess {
 			continue
@@ -703,16 +716,39 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", err.Error()))
 			continue
 		}
-		if err := service.insertComputeCheckpoint(ctx, tx, run, unit, checkpointedAt, encodedMetadata); err != nil {
+		recoverableErr, fatalErr := service.insertComputeCheckpoint(ctx, tx, run, unit, checkpointedAt, encodedMetadata)
+		if fatalErr != nil {
+			return fatalErr
+		}
+		if recoverableErr != nil {
 			service.logger.WarnContext(ctx, "finalize_sync_run.compute_checkpoint_unit_failed",
-				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", err.Error()))
+				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", recoverableErr.Error()))
 		}
 	}
+	return nil
 }
 
 // insertComputeCheckpoint writes one checkpoint row inside its own
-// savepoint, rolling the savepoint back (not the enclosing transaction) on
-// any error so the caller's log-and-continue policy actually holds.
+// savepoint. It returns exactly one of two error kinds, never both:
+//
+//   - recoverableErr: the INSERT itself failed (a genuine constraint
+//     violation, not the expected unique-constraint race, which ON CONFLICT
+//     already absorbs) and was cleanly rolled back to the savepoint. The
+//     enclosing transaction remains usable; the caller logs and moves on to
+//     the next unit, matching Python's log-and-continue SQLAlchemyError
+//     branch.
+//   - fatalErr: either the ROLLBACK TO SAVEPOINT itself failed, or RELEASE
+//     SAVEPOINT (nested.Commit) failed. Per native_post_sync.go's own
+//     publishTeamAutoimport precedent: pgx marks a Tx closed before
+//     returning a failed-commit error and closes the underlying connection
+//     when the transaction status is not idle, so a further Rollback would
+//     be a no-op reading as recovery, and the OUTER transaction may no
+//     longer be committable at all. The caller must abort the whole
+//     Finalize rather than treat this the same as an ordinary checkpoint
+//     failure (codex adversarial review round 3, CHAOS-4175) -- silently
+//     continuing here risks the run's status/observer/ledger writes either
+//     failing unpredictably or committing against a connection that never
+//     actually released the savepoint.
 //
 // org_id comes from the UNIT, not the run: Python's
 // `_checkpoint_successful_compute_inputs` builds
@@ -728,10 +764,14 @@ func (service *NativeFinalizeSyncRunService) insertComputeCheckpoint(
 	unit finalizeSyncRunUnit,
 	checkpointedAt time.Time,
 	encodedMetadata []byte,
-) error {
+) (recoverableErr error, fatalErr error) {
 	nested, err := tx.Begin(ctx)
 	if err != nil {
-		return err
+		// Could not even OPEN the savepoint. The outer transaction was not
+		// touched by this attempt, but a failure to open a savepoint at all
+		// is itself a sign the connection/transaction is not healthy --
+		// treat it the same as a failed release, fatal to Finalize.
+		return nil, err
 	}
 	checkpointID := uuid.New().String()
 	_, execErr := nested.Exec(ctx, `
@@ -746,11 +786,14 @@ ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
 		checkpointedAt, encodedMetadata)
 	if execErr != nil {
 		if rollbackErr := nested.Rollback(ctx); rollbackErr != nil {
-			return rollbackErr
+			return nil, rollbackErr
 		}
-		return execErr
+		return execErr, nil
 	}
-	return nested.Commit(ctx)
+	if commitErr := nested.Commit(ctx); commitErr != nil {
+		return nil, commitErr
+	}
+	return nil, nil
 }
 
 // invalidateSyncCoverageForIntegration ports

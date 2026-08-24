@@ -681,3 +681,60 @@ func TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized(t *testing.T) {
 		t.Fatalf("zero-unit counter[unknown,%s]=%d want=0 (a real, known provider must never fall back to unknown)", zeroUnitGenericReason, count)
 	}
 }
+
+// TestCheckpointSuccessfulComputeInputsAbortsOnFatalSavepointFailure (codex
+// adversarial review round 3, CHAOS-4175) pins that a FATAL checkpoint
+// failure -- one where opening/closing the per-checkpoint savepoint itself
+// fails, not an ordinary recovered INSERT error -- propagates an error out
+// of checkpointSuccessfulComputeInputs rather than being logged and
+// swallowed like a recovered failure is.
+//
+// A genuine "RELEASE SAVEPOINT fails mid-transaction" is an infrastructure
+// fault (a dying connection), not something reproducible with SQL alone --
+// the same gap exists in native_post_sync.go's own precedent for this exact
+// failure mode (no dedicated test there either, only the doc comment this
+// port's insertComputeCheckpoint cites). What IS deterministically
+// reproducible is the sibling fatal path: tx.Begin(ctx) (opening the
+// savepoint) failing because the caller's transaction is already closed.
+// This test forces exactly that by committing the outer transaction BEFORE
+// calling checkpointSuccessfulComputeInputs against it.
+func TestCheckpointSuccessfulComputeInputsAbortsOnFatalSavepointFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createFinalizeTables(t, ctx, pool)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the outer tx early (to close it before use): %v", err)
+	}
+
+	service, err := NewNativeFinalizeSyncRunService(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &finalizeSyncRun{id: finalizeTestRun, orgID: finalizeTestOrg}
+	units := []finalizeSyncRunUnit{{
+		id:         finalizeTestUnit,
+		orgID:      finalizeTestOrg,
+		status:     syncRunUnitStatusSuccess,
+		provider:   "github",
+		datasetKey: "commits",
+		sourceID:   finalizeTestSource,
+	}}
+	if err := service.checkpointSuccessfulComputeInputs(ctx, tx, run, units, time.Now().UTC()); err == nil {
+		t.Fatal("checkpointSuccessfulComputeInputs returned nil against an already-closed transaction, want a fatal error")
+	}
+}

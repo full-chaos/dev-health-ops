@@ -52,6 +52,16 @@ import (
 // file's harness, and NOT in coordinatorStatements() below: most of them run
 // against tables the domain role legitimately holds too, so they are not
 // "denied to domain" statements and belong in their own suite.
+//
+// coordinatorDualGrantStatements() below is the same distinction applied within
+// this file. CHAOS-4209 made sync_run_reference_discoveries and
+// sync_run_post_dispatches dual-grant, so the reconciler's reads of them are
+// still coordinator statements worth proving PERMITTED, but are no longer
+// statements the domain role is denied. What proves the domain side is
+// internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go,
+// which runs the native services' own entry points as the real domain role
+// rather than listing their statements here — a list in this file could not
+// see a query those services grow later.
 
 const (
 	grantCoordinatorRole = "grant_coordinator_runtime"
@@ -254,16 +264,38 @@ func coordinatorStatements() []coordinatorStatement {
 				FROM public.sync_dispatch_transport_routes
 				WHERE kind = 'sync.dispatch' FOR UPDATE`,
 		},
+	}
+}
+
+// coordinatorDualGrantStatements are coordinator statements against tables the
+// DOMAIN role also legitimately holds, so they belong to the "permitted to the
+// coordinator" half of this suite and to neither half of the "denied to the
+// domain role" one.
+//
+// Both entries used to live in coordinatorStatements() above, on the strength
+// of coordinatorPosture's "no domain-hot-path site for any of them". CHAOS-4209
+// ended that: the CHAOS-4175 native ports of reference discovery and
+// finalize_sync_run run on pools.Domain and write these very tables, so the
+// domain role now holds INSERT+UPDATE on the discovery ledger and INSERT on the
+// post-dispatch ledger. Asserting a denial that the deployment deliberately no
+// longer has would pin the bug rather than the fix.
+//
+// The coordinator half still matters and is still checked here: its own posture
+// is UNCHANGED by CHAOS-4209, and the reconciler materializer still needs these
+// reads. This mirrors the split the file's own doc comment already describes
+// for the fixed-schedule engine's statements.
+func coordinatorDualGrantStatements() []coordinatorStatement {
+	return []coordinatorStatement{
 		{
 			name:      "reconciler materializer reads its reference discoveries",
 			site:      "internal/syncreconciler/materializer.go, wired at cmd/dev-health-reconciler/dependencies.go, on the coordinator pool since the CHAOS-3113 repoint",
-			privilege: "sync_run_reference_discoveries SELECT",
+			privilege: "sync_run_reference_discoveries SELECT (dual-grant since CHAOS-4209; the domain role holds SELECT+INSERT+UPDATE of its own)",
 			sql:       "SELECT id FROM public.sync_run_reference_discoveries WHERE sync_run_id = gen_random_uuid()",
 		},
 		{
 			name:      "reconciler materializer reads its post dispatches",
 			site:      "internal/syncreconciler/materializer.go",
-			privilege: "sync_run_post_dispatches SELECT",
+			privilege: "sync_run_post_dispatches SELECT (dual-grant since CHAOS-4209; the domain role holds SELECT+INSERT of its own)",
 			sql:       "SELECT id FROM public.sync_run_post_dispatches WHERE sync_run_id = gen_random_uuid()",
 		},
 	}
@@ -319,7 +351,7 @@ func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	_, uri := startGrantHarness(t, ctx)
 
 	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	for _, statement := range coordinatorStatements() {
+	for _, statement := range append(coordinatorStatements(), coordinatorDualGrantStatements()...) {
 		if err := execInRolledBackTransaction(t, ctx, coordinator, statement.sql); err != nil {
 			t.Errorf("%s: denied to the coordinator role, so coordinatorPosture is missing %s\n  site: %s\n  statement: %s\n  error: %v",
 				statement.name, statement.privilege, statement.site, collapse(statement.sql), err)

@@ -511,6 +511,28 @@ type RolePosture struct {
 //     flags, and again in coordinatorPosture with the coordinator's — see
 //     CheckRolePosture's doc comment for why a table required by two roles is
 //     not a leak as long as each role's own manifest states it accurately.
+//   - sync_run_reference_discoveries, sync_run_post_dispatches and job_runs
+//     joined that dual-grant set under CHAOS-4209, and sync_configurations and
+//     backfill_jobs each gained a domain-side UPDATE there. All five changes
+//     are driven by the CHAOS-4175 native ports of reference discovery and
+//     finalize_sync_run
+//     (internal/syncdispatchruntime/native_reference_discovery.go,
+//     native_finalize_sync_run.go), which run on pools.Domain
+//     (cmd/dev-health-worker/sync_dispatch.go:340,374) while issuing statements
+//     the domain role had no grant for. The coordinator side of the three newly
+//     dual-grant tables is UNCHANGED: reference discoveries and job_runs keep
+//     the coordinator's INSERT (it opens those ledgers), post dispatches keeps
+//     its SELECT, and the domain role gets only what its own statement set
+//     proves. The flags are not derived from this prose or from the ticket:
+//     they are what
+//     internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go
+//     permits, by running those services' real entry points as the real
+//     restricted role. Widening any of them further fails nothing here and
+//     everything there.
+//   - sync_compute_checkpoints is NOT dual-grant. It appeared in no role's
+//     manifest at all before CHAOS-4209 — the grant existed for nobody — and it
+//     is declared here only, with INSERT, because the finalize service is its
+//     only writer.
 //   - remaining_metric_runs, remaining_metric_partitions,
 //     work_graph_execution_requests, daily_metrics_partitions,
 //     daily_metrics_runs: genuine read-modify-write callers reached from the
@@ -566,6 +588,30 @@ func domainPosture() RolePosture {
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},
+			// CHAOS-4209, the reference-discovery ledger. SELECT+INSERT+UPDATE
+			// and no DELETE: the row is created PLANNED on first sight
+			// (ensureReferenceDiscoveryLedger's `ON CONFLICT (sync_run_id) DO
+			// UPDATE`, which needs UPDATE as well as INSERT), claimed and
+			// heartbeated in place, and stamped terminal. Nothing removes it --
+			// it IS the durable evidence that discovery ran.
+			{"sync_run_reference_discoveries", true, true, false},
+			// CHAOS-4209, the once-only post-dispatch ledger. INSERT only:
+			// native_finalize_sync_run.go:253 inserts one row and treats the
+			// 23505 as "already dispatched by an earlier finalize". No statement
+			// updates or deletes it, so a bug that tried to re-open a dispatch
+			// would be refused by the database. SELECT comes with any
+			// RequiredTables row (see TablePrivilege); there is no server-owned
+			// column here for a column-scoped grant to protect, unlike
+			// worker_job_completion_fences.
+			{"sync_run_post_dispatches", true, false, false},
+			// CHAOS-4209, the compute-input checkpoint. INSERT only, via
+			// native_finalize_sync_run.go:782's `ON CONFLICT ON CONSTRAINT
+			// uq_sync_compute_checkpoint_unit_type DO NOTHING` -- DO NOTHING,
+			// unlike DO UPDATE, needs no UPDATE privilege, and the insert runs
+			// in its own savepoint precisely so a failure stays recoverable.
+			// This table was in NO role's manifest before: the grant existed
+			// nowhere, for anyone.
+			{"sync_compute_checkpoints", true, false, false},
 			// CHAOS-4114: the executed-proof ledger is the maintained
 			// projection of sync_run_units the CHAOS-4060 gate now reads
 			// instead of rescanning that table. It is written by the same
@@ -597,7 +643,13 @@ func domainPosture() RolePosture {
 			{"sync_watermarks", true, true, false},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
-			{"sync_configurations", false, false, false},
+			// UPDATE as of CHAOS-4209: stampCanonicalSyncConfig
+			// (native_finalize_sync_run.go:582,597) writes the run's
+			// last_sync_at/last_sync_success/last_sync_error/last_sync_stats on
+			// the domain transaction. The SELECT-only reading recorded in this
+			// function's doc comment was correct only while
+			// native_post_sync.go:263 was the domain's sole site.
+			{"sync_configurations", false, true, false},
 			// The native sync-coverage projector reads schedule facts. The report
 			// worker also clears next_run_at after a terminal scheduled run so the
 			// fixed scheduler recomputes the next cron instant.
@@ -605,7 +657,17 @@ func domainPosture() RolePosture {
 			// Read only: terminal report handling follows the immutable occurrence
 			// link to the scheduled_jobs row it is allowed to invalidate.
 			{"scheduled_report_occurrences", false, false, false},
-			{"backfill_jobs", false, false, false},
+			// UPDATE as of CHAOS-4209: observeTerminalSyncRun
+			// (native_finalize_sync_run.go:628) terminalizes the backfill rows a
+			// finished sync run owns, matched by celery_task_id. INSERT stays
+			// off -- the domain worker never creates a backfill job.
+			{"backfill_jobs", false, true, false},
+			// UPDATE as of CHAOS-4209, and UPDATE only: the same
+			// observeTerminalSyncRun (native_finalize_sync_run.go:659) closes the
+			// in-flight JobRun rows this sync run owns. The coordinator side
+			// keeps INSERT (it is the one that opens them); the domain worker
+			// must never be able to mint a job run of its own.
+			{"job_runs", false, true, false},
 			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},
 			{"remaining_metric_runs", true, true, false},
@@ -622,6 +684,16 @@ func domainPosture() RolePosture {
 			{"external_ingest_recompute_jobs", true, false, false},
 			{"external_ingest_rejections", true, false, false},
 			{"external_ingest_sources", false, false, false},
+			// Deliberately SELECT-only, and CHAOS-4209 KEPT it that way. The
+			// CHAOS-4175 reference-discovery port reached the canonical-incident
+			// entitlement gate through its locking form, whose FOR UPDATE is an
+			// UPDATE-class privilege on both tables. Granting that would let the
+			// role handling third-party provider payloads rewrite global feature
+			// enablement and tenant overrides -- the exact property the split
+			// exists to protect. The call site moved to the non-locking gate
+			// instead (scheduledsync.CanonicalIncidentDecision); the manifest did
+			// not move. Domain-side gates read entitlement without locking; only
+			// the coordinator's materializer takes FOR UPDATE.
 			{"feature_flags", false, false, false},
 			{"org_feature_overrides", false, false, false},
 			{"org_licenses", false, false, false},
@@ -651,9 +723,20 @@ func domainPosture() RolePosture {
 // same sole authority domainPosture defers to.
 //
 //   - internal_service_credentials, worker_operator_audits,
-//     sync_run_reference_discoveries, sync_run_post_dispatches,
 //     worker_job_routes: coordinator-exclusive, verified confidence (workerctl
 //     and/or reconciler call sites, no domain-hot-path site for any of them).
+//
+//   - sync_run_reference_discoveries, sync_run_post_dispatches: NO LONGER
+//     coordinator-exclusive as of CHAOS-4209. The claim above once covered them
+//     on the strength of "no domain-hot-path site", which was true when it was
+//     written and stopped being true when CHAOS-4175's native ports landed on
+//     pools.Domain. The flags on THIS side are unchanged — the coordinator's
+//     reconciler/materializer posture is exactly what it was — and the domain
+//     side declares its own in domainPosture. A statement-executing test, not a
+//     reading of call sites, is what now holds each side honest:
+//     coordinator_statement_privileges_integration_test.go for this role and
+//     internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go
+//     for the domain role.
 //
 //   - scheduled_jobs, scheduled_sync_occurrences, fixed_schedule_occurrences:
 //     coordinator-exclusive but manifest confidence is "unverified-shape" —
@@ -765,7 +848,11 @@ func domainPosture() RolePosture {
 //     the domain transaction so unit foreign keys never depend on uncommitted
 //     coordinator rows.
 //     job_runs and sync_run_reference_discoveries are coordinator ledger
-//     INSERTs after the domain graph commit.
+//     INSERTs after the domain graph commit. Both are dual-grant since
+//     CHAOS-4209: the domain worker terminalizes those same ledgers when a sync
+//     run finishes, so it holds UPDATE (job_runs) and INSERT+UPDATE
+//     (sync_run_reference_discoveries) on its own side. It holds no INSERT on
+//     job_runs — opening a job run stays the coordinator's alone.
 //
 //   - organizations requires UPDATE only for the native scheduled planner's
 //     FOR KEY SHARE existence lock. org_licenses and dev_conversations remain

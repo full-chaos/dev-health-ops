@@ -249,7 +249,12 @@ func (service *NativeReferenceDiscoveryService) claim(
 	}
 	if requiresFeature {
 		gateNow := service.nowUTC()
-		allowed, reason, err := scheduledsync.CanonicalIncidentDecisionForUpdate(ctx, tx, run.orgID, gateNow)
+		// NON-locking (CHAOS-4209). This runs on pools.Domain, and the locking
+		// form's FOR UPDATE is an UPDATE-class privilege on feature_flags and
+		// org_feature_overrides -- control-plane authorization state the domain
+		// role must not be able to rewrite. See CanonicalIncidentDecision for
+		// the class rule and for what the surrendered window costs.
+		allowed, reason, err := scheduledsync.CanonicalIncidentDecision(ctx, tx, run.orgID, gateNow)
 		if err != nil {
 			return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
 		}

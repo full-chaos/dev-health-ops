@@ -408,6 +408,13 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		// an absent table silently skips its grant while domainPosture() still
 		// requires it -- which is exactly how CheckDomainAuthorization came to
 		// fail here for every test in this file.
+		// CHAOS-4209: the finalize service's compute-input checkpoint joined
+		// domainPosture's manifest. Every domain GRANT is wrapped in a
+		// to_regclass guard, so a venue that never CREATEs it silently skips the
+		// grant while the posture still requires it -- CheckDomainAuthorization
+		// would then fail closed for every test in this file, naming neither the
+		// table nor the reason.
+		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_unit_chunk_checkpoints (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",

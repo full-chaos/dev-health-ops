@@ -964,6 +964,69 @@ func CanonicalIncidentDecisionForUpdate(ctx context.Context, tx pgx.Tx, orgID st
 	return canonicalIncidentDecision(ctx, tx, orgID, now, true)
 }
 
+// CanonicalIncidentAllowed is the NON-LOCKING export of the same decision
+// (CHAOS-4209). It exists because the class rule this package already
+// documents on canonicalIncidentAllowed below -- phase-B materialization
+// locks, the phase-A gate does not -- had no exported form, so the CHAOS-4175
+// native ports reached for the *ForUpdate pair and dragged a FOR UPDATE onto
+// the DOMAIN pool.
+//
+// That is not a grant gap to be closed by granting. PostgreSQL treats FOR
+// UPDATE as an UPDATE-class privilege, so satisfying it would mean giving the
+// domain login UPDATE on public.feature_flags and public.org_feature_overrides
+// -- letting the role that handles third-party provider payloads rewrite
+// global feature enablement and tenant overrides. That is precisely the
+// property the Option B role split exists to protect, and a doc comment
+// promising "we only take the lock" would be a comment, not a mechanism.
+//
+// The rule, stated once: DOMAIN-SIDE GATES READ ENTITLEMENT WITHOUT LOCKING;
+// ONLY THE COORDINATOR'S MATERIALIZER TAKES FOR UPDATE.
+//
+// Be precise about what is given up, because "we dropped a lock" is easy to
+// wave away and this one is real. FOR UPDATE NARROWED this window; it never
+// closed it. Under READ COMMITTED a locking read blocks on an administrator's
+// UNCOMMITTED disable and then re-reads the new row version, so that one
+// interleaving was refused; a plain read sees the old snapshot and proceeds.
+// The immediately adjacent interleaving -- a disable committing just after the
+// read -- was never refused by either form, because the external side effect
+// (executor.Discover) happens past the commit that releases the lock. So the
+// lock bought one interleaving, not the property. Closing the class needs a
+// re-check at the seam that actually precedes the side effect, which is
+// CHAOS-4219; this gate's job is to refuse runs that were disabled BEFORE it
+// looked, and that it still does.
+//
+// The window this gives up -- the flag changing between this read and the
+// caller's commit -- is bounded in both directions and neither direction
+// strands a run:
+//
+//   - Flag flipped OFF after a claim: the run proceeds once, and
+//     internal/syncdispatchruntime/feature_disabled_termination.go terminalizes
+//     it on the next pass.
+//   - Flag flipped ON after a disabled-terminalize: nothing is lost, the next
+//     scheduled run for that organization proceeds normally.
+//
+// Divergence from Python is deliberate and worth naming: Python locks at every
+// site (reference_discovery.py, sync_units.py:804 for dispatch, :1289/:1311 for
+// the provider unit) via require_canonical_incident_feature_for_update_sync ->
+// lock_feature_rows_sync. It can afford to, because Python runs every one of
+// those under ONE full-privilege role. Go does not, and the two-phase split
+// this package already documents is what replaces the lock on the domain side.
+func CanonicalIncidentAllowed(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
+	return canonicalIncidentAllowed(ctx, tx, orgID, now, false)
+}
+
+// CanonicalIncidentDecision is CanonicalIncidentAllowed's reason-carrying
+// sibling, the non-locking counterpart of CanonicalIncidentDecisionForUpdate.
+// A caller that terminalizes on denial needs the WHY, not just the false --
+// see CanonicalIncidentDecisionForUpdate's doc comment for why the reason is
+// load-bearing rather than cosmetic.
+//
+// Signature is identical to the ForUpdate pair so a caller moving off the lock
+// changes the function name and nothing else.
+func CanonicalIncidentDecision(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, FeatureDecisionReason, error) {
+	return canonicalIncidentDecision(ctx, tx, orgID, now, false)
+}
+
 // canonicalIncidentAllowedForUpdate is the phase-B, row-locking form.
 func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
 	return canonicalIncidentAllowed(ctx, tx, orgID, now, true)

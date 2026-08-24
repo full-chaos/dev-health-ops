@@ -189,8 +189,14 @@ func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
 	want := map[string]TablePrivilege{
 		"scheduled_jobs":               {TableName: "scheduled_jobs", AllowUpdate: true},
 		"scheduled_report_occurrences": {TableName: "scheduled_report_occurrences"},
-		"backfill_jobs":                {TableName: "backfill_jobs"},
-		"sync_coverage_projections":    {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
+		// SELECT is all the coverage projector itself needs. The UPDATE
+		// arrived with CHAOS-4209: observeTerminalSyncRun
+		// (internal/syncdispatchruntime/native_finalize_sync_run.go:628)
+		// terminalizes a finished run's backfill rows on the same domain
+		// pool. INSERT and DELETE stay off -- no domain statement creates or
+		// removes a backfill job.
+		"backfill_jobs":             {TableName: "backfill_jobs", AllowUpdate: true},
+		"sync_coverage_projections": {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
 	}
 	for _, table := range domainPosture().RequiredTables {
 		expected, ok := want[table.TableName]

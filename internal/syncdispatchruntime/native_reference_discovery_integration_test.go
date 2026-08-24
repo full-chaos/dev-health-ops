@@ -50,6 +50,11 @@ CREATE TABLE integration_datasets (
 CREATE TABLE feature_flags (
  id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL, is_enabled boolean NOT NULL
 );
+CREATE TABLE org_feature_overrides (
+ id uuid PRIMARY KEY, org_id uuid NOT NULL, feature_id uuid NOT NULL,
+ is_enabled boolean NOT NULL, expires_at timestamptz NULL,
+ UNIQUE (org_id, feature_id)
+);
 CREATE TABLE backfill_jobs (
  id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
  total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,

@@ -646,6 +646,10 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.fixed_schedule_occurrences (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
+		// CHAOS-4209: the finalize service's compute-input checkpoint entered
+		// domainPosture, so this venue must create it for the same to_regclass
+		// reason the coordinator tables above are created before the migration.
+		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(ctx, statement); err != nil {

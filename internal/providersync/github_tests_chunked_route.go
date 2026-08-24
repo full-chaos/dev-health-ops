@@ -826,13 +826,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue
 						}
-						// Counted as SEEN the moment a real read is attempted --
-						// before the outcome is known -- so every downstream
-						// disposition (healthy, unreadable, or a fatal parse
-						// bound) is reflected in the denominator the totality
-						// gate divides by (CHAOS-4185).
-						cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
-						archive, used, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
+						archive, used, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
 						cursor.Requests += used
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -841,31 +835,61 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// container is skipped below, and keep walking:
 							// one bad artifact must not cost the healthy ones
 							// or the whole unit (CHAOS-4191, extending
-							// CHAOS-4177).
+							// CHAOS-4177). Counted as SEEN here (not before
+							// the call): a fetch that never even reached this
+							// branch commits nothing, so nothing should be
+							// attributed to the totality denominator either.
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactUnavailable) {
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactUnavailableCause,
 								)
+								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
 							}
 							return downloadErr
 						}
+						if notFound {
+							// A ROUTINE provider-side disappearance: the
+							// artifact expired or was deleted between listing
+							// and download (GitHub answers 404/410 for this,
+							// a documented, ordinary outcome -- see
+							// downloadGitHubTestsArtifact's doc comment).
+							// Provider-side ephemeral state is not evidence
+							// about whether OUR channel to read artifacts is
+							// broken, so it is excluded from totality
+							// accounting entirely -- neither seen nor
+							// unreadable -- matching this route's
+							// pre-CHAOS-4185 disposition for this exact case.
+							// Without this exclusion, two artifacts that
+							// simply expired between listing and download
+							// would satisfy the totality floor and
+							// terminalize a healthy unit (CHAOS-4185 codex
+							// round 3).
+							continue
+						}
+						// Counted as SEEN the moment a real read is attempted
+						// AND the artifact is confirmed present -- so every
+						// downstream disposition (healthy, unreadable, or a
+						// fatal parse bound) is reflected in the denominator
+						// the totality gate divides by, while a routine
+						// not-found above never was (CHAOS-4185).
+						cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 						if len(archive) == 0 {
 							// A 2xx download with a truly empty body is not a
 							// legitimate GitHub response (a real artifact
-							// either has bytes or the download errors); it is
-							// the same "answers every request with an empty
-							// document" edge condition the totality gate
-							// exists to catch, just without even a malformed
-							// payload to reject. Recording it as unreadable
-							// -- exactly like a container that downloaded but
-							// would not open -- closes the gap where a
-							// broken proxy returning empty bodies for every
-							// artifact would otherwise finalize the unit as
-							// healthy with zero report rows (CHAOS-4185
-							// codex round 2).
+							// either has bytes or the download 404s/410s,
+							// handled above); it is the same "answers every
+							// request with an empty document" edge condition
+							// the totality gate exists to catch, just without
+							// even a malformed payload to reject. Recording
+							// it as unreadable -- exactly like a container
+							// that downloaded but would not open -- closes
+							// the gap where a broken proxy returning empty
+							// bodies for every artifact would otherwise
+							// finalize the unit as healthy with zero report
+							// rows (CHAOS-4185 codex round 2).
 							cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								githubTestsUnreadableArchiveCause,

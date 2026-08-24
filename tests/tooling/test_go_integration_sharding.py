@@ -461,7 +461,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable. Drives the chunked
     # route through an in-memory HTTP doer and touches no database, so the
     # integration-tagged count stays 114.
-    assert len(expected_provider_tests) == 1031
+    #
+    # A third (final) codex round then found that fix regressed a ROUTINE
+    # provider condition: downloadGitHubTestsArtifact returns the identical
+    # (nil-archive, no-error) shape for BOTH a genuine 2xx-empty body and an
+    # ordinary 404/410 (an artifact that expired or was deleted between
+    # listing and download, which GitHub documents as a normal response) --
+    # so two routine vanished artifacts would satisfy the totality floor and
+    # terminalize a healthy unit. The fix gives the downloader a `notFound`
+    # return so the chunked route can exclude a routine 404/410 from totality
+    # accounting entirely (neither seen nor unreadable), while a genuinely
+    # empty 2xx body still counts. +2 ordinary tests (1031 -> 1033):
+    # TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality (404 and 410,
+    # subtests) and TestGitHubTestsMixedNotFoundAndUnreadableCountsOnlyTheObserved
+    # (one not-found artifact alongside two genuinely unreadable ones must
+    # still fire on exactly the two observed). Both drive the chunked route
+    # through in-memory HTTP doers and touch no database, so the
+    # integration-tagged count stays 114.
+    assert len(expected_provider_tests) == 1033
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -478,7 +495,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1031
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1033
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -539,7 +556,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1031
+    assert len(selected_tests) == len(set(selected_tests)) == 1033
     assert set(selected_tests) == expected_tests
 
 

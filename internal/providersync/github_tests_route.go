@@ -344,7 +344,12 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if artifact.Expired {
 				continue
 			}
-			archive, used, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
+			// notFound is not distinguished here: this route has no totality
+			// accounting, and its own len(archive)==0 branch below already
+			// treats a routine 404/410 and a genuinely empty 2xx body
+			// identically (CHAOS-4185 codex round 3 only changed the
+			// CHUNKED route's accounting, not this oracle's disposition).
+			archive, used, _, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
 			requests += used
 			if downloadErr != nil {
 				// Same disposition as an unreadable container below: an
@@ -636,21 +641,33 @@ func gitHubTestsCheckKey(provider, name string) string {
 	return provider + ":" + hex.EncodeToString(digest[:])[:24]
 }
 
-func downloadGitHubTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string) ([]byte, int, error) {
+// downloadGitHubTestsArtifact's notFound return distinguishes a ROUTINE
+// provider-side disappearance (the artifact expired or was deleted between
+// listing and download -- GitHub answers 404/410 for this, a documented,
+// ordinary outcome) from every other nil-body case. The two used to be
+// indistinguishable to callers: both returned (nil, N, nil). That
+// conflation is exactly what let a genuinely benign vanished artifact be
+// misclassified as an unreadable one once a caller started treating an
+// empty body as evidence of totality (CHAOS-4185 codex round 3) -- two
+// artifacts that simply expired between listing and download would
+// otherwise satisfy the totality floor and terminalize a healthy unit.
+func downloadGitHubTestsArtifact(
+	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
+) (archive []byte, used int, notFound bool, err error) {
 	response, err := client.Do(ctx, http.MethodGet, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
-			return nil, 1, nil
+			return nil, 1, true, nil
 		}
-		return nil, 1, err
+		return nil, 1, false, err
 	}
 	requests := 1
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, fmt.Errorf(
+			return nil, requests, false, fmt.Errorf(
 				"%w: redirect status=%d carried no Location header",
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
 			)
@@ -658,29 +675,29 @@ func downloadGitHubTestsArtifact(ctx context.Context, client *providerfoundation
 		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
 		requests++
 		if err != nil {
-			return nil, requests, err
+			return nil, requests, false, err
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return nil, requests, nil
+		return nil, requests, true, nil
 	}
 	if response.StatusCode >= 400 {
-		return nil, requests, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
+		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, githubTestsMaxDownloadSize+1))
 	if readErr != nil {
-		return nil, requests, fmt.Errorf(
+		return nil, requests, false, fmt.Errorf(
 			"%w: artifact download read failed: %v", ErrGitHubTestsIncomplete, readErr,
 		)
 	}
 	if len(body) > githubTestsMaxDownloadSize {
-		return nil, requests, fmt.Errorf(
+		return nil, requests, false, fmt.Errorf(
 			"%w: artifact exceeds max download size %d bytes",
 			ErrGitHubTestsArtifactOversized, githubTestsMaxDownloadSize,
 		)
 	}
-	return body, requests, nil
+	return body, requests, false, nil
 }
 
 var _ CompleteRouteHandler = GitHubTestsRouteHandler{}

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -538,6 +539,148 @@ func TestGitHubTestsEmptyArtifactBodiesCountAsUnreadable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "seen=2") || !strings.Contains(err.Error(), "unreadable=2") {
 		t.Fatalf("err=%v, want it to carry seen=2 unreadable=2", err)
+	}
+	if walk.final.Result != nil {
+		t.Fatalf("final batch=%#v, want no final emission on a totality failure", walk.final)
+	}
+}
+
+// githubTestsNotFoundArtifactDoer serves `runs` workflow runs, each with one
+// artifact whose download answers `status` (404 or 410) directly -- a
+// ROUTINE provider-side disappearance (the artifact expired or was deleted
+// between listing and download), not a proxy/auth edge answering every
+// request with junk. GitHub documents both as valid artifact-download
+// responses.
+type githubTestsNotFoundArtifactDoer struct {
+	t               *testing.T
+	runs            int
+	status          int
+	archiveRequests int
+}
+
+func (doer *githubTestsNotFoundArtifactDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}}
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api":
+		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+	case path == "/repos/acme/api/actions/runs":
+		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(1, doer.runs)), nil
+	case strings.HasSuffix(path, "/jobs"):
+		return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+	case strings.HasSuffix(path, "/artifacts"):
+		return githubTestsHTTPResponse(request, header, githubTestsArtifactsFixture(1)), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		doer.archiveRequests++
+		return &http.Response{
+			StatusCode: doer.status,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}, nil
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+// RED (codex round 3, HIGH). Two artifacts that routinely 404 between
+// listing and download must NOT satisfy totality: before this fix, a 404/410
+// download collapsed to the same (nil-archive, no-error) shape as a
+// genuinely empty 2xx body, so the round-2 fix for THAT case regressed this
+// one -- two ordinary vanished artifacts would satisfy seen=2/unreadable=2
+// and terminalize a healthy unit for a routine provider condition GitHub
+// documents as normal.
+func TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			doer := &githubTestsNotFoundArtifactDoer{t: t, runs: 2, status: status}
+			client := githubTestsClient(t, doer)
+
+			walk, err := walkGitHubTestsChunksResult(t, client, 8)
+			if err != nil {
+				t.Fatalf(
+					"two routine %d artifacts sank the unit: err=%v; want completion "+
+						"(a vanished artifact is not evidence the read channel is broken)",
+					status, err,
+				)
+			}
+			if doer.archiveRequests != 2 {
+				t.Fatalf("downloaded %d archives, want 2 (both observed)", doer.archiveRequests)
+			}
+			if walk.cursor.Phase != "done" {
+				t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+			}
+			if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 0 {
+				t.Fatalf("ArchivesSeen=%v, want 0: a routine not-found is excluded from totality "+
+					"accounting entirely", intPtrString(walk.cursor.ArchivesSeen))
+			}
+			if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 0 {
+				t.Fatalf("ArchivesUnreadable=%v, want 0", intPtrString(walk.cursor.ArchivesUnreadable))
+			}
+		})
+	}
+}
+
+// githubTestsMixedNotFoundDoer serves three runs: one whose artifact 404s
+// (routine, excluded from totality accounting) and two whose artifacts are
+// genuinely unreadable (a 2xx non-zip body). Mixes the two dispositions the
+// round-3 fix must keep separate.
+type githubTestsMixedNotFoundDoer struct {
+	t               *testing.T
+	notFoundRun     int
+	archiveRequests int
+}
+
+func (doer *githubTestsMixedNotFoundDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}}
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api":
+		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+	case path == "/repos/acme/api/actions/runs":
+		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(1, 3)), nil
+	case strings.HasSuffix(path, "/jobs"):
+		return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+	case strings.HasSuffix(path, "/artifacts"):
+		return githubTestsHTTPResponse(request, header, githubTestsArtifactsFixture(1)), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		doer.archiveRequests++
+		if doer.archiveRequests == doer.notFoundRun {
+			return &http.Response{
+				StatusCode: http.StatusNotFound, Header: header,
+				Body: io.NopCloser(strings.NewReader("")), Request: request,
+			}, nil
+		}
+		return githubTestsHTTPResponse(request, header, githubTestsBlobErrorDocument), nil
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+// RED (codex round 3 companion). A mix of one routine not-found artifact and
+// two genuinely unreadable artifacts must fire totality counting ONLY the
+// two genuinely observed ones (seen=2, unreadable=2) -- the not-found
+// artifact must neither dilute the ratio (masking a real totality failure)
+// nor inflate it (crossing the floor on its own).
+func TestGitHubTestsMixedNotFoundAndUnreadableCountsOnlyTheObserved(t *testing.T) {
+	doer := &githubTestsMixedNotFoundDoer{t: t, notFoundRun: 1}
+	client := githubTestsClient(t, doer)
+
+	walk, err := walkGitHubTestsChunksResult(t, client, 8)
+	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable: the two genuinely unreadable "+
+			"artifacts must still meet the floor regardless of the not-found one", err)
+	}
+	if doer.archiveRequests != 3 {
+		t.Fatalf("downloaded %d archives, want 3 (all observed before failing)", doer.archiveRequests)
+	}
+	if !strings.Contains(err.Error(), "seen=2") || !strings.Contains(err.Error(), "unreadable=2") {
+		t.Fatalf("err=%v, want seen=2 unreadable=2 -- the not-found artifact must be excluded, "+
+			"not counted toward either side", err)
 	}
 	if walk.final.Result != nil {
 		t.Fatalf("final batch=%#v, want no final emission on a totality failure", walk.final)

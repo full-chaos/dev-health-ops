@@ -792,13 +792,15 @@ A hop with no Postgres role at all (an HTTP call, a cache read) is tagged
 
 ```mermaid
 flowchart TD
-  subgraph SCHED["dev-health-scheduler"]
-    MAT["OccurrenceReconciler.Materialize<br/>writes sync_runs / sync_run_units<br/>+ inserts sync_dispatch_outbox(kind=dispatch)<br/>[coordinator]"]
+  subgraph SCHED["dev-health-scheduler — OccurrenceReconciler.Materialize, one call, three sub-steps"]
+    MATREAD["Loads the plan, resolves the credential stamp<br/>(reads feature_flags/org_feature_overrides FOR UPDATE)<br/>[coordinator — coordinatorTx]"]
+    MATDOMAIN["Writes sync_runs / sync_run_units<br/>(its own transaction, commits first)<br/>[domain — materializer.domainPool.Begin]"]
+    MATOUTBOX["Inserts sync_dispatch_outbox(kind=dispatch)<br/>(same coordinatorTx as the read above)<br/>[coordinator]"]
   end
 
   subgraph RECON1["dev-health-reconciler — dispatch wakeup drain"]
-    KDISP["MutationPipeline kernel claims the outbox row<br/>[domain]"]
-    PUBDISP["publisher.Publish inserts the River dispatch_sync_run job<br/>[queue]"]
+    KDISP["MutationPipeline kernel claims the outbox row<br/>[queue — queueControlPool.Begin]"]
+    PUBDISP["Resolves the domain reference, then publisher.Publish<br/>inserts the River dispatch_sync_run job<br/>[domain read + queue write]"]
   end
 
   subgraph WDISPATCH["dev-health-worker — NativeDispatchSyncRunService.Dispatch"]
@@ -809,7 +811,7 @@ flowchart TD
   end
 
   subgraph RECON2["dev-health-reconciler — joboutbox.Relay.Step"]
-    RESOLVE["routes.Resolve(kind) per claim<br/>[queue]"]
+    RESOLVE["routes.Resolve(kind) per claim<br/>(jobroute.Controller on coordinatorPool)<br/>[coordinator]"]
     HOLD["celery / paused route: releaseClaim, hold — no River insert<br/>[queue]"]
     INSERTUNIT["river-routed: RiverInserter inserts the provider-unit job<br/>[queue]"]
   end
@@ -821,8 +823,8 @@ flowchart TD
   end
 
   subgraph RECON3["dev-health-reconciler — finalize wakeup drain"]
-    KFIN["kernel claims the outbox row [domain]"]
-    PUBFIN["publisher.Publish inserts the River finalize_sync_run job [queue]"]
+    KFIN["kernel claims the outbox row [queue]"]
+    PUBFIN["resolves the domain reference, then publisher.Publish<br/>inserts the River finalize_sync_run job [domain read + queue write]"]
   end
 
   subgraph WFIN["dev-health-worker — NativeFinalizeSyncRunService"]
@@ -831,10 +833,10 @@ flowchart TD
   end
 
   subgraph CACHEHOP["Python API — home dashboard"]
-    VALKEY["TTLCache (Valkey/Redis backend) serves the next /home read.<br/>Not actively invalidated — TTL-expiry only.<br/>CacheInvalidationEvent / invalidate_cache_for_event exist but are<br/>never called (CHAOS-4226)<br/>[external — Valkey, no Postgres role]"]
+    VALKEY["TTLCache (Valkey/Redis backend) serves the next /home read.<br/>NativeFinalizeSyncRunService has no hook into it -- neither did<br/>Python's finalize_sync_run. The ONLY active invalidation path today<br/>is inbound provider webhooks (system_webhooks.py), unrelated to this<br/>pathway; otherwise it's TTL-expiry only (CHAOS-4226)<br/>[external — Valkey, no Postgres role]"]
   end
 
-  MAT --> KDISP --> PUBDISP --> GATE --> BUDGET --> CLAIM --> PUB --> RESOLVE
+  MATREAD --> MATDOMAIN --> MATOUTBOX --> KDISP --> PUBDISP --> GATE --> BUDGET --> CLAIM --> PUB --> RESOLVE
   RESOLVE -->|route ready| INSERTUNIT
   RESOLVE -->|celery or paused| HOLD
   HOLD -.->|route resumes, next Step| RESOLVE
@@ -846,18 +848,42 @@ flowchart TD
 ```
 
 **Reading the pathway by role, not by process:** the same three-role split
-this page documents everywhere else holds here too. Materialization runs on
-the **coordinator** pool because it is the one place Option B deliberately
-widens the coordinator role to write domain-owned tables in the same
-transaction as its own (see the `daily_metrics_runs`/`organizations` dual-role
-reasoning in `internal/storage/postgres/domain_authorization.go`'s
-`coordinatorPosture()` doc comment — Celery Beat, which this replaces, already
-spanned both table sets under one identity). Every outbox **drain** (claim on
-domain, River insert on queue) repeats the same pattern
-`worker_job_outbox`/`joboutbox.Producer` already uses: the row that identifies
-work is a domain write, and only the transport that delivers it is
-queue-control. `NativeDispatchSyncRunService` and `NativeFinalizeSyncRunService`
-run entirely on the **domain** pool — `dev-health-worker` never opens a
+this page documents everywhere else holds here too, and it is more layered
+than a single label per hop. `Materialize` is not coordinator-only: it reads
+and locks on the caller's `coordinatorTx` (`OccurrenceReconciler`'s own pool,
+`cmd/dev-health-scheduler/dependencies.go`'s `NewOccurrenceReconciler(
+coordinatorPool, ...)`), but the domain-owned write
+(`sync_runs`/`sync_run_units`) runs in a SEPARATE transaction the
+materializer opens on its own `domainPool` and commits BEFORE the
+coordinator side writes the `sync_dispatch_outbox` wakeup in the original
+`coordinatorTx` — this is the one place Option B deliberately widens the
+coordinator role to also read/lock feature entitlement in the same pass as
+its own domain-shaped work (see the `daily_metrics_runs`/`organizations`
+dual-role reasoning in `internal/storage/postgres/domain_authorization.go`'s
+`coordinatorPosture()` doc comment — Celery Beat, which this replaces,
+already spanned both table sets under one identity).
+
+Every outbox **drain** (`MutationPipeline`'s kernel) claims the row on the
+**queue-control** pool (`internal/syncreconciler/kernel.go`'s
+`NewKernel` doc comment: "mutation begins only on the least-privilege
+queue-control pool") — not domain, despite the SAME-named
+`worker_job_outbox`/`joboutbox.Producer` pattern elsewhere on this page
+putting the claim on domain; the two outbox implementations disagree on this
+by design (`sync_dispatch_outbox` is coordinator-owned control-plane data,
+`worker_job_outbox` is domain-owned). The claim step also resolves the
+domain reference (a domain-pool read) before the queue-pool `River` insert.
+
+Route resolution in the relay (`routes.Resolve(kind)`, `joboutbox.Relay.Step`)
+runs on the **coordinator** pool too:
+`cmd/dev-health-reconciler/dependencies.go`'s `jobroute.NewController(
+coordinatorPool, ...)` is the exact controller instance threaded into
+`joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair`. An earlier draft of
+this page (and of this PR's own doc comments) stated this ran "under the
+queue role" — wrong, caught by codex round 3, corrected here and at its
+other two sites in `internal/syncdispatchruntime/native_dispatch_sync_run_service.go`.
+
+`NativeDispatchSyncRunService` and `NativeFinalizeSyncRunService` DO run
+entirely on the **domain** pool — `dev-health-worker` never opens a
 coordinator pool at all, which is exactly why `DispatchGuard`'s `tier_limits`
 read had to be dual-granted rather than left coordinator-only (CHAOS-4175;
 see the dual-grant table list in `domainPosture()`'s doc comment).
@@ -878,19 +904,29 @@ topology](#queue-topology)):**
   call anywhere. The window this leaves is bounded (one Dispatch pass) and
   accepted as a tradeoff, not a bug, but it is real and asymmetric across the
   two providers. Tracked as CHAOS-4219.
-- **The coverage cache is never actively invalidated.**
+- **Neither finalize path actively invalidates the coverage cache.**
   `invalidateSyncCoverageForIntegration` (`native_finalize_sync_run.go:813`)
   updates `sync_coverage_projections.invalidated_at` in Postgres on every
-  finalize, but nothing calls into
-  `dev_health_ops.core.cache_invalidation.invalidate_cache_for_event` —
-  that function and `CacheInvalidationEvent` are fully implemented and have
-  zero callers anywhere in the codebase (confirmed by repository-wide search,
-  2026-08-24). The home dashboard's Valkey-backed `TTLCache`
-  (`dev_health_ops/api/services/home.py`, `core/cache.py`) therefore serves
-  whatever coverage state it cached until its TTL expires, even for an
-  organization whose sync just finished and just invalidated the Postgres
-  row. Filed as CHAOS-4226: the durable signal exists and is correct; the
-  layer that should react to it does not yet.
+  finalize — parity with Python's own `finalize_sync_run`
+  (`sync_units.py`), which calls the same
+  `invalidate_sync_coverage_projection_sync` and nothing else. Neither
+  finalize path calls into
+  `dev_health_ops.core.cache_invalidation.invalidate_cache_for_event`. That
+  function is NOT dead code, though — an earlier version of this note
+  claimed it had zero callers anywhere, which codex round 3 caught as false:
+  `invalidate_on_sync_complete`/`invalidate_on_metrics_update` wrap it and
+  ARE called, from `system_webhooks.py`'s inbound-webhook handler
+  (`_invalidate_sync_cache`, triggered by a provider pushing a webhook TO
+  this service) and from the daily-metrics worker — both a completely
+  different trigger than a scheduled sync run finishing. So the home
+  dashboard's Valkey-backed `TTLCache`
+  (`dev_health_ops/api/services/home.py`, `core/cache.py`) DOES get
+  invalidated on some events, just never on "this scheduled sync run just
+  finished" — an organization that syncs on schedule with no inbound
+  webhook traffic sees stale coverage until the TTL expires regardless.
+  Filed as CHAOS-4226: the durable Postgres signal exists and is correct;
+  scheduled-sync completion specifically has no hook into the cache layer
+  that already exists and already reacts to other triggers.
 
 ## Deployment couplings
 
@@ -1056,7 +1092,9 @@ a new contract version; adding an optional field does not.
   staleness window with no backstop today. See [The native sync-dispatch
   coordinator pathway](#the-native-sync-dispatch-coordinator-pathway)
 - CHAOS-4226 — the home dashboard's Valkey-backed coverage cache is never
-  actively invalidated on sync completion; `invalidate_cache_for_event` and
-  `CacheInvalidationEvent` exist fully implemented and uncalled. See [The
-  native sync-dispatch coordinator
+  actively invalidated when a scheduled sync run finishes (neither the
+  native nor the Python finalize path hooks into it); the invalidation
+  machinery itself is live and already reacts to inbound provider webhooks
+  and daily-metrics updates, just not to this trigger. See [The native
+  sync-dispatch coordinator
   pathway](#the-native-sync-dispatch-coordinator-pathway)

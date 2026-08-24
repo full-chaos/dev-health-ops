@@ -149,8 +149,12 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // transaction commits or aborts -- Python fenced via a lock on the route
 // row itself; Go fences via a lock on the outbox table the enqueue itself
 // touches. Route resolution for sync.provider_unit lives ONLY at drain,
-// under the queue role, in the relay (internal/joboutbox's relay step
-// calls routes.Resolve per claim): a celery-routed claim is deferred back,
+// in the relay (internal/joboutbox's relay step calls routes.Resolve per
+// claim, via a jobroute.Controller constructed on the COORDINATOR pool --
+// cmd/dev-health-reconciler/dependencies.go's jobroute.NewController(
+// coordinatorPool, ...) -- not the queue-control pool the relay's own
+// outbox claim/delivery runs on; codex round 3 caught this file's own
+// doc comment stating the wrong role): a celery-routed claim is deferred back,
 // a paused route stalls the relay step. No native producer on origin/main
 // calls the route controller either -- this mirrors
 // teamAutoimportPostSyncWriter's existing Publish/PublishDeferred
@@ -165,7 +169,8 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // unit visibly stuck in a Go-only error state; the run's units sit
 // DISPATCHING until the pause lifts or rolls back). This is accepted, not
 // a gap: production has no Celery consumer left for this kind, and the
-// relay is the sole route authority under the queue role by construction.
+// relay is the sole route authority by construction (on the coordinator
+// pool, for the route read specifically -- see above).
 //
 // Idempotent / redispatchable, same as Python: nothing here assumes this
 // is the run's only or first dispatch attempt.

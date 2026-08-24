@@ -904,6 +904,19 @@ type rowQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// CanonicalIncidentAllowedForUpdate exports canonicalIncidentAllowedForUpdate
+// for cross-package reuse (CHAOS-4175). rowQuerier's own doc comment already
+// states the rule this satisfies: "this decision must not be implemented
+// twice." The native Go port of run_sync_reference_discovery needs the exact
+// row-locking entitlement check require_canonical_incident_feature_for_update_sync
+// performs, and this IS that check -- same SQL (feature_flags ->
+// org_feature_overrides -> organizations/org_licenses tier ranking),
+// verified line-for-line against the Python before reuse rather than
+// re-derived.
+func CanonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
+	return canonicalIncidentAllowedForUpdate(ctx, tx, orgID, now)
+}
+
 // canonicalIncidentAllowedForUpdate is the phase-B, row-locking form.
 func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
 	return canonicalIncidentAllowed(ctx, tx, orgID, now, true)
@@ -1039,6 +1052,16 @@ func requestedDatasetKeys(provider string, targets []string, sourceID *string) m
 		return nil
 	}
 	return requested
+}
+
+// SyncTargetsRequireCanonicalIncident exports syncTargetsRequireCanonicalIncident
+// for cross-package reuse (CHAOS-4175): the native reference_discovery port
+// needs the same "does this unit's legacy targets require the canonical
+// incident feature" check sync_dataset_requires_canonical_incident_feature
+// makes in Python, and the answer must not diverge between the two Go
+// callers of this decision.
+func SyncTargetsRequireCanonicalIncident(targets []string) bool {
+	return syncTargetsRequireCanonicalIncident(targets)
 }
 
 func syncTargetsRequireCanonicalIncident(targets []string) bool {

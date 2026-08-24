@@ -162,12 +162,12 @@ func (service *NativeReferenceDiscoveryService) claim(
 	}
 	if requiresFeature {
 		gateNow := service.nowUTC()
-		allowed, err := scheduledsync.CanonicalIncidentAllowedForUpdate(ctx, tx, run.orgID, gateNow)
+		allowed, reason, err := scheduledsync.CanonicalIncidentDecisionForUpdate(ctx, tx, run.orgID, gateNow)
 		if err != nil {
 			return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
 		}
 		if !allowed {
-			if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, gateNow); err != nil {
+			if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, reason, gateNow); err != nil {
 				return false, "", time.Time{}, err
 			}
 			if err := tx.Commit(ctx); err != nil {

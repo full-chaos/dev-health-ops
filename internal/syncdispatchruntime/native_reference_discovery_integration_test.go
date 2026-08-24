@@ -466,6 +466,13 @@ VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
 	if !strings.Contains(unitError, "canonical incident ingestion is disabled") {
 		t.Fatalf("unit error=%q want feature-disabled message", unitError)
 	}
+	// No feature_flags row exists for canonical_incident_ingestion in this
+	// fixture, so CanonicalIncidentDecisionForUpdate's real reason must be
+	// "feature_not_registered" -- proving the CARRIED-THROUGH reason reaches
+	// the persisted error text, not a placeholder.
+	if !strings.Contains(unitError, "(feature_not_registered)") {
+		t.Fatalf("unit error=%q want the real FeatureDecisionReason embedded, not a placeholder", unitError)
+	}
 	var runStatus string
 	if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runStatus); err != nil {
 		t.Fatal(err)

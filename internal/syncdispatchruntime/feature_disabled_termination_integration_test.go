@@ -9,10 +9,19 @@ import (
 	"testing"
 	"time"
 
+	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// testFeatureDisabledMessage stands in for a real
+// CanonicalIncidentDecisionForUpdate reason in tests that exercise
+// terminalizeFeatureDisabledRun/Graph directly (below terminalizeFeatureDisabledPlan,
+// which is what actually resolves a real reason) -- the specific reason
+// value is immaterial to these tests, which assert on the run/unit
+// termination mechanics, not on message content.
+var testFeatureDisabledMessage = canonicalIncidentFeatureDisabledMessage(scheduledsync.FeatureDecisionReasonGlobalDisabled)
 
 // createFeatureDisabledTables is a self-contained schema for this file:
 // createFinalizeTables' sync_runs/sync_run_units carry the full column set
@@ -157,7 +166,7 @@ func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 	now := time.Now().UTC()
 	withTx(t, ctx, pool, func(tx pgx.Tx) {
 		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
-		result, err := terminalizeFeatureDisabledRun(ctx, tx, run, canonicalIncidentFeatureDisabledMessage, now)
+		result, err := terminalizeFeatureDisabledRun(ctx, tx, run, testFeatureDisabledMessage, now)
 		if err != nil {
 			t.Fatalf("terminalizeFeatureDisabledRun: %v", err)
 		}
@@ -192,8 +201,8 @@ func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 		if status != syncRunUnitStatusFailed {
 			t.Fatalf("unit %s status=%q want=failed", id, status)
 		}
-		if errorText == nil || *errorText != canonicalIncidentFeatureDisabledMessage {
-			t.Fatalf("unit %s error=%v want=%q", id, errorText, canonicalIncidentFeatureDisabledMessage)
+		if errorText == nil || *errorText != testFeatureDisabledMessage {
+			t.Fatalf("unit %s error=%v want=%q", id, errorText, testFeatureDisabledMessage)
 		}
 	}
 	var successStatus string
@@ -215,8 +224,8 @@ func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 	if runStatus != syncRunStatusFailed || completedUnits != 1 || failedUnits != 4 {
 		t.Fatalf("sync_runs row status=%q completed=%d failed=%d want failed,1,4", runStatus, completedUnits, failedUnits)
 	}
-	if runError != canonicalIncidentFeatureDisabledMessage {
-		t.Fatalf("sync_runs.error=%q want=%q", runError, canonicalIncidentFeatureDisabledMessage)
+	if runError != testFeatureDisabledMessage {
+		t.Fatalf("sync_runs.error=%q want=%q", runError, testFeatureDisabledMessage)
 	}
 }
 
@@ -237,7 +246,7 @@ func TestTerminalizeFeatureDisabledRunLeavesGenuinelyNonterminalStateAlone(t *te
 
 	withTx(t, ctx, pool, func(tx pgx.Tx) {
 		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
-		_, err := terminalizeFeatureDisabledPlan(ctx, tx, run, time.Now().UTC())
+		_, err := terminalizeFeatureDisabledPlan(ctx, tx, run, scheduledsync.FeatureDecisionReasonGlobalDisabled, time.Now().UTC())
 		if !errors.Is(err, ErrFeatureDisabledPlanNotTerminal) {
 			t.Fatalf("terminalizeFeatureDisabledPlan error=%v want=ErrFeatureDisabledPlanNotTerminal", err)
 		}
@@ -288,7 +297,7 @@ INSERT INTO backfill_jobs (id, org_id, celery_task_id, status) VALUES ($1, $2, $
 
 	withTx(t, ctx, pool, func(tx pgx.Tx) {
 		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
-		if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, time.Now().UTC()); err != nil {
+		if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, scheduledsync.FeatureDecisionReasonGlobalDisabled, time.Now().UTC()); err != nil {
 			t.Fatalf("terminalizeFeatureDisabledPlan: %v", err)
 		}
 	})
@@ -367,7 +376,7 @@ VALUES ($1, $2, $3, $4, 'pending', now(), now(), now())`,
 
 	withTx(t, ctx, pool, func(tx pgx.Tx) {
 		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
-		if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, time.Now().UTC()); err != nil {
+		if _, err := terminalizeFeatureDisabledPlan(ctx, tx, run, scheduledsync.FeatureDecisionReasonGlobalDisabled, time.Now().UTC()); err != nil {
 			t.Fatalf("terminalizeFeatureDisabledPlan: %v", err)
 		}
 	})

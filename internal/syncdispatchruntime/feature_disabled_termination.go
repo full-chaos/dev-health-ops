@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -23,22 +24,20 @@ import (
 var ErrFeatureDisabledPlanNotTerminal = errors.New("feature-disabled planned run retained nonterminal units")
 
 // canonicalIncidentFeatureDisabledMessage ports
-// CanonicalIncidentFeatureDisabledError.__str__: f"{FEATURE_DISABLED_ERROR_CATEGORY}:
-// canonical incident ingestion is disabled ({reason.value})". The native
-// gate this package reuses (scheduler/sync.CanonicalIncidentAllowedForUpdate)
-// reports only allowed/disallowed, not WHICH FeatureDecisionReason (13
-// values -- ENABLED_BY_ORG_OVERRIDE, GLOBAL_DISABLED, TIER_REQUIRED, etc.)
-// produced the disallowal; exposing that would mean widening the shared
-// entitlement function's return shape beyond what its other caller (the Go
-// scheduler) needs. The embedded reason is free-text diagnostic content --
-// error_category="feature_disabled" is the constant routing/retry decisions
-// actually read, and that constant IS reproduced exactly (featureDisabledErrorCategory).
-// "unspecified_reason" is a deliberate, unmistakable placeholder (it can
-// never coincide with a real FeatureDecisionReason value) standing in for
-// the one Python detail this port does not reproduce. Flagged to team-lead
-// as a disclosed simplification, not silently claimed as full parity.
-const canonicalIncidentFeatureDisabledMessage = featureDisabledErrorCategory +
-	": canonical incident ingestion is disabled (unspecified_reason)"
+// CanonicalIncidentFeatureDisabledError.__str__ verbatim:
+// f"{FEATURE_DISABLED_ERROR_CATEGORY}: canonical incident ingestion is
+// disabled ({reason.value})". The reason comes from
+// scheduler/sync.CanonicalIncidentDecisionForUpdate -- the SAME decision
+// path CanonicalIncidentAllowedForUpdate uses, extended to also surface the
+// FeatureDecisionReason it was already computing internally. Losing this
+// text (an earlier draft used a fixed "unspecified_reason" placeholder) was
+// ruled a cause-erasure regression of the same class CHAOS-4159/#1881
+// exists to prevent: a generic label overwriting a specific diagnostic
+// cause, just one layer up (the native gate's own denial reason, not a
+// planner result's).
+func canonicalIncidentFeatureDisabledMessage(reason scheduledsync.FeatureDecisionReason) string {
+	return fmt.Sprintf("%s: canonical incident ingestion is disabled (%s)", featureDisabledErrorCategory, reason)
+}
 
 // FeatureDisabledRunTransition mirrors feature_denial.py's dataclass of the
 // same name.
@@ -324,11 +323,15 @@ SET status = 'dispatched',
 // the reference_discovery caller's variant, which REQUIRES the run to have
 // gone fully terminal (discovery runs before dispatch, so every unit is
 // still a fresh plan with no in-flight dispatched work) and always
-// terminalizes the graph immediately after.
+// terminalizes the graph immediately after. reason is the
+// FeatureDecisionReason CanonicalIncidentDecisionForUpdate produced for the
+// denial that triggered this call -- callers must not reuse a message
+// computed for a different decision.
 func terminalizeFeatureDisabledPlan(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, now time.Time,
+	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, reason scheduledsync.FeatureDecisionReason, now time.Time,
 ) (FeatureDisabledRunTransition, error) {
-	transition, err := terminalizeFeatureDisabledRun(ctx, tx, run, canonicalIncidentFeatureDisabledMessage, now)
+	message := canonicalIncidentFeatureDisabledMessage(reason)
+	transition, err := terminalizeFeatureDisabledRun(ctx, tx, run, message, now)
 	if err != nil {
 		return FeatureDisabledRunTransition{}, err
 	}
@@ -337,7 +340,7 @@ func terminalizeFeatureDisabledPlan(
 	}
 	// run.completedAt is guaranteed non-nil here: terminalizeFeatureDisabledRun
 	// sets it whenever it returns RunTerminal true.
-	if err := terminalizeFeatureDisabledGraph(ctx, tx, run, canonicalIncidentFeatureDisabledMessage, *run.completedAt); err != nil {
+	if err := terminalizeFeatureDisabledGraph(ctx, tx, run, message, *run.completedAt); err != nil {
 		return transition, err
 	}
 	return transition, nil

@@ -265,6 +265,44 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 			t.Fatalf("ObservationTimeout = %s, want the composed default %s (stage budgets sum + margin)", captured, want)
 		}
 	})
+
+	// TestSyncObservationTimeoutPropagatesFromConfig/a_config.Load-shaped_config_still_gets_the_composed_default
+	// pins the bug a codex review caught on CHAOS-4239: config.Load NEVER
+	// leaves SyncObservationTimeout at Go's zero value for this service --
+	// durationEnv falls back to config.DefaultSyncObservationTimeout (2s)
+	// whenever SYNC_OBSERVATION_TIMEOUT is unset -- so every REAL deployment
+	// carries a non-zero 2s here even when the operator configured nothing.
+	// The "bare config.Config{}" subtest above cannot catch a regression of
+	// this: it is the one shape config.Load can never actually produce.
+	// Without the second comparison in dependencies.go, this exact
+	// config.Load-shaped input silently clobbered the composed
+	// syncreconciler.DefaultStageBudgets().Sum() envelope back down to the
+	// flat 2s CHAOS-4239 exists to stop using, and the whole fix shipped
+	// inert against the only input production ever actually sends it.
+	t.Run("a config.Load-shaped config still gets the composed default", func(t *testing.T) {
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(),
+			config.Config{
+				RiverDatabaseSchema: "river",
+				// This is exactly what config.Load produces for the
+				// reconciler service when SYNC_OBSERVATION_TIMEOUT is unset
+				// -- durationEnv's fallback, never Go's zero value.
+				SyncObservationTimeout: config.DefaultSyncObservationTimeout,
+			},
+			health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s: a config.Load-shaped "+
+				"input (SyncObservationTimeout already at its own package default, not Go's zero) "+
+				"must not be mistaken for an explicit operator override", captured, want)
+		}
+	})
 }
 
 func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.T) {

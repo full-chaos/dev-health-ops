@@ -678,15 +678,33 @@ func buildReconcilerDependencies(
 		syncLoopConfig.ObservationTimeout = syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
 	}
 	// CHAOS-4092: --sync-observation-timeout / SYNC_OBSERVATION_TIMEOUT
-	// overrides the 2s default in place of a redeploy. Config.Load never
-	// returns a zero SyncObservationTimeout -- durationEnv falls back to
-	// defaultSyncObservationTimeout, which config.go keeps equal to
-	// syncreconciler's own default -- so zero here means the caller built a
-	// bare config.Config{} directly (every reconciler unit test does this)
-	// rather than an unset override, and DefaultLoopConfig's built-in default
-	// is left standing instead of failing LoopConfig.validate's >= 10ms
-	// floor.
-	if cfg.SyncObservationTimeout != 0 {
+	// overrides the computed default in place of a redeploy. Config.Load
+	// never returns a zero SyncObservationTimeout for this service --
+	// durationEnv falls back to config.DefaultSyncObservationTimeout (2s)
+	// whenever the env/flag is unset -- so a bare "!= 0" check cannot tell
+	// "operator explicitly configured this" apart from "nobody configured
+	// anything and Load's own fallback fired." A codex review on CHAOS-4239
+	// caught that gap: without the second comparison below, EVERY real
+	// deployment (which always goes through Config.Load, never a bare
+	// config.Config{}) silently clobbered the composed
+	// syncreconciler.DefaultStageBudgets().Sum() envelope above back down to
+	// the flat 2s this ticket exists to stop using -- the whole fix would
+	// have shipped inert.
+	//
+	// A value that is neither Go's zero (the bare config.Config{} shape
+	// every reconciler unit test uses, never Load's) NOR exactly
+	// config.DefaultSyncObservationTimeout is unambiguously an operator's
+	// real choice and always wins. A value that equals
+	// config.DefaultSyncObservationTimeout exactly is treated as unset for
+	// the mutation loop specifically: it is indistinguishable from Load's own
+	// fallback from here, and honoring it as a literal request would just
+	// reproduce CHAOS-4239's crash-loop regardless of which one it actually
+	// was, so the composed default (safe either way) is preferred. An
+	// operator who wants exactly 2s for the mutation pipeline has no way to
+	// express that through this option; nothing in this ticket's scope needs
+	// them to.
+	if cfg.SyncObservationTimeout != 0 &&
+		!(activation.syncMutation && cfg.SyncObservationTimeout == config.DefaultSyncObservationTimeout) {
 		syncLoopConfig.ObservationTimeout = cfg.SyncObservationTimeout
 	}
 	syncLoopConfig.Recorder = recorder

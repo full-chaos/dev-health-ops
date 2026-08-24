@@ -40,6 +40,13 @@ const (
 	// default (CHAOS-4092) so a deployment that never sets the override sees
 	// no behavior change from this option's introduction.
 	defaultSyncObservationTimeout = 2 * time.Second
+	// DefaultSyncObservationTimeout exports the same value for callers that
+	// need to tell "the reconciler's own baked-in fallback" apart from an
+	// operator's genuine SYNC_OBSERVATION_TIMEOUT override (CHAOS-4239):
+	// Load never leaves SyncObservationTimeout at Go's zero value for the
+	// reconciler service, so a bare "!= 0" check cannot make that
+	// distinction on its own. See cmd/dev-health-reconciler/dependencies.go.
+	DefaultSyncObservationTimeout = defaultSyncObservationTimeout
 	defaultRiverDatabaseSchema    = "river"
 	defaultDomainDatabaseRole     = "devhealth_domain"
 	defaultQueueDatabaseRole      = "devhealth_queue"

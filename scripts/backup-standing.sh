@@ -17,17 +17,28 @@
 #
 # Every artifact is verified after the fact (never trust a zero exit code
 # alone): gzip -t + the pg_dumpall header/footer + a CREATE DATABASE count
-# reconciled against a live, non-template database count; unzip -t per
-# ClickHouse zip. sha256 digests are printed and written to
-# SHA256SUMS for every artifact so a caller can pin/compare.
+# reconciled against a live, non-template, connectable database count;
+# unzip -t per ClickHouse zip. sha256 digests are printed and written to
+# SHA256SUMS-<ts> for every artifact this run produced so a caller can
+# pin/compare.
+#
+# `pg_dumpall` embeds role definitions, including password hashes, by
+# design (this recipe never adds --no-role-passwords -- the validated
+# 2026-08-22 recipe did not, and this is a credential-bearing artifact on
+# purpose, not an oversight). `umask 077` below is the actual control:
+# every file/directory this script creates is owner-only from the moment
+# it exists, never briefly world-readable under a default 022 umask.
 #
 # Idempotent: refuses to write into an existing, non-empty backup
-# directory unless --force is passed. Every artifact name carries this
-# run's own timestamp, so --force never actually overwrites a prior run's
-# files (it never truly is destructive) -- it only lifts the guard against
-# proceeding into a directory a caller may not have expected to be
-# non-empty (a stale --out-dir, or a same-second re-run colliding on the
-# default timestamped directory).
+# directory unless --force is passed, and the existence check itself is
+# atomic (a bare `mkdir`, which fails if the directory already exists --
+# not a separate check-then-create, which would race two concurrent
+# invocations targeting the same default timestamped directory). Every
+# artifact name (including this run's own SHA256SUMS-<ts>) carries this
+# run's timestamp, so --force does not overwrite a PRIOR run's files --
+# it only lifts the atomicity guard for a directory a caller may not have
+# expected to be non-empty (a stale --out-dir, or a --force retry after a
+# failed run left partial artifacts behind).
 #
 # Usage:
 #   scripts/backup-standing.sh [--force] [--out-dir DIR]
@@ -39,7 +50,15 @@
 #   CLICKHOUSE_USER       (default ch)
 #   CLICKHOUSE_PASSWORD   (default ch)
 #   BACKUP_OUT_ROOT       (default <dev-health-root>/backups)
+#
+# Requires a bash with `local`/arrays (bash >= 3.2 is fine; this script
+# deliberately avoids `mapfile`/`readarray`, unavailable in stock macOS
+# /bin/bash 3.2). Run with an explicit modern bash if `/bin/bash` on your
+# machine is the ancient stock one and `bash` on PATH is not (`command -v
+# bash` should resolve to a >= 4.x install; Homebrew's bash package
+# provides one).
 set -euo pipefail
+umask 077
 
 FORCE=0
 OUT_DIR_OVERRIDE=""
@@ -54,7 +73,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,59p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -119,11 +138,20 @@ done
 TS="$(date -u +%Y%m%d-%H%M%S)"
 OUT_DIR="${OUT_DIR_OVERRIDE:-$OUT_ROOT/$TS}"
 
-if [[ -d "$OUT_DIR" && -n "$(ls -A "$OUT_DIR" 2>/dev/null)" && "$FORCE" -ne 1 ]]; then
-  echo "backup-standing.sh: $OUT_DIR already exists and is non-empty -- refusing to proceed (pass --force to write into it anyway; every artifact name carries this run's own timestamp, so nothing gets overwritten)" >&2
-  exit 1
+mkdir -p "$OUT_ROOT"
+if [[ "$FORCE" -eq 1 ]]; then
+  mkdir -p "$OUT_DIR"
+else
+  # Atomic collision guard: `mkdir` (no -p) fails if OUT_DIR already
+  # exists, so two invocations racing on the SAME default timestamped
+  # directory cannot both pass a separate check-then-create and then both
+  # proceed to write the same filenames -- the loser's `mkdir` fails here,
+  # before either has written anything.
+  if ! mkdir "$OUT_DIR" 2>/dev/null; then
+    echo "backup-standing.sh: $OUT_DIR already exists -- refusing to proceed (pass --force to write into it anyway; every artifact name, including SHA256SUMS-$TS, carries this run's own timestamp, so a PRIOR run's files are never overwritten)" >&2
+    exit 1
+  fi
 fi
-mkdir -p "$OUT_DIR"
 
 echo "backup-standing.sh: writing to $OUT_DIR"
 
@@ -135,11 +163,34 @@ docker exec "$PG_CONTAINER" pg_dumpall -U "$PG_USER" 2>"$pg_log_file" | gzip >"$
 
 # --- ClickHouse ---
 echo "backup-standing.sh: listing ClickHouse databases ($CH_CONTAINER)..."
-mapfile -t ch_dbs < <(docker exec "$CH_CONTAINER" clickhouse-client --user "$CH_USER" --password "$CH_PASSWORD" -q \
-  "SELECT name FROM system.databases WHERE name NOT IN ('system','information_schema','INFORMATION_SCHEMA') ORDER BY name")
+# Written to a real file and the PRODUCING command's own exit status
+# checked explicitly -- NOT `mapfile -t arr < <(cmd)`. Process
+# substitution runs `cmd` asynchronously; mapfile only sees whatever
+# `cmd` wrote and returns success regardless of `cmd`'s own exit code, so
+# a failing `docker exec ... clickhouse-client` (bad credentials,
+# container hiccup) would silently leave `ch_dbs` empty and this script
+# would go on to produce and VERIFY a Postgres-only backup as a clean
+# success -- exactly the silent-data-loss shape this script exists to
+# prevent (codex xhigh review, PR #1885). A plain `while read` loop below
+# is also more portable: `mapfile`/`readarray` do not exist in stock
+# macOS /bin/bash 3.2 at all.
+ch_db_list_file="$OUT_DIR/.clickhouse-databases.txt"
+trap 'rm -f "$ch_db_list_file"' EXIT
+if ! docker exec "$CH_CONTAINER" clickhouse-client --user "$CH_USER" --password "$CH_PASSWORD" -q \
+  "SELECT name FROM system.databases WHERE name NOT IN ('system','information_schema','INFORMATION_SCHEMA') ORDER BY name" \
+  >"$ch_db_list_file"; then
+  echo "backup-standing.sh: VERIFY FAILED: ClickHouse database listing failed ($CH_CONTAINER) -- refusing to produce a Postgres-only backup silently" >&2
+  exit 1
+fi
+ch_dbs=()
+while IFS= read -r db; do
+  [[ -n "$db" ]] && ch_dbs+=("$db")
+done <"$ch_db_list_file"
+rm -f "$ch_db_list_file"
+trap - EXIT
 
 if [[ "${#ch_dbs[@]}" -eq 0 ]]; then
-  echo "backup-standing.sh: WARNING no ClickHouse databases found besides system -- nothing to back up there" >&2
+  echo "backup-standing.sh: WARNING no ClickHouse databases found besides system -- the query ran successfully and genuinely returned nothing to back up there" >&2
 fi
 
 ch_zips=()
@@ -150,10 +201,19 @@ for db in "${ch_dbs[@]}"; do
   docker exec "$CH_CONTAINER" clickhouse-client --user "$CH_USER" --password "$CH_PASSWORD" -q \
     "BACKUP DATABASE \`${db}\` TO File('${container_zip}')" >/dev/null
   docker cp "$CH_CONTAINER:/var/lib/clickhouse/backups/$container_zip" "$local_zip"
+  # `docker cp` preserves the SOURCE file's mode from inside the
+  # container (live-verified: it lands owner-rw/group-r, 640, regardless
+  # of this shell's own umask) -- umask only governs files THIS script
+  # creates directly. Enforced explicitly here so every artifact in the
+  # output directory ends up owner-only, matching the pg_dumpall file's
+  # actual protection rather than only appearing to via umask.
+  chmod 600 "$local_zip"
   # Clean container-side copy -- allowed_path is a shared namespace across
   # every run, so a leftover here would collide on any db name reused
   # after a full timestamp second (extremely unlikely, but free to avoid).
-  docker exec "$CH_CONTAINER" rm -f "/var/lib/clickhouse/backups/$container_zip"
+  # Best-effort: an already-successful docker cp above means the backup
+  # is safe either way, this is tidiness, not correctness.
+  docker exec "$CH_CONTAINER" rm -f "/var/lib/clickhouse/backups/$container_zip" || true
   ch_zips+=("$local_zip")
 done
 
@@ -169,8 +229,13 @@ gzip -t "$pg_dump_file" || {
 # gives it a nonzero exit -- under `set -o pipefail` that nonzero exit
 # becomes the pipeline's own reported status even though the downstream
 # grep genuinely matched, producing a false VERIFY FAILED. Decompressing
-# once, to a real file, sidesteps that entirely.
+# once, to a real file, sidesteps that entirely. Trap-cleaned so a
+# plaintext copy of a credential-bearing pg_dumpall (it embeds role
+# password hashes by design, see the umask note above) never survives a
+# verify failure on disk -- every `exit 1` path below this point would
+# otherwise leave it behind.
 pg_plain_file="$OUT_DIR/.postgres-all-$TS.sql.plain"
+trap 'rm -f "$pg_plain_file"' EXIT
 gzip -dc "$pg_dump_file" >"$pg_plain_file"
 if ! head -5 "$pg_plain_file" | grep -q "PostgreSQL database cluster dump"; then
   echo "backup-standing.sh: VERIFY FAILED: $pg_dump_file is missing the pg_dumpall header -- dump likely incomplete or corrupt" >&2
@@ -180,17 +245,31 @@ if ! tail -5 "$pg_plain_file" | grep -q "PostgreSQL database cluster dump comple
   echo "backup-standing.sh: VERIFY FAILED: $pg_dump_file is missing the pg_dumpall completion footer -- dump likely truncated" >&2
   exit 1
 fi
-dumped_db_count="$(grep -c '^CREATE DATABASE ' "$pg_plain_file")"
+# Anchored to the exact statement shape pg_dumpall emits (WITH TEMPLATE =
+# ... at end of line), not a bare `^CREATE DATABASE ` prefix -- a data
+# row inside a later COPY block could theoretically start with that exact
+# literal text and inflate the count on a bare prefix match. `|| true` +
+# explicit fallback: `grep -c` exits 1 (not just "0 matches") when the
+# count is genuinely zero, which under `set -e` would abort the script
+# before the count is ever compared -- a cluster with a single database
+# is a real, if unusual, case this must not crash on.
+dumped_db_count="$(grep -c '^CREATE DATABASE .* WITH TEMPLATE = ' "$pg_plain_file" || true)"
+dumped_db_count="${dumped_db_count:-0}"
 rm -f "$pg_plain_file"
+trap - EXIT
 # pg_dumpall never emits a CREATE DATABASE for `postgres` itself -- every
-# target cluster already has it by construction, so dumpall assumes it
-# rather than recreating it (live-verified: it dumps postgres' CONTENTS
-# via a \connect block, just never its CREATE DATABASE). Excluded from
-# the live count for the same reason, not because it went unbacked-up.
-live_db_count="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -tAc "SELECT count(*) FROM pg_database WHERE datistemplate = false AND datname <> 'postgres'")"
+# target cluster already has it by construction (live-verified: it dumps
+# postgres' CONTENTS via a \connect block, just never its CREATE
+# DATABASE) -- nor for a database with datallowconn=false (truly
+# unconnectable, dumpall cannot dump it) or datconnlimit=-2 (PG's
+# pending-drop/invalid marker, upstream pg_dumpall skips these too; see
+# pg_dump/pg_dumpall.c). All three are excluded from the live count for
+# the SAME reason dumpall itself excludes them, not because they went
+# unbacked-up.
+live_db_count="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -tAc "SELECT count(*) FROM pg_database WHERE datistemplate = false AND datname <> 'postgres' AND datallowconn AND datconnlimit <> -2")"
 live_db_count="${live_db_count//[[:space:]]/}"
 if [[ "$dumped_db_count" -ne "$live_db_count" ]]; then
-  echo "backup-standing.sh: VERIFY FAILED: dump has $dumped_db_count CREATE DATABASE statements, live cluster has $live_db_count non-template databases -- see $pg_log_file" >&2
+  echo "backup-standing.sh: VERIFY FAILED: dump has $dumped_db_count CREATE DATABASE statements, live cluster has $live_db_count non-template, connectable databases -- see $pg_log_file" >&2
   exit 1
 fi
 echo "backup-standing.sh: postgres OK ($dumped_db_count databases, header+footer present)"
@@ -204,13 +283,24 @@ done
 echo "backup-standing.sh: clickhouse OK (${#ch_zips[@]} database(s) verified)"
 
 # --- Digests ---
+# Named with this run's OWN timestamp (SHA256SUMS-<ts>, never a bare
+# SHA256SUMS) and scoped to exactly the files this invocation produced
+# (never a bare `*` glob) -- a bare name/glob would, under --force into a
+# non-empty directory, silently absorb a PRIOR run's files into this
+# run's manifest and overwrite that prior run's own SHA256SUMS with a
+# merged one.
+sha_file="SHA256SUMS-$TS"
+this_run_artifacts=("$(basename "$pg_dump_file")" "$(basename "$pg_log_file")")
+for zip in "${ch_zips[@]}"; do
+  this_run_artifacts+=("$(basename "$zip")")
+done
 echo "backup-standing.sh: sha256 digests:"
 (
   cd "$OUT_DIR"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -- * | tee SHA256SUMS
+    sha256sum -- "${this_run_artifacts[@]}" | tee "$sha_file"
   else
-    shasum -a 256 -- * | tee SHA256SUMS
+    shasum -a 256 -- "${this_run_artifacts[@]}" | tee "$sha_file"
   fi
 )
 

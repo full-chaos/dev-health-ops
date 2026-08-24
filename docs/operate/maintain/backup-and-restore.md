@@ -70,9 +70,37 @@ restoring, and never compare measurement runs taken against two different
 restored datasets as though they were the same baseline.
 
 Restore is manual (not yet scripted, see CHAOS-4091 for a future
-ephemeral-cluster snapshot-restore path): `gunzip -c
-postgres-all-<ts>.sql.gz | psql -U <user> -d postgres` for Postgres;
-`RESTORE DATABASE <db> FROM File('<name>.zip')` (after `docker cp`-ing the
-zip back into the ClickHouse container's `backups/` directory) for each
-ClickHouse database. Verify with a real query per store, not by
-inference — see "Test restore in isolation" above.
+ephemeral-cluster snapshot-restore path). **Restore into an isolated
+target (a scratch/ephemeral stack), never back onto the live standing
+stack** — matches the general "Test restore in isolation" guidance above
+and the isolation posture in
+[databases-and-storage.md](../configure/databases-and-storage.md).
+
+Postgres (against the `compose.yml` container, host/port/credentials
+default to `localhost:5432`, `POSTGRES_USER`/`POSTGRES_PASSWORD` from
+`ops/.env` — `devhealth`/`devhealth` unless overridden):
+
+```bash
+gunzip -c postgres-all-<ts>.sql.gz \
+  | PGPASSWORD="$POSTGRES_PASSWORD" psql -h localhost -p 5432 \
+      -U "$POSTGRES_USER" -d postgres --set ON_ERROR_STOP=1
+```
+
+`--set ON_ERROR_STOP=1` is required — without it `psql` keeps going past a
+failed statement and a partial, silently-corrupt restore looks identical
+to a clean one in the output.
+
+ClickHouse (against the `compose.yml` container,
+`CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` from `ops/.env` — `ch`/`ch` unless
+overridden), per database:
+
+```bash
+docker cp clickhouse-<db>-<ts>.zip \
+  dev-health-clickhouse-1:/var/lib/clickhouse/backups/<db>-<ts>.zip
+docker exec dev-health-clickhouse-1 clickhouse-client \
+  --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+  -q "RESTORE DATABASE \`<db>\` FROM File('<db>-<ts>.zip')"
+```
+
+Verify with a real query per store, not by inference — see "Test restore
+in isolation" above.

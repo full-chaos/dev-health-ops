@@ -48,6 +48,7 @@ from ..models.outputs import (
     SankeyEdge,
     SankeyNode,
     SankeyResult,
+    SankeyValueUnit,
     TimeseriesBucket,
     TimeseriesResult,
 )
@@ -658,7 +659,7 @@ async def resolve_analytics(
             if batch.sankey is not None:
                 # Use a specific coverage query
                 # We need to calculate % of units with assigned team and assigned repo
-                from ..sql.validate import Dimension
+                from ..sql.validate import Dimension, Measure
 
                 team_col = Dimension.db_column(
                     Dimension.TEAM, use_investment=bool(request.use_investment)
@@ -701,13 +702,24 @@ async def resolve_analytics(
                 repo_total_expr = total_expr
                 assigned_team_count_expr = f"countIf({assigned_team_expr})"
                 assigned_repo_count_expr = f"countIf({assigned_repo_expr})"
-                if request.use_investment:
+                # CHAOS-4241: coverage must be weighted the SAME way as the
+                # Sankey flow it sits beside, or the cards visibly disagree
+                # with the chart. The default weight is now a work-unit COUNT
+                # (see Measure.db_expression), so the plain row-count default
+                # above is already correct for the default measure. Only the
+                # explicit CHURN_LOC measure switches coverage to the
+                # effort(LOC)-weighted, allocation-aware form -- never as the
+                # default.
+                if (
+                    request.use_investment
+                    and request.measure == Measure.CHURN_LOC.value
+                ):
                     # Effort-weighted, allocation-aware coverage so the numbers
-                    # match the effort-weighted Sankey flows (team coverage was
-                    # previously count-based and disagreed with the visual).
-                    # LEFT JOIN fallback: a work unit with no repo-effort
-                    # allocation row falls back to its scalar repo_id + full
-                    # effort, so it is never silently dropped.
+                    # match the LOC-weighted Sankey flow when CHURN_LOC is
+                    # explicitly requested. LEFT JOIN fallback: a work unit
+                    # with no repo-effort allocation row falls back to its
+                    # scalar repo_id + full effort, so it is never silently
+                    # dropped.
                     repo_effort_col = (
                         "if(wure.work_unit_id != '', wure.repo_effort_value, "
                         "work_unit_investments.effort_value)"
@@ -819,7 +831,14 @@ async def resolve_analytics(
                     logger.error("Coverage query failed: %s", e)
                     coverage = None
 
-            sankey_result = SankeyResult(nodes=nodes, edges=edges, coverage=coverage)
+            value_unit = (
+                SankeyValueUnit.LOC
+                if request.measure == Measure.CHURN_LOC.value
+                else SankeyValueUnit.WORK_UNITS
+            )
+            sankey_result = SankeyResult(
+                nodes=nodes, edges=edges, coverage=coverage, unit=value_unit
+            )
 
         except Exception as e:
             logger.error("Sankey query failed: %s", e)

@@ -112,7 +112,19 @@ class Measure(str, Enum):
                 throughput_expr = "SUM(subcategory_kv.2 * allocation_weight)"
                 cycle_time_expr = "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight) / NULLIF(SUM(allocation_weight), 0)"
             mapping: dict[Measure, str] = {
-                cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
+                # CHAOS-4241: COUNT is the default investment weight and MUST
+                # be a count of attributed work units, not LOC churn.
+                # subcategory_kv.2 is each unit's fractional subcategory share
+                # (sums to 1.0 per work_unit_id — see
+                # ensure_full_subcategory_vector/normalize_scores), so
+                # SUM(subcategory_kv.2) is a true fractional work-unit count.
+                # This is deliberately the SAME expression as THROUGHPUT's
+                # investment formula (below) -- COUNT and THROUGHPUT are
+                # already identical in the non-investment branch above
+                # (both SUM(work_items_completed)), so they must stay
+                # identical here too. effort_value (LOC churn) remains
+                # available ONLY via the explicit CHURN_LOC measure.
+                cls.COUNT: throughput_expr,
                 cls.THROUGHPUT: throughput_expr,
                 # CHURN_LOC: effort_value stores the actual churn LOC for work
                 # units whose effort_metric = 'churn_loc'; weight by subcategory

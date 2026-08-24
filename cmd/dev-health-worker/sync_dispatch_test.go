@@ -80,77 +80,46 @@ func TestPostSyncRemainingScopeRejectsUnownedFamily(t *testing.T) {
 	}
 }
 
-// TestSyncCoordinatorReportsItsRegisteredKind closes the second registration
-// blind spot: sync.team_autoimport is a bounded registry kind whose worker
-// lives in the coordinator's own private River client. Before CUT-02 that
-// builder returned only a lifecycle component, so the kind was constructed but
-// unobservable to startup validation.
-func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
+// TestSyncCoordinatorReportsItsRegisteredKind moved to
+// sync_dispatch_integration_test.go (CHAOS-4175): reference_discovery's
+// native ClickHouse readback verification made buildSyncCoordinatorWorker
+// require a real, reachable ClickHouse connection (clickhousestore.Open
+// pings it), so this test now needs a live container -- matching the
+// repo's existing precedent of moving a builder test to the integration
+// tier once it starts needing a dependency this package's plain unit tests
+// don't otherwise pay for.
+
+// TestSyncCoordinatorRefusesToBuildWithoutClickHouseConfigured pins the new
+// contract (CHAOS-4175): reference_discovery's native ClickHouse readback
+// verification makes ClickHouse a hard requirement once the sync queue is
+// selected, the same way reports.go and provider_sync.go already require
+// it for theirs. A verification step that silently skips when its
+// dependency is unconfigured is a check that fails toward "fine" -- this
+// must be a loud startup error instead, not a permanent, silent skip that
+// only shows up when a run's readback silently never happens.
+func TestSyncCoordinatorRefusesToBuildWithoutClickHouseConfigured(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	for _, test := range []struct {
-		name      string
-		promote   []string
-		wantKinds []string
-	}{
-		{
-			name:      "celery routed kind is not consumed at all",
-			wantKinds: nil,
+	registry, _ := demotedContractRoot(t, jobcontract.KindTeamAutoimport)
+	_, err := buildSyncCoordinatorWorker(
+		context.Background(),
+		config.Config{
+			Queues:                         []string{"sync", "sync_provider"},
+			WorkerQueueConcurrency:         map[string]int{"sync": 13, "sync_provider": 7},
+			RiverDatabaseSchema:            "river",
+			OperationalBridgeURL:           "http://localhost",
+			OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout:       time.Second,
+			OperationalBridgeAllowInsecure: true,
+			// ClickHouseURI deliberately left unconfigured.
 		},
-		{
-			name:      "promoted kind is registered and reported",
-			promote:   []string{jobcontract.KindTeamAutoimport},
-			wantKinds: []string{jobcontract.KindTeamAutoimport},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			// sync.team_autoimport now ships at go_default in the checked-in
-			// contract, so the "not consumed at all" case has to demote it
-			// back to Celery explicitly; promotedContractRoot alone would be
-			// a no-op against an already-promoted production tree.
-			var registry *jobruntime.Registry
-			if len(test.promote) == 0 {
-				registry, _ = demotedContractRoot(t, jobcontract.KindTeamAutoimport)
-			} else {
-				registry, _ = promotedContractRoot(t, test.promote...)
-			}
-			family, err := buildSyncCoordinatorWorker(
-				config.Config{
-					Queues:                         []string{"sync", "sync_provider"},
-					WorkerQueueConcurrency:         map[string]int{"sync": 13, "sync_provider": 7},
-					RiverDatabaseSchema:            "river",
-					OperationalBridgeURL:           "http://localhost",
-					OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
-					OperationalBridgeTimeout:       time.Second,
-					OperationalBridgeAllowInsecure: true,
-				},
-				reportBuilderDatabase(t),
-				registry,
-				reportTestObserver(t),
-				slog.Default(),
-				river.NewWorkers(),
-			)
-			if err != nil {
-				t.Fatalf("buildSyncCoordinatorWorker: %v", err)
-			}
-			if len(family.queues) == 0 {
-				t.Fatal("coordinator did not declare its selected queue")
-			}
-			if len(family.handlers) != len(test.wantKinds) {
-				t.Fatalf("reported handlers = %#v, want %v", family.handlers, test.wantKinds)
-			}
-			for index, kind := range test.wantKinds {
-				if family.handlers[index].Kind != kind {
-					t.Fatalf("reported handler %d = %s, want %s", index, family.handlers[index].Kind, kind)
-				}
-			}
-			// The coordinator's native, non-registry dispatch handlers also
-			// consume the sync queue. Its queue budget remains present even
-			// while team auto-import still routes to Celery.
-			if len(family.queues) != 1 || family.queues[0].Queue != syncCoordinatorQueue ||
-				family.queues[0].MaxWorkers != 13 {
-				t.Fatalf("reported queues = %#v", family.queues)
-			}
-		})
+		reportBuilderDatabase(t),
+		registry,
+		reportTestObserver(t),
+		slog.Default(),
+		river.NewWorkers(),
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("buildSyncCoordinatorWorker error=%v want=%v", err, errWorkerDependencyUnavailable)
 	}
 }
 

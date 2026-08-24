@@ -219,6 +219,29 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 	return decision{result: ResultCancel, category: CategoryPermanent, cancel: true}
 }
 
+// classifyBudgetWait classifies a budget.Acquire failure -- a wait for fleet
+// or organization capacity that failed before the handler ever ran. Unlike
+// classify, it never returns ResultDiscard: no domain attempt has been made,
+// so there is nothing to charge against the contract's own max_attempts.
+// River's own MaxAttempts (set at job insert, independently of the contract)
+// still governs whether this job is retried or eventually discarded; a
+// contract may legitimately give River more retry headroom against
+// infrastructure backpressure than its own domain-attempt ceiling allows
+// (CHAOS-4235: TestMultiReplicaFleetSurvivesDatabaseOutage does this
+// deliberately for system.heartbeat, whose contract max_attempts is 1).
+func classifyBudgetWait(ctx context.Context, err error) decision {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		// Mirrors classify: a remote River cancellation already marks the
+		// row, while a process drain must leave the job retryable.
+		return decision{result: ResultCancel, category: CategoryCancelled}
+	}
+	category := CategoryBudget
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		category = CategoryTimeout
+	}
+	return decision{result: ResultRetry, category: category}
+}
+
 func retryDecision(category ErrorCategory, why Reason, attempt, maxAttempts int) decision {
 	if attempt >= maxAttempts {
 		return decision{result: ResultDiscard, category: category, reason: why}

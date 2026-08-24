@@ -381,7 +381,20 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	}
 	observe(func() { adapter.observer.BudgetWait(ctx, labels, time.Since(waitStarted), waitResult) })
 	if err != nil {
-		choice = classify(ctx, mark(CategoryBudget, err, false), job.Attempt, adapter.descriptor.MaxAttempts)
+		// classifyBudgetWait, not classify: no domain attempt has run yet at
+		// this point, so a wait failure must never be charged against
+		// adapter.descriptor.MaxAttempts (CHAOS-4235). That ceiling bounds how
+		// many times the DOMAIN side effect may run; a budget-wait failure is
+		// infrastructure backpressure before the handler was ever entered.
+		// Reusing classify() here mislabeled a wait that River (governed by
+		// its own, independently-set job.MaxAttempts) was still going to
+		// retry as "discard" in metrics and logs -- confirmed live: a
+		// contract with max_attempts=1 (e.g. system.heartbeat) reported
+		// result=discard on the very first budget-wait failure while River
+		// went on to run and succeed on attempt 2 moments later, because
+		// ResultDiscard's cancel flag is false and never reaches
+		// river.JobCancel. See TestMultiReplicaFleetSurvivesDatabaseOutage.
+		choice = classifyBudgetWait(ctx, err)
 		return choice, envelope, err
 	}
 	if lease == nil {

@@ -14,6 +14,23 @@ import (
 const (
 	defaultConcurrencyLease = 15 * time.Minute
 	concurrencyRetryDelay   = 100 * time.Millisecond
+
+	// acquireQueryTimeout bounds a single tryAcquire poll iteration.
+	//
+	// DEFENSE-IN-DEPTH, not the CHAOS-4235 root cause: the caller's own ctx
+	// (the job's contract deadline) is expected to bound Begin/Exec/Commit
+	// through pgx's context-cancellation watcher, and CHAOS-4235's isolated
+	// diagnostic (30 trials driving a real TCP-level outage against a blocked
+	// Acquire poll) never observed that watcher fail to fire -- every trial
+	// failed fast on a "conn closed" error well inside its deadline. The
+	// actual CHAOS-4235 mechanism was River's own BatchCompleter requeue loop
+	// silently retrying forever without writing river_job (see
+	// multi_replica_outage_integration_test.go's completerProgressHandler).
+	// This bound exists so that if some future pgx/network edge case ever
+	// does let a single DB call outlive its caller's context, one poll
+	// iteration still cannot run unbounded -- it fails closed into the next
+	// retry instead.
+	acquireQueryTimeout = 5 * time.Second
 )
 
 var errConcurrencyBudgetUnavailable = errors.New("concurrency budget store is unavailable")
@@ -77,7 +94,11 @@ func (store *PostgresConcurrencyBudget) Acquire(
 		return nil, errConcurrencyBudgetUnavailable
 	}
 	for {
-		lease, leased, expired, acquireErr := store.tryAcquire(ctx, request, key)
+		// Bounded defensively to acquireQueryTimeout in addition to ctx: see
+		// the constant's doc comment.
+		iterCtx, iterCancel := context.WithTimeout(ctx, acquireQueryTimeout)
+		lease, leased, expired, acquireErr := store.tryAcquire(iterCtx, request, key)
+		iterCancel()
 		if acquireErr != nil {
 			return nil, acquireErr
 		}

@@ -872,6 +872,29 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 	return backfill, totalCap, nil
 }
 
+// ResolveMaxSyncUnitsCap resolves the org's tier-based max_sync_units cap --
+// the same organizations/org_licenses/tier_limits resolution loadPlanLimits
+// already performs for scheduling, shared (not duplicated) for
+// DispatchGuard's total-cap check (CHAOS-4175 family 3, port of
+// guard.py's DispatchGuard.authorize_run / TierLimitService.get_limit).
+//
+// Callers porting Python's _resolve_total_unit_cap must NOT propagate a
+// non-nil error as a hard failure: Python's version catches every exception
+// (missing org, missing tier_limits table, a malformed override) and falls
+// back to defaultCap unconditionally, by design (CHAOS-2580's savepoint
+// discussion). loadPlanLimits, in contrast, treats a genuinely missing
+// organizations row as ErrOccurrenceIneligible -- a meaningful signal for
+// the SCHEDULER's own caller, but not one DispatchGuard's fallback-on-any-
+// error semantics should adopt. A caller wanting Python parity should catch
+// any error from this function and substitute defaultCap itself.
+func ResolveMaxSyncUnitsCap(ctx context.Context, tx pgx.Tx, orgID string, defaultCap int) (int, error) {
+	_, totalCap, err := loadPlanLimits(ctx, tx, orgID, defaultCap)
+	if err != nil {
+		return 0, err
+	}
+	return totalCap, nil
+}
+
 func parseOptionalPositiveInt(value *string) (*int, bool) {
 	if value == nil {
 		return nil, true

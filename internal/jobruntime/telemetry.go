@@ -258,6 +258,14 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// budgetEstimateFailures counts dispatch_sync_run's BudgetGuard falling
+	// open on a bridge estimate fetch, by reason (CHAOS-4175). Standing
+	// order: new fail-open logic must carry a counter, so a fetch that
+	// silently admits units with zero budget checked cannot go unnoticed --
+	// zero here means "the estimate bridge stayed healthy," not "nothing to
+	// measure."
+	budgetEstimateFailures map[string]uint64
+
 	// Native capacity compute (CUT-20 R2). capacitySkippedScopes is the one
 	// that matters most: Python skips a scope with no history or no positive
 	// item target by logging and continuing, so without a counter a run that
@@ -734,6 +742,33 @@ func (collector *MetricsCollector) ObserveZeroUnitFinalization(provider, reason 
 // stand its own row down because its lease had already expired (CHAOS-4002).
 // Unlike the daily-metrics lease, work-graph has one lease-fenced release path
 // shared by all five kinds, so there is no stage dimension to record.
+// Budget-estimate fail-open reasons (CHAOS-4175). Closed set: the ONLY
+// remaining fail-open trigger, after the contract-rejection split, is a
+// genuine bridge/estimate-outage failure (transport, 5xx, decode) --
+// budgetEnforceRun's own classification already refuses a batch that
+// exceeds the endpoint's documented size limit instead of falling open on
+// it, so that case never reaches this counter at all.
+const BudgetEstimateFailureBridgeUnavailable = "bridge_unavailable"
+
+var budgetEstimateFailureReasons = []string{BudgetEstimateFailureBridgeUnavailable}
+
+// ObserveBudgetEstimateFailure records dispatch_sync_run's BudgetGuard
+// falling open on an estimate-bridge chunk failure, by reason -- the
+// positive signal an alert can bind to, since admission proceeding with
+// zero estimates checked is otherwise indistinguishable from a quiet pass.
+func (collector *MetricsCollector) ObserveBudgetEstimateFailure(reason string) error {
+	if !slices.Contains(budgetEstimateFailureReasons, reason) {
+		return fmt.Errorf("unknown budget estimate failure reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.budgetEstimateFailures == nil {
+		collector.budgetEstimateFailures = map[string]uint64{}
+	}
+	collector.budgetEstimateFailures[reason]++
+	return nil
+}
+
 func (collector *MetricsCollector) ObserveWorkGraphLeaseReleaseLost() error {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
@@ -1269,6 +1304,12 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, reason := range capacityRefusalReasons {
 		writeUintSample(output, "worker_capacity_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.capacityRefusals[reason])
+	}
+
+	writeMetadata(output, "worker_dispatch_budget_estimate_failures_total", "dispatch_sync_run BudgetGuard estimate-bridge fetches that fell open, by reason.", "counter")
+	for _, reason := range budgetEstimateFailureReasons {
+		writeUintSample(output, "worker_dispatch_budget_estimate_failures_total",
+			[]metricLabel{{"reason", reason}}, collector.budgetEstimateFailures[reason])
 	}
 }
 

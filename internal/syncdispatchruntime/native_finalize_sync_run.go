@@ -88,6 +88,10 @@ const (
 	syncRunStatusSuccess       = "success"
 	syncRunStatusFailed        = "failed"
 	syncRunStatusPartialFailed = "partial_failed"
+	// syncRunStatusDispatching is SyncRunStatus.DISPATCHING.value -- written
+	// by NativeDispatchSyncRunService.Dispatch when at least one unit was
+	// queued to River this pass.
+	syncRunStatusDispatching = "dispatching"
 
 	// jobRunStatusPending/Running/Success/Failed mirror
 	// models.settings.JobRunStatus (an int Enum): PENDING=0 RUNNING=1

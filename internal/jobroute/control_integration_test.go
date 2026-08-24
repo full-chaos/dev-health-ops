@@ -802,13 +802,18 @@ func TestRollbackDoesNotBlockOnExpiredRunningLease(t *testing.T) {
 
 func waitForBlockedRouteUpdate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	waitForLockWaiter(t, ctx, pool, "%worker_job_routes WHERE job_kind = $1%FOR UPDATE%", "rollback never blocked on producer route lock")
+}
+
+func waitForLockWaiter(t *testing.T, ctx context.Context, pool *pgxpool.Pool, queryPattern, timeoutMessage string) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var waiting int
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
 			WHERE wait_event_type = 'Lock'
-			  AND query LIKE '%worker_job_routes WHERE job_kind = $1%FOR UPDATE%'`,
+			  AND query LIKE $1`, queryPattern,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
@@ -817,5 +822,5 @@ func waitForBlockedRouteUpdate(t *testing.T, ctx context.Context, pool *pgxpool.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("rollback never blocked on producer route lock")
+	t.Fatal(timeoutMessage)
 }

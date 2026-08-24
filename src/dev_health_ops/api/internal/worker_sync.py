@@ -16,7 +16,9 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncDispatchTransportRoute,
     SyncRun,
+    SyncRunUnit,
 )
+from dev_health_ops.sync.budget_guard import batch_estimate_provider_budget_for_units
 from dev_health_ops.workers.reference_discovery import (
     run_reference_discovery_populate_for_sync_run,
     run_sync_reference_discovery,
@@ -43,6 +45,53 @@ class SyncCoordinatorReference(_StrictModel):
 class TeamAutoImportReference(_StrictModel):
     organization_id: uuid.UUID
     sync_run_id: uuid.UUID
+
+
+class DispatchBudgetEstimateReference(_StrictModel):
+    """Identifiers only, matching every other bridge reference in this
+    module -- no credential material, no provider payload, ever crosses
+    this boundary (CHAOS-4175). unit_ids is bounded to keep one dispatch
+    pass's batch from becoming an unbounded credential-decryption fan-out;
+    500 comfortably covers SYNC_UNIT_CONCURRENCY_PER_BUCKET's realistic
+    worst case across every bucket in one run.
+    """
+
+    organization_id: uuid.UUID
+    sync_run_id: uuid.UUID
+    unit_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+
+
+class BudgetEstimateBucketPayload(_StrictModel):
+    provider: str
+    org_id: str
+    host: str
+    credential_fingerprint: str
+    dimension: str
+
+
+class BudgetEstimatePayload(_StrictModel):
+    bucket: BudgetEstimateBucketPayload
+    estimated_units: int
+    confidence: str
+    route_family: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class DispatchBudgetEstimateResponse(_StrictModel):
+    """The closed BudgetEstimate schema, keyed by unit id (as a string --
+    JSON object keys are always strings; the Go client parses each key back
+    to a UUID). A unit id present in the request but ABSENT from this dict's
+    keys, or mapped to an empty list, both mean "no budget constraint for
+    this unit" -- estimate_provider_budget legitimately returns an empty
+    tuple for an unrecognized provider, and
+    batch_estimate_provider_budget_for_units degrades a bootstrap/estimate
+    failure to the same empty shape rather than failing the whole batch
+    (see that function's docstring). The Go caller must treat both the
+    same way Python's own enforce_run does: no estimate to check against
+    any budget bucket, not a hard failure.
+    """
+
+    estimates: dict[str, list[BudgetEstimatePayload]]
 
 
 def _authorize(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -118,6 +167,39 @@ def _current_sync_run_reference(reference: TeamAutoImportReference) -> bool:
             .one_or_none()
         )
     return run is not None
+
+
+def _units_belong_to_run(
+    session: Any,
+    sync_run_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    unit_ids: list[uuid.UUID],
+) -> bool:
+    """Reject any unit id NOT owned by this (tenant-fenced) run.
+
+    SyncTaskBootstrap.load itself only ever filters on unit.id, not
+    sync_run_id or org_id -- there is no Python precedent for a batched,
+    caller-supplied unit-id-list endpoint like this one, so this endpoint
+    must independently prove every requested id actually belongs to this
+    run BEFORE bootstrapping (and decrypting credentials for) any of them.
+    Rejecting the WHOLE batch on ANY mismatch, rather than silently
+    dropping the offending id, is deliberate: a mismatched id here can only
+    mean a Go-side bug (it should never legitimately gather a unit id
+    outside the run it is dispatching), and that must surface loudly, not
+    disappear into an empty-estimate result indistinguishable from a
+    normal "unrecognized provider" no-op.
+    """
+
+    matched = (
+        session.query(SyncRunUnit.id)
+        .filter(
+            SyncRunUnit.id.in_(unit_ids),
+            SyncRunUnit.sync_run_id == sync_run_id,
+            SyncRunUnit.org_id == str(organization_id),
+        )
+        .count()
+    )
+    return matched == len(set(unit_ids))
 
 
 @router.post("/dispatch", dependencies=[])
@@ -226,3 +308,77 @@ async def reference_discovery_populate_reference(
     return await run_in_threadpool(
         run_reference_discovery_populate_for_sync_run, str(reference.sync_run_id)
     )
+
+
+def _dispatch_budget_estimate(
+    reference: DispatchBudgetEstimateReference,
+) -> DispatchBudgetEstimateResponse:
+    with get_postgres_session_sync() as session:
+        if not _units_belong_to_run(
+            session,
+            reference.sync_run_id,
+            reference.organization_id,
+            reference.unit_ids,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="One or more units do not belong to this sync run",
+            )
+        estimates_by_unit = batch_estimate_provider_budget_for_units(
+            session,
+            str(reference.sync_run_id),
+            (str(unit_id) for unit_id in reference.unit_ids),
+        )
+    return DispatchBudgetEstimateResponse(
+        estimates={
+            unit_id: [
+                BudgetEstimatePayload(
+                    bucket=BudgetEstimateBucketPayload(**estimate.bucket.to_dict()),
+                    estimated_units=estimate.estimated_units,
+                    confidence=estimate.confidence,
+                    route_family=estimate.route_family,
+                    notes=list(estimate.notes),
+                )
+                for estimate in estimates
+            ]
+            for unit_id, estimates in estimates_by_unit.items()
+        }
+    )
+
+
+@router.post(
+    "/dispatch-budget-estimate",
+    response_model=DispatchBudgetEstimateResponse,
+    dependencies=[],
+)
+async def dispatch_budget_estimate_reference(
+    reference: DispatchBudgetEstimateReference,
+    authorization: Annotated[str | None, Header()] = None,
+) -> DispatchBudgetEstimateResponse:
+    """Wraps batch_estimate_provider_budget_for_units EXACTLY.
+
+    This is the ONE narrow, synchronous bridge call CHAOS-4175's native Go
+    BudgetGuard port makes (ruled 2026-08-24): the request carries
+    organization_id/sync_run_id/unit_ids only, and the response is the
+    closed BudgetEstimate schema only -- no credential material, no
+    provider payload, either direction. SyncTaskBootstrap.load's Fernet
+    decryption and the six per-provider estimator classes
+    (estimate_provider_budget) run entirely inside
+    batch_estimate_provider_budget_for_units, on this side of the
+    boundary. See test_worker_sync_bridge.py's identifiers-only /
+    closed-response pins for the enforced shape on both directions.
+
+    Every requested unit id is verified to belong to sync_run_id (tenant-
+    fenced, see _units_belong_to_run) before any credential is decrypted --
+    unlike the other bridge endpoints in this module, this one's request
+    body names a whole LIST of domain objects, so the usual single-run
+    tenant check is not enough on its own.
+    """
+    _authorize(authorization)
+    if not _current_sync_run_reference(
+        TeamAutoImportReference(
+            organization_id=reference.organization_id, sync_run_id=reference.sync_run_id
+        )
+    ):
+        raise HTTPException(status_code=409, detail="Sync run reference is stale")
+    return await run_in_threadpool(_dispatch_budget_estimate, reference)

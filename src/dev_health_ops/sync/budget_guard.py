@@ -180,6 +180,55 @@ class CooldownReconfirmResult:
     next_deferred_at: datetime | None = None
 
 
+def batch_estimate_provider_budget_for_units(
+    session: Any, sync_run_id: str, unit_ids: Iterable[str]
+) -> dict[str, tuple[BudgetEstimate, ...]]:
+    """Bootstrap + estimate a batch of units in ONE pass.
+
+    CHAOS-4175 family 3: this is the ONE narrow, synchronous bridge call the
+    native Go BudgetGuard port makes for the credential-bound half of budget
+    admission (SyncTaskBootstrap.load's decryption, the six per-provider
+    estimator classes) -- everything else (cooldown gating, the CAS defer/
+    terminalize writes, advisory locks, surplus-retry admission,
+    reconfirm_cooldowns' TOCTOU re-check) is native. Same seam shape as
+    CHAOS-4175's populate bridge: identifiers in (sync_run_id + unit_ids),
+    the closed BudgetEstimate schema out, no credential material either
+    direction. See api/internal/worker_sync.py's
+    dispatch_budget_estimate_reference for the HTTP boundary and its
+    identifiers-only/closed-response contract pins.
+
+    unit_ids MUST all belong to sync_run_id -- the caller (the endpoint) is
+    responsible for that tenant-fencing check BEFORE calling this; this
+    function trusts its unit_ids argument completely, matching every other
+    *_for_sync_run helper's division of responsibility in this codebase (the
+    endpoint validates the reference, the worker function does the work).
+
+    A per-unit bootstrap/estimate failure degrades to an empty estimate
+    tuple for THAT unit and is logged, never raised -- this is Python's OWN
+    existing behavior in enforce_run/observe_run/_active_budget_consumption's
+    identical try/except (an unbootstrappable unit gets no budget constraint
+    applied to it, not a failed dispatch pass), preserved here rather than
+    invented for the bridge.
+    """
+
+    results: dict[str, tuple[BudgetEstimate, ...]] = {}
+    for unit_id in unit_ids:
+        try:
+            ctx = SyncTaskBootstrap.load(session, str(unit_id))
+            results[str(unit_id)] = estimate_provider_budget(ctx)
+        except Exception as exc:
+            logger.warning(
+                "dispatch_sync_run.budget_estimate_bridge_failed",
+                extra={
+                    "sync_run_id": sync_run_id,
+                    "unit_id": str(unit_id),
+                    "error": str(exc),
+                },
+            )
+            results[str(unit_id)] = ()
+    return results
+
+
 class BudgetGuard:
     @staticmethod
     def observe_run(

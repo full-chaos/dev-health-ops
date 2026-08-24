@@ -33,13 +33,19 @@ CREATE TABLE sync_runs (
  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
  status text NOT NULL DEFAULT 'dispatching', total_units int NOT NULL DEFAULT 0,
  completed_units int NOT NULL DEFAULT 0, failed_units int NOT NULL DEFAULT 0,
- completed_at timestamptz NULL, result json NULL, error text NULL
+ started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL
 );
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
  dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
+ cost_class text NOT NULL DEFAULT 'standard',
+ integration_id uuid NOT NULL DEFAULT '00000000-0000-4000-8000-000000000010',
+ since_at timestamptz NULL, before_at timestamptz NULL,
  available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
- last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now()
+ last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+ rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
+ budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
+ first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
 );
 CREATE TABLE integrations (
  id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL

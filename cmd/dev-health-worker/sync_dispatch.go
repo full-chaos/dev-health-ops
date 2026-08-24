@@ -379,7 +379,32 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
+	// The budget-estimate-failure counter reports directly, the same way the
+	// zero-unit finalization counter does just above: only this
+	// implementation knows when its BudgetGuard estimate-bridge fetch fell
+	// open, and why (codex round 2, CHAOS-4175).
+	var budgetEstimateFailureObservers []jobruntime.BudgetEstimateFailureObserver
+	if budgetEstimateFailureObserver, ok := observer.(jobruntime.BudgetEstimateFailureObserver); ok {
+		budgetEstimateFailureObservers = append(budgetEstimateFailureObservers, budgetEstimateFailureObserver)
+	}
+	// dispatchSyncRun runs on the SAME domain pool/registry the producer above
+	// already uses (postgresDatabase.pools.Domain, registry) -- no coordinator
+	// pool needed. CHAOS-4175 ruling (see NativeDispatchSyncRunService's doc
+	// comment): Dispatch's write path never reads worker_job_routes -- the
+	// domain role has no grant on it -- so it needs no jobroute.Controller.
+	dispatchSyncRun, err := syncdispatchruntime.NewNativeDispatchSyncRunService(
+		postgresDatabase.pools.Domain,
+		logger,
+		bridge,
+		producer,
+		registry,
+		budgetEstimateFailureObservers...,
+	)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterWorkers(workers, dispatchSyncRun, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}

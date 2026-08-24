@@ -533,6 +533,22 @@ type RolePosture struct {
 //     manifest at all before CHAOS-4209 — the grant existed for nobody — and it
 //     is declared here only, with INSERT, because the finalize service is its
 //     only writer.
+//   - tier_limits joins the dual-grant set, SELECT-only, driven by CHAOS-4175
+//     family 3 (native dispatch_sync_run): DispatchGuard's total-cap check
+//     (internal/syncdispatchruntime/dispatch_guard.go, via
+//     scheduledsync.ResolveMaxSyncUnitsCap -> loadPlanLimits) runs on
+//     pools.Domain and reads it for limit-override fallback keys, alongside
+//     organizations/org_licenses (both already domain-granted). This is NOT a
+//     move out of coordinatorPosture: loadPlanLimits is the SAME function the
+//     coordinator-side scheduler materializer already calls in its own
+//     transaction (materializer.go:600), so the coordinator keeps its existing
+//     grant unchanged — verified by reading that call site before proposing
+//     dual-grant rather than move, the same discipline CHAOS-4209's own three
+//     additions above document. Caught by
+//     internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go's
+//     TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole on its first
+//     run — this ticket's thesis proven a fifth time, on a call site only
+//     family 3 reaches.
 //   - remaining_metric_runs, remaining_metric_partitions,
 //     work_graph_execution_requests, daily_metrics_partitions,
 //     daily_metrics_runs: genuine read-modify-write callers reached from the
@@ -700,6 +716,9 @@ func domainPosture() RolePosture {
 			{"provider_rate_limit_observations", false, true, true},
 			{"report_runs", false, true, false},
 			{"saved_reports", false, true, false},
+			// SELECT-only: CHAOS-4175 family 3's DispatchGuard total-cap read.
+			// See the dual-grant table doc comment above this function.
+			{"tier_limits", false, false, false},
 			{"webhook_deliveries", false, false, false},
 			{"worker_job_runs", true, true, false},
 			// Durable organization/fleet concurrency leases are domain-owned. The

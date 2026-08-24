@@ -1,6 +1,14 @@
 // Package syncdispatchruntime contains the typed River transport primitives
 // used by the active sync-dispatch v1 coordinator. Command composition owns
 // route activation and worker registration.
+//
+// For the full pathway this package sits in -- scheduler materialization
+// through the outbox wakeups, NativeDispatchSyncRunService's gate chain and
+// BudgetGuard, the relay's route resolution, unit execution, and
+// NativeFinalizeSyncRunService's coverage invalidation, each hop tagged with
+// the database role (domain/queue/coordinator) it actually runs as -- see
+// "The native sync-dispatch coordinator pathway" in
+// docs/contribute/architecture/go-worker-runtime.md.
 package syncdispatchruntime
 
 import (

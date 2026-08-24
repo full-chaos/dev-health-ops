@@ -472,7 +472,12 @@ config:
   #    named the retired Celery dispatch, "river" hands the stream to Go
   #    (CUT-14/18). Celery is gone (CHAOS-4195), so "river" is the only
   #    functioning value -- the Go stream-pagerduty group is this chart's
-  #    sole consumer of a staged webhook entry.
+  #    sole consumer of a staged webhook entry. It defaults to replicas: 0
+  #    like every other group (goWorkers.groups), so a fresh install ACCEPTS
+  #    PagerDuty webhooks into the durable outbox but nothing drains it until
+  #    an operator scales stream-pagerduty -- staged, not lost, but scale it
+  #    before relying on PagerDuty delivery:
+  #    kubectl scale deployment/<release>-go-stream-pagerduty --replicas=1
   PAGERDUTY_WEBHOOK_TRANSPORT: "river"
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"

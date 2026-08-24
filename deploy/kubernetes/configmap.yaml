@@ -36,7 +36,10 @@ data:
   # stream runner share this ConfigMap so they can never disagree: `celery`
   # named the retired Celery dispatch, `river` hands the stream to Go
   # (CUT-14/18). Celery is gone (CHAOS-4195); `river` is the only functioning
-  # value -- the Go stream-pagerduty group is the sole consumer now.
+  # value -- the Go stream-pagerduty group is the sole consumer now. It
+  # defaults to replicas: 0 in go-workers.yaml, so a fresh apply ACCEPTS
+  # PagerDuty webhooks into the durable outbox but nothing drains it until
+  # scaled: kubectl scale deployment/dev-health-go-stream-pagerduty --replicas=1
   PAGERDUTY_WEBHOOK_TRANSPORT: "river"
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"

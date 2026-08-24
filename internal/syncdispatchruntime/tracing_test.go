@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/riverqueue/river"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -13,7 +14,12 @@ import (
 
 type panickingBridge struct{ recordingBridge }
 
-func (*panickingBridge) Dispatch(context.Context, DispatchSyncRunArgs) error {
+// TeamAutoImport is the panic seam exercised below: teamAutoimportWorker is
+// the last coordinator worker still holding a CoordinatorBridge field
+// (CHAOS-4175: dispatch_sync_run, finalize_sync_run, and
+// run_sync_reference_discovery are all native now, so their own workers no
+// longer have a bridge call to panic through).
+func (*panickingBridge) TeamAutoImport(context.Context, DomainReference) error {
 	panic("bridge exploded")
 }
 
@@ -33,8 +39,15 @@ func TestCoordinatorSpanEndsEvenWhenTheBridgePanics(t *testing.T) {
 	otel.SetTracerProvider(provider)
 	t.Cleanup(func() { otel.SetTracerProvider(previous) })
 
-	base := TransportArgs{Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 1}
-	worker := &dispatchWorker{bridge: &panickingBridge{}}
+	worker := &teamAutoimportWorker{bridge: &panickingBridge{}}
+	teamArgs := TeamAutoimportJobArgs{
+		Version:       ContractVersionV1,
+		OrgID:         testOrg,
+		CorrelationID: "post-sync-" + testRun,
+		Idempotency:   "post-sync:" + testRun + ":team_autoimport",
+		Domain:        jobcontract.DomainLink{Type: "sync_run", ID: testRun},
+		Payload:       jobcontract.TeamAutoimportPayload{SyncRunID: testRun},
+	}
 
 	func() {
 		defer func() {
@@ -42,7 +55,7 @@ func TestCoordinatorSpanEndsEvenWhenTheBridgePanics(t *testing.T) {
 				t.Fatal("expected the panic to propagate out of Work, not be swallowed")
 			}
 		}()
-		_ = worker.Work(context.Background(), &river.Job[DispatchSyncRunArgs]{Args: DispatchSyncRunArgs{TransportArgs: base}})
+		_ = worker.Work(context.Background(), &river.Job[TeamAutoimportJobArgs]{Args: teamArgs})
 	}()
 
 	spans := exporter.GetSpans()

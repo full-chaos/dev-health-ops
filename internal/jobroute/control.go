@@ -102,46 +102,6 @@ func (controller *Controller) Resolve(ctx context.Context, kind string) (string,
 	return state.Transport, nil
 }
 
-// ResolveInTx is Resolve's transaction-scoped variant (CHAOS-4175): the
-// route row is read with the SAME row-level FOR UPDATE lock ApplyCheckedIn/
-// Rollback already use, held inside the CALLER's transaction rather than a
-// fresh connection Resolve borrows from the pool. This is what makes the
-// check atomic with whatever the caller commits alongside it -- exactly the
-// guarantee Python's resolve_worker_job_route (job_routes.py:44-69)
-// documents as deliberate: "Keep this shared row lock in the producer's
-// outbox transaction. A rollback takes FOR UPDATE on the same row, so it
-// cannot report quiescence while a producer that observed the old route can
-// still stage work after the route change commits." Resolve's own
-// pool-based read does not hold this guarantee -- it is an independent
-// snapshot with nothing fencing a route change that commits between the
-// check and the caller's own write.
-//
-// Every native producer that must be safe against a route pause/rollback
-// racing its own commit -- which is every native coordinator this ticket
-// ports, since a route change is exactly how these families deploy and roll
-// back -- must call this, not Resolve, before enqueueing work in the same
-// transaction.
-func (controller *Controller) ResolveInTx(ctx context.Context, tx pgx.Tx, kind string) (string, error) {
-	descriptor, ok := controller.descriptor(kind)
-	if !ok {
-		return "", ErrUnknownRoute
-	}
-	if tx == nil {
-		return "", ErrInvalidConfiguration
-	}
-	state, err := readState(ctx, tx, kind, true)
-	if err != nil {
-		return "", err
-	}
-	if !allowed(descriptor, state.Transport) {
-		return "", ErrDrift
-	}
-	if state.Paused {
-		return "", ErrPaused
-	}
-	return state.Transport, nil
-}
-
 // DeferredKinds returns routes whose current durable transport remains Celery.
 // The relay refreshes this list for every bounded step so rollback immediately
 // prevents new River inserts without a process restart.

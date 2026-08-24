@@ -12,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
-	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -27,26 +26,17 @@ import (
 var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unavailable")
 
 // ErrDispatchProviderUnitRoute ports WorkerJobRouteError for THIS
-// producer's two raise sites verbatim: the sync.provider_unit job-kind
-// transport is not currently River-owned (resolve_worker_job_route /
-// PROVIDER_UNIT_OUTBOX_ROUTES), or a claimed unit fails
+// producer's remaining raise site verbatim: a claimed unit fails
 // validate_provider_family_claim (a malformed persisted atomic-family
-// claim). Python uses the SAME exception class for both -- a route-store
-// failure and a malformed claim are both "this producer cannot safely
-// stage this job" -- so this stays one sentinel, not two.
+// claim). Python's WorkerJobRouteError also covers a route-store failure
+// (resolve_worker_job_route / PROVIDER_UNIT_OUTBOX_ROUTES) -- Go does NOT
+// port that half. See the CHAOS-4175 ruling on Dispatch's doc comment below
+// for why: the domain role that runs this transaction has no grant on
+// worker_job_routes at all (verified, domain_authorization.go), so a
+// route-in-tx check here is not just unported, it is unreachable by
+// construction. This sentinel stays because the malformed-claim raise site
+// is still real and still uses it.
 var ErrDispatchProviderUnitRoute = errors.New("provider-unit route is unavailable")
-
-// providerUnitOutboxRoutes ports PROVIDER_UNIT_OUTBOX_ROUTES verbatim: the
-// durable sync.provider_unit routes under which River owns provider units.
-// Deliberately narrower than jobruntime.Descriptor.Executable() (which also
-// accepts "shadow") -- Python's own set does not include shadow, and
-// jobroute.Controller.ResolveInTx's underlying worker_job_routes table can
-// return any of celery/shadow/river_canary/river for THIS kind (unlike the
-// four sync-dispatch coordinator kinds, which the checked-in route artifact
-// constrains to celery/river only). Using .Executable() here would silently
-// admit a shadow-routed claim Python would refuse -- confirmed by reading
-// jobroute.allowed()/readState() before writing this, not assumed.
-var providerUnitOutboxRoutes = map[string]bool{"river_canary": true, "river": true}
 
 // NativeDispatchSyncRunService is the native equivalent of bridge.Dispatch /
 // Python's dispatch_sync_run task -- CHAOS-4175 family 3, the last of the
@@ -61,13 +51,12 @@ var providerUnitOutboxRoutes = map[string]bool{"river_canary": true, "river": tr
 // _schedule_redispatch opens for itself) rather than one transaction end
 // to end.
 type NativeDispatchSyncRunService struct {
-	pool            *pgxpool.Pool
-	logger          *slog.Logger
-	bridge          budgetEstimator
-	producer        *joboutbox.Producer
-	registry        joboutbox.PolicyRegistry
-	routeController *jobroute.Controller
-	now             func() time.Time
+	pool     *pgxpool.Pool
+	logger   *slog.Logger
+	bridge   budgetEstimator
+	producer *joboutbox.Producer
+	registry joboutbox.PolicyRegistry
+	now      func() time.Time
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
@@ -75,20 +64,19 @@ type NativeDispatchSyncRunService struct {
 // the credential-bound half of budget admission (SyncTaskBootstrap.load,
 // the six per-provider estimator classes) stays Python-side behind
 // /dispatch-budget-estimate; everything else in this service is native.
-// producer/registry/routeController are the SAME dependency shapes
-// teamAutoimportPostSyncWriter already uses for its own Publish/PublishDeferred
-// call, plus the route-fencing Controller every native producer that
-// enqueues into River must hold (jobroute.Controller.ResolveInTx's own doc
-// comment: "Every native coordinator this ticket ports... must call this").
+// producer/registry are the SAME dependency shapes teamAutoimportPostSyncWriter
+// already uses for its own Publish/PublishDeferred call. There is
+// deliberately no jobroute.Controller here (CHAOS-4175 ruling, see Dispatch's
+// doc comment): this service's transaction runs on the domain role, which
+// has no grant on worker_job_routes.
 func NewNativeDispatchSyncRunService(
 	pool *pgxpool.Pool,
 	logger *slog.Logger,
 	bridge budgetEstimator,
 	producer *joboutbox.Producer,
 	registry joboutbox.PolicyRegistry,
-	routeController *jobroute.Controller,
 ) (*NativeDispatchSyncRunService, error) {
-	if pool == nil || bridge == nil || producer == nil || registry == nil || routeController == nil {
+	if pool == nil || bridge == nil || producer == nil || registry == nil {
 		return nil, ErrDispatchSyncRunUnavailable
 	}
 	if logger == nil {
@@ -96,7 +84,7 @@ func NewNativeDispatchSyncRunService(
 	}
 	return &NativeDispatchSyncRunService{
 		pool: pool, logger: logger, bridge: bridge,
-		producer: producer, registry: registry, routeController: routeController,
+		producer: producer, registry: registry,
 		now: time.Now,
 	}, nil
 }
@@ -113,16 +101,60 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // (workers/sync_units.py:759-1158): the outbox-relay route fence, the
 // feature/reference-discovery/DispatchGuard gate chain and total-cap
 // denial (in the FIRST transaction), concurrency partial-cap, the full
-// BudgetGuard sequence, the sync.provider_unit route fence, the atomic
-// claim and per-unit validate+route+enqueue loop, the DISPATCHING status
-// flip (all still the SAME first transaction -- team-lead-confirmed
-// against origin/main: the claim/route/enqueue/status-flip is one
-// Postgres transaction in Python too, closing the producer kill window
-// its own comment names), and the tail (a SECOND transaction for
-// pending-unit-counts, deciding between a countdown/deferred redispatch
-// and arming finalize; scheduleRedispatch and armFinalizeSyncRunWakeup
-// each open their own transaction beyond that, matching Python's own
-// separate sessions for _schedule_redispatch calls).
+// BudgetGuard sequence, the atomic claim and per-unit validate+enqueue
+// loop, the DISPATCHING status flip (all still the SAME first transaction
+// -- team-lead-confirmed against origin/main: the claim/enqueue/
+// status-flip is one Postgres transaction in Python too, closing the
+// producer kill window its own comment names), and the tail (a SECOND
+// transaction for pending-unit-counts, deciding between a countdown/
+// deferred redispatch and arming finalize; scheduleRedispatch and
+// armFinalizeSyncRunWakeup each open their own transaction beyond that,
+// matching Python's own separate sessions for _schedule_redispatch calls).
+//
+// RULING REVERSAL (CHAOS-4175, team-lead, superseding an earlier ruling in
+// this same ticket): Dispatch does NOT resolve sync.provider_unit's route
+// via jobroute.Controller.ResolveInTx before enqueueing, even though that
+// is what Python's resolve_worker_job_route does and even though an
+// earlier ruling on this branch said every native producer must call
+// ResolveInTx in its own write transaction. Reversed because the domain
+// role this transaction runs under has NO grant on worker_job_routes at
+// all (internal/storage/postgres/domain_authorization.go's domainPosture:
+// "worker_job_routes ... moved OUT of this posture entirely ... attributes
+// [it] exclusively to the coordinator role") and dev-health-worker (the
+// binary that hosts this service) never opts into a coordinator pool
+// (cmd/dev-health-worker/dependencies.go's openWorkerDatabase never calls
+// RuntimeConfig.WithCoordinator). A tx-scoped route read here would 42501
+// in production; it only looked safe in this package's own integration
+// tests because those fixtures run one ungated role against one pool.
+//
+// The route-pause/rollback race ResolveInTx exists to close is closed by a
+// DIFFERENT mechanism on the Go side, with the same guarantee moved to a
+// different lock: service.producer.Publish below stages into
+// worker_job_outbox under an INSERT (domain has that grant -- it is a
+// three-role table), and jobroute.Controller.Rollback takes `LOCK TABLE
+// public.worker_job_outbox IN SHARE ROW EXCLUSIVE MODE` (control.go:197).
+// An uncommitted Publish holds ROW EXCLUSIVE on that same table, which
+// blocks a concurrent Rollback's SHARE ROW EXCLUSIVE until this
+// transaction commits or aborts -- Python fenced via a lock on the route
+// row itself; Go fences via a lock on the outbox table the enqueue itself
+// touches. Route resolution for sync.provider_unit lives ONLY at drain,
+// under the queue role, in the relay (internal/joboutbox's relay step
+// calls routes.Resolve per claim): a celery-routed claim is deferred back,
+// a paused route stalls the relay step. No native producer on origin/main
+// calls the route controller either -- this mirrors
+// teamAutoimportPostSyncWriter's existing Publish/PublishDeferred
+// precedent, which this service already otherwise follows.
+//
+// Classification-table divergence this ruling introduces: Python refuses
+// eagerly at the producer when sync.provider_unit's route is celery or
+// paused (WorkerJobRouteError, sync_units.py:987-1022, raised before any
+// enqueue). Go stages the unit into the outbox unconditionally and lets
+// the relay decide at drain time -- a celery route defers the claim back
+// (redispatchable, not lost), a paused route stalls the relay step (no
+// unit visibly stuck in a Go-only error state; the run's units sit
+// DISPATCHING until the pause lifts or rolls back). This is accepted, not
+// a gap: production has no Celery consumer left for this kind, and the
+// relay is the sole route authority under the queue role by construction.
 //
 // Idempotent / redispatchable, same as Python: nothing here assumes this
 // is the run's only or first dispatch attempt.
@@ -259,20 +291,6 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	nextDeferredAt := budgetResult.nextDeferredAt
 	if reconfirmResult.nextDeferredAt != nil && (nextDeferredAt == nil || reconfirmResult.nextDeferredAt.Before(*nextDeferredAt)) {
 		nextDeferredAt = reconfirmResult.nextDeferredAt
-	}
-
-	// --- sync.provider_unit route resolution, fenced in THIS transaction so
-	// a rollback racing this commit is always observed (jobroute.Controller.
-	// ResolveInTx's own doc comment) ---
-	route, err := service.routeController.ResolveInTx(ctx, tx, jobcontract.KindSyncProviderUnit)
-	if err != nil {
-		return ErrDispatchProviderUnitRoute
-	}
-	if !providerUnitOutboxRoutes[route] {
-		// CHAOS-4054 step 4 deleted the Celery dispatch plane: there is no
-		// second runtime left to fall through to, so a non-river route here
-		// is a fail-closed route fault, never a Celery dispatch.
-		return ErrDispatchProviderUnitRoute
 	}
 
 	// --- Atomic claim: fresh PLANNED, due RETRYING, reclaimed stale

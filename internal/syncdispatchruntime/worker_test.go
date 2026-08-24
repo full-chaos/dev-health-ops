@@ -37,16 +37,17 @@ func (bridge *recordingBridge) TeamAutoImport(_ context.Context, reference Domai
 func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	t.Parallel()
 	bridge := &recordingBridge{}
-	base := TransportArgs{Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 1}
-	if err := (&dispatchWorker{bridge: bridge}).Work(context.Background(), &river.Job[DispatchSyncRunArgs]{Args: DispatchSyncRunArgs{TransportArgs: base}}); err != nil {
-		t.Fatal(err)
-	}
-	// finalizeWorker and referenceDiscoveryWorker no longer hold a bridge
-	// (CHAOS-4175: finalize_sync_run and run_sync_reference_discovery are
-	// both native now) -- their own seams are exercised by
-	// native_finalize_sync_run_integration_test.go and
+	// dispatchWorker, finalizeWorker, and referenceDiscoveryWorker no
+	// longer hold a bridge (CHAOS-4175: dispatch_sync_run,
+	// finalize_sync_run, and run_sync_reference_discovery are all native
+	// now) -- their own seams are exercised by
+	// native_dispatch_sync_run_service_integration_test.go,
+	// native_finalize_sync_run_integration_test.go, and
 	// native_reference_discovery_integration_test.go against a real
-	// Postgres, not here.
+	// Postgres, not here. teamAutoimportWorker is the last coordinator
+	// still bridge-based (sync.team_autoimport is a bounded registry kind,
+	// not one of the four sync-dispatch coordinator kinds this ticket
+	// ports).
 	teamArgs := TeamAutoimportJobArgs{
 		Version:       ContractVersionV1,
 		OrgID:         testOrg,
@@ -58,7 +59,7 @@ func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	if err := (&teamAutoimportWorker{bridge: bridge}).Work(context.Background(), &river.Job[TeamAutoimportJobArgs]{Args: teamArgs}); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(bridge.calls), 2; got != want || bridge.calls[0] != "dispatch" || bridge.calls[1] != "team_autoimport" {
+	if got, want := len(bridge.calls), 1; got != want || bridge.calls[0] != "team_autoimport" {
 		t.Fatalf("bridge calls=%#v", bridge.calls)
 	}
 	if bridge.teamReference != (DomainReference{OrganizationID: testOrg, SyncRunID: testRun}) {

@@ -10,18 +10,19 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
-	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// fakeJobRegistry satisfies both joboutbox.PolicyRegistry and
-// jobroute.Registry (the same Descriptor(kind) shape) without needing the
+// fakeJobRegistry satisfies joboutbox.PolicyRegistry without needing the
 // real jobruntime.Load's checked-in contract/migration artifacts on disk --
 // this test only needs ONE kind's descriptor (sync.provider_unit) under a
-// caller-controlled Route, to prove the route-fence and Publish call sites
-// wire correctly, not to re-test jobruntime's own artifact loading.
+// caller-controlled Route, to prove Publish's own descriptorAllowsPublish
+// gate wires correctly (CHAOS-4175 ruling: this is now the ONLY route check
+// Dispatch's write path is subject to -- see NativeDispatchSyncRunService's
+// doc comment for why there is no jobroute.Controller here at all), not to
+// re-test jobruntime's own artifact loading.
 type fakeJobRegistry struct {
 	descriptors map[string]jobruntime.Descriptor
 }
@@ -38,10 +39,6 @@ func (registry *fakeJobRegistry) Descriptors() []jobruntime.Descriptor {
 	}
 	return list
 }
-
-type fakeQuiescer struct{}
-
-func (fakeQuiescer) Quiesce(context.Context, string) error { return nil }
 
 func providerUnitDescriptor(route string) jobruntime.Descriptor {
 	return jobruntime.Descriptor{
@@ -92,16 +89,12 @@ CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, li
 INSERT INTO public.organizations (id, tier) VALUES ('`+discoveryTestOrg+`', 'community');`); err != nil {
 		t.Fatal(err)
 	}
-	// jobroute.Controller.ResolveInTx / joboutbox.Producer.Publish's own
-	// tables -- worker_job_routes is the SAME generic route store Python's
-	// resolve_worker_job_route reads (confirmed by reading jobroute's own
-	// readState query before wiring this in), a different table from this
-	// coordinator's own sync_dispatch_transport_routes.
+	// joboutbox.Producer.Publish's own table. Deliberately no worker_job_routes
+	// here (CHAOS-4175 ruling, superseding an earlier one on this branch):
+	// Dispatch's write path never reads the live route store -- the domain
+	// role has no grant on it in production -- so this fixture doesn't need
+	// it either. See NativeDispatchSyncRunService's doc comment.
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.worker_job_routes (
-  job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-  generation bigint NOT NULL, updated_at timestamptz NOT NULL
-);
 CREATE TABLE public.worker_job_outbox (
   id uuid PRIMARY KEY, dedupe_key text NOT NULL UNIQUE, job_kind text NOT NULL,
   contract_version int NOT NULL, args json NOT NULL, payload_hash text NOT NULL,
@@ -109,9 +102,7 @@ CREATE TABLE public.worker_job_outbox (
   scheduled_at timestamptz NOT NULL, status text NOT NULL, attempt_count int NOT NULL,
   next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
   created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);
-INSERT INTO public.worker_job_routes (job_kind, transport, paused, generation, updated_at)
-VALUES ('sync.provider_unit', 'river', false, 1, now());`); err != nil {
+);`); err != nil {
 		t.Fatal(err)
 	}
 	// activeCooldowns (inside enforceRun) reads this table and is
@@ -190,11 +181,7 @@ func newTestDispatchServiceWith(t *testing.T, pool *pgxpool.Pool, registry *fake
 	if err != nil {
 		t.Fatalf("joboutbox.NewProducer: %v", err)
 	}
-	routeController, err := jobroute.NewController(pool, registry, fakeQuiescer{})
-	if err != nil {
-		t.Fatalf("jobroute.NewController: %v", err)
-	}
-	service, err := NewNativeDispatchSyncRunService(pool, nil, &fakeBudgetEstimator{}, producer, registry, routeController)
+	service, err := NewNativeDispatchSyncRunService(pool, nil, &fakeBudgetEstimator{}, producer, registry)
 	if err != nil {
 		t.Fatalf("NewNativeDispatchSyncRunService: %v", err)
 	}
@@ -507,19 +494,21 @@ VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000
 	})
 }
 
-// TestDispatchFailsClosedWhenTheProviderUnitRouteIsNotRiver pins the
-// route-fence: with sync.provider_unit's durable transport set to
-// anything other than river, Dispatch() must fail closed
-// (ErrDispatchProviderUnitRoute) rather than stage work -- CHAOS-4054
-// deleted the Celery dispatch plane, so there is no second runtime left
-// to fall through to.
-func TestDispatchFailsClosedWhenTheProviderUnitRouteIsNotRiver(t *testing.T) {
+// TestDispatchFailsClosedWhenTheProviderUnitKindIsNotCheckedInAsExecutable
+// pins the ONLY route-shaped fail-closed check left on Dispatch's write path
+// after the CHAOS-4175 ruling reversal (see NativeDispatchSyncRunService's
+// doc comment): there is no jobroute.Controller check here anymore, but
+// service.producer.Publish still refuses via its own descriptorAllowsPublish
+// gate (joboutbox.ErrPolicyRejected) when the REGISTRY's checked-in
+// descriptor for sync.provider_unit does not declare an executable route
+// (river/river_canary/shadow) -- confirmed by reading
+// joboutbox.descriptorAllowsPublish before rewriting this test, not assumed.
+// A celery-declared descriptor must still fail closed and roll back the
+// claim, just via a different error than before.
+func TestDispatchFailsClosedWhenTheProviderUnitKindIsNotCheckedInAsExecutable(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
-		if _, err := pool.Exec(ctx, `UPDATE worker_job_routes SET transport='celery' WHERE job_kind=$1`, jobcontract.KindSyncProviderUnit); err != nil {
-			t.Fatal(err)
-		}
 		now := time.Now().UTC()
 		unitID := "00000000-0000-4000-8000-0000000000f3"
 		if _, err := pool.Exec(ctx, `
@@ -535,8 +524,8 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 			},
 		})
 		err := service.Dispatch(ctx, dispatchTestArgs())
-		if !errors.Is(err, ErrDispatchProviderUnitRoute) {
-			t.Fatalf("Dispatch: %v, want ErrDispatchProviderUnitRoute", err)
+		if !errors.Is(err, joboutbox.ErrPolicyRejected) {
+			t.Fatalf("Dispatch: %v, want joboutbox.ErrPolicyRejected", err)
 		}
 
 		var unitStatus string

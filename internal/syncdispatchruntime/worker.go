@@ -69,15 +69,15 @@ func finishCoordinatorSpan(span oteltrace.Span, err error) {
 // reporting the constructed spec through the canonical capability channel.
 func RegisterWorkers(
 	workers *river.Workers,
-	bridge CoordinatorBridge,
+	dispatchSyncRun *NativeDispatchSyncRunService,
 	postSync *NativePostSyncService,
 	finalizeSyncRun *NativeFinalizeSyncRunService,
 	referenceDiscovery *NativeReferenceDiscoveryService,
 ) error {
-	if workers == nil || bridge == nil || postSync == nil || finalizeSyncRun == nil || referenceDiscovery == nil {
+	if workers == nil || dispatchSyncRun == nil || postSync == nil || finalizeSyncRun == nil || referenceDiscovery == nil {
 		return ErrWorkerRegistration
 	}
-	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
+	if river.AddWorkerSafely(workers, &dispatchWorker{service: dispatchSyncRun}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{service: finalizeSyncRun}) != nil ||
 		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
 		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{service: referenceDiscovery}) != nil {
@@ -112,20 +112,20 @@ func RouteCapabilities() []syncroute.Capability {
 
 type dispatchWorker struct {
 	river.WorkerDefaults[DispatchSyncRunArgs]
-	bridge CoordinatorBridge
+	service *NativeDispatchSyncRunService
 }
 
 func (worker *dispatchWorker) Work(ctx context.Context, job *river.Job[DispatchSyncRunArgs]) (err error) {
-	if worker == nil || worker.bridge == nil || job == nil {
+	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.SyncRunID(), job.Args.TraceParent)
 	// A deferred finish (not a direct call after Dispatch returns) so a panic
-	// from worker.bridge still ends and exports the span before the panic
+	// from worker.service still ends and exports the span before the panic
 	// continues propagating to River's own panic-to-failure handling; this
 	// does not recover the panic, only observes it.
 	defer func() { finishCoordinatorSpan(span, err) }()
-	err = worker.bridge.Dispatch(ctx, job.Args)
+	err = worker.service.Dispatch(ctx, job.Args)
 	return err
 }
 

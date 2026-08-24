@@ -162,3 +162,28 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 	}
 	return terminalized, nil
 }
+
+// armDeniedActiveFinalize ports _enqueue_denied_active_finalize -- NOT as
+// a literal Celery apply_async call, but by targeting the actual mechanism
+// finalize_sync_run runs through today. finalize_sync_run's transport
+// route is river (sync_dispatch_transport_routes), so a Celery
+// apply_async naming it is exactly the same thing every OTHER "get
+// finalize to run soon" call site in this codebase already does: arm a
+// finalize_sync_run outbox wakeup, via upsertDiscoveryOutboxWakeup
+// (already generic over kind -- the SAME call native_reference_discovery.go's
+// own terminal-failure path makes to arm finalize on ITS OWN denial path).
+//
+// Runs in the CALLER's transaction, unlike scheduleRedispatch's own
+// separate session: this call site sits inside the SAME total-cap-denial
+// transaction that just failed the run's planned/retrying/stale-
+// dispatching units (failPlannedUnits/failStaleDispatchingUnits), and
+// committing the wakeup together with those writes is the identical
+// "terminal state + wakeup, one atomic unit" shape that precedent already
+// uses. This is not an improvement over Python's own ordering, since the
+// underlying mechanisms differ in a way that removes the question
+// entirely: the outbox is pull-based (a poller picks up an eligible row
+// whenever it next runs), unlike Celery's push-based apply_async, which
+// has no equivalent commit-ordering race to preserve or accidentally fix.
+func armDeniedActiveFinalize(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) error {
+	return upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindFinalizeSyncRun, now)
+}

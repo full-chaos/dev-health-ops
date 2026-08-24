@@ -36,7 +36,6 @@ from dev_health_ops.exceptions import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth
 from dev_health_ops.providers.github.code_client import GitHubCodeClient
-from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.pagerduty.sync_auth import (
     hydrate_pagerduty_credentials_async,
 )
@@ -45,6 +44,9 @@ from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from .common import get_session
 
 logger = logging.getLogger(__name__)
+
+_GITLAB_DEFAULT_URL = "https://gitlab.com"
+_GITLAB_API_SUFFIX = "/api/v4"
 
 router = APIRouter()
 
@@ -75,14 +77,21 @@ def _gitlab_api_base_url(base_url: str | None) -> str:
     """Resolve a stored GitLab URL to that instance's v4 API root.
 
     The stored value is an instance root everywhere else in the codebase:
-    ``gitlab.Gitlab(...)`` appends ``/api/v4`` itself and
-    ``normalize_gitlab_instance`` discards any path, so
-    ``https://gitlab.com`` and ``https://gitlab.com/api/v4`` name the same
-    instance. Normalizing here keeps the connection test on the same
-    vocabulary as the sync runtime instead of probing a web page.
+    ``gitlab.Gitlab(...)`` is handed it verbatim and appends ``/api/v4``
+    itself. A subpath install therefore keeps its subpath, and a value that
+    already names the API root does not gain a second suffix. The host is
+    never substituted -- an unusable URL has to fail the SSRF guard below
+    rather than quietly redirect a self-hosted instance's token to
+    gitlab.com.
     """
-    instance = normalize_gitlab_instance(base_url) or "https://gitlab.com"
-    return f"{instance}/api/v4"
+    candidate = (base_url or "").strip() or _GITLAB_DEFAULT_URL
+    parsed = urlparse(candidate)
+    path = parsed.path.rstrip("/")
+    if path.endswith(_GITLAB_API_SUFFIX):
+        path = path[: -len(_GITLAB_API_SUFFIX)]
+    return urlunparse(
+        (parsed.scheme, parsed.netloc, f"{path}{_GITLAB_API_SUFFIX}", "", "", "")
+    )
 
 
 def _validated_github_base_url(base_url: str | None) -> str:

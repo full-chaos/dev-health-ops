@@ -694,3 +694,102 @@ async def test_gitlab_connection_helper_honours_a_self_hosted_instance_root(
 
     assert requested == ["https://gitlab.example.com/api/v4/user"]
     assert success is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_url,expected",
+    [
+        (
+            "https://gitlab.example.com/gitlab",
+            "https://gitlab.example.com/gitlab/api/v4/user",
+        ),
+        (
+            "https://gitlab.example.com/gitlab/api/v4",
+            "https://gitlab.example.com/gitlab/api/v4/user",
+        ),
+        (
+            "https://gitlab.example.com/gitlab/",
+            "https://gitlab.example.com/gitlab/api/v4/user",
+        ),
+    ],
+    ids=["subpath", "subpath-with-api-v4", "subpath-trailing-slash"],
+)
+async def test_gitlab_connection_helper_keeps_a_subpath_install_on_its_own_path(
+    monkeypatch, stored_url, expected
+):
+    """A GitLab served under a subpath keeps that subpath.
+
+    python-gitlab is handed the stored URL verbatim and appends ``/api/v4``
+    to whatever path it carries, so ``https://host/gitlab`` is a real,
+    supported instance. Resolving the probe URL by discarding the path
+    would send the request -- and the token -- to the wrong application on
+    that host.
+    """
+
+    def _fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("172.65.251.78", 0))]
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _fake_getaddrinfo)
+
+    requested: list[str] = []
+    sent_headers: list[dict[str, str]] = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"username": "probe", "name": "Probe"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> bool:
+            return False
+
+        async def get(self, url, *args, headers=None, **kwargs):
+            requested.append(url)
+            sent_headers.append(dict(headers or {}))
+            return _FakeResponse()
+
+    with patch("httpx.AsyncClient", _FakeAsyncClient):
+        success, _ = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder", "url": stored_url}
+        )
+
+    assert requested == [expected]
+    assert sent_headers == [{"PRIVATE-TOKEN": "placeholder"}]
+    assert success is True
+
+
+@pytest.mark.asyncio
+async def test_gitlab_connection_helper_never_reroutes_an_unusable_url_to_gitlab_com(
+    monkeypatch,
+):
+    """An unusable stored URL must fail, not silently become gitlab.com.
+
+    Falling back to the public host when the configured one cannot be
+    resolved would send a self-hosted instance's token to a third party.
+    """
+
+    def _unresolvable(*_args, **_kwargs):
+        raise socket.gaierror("no such host")
+
+    monkeypatch.setattr(admin_router_module.socket, "getaddrinfo", _unresolvable)
+
+    class _ExplodingAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("no request may be made for an unusable URL")
+
+    with patch("httpx.AsyncClient", _ExplodingAsyncClient):
+        success, details = await admin_router_module._test_gitlab_connection(
+            {"token": "placeholder", "url": "https://gitlab.example.com:notaport"}
+        )
+
+    assert success is False
+    assert "gitlab.example.com" in details["error"]

@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -247,7 +250,73 @@ func (GitHubProjectV2Fetcher) Fetch(
 			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
 	}
+	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
 	return finishGitHubProjectV2Fetch(result), nil
+}
+
+// gitHubProjectV2AttentionSkips are the skip reasons that mean something
+// CHANGED, as opposed to something we deliberately deferred.
+//
+// A board item whose typename we do not recognise means GitHub shipped a new
+// content kind; a PullRequest missing its repository, number or createdAt means
+// the query or the payload shape moved under us. Neither is self-correcting and
+// both are invisible without this line.
+var gitHubProjectV2AttentionSkips = []string{"pull_request_incomplete", "unknown_content_type"}
+
+// reportGitHubProjectV2MembershipSkips emits the one structured record that
+// makes MembershipSkips observable in production.
+//
+// A count on a result struct is not observability: nothing reads
+// GitHubProjectV2FetchResult except the caller that built it, and this
+// collector owns no registration to publish a Prometheus series through (D18),
+// so without this the counter would be exactly what it replaced -- a drop
+// nobody can see, with a nicer name in the source. The reserved metric name for
+// when that collector is activated is
+// worker_github_project_v2_membership_skips_total{reason}; it is deliberately
+// not declared yet, because a series with no emitter can never move and would
+// read as coverage of a case nobody exercised.
+//
+// Emitted only when something was actually skipped. A line on every sync
+// regardless of content is noise operators learn to filter, which costs the
+// record the attention it exists to buy.
+//
+// The LEVEL is chosen by content rather than fixed. Every sync of a real board
+// defers every issue on it, so a fixed WARN would warn permanently about
+// working as designed and would bury the reasons that are genuinely news inside
+// that noise. A fixed INFO would put a provider schema change at the level
+// operators filter out. So a deferral logs INFO and an attention reason
+// escalates the same record to WARN.
+//
+// Each reason is its own attribute and a reason with no occurrences is OMITTED,
+// not written as zero -- a permanent zero reads as coverage of a case nobody
+// exercised. Attributes are sorted so the record is stable across runs; Go map
+// iteration order is randomised, and an unstable attribute order makes two
+// identical fetches look like different events to a log backend.
+//
+// Not called on the error return paths. A failed fetch's partial skip counts
+// describe how far it got, not what it decided, and reporting them would put a
+// misleading "we skipped these" record next to the error that actually matters.
+func reportGitHubProjectV2MembershipSkips(claim Claim, skips map[string]int) {
+	if len(skips) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(skips))
+	for reason := range skips {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	attrs := []any{
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"org_id", claim.OrgID, "unit", claim.ID, "integration", claim.IntegrationID,
+	}
+	level := slog.LevelInfo
+	for _, reason := range reasons {
+		attrs = append(attrs, reason, int64(skips[reason]))
+		if skips[reason] > 0 && slices.Contains(gitHubProjectV2AttentionSkips, reason) {
+			level = slog.LevelWarn
+		}
+	}
+	slog.Log(context.Background(), level, "github_projects_v2.membership_skips", attrs...)
 }
 
 func finishGitHubProjectV2Fetch(result GitHubProjectV2FetchResult) GitHubProjectV2FetchResult {

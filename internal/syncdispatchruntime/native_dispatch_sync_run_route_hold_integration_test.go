@@ -143,7 +143,16 @@ CREATE TABLE public.worker_job_routes (
 	generation bigint NOT NULL, updated_at timestamptz NOT NULL
 );
 INSERT INTO public.worker_job_routes (job_kind, transport, paused, generation, updated_at)
-VALUES ('`+jobcontract.KindSyncProviderUnit+`', 'river', false, 1, now());`); err != nil {
+VALUES ('`+jobcontract.KindSyncProviderUnit+`', 'river', false, 1, now());
+-- Rollback's own live-claims check reads this (control.go's
+-- "SELECT count(*) FROM public.worker_job_runs WHERE job_kind=$1 AND
+-- status='running'") -- absent from every other dispatch fixture in this
+-- package since Dispatch's own write path never touches it, but the
+-- rollback-fence test needs it for a real Rollback() call to reach past
+-- its own precondition checks instead of failing on a missing relation.
+CREATE TABLE public.worker_job_runs (
+	id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
+);`); err != nil {
 		t.Fatal(err)
 	}
 

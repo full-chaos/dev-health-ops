@@ -768,3 +768,162 @@ class TestProviderCredentials:
             extra={"custom_field": "custom_value"},
         )
         assert creds.extra["custom_field"] == "custom_value"
+
+
+class TestJiraStoredCredentialShapes:
+    """CHAOS-4224: resolve the Jira shapes already sitting in the database.
+
+    Both web credential surfaces wrote keys the resolver never read, and
+    the failure is silent: ``jira_credentials_from_mapping`` returns
+    ``None`` and the sync reports "credentials mapping was incomplete or
+    invalid" with no indication of which field was missing. The admin
+    connection test accepts ``token`` (``routers/credentials.py:690``), so
+    a credential could pass its test and still be unusable at sync time --
+    a check that fails toward fine.
+
+    Aliasing on read rather than migrating rows: the stored ciphertext is
+    the user's, re-encrypting it to rename a key risks more than it fixes.
+    """
+
+    def test_providers_wizard_shape_resolves(self):
+        """Admin > Providers > JIRA > "Create New" writes email/token/url.
+
+        This is the literal stored shape of the credential on the local
+        stack whose sync failed.
+        """
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        creds = jira_credentials_from_mapping(
+            {
+                "email": "user@example.com",
+                "token": "jira-token",
+                "url": "https://acme.atlassian.net",
+            }
+        )
+
+        assert creds is not None
+        assert creds.api_token == "jira-token"
+        assert creds.email == "user@example.com"
+        assert creds.base_url == "https://acme.atlassian.net"
+
+    def test_syncs_inline_modal_shape_resolves(self):
+        """Admin > Syncs > JIRA > "+Add New" wrote api_token/server_url."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        creds = jira_credentials_from_mapping(
+            {
+                "email": "user@example.com",
+                "api_token": "jira-token",
+                "server_url": "https://acme.atlassian.net",
+            }
+        )
+
+        assert creds is not None
+        assert creds.api_token == "jira-token"
+        assert creds.base_url == "https://acme.atlassian.net"
+
+    def test_canonical_shape_still_resolves(self):
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        creds = jira_credentials_from_mapping(
+            {
+                "email": "user@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+
+        assert creds is not None
+        assert creds.base_url == "https://acme.atlassian.net"
+
+    def test_an_explicit_api_token_outranks_a_generic_token(self):
+        """``token`` is the alias, never the winner.
+
+        A mapping carrying both is a credential mid-migration; the key the
+        resolver has always read must not be displaced by the alias.
+        """
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        creds = jira_credentials_from_mapping(
+            {
+                "email": "user@example.com",
+                "api_token": "explicit",
+                "token": "generic",
+                "url": "https://acme.atlassian.net",
+            }
+        )
+
+        assert creds is not None
+        assert creds.api_token == "explicit"
+
+    def test_a_base_url_outranks_both_url_aliases(self):
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        creds = jira_credentials_from_mapping(
+            {
+                "email": "user@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://canonical.atlassian.net",
+                "url": "https://alias.atlassian.net",
+                "server_url": "https://other.atlassian.net",
+            }
+        )
+
+        assert creds is not None
+        assert creds.base_url == "https://canonical.atlassian.net"
+
+    def test_a_genuinely_incomplete_mapping_still_returns_none(self):
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        assert (
+            jira_credentials_from_mapping(
+                {"email": "user@example.com", "url": "https://acme.atlassian.net"}
+            )
+            is None
+        )
+
+    def test_a_rejected_mapping_names_the_field_it_lacked(self):
+        """The silent return is what cost the debugging time, not the bug.
+
+        A resolver that answers ``None`` tells an operator nothing about
+        why, and the log line deliberately carries no detail. The counter
+        is where "which field" now lives.
+        """
+        import dev_health_ops.credentials.resolver as resolver_module
+
+        recorded: list[dict[str, str]] = []
+
+        def _capture(*, provider: str, missing_field: str) -> None:
+            recorded.append({"provider": provider, "missing_field": missing_field})
+
+        with patch(
+            "dev_health_ops.metrics.prometheus.record_credential_mapping_rejected",
+            _capture,
+        ):
+            assert (
+                resolver_module.jira_credentials_from_mapping(
+                    {"email": "user@example.com", "url": "https://acme.atlassian.net"}
+                )
+                is None
+            )
+
+        assert recorded == [{"provider": "jira", "missing_field": "api_token"}]
+
+    def test_the_rejection_label_never_carries_credential_material(self):
+        """The label vocabulary is the caller's field names, nothing else."""
+        import dev_health_ops.credentials.resolver as resolver_module
+
+        recorded: list[str] = []
+
+        def _capture(*, provider: str, missing_field: str) -> None:
+            recorded.append(missing_field)
+
+        with patch(
+            "dev_health_ops.metrics.prometheus.record_credential_mapping_rejected",
+            _capture,
+        ):
+            resolver_module.jira_credentials_from_mapping(
+                {"api_token": "s3cret-token-value", "url": "https://acme.atlassian.net"}
+            )
+
+        assert recorded == ["email"]

@@ -337,18 +337,53 @@ def gitlab_credentials_from_mapping(
         return None
 
 
+def _record_mapping_rejected(provider: str, **fields: str) -> None:
+    """Count a rejected mapping against the first required field it lacks.
+
+    One label value per absent field, chosen from the caller's own keyword
+    names -- never from credential contents, which would put secret
+    material on the metrics endpoint and blow up label cardinality at the
+    same time.
+    """
+    from dev_health_ops.metrics.prometheus import record_credential_mapping_rejected
+
+    missing = next((name for name, value in fields.items() if not value), "unknown")
+    record_credential_mapping_rejected(provider=provider, missing_field=missing)
+
+
 def jira_credentials_from_mapping(
     cred_dict: dict[str, Any],
     *,
     source: CredentialSource = CredentialSource.DATABASE,
     credential_name: str = "default",
 ) -> JiraCredentials | None:
-    api_token = str(cred_dict.get("api_token") or cred_dict.get("apiToken") or "")
+    """Build :class:`JiraCredentials` from a credentials mapping.
+
+    Reads the aliases the web credential surfaces have actually written, not
+    only the canonical names (CHAOS-4224): Admin > Providers > JIRA >
+    "Create New" stores ``token``/``url`` and Admin > Syncs > JIRA >
+    "+Add New" stored ``server_url``, and neither resolved -- so a
+    credential that passed its connection test could not authenticate a
+    single sync. Aliasing on read fixes the rows already in the database
+    without re-encrypting anyone's stored secret; the writers are being
+    corrected separately.
+
+    The order is a precedence, not a lookup: an explicitly stored canonical
+    key always outranks an alias, so a mapping written by both an old and a
+    new client resolves to the new one.
+    """
+    api_token = str(
+        cred_dict.get("api_token")
+        or cred_dict.get("apiToken")
+        or cred_dict.get("token")
+        or ""
+    )
     email = str(cred_dict.get("email") or "")
     base_url = str(
         cred_dict.get("base_url")
         or cred_dict.get("baseUrl")
         or cred_dict.get("url")
+        or cred_dict.get("server_url")
         or ""
     )
     try:
@@ -360,6 +395,16 @@ def jira_credentials_from_mapping(
             credential_name=credential_name,
         )
     except (ValueError, TypeError):
+        # The exception text is not logged: it derives from credential
+        # construction and could surface field values. The counter carries
+        # which field was absent, drawn from this fixed vocabulary -- that
+        # is the part an operator needs and the message never gave them.
+        _record_mapping_rejected(
+            "jira",
+            api_token=api_token,
+            email=email,
+            base_url=base_url,
+        )
         logger.debug("Jira credentials mapping was incomplete or invalid")
         return None
 

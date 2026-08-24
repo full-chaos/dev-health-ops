@@ -283,3 +283,117 @@ func (d *pagerDutyClientCredentialsDoer) Do(request *http.Request) (*http.Respon
 	}
 	return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
 }
+
+func jiraTestRetry() RetryPolicy {
+	return RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond}
+}
+
+func jiraTestLease() LeaseGuard {
+	return LeaseGuardFunc(func(context.Context) error { return nil })
+}
+
+// TestJiraAcceptsTheCredentialShapesTheWebActuallyWrote pins the Go client to
+// the same Jira aliases the Python resolver reads. ValidateCredentialShape
+// documents itself as accepting "only the auth fields that the current Python
+// resolver accepts for this provider", so the two drifting apart is a defect
+// on its own terms -- and here it was load-bearing: Admin > Providers > JIRA >
+// "Create New" stores email/token/url and Admin > Syncs > JIRA > "+Add New"
+// stored server_url, neither of which authenticated a single sync (CHAOS-4224).
+func TestJiraAcceptsTheCredentialShapesTheWebActuallyWrote(t *testing.T) {
+	const wantAuth = "Basic ZGV2QGFjbWUudGVzdDpqaXJhLXRva2Vu"
+	for _, testCase := range []struct {
+		name       string
+		values     map[string]string
+		wantScheme string
+		wantHost   string
+	}{
+		{
+			name:       "providers wizard shape",
+			values:     map[string]string{"email": "dev@acme.test", "token": "jira-token", "url": "https://acme.atlassian.net"},
+			wantScheme: "https",
+			wantHost:   "acme.atlassian.net",
+		},
+		{
+			name:       "syncs inline modal shape",
+			values:     map[string]string{"email": "dev@acme.test", "api_token": "jira-token", "server_url": "https://acme.atlassian.net"},
+			wantScheme: "https",
+			wantHost:   "acme.atlassian.net",
+		},
+		{
+			name:       "canonical shape",
+			values:     map[string]string{"email": "dev@acme.test", "api_token": "jira-token", "base_url": "https://acme.atlassian.net"},
+			wantScheme: "https",
+			wantHost:   "acme.atlassian.net",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			credential := testCredential("jira", testCase.values)
+			if err := ValidateCredentialShape(credential); err != nil {
+				t.Fatalf("ValidateCredentialShape rejected a stored shape: %v", err)
+			}
+			doer := &headerCaptureDoer{}
+			client, err := NewJiraClient(credential, doer, jiraTestRetry(), jiraTestLease())
+			if err != nil {
+				t.Fatalf("NewJiraClient: %v", err)
+			}
+			response, err := client.Do(context.Background(), http.MethodGet, "/rest/api/3/myself", nil)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			defer response.Body.Close()
+			if got := doer.header.Get("Authorization"); got != wantAuth {
+				t.Fatalf("Authorization = %q, want %q", got, wantAuth)
+			}
+			if doer.url.Scheme != testCase.wantScheme || doer.url.Host != testCase.wantHost {
+				t.Fatalf("request went to %s://%s, want %s://%s", doer.url.Scheme, doer.url.Host, testCase.wantScheme, testCase.wantHost)
+			}
+		})
+	}
+}
+
+// TestJiraStillRejectsAGenuinelyIncompleteCredential keeps the aliases from
+// turning the shape check into a rubber stamp.
+func TestJiraStillRejectsAGenuinelyIncompleteCredential(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		values map[string]string
+	}{
+		{name: "no token of any spelling", values: map[string]string{"email": "dev@acme.test", "url": "https://acme.atlassian.net"}},
+		{name: "no email", values: map[string]string{"token": "jira-token", "url": "https://acme.atlassian.net"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if err := ValidateCredentialShape(testCredential("jira", testCase.values)); err == nil {
+				t.Fatal("ValidateCredentialShape accepted an incomplete credential")
+			}
+		})
+	}
+}
+
+// TestJiraCanonicalKeysOutrankTheirAliases mirrors the Python precedence: a
+// credential written by both an old and a new client resolves to the new one.
+func TestJiraCanonicalKeysOutrankTheirAliases(t *testing.T) {
+	credential := testCredential("jira", map[string]string{
+		"email":      "dev@acme.test",
+		"api_token":  "jira-token",
+		"token":      "stale-token",
+		"base_url":   "https://acme.atlassian.net",
+		"url":        "https://stale.atlassian.net",
+		"server_url": "https://older.atlassian.net",
+	})
+	doer := &headerCaptureDoer{}
+	client, err := NewJiraClient(credential, doer, jiraTestRetry(), jiraTestLease())
+	if err != nil {
+		t.Fatalf("NewJiraClient: %v", err)
+	}
+	response, err := client.Do(context.Background(), http.MethodGet, "/rest/api/3/myself", nil)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer response.Body.Close()
+	if got := doer.header.Get("Authorization"); got != "Basic ZGV2QGFjbWUudGVzdDpqaXJhLXRva2Vu" {
+		t.Fatalf("alias displaced the canonical api_token: Authorization = %q", got)
+	}
+	if doer.url.Host != "acme.atlassian.net" {
+		t.Fatalf("alias displaced the canonical base_url: host = %q", doer.url.Host)
+	}
+}

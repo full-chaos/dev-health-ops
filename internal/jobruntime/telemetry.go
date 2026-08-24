@@ -241,6 +241,17 @@ type MetricsCollector struct {
 	remainingReleaseLost      uint64
 	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
 
+	// External ingest, work_item -> project reassignment (CHAOS-4194).
+	//
+	// These two are a PAIR and only mean something together. The sunk counter
+	// alone cannot distinguish "no provider reassigned anything today" from
+	// "every event was refused at the registry", which are the same flat line
+	// and opposite operational situations. Before this, a producer shipping
+	// against an unregistered kind saw a clean successful sync and no rows,
+	// with nothing outward to look at.
+	externalProjectMembershipsSunk map[string]uint64
+	externalRecordRefusals         map[externalRefusalLabels]uint64
+
 	// Native DORA compute (CHAOS-3092 R1). The HTTP compatibility bridge could
 	// only ever report a status code, so a partition that computed nothing and
 	// a partition that computed everything were indistinguishable from the
@@ -308,39 +319,41 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 
 	collector := &MetricsCollector{
-		allowedJobs:               make(map[JobLabels]struct{}, len(dimensions.Jobs)),
-		allowedQueues:             make(map[queueLabels]struct{}),
-		allowedKinds:              make(map[string]struct{}),
-		allowedDomains:            make(map[string]struct{}, len(dimensions.DomainTypes)),
-		allowedSyncLeases:         make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
-		allowedStreams:            make(map[StreamLabels]struct{}, len(dimensions.Streams)),
-		allowedBudgets:            make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
-		allowedConcurrencyBudgets: make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
-		jobsAvailable:             make(map[JobLabels]int64, len(dimensions.Jobs)),
-		jobOldestAge:              make(map[queueLabels]float64),
-		jobsRunning:               make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation:       make(map[queueLabels]float64),
-		jobWait:                   make(map[JobLabels]*histogram, len(dimensions.Jobs)),
-		jobDuration:               make(map[jobResultLabels]*histogram),
-		jobAttempts:               make(map[attemptLabels]uint64),
-		jobPanics:                 make(map[string]uint64),
-		cancellations:             make(map[cancellationLabels]uint64),
-		domainMismatch:            make(map[string]uint64, len(dimensions.DomainTypes)),
-		syncLeaseExpired:          make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
-		reportRunLeaseExpired:     make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
-		idempotencyRenewalRetired: make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
-		dailyMetricsLease:         make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
-		zeroUnitFinalizations:     make(map[zeroUnitFinalizationLabels]uint64),
-		streamLag:                 make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamPending:             make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamOldestPending:       make(map[StreamLabels]float64, len(dimensions.Streams)),
-		budgetWait:                make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
-		concurrencyBudgetCapacity: make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetLeased:   make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetWait:     make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetEvents:   make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
-		poolSaturation:            map[string]float64{poolDomain: 0, poolQueueControl: 0},
-		poolAcquire:               make(map[poolAcquireLabels]*histogram, 8),
+		allowedJobs:                    make(map[JobLabels]struct{}, len(dimensions.Jobs)),
+		allowedQueues:                  make(map[queueLabels]struct{}),
+		allowedKinds:                   make(map[string]struct{}),
+		allowedDomains:                 make(map[string]struct{}, len(dimensions.DomainTypes)),
+		allowedSyncLeases:              make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
+		allowedStreams:                 make(map[StreamLabels]struct{}, len(dimensions.Streams)),
+		allowedBudgets:                 make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
+		allowedConcurrencyBudgets:      make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		jobsAvailable:                  make(map[JobLabels]int64, len(dimensions.Jobs)),
+		jobOldestAge:                   make(map[queueLabels]float64),
+		jobsRunning:                    make(map[JobLabels]int64, len(dimensions.Jobs)),
+		executionSaturation:            make(map[queueLabels]float64),
+		jobWait:                        make(map[JobLabels]*histogram, len(dimensions.Jobs)),
+		jobDuration:                    make(map[jobResultLabels]*histogram),
+		jobAttempts:                    make(map[attemptLabels]uint64),
+		jobPanics:                      make(map[string]uint64),
+		cancellations:                  make(map[cancellationLabels]uint64),
+		domainMismatch:                 make(map[string]uint64, len(dimensions.DomainTypes)),
+		syncLeaseExpired:               make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
+		reportRunLeaseExpired:          make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		idempotencyRenewalRetired:      make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
+		dailyMetricsLease:              make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
+		zeroUnitFinalizations:          make(map[zeroUnitFinalizationLabels]uint64),
+		externalProjectMembershipsSunk: make(map[string]uint64),
+		externalRecordRefusals:         make(map[externalRefusalLabels]uint64),
+		streamLag:                      make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamPending:                  make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamOldestPending:            make(map[StreamLabels]float64, len(dimensions.Streams)),
+		budgetWait:                     make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
+		concurrencyBudgetCapacity:      make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetLeased:        make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetWait:          make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetEvents:        make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
+		poolSaturation:                 map[string]float64{poolDomain: 0, poolQueueControl: 0},
+		poolAcquire:                    make(map[poolAcquireLabels]*histogram, 8),
 	}
 	for _, labels := range dimensions.Jobs {
 		if err := validateJobLabels(labels); err != nil {
@@ -738,6 +751,117 @@ func (collector *MetricsCollector) ObserveZeroUnitFinalization(provider, reason 
 	return nil
 }
 
+// External-ingest label domains (CHAOS-4194). Both are CLOSED sets checked
+// against, not free text, because both label values originate in a
+// customer-pushed batch. `source_system` comes off the batch pointer and
+// `reason` is a refusal code the ingest path chooses, but neither is worth
+// trusting to stay bounded on the strength of "the caller only passes good
+// values" -- an unbounded label here is a customer-controlled cardinality
+// explosion in the exposition, not a cosmetic defect.
+//
+// The record KIND is deliberately not a label. It is the one value in a
+// refusal that is genuinely attacker-controlled and unbounded -- the whole
+// point of unsupported_kind_for_system is that the kind was not recognised --
+// so labeling by it would let a malformed push mint a new series per record.
+// The kind is already carried on the durable rejection row, which is where an
+// operator should read it.
+var externalTelemetrySystems = map[string]struct{}{
+	"github": {}, "gitlab": {}, "jira": {}, "linear": {},
+	"custom": {}, "pagerduty": {}, "atlassian": {},
+}
+
+// ExternalRefused* are the refusal codes normalizeExternalRecords emits.
+const (
+	ExternalRefusedUnsupportedKind       = "unsupported_kind_for_system"
+	ExternalRefusedEntityFamilyMismatch  = "entity_family_mismatch"
+	ExternalRefusedInvalidField          = "invalid_field"
+	ExternalRefusedOutsideSourceInstance = "record_outside_source_instance"
+	// ExternalRefusedUnresolvableProject and ExternalRefusedContradictoryEvent
+	// are project_membership_transition.v1's own refusals (CHAOS-4194): a
+	// from/to project id that cannot be a provider PROJECT entity, and two
+	// records in one batch asserting the same event_id with different content.
+	ExternalRefusedUnresolvableProject = "unresolvable_project_entity"
+	ExternalRefusedContradictoryEvent  = "contradictory_event_id"
+	// ExternalRefusedNamelessMembership is a membership event naming neither
+	// the project joined nor the project left. Presence is keyed per
+	// (subject, project), so such a row could not retire or create any
+	// membership -- it would sit in the history looking like a removal that
+	// silently did nothing.
+	ExternalRefusedNamelessMembership = "membership_event_names_no_project"
+)
+
+var externalRefusalReasons = []string{
+	ExternalRefusedUnsupportedKind,
+	ExternalRefusedEntityFamilyMismatch,
+	ExternalRefusedInvalidField,
+	ExternalRefusedOutsideSourceInstance,
+	ExternalRefusedUnresolvableProject,
+	ExternalRefusedContradictoryEvent,
+	ExternalRefusedNamelessMembership,
+}
+
+const externalTelemetryUnknownSystem = "unknown"
+
+type externalRefusalLabels struct {
+	SourceSystem string
+	Reason       string
+}
+
+func externalTelemetrySystem(system string) string {
+	if _, known := externalTelemetrySystems[system]; known {
+		return system
+	}
+	return externalTelemetryUnknownSystem
+}
+
+// ObserveExternalProjectMembershipsSunk records project_membership_transition.v1
+// rows that reached ClickHouse, by the provider that pushed them (CHAOS-4194).
+//
+// Callers must call this AFTER the sink write has returned successfully, for
+// the same reason ObserveZeroUnitFinalization insists on a committed
+// transaction: the external ingest handler RETRIES a transient sink failure,
+// so counting at append time would count every attempt of a write that
+// eventually succeeds once.
+func (collector *MetricsCollector) ObserveExternalProjectMembershipsSunk(provider string, rows int) error {
+	if rows < 0 {
+		return errors.New("sunk project membership rows cannot be negative")
+	}
+	if rows == 0 {
+		return nil
+	}
+	provider = externalTelemetrySystem(provider)
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.externalProjectMembershipsSunk == nil {
+		collector.externalProjectMembershipsSunk = map[string]uint64{}
+	}
+	collector.externalProjectMembershipsSunk[provider] += uint64(rows)
+	return nil
+}
+
+// ObserveExternalKindRefused records one external-ingest record the registry
+// refused, by source system and refusal code (CHAOS-4194).
+//
+// An unknown reason is an ERROR rather than a fold into an "other" bucket. The
+// reason set is this repo's own closed vocabulary, so an unrecognised one means
+// a refusal path was added without extending the exposition -- exactly the
+// silent-new-failure-mode this counter exists to prevent -- and swallowing it
+// would hide the omission behind a plausible-looking series.
+func (collector *MetricsCollector) ObserveExternalKindRefused(sourceSystem, reason string) error {
+	if !slices.Contains(externalRefusalReasons, reason) {
+		return fmt.Errorf("unknown external refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.externalRecordRefusals == nil {
+		collector.externalRecordRefusals = map[externalRefusalLabels]uint64{}
+	}
+	collector.externalRecordRefusals[externalRefusalLabels{
+		SourceSystem: externalTelemetrySystem(sourceSystem), Reason: reason,
+	}]++
+	return nil
+}
+
 // ObserveWorkGraphLeaseReleaseLost records a work-graph claimant that could not
 // stand its own row down because its lease had already expired (CHAOS-4002).
 // Unlike the daily-metrics lease, work-graph has one lease-fenced release path
@@ -1070,6 +1194,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeZeroUnitFinalizations(&output)
+	collector.writeExternalIngest(&output)
 	collector.writeStreams(&output)
 	collector.writeBudgets(&output)
 	collector.writeConcurrencyBudgets(&output)
@@ -1251,6 +1376,37 @@ func (collector *MetricsCollector) writeZeroUnitFinalizations(output *strings.Bu
 		writeUintSample(output, "devhealth_sync_run_zero_unit_finalizations_total", []metricLabel{
 			{"provider", key.Provider}, {"reason", key.Reason},
 		}, collector.zeroUnitFinalizations[key])
+	}
+}
+
+func (collector *MetricsCollector) writeExternalIngest(output *strings.Builder) {
+	writeMetadata(output, "worker_external_project_memberships_sunk_total",
+		"project_membership_transition.v1 rows durably written to ClickHouse, by source system.", "counter")
+	providers := make([]string, 0, len(collector.externalProjectMembershipsSunk))
+	for provider := range collector.externalProjectMembershipsSunk {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	for _, provider := range providers {
+		writeUintSample(output, "worker_external_project_memberships_sunk_total",
+			[]metricLabel{{"provider", provider}}, collector.externalProjectMembershipsSunk[provider])
+	}
+	writeMetadata(output, "worker_external_record_refused_total",
+		"External-ingest records refused by the kind registry, by source system and refusal reason.", "counter")
+	keys := make([]externalRefusalLabels, 0, len(collector.externalRecordRefusals))
+	for key := range collector.externalRecordRefusals {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].SourceSystem != keys[right].SourceSystem {
+			return keys[left].SourceSystem < keys[right].SourceSystem
+		}
+		return keys[left].Reason < keys[right].Reason
+	})
+	for _, key := range keys {
+		writeUintSample(output, "worker_external_record_refused_total", []metricLabel{
+			{"source_system", key.SourceSystem}, {"reason", key.Reason},
+		}, collector.externalRecordRefusals[key])
 	}
 }
 

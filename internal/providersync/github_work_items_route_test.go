@@ -173,7 +173,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		t.Fatalf("composed rows=%+v", deriver.got)
 	}
 
-	wantDestinations := workItemRouteDestinations()
+	wantDestinations := githubWorkItemRouteDestinations()
 	gotDestinations := make([]string, 0, len(batch.Effects))
 	for _, effect := range batch.Effects {
 		gotDestinations = append(gotDestinations, effect.Destination)
@@ -848,7 +848,7 @@ func TestGitHubWorkItemsRouteRejectsIncompleteDerivedDestinationSet(t *testing.T
 			}
 		})
 	}
-	if effects, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), complete); err != nil || len(effects) != len(workItemRouteDestinations()) {
+	if effects, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), complete); err != nil || len(effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("complete effects=%d error=%v", len(effects), err)
 	}
 }

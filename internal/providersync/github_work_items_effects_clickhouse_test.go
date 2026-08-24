@@ -38,7 +38,7 @@ func TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("effect construction is order-sensitive:\nfirst=%+v\nsecond=%+v", first, second)
 	}
-	wantDestinations := workItemRouteDestinations()
+	wantDestinations := githubWorkItemRouteDestinations()
 	if len(first) != len(wantDestinations) {
 		t.Fatalf("effects=%d want=%d", len(first), len(wantDestinations))
 	}
@@ -58,8 +58,15 @@ func TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 	if len(first[1].Rows) != 0 {
 		t.Fatalf("conditional-empty destination was dropped or populated: %+v", first[1])
 	}
-	if len(first[5].Rows) != 1 || first[5].Destination != "sprints" {
-		t.Fatalf("sprint effect=%+v", first[5])
+	// Located by NAME, not by index. The index moved when CHAOS-4194 inserted
+	// two destinations alphabetically ahead of sprints, and a positional
+	// assertion turns any future insertion into a failure that names the wrong
+	// destination and says nothing about ordering.
+	sprints := slices.IndexFunc(first, func(effect EffectBatch) bool {
+		return effect.Destination == "sprints"
+	})
+	if sprints < 0 || len(first[sprints].Rows) != 1 {
+		t.Fatalf("sprint effect index=%d effects=%+v", sprints, first)
 	}
 }
 
@@ -156,7 +163,7 @@ func TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity(t *
 			t.Fatalf("inspect %s=%s error=%v", effect.Destination, inspection, err)
 		}
 	}
-	if len(backend.identities) != 2*len(workItemRouteDestinations()) {
+	if len(backend.identities) != 2*len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("identity calls=%d", len(backend.identities))
 	}
 	for _, identity := range backend.identities {
@@ -219,13 +226,13 @@ func TestGitHubWorkItemEffectsRecoverMidWriteAndAccountForEmptyDestinations(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.MarkedCommitted != 1 || result.Written+result.Skipped+result.MarkedCommitted != 16 {
+	if result.MarkedCommitted != 1 || result.Written+result.Skipped+result.MarkedCommitted != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("recovery result=%+v", result)
 	}
 	if backend.writeCounts["work_item_interactions"] != 1 {
 		t.Fatalf("exact readback replayed crashed effect: %d", backend.writeCounts["work_item_interactions"])
 	}
-	for _, destination := range workItemRouteDestinations() {
+	for _, destination := range githubWorkItemRouteDestinations() {
 		if backend.writeCounts[destination] != 1 {
 			t.Fatalf("destination %s writes=%d", destination, backend.writeCounts[destination])
 		}
@@ -323,6 +330,8 @@ func githubWorkItemEffectsFixture(
 		WorkItemTransitions:            adapter("work_item_transitions"),
 		WorkItemUserMetricsDaily:       adapter("work_item_user_metrics_daily"),
 		WorkItems:                      adapter("work_items"),
+		ProjectMembershipTransitions:   adapter("project_membership_transitions"),
+		Projects:                       adapter("projects"),
 	}
 }
 

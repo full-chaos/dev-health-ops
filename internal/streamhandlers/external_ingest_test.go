@@ -133,7 +133,7 @@ func TestExternalHandlerPersistsPartialOutcomeAndSchedulesAfterCommit(t *testing
 	}
 	sink := &externalSinkFake{scope: scope}
 	scheduler := &externalSchedulerFake{}
-	handler, err := NewExternalIngestHandler(repository, sink, scheduler)
+	handler, err := NewExternalIngestHandler(repository, sink, scheduler, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestExternalHandlerRetriesTransientSinkAndLeavesExhaustionNonTerminal(t *te
 			errors: []error{errors.New("unavailable"), errors.New("unavailable")},
 			scope:  ExternalRecomputeScope{OrgID: pointer.OrgID},
 		}
-		handler, err := NewExternalIngestHandler(repository, sink, nil)
+		handler, err := NewExternalIngestHandler(repository, sink, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +198,7 @@ func TestExternalHandlerRetriesTransientSinkAndLeavesExhaustionNonTerminal(t *te
 		sink := &externalSinkFake{errors: []error{
 			errors.New("unavailable"), errors.New("unavailable"), errors.New("unavailable"),
 		}}
-		handler, err := NewExternalIngestHandler(repository, sink, nil)
+		handler, err := NewExternalIngestHandler(repository, sink, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +217,7 @@ func TestExternalHandlerSkipsTerminalAndFailsClosedOperationalEntitlement(t *tes
 	t.Run("terminal skip", func(t *testing.T) {
 		repository := &externalRepositoryFake{batch: externalBatch{Skip: true}}
 		sink := &externalSinkFake{}
-		handler, err := NewExternalIngestHandler(repository, sink, nil)
+		handler, err := NewExternalIngestHandler(repository, sink, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestExternalHandlerSkipsTerminalAndFailsClosedOperationalEntitlement(t *tes
 				ItemsReceived: 1, Payload: payload,
 			},
 		}
-		handler, err := NewExternalIngestHandler(repository, &externalSinkFake{}, nil)
+		handler, err := NewExternalIngestHandler(repository, &externalSinkFake{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -256,7 +256,7 @@ func TestExternalHandlerSkipsTerminalAndFailsClosedOperationalEntitlement(t *tes
 func TestExternalPermanentFinalizerMarksAddressableBatchOnly(t *testing.T) {
 	pointer := externalTestPointer()
 	repository := &externalRepositoryFake{}
-	handler, err := NewExternalIngestHandler(repository, &externalSinkFake{}, nil)
+	handler, err := NewExternalIngestHandler(repository, &externalSinkFake{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -206,6 +207,61 @@ func requirePreparedRouteSnapshotEOF(decoder *json.Decoder) error {
 	return nil
 }
 
+// preparedRouteManifestDestinationsMatch compares a manifest's destination set
+// against the one github emits TODAY.
+//
+// It is split out of the identity check, and returns its OWN error, because the
+// two failures need different answers. Every other identity failure means the
+// document is not this claim's, or has been tampered with, and the only safe
+// response is to refuse. A destination-set difference means something else
+// entirely: the document is authentically ours and simply predates a manifest
+// change. Collapsing them into one error forced the caller to treat a routine
+// deploy like tampering.
+//
+// The GITHUB list. This validator refuses any other provider outright, so the
+// shared family list was never right here -- and once github grew two
+// destinations of its own (CHAOS-4194) it became actively wrong: a run that
+// persisted an eighteen-effect snapshot and crashed would reload it, compare
+// eighteen against sixteen, and refuse to replay or complete the unit.
+func preparedRouteManifestDestinationsMatch(batch CompleteRouteBatch) error {
+	got := make([]string, 0, len(batch.Effects))
+	for _, effect := range batch.Effects {
+		got = append(got, effect.Destination)
+	}
+	sort.Strings(got)
+	want := githubWorkItemRouteDestinations()
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		return ErrPreparedSnapshotManifestMismatch
+	}
+	return nil
+}
+
+// preparedSnapshotReplayable reports whether a persisted ledger may be
+// DISCARDED and its route re-run from the claim.
+//
+// Discarding is only safe if every effect the old document describes can be
+// produced again and land idempotently. Readback-fenced and replay-safe effects
+// both qualify: the committer inspects before writing and replays only what the
+// readback reports absent. An effect recorded as recovery-BLOCKED does not --
+// that classification exists precisely to say "this cannot be redone safely" --
+// so a document containing one is refused rather than discarded, loudly.
+//
+// Checked against the PERSISTED document rather than assumed from today's
+// builder. Today every github destination is built EffectReadbackRequired
+// (BuildGitHubWorkItemEffects), so this answers true for every real snapshot;
+// but the document being judged was written by an OLDER binary, which is the
+// whole situation, and reading its own recorded classification is the only
+// honest way to ask.
+func preparedSnapshotReplayable(state EffectLedgerState) bool {
+	for _, effect := range state.Effects {
+		if effect.Recovery == EffectRecoveryBlocked {
+			return false
+		}
+	}
+	return true
+}
+
 func validatePreparedRouteManifestIdentity(
 	claim Claim,
 	batch CompleteRouteBatch,
@@ -216,20 +272,8 @@ func validatePreparedRouteManifestIdentity(
 		batch.Evidence.Provider != claim.Provider || batch.Evidence.Dataset != claim.Dataset {
 		return ErrEffectRecoveryUnsafe
 	}
-	got := make([]string, 0, len(batch.Effects))
-	for _, effect := range batch.Effects {
-		got = append(got, effect.Destination)
-	}
-	sort.Strings(got)
-	want := workItemRouteDestinations()
-	sort.Strings(want)
-	if len(got) != len(want) {
-		return ErrEffectRecoveryUnsafe
-	}
-	for index := range got {
-		if got[index] != want[index] {
-			return ErrEffectRecoveryUnsafe
-		}
+	if err := preparedRouteManifestDestinationsMatch(batch); err != nil {
+		return err
 	}
 	return nil
 }

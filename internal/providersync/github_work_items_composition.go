@@ -58,6 +58,14 @@ func NewGitHubWorkItemClickHouseEffects(
 	sink := GitHubWorkItemClickHouseEffects{
 		Lease: lease,
 
+		// Project membership (CHAOS-4194). Kept adjacent to the direct fact
+		// surfaces because that is what they are: observed provider events, not
+		// derivations. They are listed separately only because Python has no
+		// counterpart for either -- it drops PullRequest board items outright,
+		// and never wrote a `projects` row for a Projects V2 target at all.
+		ProjectMembershipTransitions: GitHubProjectMembershipClickHouseAdapter{Conn: conn},
+		Projects:                     GitHubProjectCatalogClickHouseAdapter{Conn: conn},
+
 		// Seven direct fact surfaces.
 		AIAttribution:        GitHubAIAttributionClickHouseAdapter{Conn: conn},
 		Sprints:              GitHubSprintsClickHouseAdapter{Conn: conn},

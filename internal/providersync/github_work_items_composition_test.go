@@ -81,7 +81,7 @@ func TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen(t *testing.T) {
 	if !sink.complete() {
 		t.Fatal("fully constructed sink did not report itself complete")
 	}
-	for _, destination := range workItemRouteDestinations() {
+	for _, destination := range githubWorkItemRouteDestinations() {
 		adapter, known := sink.adapterForDestination(destination)
 		if !known {
 			t.Fatalf("destination %q is not dispatchable", destination)
@@ -111,7 +111,7 @@ func TestGitHubWorkItemSinkMissingDestinationsIsClauseLevel(t *testing.T) {
 		t.Fatalf("fixture is not complete: missing=%v", got)
 	}
 
-	for _, destination := range workItemRouteDestinations() {
+	for _, destination := range githubWorkItemRouteDestinations() {
 		t.Run(destination, func(t *testing.T) {
 			t.Parallel()
 			mutated := githubWorkItemSinkWithout(
@@ -187,6 +187,10 @@ func githubWorkItemSinkWithout(
 		sink.WorkItemUserMetricsDaily = nil
 	case "work_items":
 		sink.WorkItems = nil
+	case "project_membership_transitions":
+		sink.ProjectMembershipTransitions = nil
+	case "projects":
+		sink.Projects = nil
 	default:
 		panic("unmapped destination " + destination)
 	}
@@ -896,8 +900,8 @@ func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(effects) != len(workItemRouteDestinations()) {
-		t.Fatalf("effects=%d want=%d", len(effects), len(workItemRouteDestinations()))
+	if len(effects) != len(githubWorkItemRouteDestinations()) {
+		t.Fatalf("effects=%d want=%d", len(effects), len(githubWorkItemRouteDestinations()))
 	}
 
 	// A complete sink -- the shape NewGitHubWorkItemClickHouseEffects will
@@ -914,8 +918,8 @@ func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T)
 			t.Fatalf("inspect %s=%s error=%v", effect.Destination, inspection, err)
 		}
 	}
-	if len(backend.writeCounts) != len(workItemRouteDestinations()) {
+	if len(backend.writeCounts) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("destinations written=%d want=%d",
-			len(backend.writeCounts), len(workItemRouteDestinations()))
+			len(backend.writeCounts), len(githubWorkItemRouteDestinations()))
 	}
 }

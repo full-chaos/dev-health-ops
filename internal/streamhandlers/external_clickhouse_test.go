@@ -40,6 +40,11 @@ func TestClickHouseExternalSinkPersistsEveryV1KindWithProvenance(t *testing.T) {
 			"externalKey": "7", "provider": "github", "occurredAt": "2026-07-22T11:00:00Z",
 			"fromStatus": "todo", "toStatus": "in_progress",
 		}),
+		externalSinkFixture("project_membership_transition.v1", map[string]any{
+			"externalKey": "7", "provider": "github", "eventId": "evt-1",
+			"subjectKind": "work_item", "workItemType": "issue",
+			"occurredAt": "2026-07-22T11:30:00Z", "toProjectId": "ghprojv2:full-chaos#4",
+		}),
 		externalSinkFixture("work_item_dependency.v1", map[string]any{
 			"sourceExternalKey": "7", "targetExternalKey": "8", "relationshipType": "blocks",
 		}),
@@ -84,22 +89,35 @@ func TestClickHouseExternalSinkPersistsEveryV1KindWithProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(connection.queries) != 21 {
+	if len(connection.queries) != 22 {
 		t.Fatalf("prepared sink kinds = %d", len(connection.queries))
 	}
 	for index, batch := range batches {
 		if !batch.sent || len(batch.rows) != 1 {
 			t.Fatalf("sink batch %d not durable: %#v", index, batch)
 		}
+		// Either shape counts as provenance. Most tables declare source_id as a
+		// bare UUID and the sink appends the value; project_membership_
+		// transitions declares it Nullable, so the shared row carries a pointer
+		// to express the NULL a Go-sync-route writer needs. Accepting only the
+		// bare value would fail a row that is MORE precise about the column it
+		// is writing, not less.
 		if !slices.ContainsFunc(batch.rows[0], func(value any) bool {
-			id, ok := value.(uuid.UUID)
-			return ok && id == sourceID
+			switch id := value.(type) {
+			case uuid.UUID:
+				return id == sourceID
+			case *uuid.UUID:
+				return id != nil && *id == sourceID
+			default:
+				return false
+			}
 		}) {
 			t.Fatalf("sink batch %d omitted source provenance: %#v", index, batch.rows[0])
 		}
 	}
 	for _, table := range []string{
 		"repos", "identities", "teams", "work_items", "work_item_transitions",
+		"project_membership_transitions",
 		"work_item_dependencies", "git_pull_requests", "git_pull_request_reviews",
 		"git_commits", "operational_services", "operational_incidents",
 		"operational_alerts", "operational_incident_timeline_events",
@@ -151,7 +169,7 @@ func TestClickHouseExternalSinkRetriesAreIdempotentAtNaturalKeys(t *testing.T) {
 	}
 }
 
-func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyOneKinds(t *testing.T) {
+func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyTwoKinds(t *testing.T) {
 	pointer := externalTestPointer()
 	records := []externalSinkRecord{
 		externalSinkFixture("repository.v1", map[string]any{"externalId": pointer.SourceInstance, "sourceSystem": "github"}),
@@ -164,6 +182,11 @@ func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyOneKinds(t *testing.T) {
 		externalSinkFixture("work_item_transition.v1", map[string]any{
 			"externalKey": "7", "provider": "github", "occurredAt": "2026-07-23T11:00:00Z",
 			"fromStatus": "todo", "toStatus": "in_progress",
+		}),
+		externalSinkFixture("project_membership_transition.v1", map[string]any{
+			"externalKey": "7", "provider": "github", "eventId": "evt-1",
+			"subjectKind": "work_item", "workItemType": "issue",
+			"occurredAt": "2026-07-23T11:00:00Z", "toProjectId": "ghprojv2:full-chaos#4",
 		}),
 		externalSinkFixture("work_item_dependency.v1", map[string]any{
 			"sourceExternalKey": "7", "targetExternalKey": "8", "relationshipType": "blocks",
@@ -181,7 +204,7 @@ func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyOneKinds(t *testing.T) {
 		}),
 	}
 	records = append(records, externalOperationalSinkFixtures()...)
-	if len(records) != 21 || len(externalRecordSchemas) != 21 {
+	if len(records) != 22 || len(externalRecordSchemas) != 22 {
 		t.Fatalf("schema coverage records=%d schemas=%d", len(records), len(externalRecordSchemas))
 	}
 	for _, record := range records {

@@ -337,7 +337,12 @@ func TestGitHubWorkItemMetricTripletOwnsExactlyThreeDerivedDestinations(t *testi
 		if !slices.Contains(githubWorkItemDerivedDestinations, destination) {
 			t.Fatalf("%q is not one of the route's derived destinations", destination)
 		}
-		if !slices.Contains(workItemRouteDestinations(), destination) {
+		// The GITHUB list, on a github path. Behaviour-neutral TODAY -- the
+		// metric triplet is a subset of the shared family, so Contains answers
+		// the same against either -- but the shared list is the wrong source
+		// for a github assertion, and a future github-only surface here would
+		// fail silently against it.
+		if !slices.Contains(githubWorkItemRouteDestinations(), destination) {
 			t.Fatalf("%q is not a canonical work-item route destination", destination)
 		}
 	}

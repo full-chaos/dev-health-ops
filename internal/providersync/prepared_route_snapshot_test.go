@@ -40,8 +40,12 @@ func TestPreparedRouteSnapshotRoundTripBindsExactGitHubWorkItemsManifest(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Batch.Effects) != len(workItemRouteDestinations()) ||
+	if len(manifest.Batch.Effects) != len(githubWorkItemRouteDestinations()) ||
 		!manifest.NormalizedAt.Equal(normalizedAt) || !manifest.Comparison.Match ||
+		// 16 is the FIXTURE's record count, not a destination count. The two
+		// were equal by coincidence before CHAOS-4194 added two destinations,
+		// and conflating them here would tie an evidence total to a manifest
+		// length that has nothing to do with it.
 		manifest.Batch.Evidence.Records != 16 {
 		t.Fatalf("manifest=%+v", manifest)
 	}
@@ -160,7 +164,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	if !ok || !descriptor.PreparedManifestRecovery || !descriptor.RouteReady || !descriptor.Plannable {
 		t.Fatalf("github/work-items descriptor=%+v ok=%v", descriptor, ok)
 	}
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady = true
 	descriptor.Plannable = true
 	handler := &staticCompleteRouteHandler{
@@ -189,7 +193,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 		ledger.preparedPrepares != 1 ||
 		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
 		result.Effects.Skipped != 1 || result.Effects.MarkedCommitted != 1 ||
-		result.Effects.Written != len(workItemRouteDestinations())-2 ||
+		result.Effects.Written != len(githubWorkItemRouteDestinations())-2 ||
 		result.Result["records"] != float64(16) {
 		t.Fatalf(
 			"handler_at=%s loads=%d prepares=%d credential_calls=%d decrypt_calls=%d requests=%d result=%+v stored_result=%v",
@@ -203,7 +207,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondResult.Effects.Skipped != len(workItemRouteDestinations()) ||
+	if secondResult.Effects.Skipped != len(githubWorkItemRouteDestinations()) ||
 		secondResult.Effects.Written != 0 || len(secondSink.destinations) != 0 ||
 		ledger.preparedPrepares != 1 || !handler.normalizedAt.IsZero() {
 		t.Fatalf("all-committed recovery result=%+v writes=%v", secondResult, secondSink.destinations)
@@ -231,7 +235,7 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 	}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live_provider": "changed"},
@@ -251,7 +255,7 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 	}
 	if result.Watermark != nil || !handler.normalizedAt.IsZero() ||
 		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
-		result.Effects.Written != len(workItemRouteDestinations()) {
+		result.Effects.Written != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf(
 			"watermark=%v handler_at=%s credential_calls=%d decrypt_calls=%d requests=%d result=%+v",
 			result.Watermark, handler.normalizedAt, credentials.calls, decryptor.calls,
@@ -279,7 +283,7 @@ func TestCompleteRouteExecutorSuppressesForgedLiveIncompleteWatermark(t *testing
 	}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	ledger := &memoryEffectLedger{}
@@ -312,7 +316,7 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 		t.Fatal(err)
 	}
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live": "changed"},
@@ -324,7 +328,7 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Effects.Written != len(workItemRouteDestinations()) ||
+	if result.Effects.Written != len(githubWorkItemRouteDestinations()) ||
 		!handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
 		ledger.preparedPrepares != 1 {
 		t.Fatalf(
@@ -350,7 +354,7 @@ func TestCompleteRouteExecutorFailsClosedWhenPreparedSnapshotIsMissing(t *testin
 	}
 	ledger.state = state
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
@@ -363,7 +367,7 @@ func TestCompleteRouteExecutorFailsClosedWhenPreparedSnapshotIsMissing(t *testin
 
 func preparedGitHubWorkItemsFixture(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
-	destinations := workItemRouteDestinations()
+	destinations := githubWorkItemRouteDestinations()
 	effects := make([]EffectBatch, 0, len(destinations))
 	for _, destination := range destinations {
 		policy := EffectReplaySafe
@@ -545,7 +549,7 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 	}
 	ledger := &memoryEffectLedger{state: legacy, preparedSnapshot: payload}
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
@@ -584,7 +588,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)
 			descriptor := CompleteRouteDescriptor{
 				Provider: pair.provider, RequestedDataset: pair.dataset,
-				RouteDataset: pair.dataset, Destinations: workItemRouteDestinations(),
+				RouteDataset: pair.dataset, Destinations: githubWorkItemRouteDestinations(),
 				PreparedManifestRecovery: true, RouteReady: true, Plannable: true,
 			}
 			handler := &staticCompleteRouteHandler{
@@ -624,7 +628,7 @@ func TestRouteRequiringPreparedRecoveryRefusesALedgerWithoutASnapshotStore(t *te
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	_, session := preparedGitHubWorkItemsSession(t, now)
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{}
 	sink := &memoryEffectSink{}
@@ -654,7 +658,7 @@ func TestPreparedRecoveryRevalidatesTheManifestAgainstTheLiveDescriptor(t *testi
 		t.Fatal(err)
 	}
 	descriptor, _ := Descriptor("github", "work-items")
-	full := workItemRouteDestinations()
+	full := githubWorkItemRouteDestinations()
 	descriptor.Destinations = full[:len(full)-1]
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
@@ -863,14 +867,14 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 	); err != nil {
 		t.Fatal(err)
 	}
-	destinations := workItemRouteDestinations()
+	destinations := githubWorkItemRouteDestinations()
 	sortStrings(destinations)
 	refused := destinations[len(destinations)/2]
 	sinkFailure := errors.New("sink refused the write")
 	sink := &memoryEffectSink{failAfterWrite: refused, failure: sinkFailure}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err := completeRouteExecutor(
@@ -889,7 +893,7 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 	if loadErr != nil {
 		t.Fatalf("snapshot unusable after a withheld completion: %v", loadErr)
 	}
-	if len(recovered.Batch.Effects) != len(workItemRouteDestinations()) {
+	if len(recovered.Batch.Effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("recovered manifest is incomplete: %d effects", len(recovered.Batch.Effects))
 	}
 }
@@ -931,7 +935,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if !ok || !descriptor.PreparedManifestRecovery {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 
 	ledger := &memoryEffectLedger{}
@@ -945,7 +949,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live collect and prepare failed: %v", err)
 	}
-	if first.Effects.Written != len(workItemRouteDestinations()) ||
+	if first.Effects.Written != len(githubWorkItemRouteDestinations()) ||
 		ledger.preparedPrepares != 1 {
 		t.Fatalf("first pass result=%+v prepares=%d", first, ledger.preparedPrepares)
 	}
@@ -996,7 +1000,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recovery refused the snapshot this route prepared: %v", err)
 	}
-	if second.Effects.Skipped != len(workItemRouteDestinations()) ||
+	if second.Effects.Skipped != len(githubWorkItemRouteDestinations()) ||
 		second.Effects.Written != 0 || len(recoverySink.destinations) != 0 {
 		t.Fatalf("recovery result=%+v writes=%v", second, recoverySink.destinations)
 	}
@@ -1004,5 +1008,107 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if !recovering.normalizedAt.IsZero() || ledger.preparedPrepares != 1 {
 		t.Fatalf("recovery recollected at=%s prepares=%d",
 			recovering.normalizedAt, ledger.preparedPrepares)
+	}
+}
+
+// TestASupersededDestinationManifestIsDistinguishableFromTampering is the
+// deploy-compatibility contract (CHAOS-4194, Context Fabric ruling D).
+//
+// A prepared snapshot persisted by an OLDER binary describes the manifest that
+// binary emitted. Adding a destination makes every such document unloadable,
+// and the previous code answered that the only way it could: by refusing, with
+// the same error tampering earns. The document never changes, so every retry
+// refused identically and the unit was stuck -- silently, because nothing
+// reports "recovery keeps refusing the same snapshot". Every future destination
+// addition would strand whatever was in flight at deploy.
+//
+// The fix turns entirely on telling the two apart, so that is what this pins:
+// a superseded set returns its OWN error, and every other identity failure
+// still returns the refusal it always did.
+func TestASupersededDestinationManifestIsDistinguishableFromTampering(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	current := preparedGitHubWorkItemsFixture(t, claim)
+
+	// Exactly a pre-CHAOS-4194 document: this manifest minus the two
+	// destinations that ticket added. Structurally valid, authentically this
+	// claim's, and describing a set the route no longer emits.
+	superseded := current
+	kept := make([]EffectBatch, 0, len(current.Effects))
+	for _, effect := range current.Effects {
+		if effect.Destination == "project_membership_transitions" || effect.Destination == "projects" {
+			continue
+		}
+		kept = append(kept, effect)
+	}
+	if len(kept) != len(current.Effects)-2 {
+		t.Fatalf("fixture lacks the new destinations: kept %d of %d", len(kept), len(current.Effects))
+	}
+	superseded.Effects = kept
+
+	if err := preparedRouteManifestDestinationsMatch(superseded); !errors.Is(
+		err, ErrPreparedSnapshotManifestMismatch,
+	) {
+		t.Fatalf("superseded manifest error=%v, want ErrPreparedSnapshotManifestMismatch", err)
+	}
+	if err := preparedRouteManifestDestinationsMatch(current); err != nil {
+		t.Fatalf("current manifest was rejected: %v", err)
+	}
+	// The distinction is only worth anything if the OTHER failures still refuse.
+	// A wrong-provider claim must not be mistaken for a stale document and
+	// discarded -- that would turn the tamper fence into a replay trigger.
+	foreign := claim
+	foreign.Provider = "gitlab"
+	if err := validatePreparedRouteManifestIdentity(foreign, current, normalizedAt); !errors.Is(
+		err, ErrEffectRecoveryUnsafe,
+	) {
+		t.Fatalf("foreign-provider identity error=%v, want ErrEffectRecoveryUnsafe", err)
+	}
+}
+
+// TestOnlyAnUntouchedSupersededDocumentMayBeDiscarded keeps the discard honest.
+//
+// Discarding deletes the generation journal, which is also the record that a
+// committed effect ever landed. So it is restricted to documents where nothing
+// has committed and nothing is recovery-blocked; anything else stops loudly
+// instead. Without this the fix would trade a stuck unit for a silently
+// destroyed write record, which is the worse of the two.
+func TestOnlyAnUntouchedSupersededDocumentMayBeDiscarded(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	state, err := NewEffectLedgerState(claim, batch.Effects, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isSafeWorkItemsManifestReplanState(claim, state) {
+		t.Fatal("an untouched document was judged unsafe to discard")
+	}
+
+	committed := state
+	committed.Effects = append([]EffectLedgerEntry(nil), state.Effects...)
+	started, landed := normalizedAt, normalizedAt
+	committed.Effects[0].Status = GenerationBlockCommitted
+	committed.Effects[0].StartedAt, committed.Effects[0].CommittedAt = &started, &landed
+	if isSafeWorkItemsManifestReplanState(claim, committed) {
+		t.Fatal("a document with a committed effect was judged safe to discard")
+	}
+
+	blocked := state
+	blocked.Effects = append([]EffectLedgerEntry(nil), state.Effects...)
+	blocked.Effects[0].Recovery = EffectRecoveryBlocked
+	if isSafeWorkItemsManifestReplanState(claim, blocked) {
+		t.Fatal("a document with a recovery-blocked effect was judged safe to discard")
+	}
+	if preparedSnapshotReplayable(blocked) {
+		t.Fatal("a recovery-blocked document was judged replayable")
+	}
+
+	// The blame predicate must not have been widened by accident: it still
+	// answers only for its own dataset and shape.
+	if isSafeGitHubBlameReplanState(claim, state) {
+		t.Fatal("the blame replan predicate accepted a work-items document")
 	}
 }

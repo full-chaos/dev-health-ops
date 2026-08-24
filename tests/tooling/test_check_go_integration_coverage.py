@@ -32,4 +32,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-3092 P0 added internal/testsupport/computeparity (27 -> 28): the
     # whole-table parity harness is integration-tagged because it provisions
     # two migrated scratch stores in a real container.
-    assert "28 package(s) discovered, 0 denylisted, 28 will run" in result.stdout
+    # CHAOS-4194 added internal/streamhandlers (28 -> 29): the project
+    # membership sink is proved against the real migration chain in a real
+    # container, so the package grew its first -tags integration file.
+    assert "29 package(s) discovered, 0 denylisted, 29 will run" in result.stdout

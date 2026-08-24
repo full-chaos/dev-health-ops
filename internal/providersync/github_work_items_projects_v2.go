@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 const gitHubProjectsV2IntegrationConfigKey = "github_projects_v2"
@@ -68,6 +73,14 @@ type GitHubProjectV2FetchResult struct {
 	Evidence FetchEvidence
 	Usage    GitHubProjectV2Usage
 	Targets  int
+	// MembershipSkips counts board items that produced NO membership row, by
+	// bounded reason (CHAOS-4194). It exists because the defect this ticket
+	// fixes was a SILENT drop: PR items were fetched fully hydrated and
+	// discarded with no counter and no log, so the gap was invisible for as
+	// long as it existed. Every remaining not-emitted case is now countable by
+	// a label that says which case it is, so the next such gap is visible
+	// before someone has to read the normalizer to find it.
+	MembershipSkips map[string]int
 }
 
 // GitHubProjectV2Fetcher preserves Python's per-source fanout: callers may
@@ -170,9 +183,11 @@ func (GitHubProjectV2Fetcher) Fetch(
 			WorkItems: []githubWorkItemRow{}, StatusTransitions: []githubWorkItemTransitionRow{},
 			Dependencies: []githubWorkItemDependencyRow{}, ReopenEvents: []githubWorkItemReopenRow{},
 			Interactions: []githubWorkItemInteractionRow{}, Sprints: []githubSprintRow{},
-			AIAttributions: []githubAIAttributionRow{},
+			AIAttributions:     []githubAIAttributionRow{},
+			ProjectMemberships: []projectmembership.Row{}, Projects: []projectmembership.CatalogRow{},
 		},
-		Evidence: FetchEvidence{Provider: "github", Dataset: "projects-v2"},
+		MembershipSkips: map[string]int{},
+		Evidence:        FetchEvidence{Provider: "github", Dataset: "projects-v2"},
 		Usage: GitHubProjectV2Usage{
 			Transport: "graphql", RouteFamily: "work_item_prs", Dimension: BudgetGraphQLCost,
 		},
@@ -195,7 +210,29 @@ func (GitHubProjectV2Fetcher) Fetch(
 			return finishGitHubProjectV2Fetch(result), err
 		}
 		projectScopeID := fmt.Sprintf("ghprojv2:%s#%d", target.OrgLogin, target.ProjectNumber)
+		// The board itself has to exist in `projects` before anything can
+		// point at it. Nothing wrote this row before CHAOS-4194 -- the fetcher
+		// stamped the id onto work items and the entity it named was never
+		// created -- so every github membership would have been filtered out
+		// by the resolve-to-`projects` constraint. `projects` is a
+		// ReplacingMergeTree keyed (org_id, provider, id), so emitting it once
+		// per sync converges rather than accumulating.
+		result.Rows.Projects = append(result.Rows.Projects, projectmembership.EnsureProjectsRow(
+			claim.OrgID, "github", projectScopeID, "",
+			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
+		))
 		for _, item := range items {
+			// Membership is decided BEFORE the work-item normalization, and
+			// independently of it. A pull request is not a work item and never
+			// becomes one -- PRs live in git_pull_requests -- but it is a first
+			// class board member, and conflating the two questions is exactly
+			// how its membership came to be discarded: the normalizer answered
+			// "not a work item" and the loop read that as "nothing here".
+			if membership, ok := githubProjectV2MembershipRow(claim, item, projectScopeID, normalizedAt); ok {
+				result.Rows.ProjectMemberships = append(result.Rows.ProjectMemberships, membership)
+			} else {
+				result.MembershipSkips[githubProjectV2MembershipSkipReason(item)]++
+			}
 			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
 			)
@@ -214,11 +251,78 @@ func (GitHubProjectV2Fetcher) Fetch(
 			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
 	}
+	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
 	return finishGitHubProjectV2Fetch(result), nil
 }
 
+// gitHubProjectV2AttentionSkips are the skip reasons that mean something
+// CHANGED, as opposed to something we deliberately deferred.
+//
+// A board item whose typename we do not recognise means GitHub shipped a new
+// content kind; a PullRequest missing its repository, number or createdAt means
+// the query or the payload shape moved under us. Neither is self-correcting and
+// both are invisible without this line.
+var gitHubProjectV2AttentionSkips = []string{"pull_request_incomplete", "unknown_content_type"}
+
+// reportGitHubProjectV2MembershipSkips emits the one structured record that
+// makes MembershipSkips observable in production.
+//
+// A count on a result struct is not observability: nothing reads
+// GitHubProjectV2FetchResult except the caller that built it, and this
+// collector owns no registration to publish a Prometheus series through (D18),
+// so without this the counter would be exactly what it replaced -- a drop
+// nobody can see, with a nicer name in the source. The reserved metric name for
+// when that collector is activated is
+// worker_github_project_v2_membership_skips_total{reason}; it is deliberately
+// not declared yet, because a series with no emitter can never move and would
+// read as coverage of a case nobody exercised.
+//
+// Emitted only when something was actually skipped. A line on every sync
+// regardless of content is noise operators learn to filter, which costs the
+// record the attention it exists to buy.
+//
+// The LEVEL is chosen by content rather than fixed. Every sync of a real board
+// defers every issue on it, so a fixed WARN would warn permanently about
+// working as designed and would bury the reasons that are genuinely news inside
+// that noise. A fixed INFO would put a provider schema change at the level
+// operators filter out. So a deferral logs INFO and an attention reason
+// escalates the same record to WARN.
+//
+// Each reason is its own attribute and a reason with no occurrences is OMITTED,
+// not written as zero -- a permanent zero reads as coverage of a case nobody
+// exercised. Attributes are sorted so the record is stable across runs; Go map
+// iteration order is randomised, and an unstable attribute order makes two
+// identical fetches look like different events to a log backend.
+//
+// Not called on the error return paths. A failed fetch's partial skip counts
+// describe how far it got, not what it decided, and reporting them would put a
+// misleading "we skipped these" record next to the error that actually matters.
+func reportGitHubProjectV2MembershipSkips(claim Claim, skips map[string]int) {
+	if len(skips) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(skips))
+	for reason := range skips {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	attrs := []any{
+		"provider", claim.Provider, "dataset", claim.Dataset,
+		"org_id", claim.OrgID, "unit", claim.ID, "integration", claim.IntegrationID,
+	}
+	level := slog.LevelInfo
+	for _, reason := range reasons {
+		attrs = append(attrs, reason, int64(skips[reason]))
+		if skips[reason] > 0 && slices.Contains(gitHubProjectV2AttentionSkips, reason) {
+			level = slog.LevelWarn
+		}
+	}
+	slog.Log(context.Background(), level, "github_projects_v2.membership_skips", attrs...)
+}
+
 func finishGitHubProjectV2Fetch(result GitHubProjectV2FetchResult) GitHubProjectV2FetchResult {
-	result.Evidence.Records = len(result.Rows.WorkItems) + len(result.Rows.StatusTransitions)
+	result.Evidence.Records = len(result.Rows.WorkItems) + len(result.Rows.StatusTransitions) +
+		len(result.Rows.ProjectMemberships) + len(result.Rows.Projects)
 	return result
 }
 
@@ -438,6 +542,103 @@ type gitHubProjectV2ChangePayload struct {
 	} `json:"actor"`
 }
 
+// githubProjectV2MembershipRow builds the board-membership row for one Projects
+// v2 item, or reports that the item cannot carry one.
+//
+// PULL REQUESTS ARE THE POINT. Before CHAOS-4194 a PR item was fetched fully
+// hydrated -- the GraphQL query already selects the `... on PullRequest`
+// fragment -- and then discarded by the normalizer with no counter and no log,
+// so a PR's board membership existed nowhere in the graph. That was a
+// normalizer POLICY choice, not an API limitation, which is why removing it is
+// the whole fix on this side.
+//
+// occurred_at is the ITEM's createdAt, not the sync clock, and that choice is
+// load-bearing rather than cosmetic. A ProjectV2Item's createdAt is when the
+// subject was added to this board, which is precisely the membership event --
+// and it is stable across re-syncs, so the content-determined event_id derived
+// from it is stable too and ReplacingMergeTree collapses a re-sync back to one
+// row. Stamping the sync time instead would put a per-sync value into the
+// sorting key and accumulate one row per sync of a single membership, which is
+// the same interaction that made occurred_at required at the sink.
+//
+// An item missing any of repository, number, or createdAt yields NO row rather
+// than a defaulted one. Each of those is a sorting-key member or the basis of
+// one, so a placeholder would key the row to something that does not exist
+// while looking entirely well-formed -- and the caller counts the skip, so the
+// absence is visible.
+//
+// Issues are NOT emitted here, and that is a deferral rather than an omission:
+// github work-item membership is observable only by diffing which board an item
+// appears on between syncs, and that snapshot-diff mechanism is sequenced
+// behind the jira and linear producers on CHAOS-4193 (its producer scope pass,
+// item 4). Emitting an issue row from this loop would have to invent an
+// occurred_at for a change nobody observed.
+func githubProjectV2MembershipRow(
+	claim Claim,
+	item gitHubProjectV2ItemPayload,
+	projectScopeID string,
+	normalizedAt time.Time,
+) (projectmembership.Row, bool) {
+	if claim.Validate() != nil || item.Content.Typename != "PullRequest" ||
+		strings.TrimSpace(projectScopeID) == "" || normalizedAt.IsZero() {
+		return projectmembership.Row{}, false
+	}
+	repository := strings.TrimSpace(item.Content.Repository.NameWithOwner)
+	addedAt := parseGitHubWorkItemTime(item.CreatedAt)
+	if repository == "" || item.Content.Number <= 0 || addedAt == nil {
+		return projectmembership.Row{}, false
+	}
+	identity, err := repositoryIdentity(repository)
+	if err != nil {
+		return projectmembership.Row{}, false
+	}
+	repoID, err := uuid.Parse(identity)
+	if err != nil {
+		return projectmembership.Row{}, false
+	}
+	row := projectmembership.Row{
+		OrgID: claim.OrgID, SubjectKind: projectmembership.SubjectPullRequest,
+		SubjectID: strconv.Itoa(item.Content.Number), RepoID: repoID,
+		Provider: "github",
+		// from_* is empty: a snapshot observation of current membership has no
+		// observed predecessor, which is the same first-assignment case
+		// work_item_transitions already spells "" rather than NULL.
+		//
+		// to_project_key is empty because GitHub Projects v2 HAS no project key
+		// -- a board is a number and a title. The sink admits an id without a
+		// key for exactly this reason; only a key without an id is refused,
+		// since that is what cannot resolve to a `projects` row.
+		ToProjectID: projectScopeID,
+		OccurredAt:  addedAt.UTC(), LastSynced: normalizedAt.UTC(),
+	}
+	row.EventID = projectmembership.EventID(row)
+	return row, true
+}
+
+// githubProjectV2MembershipSkipReason labels one not-emitted item with a
+// BOUNDED reason. Bounded because it becomes a Prometheus label: an unbounded
+// one (the raw typename, say) would let a provider schema change mint
+// unbounded series.
+//
+// The four values are genuinely different situations and are kept apart rather
+// than folded into one "skipped" bucket, since the response to each differs:
+// an issue is deferred work, a draft issue can never carry a membership at all,
+// an incomplete pull request is a real signal that the query or the payload
+// changed, and an unknown typename means GitHub added a content kind nobody
+// has looked at.
+func githubProjectV2MembershipSkipReason(item gitHubProjectV2ItemPayload) string {
+	switch item.Content.Typename {
+	case "PullRequest":
+		return "pull_request_incomplete"
+	case "Issue":
+		return "issue_deferred_to_snapshot_diff"
+	case "DraftIssue":
+		return "draft_issue_has_no_subject"
+	default:
+		return "unknown_content_type"
+	}
+}
+
 func normalizeGitHubProjectV2Item(
 	claim Claim,
 	item gitHubProjectV2ItemPayload,
@@ -639,6 +840,12 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 		}
 	}
 	merged.StatusTransitions = append(append([]githubWorkItemTransitionRow{}, repository.StatusTransitions...), projects.StatusTransitions...)
+	// Appended, not last-wins. Memberships and catalogue rows are append-only
+	// facts keyed on their own identity, so the work-item merge's
+	// overwrite-by-id rule does not apply to them; taking `merged := repository`
+	// alone would silently drop everything the Projects v2 half produced.
+	merged.ProjectMemberships = append(append([]projectmembership.Row{}, repository.ProjectMemberships...), projects.ProjectMemberships...)
+	merged.Projects = append(append([]projectmembership.CatalogRow{}, repository.Projects...), projects.Projects...)
 	return merged
 }
 

@@ -102,13 +102,28 @@ func TestNormalizeGitHubSprintMatchesProductionBoundary(t *testing.T) {
 	}
 }
 
+// TestGitHubWorkItemCompositeDeclaresEveryPythonBatchFamily pins the seven
+// families Python's GitHubProvider._ingest_with_client emits, IN ORDER, plus
+// the Go-only families declared separately below.
+//
+// The split is the point. Anything in the first list is a parity claim: adding
+// to it silently would assert Python emits a family it does not. Anything in
+// the second is a deliberate divergence of record -- Go emits it and Python
+// never did -- so it has to be named here rather than merged into the parity
+// list where it would read as ported behaviour.
 func TestGitHubWorkItemCompositeDeclaresEveryPythonBatchFamily(t *testing.T) {
 	t.Parallel()
 	typeOf := reflect.TypeOf(githubWorkItemRows{})
-	want := []string{
+	pythonFamilies := []string{
 		"WorkItems", "StatusTransitions", "Dependencies", "ReopenEvents",
 		"Interactions", "Sprints", "AIAttributions",
 	}
+	// CHAOS-4194: board membership and the `projects` catalogue row. Python's
+	// normalizer drops PR board items outright (normalize.py:514) and writes no
+	// projects row for a Projects v2 target at all, so neither family has a
+	// Python counterpart to be at parity with.
+	goOnlyFamilies := []string{"ProjectMemberships", "Projects"}
+	want := append(append([]string{}, pythonFamilies...), goOnlyFamilies...)
 	got := make([]string, 0, typeOf.NumField())
 	for index := 0; index < typeOf.NumField(); index++ {
 		got = append(got, typeOf.Field(index).Name)

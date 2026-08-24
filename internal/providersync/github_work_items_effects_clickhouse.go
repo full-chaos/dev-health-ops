@@ -31,6 +31,10 @@ type GitHubWorkItemEffectRows struct {
 	WorkItemTransitions            []json.RawMessage
 	WorkItemUserMetricsDaily       []json.RawMessage
 	WorkItems                      []json.RawMessage
+	// CHAOS-4194. Board memberships and the `projects` catalogue row that makes
+	// their destination resolvable.
+	ProjectMembershipTransitions []json.RawMessage
+	Projects                     []json.RawMessage
 }
 
 // githubWorkItemEffectRowsByDestination is intentionally a projection map,
@@ -55,11 +59,19 @@ var githubWorkItemEffectRowsByDestination = map[string]func(GitHubWorkItemEffect
 	"work_item_team_attributions":      func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTeamAttributions },
 	"work_item_transitions":            func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTransitions },
 	"work_item_user_metrics_daily":     func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemUserMetricsDaily },
+	"project_membership_transitions":   func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.ProjectMembershipTransitions },
+	"projects":                         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Projects },
 	"work_items":                       func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItems },
 }
 
 func githubWorkItemRouteDestinations() []string {
 	return workitemcontract.GitHubEffectDestinations()
+}
+
+// workItemFamilyRouteDestinations is the subset every work-item provider's
+// route writes. See workItemRouteDestinations for why the two lists differ.
+func workItemFamilyRouteDestinations() []string {
+	return workitemcontract.FamilyRouteDestinations()
 }
 
 // BuildGitHubWorkItemEffects constructs one deterministic, readback-fenced
@@ -115,7 +127,9 @@ func newGitHubWorkItemEffectIdentity(
 ) (GitHubWorkItemEffectIdentity, error) {
 	if claim.Validate() != nil || claim.Provider != "github" ||
 		!isWorkItemFamilyDataset(claim.Dataset) ||
-		!slices.Contains(workItemRouteDestinations(), effect.Destination) ||
+		// The GITHUB list: this identity fences the github work-item sink,
+		// which owns two surfaces beyond the shared family route.
+		!slices.Contains(githubWorkItemRouteDestinations(), effect.Destination) ||
 		!validDigest(effect.ContentDigest) ||
 		effect.Recovery != EffectReadbackRequired || effect.PayloadBytes < 0 {
 		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
@@ -181,6 +195,8 @@ type GitHubWorkItemClickHouseEffects struct {
 	WorkItemTransitions            GitHubWorkItemEffectAdapter
 	WorkItemUserMetricsDaily       GitHubWorkItemEffectAdapter
 	WorkItems                      GitHubWorkItemEffectAdapter
+	ProjectMembershipTransitions   GitHubWorkItemEffectAdapter
+	Projects                       GitHubWorkItemEffectAdapter
 }
 
 func (sink GitHubWorkItemClickHouseEffects) WriteEffect(
@@ -285,6 +301,10 @@ func (sink GitHubWorkItemClickHouseEffects) adapterForDestination(
 		return sink.WorkItemUserMetricsDaily, true
 	case "work_items":
 		return sink.WorkItems, true
+	case "project_membership_transitions":
+		return sink.ProjectMembershipTransitions, true
+	case "projects":
+		return sink.Projects, true
 	default:
 		return nil, false
 	}
@@ -300,7 +320,10 @@ func (sink GitHubWorkItemClickHouseEffects) adapterForDestination(
 // that entry must surface here -- silently omitting it would let the sink
 // report itself complete while a destination had no adapter at all.
 func (sink GitHubWorkItemClickHouseEffects) MissingDestinations() []string {
-	canonical := workItemRouteDestinations()
+	// The GITHUB list, not the shared family one: this sink owns two surfaces
+	// no other provider writes, and completeness has to demand them or the two
+	// adapters could go missing without anything noticing.
+	canonical := githubWorkItemRouteDestinations()
 	missing := make([]string, 0, len(canonical))
 	for _, destination := range canonical {
 		adapter, known := sink.adapterForDestination(destination)
@@ -311,11 +334,12 @@ func (sink GitHubWorkItemClickHouseEffects) MissingDestinations() []string {
 	return missing
 }
 
-// complete gates every write and readback. It remains an ALL-SIXTEEN gate: a
-// partially constructed sink would land a generation whose surfaces are
-// silently absent, which is exactly the "evaluated and produced no rows" versus
-// "the composite forgot a destination" distinction GitHubWorkItemEffectRows
-// exists to preserve.
+// complete gates every write and readback. It is an ALL-DESTINATIONS gate --
+// eighteen since CHAOS-4194 -- because a partially constructed sink would land
+// a generation whose surfaces are silently absent, which is exactly the
+// "evaluated and produced no rows" versus "the composite forgot a destination"
+// distinction GitHubWorkItemEffectRows exists to preserve. The count is not
+// spelled in code on purpose: workitemcontract owns it.
 func (sink GitHubWorkItemClickHouseEffects) complete() bool {
 	return len(sink.MissingDestinations()) == 0
 }

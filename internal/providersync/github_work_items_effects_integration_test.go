@@ -16,8 +16,11 @@ import (
 
 // TestGitHubWorkItemEffectRecoveryHoldsCompletionAndWatermarks exercises the
 // real Postgres effect ledger around both crash windows owned by this layer:
-// one destination lands before its CommitEffect acknowledgement, then all 16
-// effects commit before the worker can call PostgresRepository.Complete.
+// one destination lands before its CommitEffect acknowledgement, then every
+// effect commits before the worker can call PostgresRepository.Complete.
+// The counts are DERIVED from the github destination manifest, never spelled:
+// CHAOS-4194 moved it from sixteen to eighteen, and a literal here would have
+// pinned recovery to a shape github had stopped producing.
 // Neither window may advance an alias watermark.
 func TestGitHubWorkItemEffectRecoveryHoldsCompletionAndWatermarks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -98,7 +101,7 @@ func TestGitHubWorkItemEffectRecoveryHoldsCompletionAndWatermarks(t *testing.T) 
 		Now: func() time.Time { return recoveryNow },
 	}).Commit(ctx, recovered, effects, now)
 	if err != nil || result.MarkedCommitted != 1 ||
-		result.MarkedCommitted+result.Skipped+result.Written != 16 {
+		result.MarkedCommitted+result.Skipped+result.Written != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("recovery result=%+v error=%v", result, err)
 	}
 	assertWorkItemUnitStillRunningWithoutWatermark(t, ctx, pool, unitID)
@@ -119,7 +122,7 @@ func TestGitHubWorkItemEffectRecoveryHoldsCompletionAndWatermarks(t *testing.T) 
 		Ledger: repository, Sink: thirdSink, Readback: thirdSink,
 		Now: func() time.Time { return thirdNow },
 	}).Commit(ctx, third, effects, now)
-	if err != nil || result.Skipped != 16 || result.Written != 0 ||
+	if err != nil || result.Skipped != len(githubWorkItemRouteDestinations()) || result.Written != 0 ||
 		result.MarkedCommitted != 0 {
 		t.Fatalf("all-committed recovery result=%+v error=%v", result, err)
 	}
@@ -229,7 +232,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 		t.Fatal(err)
 	}
 	if prepared.SchemaVersion != "v2" || prepared.PreparedSnapshot == nil ||
-		len(prepared.Effects) != len(workItemRouteDestinations()) {
+		len(prepared.Effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("prepared ledger=%+v", prepared)
 	}
 
@@ -294,7 +297,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 		t.Fatalf("recovery descriptor=%+v ok=%v", descriptor, ok)
 	}
 	descriptor.Plannable = true
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"mutable_live_input": true},
 	}}
@@ -314,7 +317,7 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 	}
 	if !handler.normalizedAt.IsZero() || credentials.calls != 0 || decryptor.calls != 0 ||
 		doer.requests != 0 || result.Watermark != nil || result.Effects.MarkedCommitted != 1 ||
-		result.Effects.Written != len(workItemRouteDestinations())-1 {
+		result.Effects.Written != len(githubWorkItemRouteDestinations())-1 {
 		t.Fatalf(
 			"handler_at=%s credential_calls=%d decrypt_calls=%d requests=%d result=%+v",
 			handler.normalizedAt, credentials.calls, decryptor.calls, doer.requests, result,

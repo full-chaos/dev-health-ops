@@ -92,6 +92,62 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 			"toStatus":   {kind: externalString, required: true, enum: workItemStatuses()},
 			"actor":      optionalString,
 		},
+		// CHAOS-4194 / CHAOS-4193 final shape (Context Fabric, 2026-08-24).
+		//
+		// `subjectKind` is REQUIRED with a closed two-value enum, and it is the
+		// POSITIVE declaration the subject derivation branches on. That shape is
+		// deliberate: an earlier build refused pull requests by rejecting the
+		// value "pr" on `workItemType`, and a PR payload need only OMIT the field
+		// to fall through to the issue-shaped id derivation and be accepted
+		// (codex adversarial review, round 1). Requiring the declaration closes
+		// that whether or not the value is one this table admits.
+		//
+		// `workItemType` stays optional in this table and is enforced by
+		// refuseProjectMembershipContradiction instead, because what it must say
+		// depends on `subjectKind` -- a field rule cannot see a sibling field.
+		// A work_item subject must positively declare "issue"; a pull_request
+		// subject must not carry one at all.
+		//
+		// `toProjectId` is OPTIONAL, which reverses the earlier lock. `""` is now
+		// the ruled UNASSIGNMENT sentinel -- removed from every project -- and it
+		// is only that when `toProjectKey` is empty too. A half-empty destination
+		// is a contradiction with no honest reading and is refused in
+		// normalization, where both fields are visible at once.
+		//
+		// `occurredAt` is REQUIRED, which DEVIATES from CHAOS-4194's provisional
+		// "else last_synced" default -- deliberately, because that default is
+		// incompatible with the locked sorting key. occurred_at is a key member,
+		// so a sink-supplied `now` differs on every re-sync of the same provider
+		// event, the keys differ, and FINAL returns one row per sync: the exact
+		// duplication event_id is in the key to prevent. The sink cannot invent
+		// a value stable across re-syncs; only the producer can. Context Fabric
+		// ruled A on 2026-08-24: occurred_at stays in the key and producers
+		// guarantee a re-sync-stable value.
+		//
+		// `repositoryExternalId` mirrors work_item.v1 so the subject_id derived
+		// here matches the one work_item.v1 derives. Without it, a batch whose
+		// source instance is an org while its work items name org/repo produces a
+		// DIFFERENT id and the presence edge joins to nothing.
+		// work_item_transition.v1 has the same latent hole; this kind does not
+		// inherit it, because this is the kind that gets joined. For a
+		// pull_request subject it is not merely helpful but REQUIRED -- the PR
+		// number alone identifies nothing without its repository.
+		//
+		// `provider` admits github/jira/linear only. gitlab is absent by ruling:
+		// GitLab's own "project" concept IS this schema's repo_id, so a gitlab
+		// row would violate the resolve-to-`projects` constraint by construction.
+		"project_membership_transition.v1": {
+			"subjectKind":          {kind: externalString, required: true, enum: []string{"work_item", "pull_request"}},
+			"externalKey":          requiredString,
+			"provider":             {kind: externalString, required: true, enum: []string{"jira", "github", "linear"}},
+			"eventId":              requiredString,
+			"workItemType":         {kind: externalString, enum: []string{"issue"}},
+			"occurredAt":           requiredDate,
+			"repositoryExternalId": optionalString,
+			"fromProjectId":        optionalString, "toProjectId": optionalString,
+			"fromProjectKey": optionalString, "toProjectKey": optionalString,
+			"actor": optionalString,
+		},
 		"work_item_dependency.v1": {
 			"sourceExternalKey": requiredString, "sourceWorkItemType": {kind: externalString, enum: []string{"issue", "pr", "merge_request"}},
 			"targetExternalKey": requiredString, "targetWorkItemType": {kind: externalString, enum: []string{"issue", "pr", "merge_request"}},

@@ -946,6 +946,13 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
+		// CHAOS-4209: job_runs and sync_compute_checkpoints entered
+		// domainPosture when the CHAOS-4175 finalize port landed on pools.Domain.
+		// Every domain GRANT is to_regclass-guarded, so a venue that omits them
+		// gets no grant and CheckDomainAuthorization fails closed with an opaque
+		// readiness error naming neither table.
+		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",

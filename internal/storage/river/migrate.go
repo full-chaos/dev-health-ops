@@ -410,6 +410,18 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
+		// CHAOS-4209. These four are the grants the CHAOS-4175 native ports need
+		// and never got: NativeReferenceDiscoveryService and
+		// NativeFinalizeSyncRunService both run on pools.Domain and were issuing
+		// statements against tables the domain role held nothing on. Each flag
+		// list is exactly what domainPosture() declares -- the two must agree or
+		// TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith fails, since
+		// CheckDomainAuthorization asserts the privilege set is neither smaller
+		// nor larger than the manifest.
+		"DO $$ BEGIN IF to_regclass('public.sync_run_reference_discoveries') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_post_dispatches') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_compute_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.sync_compute_checkpoints TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.job_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.job_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + domainRole + "; END IF; END $$",
 		// Prepared recovery snapshots are transient state cleared in the same
@@ -424,10 +436,14 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
+		// UPDATE added by CHAOS-4209 for stampCanonicalSyncConfig's last_sync_*
+		// write on the domain transaction.
+		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.scheduled_report_occurrences') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_report_occurrences TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
+		// UPDATE added by CHAOS-4209 for observeTerminalSyncRun's backfill
+		// terminalization. INSERT deliberately stays off.
+		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",

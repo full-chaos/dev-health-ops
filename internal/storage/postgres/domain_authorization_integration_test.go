@@ -80,6 +80,14 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
+		// CHAOS-4209: the CHAOS-4175 native reference-discovery and
+		// finalize_sync_run ports run on pools.Domain and write these, so
+		// domainPosture() now requires them on the domain side. The coordinator
+		// keeps its own, unchanged declarations for the first two.
+		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_compute_checkpoints (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.job_runs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
@@ -116,12 +124,15 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.backfill_jobs TO " + authorizedDomainRole,
+		// CHAOS-4209: observeTerminalSyncRun terminalizes the backfill and
+		// job_run rows a finished sync run owns. UPDATE only -- the domain
+		// worker never opens either kind of row.
+		"GRANT SELECT, UPDATE ON TABLE public.backfill_jobs, public.job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + authorizedDomainRole,
@@ -141,6 +152,14 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_effect_chunks TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
+		// CHAOS-4209. sync_configurations gains UPDATE (stampCanonicalSyncConfig
+		// writes last_sync_*), the discovery ledger gains INSERT+UPDATE, and the
+		// post-dispatch and compute-checkpoint ledgers gain INSERT. Each set is
+		// exactly what domainPosture() declares -- a venue granting more or less
+		// than the manifest fails CheckDomainAuthorization in both directions.
+		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {

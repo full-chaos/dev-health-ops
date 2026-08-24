@@ -272,6 +272,45 @@ func TestMetricsSourcesAreStableAndFailWithoutPartialOutput(t *testing.T) {
 	}
 }
 
+// TestWriteMetricsFailsClosedWithNoPartialBytesEvenWhenAnEarlierSourceSucceeded
+// (CHAOS-4175) pins the "all-or-nothing" guarantee WriteMetrics's own doc
+// comment claims, which the implementation did not actually provide: it
+// wrote each source directly to the caller's output as it iterated in sorted
+// name order, so any source sorting BEFORE the one that fails had already
+// landed real bytes in output by the time the error was returned. A registry
+// with exactly one metrics source that always fails (the shape every
+// pre-CHAOS-4175 caller of WriteMetrics happened to have) could never
+// observe this: the leak only appears once a second, earlier-sorting,
+// always-succeeding source is registered alongside a later-sorting failing
+// one -- precisely the shape adding a new always-on counter (like the
+// zero-unit-finalization one) to a registry that already has a
+// database-backed required source creates.
+func TestWriteMetricsFailsClosedWithNoPartialBytesEvenWhenAnEarlierSourceSucceeded(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(100 * time.Millisecond)
+	// "a_source" sorts before "b_source_broken" -- WriteMetrics iterates
+	// registered sources in sorted name order, so this is the exact ordering
+	// that let a healthy source's bytes reach output before the failure was
+	// discovered.
+	if err := registry.RegisterMetrics("a_source", testMetricsSource{text: "a_metric 1\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterMetrics("b_source_broken", testMetricsSource{err: errors.New("boom")}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := registry.WriteMetrics(&output)
+	if err == nil {
+		t.Fatal("WriteMetrics() error = nil, want the broken source's error")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("WriteMetrics() leaked %d partial bytes into output despite failing: %q",
+			output.Len(), output.String())
+	}
+}
+
 func TestMetricsExposesPerCheckFailureGauge(t *testing.T) {
 	t.Parallel()
 

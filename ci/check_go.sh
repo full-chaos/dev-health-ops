@@ -497,6 +497,17 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+  # CHAOS-4198: the same ./internal/syncdispatchruntime/... run above also
+  # executes TestBudgetAdmissionMathMatchesLivePython (dispatch_sync_run's
+  # BudgetGuard admission math vs the same live interpreter) -- this is a
+  # second proof-file check on that ALREADY-COMPLETED run, not a second test
+  # invocation.
+  proof_file="${proof_dir}/sync-dispatch-admission"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: native dispatch_sync_run budget-admission live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
   rm -rf -- "${proof_dir}"
 }
 

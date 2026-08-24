@@ -10,6 +10,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
+	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
@@ -31,6 +36,28 @@ var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unav
 // development-only marker, not a caller-facing sentinel.
 var errDispatchNotYetImplemented = errors.New("dispatch_sync_run: allowed-pass continuation not yet implemented (CHAOS-4175 family 3)")
 
+// ErrDispatchProviderUnitRoute ports WorkerJobRouteError for THIS
+// producer's two raise sites verbatim: the sync.provider_unit job-kind
+// transport is not currently River-owned (resolve_worker_job_route /
+// PROVIDER_UNIT_OUTBOX_ROUTES), or a claimed unit fails
+// validate_provider_family_claim (a malformed persisted atomic-family
+// claim). Python uses the SAME exception class for both -- a route-store
+// failure and a malformed claim are both "this producer cannot safely
+// stage this job" -- so this stays one sentinel, not two.
+var ErrDispatchProviderUnitRoute = errors.New("provider-unit route is unavailable")
+
+// providerUnitOutboxRoutes ports PROVIDER_UNIT_OUTBOX_ROUTES verbatim: the
+// durable sync.provider_unit routes under which River owns provider units.
+// Deliberately narrower than jobruntime.Descriptor.Executable() (which also
+// accepts "shadow") -- Python's own set does not include shadow, and
+// jobroute.Controller.ResolveInTx's underlying worker_job_routes table can
+// return any of celery/shadow/river_canary/river for THIS kind (unlike the
+// four sync-dispatch coordinator kinds, which the checked-in route artifact
+// constrains to celery/river only). Using .Executable() here would silently
+// admit a shadow-routed claim Python would refuse -- confirmed by reading
+// jobroute.allowed()/readState() before writing this, not assumed.
+var providerUnitOutboxRoutes = map[string]bool{"river_canary": true, "river": true}
+
 // NativeDispatchSyncRunService is the native equivalent of bridge.Dispatch /
 // Python's dispatch_sync_run task -- CHAOS-4175 family 3, the last of the
 // three sync-dispatch coordinator families to move off the HTTP
@@ -44,10 +71,13 @@ var errDispatchNotYetImplemented = errors.New("dispatch_sync_run: allowed-pass c
 // _schedule_redispatch opens for itself) rather than one transaction end
 // to end.
 type NativeDispatchSyncRunService struct {
-	pool   *pgxpool.Pool
-	logger *slog.Logger
-	bridge budgetEstimator
-	now    func() time.Time
+	pool            *pgxpool.Pool
+	logger          *slog.Logger
+	bridge          budgetEstimator
+	producer        *joboutbox.Producer
+	registry        joboutbox.PolicyRegistry
+	routeController *jobroute.Controller
+	now             func() time.Time
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
@@ -55,18 +85,30 @@ type NativeDispatchSyncRunService struct {
 // the credential-bound half of budget admission (SyncTaskBootstrap.load,
 // the six per-provider estimator classes) stays Python-side behind
 // /dispatch-budget-estimate; everything else in this service is native.
+// producer/registry/routeController are the SAME dependency shapes
+// teamAutoimportPostSyncWriter already uses for its own Publish/PublishDeferred
+// call, plus the route-fencing Controller every native producer that
+// enqueues into River must hold (jobroute.Controller.ResolveInTx's own doc
+// comment: "Every native coordinator this ticket ports... must call this").
 func NewNativeDispatchSyncRunService(
 	pool *pgxpool.Pool,
 	logger *slog.Logger,
 	bridge budgetEstimator,
+	producer *joboutbox.Producer,
+	registry joboutbox.PolicyRegistry,
+	routeController *jobroute.Controller,
 ) (*NativeDispatchSyncRunService, error) {
-	if pool == nil || bridge == nil {
+	if pool == nil || bridge == nil || producer == nil || registry == nil || routeController == nil {
 		return nil, ErrDispatchSyncRunUnavailable
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &NativeDispatchSyncRunService{pool: pool, logger: logger, bridge: bridge, now: time.Now}, nil
+	return &NativeDispatchSyncRunService{
+		pool: pool, logger: logger, bridge: bridge,
+		producer: producer, registry: registry, routeController: routeController,
+		now: time.Now,
+	}, nil
 }
 
 func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
@@ -173,12 +215,160 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// an unreachable branch in Go would not be a behavior change either
 	// way, only a Go-side accumulation of dead code Python already has.
 
-	// TODO(CHAOS-4175 family 3, next commit): concurrency partial-cap,
-	// BudgetGuard.observe_run/enforce_run/reconfirm_cooldowns, provider-
-	// family routing + claim + enqueue, and the tail (pending-unit-counts /
-	// redispatch / finalize branches). Everything above this point is
-	// tested and committed; this return is the explicit, visible stopping
-	// point for this slice -- not a silent gap.
+	// --- Concurrency partial-cap: defer overflow units, proceed with rest ---
+	cappedIDs := map[string]bool{}
+	if decision.concurrencyCapped && len(decision.cappedUnitIDs) > 0 {
+		for _, id := range decision.cappedUnitIDs {
+			cappedIDs[id] = true
+		}
+		service.logger.InfoContext(ctx, "dispatch_sync_run.concurrency_capped",
+			slog.String("sync_run_id", run.id), slog.Int("capped_count", len(cappedIDs)), slog.String("reason", decision.reason))
+	}
+
+	// --- BudgetGuard dry-run telemetry (side effect only; return discarded,
+	// matching Python's own bare `BudgetGuard.observe_run(...)` call) ---
+	// Each BudgetGuard call below gets its OWN fresh timestamp, matching
+	// Python exactly: none of observe_run/enforce_run/reconfirm_cooldowns
+	// receives an explicit now= from Dispatch() in Python, so each defaults
+	// to its own datetime.now(timezone.utc) at its own call time rather
+	// than sharing one value captured earlier in this function.
+	if _, err := observeRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, service.nowUTC()); err != nil {
+		return err
+	}
+
+	enforcedAt := service.nowUTC()
+	budgetResult, err := enforceRun(ctx, tx, service.bridge, service.logger, run.orgID, run.id, cappedIDs, decision.slotHeadroom, enforcedAt)
+	if err != nil {
+		return err
+	}
+	for id := range budgetResult.deferredUnitIDs {
+		cappedIDs[id] = true
+	}
+
+	// CHAOS-2760 TOCTOU closure: reconfirm_cooldowns' surplusPromotedAt MUST
+	// be enforceRun's OWN `enforcedAt` (not this call's own fresh now) --
+	// that is the timestamp _admit_unit_from_surplus actually wrote as
+	// available_at for any surplus-admitted unit in budgetResult.candidateUnits.
+	reconfirmResult, err := reconfirmCooldowns(ctx, tx, service.logger, run.id, budgetResult.candidateUnits, budgetResult.estimatesByUnit,
+		cappedIDs, budgetResult.jitterSeconds, budgetResult.surplusPriorAvailableAt, enforcedAt, service.nowUTC())
+	if err != nil {
+		return err
+	}
+	for id := range reconfirmResult.excludedUnitIDs {
+		cappedIDs[id] = true
+	}
+
+	nextDeferredAt := budgetResult.nextDeferredAt
+	if reconfirmResult.nextDeferredAt != nil && (nextDeferredAt == nil || reconfirmResult.nextDeferredAt.Before(*nextDeferredAt)) {
+		nextDeferredAt = reconfirmResult.nextDeferredAt
+	}
+
+	// --- sync.provider_unit route resolution, fenced in THIS transaction so
+	// a rollback racing this commit is always observed (jobroute.Controller.
+	// ResolveInTx's own doc comment) ---
+	route, err := service.routeController.ResolveInTx(ctx, tx, jobcontract.KindSyncProviderUnit)
+	if err != nil {
+		return ErrDispatchProviderUnitRoute
+	}
+	if !providerUnitOutboxRoutes[route] {
+		// CHAOS-4054 step 4 deleted the Celery dispatch plane: there is no
+		// second runtime left to fall through to, so a non-river route here
+		// is a fail-closed route fault, never a Celery dispatch.
+		return ErrDispatchProviderUnitRoute
+	}
+
+	// --- Atomic claim: fresh PLANNED, due RETRYING, reclaimed stale
+	// DISPATCHING, excluding every id capped/deferred/excluded above ---
+	claimedUnits, err := claimUnits(ctx, tx, run.id, cappedIDs, service.nowUTC())
+	if err != nil {
+		return err
+	}
+
+	riverQueued := 0
+	var unroutableUnits []budgetUnit
+	for _, unit := range claimedUnits {
+		// Atomic provider families are admitted before transport selection,
+		// so a malformed claim can reach neither River nor a stranded state.
+		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
+			return ErrDispatchProviderUnitRoute
+		}
+		// Routability is decided per pair, not per run, and the capability
+		// matrix is its only source: a pair is executable when the matrix
+		// marks it route-ready AND plannable (the canonical writer identity
+		// of its family). Ported as Python has it (routes_to_river checks
+		// both), even though for every atomic family currently declared,
+		// RouteReady-true-but-Plannable-false is unreachable HERE: those are
+		// exactly the non-canonical family aliases ValidateClaim above
+		// already refuses first. Kept for fidelity and as a real guard
+		// against the day a dataset is RouteReady in providersync without a
+		// matching providerfamilycontract policy entry -- a gap between the
+		// two registries this check alone would catch.
+		descriptor, ok := providersync.Descriptor(unit.provider, unit.datasetKey)
+		if ok && descriptor.RouteReady && descriptor.Plannable {
+			organizationID := unit.orgID
+			envelope := jobcontract.Envelope{
+				ContractVersion: jobcontract.ContractVersionV1,
+				OrganizationID:  &organizationID,
+				CorrelationID:   "sync-run:" + run.id,
+				IdempotencyKey:  jobcontract.KindSyncProviderUnit + ":" + unit.id,
+				Domain:          jobcontract.DomainLink{Type: "sync_run_unit", ID: unit.id},
+				Payload:         jobcontract.ProviderUnitPayload{UnitID: unit.id},
+			}
+			if err := service.producer.Publish(ctx, tx, jobcontract.KindSyncProviderUnit, envelope); err != nil {
+				return err
+			}
+			riverQueued++
+			continue
+		}
+		// The matrix does not route this pair and there is no fallback
+		// runtime to publish it to. Terminalize instead of leaving it
+		// wedged (CHAOS-3990).
+		unroutableUnits = append(unroutableUnits, unit)
+	}
+
+	if len(unroutableUnits) > 0 {
+		terminalizeNow := service.nowUTC()
+		terminalized, err := terminalizeUnroutableUnits(ctx, tx, unroutableUnits, terminalizeNow)
+		if err != nil {
+			return err
+		}
+		service.logger.WarnContext(ctx, "dispatch_sync_run.unroutable_units_terminalized",
+			slog.String("sync_run_id", run.id), slog.Int("unroutable_units", terminalized),
+			slog.String("error_category", featureDisabledErrorCategory))
+	}
+
+	if riverQueued > 0 {
+		writeNow := service.nowUTC()
+		if _, err := tx.Exec(ctx, `
+UPDATE public.sync_runs
+SET status = $2, started_at = COALESCE(started_at, $3)
+WHERE id = $1::uuid`,
+			run.id, syncRunStatusDispatching, writeNow); err != nil {
+			return ErrDispatchSyncRunUnavailable
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrDispatchSyncRunUnavailable
+	}
+
+	if riverQueued > 0 {
+		if nextDeferredAt != nil {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
+		} else if len(cappedIDs) > 0 {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		}
+		service.logger.InfoContext(ctx, "dispatch_sync_run.dispatched",
+			slog.String("sync_run_id", run.id), slog.Int("queued_units", riverQueued))
+		return nil
+	}
+
+	// TODO(CHAOS-4175 family 3, next commit): river_queued == 0 -- the tail
+	// distinguishing "more work later" (pendingUnitCounts -> scheduleRedispatch)
+	// from "genuinely done" (finalize) via a SECOND, separate transaction,
+	// matching Python's own second `with get_postgres_session_sync()` block.
+	// Everything above this point is tested and committed; this return is
+	// the explicit, visible stopping point for this slice -- not a silent
+	// gap.
 	return errDispatchNotYetImplemented
 }
 

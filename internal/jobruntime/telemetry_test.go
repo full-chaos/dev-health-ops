@@ -536,7 +536,52 @@ func TestObserveZeroUnitFinalizationCapsCardinality(t *testing.T) {
 	if !strings.Contains(text, `devhealth_sync_run_zero_unit_finalizations_total{provider="github",reason="reason_0"} 2`+"\n") {
 		t.Fatalf("already-seen reason was miscounted as overflow:\n%s", text)
 	}
-	if !strings.Contains(text, `devhealth_sync_run_zero_unit_finalizations_total{provider="github",reason="cardinality_capped"} 1`+"\n") {
+	// The overflow key is provider-independent ("unknown", not "github"):
+	// see TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider
+	// for why a per-provider overflow bucket would defeat the whole point of
+	// the cap.
+	if !strings.Contains(text, `devhealth_sync_run_zero_unit_finalizations_total{provider="unknown",reason="cardinality_capped"} 1`+"\n") {
 		t.Fatalf("missing overflow-bucket exposition line:\n%s", text)
+	}
+}
+
+// TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider
+// (CHAOS-4175, codex adversarial review) pins that the cardinality cap is a
+// GLOBAL bound on total series, not a per-provider one: if the overflow key
+// varied by provider, each distinct provider that independently exhausted
+// the cap would mint its OWN overflow series, so the total series count
+// could grow to maxZeroUnitFinalizationSeries + (number of distinct
+// providers seen) -- silently exceeding the stated bound while every
+// individual reason string still looked correctly capped.
+func TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxZeroUnitFinalizationSeries; index++ {
+		if err := collector.ObserveZeroUnitFinalization("github", fmt.Sprintf("reason_%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two DIFFERENT providers each overflow independently.
+	if err := collector.ObserveZeroUnitFinalization("github", "github_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("gitlab", "gitlab_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveZeroUnitFinalization("jira", "jira_overflow_reason"); err != nil {
+		t.Fatal(err)
+	}
+	seriesCount := 0
+	for _, line := range strings.Split(collector.PrometheusText(), "\n") {
+		if strings.HasPrefix(line, "devhealth_sync_run_zero_unit_finalizations_total{") {
+			seriesCount++
+		}
+	}
+	if want := maxZeroUnitFinalizationSeries + 1; seriesCount != want {
+		t.Fatalf("total zero-unit-finalization series = %d, want exactly %d (cap + one SHARED overflow bucket, not one per provider that overflowed)",
+			seriesCount, want)
 	}
 }

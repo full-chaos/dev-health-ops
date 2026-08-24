@@ -714,7 +714,17 @@ func (collector *MetricsCollector) ObserveZeroUnitFinalization(provider, reason 
 	key := zeroUnitFinalizationLabels{Provider: provider, Reason: reason}
 	if _, seen := collector.zeroUnitFinalizations[key]; !seen &&
 		len(collector.zeroUnitFinalizations) >= maxZeroUnitFinalizationSeries {
-		key = zeroUnitFinalizationLabels{Provider: provider, Reason: zeroUnitFinalizationOverflowReason}
+		// A SINGLE, provider-independent overflow key -- not
+		// {provider, cardinality_capped} -- so the map can never grow past
+		// maxZeroUnitFinalizationSeries+1 regardless of how many distinct
+		// providers each independently trigger overflow. A per-provider
+		// overflow bucket would still be an unbounded-in-provider-count
+		// series set, just with a higher, less obviously-wrong ceiling
+		// (codex adversarial review, CHAOS-4175).
+		key = zeroUnitFinalizationLabels{
+			Provider: zeroUnitFinalizationUnknownProvider,
+			Reason:   zeroUnitFinalizationOverflowReason,
+		}
 	}
 	collector.zeroUnitFinalizations[key]++
 	return nil

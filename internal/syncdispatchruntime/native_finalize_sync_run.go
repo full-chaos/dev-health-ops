@@ -393,6 +393,10 @@ type finalizeSyncRunUnit struct {
 	provider       string
 	datasetKey     string
 	sourceID       string
+	sinceAt        *time.Time
+	beforeAt       *time.Time
+	costClass      string
+	mode           string
 	errorText      *string
 	errorCategory  string
 	processorFlags map[string]any
@@ -400,7 +404,8 @@ type finalizeSyncRunUnit struct {
 
 func loadFinalizeUnits(ctx context.Context, tx pgx.Tx, runID string) ([]finalizeSyncRunUnit, error) {
 	rows, err := tx.Query(ctx, `
-SELECT id::text, status, provider, dataset_key, source_id::text, error, result, processor_flags
+SELECT id::text, status, provider, dataset_key, source_id::text, since_at, before_at,
+       cost_class, mode, error, result, processor_flags
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid
 ORDER BY id`, runID)
@@ -417,6 +422,7 @@ ORDER BY id`, runID)
 			processorRaw []byte
 		)
 		if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.datasetKey, &unit.sourceID,
+			&unit.sinceAt, &unit.beforeAt, &unit.costClass, &unit.mode,
 			&errorText, &resultRaw, &processorRaw); err != nil {
 			return nil, ErrFinalizeSyncRunUnavailable
 		}
@@ -651,10 +657,22 @@ WHERE status IN ($5, $6) AND result->>'sync_run_id' = $7`,
 }
 
 // checkpointSuccessfulComputeInputs ports
-// sync_units.py::_checkpoint_successful_compute_inputs. Best-effort by
-// design (Python wraps the whole loop in try/except SQLAlchemyError and only
-// logs) -- a checkpoint-write failure must never fail finalize itself, so
-// this reports via the service logger rather than returning an error.
+// sync_units.py::_checkpoint_successful_compute_inputs, including the
+// per-unit metadata Python's checkpoint_metadata dict carries
+// (cost_class, mode, legacy_targets, family_datasets) and the
+// window_start/window_end columns (unit.since_at/before_at) -- both
+// omitted from an earlier draft (codex adversarial review, CHAOS-4175).
+//
+// Each insert runs in its OWN savepoint, not the outer transaction
+// directly. Postgres marks a transaction ABORTED on any statement error,
+// even one the application code goes on to catch and log -- so without a
+// savepoint, one genuinely-failing checkpoint insert (Python's
+// SQLAlchemyError branch, not the expected IntegrityError race) would
+// poison every later statement in Finalize's outer transaction, turning a
+// best-effort, log-and-continue checkpoint failure into a full rollback of
+// the run's status, canonical config stamp, observers, and post-sync
+// handoff (the same defect class the review flagged: log-and-continue
+// without a savepoint is not what it looks like in Postgres).
 func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -672,6 +690,8 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 		}
 		metadata := map[string]any{
 			"legacy_targets": sortedStrings(targets),
+			"cost_class":     unit.costClass,
+			"mode":           unit.mode,
 		}
 		if familyDatasets := familyDatasetKeysFromFlags(unit.processorFlags); len(familyDatasets) > 0 {
 			metadata["family_datasets"] = familyDatasets
@@ -682,23 +702,46 @@ func (service *NativeFinalizeSyncRunService) checkpointSuccessfulComputeInputs(
 				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", err.Error()))
 			continue
 		}
-		checkpointID := uuid.New().String()
-		_, err = tx.Exec(ctx, `
-INSERT INTO public.sync_compute_checkpoints (
-    id, org_id, sync_run_id, sync_run_unit_id, source_id, provider, dataset_key,
-    compute_type, status, checkpointed_at, metadata, created_at, updated_at
-) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11::json, $10, $10)
-ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
-			checkpointID, run.orgID, run.id, unit.id, unit.sourceID, unit.provider, unit.datasetKey,
-			syncComputeTypeWorkGraph, syncComputeCheckpointStatusOK, checkpointedAt, encodedMetadata)
-		if err != nil {
-			// A true constraint violation is handled by DO NOTHING above; any
-			// other error here is the SQLAlchemyError branch Python logs and
-			// continues past.
+		if err := service.insertComputeCheckpoint(ctx, tx, run, unit, checkpointedAt, encodedMetadata); err != nil {
 			service.logger.WarnContext(ctx, "finalize_sync_run.compute_checkpoint_unit_failed",
 				slog.String("sync_run_id", run.id), slog.String("unit_id", unit.id), slog.String("error", err.Error()))
 		}
 	}
+}
+
+// insertComputeCheckpoint writes one checkpoint row inside its own
+// savepoint, rolling the savepoint back (not the enclosing transaction) on
+// any error so the caller's log-and-continue policy actually holds.
+func (service *NativeFinalizeSyncRunService) insertComputeCheckpoint(
+	ctx context.Context,
+	tx pgx.Tx,
+	run *finalizeSyncRun,
+	unit finalizeSyncRunUnit,
+	checkpointedAt time.Time,
+	encodedMetadata []byte,
+) error {
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	checkpointID := uuid.New().String()
+	_, execErr := nested.Exec(ctx, `
+INSERT INTO public.sync_compute_checkpoints (
+    id, org_id, sync_run_id, sync_run_unit_id, source_id, provider, dataset_key,
+    compute_type, status, window_start, window_end, checkpointed_at, metadata,
+    created_at, updated_at
+) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13::json, $12, $12)
+ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
+		checkpointID, run.orgID, run.id, unit.id, unit.sourceID, unit.provider, unit.datasetKey,
+		syncComputeTypeWorkGraph, syncComputeCheckpointStatusOK, unit.sinceAt, unit.beforeAt,
+		checkpointedAt, encodedMetadata)
+	if execErr != nil {
+		if rollbackErr := nested.Rollback(ctx); rollbackErr != nil {
+			return rollbackErr
+		}
+		return execErr
+	}
+	return nested.Commit(ctx)
 }
 
 // invalidateSyncCoverageForIntegration ports
@@ -814,6 +857,34 @@ SET status = CASE
          AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
          AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
         THEN public.sync_dispatch_outbox.claim_transport
+        ELSE NULL
+    END,
+    claim_route_generation = CASE
+        WHEN NOT (
+            public.sync_dispatch_outbox.status = 'dispatched'
+            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        )
+         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
+         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
+        THEN public.sync_dispatch_outbox.claim_route_generation
+        ELSE NULL
+    END,
+    dispatched_transport = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.dispatched_transport
+        ELSE NULL
+    END,
+    dispatched_route_generation = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.dispatched_route_generation
+        ELSE NULL
+    END,
+    transport_job_id = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.transport_job_id
         ELSE NULL
     END,
     updated_at = EXCLUDED.updated_at`,

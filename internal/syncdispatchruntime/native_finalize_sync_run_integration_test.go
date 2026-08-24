@@ -4,6 +4,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -59,6 +60,8 @@ CREATE TABLE sync_runs (
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
  dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
+ since_at timestamptz NULL, before_at timestamptz NULL,
+ cost_class text NOT NULL DEFAULT 'medium', mode text NOT NULL DEFAULT 'incremental',
  error text NULL, result json NULL, processor_flags json NULL
 );
 CREATE TABLE integrations (
@@ -82,10 +85,15 @@ CREATE TABLE job_runs (
  id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
  status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
 );
+CREATE TABLE integration_sources (
+ id uuid PRIMARY KEY
+);
 CREATE TABLE sync_compute_checkpoints (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
- source_id uuid NULL, provider text NOT NULL, dataset_key text NOT NULL, compute_type text NOT NULL,
- status text NOT NULL, checkpointed_at timestamptz NOT NULL, metadata json NULL,
+ source_id uuid NULL REFERENCES integration_sources(id), provider text NOT NULL, dataset_key text NOT NULL,
+ compute_type text NOT NULL,
+ status text NOT NULL, window_start timestamptz NULL, window_end timestamptz NULL,
+ checkpointed_at timestamptz NOT NULL, metadata json NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
  CONSTRAINT uq_sync_compute_checkpoint_unit_type UNIQUE (sync_run_id, sync_run_unit_id, compute_type)
 );
@@ -340,10 +348,15 @@ INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_uni
 VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
+		t.Fatal(err)
+	}
+	unitSinceAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	unitBeforeAt := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'success')`,
-		finalizeTestUnit, finalizeTestOrg, finalizeTestRun, finalizeTestSource); err != nil {
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)
+VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
+		finalizeTestUnit, finalizeTestOrg, finalizeTestRun, finalizeTestSource, unitSinceAt, unitBeforeAt); err != nil {
 		t.Fatal(err)
 	}
 	// An in-flight JobRun this SyncRun should terminalize -- PENDING (0),
@@ -404,6 +417,30 @@ WHERE sync_run_id=$1 AND sync_run_unit_id=$2 AND compute_type='work_graph'`,
 		t.Fatalf("compute checkpoint rows=%d want=1 (github/commits is a git legacy target)", checkpointCount)
 	}
 
+	// The checkpoint must carry the unit's compute WINDOW and audit
+	// classification (window_start/window_end from since_at/before_at, plus
+	// cost_class/mode in metadata) -- a row that exists but is missing these
+	// is incomplete for replay/audit even though the row count check above
+	// would not catch it (codex adversarial review, CHAOS-4175).
+	var windowStart, windowEnd time.Time
+	var metadataRaw []byte
+	if err := pool.QueryRow(ctx, `
+SELECT window_start, window_end, metadata FROM sync_compute_checkpoints
+WHERE sync_run_id=$1 AND sync_run_unit_id=$2 AND compute_type='work_graph'`,
+		finalizeTestRun, finalizeTestUnit).Scan(&windowStart, &windowEnd, &metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !windowStart.Equal(unitSinceAt) || !windowEnd.Equal(unitBeforeAt) {
+		t.Fatalf("checkpoint window = [%s, %s], want [%s, %s]", windowStart, windowEnd, unitSinceAt, unitBeforeAt)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["cost_class"] != "heavy" || metadata["mode"] != "incremental" {
+		t.Fatalf("checkpoint metadata missing cost_class/mode: %v", metadata)
+	}
+
 	// Re-finalize must not duplicate the checkpoint row (ON CONFLICT DO
 	// NOTHING on uq_sync_compute_checkpoint_unit_type).
 	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
@@ -417,5 +454,111 @@ WHERE sync_run_id=$1 AND sync_run_unit_id=$2 AND compute_type='work_graph'`,
 	}
 	if checkpointCount != 1 {
 		t.Fatalf("compute checkpoint rows after re-finalize=%d want=1 (no duplicate)", checkpointCount)
+	}
+}
+
+// TestNativeFinalizeSyncRunSurvivesAGenuineComputeCheckpointFailure (codex
+// adversarial review, CHAOS-4175) pins that a checkpoint insert failure that
+// is NOT the expected unique-constraint race (here: a dangling source_id
+// violating the FK to integration_sources) does not poison the rest of
+// Finalize's transaction. Postgres marks a transaction ABORTED on any
+// statement error, even one the application only logs and continues past
+// -- so without a per-checkpoint savepoint, this one bad unit's checkpoint
+// would have rolled back the run's status, canonical config stamp,
+// observers, and post-sync handoff along with it, silently turning a
+// documented "best-effort, log and continue" checkpoint policy into a hard
+// failure of the whole finalization.
+func TestNativeFinalizeSyncRunSurvivesAGenuineComputeCheckpointFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createFinalizeTables(t, ctx, pool)
+	seedFinalizeRoute(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
+VALUES ($1,$2,$3,'dispatching',2,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
+		t.Fatal(err)
+	}
+	// Unit A: valid, registered source -- its checkpoint must succeed.
+	unitA := "00000000-0000-4000-8000-0000000000fa"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','commits',$4,'success')`,
+		unitA, finalizeTestOrg, finalizeTestRun, finalizeTestSource); err != nil {
+		t.Fatal(err)
+	}
+	// Unit B: a DANGLING source_id with no integration_sources row --
+	// its checkpoint insert genuinely fails on the FK, distinct from the
+	// expected/tolerated unique-constraint race.
+	unitB := "00000000-0000-4000-8000-0000000000fb"
+	danglingSource := "00000000-0000-4000-8000-0000000000fc"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','commits',$4,'success')`,
+		unitB, finalizeTestOrg, finalizeTestRun, danglingSource); err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := NewNativeFinalizeSyncRunService(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
+		t.Fatalf("Finalize: %v (a tolerated checkpoint failure must not fail finalize)", err)
+	}
+
+	var status string
+	var completedUnits int
+	if err := pool.QueryRow(ctx, `SELECT status, completed_units FROM sync_runs WHERE id=$1`, finalizeTestRun).
+		Scan(&status, &completedUnits); err != nil {
+		t.Fatal(err)
+	}
+	if status != syncRunStatusSuccess || completedUnits != 2 {
+		t.Fatalf("status=%q completed=%d, want success/2 -- one unit's checkpoint failure must not roll back the run's own finalization",
+			status, completedUnits)
+	}
+	var lastSuccess bool
+	if err := pool.QueryRow(ctx, `SELECT last_sync_success FROM sync_configurations WHERE id=$1`, finalizeTestSyncConfig).Scan(&lastSuccess); err != nil {
+		t.Fatal(err)
+	}
+	if !lastSuccess {
+		t.Fatal("canonical config stamp was rolled back by a checkpoint failure it should be isolated from")
+	}
+	var dispatchRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_run_post_dispatches WHERE sync_run_id=$1`, finalizeTestRun).Scan(&dispatchRows); err != nil {
+		t.Fatal(err)
+	}
+	if dispatchRows != 1 {
+		t.Fatal("post-sync once-only ledger was rolled back by a checkpoint failure it should be isolated from")
+	}
+	var checkpointCountA int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_unit_id=$2`,
+		finalizeTestRun, unitA).Scan(&checkpointCountA); err != nil {
+		t.Fatal(err)
+	}
+	if checkpointCountA != 1 {
+		t.Fatalf("unit A's own checkpoint = %d rows, want 1 (its sibling's failure must not take it down too)", checkpointCountA)
+	}
+	var checkpointCountB int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_unit_id=$2`,
+		finalizeTestRun, unitB).Scan(&checkpointCountB); err != nil {
+		t.Fatal(err)
+	}
+	if checkpointCountB != 0 {
+		t.Fatalf("unit B's checkpoint = %d rows, want 0 (its FK violation should have been rolled back to its own savepoint)", checkpointCountB)
 	}
 }

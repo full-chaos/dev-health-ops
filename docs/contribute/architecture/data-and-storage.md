@@ -82,48 +82,62 @@ ClickHouse writes must preserve:
 
 A missing provider transition or absent bounded-page result is unknown, not automatically a tombstone.
 
-## Work item to project: provider event to graph edge
+## Project membership: provider event to graph edge
 
 A work item's project used to be a plain overwrite column on `work_items`. That
 table is a `ReplacingMergeTree` keyed on the work item, so a reassignment
 overwrote `project_id` and the previous value was unrecoverable after
-compaction: presence was queryable, history never existed. CHAOS-4194 and
-CHAOS-4193 replace that with one representation -- an append-only event stream
-that presence projects from and validity intervals derive from -- rather than
-two parallel stores.
+compaction: presence was queryable, history never existed. A pull request had
+it worse -- `git_pull_requests` carries no project columns at all, so a PR's
+board membership was nowhere in the graph even as a current value. CHAOS-4194
+and CHAOS-4193 replace both with one representation -- an append-only event
+stream that presence projects from and validity intervals derive from -- rather
+than parallel stores per subject.
 
 Read this diagram for where a value can be LOST rather than only where it
-flows. Three edges below are refusals, and each one exists because the silent
-version of it was the actual defect.
+flows. Five edges below are refusals, and each one exists because the silent
+version of it was the actual defect. The reachability of the whole path is
+CHAOS-4222.
 
 ```mermaid
 flowchart TD
     P["Provider event<br/>(Jira project / GitHub Projects V2 / Linear project)"]
+    G["GitHub Projects V2 sync<br/>providersync, board items"]
+    GS["worker/github MembershipSkips<br/>{issue_deferred, draft_issue, pr_incomplete, unknown}"]
+    PJ[("projects<br/>ensureProjectsRow, base 051 columns")]
     B["External batch<br/>customer push, Postgres batch row"]
     N["normalizeExternalRecords<br/>external_ingest.go"]
-    K{"kind registered for<br/>this source system?"}
+    K{"kind registered for<br/>this source system?<br/>github, jira, linear -- NOT gitlab"}
     V{"payload valid for<br/>the kind's schema?"}
+    C{"whole-record contradiction?<br/>provider vs batch, subject identity,<br/>project vocabulary, event_id"}
     R["externalRejection persisted on the batch<br/>code + kind + external id"]
     M["worker_external_record_refused_total<br/>{source_system, reason}"]
     S["ClickHouse sink<br/>external_clickhouse.go"]
-    T[("work_item_project_transitions<br/>ReplacingMergeTree(last_synced)<br/>ORDER BY org_id, work_item_id, occurred_at, event_id")]
-    MS["worker_external_project_transitions_sunk_total<br/>{provider}"]
-    PR[["work_item_project_presence<br/>view: latest transition, else work_items column"]]
+    T[("project_membership_transitions<br/>ReplacingMergeTree(last_synced)<br/>ORDER BY org_id, subject_kind, repo_id,<br/>subject_id, occurred_at, event_id")]
+    MS["worker_external_project_memberships_sunk_total<br/>{provider}"]
+    PR[["project_membership_presence<br/>view: latest transition, else work_items column"]]
     W[("work_items FINAL<br/>current-value column, no history")]
     CF["Context Fabric devhealthsource<br/>BELONGS_TO_PROJECT edge"]
     RC["ExternalRecomputeScope<br/>coalesced in Valkey, scheduled after commit"]
 
     P --> B --> N
+    P --> G
+    G -- "PullRequest items<br/>(repo_id, number)" --> T
+    G -. "no membership row,<br/>counted not dropped" .-> GS
+    G -- "one row per configured board" --> PJ
     N --> K
     K -- "no" --> R
     K -- "yes" --> V
     V -- "no" --> R
-    V -- "yes" --> S
+    V -- "yes" --> C
+    C -- "yes" --> R
+    C -- "no" --> S
     R --> M
     S --> T
     S --> MS
     T --> PR
-    W -. "fallback arm: only for work items<br/>with no transition history" .-> PR
+    W -. "fallback arm: work items only,<br/>no transition history,<br/>repo-as-project filtered out" .-> PR
+    PJ -. "(provider, project_id)<br/>must resolve here" .-> PR
     PR --> CF
     S -- "after Complete commits" --> RC
     RC -. "invalidates derived<br/>materializations" .-> CF
@@ -140,14 +154,23 @@ Load-bearing properties, and why each is where it is:
   jira is refused for jira.
 - **Dedupe is the engine's job.** `event_id` is in the sorting key, so a
   re-synced provider event collapses under `FINAL` instead of accumulating one
-  row per sync. Reads must use `SELECT ... FINAL`.
+  row per sync. Reads must use `SELECT ... FINAL`. It is content-determined --
+  a native provider id where one exists, else a hash of the identity and
+  destination tuple plus `occurred_at` -- so a re-sync recomputes the same value
+  and two distinct events cannot share one. Two records asserting one `event_id`
+  with different content are refused within a batch rather than left for `FINAL`
+  to choose between arbitrarily.
 - **`occurred_at` must come from the provider.** It is in the sorting key, so a
   sink-supplied timestamp differs on every re-sync of the same event: the keys
   differ, `FINAL` keeps both, and the table accumulates one row per sync of a
   single reassignment. The sink cannot invent a value stable across re-syncs;
   only the producer can, so an event without one is refused. This deviates from
   CHAOS-4194's provisional "else `last_synced`" default, which was written
-  before the interaction with the sorting key was noticed.
+  before the interaction with the sorting key was noticed, and Context Fabric
+  ratified the deviation on 2026-08-24. The github board producer satisfies it
+  with the board item's own `createdAt` -- the time the subject was added to the
+  board -- which is both the real membership event time and stable across
+  re-syncs.
 - **The presence fallback is a view arm, not a backfill.** Synthesising
   transition rows for pre-CDC work items would put events into the history
   table that no provider emitted, with a fabricated `event_id` and an
@@ -159,12 +182,45 @@ Load-bearing properties, and why each is where it is:
   only. Legacy Jira treated projects as teams; `work_items.native_team_key` is
   a separate axis and no project transition may be derived from, or read as, a
   team transition.
-- **Pull requests are refused at the schema boundary,** and the refusal needs a
-  POSITIVE `"issue"` declaration rather than the absence of a `"pr"` one -- a PR
-  payload that merely omits the field would otherwise fall through to the
-  issue-shaped id derivation. The table keys on `work_item_id` and a PR has no
-  `work_items` row to join. PR-to-project is an open shape (CHAOS-4194), not an
-  omission to paper over.
+- **Pull requests are a first-class subject, and were the missing half.** A PR
+  board item was fetched fully hydrated and then discarded by the normalizer
+  with no counter and no log, so PR-to-project existed nowhere. `subject_kind`
+  now carries the shape: a work item keys on `(repo_id, work_item_id)`, a pull
+  request on `(repo_id, number)`, mirroring the fabric identity registry's own
+  natural keys. A PR still never becomes a `work_items` row -- only its
+  membership is recorded. Its `changes` history inside a board remains
+  discarded; that is CHAOS-4221.
+- **The subject declaration must be POSITIVE.** `subjectKind` is required with a
+  closed enum because the sink branches its entire identity derivation on it. An
+  earlier build refused PRs by rejecting the value `"pr"`, and a PR payload need
+  only omit the field to fall through to the issue-shaped derivation and be
+  accepted.
+- **gitlab is deliberately unregistered.** GitLab's own "project" concept IS
+  this schema's `repo_id`, so a gitlab producer could only ever write a
+  repo-derived id, which resolves to no `projects` row. There is no correct
+  gitlab row to admit, so the registry refusal is the fail-closed guard and the
+  refusal is recorded rather than discovered later as edges that join to
+  nothing.
+- **Three things are called "project" and only one belongs here.** The external
+  ingest path writes the REPOSITORY full name into `work_items.project_id` for
+  github and gitlab; the Projects V2 route mints the real entity
+  `ghprojv2:<org>#<n>`; legacy Jira treated projects as teams. The sink refuses
+  the repo-as-project value with `unresolvable_project_entity`, and the presence
+  view's column arm filters it out again on the read side -- that arm reads rows
+  written long before this kind existed, which never passed the sink's check.
+- **An empty destination is the unassignment sentinel.** `to_project_id = ""`
+  means removed from every project, and it is the one value exempt from the
+  resolve-to-`projects` constraint. The transition arm yields no row for it and
+  the column arm's anti-join runs against the UNFILTERED transition set, so the
+  subject does not fall through and resurrect the value the removal retired. A
+  destination key with NO id is refused; an id with no key is normal, since a
+  GitHub board has a number and a title and no key at all.
+- **`projects` rows are ensured by the producer.** GitHub Projects V2 wrote no
+  `projects` row anywhere before CHAOS-4194 -- the fetcher stamped the id onto
+  work items and the entity it named was never created -- so every github
+  membership would have been filtered out by the vocabulary constraint.
+  `ensureProjectsRow` writes the base 051 columns and converges on re-sync,
+  because `projects` is a `ReplacingMergeTree` keyed `(org_id, provider, id)`.
 - **The subject id is derived from the record's own `repositoryExternalId`,**
   matching `work_item.v1`. Deriving from the batch pointer alone -- which is
   what the older `work_item_transition.v1` does -- gives a different id whenever

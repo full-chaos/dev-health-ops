@@ -581,6 +581,33 @@ func TestPlannerManagedGateAndSourceScopingBothHold(t *testing.T) {
 	}
 }
 
+// TestUnpopulatedPlannerManagedFieldRefusesRatherThanAdmits pins the DEFAULT
+// DIRECTION of Candidate.PlannerManaged, not just its explicit-false case
+// (which TestPhaseADecisionsMatchThePythonGates already covers). Go's zero
+// value for a bool is false, and false is CHAOS-4174's refusing value, so a
+// caller that ever forgets to populate this field -- a new Candidate
+// construction path added in a future refactor, say -- fails CLOSED: the
+// config is refused, not silently treated as eligible. This candidate
+// deliberately never sets PlannerManaged, so the field is read at its Go zero
+// value, not an explicit literal false, to prove that direction.
+func TestUnpopulatedPlannerManagedFieldRefusesRatherThanAdmits(t *testing.T) {
+	candidate := Candidate{
+		ConfigID:     "unpopulated",
+		Active:       true,
+		ScheduleCron: "0 * * * *",
+		CreatedAt:    at("2026-01-01T00:00:00Z"),
+	}
+	if candidate.PlannerManaged {
+		t.Fatal("test setup bug: PlannerManaged is not at its Go zero value")
+	}
+	got := Evaluate(candidate, at("2026-01-02T00:00:00Z"))
+	if got.Decision != DecisionNotPlannerManaged {
+		t.Fatalf("Evaluate() with an unpopulated PlannerManaged field = %q, "+
+			"want %q: an omitted field must refuse, never silently admit",
+			got.Decision, DecisionNotPlannerManaged)
+	}
+}
+
 // TestPhaseADecisionsMatchThePythonGates exercises every phase-A gate through
 // the real Evaluate entry point, in the order Python applies them. Ordering is
 // part of the contract, not an accident: Python classifies a config with a

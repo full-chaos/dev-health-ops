@@ -805,4 +805,7 @@ async def test_gitlab_connection_helper_never_reroutes_an_unusable_url_to_gitlab
         )
 
     assert success is False
-    assert "gitlab.example.com" in details["error"]
+    # Exact, not a substring match: the point is that the error names the
+    # CONFIGURED host, and a substring check would also pass for a URL that
+    # merely contains it somewhere.
+    assert details["error"] == "Cannot resolve hostname: gitlab.example.com"

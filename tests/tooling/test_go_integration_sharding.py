@@ -430,7 +430,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # observability standing order CHAOS-4194's membership-skip log tests
     # apply. Drives the chunked route through an in-memory HTTP doer and
     # touches no database, so the integration-tagged count stays 114.
-    assert len(expected_provider_tests) == 1029
+    #
+    # A first codex adversarial round (HIGH) then found a re-anchor whole-page
+    # replay could re-download and re-count an artifact an earlier attempt
+    # already reflected in ArchivesSeen/ArchivesUnreadable, crossing the
+    # totality floor on a genuinely single real unreadable artifact. The fix
+    # (a genuine artifacts-phase re-anchor poisons the totality counters to
+    # UNKNOWN for the rest of the walk) replaced the prior
+    # TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay test in
+    # place (net 0) and added ONE new control test, +1 (1029 -> 1030):
+    # TestGitHubTestsAllArtifactsUnreadableOrdinaryResumeKeepsCountersKnown,
+    # proving an ordinary (non-shrinking) resume keeps its known counters and
+    # still detects a genuine totality failure -- i.e. the fix poisons ONLY on
+    # a genuine re-anchor, not on every resume. Both drive the chunked route
+    # through in-memory HTTP doers and touch no database, so the
+    # integration-tagged count stays 114. (The same round's two MEDIUM
+    # findings -- moving the metric to only fire after providerunit's durable
+    # Fail succeeds, and triaging the "malformed cursor" finding as the
+    # ticket's own already-accepted bypass trade-off, not a new defect -- add
+    # tests in internal/jobs/providerunit, a package this providersync-scoped
+    # census does not track.)
+    assert len(expected_provider_tests) == 1030
     assert len(expected_integration_tests) == 114
     assert expected_integration_tests < expected_provider_tests
 
@@ -447,7 +467,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1029
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1030
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -508,7 +528,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1029
+    assert len(selected_tests) == len(set(selected_tests)) == 1030
     assert set(selected_tests) == expected_tests
 
 

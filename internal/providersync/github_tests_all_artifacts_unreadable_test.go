@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -61,7 +60,6 @@ func (doer *githubTestsAllUnreadableDoer) Do(request *http.Request) (*http.Respo
 func TestGitHubTestsAllArtifactsUnreadableFailsTheUnit(t *testing.T) {
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
 	client := githubTestsClient(t, doer)
-	client.Metrics = providerfoundation.NewMetrics()
 
 	walk, err := walkGitHubTestsChunksResult(t, client, 8)
 	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
@@ -78,15 +76,14 @@ func TestGitHubTestsAllArtifactsUnreadableFailsTheUnit(t *testing.T) {
 	if walk.final.Result != nil {
 		t.Fatalf("final batch=%#v, want no final emission on a totality failure", walk.final)
 	}
-
-	var buffer bytes.Buffer
-	if writeErr := client.Metrics.WritePrometheus(&buffer); writeErr != nil {
-		t.Fatalf("WritePrometheus: %v", writeErr)
-	}
-	want := `dev_health_provider_all_artifacts_unreadable_total{provider="github",dataset="cicd"} 1`
-	if !strings.Contains(buffer.String(), want) {
-		t.Fatalf("metrics did not carry the totality failure:\nwant line: %s\ngot:\n%s", want, buffer.String())
-	}
+	// The dev_health_provider_all_artifacts_unreadable_total counter is
+	// deliberately NOT asserted at the route level: it is recorded in
+	// providerunit.Handler.observeAllArtifactsUnreadable, only after the
+	// durable Fail transition succeeds, so one logical unit cannot be
+	// double-counted if Fail itself errors and a later attempt re-detects
+	// this same condition (CHAOS-4185 codex round 1). See
+	// TestHandlerRecordsAllArtifactsUnreadableOnlyAfterDurableFail in
+	// internal/jobs/providerunit.
 }
 
 // RED. A counter nothing logs is unqueryable in production: an operator
@@ -246,7 +243,6 @@ func TestGitHubTestsLegacyCursorWithoutCountersNeverFiresTheGate(t *testing.T) {
 
 	doer := &githubTestsAllUnreadableDoer{t: t, runs: 3}
 	client := githubTestsClient(t, doer)
-	client.Metrics = providerfoundation.NewMetrics()
 
 	var finalCursor githubTestsChunkCursor
 	var sawFinal bool
@@ -282,17 +278,10 @@ func TestGitHubTestsLegacyCursorWithoutCountersNeverFiresTheGate(t *testing.T) {
 			intPtrString(finalCursor.ArchivesSeen), intPtrString(finalCursor.ArchivesUnreadable),
 		)
 	}
-
-	var buffer bytes.Buffer
-	if writeErr := client.Metrics.WritePrometheus(&buffer); writeErr != nil {
-		t.Fatalf("WritePrometheus: %v", writeErr)
-	}
-	// The HELP/TYPE header lines always carry the bare family name even with
-	// zero series, so the no-fire assertion must match a rendered DATA line
-	// (with its "{" label block), not the family name alone.
-	if strings.Contains(buffer.String(), "dev_health_provider_all_artifacts_unreadable_total{") {
-		t.Fatalf("totality metric fired for a walk with unknown counters:\n%s", buffer.String())
-	}
+	// The all_artifacts_unreadable metric is recorded at the providerunit
+	// level, not by this route, so it is not asserted here -- see
+	// TestHandlerRecordsAllArtifactsUnreadableOnlyAfterDurableFail in
+	// internal/jobs/providerunit.
 }
 
 // RED. Continuation: the gate must evaluate against counters ACCUMULATED
@@ -322,7 +311,6 @@ func TestGitHubTestsAllArtifactsUnreadableAccumulatesAcrossContinuation(t *testi
 func TestGitHubTestsDoneResumeDoesNotReevaluateOrDoubleCount(t *testing.T) {
 	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 2, corrupt: map[int]bool{1: true}}
 	client := githubTestsClient(t, doer)
-	client.Metrics = providerfoundation.NewMetrics()
 
 	claim := nativeTestClaim("github", "cicd")
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
@@ -349,17 +337,6 @@ func TestGitHubTestsDoneResumeDoesNotReevaluateOrDoubleCount(t *testing.T) {
 	run(terminal)
 	if finals != 2 {
 		t.Fatalf("after done-resume finals=%d, want 2 (resume republishes, does not fail)", finals)
-	}
-
-	var buffer bytes.Buffer
-	if writeErr := client.Metrics.WritePrometheus(&buffer); writeErr != nil {
-		t.Fatalf("WritePrometheus: %v", writeErr)
-	}
-	// The HELP/TYPE header lines always carry the bare family name even with
-	// zero series, so the no-fire assertion must match a rendered DATA line
-	// (with its "{" label block), not the family name alone.
-	if strings.Contains(buffer.String(), "dev_health_provider_all_artifacts_unreadable_total{") {
-		t.Fatalf("totality metric fired for a partial-degradation unit:\n%s", buffer.String())
 	}
 }
 
@@ -407,15 +384,23 @@ func (doer *githubTestsReanchorAllUnreadableDoer) Do(request *http.Request) (*ht
 	}
 }
 
-// RED. Re-verifies the counter lifecycle against a re-anchoring walk
-// (CHAOS-4185 part 6). A page that shrank under a resume re-processes
-// artifacts already reflected in the persisted counters; the equality
-// invariant the gate checks (unreadable == seen) must survive that replay
-// without flipping a correctly-partial walk into a false totality failure or
-// vice versa. Both counters inflate by the SAME replayed amount, so the
-// EQUALITY the gate tests is preserved even though the raw counts are not
-// exact -- documented, accepted, and asserted here explicitly.
-func TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay(t *testing.T) {
+// RED (codex round 1, HIGH). A re-anchor re-walks its WHOLE page from index
+// 0, which re-downloads and re-counts every artifact on it -- including one
+// an earlier attempt already reflected in ArchivesSeen/ArchivesUnreadable.
+// Before this fix, a genuinely single real unreadable artifact (seen=1,
+// unreadable=1, correctly BELOW the floor) could be replayed once by a
+// re-anchor and become seen=2/unreadable=2 -- crossing the floor and firing
+// totality on ONE distinct observation counted twice. This is the exact
+// false-positive class the sample floor exists to prevent (CHAOS-4185 part
+// 2), reached through a mechanism the original floor test never exercised.
+//
+// The fix: a genuine artifacts-phase re-anchor now poisons the totality
+// counters to UNKNOWN for the rest of the walk (githubTestsResumeStart's new
+// bool return), the same bounded/self-healing trade-off already accepted for
+// a legacy pre-deploy cursor. This walk must therefore complete WITHOUT the
+// totality sentinel even though every artifact it downloads, before and
+// after the re-anchor, is unreadable.
+func TestGitHubTestsAllArtifactsUnreadableReanchorReplayNeverFalselyCrossesTheFloor(t *testing.T) {
 	discover := &githubTestsReanchorAllUnreadableDoer{t: t, items: 5}
 	if err := (GitHubTestsRouteHandler{}).CollectChunks(
 		context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{},
@@ -428,9 +413,10 @@ func TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay(t *testing.T) {
 		t.Fatal("discovery pass never reached the artifacts phase; the resume cursor below would be meaningless")
 	}
 
-	// Simulates one archive already durably committed as unreadable
-	// (seen=1, unreadable=1) at index 4 of a page that has since shrunk to 2
-	// items.
+	// Simulates ONE genuinely distinct archive already durably committed as
+	// unreadable (seen=1, unreadable=1, correctly below the floor) at index 4
+	// of a page that has since shrunk to 2 items -- forcing a re-anchor that
+	// replays those 2 items from index 0.
 	resume := `{"phase":"artifacts","next_url":` + strconv.Quote(discover.artifactPhaseURL) +
 		`,"index":4,"run_pages":1,"artifact_pages":1,"repo":"acme/api",` +
 		`"archives_seen":1,"archives_unreadable":1}`
@@ -438,6 +424,7 @@ func TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay(t *testing.T) {
 	doer := &githubTestsReanchorAllUnreadableDoer{t: t, items: 2, corrupt: true}
 	client := githubTestsClient(t, doer)
 
+	var finalCursor githubTestsChunkCursor
 	sawFinal := false
 	err := (GitHubTestsRouteHandler{}).CollectChunks(
 		context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{},
@@ -445,18 +432,51 @@ func TestGitHubTestsAllArtifactsUnreadableSurvivesReanchorReplay(t *testing.T) {
 		func(emission ChunkRouteEmission) error {
 			if emission.Final {
 				sawFinal = true
+				decoded, decodeErr := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+				if decodeErr != nil {
+					t.Fatalf("decode terminal cursor: %v", decodeErr)
+				}
+				finalCursor = decoded
 			}
 			return nil
 		},
 	)
-	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+	if err != nil {
 		t.Fatalf(
-			"err=%v, want ErrGitHubTestsAllArtifactsUnreadable: the re-anchor replayed a whole page of "+
-				"still-unreadable artifacts, which must inflate seen and unreadable EQUALLY, not break the gate",
-			err,
+			"a re-anchor replay falsely crossed the totality floor: err=%v; "+
+				"want the walk to complete (only one artifact was ever distinctly observed)", err,
 		)
 	}
-	if sawFinal {
-		t.Fatal("a totality failure must not publish a final emission")
+	if !sawFinal || finalCursor.Phase != "done" {
+		t.Fatalf("walk did not reach a done final emission: sawFinal=%v phase=%q", sawFinal, finalCursor.Phase)
+	}
+	if finalCursor.ArchivesSeen != nil || finalCursor.ArchivesUnreadable != nil {
+		t.Fatalf(
+			"terminal cursor carries known counters (%v/%v) after a re-anchor replay; "+
+				"a genuine re-anchor must poison them to UNKNOWN for the rest of the walk",
+			intPtrString(finalCursor.ArchivesSeen), intPtrString(finalCursor.ArchivesUnreadable),
+		)
+	}
+}
+
+// RED (codex round 1 companion). A page resumed WITHIN its stored index --
+// no shrink, no re-anchor -- must keep its known counters and still detect a
+// genuine totality failure. This is the control that proves the fix above
+// poisons ONLY on a genuine re-anchor, not on every resume.
+func TestGitHubTestsAllArtifactsUnreadableOrdinaryResumeKeepsCountersKnown(t *testing.T) {
+	doer := &githubTestsAllUnreadableDoer{t: t, runs: 2}
+	client := githubTestsClient(t, doer)
+
+	// maxChunks=1 forces a resume between the two runs' artifacts, but the
+	// page never shrinks (githubTestsAllUnreadableDoer always serves the
+	// same 2 runs), so the stored index keeps addressing a real item and
+	// githubTestsResumeStart never re-anchors.
+	_, err := walkGitHubTestsChunksResult(t, client, 1)
+	if !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable: an ordinary resume must not "+
+			"lose its known counters", err)
+	}
+	if !strings.Contains(err.Error(), "seen=2") || !strings.Contains(err.Error(), "unreadable=2") {
+		t.Fatalf("err=%v, want seen=2 unreadable=2", err)
 	}
 }

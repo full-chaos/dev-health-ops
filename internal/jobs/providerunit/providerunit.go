@@ -294,6 +294,23 @@ func (handler *Handler) observeTerminalWithCommittedRows(
 	)
 }
 
+// observeAllArtifactsUnreadable reports a github tests/cicd unit that failed
+// because every observed artifact was unreadable. Call it only AFTER the
+// durable Fail transition succeeded, for the identical reason
+// observeTerminalWithCommittedRows is: if Repository.Fail itself errors, this
+// attempt stays retryable (jobruntime.Retryable(failErr) above), and a LATER
+// attempt walks the route again -- which would re-detect the same condition
+// and, if the metric fired here unconditionally, count one logical unit
+// failure more than once (CHAOS-4185 codex round 1). Recording it only on the
+// attempt whose Fail durably succeeded caps it at exactly one increment per
+// unit, matching RecordUnitTerminalWithRows's contract above.
+func (handler *Handler) observeAllArtifactsUnreadable(claim providersync.Claim, category string) {
+	if handler == nil || category != AllArtifactsUnreadableCategory {
+		return
+	}
+	handler.ProviderMetrics.RecordAllArtifactsUnreadable(claim.Provider, claim.Dataset)
+}
+
 // logLifecycle records the safe, authoritative identity of one provider-unit
 // attempt. River arguments deliberately carry only the unit ID, so provider,
 // dataset, mode, and run identity become available only after Claim. Keep this
@@ -625,6 +642,7 @@ func (handler *Handler) Work(
 		// operator about an incident that did not happen -- and inflate the
 		// exact series an operator would use to judge how bad CHAOS-4130 is.
 		handler.observeTerminalWithCommittedRows(session.Claim, result, category, err)
+		handler.observeAllArtifactsUnreadable(session.Claim, category)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)

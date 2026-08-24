@@ -112,23 +112,27 @@ var ErrGitHubTestsAllArtifactsUnreadable = fmt.Errorf("%w: all observed artifact
 // and always on the FIRST attempt that reaches it, never once per retry.
 //
 // The counters are UNKNOWN (nil) whenever this cursor -- or the cursor it
-// resumed from -- was ever decoded without them. Skipping the gate on
-// UNKNOWN is deliberate: a walk spanning the deploy is then bounded and
-// self-healing (the very next fresh walk starts with known zero counters)
-// rather than a false failure on a unit that already read good archives
-// before this code existed.
-func githubTestsCheckAllArtifactsUnreadable(
-	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim,
-) error {
+// resumed from -- was ever decoded without them, or a genuine artifacts-phase
+// re-anchor replayed a page this walk had already partly counted. Skipping
+// the gate on UNKNOWN is deliberate: a walk spanning the deploy, or one whose
+// counters a replay can no longer be trusted to represent, is then bounded
+// and self-healing rather than a false failure.
+//
+// Deliberately does NOT record the RecordAllArtifactsUnreadable metric: that
+// happens in providerunit.Handler.observeAllArtifactsUnreadable, ONLY after
+// the durable Fail transition succeeds. Recording it here, before the error
+// even leaves this route, would double-count if Repository.Fail itself
+// errors and a later attempt re-detects the identical condition (CHAOS-4185
+// codex round 1) -- the same reasoning providerunit's
+// observeTerminalWithCommittedRows already documents for CHAOS-4130's row
+// counter.
+func githubTestsCheckAllArtifactsUnreadable(cursor githubTestsChunkCursor, claim Claim) error {
 	if cursor.ArchivesSeen == nil || cursor.ArchivesUnreadable == nil {
 		return nil
 	}
 	seen, unreadable := *cursor.ArchivesSeen, *cursor.ArchivesUnreadable
 	if seen < githubTestsAllArtifactsUnreadableFloor || unreadable != seen {
 		return nil
-	}
-	if client != nil {
-		client.Metrics.RecordAllArtifactsUnreadable(claim.Provider, claim.Dataset)
 	}
 	slog.Error(
 		"provider unit failing: every observed cicd artifact was unreadable",
@@ -328,15 +332,23 @@ const (
 // Failing here cost one of the unit's five attempts per occurrence, which is
 // why a deploy or any other gap used to burn attempts on exactly the busiest
 // repositories -- the ones whose pages shift most (CHAOS-4177).
+// The bool return reports whether this call is a GENUINE re-anchor (the
+// stored index no longer addresses an item, so the page is about to be
+// re-walked from 0) as opposed to a fresh page never resumed at all. The
+// artifacts phase needs this distinction: a genuine re-anchor re-downloads
+// and re-counts every artifact on the page, including ones an earlier
+// attempt already reflected in ArchivesSeen/ArchivesUnreadable, which can
+// otherwise cross the totality floor on a truly small sample (CHAOS-4185
+// codex round 1) -- see the caller in the artifacts phase below.
 func githubTestsResumeStart(
 	cursor githubTestsChunkCursor,
 	page providerfoundation.PageVisit,
 	client *providerfoundation.HTTPClient,
 	claim Claim,
 	phase string,
-) int {
+) (int, bool) {
 	if cursor.NextURL != page.CursorBefore {
-		return 0
+		return 0, false
 	}
 	// A cursor is never persisted with Index == len(page.Items): both item
 	// write sites (the runs loop and its artifacts twin) assign index+1 and
@@ -348,7 +360,7 @@ func githubTestsResumeStart(
 	// whatever the page still held, silently. Index 0 is always a legitimate
 	// start, including on an empty page.
 	if cursor.Index == 0 || cursor.Index < len(page.Items) {
-		return cursor.Index
+		return cursor.Index, false
 	}
 	if client != nil {
 		client.Metrics.RecordResumeReanchor(claim.Provider, claim.Dataset, phase)
@@ -359,7 +371,7 @@ func githubTestsResumeStart(
 		"repository", cursor.Repo, "phase", phase,
 		"stored_index", cursor.Index, "page_items", len(page.Items),
 	)
-	return 0
+	return 0, true
 }
 
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
@@ -485,7 +497,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// so it evaluates exactly once per walk regardless of which of the two
 		// callers below reached it -- the natural end of pagination, or a
 		// resume that landed directly on an already-`done` cursor.
-		if err := githubTestsCheckAllArtifactsUnreadable(cursor, client, claim); err != nil {
+		if err := githubTestsCheckAllArtifactsUnreadable(cursor, claim); err != nil {
 			return err
 		}
 		batch, batchErr := githubTestsFinalMetadataBatch(claim, cursor)
@@ -566,7 +578,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 			cursor.RunPages++
 		}
-		start := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
 			before := cursor
 			var run gitHubWorkflowRunPayload
@@ -745,7 +757,24 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 				cursor.ArtifactPages++
 			}
-			start := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
+			start, reanchored := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
+			if reanchored {
+				// A genuine re-anchor re-walks this WHOLE page from index 0,
+				// which re-downloads and re-counts every artifact on it --
+				// including ones an earlier attempt already reflected in
+				// these counters. That can cross the totality floor on a
+				// truly small real sample (e.g. a genuine 1-artifact repo
+				// whose page shrank under a resume): the SAME artifact would
+				// be counted twice, satisfying seen>=2 with only one
+				// distinct observation (CHAOS-4185 codex round 1).
+				//
+				// Poisoning to UNKNOWN here is the same trade-off already
+				// accepted for a legacy pre-deploy cursor: bounded and
+				// self-healing (the very next fresh walk starts with known
+				// counters again), rather than risk a false positive from
+				// state a replay can no longer be trusted to represent.
+				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
 				var run gitHubWorkflowRunPayload

@@ -18,11 +18,7 @@ data:
   API_HOST: "0.0.0.0"
   API_PORT: "8000"
   
-  # Celery configuration
-  CELERY_BROKER_URL: "redis://valkey:6379/0"
-  CELERY_RESULT_BACKEND: "redis://valkey:6379/0"
-  WORKER_CONCURRENCY: "4"
-  WORKER_HEAVY_CONCURRENCY: "2"
+  # Go/River worker configuration (CHAOS-3052; Celery removed CHAOS-4195)
   RIVER_DATABASE_SCHEMA: "river"
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
@@ -38,8 +34,13 @@ data:
   WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
   # Exactly one runtime owns the PagerDuty webhook stream. The API and the Go
   # stream runner share this ConfigMap so they can never disagree: `celery`
-  # keeps the Celery dispatch, `river` hands the stream to Go (CUT-14/18).
-  PAGERDUTY_WEBHOOK_TRANSPORT: "celery"
+  # named the retired Celery dispatch, `river` hands the stream to Go
+  # (CUT-14/18). Celery is gone (CHAOS-4195); `river` is the only functioning
+  # value -- the Go stream-pagerduty group is the sole consumer now. It
+  # defaults to replicas: 0 in go-workers.yaml, so a fresh apply ACCEPTS
+  # PagerDuty webhooks into the durable outbox but nothing drains it until
+  # scaled: kubectl scale deployment/dev-health-go-stream-pagerduty --replicas=1
+  PAGERDUTY_WEBHOOK_TRANSPORT: "river"
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
   OTEL_SERVICE_NAME: "dev-health-ops"

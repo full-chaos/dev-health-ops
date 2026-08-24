@@ -30,20 +30,16 @@ Your release "{{ .Release.Name }}" has been deployed!
 {{- end }}
 {{- end }}
 
-{{- if .Values.worker.enabled }}
+{{- if .Values.goWorkers.enabled }}
 
-⚙️  Worker: {{ .Values.worker.replicas }} replica(s), queues: {{ .Values.worker.queues }}
-{{- end }}
-
-{{- if .Values.beat.enabled }}
-⏰ Beat scheduler: enabled
+⚙️  Go workers: {{ range .Values.goWorkers.groups }}{{ .name }}={{ .replicas }} {{ end }}
+   Scale a group: kubectl -n {{ include "dev-health.namespace" . }} scale deployment/{{ include "dev-health.fullname" . }}-go-<group> --replicas=N
 {{- end }}
 
 Components deployed:
   {{- if .Values.api.enabled }}  ✅ API{{ end }}
   {{- if .Values.web.enabled }}  ✅ Web{{ end }}
-  {{- if .Values.worker.enabled }}  ✅ Worker{{ end }}
-  {{- if .Values.beat.enabled }}  ✅ Beat{{ end }}
+  {{- if .Values.goWorkers.enabled }}  ✅ Go workers{{ end }}
   {{- if .Values.billingEdge.enabled }}  ✅ Billing Edge{{ end }}
   {{- if .Values.valkey.enabled }}  ✅ Valkey (in-cluster){{ end }}
   {{- if .Values.clickhouse.enabled }}  ✅ ClickHouse (in-cluster){{ end }}

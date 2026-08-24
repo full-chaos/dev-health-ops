@@ -128,7 +128,7 @@ deploy/kubernetes/
 ├── clickhouse.yaml         # ClickHouse StatefulSet
 ├── redis.yaml              # Redis Deployment
 ├── api.yaml                # API Deployment + HPA
-├── worker.yaml             # Celery Worker Deployment + HPA
+├── go-workers.yaml         # Go/River worker Deployments + HPAs (CHAOS-4195: replaced Celery worker.yaml/beat.yaml)
 ├── cronjobs.yaml           # Scheduled sync jobs
 └── ingress.yaml            # Ingress + NetworkPolicy
 ```

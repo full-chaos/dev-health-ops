@@ -825,14 +825,15 @@ def test_kubernetes_secret_exposes_clickhouse_uri_for_migrate(monkeypatch) -> No
     assert "GITHUB_TOKEN" not in migration_secret["stringData"]
 
 
-@pytest.mark.parametrize("manifest", ["api.yaml", "worker.yaml"])
-def test_kubernetes_app_deployments_wait_for_migrations(manifest: str) -> None:
+def test_kubernetes_app_deployments_wait_for_migrations() -> None:
     """CHAOS-2304 safety net: a naive `kubectl apply -k` rolls Deployments
-    without waiting for the migrate Job. api/worker must carry a read-only
+    without waiting for the migrate Job. api must carry a read-only
     wait-for-migrations initContainer that blocks until the schema is
     current (`dev-hops migrate clickhouse status --check`) and never runs
-    DDL itself."""
-    deployment = next(d for d in _k8s_docs(manifest) if d.get("kind") == "Deployment")
+    DDL itself. The Go worker groups in go-workers.yaml (CHAOS-4195, which
+    replaced the Celery worker.yaml this test used to also parametrize over)
+    deploy at replicas: 0 and carry no such initContainer of their own."""
+    deployment = next(d for d in _k8s_docs("api.yaml") if d.get("kind") == "Deployment")
     pod_spec = deployment["spec"]["template"]["spec"]
     waiter = next(
         (
@@ -843,7 +844,7 @@ def test_kubernetes_app_deployments_wait_for_migrations(manifest: str) -> None:
         None,
     )
     assert waiter is not None, (
-        f"{manifest} must define a wait-for-migrations initContainer"
+        "api.yaml must define a wait-for-migrations initContainer"
     )
 
     command = " ".join(waiter["command"])
@@ -890,30 +891,18 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
 
 
 def test_deploy_stacks_keep_celery_beat_singleton() -> None:
+    """Compose-only: the archived Celery Beat service must stay a singleton
+    on every deploy target that still checks one in. CHAOS-4195 deleted the
+    Kubernetes (beat.yaml) and Helm (beat-deployment.yaml) equivalents this
+    test used to also assert on -- their Go successor is the `scheduler`
+    goWorkers group (`kubernetes/go-workers.yaml`'s dev-health-go-scheduler
+    Deployment), which is a singleton by operational convention ("Run exactly
+    one active production scheduler", docs/operate/configure/
+    workers-and-schedules.md) rather than a machine-checked replica pin --
+    like every group it deploys at replicas: 0 until an operator scales it,
+    so there is no static "always exactly 1" invariant left to assert here."""
     for stack in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
         _assert_compose_beat_singleton(stack)
-
-    k8s_beats = []
-    for doc in yaml.safe_load_all((_K8S_DIR / "beat.yaml").read_text()):
-        if not doc or doc.get("kind") != "Deployment":
-            continue
-        containers = doc["spec"]["template"]["spec"].get("containers") or []
-        for container in containers:
-            command = container.get("command") or []
-            if "celery" in command and "beat" in command:
-                k8s_beats.append(doc)
-
-    assert len(k8s_beats) == 1
-    assert k8s_beats[0]["spec"].get("replicas") == 1
-
-    kustomization = _load_yaml(_K8S_DIR / "kustomization.yaml")
-    assert "beat.yaml" in kustomization["resources"]
-
-    beat_template = (_HELM_DIR / "templates" / "beat-deployment.yaml").read_text(
-        encoding="utf-8"
-    )
-    assert "SINGLETON: exactly 1 beat replica" in beat_template
-    assert "replicas: 1" in beat_template
 
 
 def test_celery_worker_prefetch_multiplier_is_one() -> None:
@@ -942,6 +931,11 @@ def test_celery_worker_prefetch_is_disabled_for_redis() -> None:
 
 
 def test_worker_commands_disable_prefetch_for_redis() -> None:
+    """Compose-only: `--disable-prefetch` is a Celery/Redis QoS flag
+    (CHAOS-2277). CHAOS-4195 deleted the Kubernetes (worker.yaml) and Helm
+    (worker-deployment.yaml/worker-pools.yaml) equivalents this test used to
+    also assert on -- the Go worker's River client has no prefetch concept to
+    disable, so there is nothing there for this flag to apply to."""
     for path in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}
         worker_commands = [
@@ -953,27 +947,6 @@ def test_worker_commands_disable_prefetch_for_redis() -> None:
         assert worker_commands
         for command in worker_commands:
             assert "--disable-prefetch" in command
-
-    k8s_commands: list[list[str]] = []
-    for doc in yaml.safe_load_all((_K8S_DIR / "worker.yaml").read_text()):
-        if not doc or doc.get("kind") != "Deployment":
-            continue
-        for container in doc["spec"]["template"]["spec"].get("containers") or []:
-            command = container.get("command") or []
-            if "worker" in command:
-                k8s_commands.append(command)
-
-    assert k8s_commands
-    for command in k8s_commands:
-        assert "--disable-prefetch" in command
-
-    helm_templates = [
-        _HELM_DIR / "templates" / "worker-deployment.yaml",
-        _HELM_DIR / "templates" / "worker-pools.yaml",
-    ]
-    for template in helm_templates:
-        text = template.read_text(encoding="utf-8")
-        assert "--disable-prefetch" in text
 
 
 def test_local_compose_workers_import_mounted_source() -> None:
@@ -1155,15 +1128,18 @@ def test_production_workers_use_semantic_postgres_uri() -> None:
 
 def test_production_stacks_consume_monitoring_queue() -> None:
     """The monitor-queue-depths beat entry enqueues to `monitoring`
-    unconditionally — every production stack's worker must consume it or
-    telemetry tasks accumulate unconsumed forever (1,440/day)."""
+    unconditionally — every production Celery stack's worker must consume it
+    or telemetry tasks accumulate unconsumed forever (1,440/day). Celery-only:
+    CHAOS-4195 deleted the Kubernetes (worker.yaml) and Helm (values.yaml
+    worker pools) equivalents this test used to also cover -- the Go
+    successors don't use Celery's `-Q`/`queues:` queue-list shape or a
+    literal `monitoring` queue name at all, so there's nothing there for this
+    regex-based check to match against."""
     import re
 
     stacks = [
         _PROD_COMPOSE,
         _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml",
-        _REPO_ROOT / "deploy" / "kubernetes" / "worker.yaml",
-        _REPO_ROOT / "deploy" / "helm" / "dev-health" / "values.yaml",
     ]
     for stack in stacks:
         text = stack.read_text(encoding="utf-8")
@@ -1186,47 +1162,21 @@ def _compose_worker_queues(path: Path) -> set[str]:
     return consumed
 
 
-def _k8s_worker_queues(path: Path) -> set[str]:
-    """Union of -Q lists across every worker Deployment in a k8s manifest."""
-    consumed: set[str] = set()
-    for doc in yaml.safe_load_all(path.read_text(encoding="utf-8")):
-        if not doc or doc.get("kind") != "Deployment":
-            continue
-        pod = doc["spec"]["template"]["spec"]
-        for container in pod.get("containers") or []:
-            cmd = container.get("command") or []
-            for i, tok in enumerate(cmd):
-                if tok == "-Q" and i + 1 < len(cmd):
-                    consumed |= {q for q in str(cmd[i + 1]).split(",") if q}
-    return consumed
-
-
-def _helm_worker_queues(values_path: Path) -> set[str]:
-    """Union of queue lists across every enabled worker pool in helm values."""
-    values = _load_yaml(values_path)
-    consumed: set[str] = set()
-    for pool in ("worker", "workerIngest", "workerExternalIngest", "workerHeavy"):
-        cfg = values.get(pool) or {}
-        if cfg.get("enabled") is False:
-            continue
-        queues = cfg.get("queues")
-        if queues:
-            consumed |= {q for q in str(queues).split(",") if q}
-    return consumed
-
-
 def test_production_stacks_cover_every_celery_queue() -> None:
-    """CHAOS-2308: every production deploy stack must consume every queue in
-    workers.config.task_queues across the union of its worker pools. A queue
-    declared in task_queues but consumed by no prod worker silently accumulates
-    forever (backfill jobs, webhook events, ingest, reports, cost-class sync).
-    Mirrors test_compose_workers_cover_every_celery_queue for the prod stacks."""
+    """CHAOS-2308: every production Celery deploy stack must consume every
+    queue in workers.config.task_queues across the union of its worker pools.
+    A queue declared in task_queues but consumed by no prod worker silently
+    accumulates forever (backfill jobs, webhook events, ingest, reports,
+    cost-class sync). Mirrors test_compose_workers_cover_every_celery_queue
+    for the prod stacks. Celery-only: CHAOS-4195 deleted the Kubernetes
+    (worker.yaml) and Helm (values.yaml worker pools) coverage this test used
+    to also assert, along with the now-unused `_k8s_worker_queues`/
+    `_helm_worker_queues` helpers -- the Go successors don't route through
+    Celery queue names."""
     all_queues = set(task_queues)
     coverage = {
         "compose.production.yml": _compose_worker_queues(_PROD_COMPOSE),
         "docker-swarm/stack.yml": _compose_worker_queues(_SWARM_STACK),
-        "kubernetes/worker.yaml": _k8s_worker_queues(_K8S_DIR / "worker.yaml"),
-        "helm values.yaml": _helm_worker_queues(_HELM_DIR / "values.yaml"),
     }
     for name, consumed in coverage.items():
         missing = all_queues - consumed

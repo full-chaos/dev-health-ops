@@ -1,7 +1,9 @@
-# Additive, default-off Go/River workloads. This file is deliberately absent
-# from kustomization.yaml: apply it only after the migration Job is complete.
-# The checked-in route contract is still Celery-owned; these pods expose
-# /healthz, /readyz, and /metrics for a bounded coexistence canary.
+# Go/River workloads (CHAOS-3052). This is the only worker topology this
+# tree renders -- the Celery manifests it replaced (worker.yaml, beat.yaml)
+# were deleted in CHAOS-4195. Listed in kustomization.yaml; apply after the
+# migration Job completes. Every group deploys at replicas: 0 by default --
+# scale the groups you need (README.md) -- and exposes /healthz, /readyz,
+# and /metrics.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,13 +11,12 @@ metadata:
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker-config}
 data:
-  # CHAOS-3942: /health/workers is Celery-authoritative until it is told
-  # otherwise. api.yaml reads this key optionally, so it's absent -- not
-  # empty -- until this file is applied: applying it is what flips the
-  # endpoint's authority, in the same change that stages the fleet it now
-  # checks. Reconciler/scheduler/stream-* are excluded: they run a separate
-  # role with their own /healthz and never register worker_instances
-  # presence.
+  # CHAOS-3942/CHAOS-4195: /health/workers is Go-authoritative now that this
+  # file is a base kustomization resource (api.yaml still reads the key
+  # `optional: true` for resilience against a partial apply, not because the
+  # fleet it describes is conditional any more). Reconciler/scheduler/
+  # stream-* are excluded: they run a separate role with their own /healthz
+  # and never register worker_instances presence.
   EXPECTED_WORKER_GROUPS: "heavy,ops,sync,sync-provider"
 ---
 apiVersion: v1

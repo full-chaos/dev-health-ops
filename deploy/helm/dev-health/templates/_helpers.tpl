@@ -108,13 +108,12 @@ ConfigMap name
 {{- end }}
 
 {{/*
-Redis URL — auto-computed when valkey.enabled, otherwise from secrets
+Redis URL — auto-computed when valkey.enabled, otherwise empty (the caller
+falls back to secrets.data.REDIS_URL, an explicit external Redis/Valkey URL).
 */}}
 {{- define "dev-health.redisURL" -}}
 {{- if .Values.valkey.enabled }}
 {{- printf "redis://%s-valkey:6379/0" (include "dev-health.fullname" .) }}
-{{- else }}
-{{- .Values.config.CELERY_BROKER_URL | default "" }}
 {{- end }}
 {{- end }}
 
@@ -216,21 +215,18 @@ hook ConfigMap (the latter exists because pre-install hooks run before the
 chart's regular resources are created).
 */}}
 {{- define "dev-health.configData" -}}
-{{- $redisAuto := and .Values.valkey.enabled (not .Values.config.CELERY_BROKER_URL) }}
-{{- $redisKeys := list "CELERY_BROKER_URL" "CELERY_RESULT_BACKEND" "REDIS_URL" }}
+{{- /* Auto-compute the in-cluster Redis URL only when valkey is enabled AND
+   the caller has not already pinned an explicit external one via the
+   REDIS_URL Secret key. */}}
+{{- $redisAuto := and .Values.valkey.enabled (not (index .Values.secrets.data "REDIS_URL")) }}
 {{- /* Keys whose empty placeholder is replaced by a computed value below. */}}
 {{- $derivedKeys := list "WORKER_OPERATIONAL_BRIDGE_URL" }}
-{{- if $redisAuto }}
-{{- $derivedKeys = concat $derivedKeys $redisKeys }}
-{{- end }}
 {{- range $key, $value := .Values.config }}
 {{- if or $value (not (has $key $derivedKeys)) }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}
 {{- if $redisAuto }}
-CELERY_BROKER_URL: {{ include "dev-health.redisURL" . | quote }}
-CELERY_RESULT_BACKEND: {{ include "dev-health.redisURL" . | quote }}
 REDIS_URL: {{ include "dev-health.redisURL" . | quote }}
 {{- end }}
 {{- if not (index .Values.config "WORKER_OPERATIONAL_BRIDGE_URL") }}

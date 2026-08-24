@@ -3,6 +3,22 @@
 # Usage: helm install dev-health ./deploy/helm/dev-health -f values-quickstart.yaml
 # =============================================================================
 # WARNING: Default credentials are for evaluation only. Do NOT use in production.
+#
+# "Zero configuration" covers what helm install renders, not what's ready to
+# scale: this chart provisions no PostgreSQL roles (see values.yaml's
+# goWorkers KNOWN GAP comment), so the bundled PostgreSQL StatefulSet below
+# creates only its own `devhealth` login -- not the devhealth_domain/
+# devhealth_queue/devhealth_coordinator roles the placeholder passwords a
+# few lines down are for. Before scaling any Go worker group, port-forward
+# the bundled PostgreSQL and run the provisioning script once:
+#
+#   kubectl -n <namespace> port-forward svc/<release>-postgresql 5432:5432 &
+#   PGPASSWORD=devhealth psql --host=localhost --username=devhealth \
+#     --dbname=devhealth \
+#     --set=domain_password=change-me-river-domain-password \
+#     --set=queue_password=change-me-river-queue-password \
+#     --set=coordinator_password=change-me-river-coordinator-password \
+#     --file=scripts/worker/provision_river_roles.sql
 
 # All databases run in-cluster
 postgresql:
@@ -28,6 +44,11 @@ clickhouse:
 
 valkey:
   enabled: true
+
+# goWorkers.pgbouncer's three River role passwords already ship a
+# chart-default placeholder (values.yaml); bundled PostgreSQL's
+# host/port/database are derived automatically once postgresql.enabled=true
+# above, so there is nothing go-worker-specific left to fill in here.
 
 # Pre-filled secrets with generated defaults
 secrets:
@@ -64,28 +85,6 @@ api:
     limits:
       memory: "512Mi"
       cpu: "250m"
-
-worker:
-  replicas: 1
-  concurrency: 2
-  autoscaling:
-    enabled: false
-  resources:
-    requests:
-      memory: "128Mi"
-      cpu: "50m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-
-beat:
-  resources:
-    requests:
-      memory: "64Mi"
-      cpu: "25m"
-    limits:
-      memory: "256Mi"
-      cpu: "125m"
 
 web:
   replicas: 1

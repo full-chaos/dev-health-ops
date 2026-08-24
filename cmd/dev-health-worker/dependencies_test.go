@@ -300,11 +300,15 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	}
 	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
 	sources.buildOperational = nil
-	sources.buildSyncCoordinator = fakeHandlerBuilder(
-		"sync-coordinator",
-		[]jobruntime.HandlerSpec{autoimportSpec},
-		jobruntime.QueueBudget{Queue: syncCoordinatorQueue, MaxWorkers: 4},
-	)
+	sources.buildSyncCoordinator = func(
+		context.Context, config.Config, workerDatabase, *jobruntime.Registry,
+		jobruntime.Observer, *slog.Logger, *river.Workers,
+	) (workerFamily, error) {
+		return workerFamily{
+			handlers: []jobruntime.HandlerSpec{autoimportSpec},
+			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
+		}, nil
+	}
 	sources.buildProviderSync = func(
 		_ context.Context,
 		_ config.Config,
@@ -1786,7 +1790,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 				return database, nil
 			}
 			sources.buildSyncCoordinator = func(
-				config.Config, workerDatabase, *jobruntime.Registry,
+				context.Context, config.Config, workerDatabase, *jobruntime.Registry,
 				jobruntime.Observer, *slog.Logger, *river.Workers,
 			) (workerFamily, error) {
 				family := workerFamily{}

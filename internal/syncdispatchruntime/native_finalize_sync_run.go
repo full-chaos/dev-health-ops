@@ -133,7 +133,7 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 		return nil
 	}
 
-	run, err := loadFinalizeRun(ctx, tx, args)
+	run, err := loadFinalizeRun(ctx, tx, args.OrganizationID(), args.SyncRunID())
 	if err != nil {
 		return err
 	}
@@ -359,7 +359,11 @@ type finalizeSyncRun struct {
 	errorText      *string
 }
 
-func loadFinalizeRun(ctx context.Context, tx pgx.Tx, args FinalizeSyncRunArgs) (*finalizeSyncRun, error) {
+// loadFinalizeRun takes orgID/runID directly (not a concrete Args type) so
+// it can be shared by any caller that needs the same sync_runs row shape --
+// finalize_sync_run's own Finalize, and reference_discovery's feature-gate
+// check, which needs the identical fields to drive terminalizeFeatureDisabledRun.
+func loadFinalizeRun(ctx context.Context, tx pgx.Tx, orgID, runID string) (*finalizeSyncRun, error) {
 	var (
 		run           finalizeSyncRun
 		integrationID string
@@ -372,7 +376,7 @@ SELECT id::text, org_id, integration_id::text, status, total_units, completed_un
        failed_units, completed_at, result, error
 FROM public.sync_runs
 WHERE id = $1::uuid AND org_id = $2`,
-		args.SyncRunID(), args.OrganizationID(),
+		runID, orgID,
 	).Scan(&run.id, &run.orgID, &integrationID, &run.status, &run.totalUnits, &run.completedUnits,
 		&run.failedUnits, &completedAt, &resultRaw, &errorText)
 	if errors.Is(err, pgx.ErrNoRows) {

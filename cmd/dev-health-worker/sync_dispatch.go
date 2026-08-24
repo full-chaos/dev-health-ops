@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
@@ -258,6 +259,7 @@ const syncCoordinatorQueue = syncdispatchcontract.RiverQueue
 // must reach validation through one canonical channel no matter which client
 // hosts the worker.
 func buildSyncCoordinatorWorker(
+	ctx context.Context,
 	cfg config.Config,
 	database workerDatabase,
 	registry *jobruntime.Registry,
@@ -272,6 +274,26 @@ func buildSyncCoordinatorWorker(
 	if !ok || postgresDatabase.pools == nil || logger == nil || registry == nil || workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// reference_discovery's native ClickHouse readback verification
+	// (CHAOS-4175) makes ClickHouse a hard requirement for this queue now,
+	// the same way reports.go and provider_sync.go already require it for
+	// theirs -- a verification step that silently skips when its dependency
+	// is unconfigured is a check that fails toward "fine", the same failure
+	// class this project already refuses elsewhere. Runtime unavailability
+	// still degrades correctly (a query error becomes a retryable run
+	// failure through the lease/backoff machinery, matching Python); this
+	// check only turns "ClickHouse never configured at all" into a loud
+	// startup error instead of a silent, permanent skip.
+	if !cfg.ClickHouseURI.Configured() {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	clickhouseConnection, err := clickhousestore.Open(
+		ctx, clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+	)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	closeClickHouse := func() { _ = clickhouseConnection.Close() }
 	bridge, err := syncdispatchruntime.NewHTTPBridge(syncdispatchruntime.HTTPBridgeConfig{
 		BaseURL:       strings.TrimRight(cfg.OperationalBridgeURL, "/"),
 		BearerToken:   cfg.OperationalBridgeToken.Reveal(),
@@ -279,6 +301,7 @@ func buildSyncCoordinatorWorker(
 		AllowInsecure: cfg.OperationalBridgeAllowInsecure,
 	})
 	if err != nil {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dailyStore, dailyStoreErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
@@ -289,6 +312,7 @@ func buildSyncCoordinatorWorker(
 	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)
 	if dailyStoreErr != nil || dailyPublisherErr != nil || remainingStoreErr != nil ||
 		remainingPublisherErr != nil || producerErr != nil || workGraphWriterErr != nil {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postSync, err := syncdispatchruntime.NewNativePostSyncService(
@@ -300,6 +324,7 @@ func buildSyncCoordinatorWorker(
 		logger,
 	)
 	if err != nil {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// The zero-unit finalization counter reports directly, the same way the
@@ -317,9 +342,45 @@ func buildSyncCoordinatorWorker(
 		zeroUnitObservers...,
 	)
 	if err != nil {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun); err != nil {
+	// The populate step (credential resolution + run_team_autoimport_strict)
+	// stays behind the narrow, identifiers-only bridge call by design
+	// (CHAOS-4175 ruling, 2026-08-24) -- everything else (claim/lease/
+	// heartbeat/retry-backoff/outbox wakeups/state transitions, and now the
+	// ClickHouse readback verification below) is native.
+	bridgeDiscoveryExecutor, err := syncdispatchruntime.NewBridgeDiscoveryExecutor(bridge)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	readbackChecker, err := syncdispatchruntime.NewClickHouseReadbackVerifier(clickhouseConnection)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	readbackVerifier, err := syncdispatchruntime.NewReferenceReadbackVerifier(readbackChecker)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(bridgeDiscoveryExecutor, readbackVerifier)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	referenceDiscovery, err := syncdispatchruntime.NewNativeReferenceDiscoveryService(
+		postgresDatabase.pools.Domain,
+		logger,
+		discoveryExecutor,
+	)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// A registered kind may only be consumed once its durable route permits
@@ -328,6 +389,7 @@ func buildSyncCoordinatorWorker(
 	// capability and stays out of registry queue coverage.
 	autoimport, ok := registry.Descriptor(jobcontract.KindTeamAutoimport)
 	if !ok {
+		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	var handlers []jobruntime.HandlerSpec
@@ -336,6 +398,7 @@ func buildSyncCoordinatorWorker(
 	)
 	if autoimport.Executable() {
 		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, bridge); err != nil {
+			closeClickHouse()
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		handlers = []jobruntime.HandlerSpec{autoimport}
@@ -352,5 +415,6 @@ func buildSyncCoordinatorWorker(
 			syncdispatchcontract.KindPostSync,
 			syncdispatchcontract.KindReferenceDiscovery,
 		},
+		cleanups: []func() error{clickhouseConnection.Close},
 	}, nil
 }

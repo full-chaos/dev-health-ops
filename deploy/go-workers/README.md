@@ -373,6 +373,11 @@ the HTTP port fails immediately with `ClickHouse readiness check failed`
 (`internal/storage/clickhouse.ErrUnavailable`) — the two processes' env var
 has the same name but must resolve to a different port.
 
+The `sync` queue now requires ClickHouse (CHAOS-4175: native reference-discovery
+readback verification reads `teams`/`sprints`). A process selecting `sync`
+without `CLICKHOUSE_URI` configured refuses to build at startup rather than
+silently skipping the verification step.
+
 ### Explicit queue selection fails closed when the selected handlers are incomplete
 
 This is intentional. With `POSTGRES_URI` and `WORKER_DATABASE_URI` configured,

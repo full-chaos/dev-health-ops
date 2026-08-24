@@ -244,14 +244,19 @@ type workerProcessBuilder func(
 ) (lifecycle.Component, error)
 
 type workerDependencySources struct {
-	openDatabase         func(context.Context, config.Config) (workerDatabase, error)
-	loadRuntimeRegistry  func(string) (*jobruntime.Registry, error)
-	newRiverClientID     func() string
-	buildOperational     workerFamilyBuilder
-	buildSyncCoordinator workerFamilyBuilder
-	buildDaily           workerFamilyBuilder
-	buildReports         func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
-	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
+	openDatabase        func(context.Context, config.Config) (workerDatabase, error)
+	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
+	newRiverClientID    func() string
+	buildOperational    workerFamilyBuilder
+	buildDaily          workerFamilyBuilder
+	buildReports        func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
+	buildProviderSync   func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
+	// buildSyncCoordinator takes a ctx (CHAOS-4175): reference_discovery's
+	// native ClickHouse readback verification made this the third ctx-taking
+	// builder alongside buildReports/buildProviderSync -- the sync-dispatch
+	// coordinator queue never needed ClickHouse before, so this queue's own
+	// builder is now in that group instead of the ctx-less one below.
+	buildSyncCoordinator func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
 	buildRiverProcess    workerProcessBuilder
 	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
@@ -651,7 +656,6 @@ func composeSelectedWorkerFamilies(
 		sources.buildOperational,
 		sources.buildDaily,
 		sources.buildWorkgraph,
-		sources.buildSyncCoordinator,
 	} {
 		if builder == nil {
 			continue
@@ -671,6 +675,7 @@ func composeSelectedWorkerFamilies(
 	) (workerFamily, error){
 		sources.buildReports,
 		sources.buildProviderSync,
+		sources.buildSyncCoordinator,
 	} {
 		if builder == nil {
 			continue

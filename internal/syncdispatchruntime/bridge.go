@@ -104,6 +104,30 @@ func (bridge *HTTPBridge) TeamAutoImport(ctx context.Context, reference DomainRe
 	})
 }
 
+// PopulateReferenceDiscovery calls the narrow, identifiers-only
+// /reference-discovery-populate endpoint (CHAOS-4175, ruling widened
+// 2026-08-24): it wraps run_reference_discovery_populate_for_sync_run
+// EXACTLY, wrapping _load_discovery_context's credential/scope resolution
+// together with run_team_autoimport_strict as one Python-side step.
+//
+// This is NOT part of the CoordinatorBridge interface -- it is not a
+// fire-and-forget dispatch acknowledgment like Dispatch/Finalize/Discover/
+// TeamAutoImport, it is a synchronous call whose RESULT (the populator's
+// summary dict, used later for ClickHouse readback verification) the
+// caller needs back. teamAutoImportReference is reused verbatim: the
+// request carries organization_id/sync_run_id only, by construction of
+// that type, not by convention at this call site -- there is no field on
+// it a caller could accidentally widen to carry credential material.
+func (bridge *HTTPBridge) PopulateReferenceDiscovery(ctx context.Context, orgID, runID string) (map[string]any, error) {
+	if bridge == nil || !uuidPattern.MatchString(orgID) || !uuidPattern.MatchString(runID) {
+		return nil, ErrInvalidBridge
+	}
+	return bridge.callWithResult(ctx, "/api/internal/worker-sync/reference-discovery-populate", teamAutoImportReference{
+		OrganizationID: orgID,
+		SyncRunID:      runID,
+	})
+}
+
 func bridgeReferenceFor(args Args) bridgeReference {
 	return bridgeReference{
 		OrganizationID:  args.OrganizationID(),
@@ -114,28 +138,62 @@ func bridgeReferenceFor(args Args) bridgeReference {
 }
 
 func (bridge *HTTPBridge) call(ctx context.Context, path string, payload any) error {
+	response, err := bridge.do(ctx, path, payload)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4097))
+	return nil
+}
+
+// callWithResult is call's sibling for an endpoint whose response body the
+// caller actually needs (unlike every existing CoordinatorBridge method,
+// which is a fire-and-forget dispatch acknowledgment). 1 MiB is a generous
+// cap for a team/sprint-key summary dict -- large enough that no real
+// populator response is at risk of truncation, small enough that a
+// misbehaving endpoint cannot make this call buffer an unbounded body.
+func (bridge *HTTPBridge) callWithResult(ctx context.Context, path string, payload any) (map[string]any, error) {
+	response, err := bridge.do(ctx, path, payload)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	var result map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("%w: decode response body: %v", ErrBridgeRequest, err)
+	}
+	return result, nil
+}
+
+func (bridge *HTTPBridge) do(ctx context.Context, path string, payload any) (*http.Response, error) {
 	if bridge == nil || bridge.client == nil || bridge.baseURL == nil || strings.TrimSpace(bridge.bearerToken) == "" || ctx == nil {
-		return ErrInvalidBridge
+		return nil, ErrInvalidBridge
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return ErrInvalidBridge
+		return nil, ErrInvalidBridge
 	}
 	target := bridge.baseURL.ResolveReference(&url.URL{Path: path})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
 	if err != nil {
-		return ErrInvalidBridge
+		return nil, ErrInvalidBridge
 	}
 	request.Header.Set("Authorization", "Bearer "+bridge.bearerToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := bridge.client.Do(request)
 	if err != nil {
-		return ErrBridgeRequest
+		// Preserve the real transport failure (connection refused, DNS
+		// failure, TLS handshake timeout, context deadline) instead of
+		// discarding it -- callers that classify retryability from the
+		// error text (isRetryableDiscoveryError) need it, and a bare
+		// sentinel with no detail is useless in an incident.
+		return nil, fmt.Errorf("%w: %v", ErrBridgeRequest, err)
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4097))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%w: status=%d", ErrBridgeRequest, response.StatusCode)
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4097))
+		return nil, fmt.Errorf("%w: status=%d", ErrBridgeRequest, response.StatusCode)
 	}
-	return nil
+	return response, nil
 }

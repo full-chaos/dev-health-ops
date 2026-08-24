@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,7 +17,10 @@ from dev_health_ops.models import (
     SyncDispatchTransportRoute,
     SyncRun,
 )
-from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
+from dev_health_ops.workers.reference_discovery import (
+    run_reference_discovery_populate_for_sync_run,
+    run_sync_reference_discovery,
+)
 from dev_health_ops.workers.sync_units import dispatch_sync_run, finalize_sync_run
 from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
 
@@ -195,4 +198,31 @@ async def team_autoimport_reference(
     return _result(
         result,
         accepted=frozenset({"skipped", "dispatched"}),
+    )
+
+
+@router.post("/reference-discovery-populate", dependencies=[])
+async def reference_discovery_populate_reference(
+    reference: TeamAutoImportReference,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Wraps run_reference_discovery_populate_for_sync_run EXACTLY.
+
+    This is the ONE narrow, synchronous bridge call CHAOS-4175's native
+    Go reference-discovery gate makes (ruling widened 2026-08-24): the
+    request carries organization_id/sync_run_id only, and the response is
+    the populator's summary dict only. Credential resolution -- Fernet
+    decryption, PagerDuty OAuth token rotation, the CHAOS-2755 stamped-
+    auth freeze -- happens entirely inside
+    run_reference_discovery_populate_for_sync_run, on this side of the
+    boundary; TeamAutoImportReference's own field set (see below) is the
+    contract that no secret material can cross it. See
+    test_worker_sync_bridge.py's identifiers-only pin for the enforced
+    shape.
+    """
+    _authorize(authorization)
+    if not _current_sync_run_reference(reference):
+        raise HTTPException(status_code=409, detail="Sync run reference is stale")
+    return await run_in_threadpool(
+        run_reference_discovery_populate_for_sync_run, str(reference.sync_run_id)
     )

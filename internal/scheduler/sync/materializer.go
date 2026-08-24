@@ -904,6 +904,65 @@ type rowQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// FeatureDecisionReason mirrors licensing/feature_policy.py's
+// FeatureDecisionReason StrEnum verbatim (all 13 values, closed vocabulary --
+// pinned against Python's exact strings in
+// canonical_incident_reason_oracle_test.go). canonicalIncidentDecision only
+// ever produces a subset of these: registry.py's ORG_OVERRIDE_ONLY_FEATURES
+// is empty and canonical_incident_ingestion is in neither
+// _TIER_BOUND_OVERRIDE_FEATURES nor EXPLICIT_PURCHASE_FEATURES, so
+// ORG_OVERRIDE_EXPIRED, ORG_OVERRIDE_REQUIRED, and EXPLICIT_PURCHASE_REQUIRED
+// can never be decide_feature's answer for THIS feature key -- they are
+// still declared here (rather than only the reachable subset) because the
+// type is meant to mirror the source enum for the oracle pin, and because a
+// future caller evaluating a different feature key through this same shape
+// would need them.
+type FeatureDecisionReason string
+
+const (
+	FeatureDecisionReasonEnabledByOrgOverride     FeatureDecisionReason = "enabled_by_org_override"
+	FeatureDecisionReasonEnabledByLicenseOverride FeatureDecisionReason = "enabled_by_license_override"
+	FeatureDecisionReasonEnabledByTier            FeatureDecisionReason = "enabled_by_tier"
+	FeatureDecisionReasonFeatureNotRegistered     FeatureDecisionReason = "feature_not_registered"
+	FeatureDecisionReasonGlobalDisabled           FeatureDecisionReason = "global_disabled"
+	FeatureDecisionReasonInvalidFeatureState      FeatureDecisionReason = "invalid_feature_state"
+	FeatureDecisionReasonStorageError             FeatureDecisionReason = "storage_error"
+	FeatureDecisionReasonOrgOverrideExpired       FeatureDecisionReason = "org_override_expired"
+	FeatureDecisionReasonOrgOverrideDisabled      FeatureDecisionReason = "org_override_disabled"
+	FeatureDecisionReasonOrgOverrideRequired      FeatureDecisionReason = "org_override_required"
+	FeatureDecisionReasonLicenseOverrideDisabled  FeatureDecisionReason = "license_override_disabled"
+	FeatureDecisionReasonExplicitPurchaseRequired FeatureDecisionReason = "explicit_purchase_required"
+	FeatureDecisionReasonTierRequired             FeatureDecisionReason = "tier_required"
+)
+
+// CanonicalIncidentAllowedForUpdate exports canonicalIncidentAllowedForUpdate
+// for cross-package reuse (CHAOS-4175). rowQuerier's own doc comment already
+// states the rule this satisfies: "this decision must not be implemented
+// twice." The native Go port of run_sync_reference_discovery needs the exact
+// row-locking entitlement check require_canonical_incident_feature_for_update_sync
+// performs, and this IS that check -- same SQL (feature_flags ->
+// org_feature_overrides -> organizations/org_licenses tier ranking),
+// verified line-for-line against the Python before reuse rather than
+// re-derived. Delegates to CanonicalIncidentDecisionForUpdate and discards
+// the reason -- this wrapper's signature is unchanged so every existing
+// caller (materializer.go, coordinator.go) stays byte-identical.
+func CanonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
+	return canonicalIncidentAllowedForUpdate(ctx, tx, orgID, now)
+}
+
+// CanonicalIncidentDecisionForUpdate is CanonicalIncidentAllowedForUpdate's
+// reason-carrying sibling (CHAOS-4175): a Go-only denial reason of just
+// "false" loses exactly the diagnostic specificity CHAOS-4159/#1881 exists to
+// preserve on the Python side (a generic label overwriting the planner's
+// specific cause is the same regression class, one layer up -- here it would
+// be the native gate erasing the answer's WHY instead of a planner result's
+// WHY). Reuses the identical decision path CanonicalIncidentAllowedForUpdate
+// already computes; the reason was always available internally; this only
+// surfaces it.
+func CanonicalIncidentDecisionForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, FeatureDecisionReason, error) {
+	return canonicalIncidentDecision(ctx, tx, orgID, now, true)
+}
+
 // canonicalIncidentAllowedForUpdate is the phase-B, row-locking form.
 func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID string, now time.Time) (bool, error) {
 	return canonicalIncidentAllowed(ctx, tx, orgID, now, true)
@@ -919,9 +978,27 @@ func canonicalIncidentAllowedForUpdate(ctx context.Context, tx pgx.Tx, orgID str
 // require_canonical_incident_feature_for_update_sync only at materialization
 // (sync/execution_trigger.py:348-355). Locking the global feature_flags row on
 // every scheduler window would serialize every replica against one row.
+// Thin wrapper over canonicalIncidentDecision, discarding the reason -- both
+// existing call sites (coordinator.go, materializer.go) only ever needed the
+// bool.
 func canonicalIncidentAllowed(ctx context.Context, tx rowQuerier, orgID string, now time.Time, lockRows bool) (bool, error) {
+	allowed, _, err := canonicalIncidentDecision(ctx, tx, orgID, now, lockRows)
+	return allowed, err
+}
+
+// canonicalIncidentDecision is canonicalIncidentAllowed's full form: every
+// return point below is annotated with the FeatureDecisionReason
+// decide_feature (feature_policy.py) would produce for the identical input
+// shape, for the reachable subset described on FeatureDecisionReason's doc
+// comment. The bool/error control flow is UNCHANGED from before this
+// reason was added -- this is a mechanical surfacing of an already-computed
+// answer, not a new decision path.
+func canonicalIncidentDecision(ctx context.Context, tx rowQuerier, orgID string, now time.Time, lockRows bool) (bool, FeatureDecisionReason, error) {
 	if _, err := uuid.Parse(orgID); err != nil {
-		return false, nil
+		// Python: require_canonical_incident_feature_for_update_sync's own
+		// `except ValueError` catch on an unparseable org_id, before
+		// evaluate_org_feature_sync is ever called.
+		return false, FeatureDecisionReasonInvalidFeatureState, nil
 	}
 	lockClause := ""
 	if lockRows {
@@ -934,15 +1011,21 @@ SELECT id::text,min_tier,is_enabled
 FROM public.feature_flags
 WHERE key='canonical_incident_ingestion'`+lockClause).Scan(&featureID, &minTier, &globallyEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		// Python: features_by_key.get(feature_key) is None -> is_registered=False.
+		return false, FeatureDecisionReasonFeatureNotRegistered, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("lock canonical incident feature: %w", err)
+		return false, "", fmt.Errorf("lock canonical incident feature: %w", err)
 	}
 	tierRank := map[string]int{"community": 0, "team": 1, "enterprise": 2}
 	minimumRank, validMinimum := tierRank[minTier]
-	if !globallyEnabled || !validMinimum {
-		return false, nil
+	if !validMinimum {
+		// Python: LicenseTier(str(feature.min_tier)) raises ValueError ->
+		// is_storage_valid=False, checked FIRST in decide_feature.
+		return false, FeatureDecisionReasonInvalidFeatureState, nil
+	}
+	if !globallyEnabled {
+		return false, FeatureDecisionReasonGlobalDisabled, nil
 	}
 	var overrideEnabled *bool
 	var overrideExpires *time.Time
@@ -951,10 +1034,17 @@ SELECT is_enabled,expires_at
 FROM public.org_feature_overrides
 WHERE org_id=$1::uuid AND feature_id=$2::uuid`+lockClause, orgID, featureID).Scan(&overrideEnabled, &overrideExpires)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("lock canonical incident override: %w", err)
+		return false, "", fmt.Errorf("lock canonical incident override: %w", err)
 	}
 	if overrideEnabled != nil && (overrideExpires == nil || overrideExpires.After(now.UTC())) {
-		return *overrideEnabled, nil
+		// Python's ORG_OVERRIDE_EXPIRED/ORG_OVERRIDE_REQUIRED and the
+		// _TIER_BOUND_OVERRIDE_FEATURES-gated TIER_REQUIRED branch here are
+		// unreachable for canonical_incident_ingestion -- see
+		// FeatureDecisionReason's doc comment.
+		if *overrideEnabled {
+			return true, FeatureDecisionReasonEnabledByOrgOverride, nil
+		}
+		return false, FeatureDecisionReasonOrgOverrideDisabled, nil
 	}
 	var orgTier *string
 	var licenseTier *string
@@ -965,16 +1055,29 @@ FROM public.organizations AS organization
 LEFT JOIN public.org_licenses AS license ON license.org_id=organization.id
 WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &licenseFeatures)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		// No Python-observable equivalent: evaluate_org_feature_sync has no
+		// "organization row missing" branch (org_tier/license resolution
+		// fails soft to community there). Labeled INVALID_FEATURE_STATE as
+		// the closest existing reason for "entitlement data could not be
+		// resolved" -- a pre-existing behavior difference (this function
+		// denies outright; Python would likely still evaluate tier), not
+		// something this change alters.
+		return false, FeatureDecisionReasonInvalidFeatureState, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("load canonical incident entitlement: %w", err)
+		return false, "", fmt.Errorf("load canonical incident entitlement: %w", err)
 	}
 	if len(licenseFeatures) > 0 {
 		var overrides map[string]bool
 		if json.Unmarshal(licenseFeatures, &overrides) == nil {
 			if allowed, ok := overrides["canonical_incident_ingestion"]; ok {
-				return allowed, nil
+				// Python's ORG_OVERRIDE_REQUIRED and TIER_REQUIRED (via
+				// _TIER_BOUND_OVERRIDE_FEATURES) branches here are likewise
+				// unreachable for this feature key.
+				if allowed {
+					return true, FeatureDecisionReasonEnabledByLicenseOverride, nil
+				}
+				return false, FeatureDecisionReasonLicenseOverrideDisabled, nil
 			}
 		}
 	}
@@ -989,7 +1092,10 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &licenseFea
 	if !validOrgTier {
 		orgRank = tierRank["community"]
 	}
-	return orgRank >= minimumRank, nil
+	if orgRank >= minimumRank {
+		return true, FeatureDecisionReasonEnabledByTier, nil
+	}
+	return false, FeatureDecisionReasonTierRequired, nil
 }
 
 func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, sourceID *string, plannerManaged bool) ([]PlanSource, error) {
@@ -1039,6 +1145,16 @@ func requestedDatasetKeys(provider string, targets []string, sourceID *string) m
 		return nil
 	}
 	return requested
+}
+
+// SyncTargetsRequireCanonicalIncident exports syncTargetsRequireCanonicalIncident
+// for cross-package reuse (CHAOS-4175): the native reference_discovery port
+// needs the same "does this unit's legacy targets require the canonical
+// incident feature" check sync_dataset_requires_canonical_incident_feature
+// makes in Python, and the answer must not diverge between the two Go
+// callers of this decision.
+func SyncTargetsRequireCanonicalIncident(targets []string) bool {
+	return syncTargetsRequireCanonicalIncident(targets)
 }
 
 func syncTargetsRequireCanonicalIncident(targets []string) bool {

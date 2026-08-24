@@ -107,12 +107,12 @@ func NewCapacityExecutor(
 // ComputePartition runs the capacity forecast for one partition.
 func (executor *CapacityExecutor) ComputePartition(
 	ctx context.Context, run Run, partition Partition,
-) error {
+) (CompatibilityOutcome, error) {
 	if executor == nil || executor.conn == nil {
-		return errCapacityUnavailable
+		return CompatibilityOutcome{}, errCapacityUnavailable
 	}
 	if strings.TrimSpace(run.OrganizationID) == "" {
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s has no organization", ErrInvalidState, partition.ID))
 	}
 	// The seed is what makes this family reproducible at all, and the run
@@ -120,7 +120,7 @@ func (executor *CapacityExecutor) ComputePartition(
 	// again here keeps the executor honest on its own terms rather than
 	// trusting an invariant enforced elsewhere.
 	if run.Seed == nil {
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s", ErrCapacitySeedMissing, partition.ID))
 	}
 	var scope capacityScope
@@ -128,14 +128,14 @@ func (executor *CapacityExecutor) ComputePartition(
 		// CHAOS-4242: the same claim-path precondition failure DORA hit --
 		// static format, partition ID plus the decoder's own message; no
 		// upstream content. Safe to surface at WARN.
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 
 	today := executor.nowUTC()
 	scopes, err := executor.resolveScopes(ctx, run.OrganizationID, scope)
 	if err != nil {
-		return err
+		return CompatibilityOutcome{}, err
 	}
 
 	var rows []capacityRow
@@ -145,7 +145,7 @@ func (executor *CapacityExecutor) ComputePartition(
 			ctx, run.OrganizationID, target, scope.HistoryDays, today,
 		)
 		if err != nil {
-			return err
+			return CompatibilityOutcome{}, err
 		}
 		// Python logs and continues; a scope with no history is not an error.
 		if len(history.DailyThroughputs) == 0 {
@@ -154,7 +154,7 @@ func (executor *CapacityExecutor) ComputePartition(
 		}
 		backlog, err := executor.loadBacklog(ctx, run.OrganizationID, target)
 		if err != nil {
-			return err
+			return CompatibilityOutcome{}, err
 		}
 
 		items := resolveTargetItems(scope.TargetItems, backlog)
@@ -173,7 +173,7 @@ func (executor *CapacityExecutor) ComputePartition(
 		if scope.TargetDate != nil && *scope.TargetDate != "" {
 			parsed, err := time.Parse("2006-01-02", *scope.TargetDate)
 			if err != nil {
-				return jobruntime.WithSafeCause(fmt.Errorf(
+				return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 					"%w: partition %s target_date %q", ErrInvalidState,
 					partition.ID, *scope.TargetDate))
 			}
@@ -183,7 +183,7 @@ func (executor *CapacityExecutor) ComputePartition(
 
 		forecast, err := numerical.ForecastCapacity(request, today)
 		if err != nil {
-			return fmt.Errorf("capacity forecast: %w", err)
+			return CompatibilityOutcome{}, fmt.Errorf("capacity forecast: %w", err)
 		}
 		rows = append(rows, capacityRow{
 			OrgID:       run.OrganizationID,
@@ -199,14 +199,14 @@ func (executor *CapacityExecutor) ComputePartition(
 
 	written, err := executor.writeForecasts(ctx, rows)
 	if err != nil {
-		return err
+		return CompatibilityOutcome{}, err
 	}
 	if executor.observer != nil {
 		// Telemetry never fails the partition: the work is durably written and
 		// losing a counter must not cause a retry that writes it again.
 		_ = executor.observer.ObserveCapacityPartition(len(scopes), written, skipped)
 	}
-	return nil
+	return CompatibilityOutcome{RowsWritten: &written}, nil
 }
 
 // capacityTarget is one (team, work scope) pair to forecast.

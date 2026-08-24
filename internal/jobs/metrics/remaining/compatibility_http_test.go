@@ -47,7 +47,7 @@ func TestHTTPCompatibilityExecutorSendsOnlyAuthoritativeIDs(t *testing.T) {
 		ID:    "33333333-3333-4333-8333-333333333333",
 		RunID: run.ID,
 	}
-	if err := executor.ComputePartition(t.Context(), run, partition); err != nil {
+	if _, err := executor.ComputePartition(t.Context(), run, partition); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
@@ -119,7 +119,7 @@ func TestHTTPCompatibilityExecutorRejectsAmbiguousResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = executor.ComputePartition(
+	_, err = executor.ComputePartition(
 		t.Context(),
 		Run{ID: "11111111-1111-4111-8111-111111111111"},
 		Partition{
@@ -156,7 +156,7 @@ func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds
 		Generation:     "post-sync:generation",
 		Status:         "running",
 	}
-	if err := executor.ComputePartition(ctx, run, Partition{
+	if _, err := executor.ComputePartition(ctx, run, Partition{
 		ID:    "33333333-3333-4333-8333-333333333333",
 		RunID: run.ID,
 	}); err != nil {

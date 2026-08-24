@@ -175,12 +175,18 @@ func buildDailyWorker(
 			remainingLeaseObservers = append(remainingLeaseObservers, leaseObserver)
 		}
 		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain, remainingLeaseObservers...)
+		var compatibilityObserver remaining.CompatibilityObserver
+		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
+			compatibilityObserver = candidate
+		}
 		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
 			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			remaining.HTTPCompatibilityConfig{
 				Endpoint:              baseURL + "/internal/worker/remaining-metrics/v1/execute",
 				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
 				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
+				Logger:                logger,
+				Observer:              compatibilityObserver,
 			},
 		)
 		budget, budgetErr := remaining.NewBudget(inventory)

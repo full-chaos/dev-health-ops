@@ -275,22 +275,22 @@ func (executor *handlerCompatibility) ComputePartition(
 	ctx context.Context,
 	_ Run,
 	_ Partition,
-) error {
+) (CompatibilityOutcome, error) {
 	if executor.computeErr != nil {
-		return executor.computeErr
+		return CompatibilityOutcome{}, executor.computeErr
 	}
 	if executor.waitForCancellation {
 		<-ctx.Done()
 		executor.canceled = true
-		return ctx.Err()
+		return CompatibilityOutcome{}, ctx.Err()
 	}
 	timer := time.NewTimer(executor.delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return nil
+		return CompatibilityOutcome{}, nil
 	case <-ctx.Done():
 		executor.canceled = true
-		return ctx.Err()
+		return CompatibilityOutcome{}, ctx.Err()
 	}
 }

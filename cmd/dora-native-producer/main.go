@@ -86,11 +86,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return executor.ComputePartition(
+	_, err = executor.ComputePartition(
 		ctx,
 		remaining.Run{ID: "parity-run", OrganizationID: *orgID, Family: "dora"},
 		remaining.Partition{ID: "parity-partition", RunID: "parity-run", Scope: scope},
 	)
+	return err
 }
 
 // dayOf accepts the same --as-of spellings the Python fixture CLI does, where

@@ -562,7 +562,18 @@ def _compute_release_env(
         flag_rollout_half_life=None,
         flag_churn_rate=None,
         issue_to_release_impact_link_rate=None,
-        rollback_or_disable_after_impact_spike=None,
+        # Unlike the flag_* fields above (all Nullable(Float64) in ClickHouse,
+        # so None correctly means "not yet computed"),
+        # rollback_or_disable_after_impact_spike is UInt32 NOT NULL: writing
+        # None here fails clickhouse_connect column serialization on every
+        # non-empty partition (CHAOS-4243). Currently masked in both measured
+        # environments only because telemetry_signal_bucket is empty, so
+        # _find_release_env_pairs returns [] and the sink write is skipped
+        # entirely -- the moment that upstream table gets real data, this
+        # becomes the new silent failure point. 0 matches
+        # instrumentation_change_flag's "not yet computed" convention for a
+        # boolean-shaped NOT NULL column.
+        rollback_or_disable_after_impact_spike=0,
         coverage_ratio=coverage_ratio,
         missing_required_fields_count=missing,
         instrumentation_change_flag=False,

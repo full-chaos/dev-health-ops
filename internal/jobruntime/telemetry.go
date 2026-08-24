@@ -300,6 +300,16 @@ type MetricsCollector struct {
 	capacitySkippedScopes uint64
 	capacityRefusals      map[string]uint64
 
+	// Compatibility-bridge partitions (CHAOS-4243). Before this, the bridge
+	// could only ever report a status code, so a partition that wrote real
+	// data and a partition that silently wrote nothing were indistinguishable
+	// from the outside -- the same rationale that native dora/capacity
+	// compute already gets its own rows-written/empty counters for above.
+	// Keyed by family; rowsWritten only counts completions that reported a
+	// non-nil count (not every family's evidence carries one).
+	compatibilityRowsWritten       map[string]uint64
+	compatibilityZeroRowPartitions map[string]uint64
+
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
 	streamOldestPending       map[StreamLabels]float64
@@ -1081,6 +1091,45 @@ func (collector *MetricsCollector) ObserveCapacityRefused(reason string) error {
 	return nil
 }
 
+// compatibilityBridgeFamilies is the closed set of remaining-metrics families
+// still routed through the Python compatibility bridge (dora and capacity are
+// native and observed separately above). Bounded label cardinality, same
+// discipline as doraRefusalReasons/capacityRefusalReasons.
+var compatibilityBridgeFamilies = []string{
+	"complexity", "release_impact", "recommendations",
+	"membership_backfill", "extra_metrics", "team_metrics",
+}
+
+// ObserveCompatibilityPartition implements remaining.CompatibilityObserver.
+// rowsWritten nil means the family's evidence carries no countable row
+// signal; a non-nil zero is counted both in compatibilityRowsWritten (as 0,
+// keeping the series present) and in compatibilityZeroRowPartitions, so a
+// success that wrote nothing is visible without waiting on a log line.
+func (collector *MetricsCollector) ObserveCompatibilityPartition(family string, rowsWritten *int) error {
+	if !slices.Contains(compatibilityBridgeFamilies, family) {
+		return fmt.Errorf("unknown compatibility bridge family %q", family)
+	}
+	if rowsWritten != nil && *rowsWritten < 0 {
+		return errors.New("compatibility rows written cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.compatibilityRowsWritten == nil {
+		collector.compatibilityRowsWritten = map[string]uint64{}
+	}
+	if collector.compatibilityZeroRowPartitions == nil {
+		collector.compatibilityZeroRowPartitions = map[string]uint64{}
+	}
+	if rowsWritten == nil {
+		return nil
+	}
+	collector.compatibilityRowsWritten[family] += uint64(*rowsWritten)
+	if *rowsWritten == 0 {
+		collector.compatibilityZeroRowPartitions[family]++
+	}
+	return nil
+}
+
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 		return errors.New("execution saturation must be between zero and one")
@@ -1558,6 +1607,20 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, reason := range budgetEstimateFailureReasons {
 		writeUintSample(output, "worker_dispatch_budget_estimate_failures_total",
 			[]metricLabel{{"reason", reason}}, collector.budgetEstimateFailures[reason])
+	}
+
+	// Compatibility-bridge rows written / zero-row completions, by family
+	// (CHAOS-4243). Emitted for every family in the closed set, including
+	// zeros, so the series exists before it ever needs to move.
+	writeMetadata(output, "worker_remaining_bridge_rows_written_total", "Rows the Python compatibility bridge reported writing for one remaining-metrics family, where the family's evidence carries a count.", "counter")
+	for _, family := range compatibilityBridgeFamilies {
+		writeUintSample(output, "worker_remaining_bridge_rows_written_total",
+			[]metricLabel{{"family", family}}, collector.compatibilityRowsWritten[family])
+	}
+	writeMetadata(output, "worker_remaining_bridge_zero_row_partitions_total", "Compatibility-bridge partitions that reported success while writing zero rows.", "counter")
+	for _, family := range compatibilityBridgeFamilies {
+		writeUintSample(output, "worker_remaining_bridge_zero_row_partitions_total",
+			[]metricLabel{{"family", family}}, collector.compatibilityZeroRowPartitions[family])
 	}
 }
 

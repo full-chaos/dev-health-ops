@@ -99,7 +99,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return executor.ComputePartition(
+	_, err = executor.ComputePartition(
 		ctx,
 		remaining.Run{
 			ID: "parity-run", OrganizationID: *orgID,
@@ -107,6 +107,7 @@ func run() error {
 		},
 		remaining.Partition{ID: "parity-partition", RunID: "parity-run", Scope: scope},
 	)
+	return err
 }
 
 func seedWasProvided(flags *flag.FlagSet) bool {

@@ -146,12 +146,12 @@ func NewDORAExecutor(
 // ComputePartition runs the dora computation for one partition.
 func (executor *DORAExecutor) ComputePartition(
 	ctx context.Context, run Run, partition Partition,
-) error {
+) (CompatibilityOutcome, error) {
 	if executor == nil || executor.conn == nil {
-		return errDORAUnavailable
+		return CompatibilityOutcome{}, errDORAUnavailable
 	}
 	if strings.TrimSpace(run.OrganizationID) == "" {
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s has no organization", ErrInvalidState, partition.ID))
 	}
 	var scope doraScope
@@ -160,16 +160,16 @@ func (executor *DORAExecutor) ComputePartition(
 		// attempt -- PostgresStore.ClaimPartition returned an empty scope.
 		// Static format, partition ID plus the decoder's own message; no
 		// upstream content. Safe to surface at WARN (jobruntime.WithSafeCause).
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 	day, err := time.Parse("2006-01-02", scope.Day)
 	if err != nil {
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s day %q", ErrInvalidState, partition.ID, scope.Day))
 	}
 	if scope.BackfillDays < 1 {
-		return jobruntime.WithSafeCause(fmt.Errorf(
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
 			"%w: partition %s backfill_days", ErrInvalidState, partition.ID))
 	}
 
@@ -183,13 +183,13 @@ func (executor *DORAExecutor) ComputePartition(
 			ctx, run.OrganizationID, current, scope,
 		)
 		if err != nil {
-			return err
+			return CompatibilityOutcome{}, err
 		}
 		incidents, incidentSkips, err := executor.loadIncidents(
 			ctx, run.OrganizationID, current, scope,
 		)
 		if err != nil {
-			return err
+			return CompatibilityOutcome{}, err
 		}
 		skipped += deploymentSkips + incidentSkips
 
@@ -209,7 +209,7 @@ func (executor *DORAExecutor) ComputePartition(
 		}
 		written, err := executor.writeMetrics(ctx, rows)
 		if err != nil {
-			return err
+			return CompatibilityOutcome{}, err
 		}
 		rowsWritten += written
 	}
@@ -220,7 +220,7 @@ func (executor *DORAExecutor) ComputePartition(
 		// writes it a second time.
 		_ = executor.observer.ObserveDORAPartition(scope.BackfillDays, rowsWritten, skipped)
 	}
-	return nil
+	return CompatibilityOutcome{RowsWritten: &rowsWritten}, nil
 }
 
 // dayRange mirrors _date_range (job_dora.py): backfill_days <= 1 is just the

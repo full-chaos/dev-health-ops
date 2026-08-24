@@ -211,7 +211,7 @@ func TestCapacityRefusesARunWithoutASeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = executor.ComputePartition(
+	_, err = executor.ComputePartition(
 		context.Background(),
 		Run{ID: "r", OrganizationID: "org", Family: "capacity", Seed: nil},
 		Partition{ID: "p", RunID: "r", Scope: scope},

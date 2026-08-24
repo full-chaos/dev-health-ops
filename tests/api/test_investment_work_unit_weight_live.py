@@ -480,18 +480,27 @@ async def test_coverage_matches_work_unit_count_not_fanned_rows(sink):
 
 
 def _seed_zero_effort_fixture(sink: Any, org: str) -> None:
-    """Two team-assigned work units with effort_value=0 (codex round 2):
+    """Three work units with effort_value=0 (codex rounds 2 and 3):
 
-    * wu-zero-single: ONE repo-allocation row, effort_value=0.
+    * wu-zero-single: ONE repo-allocation row, effort_value=0, team-assigned.
     * wu-zero-multi: TWO repo-allocation rows (fanned by the wure LEFT JOIN),
-      effort_value=0.
+      effort_value=0, team-assigned.
+    * wu-zero-unassigned: no team attribution row and no repo-allocation row
+      at all (genuinely unassigned), effort_value=0.
 
-    Both must still count as exactly ONE work unit each in COUNT-weighted
+    Every unit must count as exactly ONE work unit in COUNT-weighted
     coverage -- the Sankey's SUM(subcategory_kv.2) never touches
-    effort_value, so it counts them as 1 regardless. Dividing
-    repo_effort_value / effort_value (0) would silently drop wu-zero-single
-    entirely and, without the 1/N-rows fallback, either drop or double-count
-    wu-zero-multi depending on how many allocation rows it fanned into.
+    effort_value, so it counts them all as 1 regardless of allocation
+    fan-out. codex round 3: asserting team_coverage == 1.0 alone (as an
+    earlier version of this test did, with only assigned units) cannot
+    distinguish the correct 1/N-repo-rows fallback from a REGRESSED
+    1.0-per-row fallback -- an all-assigned fixture reads 1.0 either way,
+    since a broken fallback inflates numerator and denominator in lockstep.
+    Mixing in the genuinely unassigned unit breaks that symmetry: a
+    1.0-per-row regression would double-count wu-zero-multi (contributing 2
+    to both the numerator and denominator instead of 1), skewing
+    team_coverage to 3/4 instead of the correct 2/3 -- see the numeric
+    walk-through in the test body below.
     """
     feature = {"Feature Delivery.product": 1.0}
     repo_a = uuid.uuid4()
@@ -500,6 +509,9 @@ def _seed_zero_effort_fixture(sink: Any, org: str) -> None:
 
     single_issue = "ZERO-SINGLE-1"
     multi_issue = "ZERO-MULTI-1"
+    # wu-zero-unassigned has NO issue reference -- structural_evidence_json
+    # is empty, so team resolution has nothing to attribute and it resolves
+    # to 'unassigned', exactly like a genuinely untracked unit.
 
     sink.client.insert(
         "work_unit_investments",
@@ -525,6 +537,18 @@ def _seed_zero_effort_fixture(sink: Any, org: str) -> None:
                 0.0,
                 feature,
                 f'{{"issues": ["{multi_issue}"]}}',
+                COMPUTED_AT,
+                org,
+            ],
+            [
+                "wu-zero-unassigned",
+                FROM_TS,
+                TO_TS,
+                None,
+                "churn_loc",
+                0.0,
+                feature,
+                "{}",
                 COMPUTED_AT,
                 org,
             ],
@@ -602,10 +626,11 @@ def _seed_zero_effort_fixture(sink: Any, org: str) -> None:
 
 
 async def test_coverage_zero_effort_units_still_count_as_one(sink):
-    """CHAOS-4241 codex round 2 (HIGH): a zero-effort work unit must still
-    contribute exactly 1 to COUNT-weighted coverage, whether it has one
-    repo-allocation row or several (the fan-out must not double-count it
-    either). See `_seed_zero_effort_fixture`.
+    """CHAOS-4241 codex rounds 2+3 (HIGH): a zero-effort work unit must still
+    contribute exactly 1 to COUNT-weighted coverage -- not 0 (dropped by the
+    /0 division) and not >1 (double-counted by its repo-allocation fan-out).
+    See `_seed_zero_effort_fixture` for why the fixture mixes an unassigned
+    unit in rather than asserting coverage == 1.0 over all-assigned units.
     """
     org = f"test-chaos-4241-zero-effort-{uuid.uuid4()}"
     try:
@@ -613,10 +638,13 @@ async def test_coverage_zero_effort_units_still_count_as_one(sink):
 
         coverage = await _resolve_coverage(sink, org)
 
-        # Both units are team- and repo-assigned -> both cards must read
-        # 1.0, not <1.0 (units silently dropped by the /0 division) and not
-        # >1.0-equivalent skew from the multi-repo unit's fan-out.
-        assert coverage.team_coverage == pytest.approx(1.0, abs=0.01), coverage
-        assert coverage.repo_coverage == pytest.approx(1.0, abs=0.01), coverage
+        # 2 of 3 units are team-assigned (wu-zero-single, wu-zero-multi);
+        # wu-zero-unassigned is not. Correct 1/N fallback -> total=3.0,
+        # assigned=2.0 -> 2/3. A regressed 1.0-per-row fallback would give
+        # wu-zero-multi's 2 rows weight 1.0 each instead of 0.5 each ->
+        # total=4.0, assigned=3.0 -> 3/4 = 0.75 instead.
+        assert coverage.team_coverage == pytest.approx(2 / 3, abs=0.01), coverage
+        # Repo coverage: same two units have a real repo; the third has none.
+        assert coverage.repo_coverage == pytest.approx(2 / 3, abs=0.01), coverage
     finally:
         _cleanup(sink, org)

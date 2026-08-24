@@ -525,6 +525,81 @@ func TestASubjectHoldsSeveralBoardsAtOnceAndLosesThemIndependently(t *testing.T)
 	}
 }
 
+// TestAReassertedMembershipWithARenamedKeyIsDeterministic covers the (P, P)
+// row: a provider re-asserting a membership the subject already holds, with a
+// DIFFERENT key on each side because the project was renamed.
+//
+// Both sides name the same project, so an unpivot that emitted a touch per side
+// would produce two touches carrying the same (occurred_at, event_id). The
+// argMax over that pair would then be a tie, and ClickHouse could return either
+// key -- the same row read twice giving two different answers, with nothing in
+// the data to say which was right. The view emits ONE touch for such a row, the
+// joined side, because to_project_key is by definition the key the subject has
+// now (codex adversarial review, round 3).
+//
+// HONEST LIMIT OF THIS TEST: it does NOT go red against the pre-fix view. The
+// two-touch version was measured, and ClickHouse resolved the argMax tie toward
+// the first-listed tuple -- the joined side -- which is the same answer the fix
+// specifies. So this test pins behaviour the current engine already happens to
+// produce, and it cannot demonstrate the defect it was written for.
+//
+// It is kept anyway, and the distinction is worth being precise about: an
+// argMax tie is UNSPECIFIED, not defined-as-first. Nothing in ClickHouse
+// promises that resolution across versions, part layouts, or thread counts, so
+// the pre-fix view was correct by coincidence rather than by construction. The
+// fix removes the tie instead of relying on how it currently breaks, and this
+// test is the statement of which key is correct if the coincidence ever ends.
+// Recorded rather than presented as a red-first kill, because a test that
+// passes before and after is weak evidence and saying otherwise would overstate
+// what was verified.
+//
+// The loop is for the same reason: a single read cannot distinguish
+// "deterministic" from "got lucky once".
+func TestAReassertedMembershipWithARenamedKeyIsDeterministic(t *testing.T) {
+	ctx, conn := newProjectMembershipConn(t)
+	pointer := projectMembershipPointer()
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
+	if _, err := sink.Write(ctx, externalSinkBatch{
+		Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{
+			{Index: 0, Kind: "project_membership_transition.v1", ExternalID: "evt-rename", Payload: map[string]any{
+				"externalKey": "42", "provider": "github", "eventId": "evt-rename",
+				"subjectKind": "pull_request", "repositoryExternalId": pointer.SourceInstance,
+				"occurredAt":    "2026-07-22T11:00:00Z",
+				"fromProjectId": "ghprojv2:full-chaos#4", "fromProjectKey": "PLATFORM",
+				"toProjectId": "ghprojv2:full-chaos#4", "toProjectKey": "PLATFORM-RENAMED",
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 5 {
+		var projectID, projectKey string
+		var rows uint64
+		if err := conn.QueryRow(ctx, `
+SELECT count(), any(project_id), any(project_key) FROM project_membership_presence
+WHERE org_id = ? AND subject_id = '42'`, projectMembershipTestOrg,
+		).Scan(&rows, &projectID, &projectKey); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 {
+			t.Fatalf("attempt %d: a re-asserted membership produced %d presence rows, want 1", attempt, rows)
+		}
+		if projectID != "ghprojv2:full-chaos#4" {
+			t.Fatalf("attempt %d: project_id = %q", attempt, projectID)
+		}
+		// The JOINED side's key, every time. The other key in the row is the
+		// name the project used to have.
+		if projectKey != "PLATFORM-RENAMED" {
+			t.Fatalf("attempt %d: project_key = %q, want the joined side's key -- "+
+				"a tie in the argMax would return either", attempt, projectKey)
+		}
+	}
+}
+
 // TestASingleProjectSubjectIsUnaffectedByPerProjectKeying pins the degeneracy
 // Context Fabric's ruling promised. jira and linear work items belong to one
 // project at a time, so the per-(subject, project) keying must give them

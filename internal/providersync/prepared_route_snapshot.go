@@ -221,7 +221,14 @@ func validatePreparedRouteManifestIdentity(
 		got = append(got, effect.Destination)
 	}
 	sort.Strings(got)
-	want := workItemRouteDestinations()
+	// The GITHUB list. This validator refuses any other provider outright a few
+	// lines above, so the shared family list was never the right one here -- and
+	// once github grew two destinations of its own (CHAOS-4194) it became
+	// actively wrong: a github run that persisted an 18-effect snapshot and
+	// crashed before completion would reload it, compare 18 against 16, and
+	// refuse to replay or complete the unit. Recovery would fail closed on
+	// every github work-items crash.
+	want := githubWorkItemRouteDestinations()
 	sort.Strings(want)
 	if len(got) != len(want) {
 		return ErrEffectRecoveryUnsafe

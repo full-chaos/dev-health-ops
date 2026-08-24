@@ -40,8 +40,12 @@ func TestPreparedRouteSnapshotRoundTripBindsExactGitHubWorkItemsManifest(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Batch.Effects) != len(workItemRouteDestinations()) ||
+	if len(manifest.Batch.Effects) != len(githubWorkItemRouteDestinations()) ||
 		!manifest.NormalizedAt.Equal(normalizedAt) || !manifest.Comparison.Match ||
+		// 16 is the FIXTURE's record count, not a destination count. The two
+		// were equal by coincidence before CHAOS-4194 added two destinations,
+		// and conflating them here would tie an evidence total to a manifest
+		// length that has nothing to do with it.
 		manifest.Batch.Evidence.Records != 16 {
 		t.Fatalf("manifest=%+v", manifest)
 	}
@@ -160,7 +164,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	if !ok || !descriptor.PreparedManifestRecovery || !descriptor.RouteReady || !descriptor.Plannable {
 		t.Fatalf("github/work-items descriptor=%+v ok=%v", descriptor, ok)
 	}
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady = true
 	descriptor.Plannable = true
 	handler := &staticCompleteRouteHandler{
@@ -189,7 +193,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 		ledger.preparedPrepares != 1 ||
 		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
 		result.Effects.Skipped != 1 || result.Effects.MarkedCommitted != 1 ||
-		result.Effects.Written != len(workItemRouteDestinations())-2 ||
+		result.Effects.Written != len(githubWorkItemRouteDestinations())-2 ||
 		result.Result["records"] != float64(16) {
 		t.Fatalf(
 			"handler_at=%s loads=%d prepares=%d credential_calls=%d decrypt_calls=%d requests=%d result=%+v stored_result=%v",
@@ -203,7 +207,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondResult.Effects.Skipped != len(workItemRouteDestinations()) ||
+	if secondResult.Effects.Skipped != len(githubWorkItemRouteDestinations()) ||
 		secondResult.Effects.Written != 0 || len(secondSink.destinations) != 0 ||
 		ledger.preparedPrepares != 1 || !handler.normalizedAt.IsZero() {
 		t.Fatalf("all-committed recovery result=%+v writes=%v", secondResult, secondSink.destinations)
@@ -231,7 +235,7 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 	}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live_provider": "changed"},
@@ -251,7 +255,7 @@ func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t 
 	}
 	if result.Watermark != nil || !handler.normalizedAt.IsZero() ||
 		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
-		result.Effects.Written != len(workItemRouteDestinations()) {
+		result.Effects.Written != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf(
 			"watermark=%v handler_at=%s credential_calls=%d decrypt_calls=%d requests=%d result=%+v",
 			result.Watermark, handler.normalizedAt, credentials.calls, decryptor.calls,
@@ -279,7 +283,7 @@ func TestCompleteRouteExecutorSuppressesForgedLiveIncompleteWatermark(t *testing
 	}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	ledger := &memoryEffectLedger{}
@@ -312,7 +316,7 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 		t.Fatal(err)
 	}
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
 		Result: map[string]any{"live": "changed"},
@@ -324,7 +328,7 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Effects.Written != len(workItemRouteDestinations()) ||
+	if result.Effects.Written != len(githubWorkItemRouteDestinations()) ||
 		!handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
 		ledger.preparedPrepares != 1 {
 		t.Fatalf(
@@ -350,7 +354,7 @@ func TestCompleteRouteExecutorFailsClosedWhenPreparedSnapshotIsMissing(t *testin
 	}
 	ledger.state = state
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
@@ -363,7 +367,7 @@ func TestCompleteRouteExecutorFailsClosedWhenPreparedSnapshotIsMissing(t *testin
 
 func preparedGitHubWorkItemsFixture(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
-	destinations := workItemRouteDestinations()
+	destinations := githubWorkItemRouteDestinations()
 	effects := make([]EffectBatch, 0, len(destinations))
 	for _, destination := range destinations {
 		policy := EffectReplaySafe
@@ -545,7 +549,7 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 	}
 	ledger := &memoryEffectLedger{state: legacy, preparedSnapshot: payload}
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err = completeRouteExecutor(
@@ -584,7 +588,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)
 			descriptor := CompleteRouteDescriptor{
 				Provider: pair.provider, RequestedDataset: pair.dataset,
-				RouteDataset: pair.dataset, Destinations: workItemRouteDestinations(),
+				RouteDataset: pair.dataset, Destinations: githubWorkItemRouteDestinations(),
 				PreparedManifestRecovery: true, RouteReady: true, Plannable: true,
 			}
 			handler := &staticCompleteRouteHandler{
@@ -624,7 +628,7 @@ func TestRouteRequiringPreparedRecoveryRefusesALedgerWithoutASnapshotStore(t *te
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	_, session := preparedGitHubWorkItemsSession(t, now)
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{}
 	sink := &memoryEffectSink{}
@@ -654,7 +658,7 @@ func TestPreparedRecoveryRevalidatesTheManifestAgainstTheLiveDescriptor(t *testi
 		t.Fatal(err)
 	}
 	descriptor, _ := Descriptor("github", "work-items")
-	full := workItemRouteDestinations()
+	full := githubWorkItemRouteDestinations()
 	descriptor.Destinations = full[:len(full)-1]
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
@@ -863,14 +867,14 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 	); err != nil {
 		t.Fatal(err)
 	}
-	destinations := workItemRouteDestinations()
+	destinations := githubWorkItemRouteDestinations()
 	sortStrings(destinations)
 	refused := destinations[len(destinations)/2]
 	sinkFailure := errors.New("sink refused the write")
 	sink := &memoryEffectSink{failAfterWrite: refused, failure: sinkFailure}
 
 	descriptor, _ := Descriptor("github", "work-items")
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 	handler := &staticCompleteRouteHandler{batch: batch}
 	_, err := completeRouteExecutor(
@@ -889,7 +893,7 @@ func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) 
 	if loadErr != nil {
 		t.Fatalf("snapshot unusable after a withheld completion: %v", loadErr)
 	}
-	if len(recovered.Batch.Effects) != len(workItemRouteDestinations()) {
+	if len(recovered.Batch.Effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("recovered manifest is incomplete: %d effects", len(recovered.Batch.Effects))
 	}
 }
@@ -931,7 +935,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if !ok || !descriptor.PreparedManifestRecovery {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
-	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.Destinations = githubWorkItemRouteDestinations()
 	descriptor.RouteReady, descriptor.Plannable = true, true
 
 	ledger := &memoryEffectLedger{}
@@ -945,7 +949,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live collect and prepare failed: %v", err)
 	}
-	if first.Effects.Written != len(workItemRouteDestinations()) ||
+	if first.Effects.Written != len(githubWorkItemRouteDestinations()) ||
 		ledger.preparedPrepares != 1 {
 		t.Fatalf("first pass result=%+v prepares=%d", first, ledger.preparedPrepares)
 	}
@@ -996,7 +1000,7 @@ func TestCompleteRouteExecutorRecoversASnapshotItPreparedItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recovery refused the snapshot this route prepared: %v", err)
 	}
-	if second.Effects.Skipped != len(workItemRouteDestinations()) ||
+	if second.Effects.Skipped != len(githubWorkItemRouteDestinations()) ||
 		second.Effects.Written != 0 || len(recoverySink.destinations) != 0 {
 		t.Fatalf("recovery result=%+v writes=%v", second, recoverySink.destinations)
 	}

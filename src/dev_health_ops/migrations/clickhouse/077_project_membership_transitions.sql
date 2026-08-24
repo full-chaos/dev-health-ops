@@ -154,10 +154,22 @@ ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id);
 -- to_project_id, and unpivoting them separately would let a row's key drift
 -- onto the other row's id.
 --
--- arrayDistinct guards the degenerate (P, P) row -- a provider re-asserting a
--- membership it already had. Without it that row would contribute the same
--- touch twice, which changes no verdict but makes the intermediate result
--- misleading to anyone reading it.
+-- The (P, P) row -- a provider re-asserting a membership it already holds,
+-- typically because the project's KEY changed while its id did not --
+-- contributes ONE touch, the joined side, not two. That is a correctness rule
+-- rather than tidiness: both touches would carry the same (occurred_at,
+-- event_id), so the argMax over that pair would be a tie and ClickHouse could
+-- return either key. The view would then report an active membership whose
+-- project_key was nondeterministic between runs -- the same row read twice
+-- giving two different answers. Preferring the JOINED side is not an arbitrary
+-- tiebreak: to_project_key is by definition the key the subject has NOW, and
+-- from_project_key is the one it had before.
+--
+-- An arrayDistinct here would NOT fix that -- the two tuples differ in their
+-- key, so it would keep both -- and once the branch above exists it can never
+-- remove anything at all: distinct projects differ in element 1, and the same
+-- project now yields a single element. It was written first and removed for
+-- exactly that reason.
 --
 -- The COLUMN arm is deliberately NOT keyed per project. work_items.project_id
 -- holds one current value and carries no history, so it can only ever describe
@@ -181,10 +193,12 @@ WITH touched AS (
         occurred_at,
         event_id,
         to_project_id,
-        arrayJoin(arrayDistinct(arrayFilter(
+        arrayJoin(arrayFilter(
             pair -> pair.1 != '',
-            [(to_project_id, to_project_key), (from_project_id, from_project_key)]
-        ))) AS touch
+            if(from_project_id = to_project_id,
+               [(to_project_id, to_project_key)],
+               [(to_project_id, to_project_key), (from_project_id, from_project_key)])
+        )) AS touch
     FROM project_membership_transitions FINAL
 ),
 latest_membership AS (

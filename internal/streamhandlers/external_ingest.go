@@ -28,11 +28,16 @@ var operationalExternalKinds = map[string]struct{}{
 	"operational_team.v1": {}, "operational_user.v1": {}, "service_repository_mapping.v1": {},
 }
 
+// `work_item_project_transition.v1` (CHAOS-4194) is registered for the four
+// work-item providers only. `custom` is excluded deliberately: the kind keys on
+// a work_item_id derived from a provider-specific rule, and the custom-push
+// derivation ("custom:<instance>:<key>") has no `work_items` counterpart to
+// join. pagerduty/atlassian have no project entity at all.
 var externalAllowedKinds = map[string]map[string]struct{}{
-	"github":    kindSet("repository.v1", "identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_dependency.v1", "pull_request.v1", "review.v1", "commit.v1"),
-	"gitlab":    kindSet("repository.v1", "identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_dependency.v1", "pull_request.v1", "review.v1", "commit.v1"),
-	"jira":      kindSet("identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_dependency.v1"),
-	"linear":    kindSet("identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_dependency.v1"),
+	"github":    kindSet("repository.v1", "identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_project_transition.v1", "work_item_dependency.v1", "pull_request.v1", "review.v1", "commit.v1"),
+	"gitlab":    kindSet("repository.v1", "identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_project_transition.v1", "work_item_dependency.v1", "pull_request.v1", "review.v1", "commit.v1"),
+	"jira":      kindSet("identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_project_transition.v1", "work_item_dependency.v1"),
+	"linear":    kindSet("identity.v1", "team.v1", "work_item.v1", "work_item_transition.v1", "work_item_project_transition.v1", "work_item_dependency.v1"),
 	"custom":    kindSet("repository.v1", "identity.v1", "team.v1", "pull_request.v1", "review.v1", "commit.v1"),
 	"pagerduty": kindSet("identity.v1", "team.v1"),
 	"atlassian": kindSet("identity.v1", "team.v1"),

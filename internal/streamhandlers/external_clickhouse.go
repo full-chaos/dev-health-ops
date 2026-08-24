@@ -77,27 +77,28 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{
-		"repository.v1":                 "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
-		"commit.v1":                     "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
-		"pull_request.v1":               "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
-		"review.v1":                     "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                       "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
-		"identity.v1":                   "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
-		"work_item.v1":                  "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
-		"work_item_transition.v1":       "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
-		"work_item_dependency.v1":       "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
-		"operational_service.v1":        "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
-		"operational_incident.v1":       "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
-		"operational_alert.v1":          "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
-		"incident_timeline_event.v1":    "INSERT INTO operational_incident_timeline_events (" + operationalBaseColumns + ",incident_id,event_type,body,actor_type,actor_id,occurred_at)",
-		"incident_note.v1":              "INSERT INTO operational_incident_notes (" + operationalBaseColumns + ",incident_id,body,author_user_id,created_at)",
-		"incident_responder.v1":         "INSERT INTO operational_incident_responders (" + operationalBaseColumns + ",incident_id,user_id,responder_name,role,responder_assignment_id,requested_at,assigned_at,acknowledged_at,completed_at)",
-		"escalation_policy.v1":          "INSERT INTO operational_escalation_policies (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
-		"on_call_schedule.v1":           "INSERT INTO operational_on_call_schedules (" + operationalBaseColumns + ",name,description,timezone,is_deleted,deleted_at)",
-		"on_call_assignment.v1":         "INSERT INTO operational_on_call_assignments (" + operationalBaseColumns + ",schedule_id,user_id,escalation_policy_id,escalation_level,starts_at,ends_at)",
-		"operational_team.v1":           "INSERT INTO operational_teams (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
-		"operational_user.v1":           "INSERT INTO operational_users (" + operationalBaseColumns + ",display_name,email,is_deleted,deleted_at)",
-		"service_repository_mapping.v1": "INSERT INTO operational_service_repository_mappings (" + operationalBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active)",
+		"repository.v1":                   "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
+		"commit.v1":                       "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
+		"pull_request.v1":                 "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
+		"review.v1":                       "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
+		"team.v1":                         "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"identity.v1":                     "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
+		"work_item.v1":                    "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
+		"work_item_transition.v1":         "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
+		"work_item_project_transition.v1": "INSERT INTO work_item_project_transitions (org_id,source_id,repo_id,work_item_id,provider,from_project_id,to_project_id,from_project_key,to_project_key,actor,occurred_at,last_synced,event_id)",
+		"work_item_dependency.v1":         "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
+		"operational_service.v1":          "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
+		"operational_incident.v1":         "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
+		"operational_alert.v1":            "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
+		"incident_timeline_event.v1":      "INSERT INTO operational_incident_timeline_events (" + operationalBaseColumns + ",incident_id,event_type,body,actor_type,actor_id,occurred_at)",
+		"incident_note.v1":                "INSERT INTO operational_incident_notes (" + operationalBaseColumns + ",incident_id,body,author_user_id,created_at)",
+		"incident_responder.v1":           "INSERT INTO operational_incident_responders (" + operationalBaseColumns + ",incident_id,user_id,responder_name,role,responder_assignment_id,requested_at,assigned_at,acknowledged_at,completed_at)",
+		"escalation_policy.v1":            "INSERT INTO operational_escalation_policies (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
+		"on_call_schedule.v1":             "INSERT INTO operational_on_call_schedules (" + operationalBaseColumns + ",name,description,timezone,is_deleted,deleted_at)",
+		"on_call_assignment.v1":           "INSERT INTO operational_on_call_assignments (" + operationalBaseColumns + ",schedule_id,user_id,escalation_policy_id,escalation_level,starts_at,ends_at)",
+		"operational_team.v1":             "INSERT INTO operational_teams (" + operationalBaseColumns + ",name,description,is_deleted,deleted_at)",
+		"operational_user.v1":             "INSERT INTO operational_users (" + operationalBaseColumns + ",display_name,email,is_deleted,deleted_at)",
+		"service_repository_mapping.v1":   "INSERT INTO operational_service_repository_mappings (" + operationalBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active)",
 	}
 	query, ok := queries[kind]
 	if !ok {
@@ -220,6 +221,8 @@ func externalRecordValues(
 		return externalWorkItemValues(source, payload, now, scope)
 	case "work_item_transition.v1":
 		return externalTransitionValues(source, payload, now, scope)
+	case "work_item_project_transition.v1":
+		return externalProjectTransitionValues(source, payload, now, scope)
 	case "work_item_dependency.v1":
 		sourceID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "sourceExternalKey"), stringField(payload, "sourceWorkItemType"))
 		targetID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "targetExternalKey"), stringField(payload, "targetWorkItemType"))
@@ -306,6 +309,58 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 		stringField(payload, "fromStatus"), stringField(payload, "toStatus"),
 		stringField(payload, "fromStatusRaw"), stringField(payload, "toStatusRaw"),
 		actor, now, source.Pointer.OrgID, source.SourceID,
+	}, nil
+}
+
+// externalProjectTransitionValues builds one `work_item_project_transitions`
+// row for the CHAOS-4193 locked schema.
+//
+// The work_item_id derivation is deliberately the SAME call
+// externalTransitionValues and externalWorkItemValues make. It has to be: the
+// presence projection joins these rows back to `work_items`, and a
+// second, locally-reasonable derivation here would produce ids that look right
+// in isolation and join to nothing.
+//
+// Project identity is passed through verbatim rather than run through
+// externalProjectScope. That helper answers "what does this provider call the
+// work item's project column", and for github/gitlab it answers with the
+// REPOSITORY -- repo-as-project, which is exactly the conflation CHAOS-4194's
+// ruling forbids. A project transition names a provider PROJECT entity
+// (Jira project / GitHub Projects V2 / Linear project) and nothing else, so the
+// producer's value is the value.
+func externalProjectTransitionValues(source externalSinkBatch, payload map[string]any, now time.Time, scope *ExternalRecomputeScope) ([]any, error) {
+	system, sourceInstance := source.Pointer.SourceSystem, source.Pointer.SourceInstance
+	instance := externalWorkItemInstance(system, sourceInstance, "")
+	workItemID := externalWorkItemID(system, instance, stringField(payload, "externalKey"), stringField(payload, "workItemType"))
+	repoID := uuid.Nil
+	if system == "github" || system == "gitlab" {
+		repoID = externalRepoUUID(system, sourceInstance, instance)
+		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
+	}
+	// occurred_at is in the sorting key. Falling back to `now` rather than the
+	// zero time keeps a provider that carries no event time from sorting its
+	// events ahead of all real history, which would make the presence
+	// projection (latest transition wins) answer with the oldest row.
+	occurredAt := now
+	if value, ok, err := externalOptionalTime(payload, "occurredAt"); err != nil {
+		return nil, err
+	} else if ok {
+		occurredAt = value
+	}
+	trackExternalTime(scope, occurredAt)
+	// actor is the one Nullable column in the locked schema: an unattributed
+	// reassignment is a real, common event (provider automation, bulk moves),
+	// and "unknown" would be a fabricated identity that joins to `identities`.
+	var actor any
+	if raw := stringField(payload, "actor"); raw != "" {
+		actor = externalIdentity(system, raw)
+	}
+	return []any{
+		source.Pointer.OrgID, source.SourceID, repoID, workItemID,
+		stringField(payload, "provider"),
+		stringField(payload, "fromProjectId"), stringField(payload, "toProjectId"),
+		stringField(payload, "fromProjectKey"), stringField(payload, "toProjectKey"),
+		actor, occurredAt, now, stringField(payload, "eventId"),
 	}, nil
 }
 

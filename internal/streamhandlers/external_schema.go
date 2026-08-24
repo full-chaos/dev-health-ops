@@ -92,6 +92,26 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 			"toStatus":   {kind: externalString, required: true, enum: workItemStatuses()},
 			"actor":      optionalString,
 		},
+		// CHAOS-4194 / CHAOS-4193 locked shape. `workItemType` deliberately
+		// admits only "issue": the locked table keys on work_item_id, and a
+		// pull request has no work_items row to join, so a "pr" subject here
+		// would mint a row nothing can resolve. PR->project is a separate,
+		// still-unagreed shape.
+		//
+		// `occurredAt` is OPTIONAL by the CHAOS-4194 provisional default -- the
+		// provider event time when the provider carries one, else the sink's
+		// own last_synced. `eventId` is not: it is a member of the sorting key
+		// and an empty one silently merges distinct reassignments.
+		"work_item_project_transition.v1": {
+			"externalKey":   requiredString,
+			"provider":      {kind: externalString, required: true, enum: []string{"jira", "github", "gitlab", "linear"}},
+			"eventId":       requiredString,
+			"workItemType":  {kind: externalString, enum: []string{"issue"}},
+			"occurredAt":    optionalDate,
+			"fromProjectId": optionalString, "toProjectId": requiredString,
+			"fromProjectKey": optionalString, "toProjectKey": optionalString,
+			"actor": optionalString,
+		},
 		"work_item_dependency.v1": {
 			"sourceExternalKey": requiredString, "sourceWorkItemType": {kind: externalString, enum: []string{"issue", "pr", "merge_request"}},
 			"targetExternalKey": requiredString, "targetWorkItemType": {kind: externalString, enum: []string{"issue", "pr", "merge_request"}},

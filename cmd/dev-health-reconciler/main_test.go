@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +115,70 @@ func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("operator HTTP did not stop after cancellation")
+	}
+}
+
+// TestRunHealthcheckMirrorsReadyz pins CHAOS-4239's Compose healthcheck
+// probe: runHealthcheck's exit code must be exactly the /readyz status code
+// it observed, since Docker's exec-form healthcheck (required by the
+// distroless, shell-less runtime image -- see runHealthcheck's doc comment)
+// has no other way to learn the process's own readiness.
+func TestRunHealthcheckMirrorsReadyz(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		handler  http.HandlerFunc
+		wantCode int
+	}{
+		"ready": {
+			handler: func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusOK)
+			},
+			wantCode: 0,
+		},
+		"not ready": {
+			handler: func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusServiceUnavailable)
+			},
+			wantCode: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/readyz" {
+					t.Fatalf("healthcheck probed %q, want /readyz", request.URL.Path)
+				}
+				testCase.handler(response, request)
+			}))
+			defer server.Close()
+
+			_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("DEV_HEALTH_HTTP_ADDR", ":"+port)
+
+			if code := runHealthcheck(); code != testCase.wantCode {
+				t.Fatalf("runHealthcheck() = %d, want %d", code, testCase.wantCode)
+			}
+		})
+	}
+}
+
+// TestRunHealthcheckFailsClosedWithNothingListening proves the probe does
+// not hang or panic, and reports unhealthy, when the process's own HTTP
+// server is not answering at all -- the shape a genuinely wedged process (or
+// one that has not started yet) would take.
+func TestRunHealthcheckFailsClosedWithNothingListening(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEV_HEALTH_HTTP_ADDR", address)
+
+	if code := runHealthcheck(); code != 1 {
+		t.Fatalf("runHealthcheck() = %d, want 1 with nothing listening", code)
 	}
 }

@@ -614,19 +614,91 @@ func TestReconcilerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
 				"cover a function the binary never runs",
 		)
 	}
-	if len(mainDecl.Body.List) != 1 {
+	// CHAOS-4239 added exactly one reviewed early exit ahead of shell.Main:
+	// Docker's healthcheck exec (the distroless runtime image has no shell,
+	// so it must invoke this binary itself -- see runHealthcheck's doc
+	// comment) needs a subcommand that runs and exits BEFORE the full
+	// dependency graph boots, which shell.Main does not support. This test's
+	// job did not change: prove shell.Main(reconcilerSpec) is still always
+	// EVENTUALLY reached unless that one narrow, os.Exit-terminated branch
+	// fires -- not that main() is one statement forever.
+	if len(mainDecl.Body.List) != 2 {
 		t.Fatalf(
-			"func main() has %d statements, want exactly 1 (the shell.Main call "+
-				"this test pins). If this is a reviewed change, confirm the new "+
-				"statements cannot skip or alter the shell.Main(reconcilerSpec) call "+
-				"before updating this test.",
+			"func main() has %d statements, want exactly 2 (the CHAOS-4239 "+
+				"healthcheck short-circuit, then the shell.Main call this test "+
+				"pins). If this is a reviewed change, confirm the new statement(s) "+
+				"cannot skip or alter the shell.Main(reconcilerSpec) call without "+
+				"exiting the process first, before updating this test.",
 			len(mainDecl.Body.List),
 		)
 	}
 
-	expressionStatement, ok := mainDecl.Body.List[0].(*ast.ExprStmt)
+	assertReconcilerHealthcheckShortCircuit(t, mainDecl.Body.List[0])
+	assertReconcilerShellMainCall(t, mainDecl.Body.List[1])
+}
+
+// assertReconcilerHealthcheckShortCircuit pins main()'s first statement to
+// EXACTLY the shape `if <args-check> { os.Exit(runHealthcheck()) }` -- an
+// early exit that can only ever (a) do nothing and fall through to
+// shell.Main, or (b) terminate the process via os.Exit. Neither outcome can
+// silently skip or alter the shell.Main(reconcilerSpec) call the way an
+// arbitrary added statement could (e.g. one that mutates reconcilerSpec, or
+// calls some OTHER entry point instead).
+func assertReconcilerHealthcheckShortCircuit(t *testing.T, statement ast.Stmt) {
+	t.Helper()
+	ifStatement, ok := statement.(*ast.IfStmt)
 	if !ok {
-		t.Fatalf("func main()'s only statement is not a call expression: %#v", mainDecl.Body.List[0])
+		t.Fatalf("func main()'s first statement is not an if statement: %#v", statement)
+	}
+	if ifStatement.Init != nil || ifStatement.Else != nil {
+		t.Fatalf("the healthcheck short-circuit must be a bare if with no init or else clause: %#v", ifStatement)
+	}
+	if len(ifStatement.Body.List) != 1 {
+		t.Fatalf("the healthcheck short-circuit's body has %d statements, want exactly 1 (os.Exit)", len(ifStatement.Body.List))
+	}
+	exitStatement, ok := ifStatement.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("the healthcheck short-circuit's body is not a call expression: %#v", ifStatement.Body.List[0])
+	}
+	exitCall, ok := exitStatement.X.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("the healthcheck short-circuit's body is not a function call: %#v", exitStatement.X)
+	}
+	exitSelector, ok := exitCall.Fun.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("the healthcheck short-circuit does not call a package-qualified function: %#v", exitCall.Fun)
+	}
+	exitPackage, ok := exitSelector.X.(*ast.Ident)
+	if !ok || exitPackage.Name != "os" || exitSelector.Sel.Name != "Exit" {
+		t.Fatalf(
+			"the healthcheck short-circuit's body calls %#v, not os.Exit -- it must "+
+				"unconditionally terminate the process, never merely return and let "+
+				"execution continue past shell.Main with the healthcheck path half-run",
+			exitCall.Fun,
+		)
+	}
+	if len(exitCall.Args) != 1 {
+		t.Fatalf("os.Exit call has %d arguments, want exactly 1", len(exitCall.Args))
+	}
+	exitArgument, ok := exitCall.Args[0].(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("os.Exit's argument is not a function call: %#v", exitCall.Args[0])
+	}
+	exitArgumentIdent, ok := exitArgument.Fun.(*ast.Ident)
+	if !ok || exitArgumentIdent.Name != "runHealthcheck" {
+		t.Fatalf(
+			"os.Exit's argument calls %#v, not runHealthcheck -- the pins in this "+
+				"file cover a healthcheck probe the binary does not use",
+			exitArgument.Fun,
+		)
+	}
+}
+
+func assertReconcilerShellMainCall(t *testing.T, statement ast.Stmt) {
+	t.Helper()
+	expressionStatement, ok := statement.(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("func main()'s second statement is not a call expression: %#v", statement)
 	}
 	call, ok := expressionStatement.X.(*ast.CallExpr)
 	if !ok {

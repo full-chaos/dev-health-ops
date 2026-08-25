@@ -168,19 +168,23 @@ type Config struct {
 	CancelledJobRetention       time.Duration
 	DiscardedJobRetention       time.Duration
 	RiverJobCleanerTimeout      time.Duration
-	// SyncObservationTimeout bounds one sync-dispatch observer step
-	// (reconciler-only). CHAOS-4092: exceeding it is STILL fatal to the
-	// whole process today, exactly as the hardcoded 2s was -- syncreconciler
-	// Loop.step's deadline-exceeded error is unconditionally fatal, and its
-	// owner tears the whole service down on that error (the incident
-	// mechanism). This override does not change that failure mode; it only
-	// moves the threshold, so an operator can widen the budget in place of a
-	// redeploy while the structural fix (an index-friendly terminal-repair
-	// join) is what actually keeps steps fast. A repair stage failing only
-	// ITS OWN stage loudly instead of killing the process is a proposed
-	// follow-up, not implemented here. It is a liveness knob, not a
-	// correctness one: syncreconciler.LoopConfig.validate bounds it to
-	// [10ms, 30s] regardless of what is configured here.
+	// SyncObservationTimeout bounds the sync-dispatch mutation pipeline's
+	// outer per-step envelope (reconciler-only). CHAOS-4092 introduced this
+	// override when exceeding it was still fatal to the whole process,
+	// exactly as the hardcoded 2s was; CHAOS-4239 changed that underlying
+	// behavior structurally -- syncreconciler.Loop no longer tears the
+	// process down for this. Each pipeline stage now runs under its own
+	// bounded budget (syncreconciler.DefaultStageBudgets), the composed
+	// envelope is derived from their sum (see dependencies.go), and
+	// exceeding EITHER a stage's own budget or this outer envelope degrades
+	// only that tick (syncreconciler.ErrDegradedStage /
+	// syncreconciler.ErrStepEnvelopeExceeded -- logged, counted, self-healing
+	// on the next tick that fits) instead of exiting the process. This
+	// option still lets an operator override the composed default in place
+	// of a redeploy, honored even when it undercuts the composition (WARNed,
+	// not rejected). It remains a liveness knob, not a correctness one:
+	// syncreconciler.LoopConfig.validate bounds it to [10ms, 30s] regardless
+	// of what is configured here.
 	SyncObservationTimeout time.Duration
 	// SyncObservationTimeoutExplicit is true only when SYNC_OBSERVATION_TIMEOUT /
 	// --sync-observation-timeout was actually present in the environment/CLI

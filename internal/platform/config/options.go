@@ -251,15 +251,20 @@ var optionRegistry = []Option{
 		Usage: "per-run timeout of the River job cleaner (5s-5m)",
 	},
 	// CHAOS-4092: reconciler-only, matching the unreclaimable-sweep flag's
-	// scoping precedent above. This widens the sync-dispatch observer's
-	// per-step budget in place; exceeding it is still fatal to the whole
-	// process (unchanged from the hardcoded 2s), so this only moves the
-	// threshold -- it does not make a slow step survivable.
+	// scoping precedent above. This overrides the mutation pipeline's
+	// composed per-stage-budget envelope (syncreconciler.DefaultStageBudgets;
+	// see cmd/dev-health-reconciler/dependencies.go's
+	// SyncObservationTimeoutExplicit handling). CHAOS-4239: exceeding it no
+	// longer exits the process -- syncreconciler.ErrStepEnvelopeExceeded
+	// degrades only that tick (logged, counted, self-healing on the next one
+	// that fits) exactly the way an individual stage exceeding its own
+	// budget already does. An explicit value below the composed default is
+	// honored and WARNed about, not rejected.
 	{
 		Flag: "sync-observation-timeout", Env: "SYNC_OBSERVATION_TIMEOUT", Kind: KindDuration,
 		Default:  defaultSyncObservationTimeout.String(),
 		Services: []string{"dev-health-reconciler"}, Group: GroupRuntime,
-		Usage: "sync-dispatch observer per-step timeout (10ms-30s); exceeding it still exits the process",
+		Usage: "sync-dispatch observer per-step timeout (10ms-30s); exceeding it degrades that tick rather than exiting the process",
 	},
 
 	// Provider routes.

@@ -196,18 +196,19 @@ func NewMutationPipeline(
 		// return check error text" invariant already protects.
 		for _, stage := range orderedStages {
 			stage := stage
-			budget := config.StageBudgets[stage]
 			checkErr := config.Registry.RegisterRequired(stageReadinessCheckName(stage), func(context.Context) error {
 				if pipeline.stages.isDegraded(stage) {
 					return errStageDegraded
 				}
 				// CHAOS-4239 round 3: a stage that ignores its own stageCtx
 				// and never returns produces no failure and no success --
-				// isDegraded above would never see it. detectOverrun is
-				// evaluated HERE, on the readyz poller's own goroutine,
-				// completely independent of whatever goroutine is stuck
-				// inside the stage's call.
-				if pipeline.stages.detectOverrun(stage, budget+stepOverrunMargin) {
+				// isDegraded above would never see it. isOverrunActive is a
+				// flag the watchdog timer armed in runStage sets when it
+				// fires (see stageTelemetry.reportOverrun); this check only
+				// reads it, it never computes the overrun itself, so
+				// detection does not depend on anyone ever calling this
+				// check at all.
+				if pipeline.stages.isOverrunActive(stage) {
 					return errStepOverrun
 				}
 				return nil
@@ -254,12 +255,34 @@ func (pipeline *MutationPipeline) runStage(
 	defer cancel()
 
 	// markRunning/markIdle bracket the call so a stage that ignores stageCtx
-	// and never returns is still visible to detectOverrun from a completely
-	// different goroutine (CHAOS-4239 round 3) -- everything below this line
-	// only runs once fn actually returns, which is exactly the case this
-	// pair exists to cover for.
+	// and never returns is still visible from a completely different
+	// goroutine (CHAOS-4239 round 3) -- everything below this line only runs
+	// once fn actually returns, which is exactly the case this pair exists
+	// to cover for.
 	pipeline.stages.markRunning(stage)
-	defer pipeline.stages.markIdle(stage)
+	// The watchdog is an ARMED timer, not something computed lazily by
+	// whoever happens to poll readyz or scrape /metrics later -- chris
+	// explicitly required this in round-3 follow-up review, since nothing
+	// guarantees a deployment does either. Its callback runs on ITS OWN
+	// goroutine, independent of whatever goroutine ends up stuck inside fn,
+	// so it fires and reports the overrun regardless of whether fn ever
+	// returns. Stop()'d the instant the stage actually does return;
+	// reportOverrun itself is a no-op if that race is lost by a hair (the
+	// stage returned right as the timer was firing).
+	watchdog := time.AfterFunc(budget+stepOverrunMargin, func() {
+		if pipeline.stages.reportOverrun(stage) {
+			slog.Warn(
+				"syncreconciler.step_overrun",
+				"stage", string(stage),
+				"budget_ms", budget.Milliseconds(),
+				"threshold_ms", (budget + stepOverrunMargin).Milliseconds(),
+			)
+		}
+	})
+	defer func() {
+		watchdog.Stop()
+		pipeline.stages.markIdle(stage)
+	}()
 
 	start := time.Now()
 	err := fn(stageCtx)
@@ -680,86 +703,87 @@ type stageTelemetry struct {
 	consecutive map[StageName]int
 	degraded    map[StageName]bool
 
-	// running, runningSince, overruns and overrunCounted answer a question
-	// none of the fields above can: a stage whose call IGNORES its own
-	// stageCtx and simply never returns produces no failure, no success, and
-	// no duration sample -- runStage is itself blocked inside fn(stageCtx)
-	// and nothing about that call graph ever reaches recordFailure or
-	// recordSuccess. Every non-fatal-degradation mechanism this file builds
+	// running, overrunActive and overruns answer a question none of the
+	// fields above can: a stage whose call IGNORES its own stageCtx and
+	// simply never returns produces no failure, no success, and no duration
+	// sample -- runStage is itself blocked inside fn(stageCtx) and nothing
+	// about that call graph ever reaches recordFailure or recordSuccess.
+	// Every non-fatal-degradation mechanism this file builds
 	// (ErrDegradedStage, ErrStepEnvelopeExceeded) depends on the call
 	// RETURNING eventually; a stage that never returns is invisible to all
 	// of them, which would make CHAOS-4239's "process stays up" fix trade a
 	// loud crash-loop for a silent zombie hang (chris's round-3 finding).
 	//
-	// The fix does not need a background watchdog goroutine: runStage marks
-	// a stage running the instant it starts (before calling fn) and idle the
-	// instant it returns, and detectOverrun below is evaluated LAZILY --
-	// from a completely different goroutine than the one stuck inside fn --
-	// by whichever poller asks first: the health.Registry readiness check
-	// registered per stage, or a /metrics scrape. Either one recomputes
-	// "has this stage been running longer than its own budget plus margin"
-	// from a wall-clock comparison against runningSince, which needs no
-	// cooperation at all from the stuck call.
-	running        map[StageName]bool
-	runningSince   map[StageName]time.Time
-	overruns       map[StageName]uint64
-	overrunCounted map[StageName]bool
+	// Detection is an ARMED per-step timer, not something computed lazily
+	// when a poller happens to ask (chris explicitly rejected the lazy
+	// design in round-3 follow-up review: nothing guarantees a deployment
+	// polls readyz or scrapes metrics at all, and lazy detection would then
+	// never fire). runStage arms a time.AfterFunc at stage start, for
+	// budget+stepOverrunMargin; its callback runs on ITS OWN goroutine --
+	// independent of whatever goroutine is stuck inside fn -- and reports
+	// the overrun unconditionally the moment it fires, whether or not
+	// anyone is watching. The timer is stopped the instant the stage
+	// actually returns.
+	running       map[StageName]bool
+	overrunActive map[StageName]bool
+	overruns      map[StageName]uint64
 }
 
 func newStageTelemetry() stageTelemetry {
 	return stageTelemetry{
-		failures:       make(map[StageName]uint64, len(orderedStages)),
-		durations:      make(map[StageName]time.Duration, len(orderedStages)),
-		consecutive:    make(map[StageName]int, len(orderedStages)),
-		degraded:       make(map[StageName]bool, len(orderedStages)),
-		running:        make(map[StageName]bool, len(orderedStages)),
-		runningSince:   make(map[StageName]time.Time, len(orderedStages)),
-		overruns:       make(map[StageName]uint64, len(orderedStages)),
-		overrunCounted: make(map[StageName]bool, len(orderedStages)),
+		failures:      make(map[StageName]uint64, len(orderedStages)),
+		durations:     make(map[StageName]time.Duration, len(orderedStages)),
+		consecutive:   make(map[StageName]int, len(orderedStages)),
+		degraded:      make(map[StageName]bool, len(orderedStages)),
+		running:       make(map[StageName]bool, len(orderedStages)),
+		overrunActive: make(map[StageName]bool, len(orderedStages)),
+		overruns:      make(map[StageName]uint64, len(orderedStages)),
 	}
 }
 
-// markRunning records that a stage's call has started, for detectOverrun to
-// compare against later from another goroutine. Call this BEFORE invoking
-// the stage's own function, never after -- the whole point is visibility
-// into a call that might never return.
+// markRunning records that a stage's call has started. Call this BEFORE
+// invoking the stage's own function, never after -- the whole point is
+// visibility into a call that might never return.
 func (telemetry *stageTelemetry) markRunning(stage StageName) {
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.running[stage] = true
-	telemetry.runningSince[stage] = time.Now()
-	telemetry.overrunCounted[stage] = false
+	telemetry.overrunActive[stage] = false
 }
 
-// markIdle clears a stage's in-flight state once its call returns, however
-// it returned. Call via defer immediately after markRunning so it always
-// runs, on every exit path.
+// markIdle clears a stage's in-flight and overrun state once its call
+// returns, however it returned -- readiness must clear the instant a
+// previously-stuck stage finally does, per chris's ruling. Call via defer
+// immediately after markRunning so it always runs, on every exit path.
 func (telemetry *stageTelemetry) markIdle(stage StageName) {
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.running[stage] = false
+	telemetry.overrunActive[stage] = false
 }
 
-// detectOverrun answers "is this stage still running, past threshold" from
-// whichever goroutine polls it, and increments the overrun counter exactly
-// once per in-flight episode (guarded by overrunCounted, reset the moment
-// markRunning starts a fresh one) regardless of how many times or how many
-// different callers (a readyz check, a metrics scrape) ask while it is
-// still true.
-func (telemetry *stageTelemetry) detectOverrun(stage StageName, threshold time.Duration) bool {
+// reportOverrun is called from the watchdog timer's OWN goroutine (armed by
+// runStage, independent of whatever goroutine is potentially still stuck
+// inside the stage's call) when a stage has been running past its budget
+// plus margin. It returns false, doing nothing, if the stage has already
+// returned by the time the timer fires -- a benign race between the
+// timer firing and runStage's deferred Stop()/markIdle -- so a fast stage
+// that finished right at the wire is never misreported.
+func (telemetry *stageTelemetry) reportOverrun(stage StageName) bool {
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	if !telemetry.running[stage] {
 		return false
 	}
-	if time.Since(telemetry.runningSince[stage]) <= threshold {
-		return false
-	}
-	if !telemetry.overrunCounted[stage] {
-		telemetry.overruns[stage]++
-		telemetry.overrunCounted[stage] = true
-	}
+	telemetry.overrunActive[stage] = true
+	telemetry.overruns[stage]++
 	return true
+}
+
+func (telemetry *stageTelemetry) isOverrunActive(stage StageName) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	return telemetry.overrunActive[stage]
 }
 
 func (telemetry *stageTelemetry) overrunSnapshot() map[StageName]uint64 {
@@ -854,15 +878,11 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	stages := make([]string, 0, len(orderedStages))
 	for _, stage := range orderedStages {
 		stages = append(stages, string(stage))
-		// A metrics scrape is an equally valid poller for detectOverrun as
-		// the readyz check registered in NewMutationPipeline (CHAOS-4239
-		// round 3) -- a deployment that scrapes /metrics but never polls
-		// /readyz must still see and count a stuck stage. overrunCounted's
-		// per-episode guard keeps this from double-counting against the
-		// readyz check also calling it.
-		pipeline.stages.detectOverrun(stage, budgets[stage]+stepOverrunMargin)
 	}
 	sort.Strings(stages)
+	// Reads only: the watchdog armed in runStage (CHAOS-4239 round 3) is the
+	// sole source of truth for overrun detection, so a scrape never needs to
+	// (and must not) recompute it here.
 	overruns := pipeline.stages.overrunSnapshot()
 
 	var text strings.Builder

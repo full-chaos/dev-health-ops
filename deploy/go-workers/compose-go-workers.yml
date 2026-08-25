@@ -311,5 +311,26 @@ services:
         condition: service_started
     ports:
       - "${GO_RECONCILER_PORT:-8082}:8080"
+    # CHAOS-4239: "any stage kills the process" (the crash-loop this ticket
+    # fixed) and "a wedged process is never restarted" are the same defect
+    # from opposite directions. Per-stage budgets and the step-overrun
+    # watchdog (internal/syncreconciler) make the process stay up and mark
+    # /readyz unhealthy when a stage is stuck; this healthcheck is what turns
+    # that into a container Docker (or an external supervisor watching health
+    # status) can actually see and restart. The runtime image
+    # (gcr.io/distroless/static-debian12, docker/go-worker.Dockerfile) has no
+    # shell and no curl/wget, so this invokes the reconciler binary's own
+    # `healthcheck` subcommand (cmd/dev-health-reconciler/main.go) rather
+    # than a CMD-SHELL one-liner -- it queries this same container's own
+    # /readyz over loopback and mirrors that status as its exit code. No
+    # other service in this overlay declares a healthcheck to copy interval/
+    # timeout/retries from (verified: `grep healthcheck` over this whole
+    # file); these values are this service's own, not copied.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dev-health-reconciler", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - dev-health

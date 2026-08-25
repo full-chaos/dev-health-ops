@@ -447,11 +447,12 @@ func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
 
 	config := DefaultMutationPipelineConfig()
 	config.Registry = registry
-	// A tiny budget keeps the test fast: detectOverrun's threshold is
+	// A tiny budget keeps the test fast: the watchdog's threshold is
 	// budget+stepOverrunMargin, and stepOverrunMargin (250ms) dominates
 	// regardless, so this does not need to be unrealistically small to prove
 	// the mechanism -- it only needs to not be the multi-hundred-ms default.
-	config.StageBudgets = budgetsWithOverride(StageMaterializer, 10*time.Millisecond)
+	const materializerBudget = 10 * time.Millisecond
+	config.StageBudgets = budgetsWithOverride(StageMaterializer, materializerBudget)
 
 	pipeline, err := NewMutationPipeline(
 		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
@@ -499,24 +500,28 @@ func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
 		t.Fatal("materializer stub never started")
 	}
 
+	// PROVE THE WATCHDOG IS ARMED, NOT LAZY (chris's round-3 follow-up
+	// review): sleep past the threshold WITHOUT ever touching readiness
+	// during the wait. If detection depended on something polling
+	// registry.Readiness (the earlier, rejected design), nothing would have
+	// happened yet no matter how long this sleeps -- the state below has to
+	// already be set by the time this reads it for the first time.
+	time.Sleep(materializerBudget + stepOverrunMargin + 100*time.Millisecond)
+
 	wantName := stageReadinessCheckName(StageMaterializer)
-	deadline := time.After(5 * time.Second)
-	for {
-		readiness := registry.Readiness(context.Background())
-		if !readiness.Ready {
-			for _, check := range readiness.Checks {
-				if check.Name == wantName && check.Failed {
-					goto flagged
-				}
-			}
-		}
-		select {
-		case <-deadline:
-			t.Fatal("readiness never named the stuck materializer stage")
-		case <-time.After(5 * time.Millisecond):
+	readiness := registry.Readiness(context.Background()) // first-ever touch
+	if readiness.Ready {
+		t.Fatalf("readiness = %#v, want closed: the watchdog should have fired unpolled", readiness)
+	}
+	found := false
+	for _, check := range readiness.Checks {
+		if check.Name == wantName && check.Failed {
+			found = true
 		}
 	}
-flagged:
+	if !found {
+		t.Fatalf("readyz did not name the stuck materializer stage: %#v", readiness.Checks)
+	}
 
 	var metrics strings.Builder
 	if err := pipeline.WritePrometheus(&metrics); err != nil {
@@ -535,16 +540,11 @@ flagged:
 	case <-time.After(5 * time.Second):
 		t.Fatal("pipeline.Step never returned after the stub was unblocked")
 	}
-	deadline = time.After(5 * time.Second)
-	for {
-		if registry.Readiness(context.Background()).Ready {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("readiness never cleared after the stuck stage returned")
-		case <-time.After(5 * time.Millisecond):
-		}
+	// markIdle clears overrunActive synchronously the instant the stage
+	// returns (runStage's deferred watchdog.Stop()+markIdle already ran by
+	// the time stepDone closed), so this is a single check, not a poll loop.
+	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("readiness after the stuck stage returned = %#v, want open", readiness)
 	}
 
 	// The next (fresh, non-blocking) tick must stay healthy -- the overrun

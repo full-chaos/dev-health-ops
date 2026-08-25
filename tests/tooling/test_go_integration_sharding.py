@@ -527,7 +527,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # on the snapshot (false whenever the sync could not name a real subject
     # it saw) that suppresses removal computation, but not additions, for that
     # project this sync.
-    assert len(expected_provider_tests) == 1058
+    #
+    # Codex round 2 verified the fix and sharpened one round-1 disposition
+    # (the work_items-column fallback gap is not always a one-sync bootstrap
+    # -- an issue removed from its board strictly BEFORE this producer's
+    # first sync for that project never gets a first transition row at all,
+    # so its stale presence edge persists; the doc comment on
+    # GitHubProjectV2SnapshotDiffClickHouseReader was corrected to say so,
+    # left open as a bounded historical gap rather than fixed, matching
+    # #1896's own already-accepted interim caveat) and asked for one more
+    # ordinary test (1058 -> 1059, 116 unchanged): a Fetch-level case for
+    # every way a board's Complete flag can land (issue missing repository,
+    # a board of only draft issues, an unrecognised content typename, a
+    # fully identified mixed board) -- the original pagination test only
+    # exercised the mixed case incidentally.
+    assert len(expected_provider_tests) == 1059
     assert len(expected_integration_tests) == 116
     assert expected_integration_tests < expected_provider_tests
 
@@ -544,7 +558,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1058
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1059
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -605,7 +619,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1058
+    assert len(selected_tests) == len(set(selected_tests)) == 1059
     assert set(selected_tests) == expected_tests
 
 

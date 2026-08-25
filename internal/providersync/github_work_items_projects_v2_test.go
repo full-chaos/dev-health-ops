@@ -722,3 +722,69 @@ func TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs(t *testing.T) {
 			eventIDs[0], eventIDs[1])
 	}
 }
+
+// TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome is the
+// coverage codex round 2 asked for directly: one Fetch-level case per way a
+// board's Complete flag can land, since round 1's fix (a false removal for a
+// still-present but unidentifiable subject) is only as good as every path
+// into it being covered, not just the mixed-fixture case the original
+// pagination test happened to exercise.
+func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+	fetch := func(t *testing.T, reply string) GitHubProjectV2FetchResult {
+		t.Helper()
+		doer := &gitHubProjectV2Doer{t: t, replies: []string{reply}}
+		result, err := (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim, credential, githubProjectV2TestClient(t, doer), normalizedAt, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Snapshots) != 1 {
+			t.Fatalf("snapshots=%+v, want exactly one project", result.Snapshots)
+		}
+		return result
+	}
+
+	t.Run("issue missing repository is incomplete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"no repo"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=false and no identified subjects", result.Snapshots[0])
+		}
+	})
+
+	t.Run("a board of only draft issues is complete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=true (a draft issue names no subject at all, which is complete information) and no subjects", result.Snapshots[0])
+		}
+	})
+
+	t.Run("an unrecognised content typename is incomplete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=false: GitHub added a content kind this code has never seen", result.Snapshots[0])
+		}
+	})
+
+	t.Run("a fully identified mixed board is complete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"ok","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_2","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"ok","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_3","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 2 {
+			t.Fatalf("snapshot=%+v, want Complete=true with 2 identified subjects", result.Snapshots[0])
+		}
+	})
+}

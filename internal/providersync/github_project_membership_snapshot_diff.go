@@ -154,26 +154,38 @@ type githubProjectV2SnapshotDiffReader interface {
 // GitHubProjectV2SnapshotDiffClickHouseReader answers "what does the table
 // itself currently say is active on this board", per subject.
 //
-// KNOWN, NOT FIXED (codex round 1 finding, CHAOS-4193d): this reads ONLY
-// project_membership_transitions, not project_membership_presence's
+// KNOWN, NOT FIXED (codex round 1 finding, sharpened in round 2, CHAOS-4193d):
+// this reads ONLY project_membership_transitions, not project_membership_presence's
 // work_items-column fallback arm (migration 077's `work_item_column` source,
 // which already carries a github Issue's CURRENT project_id from the
 // pre-existing normalizeGitHubProjectV2Item write). A github Issue that has
 // never had a transition row therefore reads as "not previously active" here
-// even if it has sat on the same board for months. That is a ONE-SYNC
-// bootstrap gap, not a permanent one: the diff below treats such an issue as
-// a fresh addition and commits its first transition row, and every sync
-// after that reads it correctly through this query. The residual risk is
-// narrower still than it sounds -- an issue would have to be removed from its
-// board in the single window between #1896 (CHAOS-4194, the column write)
-// landing and this producer's first sync for that project, which #1896's own
-// PR body already recorded as an accepted interim gap ("presence view may
-// over-report a PR removed from a board until 4193 lands"). Reading the
-// column arm here to close that narrow window would mean re-deriving the
-// view's own fallback-exclusion logic (project != ”, provider-scoped,
-// NOT IN subjects_with_history) a second time in Go, which is a second place
-// for the two to silently disagree -- not a trade worth making for a gap this
-// bounded.
+// even if it has sat on the same board for months.
+//
+// For an issue that is STILL on the board the first time this producer syncs
+// its project, that is a one-sync bootstrap gap and no more: the diff below
+// treats it as a fresh addition, commits its first transition row, and every
+// sync after that reads it correctly through this query.
+//
+// For an issue that LEFT the board strictly before this producer's first
+// sync for that project, it is NOT bootstrap-bounded -- round 2 correctly
+// rejected the original, weaker claim here. That issue never appears in a
+// current snapshot this producer computes (it is already gone), so it never
+// gets a first transition row, so this query can never find it, so a removal
+// for it can never be emitted. Its stale column-arm presence row persists
+// indefinitely. Scope: github Issues only (PRs have no column-arm row at
+// all), bounded to the historical window between #1896 (CHAOS-4194, the
+// column write) landing and this producer's first sync for that specific
+// project -- which #1896's own PR body already recorded as an accepted
+// interim gap ("presence view may over-report a PR removed from a board
+// until 4193 lands"). Deliberately left open rather than closed by reading
+// the column arm here: doing so means re-deriving the view's own
+// fallback-exclusion predicate (project != ”, provider-scoped, globally
+// NOT IN subjects_with_history -- not scoped to this project, which is
+// easy to get subtly wrong from the Go side) a second time, and a second
+// place for the two to silently disagree is a worse outcome than a bounded,
+// already-accepted historical gap. A full close, if ever needed, is a
+// dedicated backfill pass over the column arm, not a change to this query.
 type GitHubProjectV2SnapshotDiffClickHouseReader struct{ Conn driver.Conn }
 
 // gitHubProjectV2PriorActiveSubjectsQuery reproduces, for ONE project, exactly

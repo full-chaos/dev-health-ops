@@ -29,10 +29,9 @@ type postureGateResult struct {
 	PostureMissing map[string]int
 }
 
-// checkExecutedGrantPosture re-derives, against the live database,
-// whether the domain and coordinator roles actually hold the grants
-// go-river-migrate just applied, using
-// postgresstore.DiagnoseRolePosture -- deliberately NOT
+// checkExecutedGrantPosture re-derives, against the live database, whether
+// all three runtime roles actually hold the grants go-river-migrate just
+// applied, using postgresstore.DiagnoseRolePosture -- deliberately NOT
 // CheckDomainAuthorization/CheckCoordinatorAuthorization/
 // CheckQueueAuthorization. Those three assert `current_user = expectedRole`
 // (rolePostureQuery's own doc comment: a read-only check on "the active
@@ -49,16 +48,14 @@ type postureGateResult struct {
 // role -- this gate only adds the "nothing is missing, and name what is"
 // half, immediately after the grants that are supposed to satisfy it.
 //
-// The queue role has no RolePosture-shaped manifest or admin-callable
-// per-table diagnostic today (queueAuthorizationQuery is a single opaque,
-// current_user-bound boolean like the other two strict checks) -- see
-// internal/storage/postgres/queue_authorization.go. Rather than
-// hand-maintaining a THIRD copy of its table list here purely to name
-// gaps, this reports a coarse signal: whether go-river-migrate granted the
-// queue role anything at all. Zero rows is unambiguously wrong (the same
-// failure mode this ticket exists to catch); a nonzero count does not by
-// itself prove completeness, which is the queue role's own startup
-// readiness check's job.
+// The queue role's own readiness check (queueAuthorizationQuery) has no
+// admin-callable per-table diagnostic of its own -- postgresstore.QueuePosture
+// exists purely to let DiagnoseRolePosture answer that for this gate,
+// without changing queueAuthorizationQuery itself. An earlier revision of
+// this gate reported only whether go-river-migrate granted the queue role
+// ANYTHING at all (a single stray or leftover grant read as "complete"); the
+// per-table posture below closes that gap the same way domain/coordinator
+// already work.
 func checkExecutedGrantPosture(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -72,7 +69,7 @@ func checkExecutedGrantPosture(
 	}
 
 	checkTablePosture := func(roleLabel, roleName string, posture postgresstore.RolePosture) {
-		declared := len(posture.RequiredTables) + len(posture.ColumnScoped)
+		declared := len(posture.RequiredTables) + len(posture.ColumnScoped) + len(posture.RequiredSequences)
 		gaps, err := postgresstore.DiagnoseRolePosture(ctx, pool, roleName, posture)
 		if err != nil {
 			// The diagnostic query itself failed (unreachable database, an
@@ -100,39 +97,10 @@ func checkExecutedGrantPosture(
 	}
 
 	checkTablePosture("domain", domainRole, postgresstore.DomainPosture())
+	checkTablePosture("queue", queueRole, postgresstore.QueuePosture())
 	checkTablePosture("coordinator", coordinatorRole, postgresstore.CoordinatorPosture())
 
-	queueGrantCount, err := countTableGrants(ctx, pool, queueRole)
-	switch {
-	case err != nil:
-		result.OK = false
-		result.GrantsApplied["queue"] = 0
-		result.PostureMissing["queue"] = 1
-		logger.Error("runtime grant posture check failed", "role", "queue", "reason", "grant_count_unavailable")
-	case queueGrantCount == 0:
-		result.OK = false
-		result.GrantsApplied["queue"] = 0
-		result.PostureMissing["queue"] = 1
-		logger.Error("runtime grant posture gap", "role", "queue", "reason", "no_table_grants_present")
-	default:
-		result.GrantsApplied["queue"] = queueGrantCount
-		result.PostureMissing["queue"] = 0
-		logger.Info("runtime grant posture confirmed", "role", "queue", "grants_applied", queueGrantCount)
-	}
-
 	return result
-}
-
-// countTableGrants reports how many information_schema.role_table_grants
-// rows PostgreSQL has recorded for the given role. Safe to run from any
-// connection: unlike rolePostureQuery/queueAuthorizationQuery, this view
-// does not bind to current_user.
-func countTableGrants(ctx context.Context, pool *pgxpool.Pool, role string) (int, error) {
-	var count int
-	err := pool.QueryRow(
-		ctx, "SELECT count(*) FROM information_schema.role_table_grants WHERE grantee = $1", role,
-	).Scan(&count)
-	return count, err
 }
 
 // writePostureTelemetry renders checkExecutedGrantPosture's result as a

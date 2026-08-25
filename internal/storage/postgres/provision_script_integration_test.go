@@ -184,3 +184,72 @@ func assertFullRuntimePostureHolds(t *testing.T, ctx context.Context, admin *pgx
 		t.Fatalf("coordinator role posture check failed: %v (gaps: %v)", err, gaps)
 	}
 }
+
+// TestQueuePostureMatchesTheGrantsItIsPairedWith is queuePosture's
+// counterpart to TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith /
+// TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes: it proves
+// queuePosture() (added for CHAOS-4261 so the admin-only executed-proof
+// gate in cmd/dev-health-worker-migrate can name a queue gap via
+// DiagnoseRolePosture) agrees with what go-river-migrate's real
+// runtimeGrantStatements actually grants the queue role, through the real
+// production grant path (ApplyPinnedMigrations via startGrantHarness), not
+// a hand-rederivation of the same list. Zero gaps here is the whole claim:
+// a table added to queuePosture without a matching GRANT in migrate.go, or
+// granted there without a matching entry here, fails this test.
+func TestQueuePostureMatchesTheGrantsItIsPairedWith(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	admin, _ := startGrantHarness(t, ctx)
+
+	gaps, err := DiagnoseRolePosture(ctx, admin, grantQueueRole, QueuePosture())
+	if err != nil {
+		t.Fatalf("DiagnoseRolePosture: %v", err)
+	}
+	if len(gaps) != 0 {
+		t.Fatalf("queuePosture() disagrees with the real queue grants: %v", gaps)
+	}
+}
+
+// TestExecutedProofCatchesAMissingCoordinatorSequenceGrant is the direct
+// regression test for the codex round-1 finding on CHAOS-4261's executed-
+// proof gate: DiagnoseRolePosture used to check only RequiredTables and
+// ColumnScoped, never RolePosture.RequiredSequences, so a coordinator role
+// missing USAGE on worker_operator_audits_id_seq -- with every table and
+// column requirement otherwise satisfied -- reported zero gaps here while
+// CheckCoordinatorAuthorization (the real, current_user-bound readiness
+// check every coordinator-role process gates on at startup) still failed.
+// posture_diagnostics.go's diagnoseSequencePosture closes that gap; this
+// proves it actually fires.
+func TestExecutedProofCatchesAMissingCoordinatorSequenceGrant(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	admin, uri := startGrantHarness(t, ctx)
+	assertFullRuntimePostureHolds(t, ctx, admin, uri)
+
+	if _, err := admin.Exec(
+		ctx, "REVOKE USAGE ON SEQUENCE public.worker_operator_audits_id_seq FROM "+grantCoordinatorRole,
+	); err != nil {
+		t.Fatalf("revoke sequence usage: %v", err)
+	}
+
+	gaps, err := DiagnoseRolePosture(ctx, admin, grantCoordinatorRole, coordinatorPosture())
+	if err != nil {
+		t.Fatalf("DiagnoseRolePosture: %v", err)
+	}
+	found := false
+	for _, gap := range gaps {
+		if gap.TableName == "worker_operator_audits_id_seq" && len(gap.Missing) == 1 && gap.Missing[0] == "USAGE" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("DiagnoseRolePosture did not report the revoked sequence grant as a gap: %v", gaps)
+	}
+
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+		t.Fatal("CheckCoordinatorAuthorization must fail once the sequence grant is revoked")
+	}
+}

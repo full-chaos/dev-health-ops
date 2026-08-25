@@ -502,10 +502,16 @@ def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
         assert f'GRANT USAGE ON SCHEMA public TO :"{role}"' in upgrade_script
         assert f'REVOKE CREATE ON SCHEMA public FROM :"{role}"' in upgrade_script
     # The whole class of statement this ticket removed must never come back,
-    # not just the specific tables it used to name.
-    assert "REVOKE ALL" not in upgrade_script
+    # not just the specific tables it used to name. Strip `--` line comments
+    # first: this docstring and the script's own explanatory comments both
+    # say "REVOKE ALL" in prose (describing what the OLD script did), and a
+    # raw substring check would flag its own documentation.
+    code_only = "\n".join(
+        line.split("--", 1)[0] for line in upgrade_script.splitlines()
+    )
+    assert "REVOKE ALL" not in code_only
     assert (
-        re.search(r"GRANT\s+(SELECT|INSERT|UPDATE|DELETE)[^;]*ON TABLE", upgrade_script)
+        re.search(r"GRANT\s+(SELECT|INSERT|UPDATE|DELETE)[^;]*ON TABLE", code_only)
         is None
     ), (
         "provision_river_roles.sql grants a table-level privilege again -- "
@@ -513,12 +519,70 @@ def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
         "defect. Per-table/sequence grants belong solely in "
         "internal/storage/river/migrate.go, applied by go-river-migrate."
     )
-    assert (
-        re.search(
-            r"GRANT\s+(SELECT|INSERT|UPDATE|DELETE)[^;]*ON SEQUENCE", upgrade_script
+    # Any privilege, not just SELECT/INSERT/UPDATE/DELETE: coordinatorGrantStatements'
+    # OWN sequence grant in migrate.go is `GRANT USAGE ON SEQUENCE ...`, which a
+    # verb-restricted regex here would silently miss if it ever leaked into this
+    # bootstrap-only script.
+    assert re.search(r"GRANT\s+\S[^;]*ON SEQUENCE", code_only) is None
+
+
+def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -> None:
+    """CHAOS-4261: `docker/init-extra-dbs.sh` has the same REVOKE-ALL-then-
+    whitelist shape `provision_river_roles.sql` used to and was deliberately
+    left untouched by this ticket -- it is not implicated in the prod
+    incident (Postgres's own `docker-entrypoint-initdb.d` mechanism only
+    ever runs it once, against a brand-new, empty data volume, and the local
+    `go-river-migrate` step that follows always restores the full posture
+    the same run) and is out of this ticket's stated scope.
+
+    That safety argument depends entirely on nothing else ever being able to
+    invoke it. Assert the precondition directly rather than trusting the
+    argument to stay true: the script must be mounted by exactly one
+    service (`postgres` in the legacy root `compose.yml`, into
+    `/docker-entrypoint-initdb.d/`) and never referenced by any other
+    compose file in this repository -- if a future change wires it into
+    `compose.production.yml`, the go-workers overlay, or the swarm stack,
+    this fails loudly instead of quietly recreating CHAOS-4261 for a second
+    script.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    mounting_services = [
+        name
+        for name, service in services.items()
+        if any(
+            "init-extra-dbs.sh" in str(volume)
+            for volume in service.get("volumes") or []
         )
-        is None
+    ]
+    assert mounting_services == ["postgres"], (
+        f"init-extra-dbs.sh must be mounted by exactly the postgres service, "
+        f"found: {mounting_services}"
     )
+    postgres_volumes = [
+        str(volume) for volume in services["postgres"].get("volumes") or []
+    ]
+    assert any(
+        "init-extra-dbs.sh:/docker-entrypoint-initdb.d/" in volume
+        for volume in postgres_volumes
+    ), (
+        "init-extra-dbs.sh must be mounted into /docker-entrypoint-initdb.d/ (initdb-only, never re-run against an existing volume)"
+    )
+
+    # A comment cross-referencing the filename (deploy/go-workers/
+    # compose-go-workers.yml does this, explaining why go-river-provision
+    # exists at all) is documentation, not a reachability path -- check each
+    # service's actual volumes/entrypoint/command fields, the only places a
+    # compose file can make Postgres execute a script, not the raw file text.
+    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _GO_WORKER_OVERLAY):
+        other_services = _load_yaml(other_compose).get("services") or {}
+        for name, service in other_services.items():
+            for field in ("volumes", "entrypoint", "command"):
+                assert "init-extra-dbs.sh" not in str(service.get(field) or ""), (
+                    f"{other_compose.name} service {name!r} references "
+                    f"init-extra-dbs.sh in its {field!r} -- it is a local-"
+                    "Postgres-container-init-only script and must never be "
+                    "reachable outside the postgres service's own initdb mount"
+                )
 
 
 def _assert_least_privilege_domain_grants(domain_script: str) -> None:

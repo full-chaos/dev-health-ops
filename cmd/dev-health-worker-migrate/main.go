@@ -142,6 +142,30 @@ func execute(
 		fmt.Fprintln(stderr, "migration failed: River schema or privilege policy was not applied")
 		return 1
 	}
+
+	// CHAOS-4261: ApplyPinnedMigrations returning nil proves the GRANT
+	// statements it issued succeeded, not that the live database now holds
+	// the full declared posture -- every domain/coordinator/queue GRANT is
+	// guarded by to_regclass and silently no-ops on a table that does not
+	// exist yet (a database behind on Alembic head; see
+	// deploy/go-workers/README.md). This executed-proof gate re-derives the
+	// real posture against the database that was just migrated and fails
+	// the command loudly, naming the missing (table, privilege) pairs,
+	// instead of reporting success on a partially-applied grant set the
+	// way the prod incident's `go-river-provision` REVOKE ALL once did
+	// silently.
+	postureResult := checkExecutedGrantPosture(ctx, pool, domainRole, queueRole, coordinatorRole, logger)
+	writePostureTelemetry(stdout, postureResult)
+	if !postureResult.OK {
+		fmt.Fprintln(
+			stderr,
+			"migration failed: executed grant posture check found missing privileges "+
+				"after go-river-migrate; see the preceding structured log lines for the "+
+				"affected role(s) and table(s)",
+		)
+		return 1
+	}
+
 	fmt.Fprintf(
 		stdout,
 		"River %s schema current at pinned version %d (%d applied)\n",

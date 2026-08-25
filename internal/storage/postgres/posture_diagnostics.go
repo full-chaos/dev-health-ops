@@ -92,10 +92,35 @@ FROM resolved
 ORDER BY table_name, column_name, privilege
 `
 
+// diagnoseSequencePostureQuery is diagnoseTablePostureQuery's sequence-scoped
+// counterpart. Every RolePosture.RequiredSequences entry this repository
+// declares is granted USAGE only (coordinatorGrantStatements'
+// `GRANT USAGE ON SEQUENCE ...`), matching rolePostureQuery's own
+// satisfaction predicate (`NOT has_sequence_privilege(current_user, oid,
+// 'USAGE')` is what makes a sequence requirement unmet) -- so USAGE is the
+// only privilege this diagnostic checks.
+const diagnoseSequencePostureQuery = `
+WITH required(sequence_name) AS (
+	SELECT * FROM unnest($2::text[])
+), resolved AS (
+	SELECT
+		required.sequence_name,
+		to_regclass('public.' || required.sequence_name) AS relation
+	FROM required
+)
+SELECT
+	sequence_name,
+	relation IS NULL AS sequence_missing,
+	relation IS NOT NULL AND NOT has_sequence_privilege($1, relation, 'USAGE') AS missing
+FROM resolved
+ORDER BY sequence_name
+`
+
 // DiagnoseRolePosture re-checks a RolePosture's requirements individually
-// and returns the subset the connected login does not currently satisfy. It
-// is deliberately NOT part of CheckRolePosture's hot readiness path: it
-// issues two additional queries re-deriving what CheckRolePosture's single
+// (tables, column-scoped privileges, AND required sequences) and returns
+// the subset the connected login does not currently satisfy. It is
+// deliberately NOT part of CheckRolePosture's hot readiness path: it
+// issues additional queries re-deriving what CheckRolePosture's single
 // hardened boolean already computed, at higher cost and with a smaller
 // trusted surface, so callers should use it only after CheckRolePosture has
 // already reported failure -- purely to explain why, in a form safe to log.
@@ -136,6 +161,14 @@ func DiagnoseRolePosture(
 			return nil, err
 		}
 		gaps = append(gaps, columnGaps...)
+	}
+
+	if len(posture.RequiredSequences) > 0 {
+		sequenceGaps, err := diagnoseSequencePosture(ctx, pool, expectedRole, posture.RequiredSequences)
+		if err != nil {
+			return nil, err
+		}
+		gaps = append(gaps, sequenceGaps...)
 	}
 
 	return gaps, nil
@@ -195,6 +228,51 @@ func diagnoseTablePosture(
 		}
 		if len(missing) > 0 {
 			gaps = append(gaps, PostureGap{TableName: tableName, Missing: missing})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return gaps, nil
+}
+
+// diagnoseSequencePosture re-derives, per required sequence, whether it
+// exists and whether the given role currently holds USAGE on it. Added for
+// CHAOS-4261: the executed-proof gate in cmd/dev-health-worker-migrate
+// (checkExecutedGrantPosture) called DiagnoseRolePosture expecting it to
+// prove the FULL declared posture, but RequiredSequences (coordinatorPosture's
+// worker_operator_audits_id_seq) was silently never checked -- a database
+// missing that sequence's grant, with every table and column requirement
+// otherwise satisfied, reported zero gaps here while
+// CheckCoordinatorAuthorization (the real, current_user-bound readiness
+// check every coordinator-role process gates on at startup) still failed.
+func diagnoseSequencePosture(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	expectedRole string,
+	sequences []string,
+) ([]PostureGap, error) {
+	rows, err := pool.Query(ctx, diagnoseSequencePostureQuery, expectedRole, sequences)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+
+	var gaps []PostureGap
+	for rows.Next() {
+		var (
+			sequenceName             string
+			sequenceMissing, missing bool
+		)
+		if err := rows.Scan(&sequenceName, &sequenceMissing, &missing); err != nil {
+			return nil, ErrUnavailable
+		}
+		if sequenceMissing {
+			gaps = append(gaps, PostureGap{TableName: sequenceName, TableMissing: true})
+			continue
+		}
+		if missing {
+			gaps = append(gaps, PostureGap{TableName: sequenceName, Missing: []string{"USAGE"}})
 		}
 	}
 	if err := rows.Err(); err != nil {

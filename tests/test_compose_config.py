@@ -457,6 +457,27 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         ]
     )
 
+
+def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
+    """CHAOS-4261: this script must be role-creation-and-connectivity
+    bootstrap only. Every prior version carried its own hand-maintained
+    per-table GRANT whitelist behind a REVOKE ALL, which drifted behind
+    postgres.domainPosture()/coordinatorPosture() as tables were added over
+    time -- and because it ran on every `docker compose run go-workerctl` (or
+    any other service depending on go-river-provision without
+    go-river-migrate), each drift silently wiped a production role back down
+    to the stale subset. The single authority for every per-table/sequence
+    privilege on all three runtime roles is now
+    internal/storage/river/migrate.go's runtimeGrantStatements /
+    coordinatorGrantStatements, applied only by go-river-migrate.
+
+    This is a completeness test, not a narrow-set enshrinement: whatever this
+    script DOES grant must be a subset of nothing wider than schema-level
+    bootstrap, because the moment it grants a single table-level privilege
+    again, it is back to being a second copy of the manifest that can drift
+    from the Go source of truth. Assert the absence of the whole class of
+    statement, not a specific table list.
+    """
     upgrade_script = (
         _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql"
     ).read_text(encoding="utf-8")
@@ -472,71 +493,106 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role",'
         ' :"queue_role", :"coordinator_role";' in upgrade_script
     )
-    # The coordinator login is provisioned here for deployed environments the
-    # same way init-extra-dbs.sh does it for local dev, and likewise receives no
-    # per-table grants -- the pinned River migration owns those.
-    for coordinator_fragment in (
-        ":'coordinator_role',",
-        'GRANT CONNECT ON DATABASE :"app_database" TO :"coordinator_role";',
-        'GRANT USAGE ON SCHEMA public TO :"coordinator_role";',
-        'REVOKE CREATE ON SCHEMA public FROM :"coordinator_role";',
-    ):
-        assert coordinator_fragment in upgrade_script
-    for grant in (
-        "GRANT USAGE ON SCHEMA public",
-        "REVOKE CREATE ON SCHEMA public FROM",
-        "public.alembic_version",
-        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
-        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
-        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
-        "GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments",
-        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
-    ):
-        assert grant in upgrade_script
-    assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" not in upgrade_script
-    assert (
-        'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, :"domain_role", :"queue_role";'
-        in upgrade_script
+    # Bootstrap connectivity for all three roles -- login + CONNECT + schema
+    # USAGE, and nothing that touches a table or a sequence.
+    for role in ("domain_role", "queue_role", "coordinator_role"):
+        assert (
+            f'GRANT CONNECT ON DATABASE :"app_database" TO :"{role}"' in upgrade_script
+        )
+        assert f'GRANT USAGE ON SCHEMA public TO :"{role}"' in upgrade_script
+        assert f'REVOKE CREATE ON SCHEMA public FROM :"{role}"' in upgrade_script
+    # The whole class of statement this ticket removed must never come back,
+    # not just the specific tables it used to name. Strip `--` line comments
+    # first: this docstring and the script's own explanatory comments both
+    # say "REVOKE ALL" in prose (describing what the OLD script did), and a
+    # raw substring check would flag its own documentation.
+    #
+    # `line.split("--", 1)` is not quote-aware: a `--` inside a single-quoted
+    # SQL string literal would truncate that line early and hide whatever
+    # follows from the checks below. This script's only string literals are
+    # role names and passwords passed in as psql variables, none of which
+    # contain `--` today, so this is a latent gap in the guard rather than a
+    # live false negative -- flagged by codex round 2 on CHAOS-4261's PR. A
+    # full quote-aware tokenizer was judged disproportionate for a ~100-line
+    # bootstrap script; if this script ever grows a literal containing `--`,
+    # this comment is the signal to revisit that judgment.
+    code_only = "\n".join(
+        line.split("--", 1)[0] for line in upgrade_script.splitlines()
     )
-    assert (
-        "GRANT INSERT ON TABLE public.worker_job_completion_fences"
-        not in upgrade_script
+    assert "REVOKE ALL" not in code_only
+    # Any privilege, not just SELECT/INSERT/UPDATE/DELETE: REFERENCES,
+    # TRIGGER, MAINTAIN, and ALL PRIVILEGES are all real, grantable
+    # table-level privileges a narrower verb list would silently miss.
+    assert re.search(r"GRANT\s+\S[^;]*ON TABLE", code_only) is None, (
+        "provision_river_roles.sql grants a table-level privilege again -- "
+        "this makes it a grant authority, which is exactly the CHAOS-4261 "
+        "defect. Per-table/sequence grants belong solely in "
+        "internal/storage/river/migrate.go, applied by go-river-migrate."
     )
-    queue_section = upgrade_script.split("-- The queue role", maxsplit=1)[1]
-    assert "GRANT SELECT ON TABLE public.sync_runs TO %I" in queue_section
-    assert "GRANT SELECT ON TABLE public.sync_run_units TO %I" in queue_section
-    assert "GRANT SELECT, UPDATE ON TABLE public.sync_runs" not in queue_section
-    assert "GRANT SELECT, INSERT ON TABLE public.sync_runs" not in queue_section
-    assert "GRANT SELECT, UPDATE ON TABLE public.sync_run_units" not in queue_section
-    assert "GRANT SELECT, INSERT ON TABLE public.sync_run_units" not in queue_section
-    # CHAOS-3997 security posture change. The stranded-delivery repair reads
-    # these three domain tables through the queue role, exactly as terminal
-    # delivery repair reads sync_runs/sync_run_units above. Assert the exact
-    # set rather than membership: a table added to the VALUES block without a
-    # matching entry in queueAuthorizationQuery fails queue-control readiness
-    # for every queue path, so the two must not be able to drift apart here.
-    assert _tables_for_formatted_grant(
-        queue_section, "GRANT SELECT ON TABLE public.%I TO %I"
-    ) == {
-        "daily_metrics_runs",
-        "daily_metrics_partitions",
-        "work_graph_execution_requests",
-    }, "queue-role read-only grant block covers the wrong tables"
-    # SELECT and nothing more. The repair mutates the outbox and the River
-    # schema; it never writes a domain row, and cannot even lock one.
-    for _table in (
-        "daily_metrics_runs",
-        "daily_metrics_partitions",
-        "work_graph_execution_requests",
-    ):
-        for _forbidden in ("UPDATE", "INSERT", "DELETE"):
-            assert (
-                f"GRANT SELECT, {_forbidden} ON TABLE public.{_table}"
-                not in queue_section
-            )
-    _assert_least_privilege_domain_grants(
-        upgrade_script.split("-- The queue role", maxsplit=1)[0]
+    # Same reasoning for sequences: coordinatorGrantStatements' OWN sequence
+    # grant in migrate.go is `GRANT USAGE ON SEQUENCE ...`, which a
+    # verb-restricted regex here would silently miss if it ever leaked into
+    # this bootstrap-only script.
+    assert re.search(r"GRANT\s+\S[^;]*ON SEQUENCE", code_only) is None
+
+
+def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -> None:
+    """CHAOS-4261: `docker/init-extra-dbs.sh` has the same REVOKE-ALL-then-
+    whitelist shape `provision_river_roles.sql` used to and was deliberately
+    left untouched by this ticket -- it is not implicated in the prod
+    incident (Postgres's own `docker-entrypoint-initdb.d` mechanism only
+    ever runs it once, against a brand-new, empty data volume, and the local
+    `go-river-migrate` step that follows always restores the full posture
+    the same run) and is out of this ticket's stated scope.
+
+    That safety argument depends entirely on nothing else ever being able to
+    invoke it. Assert the precondition directly rather than trusting the
+    argument to stay true: the script must be mounted by exactly one
+    service (`postgres` in the legacy root `compose.yml`, into
+    `/docker-entrypoint-initdb.d/`) and never referenced by any other
+    compose file in this repository -- if a future change wires it into
+    `compose.production.yml`, the go-workers overlay, or the swarm stack,
+    this fails loudly instead of quietly recreating CHAOS-4261 for a second
+    script.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    mounting_services = [
+        name
+        for name, service in services.items()
+        if any(
+            "init-extra-dbs.sh" in str(volume)
+            for volume in service.get("volumes") or []
+        )
+    ]
+    assert mounting_services == ["postgres"], (
+        f"init-extra-dbs.sh must be mounted by exactly the postgres service, "
+        f"found: {mounting_services}"
     )
+    postgres_volumes = [
+        str(volume) for volume in services["postgres"].get("volumes") or []
+    ]
+    assert any(
+        "init-extra-dbs.sh:/docker-entrypoint-initdb.d/" in volume
+        for volume in postgres_volumes
+    ), (
+        "init-extra-dbs.sh must be mounted into /docker-entrypoint-initdb.d/ (initdb-only, never re-run against an existing volume)"
+    )
+
+    # A comment cross-referencing the filename (deploy/go-workers/
+    # compose-go-workers.yml does this, explaining why go-river-provision
+    # exists at all) is documentation, not a reachability path -- check each
+    # service's actual volumes/entrypoint/command fields, the only places a
+    # compose file can make Postgres execute a script, not the raw file text.
+    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _GO_WORKER_OVERLAY):
+        other_services = _load_yaml(other_compose).get("services") or {}
+        for name, service in other_services.items():
+            for field in ("volumes", "entrypoint", "command"):
+                assert "init-extra-dbs.sh" not in str(service.get(field) or ""), (
+                    f"{other_compose.name} service {name!r} references "
+                    f"init-extra-dbs.sh in its {field!r} -- it is a local-"
+                    "Postgres-container-init-only script and must never be "
+                    "reachable outside the postgres service's own initdb mount"
+                )
 
 
 def _assert_least_privilege_domain_grants(domain_script: str) -> None:
@@ -626,14 +682,13 @@ def _tables_for_delete_grants(domain_script: str) -> set[str]:
     return granted
 
 
-# The two provisioning scripts mark the end of the domain section differently.
-# Slicing both on "-- The queue role" silently returned the WHOLE of
-# init-extra-dbs.sh, which has no such marker -- so assertions meant for the
-# domain role were reading the queue role's grants too, and the negative test
-# below passed by raising for the wrong reason.
+# init-extra-dbs.sh (local dev bootstrap) is the only provisioning script
+# left with a per-table domain-section grant block to slice out this way.
+# CHAOS-4261 removed that block from provision_river_roles.sql entirely (see
+# test_provision_river_roles_sql_is_not_a_grant_authority) -- it is no longer
+# a grant authority at all, so there is no domain section left to test here.
 _DOMAIN_SECTION_MARKERS = {
     "init-extra-dbs.sh": 'GRANT USAGE ON SCHEMA public TO :"queue_role";',
-    "provision_river_roles.sql": "-- The queue role",
 }
 
 
@@ -661,10 +716,7 @@ def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:
 
 @pytest.mark.parametrize(
     "script_path",
-    (
-        _REPO_ROOT / "docker" / "init-extra-dbs.sh",
-        _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql",
-    ),
+    (_REPO_ROOT / "docker" / "init-extra-dbs.sh",),
 )
 def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
     script_path: Path,

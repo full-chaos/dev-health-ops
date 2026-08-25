@@ -952,6 +952,49 @@ func coordinatorPosture() RolePosture {
 	}
 }
 
+// queuePosture is the queue-control runtime role's declared manifest,
+// matching exactly the GRANT statements internal/storage/river/migrate.go's
+// runtimeGrantStatements issues for the queue role. Unlike domainPosture and
+// coordinatorPosture, this is NOT what queueAuthorizationQuery
+// (queue_authorization.go) asserts at readiness -- that query remains its
+// own hand-written, current_user-bound boolean, unchanged by this addition.
+// This declaration exists solely so an admin connection (one that is not,
+// and cannot be, authenticated as the queue role -- see
+// cmd/dev-health-worker-migrate/posture_gate.go) can still name a missing
+// (table, privilege) pair via DiagnoseRolePosture, the same way domain and
+// coordinator gaps are named. CHAOS-4261 added this after a coarse
+// nonzero-grant-count check let a single stray or leftover grant read as
+// "queue posture complete" even with most of the real required tables
+// missing.
+//
+// Every entry here also appears in queueAuthorizationQuery's exclusion list
+// (that query treats any OTHER public relation as forbidden for this role),
+// so the two cannot drift into a "granted but not required" state without
+// TestQueuePostureMatchesTheGrantsItIsPairedWith noticing.
+func queuePosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"worker_job_outbox", false, true, true},
+			{"worker_job_delivery_abandonments", true, false, false},
+			{"worker_job_completion_fences", false, true, true},
+			{"sync_dispatch_outbox", false, true, false},
+			{"sync_dispatch_transport_routes", false, false, false},
+			{"sync_runs", false, false, false},
+			{"sync_run_units", false, false, false},
+			{"daily_metrics_runs", false, false, false},
+			{"daily_metrics_partitions", false, false, false},
+			{"work_graph_execution_requests", false, false, false},
+		},
+	}
+}
+
+// QueuePosture exposes queuePosture for callers outside this package (the
+// executed-proof posture gate in cmd/dev-health-worker-migrate), the same
+// way DomainPosture/CoordinatorPosture do.
+func QueuePosture() RolePosture {
+	return queuePosture()
+}
+
 // CoordinatorPosture exposes the coordinator role's declared manifest so that
 // the one-shot migration command can derive the coordinator's GRANT statements
 // from the SAME declaration CheckCoordinatorAuthorization asserts against.

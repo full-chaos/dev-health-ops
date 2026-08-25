@@ -16,12 +16,16 @@ import (
 // arbitrary semantic tables, or insert producer-owned outbox rows. Every
 // predicate operates on effective privileges.
 //
-// This declaration and the grants in scripts/worker/provision_river_roles.sql
-// are two halves of one change. This query proves the role holds EXACTLY the
-// declared posture and no more, so a table added here without the grant, or
-// granted without being added here, fails queue-control readiness for every
-// queue path -- the relay and the sync dispatch transition, not only the
-// repair that motivated the widening.
+// This declaration and the queue-role grants in
+// internal/storage/river/migrate.go (runtimeGrantStatements, applied by
+// go-river-migrate) are two halves of one change -- CHAOS-4261 removed
+// scripts/worker/provision_river_roles.sql from this relationship entirely,
+// since a second hand-maintained grant list there was exactly what let the
+// two drift apart in production. This query proves the role holds EXACTLY
+// the declared posture and no more, so a table added here without the
+// grant, or granted without being added here, fails queue-control readiness
+// for every queue path -- the relay and the sync dispatch transition, not
+// only the repair that motivated the widening.
 const queueAuthorizationQuery = `
 WITH river_tables AS (
 	SELECT class.oid

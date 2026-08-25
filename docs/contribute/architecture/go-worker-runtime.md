@@ -854,36 +854,43 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
 
-### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: no pathway change (CHAOS-4243)
+### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: deliberately dormant, no pathway change (CHAOS-4243)
 
-Both kinds were registered handlers (`cmd/dev-health-worker/daily.go`) with
+Both kinds are registered handlers (`cmd/dev-health-worker/daily.go`) with
 zero producer anywhere — the fixed-schedule fanout (`internal/scheduler/fixed
 /producers.go`'s `RemainingMetricsFanoutProducer.byScheduleID`) and the
 post-sync scope switch (`cmd/dev-health-worker/sync_dispatch.go`'s
-`postSyncRemainingScope`) both skipped them, so no partition was ever
-enqueued in either environment. CHAOS-4243 adds two Native fixed-schedule
-entries, `extra_metrics_daily_fanout` (01:45 UTC) and
-`team_metrics_daily_fanout` (02:15 UTC), in
-[`internal/scheduler/fixed/inventory.go`](../../../internal/scheduler/fixed/inventory.go).
+`postSyncRemainingScope`) both skip them, so no partition has ever been
+enqueued in either environment.
 
-This is not a new pathway and has no diagram of its own to update: both
-schedules bind into the SAME `RemainingMetricsFanoutProducer` →
-`remaining.PostgresStore.StartRunTx` → durable partition →
-`HTTPCompatibilityExecutor` bridge mechanism that
+CHAOS-4243 investigated wiring a fixed-schedule entry for each (matching
 `complexity_daily_fanout`/`release_impact_daily_fanout`/
-`recommendations_daily_fanout`/`membership_backfill_daily_fanout` already run
-through — same producer type, same store, same compatibility executor, only
-the `family`/`Scope` binding and cadence differ. No section of this document
-diagrams that fixed-schedule → fanout-producer → compatibility-bridge
-mechanism at any granularity finer than the queue-map table above, so there
-is no existing diagram to extend.
+`recommendations_daily_fanout`/`membership_backfill_daily_fanout`'s pattern)
+and DELIBERATELY DID NOT: `daily_metrics_fanout`'s existing Python
+compatibility bridge (`daily.HTTPCompatibilityExecutor` →
+`/internal/worker/daily-metrics/v1/execute` → `_run_daily_direct` →
+`run_daily_metrics_job`,
+`ops/src/dev_health_ops/metrics/job_daily.py:729-1446`) already computes and
+writes every table both families target — `compute_team_wellbeing_metrics_daily`
+(team_metrics_daily), `_write_compounding_risk_for_day` (compounding_risk_daily),
+`compute_release_confidence`/`quality_drag`/`pipeline_stability`, and
+`run_benchmarking_for_day` (benchmarking_rollups) unconditionally on every
+partition call, plus `compute_ic_metrics_daily`/`compute_ic_landscape_rolling`
+on the paired finalize call. Wiring `metrics.remaining.extra_metrics`/
+`team_metrics` — whose own handlers call the SAME `run_daily_metrics_job` a
+second time (`worker_metrics.py`'s `_run_extra_metrics`/`_run_team_metrics`)
+— would double-compute and double-write against the same ClickHouse tables
+every night rather than close a coverage gap. Full line-by-line citation:
+the comment block in `internal/scheduler/fixed/inventory.go` immediately
+above `recommendations_daily_fanout`.
 
-Neither schedule is wired into `postSyncRemainingScope`: unlike
-`complexity`/`dora`/`membership_backfill`, which the legacy Python dispatcher
-also triggered on a post-sync event, `extra_metrics` and `team_metrics` were
-computed inline inside `job_daily.py`'s per-org daily batch with no
-independent Celery Beat entry and no post-sync trigger of their own (see the
-schedule declaration comments in `inventory.go` for the source citation).
+This means there is no new pathway to diagram: nothing changed in how
+`daily_metrics_fanout` reaches those tables. The two `metrics.remaining.*`
+kinds remain registered (removing the handler/registry entries outright is a
+larger, separate change this ticket did not make) but stay intentionally
+unreachable, guarded by
+`TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer` in
+`internal/scheduler/fixed/producers_test.go`.
 
 ## The native sync-dispatch coordinator pathway
 

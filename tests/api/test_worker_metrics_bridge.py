@@ -322,6 +322,115 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
     assert effects == ["append-output"]
 
 
+def test_evidence_row_count_extracts_only_mapped_families() -> None:
+    assert (
+        worker_metrics._evidence_row_count(
+            "release_impact", {"family": "release_impact", "records_written": 3}
+        )
+        == 3
+    )
+    # An explicit 0 is a real count, not "not applicable" -- must round-trip.
+    assert (
+        worker_metrics._evidence_row_count(
+            "release_impact", {"family": "release_impact", "records_written": 0}
+        )
+        == 0
+    )
+    # complexity's evidence carries no row count (exit_code is a status, not
+    # a count) -- must be nil, never coerced.
+    assert (
+        worker_metrics._evidence_row_count(
+            "complexity", {"family": "complexity", "exit_code": 0}
+        )
+        is None
+    )
+    # A bool would satisfy isinstance(x, int) in Python; must be excluded.
+    assert (
+        worker_metrics._evidence_row_count(
+            "release_impact", {"family": "release_impact", "records_written": True}
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_surfaces_rows_written_for_a_zero_row_release_impact_completion() -> (
+    None
+):
+    """CHAOS-4243: before this, /remaining-metrics/v1/execute's response body
+    carried only status/execution_id, so the Go compatibility bridge could
+    never distinguish a real write from a reported zero -- the response
+    itself never transported the count. This proves the HTTP contract
+    actually carries rows_written=0 through to the caller, not just the
+    durable output_evidence.
+    """
+    execution = _execution(family="release_impact")
+
+    async def zero_row_effect(
+        _connection: object, _current: worker_metrics._Execution
+    ) -> dict[str, Any]:
+        return {"family": "release_impact", "records_written": 0}
+
+    with (
+        patch.object(
+            worker_metrics, "_reserve_execution", new=AsyncMock(return_value="execute")
+        ),
+        patch.object(
+            worker_metrics,
+            "_run_until_client_disconnect",
+            new=AsyncMock(side_effect=zero_row_effect),
+        ),
+        patch.object(worker_metrics, "_mark_succeeded", new_callable=AsyncMock),
+    ):
+        response = await worker_metrics._execute(
+            cast(AsyncSession, object()), execution, cast(Any, object())
+        )
+    assert response["status"] == "success"
+    assert response["rows_written"] == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_omits_rows_written_for_the_daily_worker_kind() -> None:
+    """The rows_written extension is scoped to worker_kind == "remaining":
+    the daily bridge's own response contract is untouched."""
+    from datetime import date
+
+    daily_execution = worker_metrics._Execution(
+        id=uuid.uuid4(),
+        worker_kind="daily",
+        operation="partition",
+        run_id=RUN_ID,
+        partition_id=PARTITION_ID,
+        organization_id="55555555-5555-4555-8555-555555555555",
+        family="daily",
+        generation="generation-v1",
+        claim_token=CLAIM_TOKEN,
+        scope={"target_day": date(2026, 8, 24).isoformat(), "repo_ids": []},
+        scope_digest="digest",
+    )
+
+    async def daily_effect(
+        _connection: object, _current: worker_metrics._Execution
+    ) -> dict[str, Any]:
+        return {"operation": "partition", "target_day": "2026-08-24", "repo_count": 0}
+
+    with (
+        patch.object(
+            worker_metrics, "_reserve_execution", new=AsyncMock(return_value="execute")
+        ),
+        patch.object(
+            worker_metrics,
+            "_run_until_client_disconnect",
+            new=AsyncMock(side_effect=daily_effect),
+        ),
+        patch.object(worker_metrics, "_mark_succeeded", new_callable=AsyncMock),
+    ):
+        response = await worker_metrics._execute(
+            cast(AsyncSession, object()), daily_execution, cast(Any, object())
+        )
+    assert response == {"status": "success", "execution_id": str(daily_execution.id)}
+
+
 class _Result:
     def __init__(self, *, scalar: Any = None, row: dict[str, Any] | None = None):
         self._scalar = scalar

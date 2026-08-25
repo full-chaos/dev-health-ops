@@ -90,68 +90,41 @@ func checkedInSchedules() []Schedule {
 			Rationale: "CHAOS-2381 release_impact_daily materialization. Ordered after the " +
 				"01:00 daily metrics dispatch so joined deployments exist.",
 		},
-		{
-			ID: "extra_metrics_daily_fanout",
-			// CHAOS-4243: no legacy Celery Beat entry ever existed for this
-			// family -- grepped the full beat_schedule at caca3371c^ (19
-			// entries) and none names compounding-risk/testops-risk/
-			// benchmarking. Python computed all three inline inside
-			// job_daily.py's per-org daily batch (run_daily_metrics_batch,
-			// lines ~1371-1444), chained off the SAME run-daily-metrics
-			// 01:00 Beat dispatch that daily_metrics_fanout replaces, and
-			// was never post-sync-triggered (post_sync_dispatch.py at
-			// caca3371c^ has zero references to any of these computes).
-			// Native, like daily_metrics_fanout itself, for the same reason:
-			// there is no single legacy Beat row to bind a bidirectional
-			// LegacyBeatInventory entry to.
-			Native:           true,
-			Cadence:          DailyAt(1, 45),
-			Timezone:         inventoryTimezone,
-			CatchUp:          CatchUpBounded,
-			UniquenessWindow: 25 * time.Hour,
-			TargetKind:       jobcontract.KindRemainingExtraMetrics,
-			ProducerID:       ProducerRemainingMetricsFanout,
-			MaxAttempts:      3,
-			AlertThreshold:   25 * time.Hour,
-			Rationale: "CHAOS-4243: compounding_risk_daily/testops_release_confidence/" +
-				"testops_quality_drag/testops_pipeline_stability/testops_benchmark_insights " +
-				"had zero producer after the cutover (registered handler, never enqueued). " +
-				"Scheduled after release_impact_daily_fanout (01:30) because compounding-risk " +
-				"reads repo_metrics_daily + repo_complexity_daily, which the 01:00/00:45 " +
-				"fanouts must have already materialized for the day.",
-		},
-		{
-			ID: "team_metrics_daily_fanout",
-			// CHAOS-4243: same absence as extra_metrics_daily_fanout above --
-			// no legacy Beat entry, computed inline in the same job_daily.py
-			// per-org batch (team wellbeing ~line 1057, ic landscape/user
-			// metrics finalize ~line 1437), never post-sync-triggered.
-			// Native for the same reason: no single Beat row to bind to.
-			//
-			// This family's tables (team_metrics_daily, user_metrics_daily,
-			// ic_landscape_rolling_30d) read fresh locally despite zero
-			// metrics.remaining.team_metrics runs ever -- but `rg` across the
-			// whole Go tree finds NO code writing any of the three tables
-			// (families.json marks team_wellbeing "next_core" and ic_finalize
-			// "pending" in internal/jobs/metrics/daily, neither has a Go
-			// implementation). The local freshness is almost certainly
-			// dev-hops fixture-seeded data, not live compute proof, so this
-			// family is wired for real rather than treated as a safe-to-skip
-			// duplicate of core coverage that does not exist yet.
-			Native:           true,
-			Cadence:          DailyAt(2, 15),
-			Timezone:         inventoryTimezone,
-			CatchUp:          CatchUpBounded,
-			UniquenessWindow: 25 * time.Hour,
-			TargetKind:       jobcontract.KindRemainingTeamMetrics,
-			ProducerID:       ProducerRemainingMetricsFanout,
-			MaxAttempts:      3,
-			AlertThreshold:   25 * time.Hour,
-			Rationale: "CHAOS-4243: team_metrics_daily/user_metrics_daily/ic_landscape_rolling_30d " +
-				"had zero producer after the cutover (registered handler, never enqueued). " +
-				"Scheduled after recommendations_daily_fanout (02:00), mirroring its own " +
-				"legacy dependency on already-persisted user_metrics/work-item user metrics.",
-		},
+		// CHAOS-4243 investigated wiring extra_metrics_daily_fanout and
+		// team_metrics_daily_fanout here (matching the *_daily_fanout pattern
+		// below) for the metrics.remaining.extra_metrics/team_metrics kinds,
+		// which are registered handlers with zero producer. DELIBERATELY NOT
+		// ADDED: daily_metrics_fanout below already performs every write
+		// these two families would perform, via its existing Python
+		// compatibility bridge (daily.HTTPCompatibilityExecutor ->
+		// /internal/worker/daily-metrics/v1/execute -> _run_daily_direct ->
+		// run_daily_metrics_job, ops/src/dev_health_ops/metrics/job_daily.py:
+		// 729-1446). That single function unconditionally computes and
+		// writes, on every partition call:
+		//   - compute_team_wellbeing_metrics_daily -> team_metrics_daily (line 1057)
+		//   - _write_compounding_risk_for_day -> compounding_risk_daily (line 1371)
+		//   - compute_release_confidence/quality_drag/pipeline_stability ->
+		//     release_confidence_daily/quality_drag_daily/pipeline_stability_daily (lines 1383-1413)
+		//   - run_benchmarking_for_day -> benchmarking_rollups (line 1419)
+		// and, on the paired finalize call (skip_finalize=False, lines 1428-1444):
+		//   - compute_ic_metrics_daily -> user_metrics_daily (ic)
+		//   - compute_ic_landscape_rolling -> ic_landscape_rolling_30d
+		// This is every table both families' families.json entries target.
+		// Wiring a second schedule that calls metrics.remaining.extra_metrics/
+		// team_metrics (whose own handlers call the SAME run_daily_metrics_job
+		// a second time, see worker_metrics.py's _run_extra_metrics/
+		// _run_team_metrics) would double-compute and double-write against the
+		// same ClickHouse tables every night, not close a coverage gap.
+		// team_metrics_daily/user_metrics_daily/ic_landscape_rolling_30d read
+		// fresh in both measured environments precisely because
+		// daily_metrics_fanout already produces them this way.
+		// testops_release_confidence/quality_drag/pipeline_stability ARE
+		// measured stale (16 days, local) despite this unconditional call --
+		// that is `if release_conf:`/`if quality_drag:`/`if pipeline_stab:`
+		// (job_daily.py:1408-1413) producing a falsy record from the input
+		// data, a compute-level gap in the ALREADY-RUNNING pathway, not a
+		// missing producer. Fixing that is a different, more invasive change
+		// than a schedule binding and is out of this ticket's scope.
 		{
 			ID: "recommendations_daily_fanout",
 			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-recommendations"

@@ -1224,11 +1224,36 @@ async def _run_until_client_disconnect(
         await asyncio.gather(process_task, disconnect_task, return_exceptions=True)
 
 
+# CHAOS-4243: the Go compatibility bridge (internal/jobs/metrics/remaining/
+# compatibility_http.go) parses an optional rows_written field so a
+# zero-row completion is never stored identically to a real write. This maps
+# each remaining-metrics family to the evidence key (see the runners in
+# _REMAINING_RUNNERS below) that carries a genuine row count. A family absent
+# here, or whose evidence value isn't a plain int, gets no rows_written key
+# at all -- "not applicable", never coerced to a false 0.
+_EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
+    "capacity": "forecast_count",
+    "release_impact": "records_written",
+    "recommendations": "fired",
+    "extra_metrics": "benchmark_records",
+}
+
+
+def _evidence_row_count(family: str, evidence: dict[str, Any]) -> int | None:
+    key = _EVIDENCE_ROW_COUNT_KEYS.get(family)
+    if key is None:
+        return None
+    value = evidence.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 async def _execute(
     session: AsyncSession,
     execution: _Execution,
     connection: Request,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     reservation = await _reserve_execution(session, execution)
     if reservation == "skipped":
         return {"status": "skipped", "execution_id": str(execution.id)}
@@ -1250,7 +1275,12 @@ async def _execute(
             },
         ) from exc
     await _mark_succeeded(session, execution, evidence)
-    return {"status": "success", "execution_id": str(execution.id)}
+    response: dict[str, Any] = {"status": "success", "execution_id": str(execution.id)}
+    if execution.worker_kind == "remaining":
+        rows_written = _evidence_row_count(execution.family, evidence)
+        if rows_written is not None:
+            response["rows_written"] = rows_written
+    return response
 
 
 @router.post("/daily-metrics/v1/execute")
@@ -1259,7 +1289,7 @@ async def execute_daily_metrics(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     connection: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     authorize_worker_bridge(authorization)
     execution = await _load_daily_execution(session, request)
     return await _execute(session, execution, connection)
@@ -1271,7 +1301,7 @@ async def execute_remaining_metrics(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     connection: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     authorize_worker_bridge(authorization)
     execution = await _load_remaining_execution(session, request)
     return await _execute(session, execution, connection)

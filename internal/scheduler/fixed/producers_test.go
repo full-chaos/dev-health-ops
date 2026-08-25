@@ -668,20 +668,31 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 // remainingBridgeFamilies is the checked-in set of metrics.remaining families
 // whose DB CHECK constraint (ck_remaining_metric_run_family, migration for
 // remaining_metric_runs) and internal/jobs/metrics/remaining/families.json
-// both declare. dora and capacity are deliberately excluded: dora has no
-// fixed-schedule fanout by design (post-sync only, CHAOS-4242 territory) and
-// capacity is already bound below -- this list exists to catch a family with
-// NO fixed-schedule producer at all, which is exactly the CHAOS-4243 gap.
+// both declare. dora is excluded: it has no fixed-schedule fanout by design
+// (post-sync only, CHAOS-4242 territory).
 var remainingBridgeFamiliesRequiringAFixedSchedule = []string{
 	"complexity", "release_impact", "recommendations", "membership_backfill",
-	"capacity", "extra_metrics", "team_metrics",
+	"capacity",
 }
 
-// TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer is the CHAOS-4243
-// red-first inventory test: extra_metrics and team_metrics are registered
-// handlers (cmd/dev-health-worker/daily.go) with zero producer anywhere, so
-// this test fails until byScheduleID binds a schedule to each. Mutation proof:
-// deleting either binding below must turn this red again.
+// remainingBridgeFamiliesDeliberatelyNotScheduled are metrics.remaining
+// families with a registered handler but NO fixed-schedule (or post-sync)
+// producer, on purpose (CHAOS-4243): daily_metrics_fanout's existing Python
+// compatibility bridge (run_daily_metrics_job,
+// ops/src/dev_health_ops/metrics/job_daily.py:729-1446) already computes and
+// writes every table these two families target, unconditionally, on every
+// partition/finalize call -- see the comment block in
+// internal/scheduler/fixed/inventory.go immediately above
+// recommendations_daily_fanout for the line-by-line citation. Adding a
+// second schedule for either would double-compute and double-write against
+// the same ClickHouse tables every night. This test guards the decision: if
+// someone re-adds a byScheduleID binding for either family without revisiting
+// that reasoning, this test's own claim (no binding exists) goes stale and
+// should be revisited, not silently overridden.
+var remainingBridgeFamiliesDeliberatelyNotScheduled = []string{
+	"extra_metrics", "team_metrics",
+}
+
 func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
 	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
 	boundFamilies := make(map[string]bool, len(producer.byScheduleID))
@@ -691,6 +702,18 @@ func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
 	for _, family := range remainingBridgeFamiliesRequiringAFixedSchedule {
 		if !boundFamilies[family] {
 			t.Errorf("remaining-metrics family %q has no fixed-schedule producer binding", family)
+		}
+	}
+	for _, family := range remainingBridgeFamiliesDeliberatelyNotScheduled {
+		if boundFamilies[family] {
+			t.Errorf(
+				"remaining-metrics family %q is bound to a fixed schedule, but "+
+					"CHAOS-4243 deliberately excluded it as a duplicate of "+
+					"daily_metrics_fanout's existing compute -- if that reasoning "+
+					"changed, update remainingBridgeFamiliesDeliberatelyNotScheduled "+
+					"and the inventory.go comment together",
+				family,
+			)
 		}
 	}
 }

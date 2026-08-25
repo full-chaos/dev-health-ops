@@ -77,6 +77,21 @@ class SankeyCoverage:
     repo_coverage: float
 
 
+@strawberry.enum
+class SankeyValueUnit(Enum):
+    """Unit of ``SankeyNode.value`` / ``SankeyEdge.value`` (CHAOS-4241).
+
+    The client must never guess or infer the unit from the requested measure
+    -- it is echoed back explicitly so the UI renders the correct label.
+    WORK_UNITS is the default (count of attributed work units); LOC is only
+    ever returned when the request explicitly asked for the CHURN_LOC
+    measure.
+    """
+
+    WORK_UNITS = "work_units"
+    LOC = "loc"
+
+
 @strawberry.type
 class SankeyResult:
     """Result of a Sankey flow query."""
@@ -84,6 +99,7 @@ class SankeyResult:
     nodes: list[SankeyNode]
     edges: list[SankeyEdge]
     coverage: SankeyCoverage | None = None
+    unit: SankeyValueUnit = SankeyValueUnit.WORK_UNITS
 
 
 @strawberry.type

@@ -231,7 +231,10 @@ class TestCompileBreakdown:
 
         assert "SELECT" in sql
         assert "splitByChar('.', subcategory_kv.1)[1] AS dimension_value" in sql
-        assert "SUM(subcategory_kv.2 * effort_value)" in sql
+        # CHAOS-4241: COUNT (the default weight) is a fractional work-unit
+        # count, not LOC churn — see Measure.db_expression.
+        assert "SUM(subcategory_kv.2) AS value" in sql
+        assert "SUM(subcategory_kv.2 * effort_value)" not in sql
         assert "FROM work_unit_investments" in sql
         assert "ARRAY JOIN" in sql
         assert "work_unit_investments.from_ts < %(end_date)s" in sql
@@ -452,7 +455,10 @@ class TestCompileSankey:
         assert "LEFT JOIN latest_work_unit_repo_effort AS wure" in all_sql
         assert "wure.repo_effort_value, wui.effort_value) AS effort_value" in all_sql
         assert "wure.repo_id, wui.repo_id) AS repo_id" in all_sql
-        assert "SUM(subcategory_kv.2 * effort_value)" in all_sql
+        # CHAOS-4241: COUNT is a fractional work-unit count weighted by each
+        # repo's allocation share, not LOC churn — see Measure.db_expression.
+        assert "SUM(subcategory_kv.2 * allocation_weight)" in all_sql
+        assert "SUM(subcategory_kv.2 * effort_value)" not in all_sql
         # Unassigned repo emits '' (NOT 'unassigned') so it does not collide
         # with the unassigned team node name in ECharts (the "Sankey is a DAG"
         # cycle bug).
@@ -603,9 +609,25 @@ class TestMeasureDbExpression:
 
         # Investment path — expressions over real columns in work_unit_investments
         # (CHAOS-1754: old non-existent column refs replaced with valid expressions)
+        #
+        # CHAOS-4241: COUNT must weight by attributed WORK UNITS, not lines of
+        # code — a work unit's fractional subcategory share (subcategory_kv.2,
+        # which sums to 1.0 per work_unit_id), never effort_value (LOC churn).
+        # This mirrors THROUGHPUT's already-correct investment expression: a
+        # 10,000-line-churn PR and a 10-line-churn PR must count as ONE unit
+        # each, not weighted 1000:1 by effort_value.
         assert (
             Measure.db_expression(Measure.COUNT, use_investment=True)
-            == "SUM(subcategory_kv.2 * effort_value)"
+            == "SUM(subcategory_kv.2)"
+        )
+        assert Measure.db_expression(
+            Measure.COUNT, use_investment=True
+        ) == Measure.db_expression(Measure.THROUGHPUT, use_investment=True)
+        assert (
+            Measure.db_expression(
+                Measure.COUNT, use_investment=True, use_repo_allocation=True
+            )
+            == "SUM(subcategory_kv.2 * allocation_weight)"
         )
         assert (
             Measure.db_expression(Measure.THROUGHPUT, use_investment=True)

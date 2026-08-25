@@ -48,6 +48,7 @@ from ..models.outputs import (
     SankeyEdge,
     SankeyNode,
     SankeyResult,
+    SankeyValueUnit,
     TimeseriesBucket,
     TimeseriesResult,
 )
@@ -62,6 +63,7 @@ from ..sql.compiler import (
     compile_timeseries,
 )
 from ..sql.filter_translation import translate_filters
+from .investment_coverage_telemetry import INVESTMENT_COVERAGE_QUERY_FAILED_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -658,7 +660,7 @@ async def resolve_analytics(
             if batch.sankey is not None:
                 # Use a specific coverage query
                 # We need to calculate % of units with assigned team and assigned repo
-                from ..sql.validate import Dimension
+                from ..sql.validate import Dimension, Measure
 
                 team_col = Dimension.db_column(
                     Dimension.TEAM, use_investment=bool(request.use_investment)
@@ -693,6 +695,13 @@ async def resolve_analytics(
                             ON wure.org_id = work_unit_investments.org_id
                             AND wure.work_unit_id = work_unit_investments.work_unit_id
                         LEFT JOIN repos AS r ON toString(r.id) = toString(wure.repo_id)
+                        LEFT JOIN (
+                            SELECT org_id, work_unit_id, count() AS repo_row_count
+                            FROM latest_work_unit_repo_effort
+                            GROUP BY org_id, work_unit_id
+                        ) AS wure_counts
+                            ON wure_counts.org_id = work_unit_investments.org_id
+                            AND wure_counts.work_unit_id = work_unit_investments.work_unit_id
                         """
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
@@ -701,16 +710,72 @@ async def resolve_analytics(
                 repo_total_expr = total_expr
                 assigned_team_count_expr = f"countIf({assigned_team_expr})"
                 assigned_repo_count_expr = f"countIf({assigned_repo_expr})"
+                # CHAOS-4241: coverage must be weighted the SAME way as the
+                # Sankey flow it sits beside, or the cards visibly disagree
+                # with the chart. The plain row-count/`{repo_col} IS NOT NULL`
+                # defaults above are correct ONLY for the non-investment
+                # (investment_metrics_daily) path, which has no repo-effort
+                # fan-out and whose `repo_col` is the raw `repo_id` column (a
+                # real NULL when missing). On the investment path `repo_col`
+                # is the DISPLAY-formatted dimension expression
+                # (`ifNull(nullIf(r.repo, ''), if(repo_id IS NULL, '', ...))`)
+                # which never evaluates to SQL NULL, so `IS NOT NULL` was
+                # always true -- every repo-less unit silently counted as
+                # "assigned". Worse, `count()` counts JOINED rows, and the
+                # `wure` (latest_work_unit_repo_effort) LEFT JOIN fans one row
+                # out per (work_unit, repo) -- a multi-repo unit was counted
+                # once per repo it touched, inflating `total` and
+                # `assigned_team` versus the Sankey's fractionally-weighted
+                # per-unit totals. Both bugs only manifest once this branch
+                # is reachable (previously `if request.use_investment:` was
+                # unconditional, so this row-count path never ran for the
+                # investment case at all).
+                #
+                # Fix: on the investment path, ALWAYS aggregate through the
+                # same wure-fan-out-safe weighted-sum shape the CHURN_LOC
+                # branch already used, and always test the RAW repo id
+                # (never the display string) for "assigned". Only the WEIGHT
+                # column differs by measure: a fractional allocation_weight
+                # (repo_effort_value / the unit's total effort_value, same
+                # formula compiler.py:175 uses for the Sankey's own
+                # use_repo_allocation branch -- latest_work_unit_repo_effort
+                # does not itself carry an allocation_weight column) for the
+                # default work-unit-count measures, so a unit split across N
+                # repos contributes weight fractions that sum back to 1.0 and
+                # is never double-counted; or effort_value / repo_effort_value
+                # when CHURN_LOC is explicitly requested. LEFT JOIN fallback
+                # (both cases): a work unit with no repo-effort allocation
+                # row falls back to its scalar repo_id + full weight, so it
+                # is never silently dropped.
                 if request.use_investment:
-                    # Effort-weighted, allocation-aware coverage so the numbers
-                    # match the effort-weighted Sankey flows (team coverage was
-                    # previously count-based and disagreed with the visual).
-                    # LEFT JOIN fallback: a work unit with no repo-effort
-                    # allocation row falls back to its scalar repo_id + full
-                    # effort, so it is never silently dropped.
+                    is_loc = request.measure == Measure.CHURN_LOC.value
                     repo_effort_col = (
                         "if(wure.work_unit_id != '', wure.repo_effort_value, "
                         "work_unit_investments.effort_value)"
+                        if is_loc
+                        else (
+                            "if(wure.work_unit_id != '', "
+                            "if(work_unit_investments.effort_value > 0, "
+                            "wure.repo_effort_value / work_unit_investments.effort_value, "
+                            # CHAOS-4241 codex round 2: effort_value <= 0 (a
+                            # zero-churn or non-LOC-metric work unit) made
+                            # every one of its repo-allocation rows divide to
+                            # 0, so the whole unit silently vanished from the
+                            # COUNT-weighted coverage denominator even though
+                            # the Sankey's SUM(subcategory_kv.2) -- which
+                            # never touches effort_value -- still counts it
+                            # as exactly 1. Fall back to 1/N (N = this unit's
+                            # own repo-allocation row count, from the
+                            # `wure_counts` join below) so its rows still sum
+                            # to 1.0 total regardless of fan-out, instead of
+                            # 0. A plain `count(*) OVER (PARTITION BY ...)`
+                            # does not work here -- ClickHouse rejects a
+                            # window function nested inside sum()/sumIf()
+                            # (ILLEGAL_AGGREGATION) -- so the count is
+                            # precomputed via a joined aggregate instead.
+                            "1.0 / wure_counts.repo_row_count), "
+                            "1.0)"
+                        )
                     )
                     repo_assigned_col = (
                         "if(wure.work_unit_id != '', wure.repo_id, "
@@ -816,10 +881,49 @@ async def resolve_analytics(
                             else 0,
                         )
                 except Exception as e:
-                    logger.error("Coverage query failed: %s", e)
+                    # CHAOS-4241: this except swallowed a real, unrelated SQL
+                    # bug (an ambiguous ``repo_id`` identifier) for an
+                    # unknown period before it was caught by a live test --
+                    # the coverage cards degrade to an honest empty state on
+                    # ANY failure, silently. Make the fallback itself loud:
+                    # a counter (so a rising rate pages someone) alongside
+                    # the existing structured log, without changing the
+                    # UI-facing behavior (coverage still degrades to None,
+                    # never a 500).
+                    INVESTMENT_COVERAGE_QUERY_FAILED_TOTAL.labels(
+                        resolver="investment_coverage",
+                        reason=type(e).__name__,
+                    ).inc()
+                    logger.error(
+                        "investment_coverage.query_failed",
+                        extra={
+                            "resolver": "investment_coverage",
+                            "org_id": org_id,
+                            "measure": request.measure,
+                            "use_investment": bool(request.use_investment),
+                            "error": str(e),
+                        },
+                    )
                     coverage = None
 
-            sankey_result = SankeyResult(nodes=nodes, edges=edges, coverage=coverage)
+            # CHAOS-4241 scope: this binary mapping is only known-correct for
+            # the two measures the ticket governs (COUNT/THROUGHPUT, whose
+            # investment expressions are asserted identical, vs the explicit
+            # CHURN_LOC alternative). It does NOT attempt to label every
+            # Measure the Sankey `measure` argument technically accepts (e.g.
+            # CYCLE_TIME_HOURS is hour-valued, not a count, and would be
+            # mislabeled WORK_UNITS here) -- neither web fetcher ever
+            # requests anything but COUNT or CHURN_LOC today (see
+            # investmentFetchers.ts / useChordFlow.ts), so that gap is
+            # pre-existing and out of scope rather than a regression.
+            value_unit = (
+                SankeyValueUnit.LOC
+                if request.measure == Measure.CHURN_LOC.value
+                else SankeyValueUnit.WORK_UNITS
+            )
+            sankey_result = SankeyResult(
+                nodes=nodes, edges=edges, coverage=coverage, unit=value_unit
+            )
 
         except Exception as e:
             logger.error("Sankey query failed: %s", e)

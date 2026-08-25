@@ -385,6 +385,11 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
 	}
 	where := strings.Join(clauses, " AND\n        ")
+	// CHAOS-4246: dedupFromSource wraps a re-run-affected table in its
+	// latest-generation source (see dedup.go) so a re-drive is never summed
+	// alongside its earlier generation. A table with no known re-drive risk
+	// passes through unchanged.
+	source := dedupFromSource(definition.SourceTable)
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
         CAST('total', '%s') AS x,
@@ -392,7 +397,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
         %s(%s) AS y
     FROM %s
     WHERE
-        %s`, xType, aggregate, spec.Metric, definition.SourceTable, where), parameters, nil
+        %s`, xType, aggregate, spec.Metric, source, where), parameters, nil
 	}
 	order := "y DESC, x"
 	if temporal {
@@ -406,7 +411,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
     WHERE
         %s
     GROUP BY x
-    ORDER BY %s`, xExpression, aggregate, spec.Metric, definition.SourceTable, where, order), parameters, nil
+    ORDER BY %s`, xExpression, aggregate, spec.Metric, source, where, order), parameters, nil
 }
 
 func (definition metricDefinition) hasDimension(target string) bool {

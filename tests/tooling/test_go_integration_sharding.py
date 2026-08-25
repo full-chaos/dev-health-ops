@@ -659,7 +659,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # under mismatched or legacy rows"). All three drive the resolver directly
     # over in-memory fixtures and touch no database, so the integration-tagged
     # count stays 117.
-    assert len(expected_provider_tests) == 1082
+    #
+    # A codex round-6 finding (2026-08-25, BLOCK) then added 1 more ordinary
+    # test (1082 -> 1083): the round-5 fix's tests all built
+    # githubWorkItemDerivationSubject{} literals by hand, bypassing
+    # githubWorkItemDerivationSubjectFromRow -- the actual production
+    # row-to-subject conversion -- and no test anywhere in this package had
+    # ever exercised loadDonors's Scan() with real returned data (every Rows
+    # double's Next() returns false immediately), so a column-order
+    # regression between the SELECT list and the Scan destinations could ship
+    # undetected. The three round-5 tests above were rewritten to build a
+    # githubWorkItemRow and convert it via githubWorkItemDerivationSubjectFromRow
+    # (no new top-level test, just a rewrite -- doesn't change this count);
+    # TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColumnOrder
+    # is new and drives loadDonors's Scan against a fake driver.Rows that
+    # actually returns one row. Still no database, so the integration-tagged
+    # count stays 117.
+    assert len(expected_provider_tests) == 1083
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -676,7 +692,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1082
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1083
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -737,7 +753,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1082
+    assert len(selected_tests) == len(set(selected_tests)) == 1083
     assert set(selected_tests) == expected_tests
 
 

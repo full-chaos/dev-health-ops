@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -466,6 +467,123 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	}
 }
 
+// fakeDonorRow holds one donor row's column values, in the EXACT order
+// loadDonors's SELECT list produces them.
+type fakeDonorRow struct {
+	values []any
+}
+
+// fakeDonorRows is a driver.Rows that actually returns data through Scan --
+// codex round-6 finding (2026-08-25, BLOCK): every other Rows double in this
+// package (emptyGitHubWorkItemDerivationRows included) has Next() return
+// false immediately, so loadDonors's Scan() destination list -- which must
+// stay in the same order as its SELECT column list -- has never actually
+// been exercised. A column reordering that shifted "type" into the wrong
+// destination would compile and pass every existing test while silently
+// corrupting production donor Type propagation.
+type fakeDonorRows struct {
+	rows []fakeDonorRow
+	idx  int
+}
+
+func (r *fakeDonorRows) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+
+func (r *fakeDonorRows) Scan(dest ...any) error {
+	row := r.rows[r.idx-1]
+	if len(dest) != len(row.values) {
+		return fmt.Errorf("scan destination count %d != row value count %d", len(dest), len(row.values))
+	}
+	for index, destination := range dest {
+		value := row.values[index]
+		switch target := destination.(type) {
+		case *string:
+			*target = value.(string)
+		case **string:
+			if pointer, ok := value.(*string); ok {
+				*target = pointer
+			} else {
+				*target = nil
+			}
+		case *[]string:
+			*target = value.([]string)
+		default:
+			return fmt.Errorf("fakeDonorRows: unsupported Scan destination %T at index %d", destination, index)
+		}
+	}
+	return nil
+}
+
+func (fakeDonorRows) ScanStruct(any) error             { return nil }
+func (fakeDonorRows) ColumnTypes() []driver.ColumnType { return nil }
+func (fakeDonorRows) Totals(...any) error              { return nil }
+func (fakeDonorRows) Columns() []string                { return nil }
+func (fakeDonorRows) Close() error                     { return nil }
+func (fakeDonorRows) Err() error                       { return nil }
+func (fakeDonorRows) HasData() bool                    { return true }
+
+type fakeDonorRowsConn struct {
+	driver.Conn
+	rows *fakeDonorRows
+}
+
+func (conn *fakeDonorRowsConn) Query(context.Context, string, ...any) (driver.Rows, error) {
+	return conn.rows, nil
+}
+
+func TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColumnOrder(t *testing.T) {
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+	nativeTeamKey := "native-key"
+	projectKey := "proj-key"
+	projectID := "proj-id"
+	projectName := "proj-name"
+	conn := &fakeDonorRowsConn{rows: &fakeDonorRows{rows: []fakeDonorRow{{values: []any{
+		"ghpr:acme/api#9", "github", "pr", &repoID, &nativeTeamKey,
+		&projectKey, &projectID, &projectName, []string{"alice"}, "org-acme",
+	}}}}}
+	source := githubWorkItemClickHouseDerivationContextSource{Conn: conn}
+	subjects, err := source.loadDonors(context.Background(), "org-acme", githubWorkItemDerivationLoadRequest{
+		DonorWorkItemIDs: []string{"ghpr:acme/api#9"},
+	})
+	if err != nil {
+		t.Fatalf("loadDonors error = %v", err)
+	}
+	if len(subjects) != 1 {
+		t.Fatalf("subjects = %+v, want exactly 1", subjects)
+	}
+	subject := subjects[0]
+	if subject.WorkItemID != "ghpr:acme/api#9" || subject.Provider != "github" || subject.Type != "pr" {
+		t.Fatalf("WorkItemID/Provider/Type = %q/%q/%q, want ghpr:acme/api#9/github/pr",
+			subject.WorkItemID, subject.Provider, subject.Type)
+	}
+	if subject.RepoID == nil || *subject.RepoID != repoID {
+		t.Fatalf("RepoID = %v, want %v", subject.RepoID, repoID)
+	}
+	if subject.NativeTeamKey == nil || *subject.NativeTeamKey != nativeTeamKey {
+		t.Fatalf("NativeTeamKey = %v, want %v", subject.NativeTeamKey, nativeTeamKey)
+	}
+	if subject.ProjectKey == nil || *subject.ProjectKey != projectKey {
+		t.Fatalf("ProjectKey = %v, want %v", subject.ProjectKey, projectKey)
+	}
+	if subject.ProjectID == nil || *subject.ProjectID != projectID {
+		t.Fatalf("ProjectID = %v, want %v", subject.ProjectID, projectID)
+	}
+	if subject.ProjectName == nil || *subject.ProjectName != projectName {
+		t.Fatalf("ProjectName = %v, want %v", subject.ProjectName, projectName)
+	}
+	if len(subject.Assignees) != 1 || subject.Assignees[0] != "alice" {
+		t.Fatalf("Assignees = %+v, want [alice]", subject.Assignees)
+	}
+	if subject.OrgID != "org-acme" {
+		t.Fatalf("OrgID = %q, want org-acme", subject.OrgID)
+	}
+}
+
 var _ githubWorkItemDerivationContextSource = (*fakeGitHubWorkItemDerivationContextSource)(nil)
 
 // CHAOS-4244: a GitHub PR's author (Reporter) is a membership signal the
@@ -857,6 +975,14 @@ func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue(t *tes
 	// this proves the gate stays closed for it even when its author IS a
 	// mapped, unambiguous single-team member -- the same shape that would
 	// resolve for a real GitHub PR or GitLab MR author.
+	//
+	// Codex round-6 finding (2026-08-25, BLOCK): the R5 version of this test
+	// built a githubWorkItemDerivationSubject{} literal directly, bypassing
+	// githubWorkItemDerivationSubjectFromRow -- the ACTUAL production
+	// row-to-subject conversion. A regression that broke Type propagation in
+	// that conversion (e.g. forgetting to copy row.Type) would still pass a
+	// hand-built literal. This drives the real conversion from a
+	// githubWorkItemRow instead.
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
@@ -865,10 +991,11 @@ func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue(t *tes
 		}},
 	})
 	reporter := "alice"
-	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
-		WorkItemID: "jira:OPS-101", Provider: "jira", Type: "bug",
-		Reporter: &reporter, OrgID: "org-acme",
-	})
+	row := githubWorkItemRow{
+		WorkItemID: "jira:OPS-101", Provider: "jira", Title: "t", Type: "bug",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
 	if teamID != nil {
 		t.Fatalf("team id = %v, want nil (Jira has no PR-equivalent type)", githubWorkItemDerivationStringValue(teamID))
 	}
@@ -880,7 +1007,9 @@ func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue(t *tes
 func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue(t *testing.T) {
 	// The Linear half of the codex round-5 finding above: Linear also has no
 	// PR-equivalent Type, so a mapped, unambiguous single-team Linear author
-	// must never gain author_membership either.
+	// must never gain author_membership either. Drives the real
+	// githubWorkItemRow -> githubWorkItemDerivationSubjectFromRow conversion
+	// (codex round-6, see the Jira test above for why this matters).
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
@@ -889,10 +1018,11 @@ func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue(t *t
 		}},
 	})
 	reporter := "alice"
-	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
-		WorkItemID: "linear:CHAOS-5", Provider: "linear", Type: "feature",
-		Reporter: &reporter, OrgID: "org-acme",
-	})
+	row := githubWorkItemRow{
+		WorkItemID: "linear:CHAOS-5", Provider: "linear", Title: "t", Type: "story",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
 	if teamID != nil {
 		t.Fatalf("team id = %v, want nil (Linear has no PR-equivalent type)", githubWorkItemDerivationStringValue(teamID))
 	}
@@ -916,6 +1046,11 @@ func TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape(t *te
 	// Provider+Type via githubWorkItemDerivationIsPullOrMergeRequestType,
 	// closes this because Provider "jira" never matches either case of the
 	// switch.
+	//
+	// Codex round-6 (2026-08-25, BLOCK): drives the real
+	// githubWorkItemRow -> githubWorkItemDerivationSubjectFromRow conversion
+	// (not a hand-built subject literal) so the proof covers actual
+	// production Type propagation, not just the resolve()-level gate logic.
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
@@ -924,10 +1059,11 @@ func TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape(t *te
 		}},
 	})
 	reporter := "alice"
-	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
-		WorkItemID: "gitlab:legacy-import!42", Provider: "jira", Type: "bug",
-		Reporter: &reporter, OrgID: "org-acme",
-	})
+	row := githubWorkItemRow{
+		WorkItemID: "gitlab:legacy-import!42", Provider: "jira", Title: "t", Type: "bug",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
 	if teamID != nil {
 		t.Fatalf("team id = %v, want nil (Provider jira must gate closed despite a GitLab-MR-shaped WorkItemID)", githubWorkItemDerivationStringValue(teamID))
 	}

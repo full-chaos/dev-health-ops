@@ -84,167 +84,26 @@ REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queu
 GRANT USAGE ON SCHEMA public TO :"coordinator_role";
 REVOKE CREATE ON SCHEMA public FROM :"coordinator_role";
 
--- The domain runtime receives only the semantic access exercised by the
--- executable provider-unit canary and the reconciler's observe-only paths.
--- Route mutation remains an operator concern and no current domain path uses
--- a PostgreSQL sequence.
+-- CHAOS-4261: this script is bootstrap-only. It used to REVOKE ALL and then
+-- re-GRANT a hand-maintained per-table whitelist for the domain and queue
+-- roles -- a second copy of the grant manifest that silently drifted behind
+-- postgres.domainPosture()/coordinatorPosture() (internal/storage/postgres/
+-- domain_authorization.go) as tables were added over time. Any compose
+-- service that reached this script WITHOUT then running go-river-migrate
+-- (pgbouncer startup, an operator `docker compose run go-workerctl`, a
+-- deploy pass that stopped after pass 1) wiped the previous, correct grants
+-- down to that stale subset -- CHAOS-4261's prod incident.
+--
+-- The ONLY authority for per-table/sequence privileges on all three runtime
+-- roles is now internal/storage/river/migrate.go's runtimeGrantStatements /
+-- coordinatorGrantStatements, applied by go-river-migrate every time it runs
+-- (idempotent: REVOKE ALL then re-GRANT the full declared posture in one
+-- transaction). This script only has to make the three logins exist,
+-- connectable, and unable to CREATEDB/CREATEROLE/self-grant TEMPORARY --
+-- everything a login needs before that migration can even preflight it --
+-- and it can therefore never again REVOKE a grant migrate already applied,
+-- no matter how many times or in what order it is re-run.
 GRANT USAGE ON SCHEMA public TO :"domain_role";
 REVOKE CREATE ON SCHEMA public FROM :"domain_role";
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"domain_role";
-REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM :"domain_role";
-SELECT format(
-         'REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.alembic_version') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT ON TABLE public.%I TO %I',
-         required.table_name,
-         :'domain_role'
-       )
-  FROM (
-         VALUES
-           ('integrations'),
-           ('integration_credentials'),
-           ('sync_dispatch_transport_routes')
-       ) AS required(table_name)
- WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I',
-         required.table_name,
-         :'domain_role'
-       )
-  FROM (VALUES ('integration_sources'),('integration_datasets'),('sync_runs'),('sync_run_units')) AS required(table_name)
- WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.worker_concurrency_leases') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.worker_instances') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.sync_run_unit_effect_snapshots') IS NOT NULL
-\gexec
--- CHAOS-4114: the executed-proof ledger is the maintained projection of
--- sync_run_units that the CHAOS-4060 route-readiness gate reads instead of
--- rescanning that whole table. Written and read by the domain role only; no
--- DELETE, because the ledger is monotone by construction.
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.sync_executed_proof_ledger') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.sync_watermarks') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.sync_dispatch_outbox') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO %I',
-         :'domain_role'
-       )
- WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
-\gexec
-
--- The queue role may atomically relay the generic outbox, append minimal
--- delivery-abandonment evidence during terminal retention, and transition the
--- sync-dispatch outbox while checking its read-only route and active-run
--- fences. It never receives INSERT or general semantic-table/sequence
--- privileges.
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";
-REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM :"queue_role";
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, :"domain_role", :"queue_role";
-SELECT format(
-         'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.worker_job_completion_fences') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.sync_dispatch_outbox') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT ON TABLE public.sync_runs TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.sync_runs') IS NOT NULL
-\gexec
-SELECT format(
-         'GRANT SELECT ON TABLE public.sync_run_units TO %I',
-         :'queue_role'
-       )
- WHERE to_regclass('public.sync_run_units') IS NOT NULL
-\gexec
-
--- CHAOS-3997 SECURITY POSTURE CHANGE. Read-only daily-metrics and work-graph
--- access, for bounding the stranded-delivery repair to work the domain row
--- proves never finished. Identical in purpose and in shape to the
--- sync_runs/sync_run_units grants above, which exist for exactly the same
--- reason on the sync side.
---
--- SELECT only, and deliberately so: the repair mutates the outbox and the
--- River schema, never the domain row. It cannot even lock these rows --
--- PostgreSQL requires UPDATE privilege for FOR UPDATE -- which is why the
--- repair's predicate is written to need no domain-row lock.
---
--- These grants and the matching entries in
--- internal/storage/postgres/queue_authorization.go are two halves of one
--- change and MUST deploy together. The posture assertion proves the queue role
--- holds exactly its declared privileges and no more, so either half alone
--- fails queue-control readiness for every queue path, not just this repair.
-SELECT format(
-         'GRANT SELECT ON TABLE public.%I TO %I',
-         required.table_name,
-         :'queue_role'
-       )
-  FROM (
-         VALUES
-           ('daily_metrics_runs'),
-           ('daily_metrics_partitions'),
-           ('work_graph_execution_requests')
-       ) AS required(table_name)
- WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
-\gexec

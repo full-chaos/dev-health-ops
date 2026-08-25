@@ -24,9 +24,10 @@ const (
 	// insufficientPrivilege is PostgreSQL's SQLSTATE for a denied statement.
 	// This repair is the first queue-role path to read the daily-metrics and
 	// work-graph tables, so a missing grant is a live deployment risk rather
-	// than a theoretical one: the grants ship in the ops runtime image
-	// (scripts/worker/provision_river_roles.sql and, authoritatively,
-	// internal/storage/river/migrate.go) while the posture assertion ships in
+	// than a theoretical one: the grant ships solely from
+	// internal/storage/river/migrate.go, applied by go-river-migrate (CHAOS-4261
+	// removed scripts/worker/provision_river_roles.sql as a second, drifting
+	// copy of this same list), while the posture assertion ships in
 	// the Go binaries. Returning ErrNotAuthorized rather than ErrUnavailable
 	// keeps that failure legible; the sibling sync package's single opaque
 	// error made a 42501 read as "database unavailable" for a component that

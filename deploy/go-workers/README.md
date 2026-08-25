@@ -520,6 +520,76 @@ application migrator, and confirm first that the
 (root compose mounts `./ops:/app`, so it does if you're on a branch with that
 migration file; it does not against an unmodified `origin/main` checkout).
 
+### `go-river-provision` is bootstrap-only — never reach it without `go-river-migrate`
+
+**CHAOS-4261 (prod incident, 2026-08-25):** `scripts/worker/provision_river_roles.sql`
+used to `REVOKE ALL PRIVILEGES` on the domain and queue roles and then
+re-`GRANT` a hand-maintained subset of tables — a second copy of the grant
+manifest that silently drifted behind `domainPosture()`/`coordinatorPosture()`
+(`internal/storage/postgres/domain_authorization.go`) as tables were added
+over time. `go-river-migrate` (`internal/storage/river/migrate.go`'s
+`runtimeGrantStatements`/`coordinatorGrantStatements`, applied by
+`cmd/dev-health-worker-migrate`) always ran afterward and restored the full
+posture, so a normal two-pass deploy masked the problem — but any compose
+service that reached `go-river-provision` **without** `go-river-migrate`
+(a deploy that stopped after pass 1, `pgbouncer-river-queue`/
+`pgbouncer-river-coordinator` starting up, or an operator running
+`docker compose run go-workerctl …`) silently wiped whatever grants a prior
+`go-river-migrate` run had established down to that stale subset. In prod
+this produced a `go-reconciler` crash loop ("worker outbox database
+unavailable") and a `dev-health-workerctl` `runtime_role_unauthorized`
+failure on every invocation, including `--help`.
+
+**The fix and the resulting contract:** `provision_river_roles.sql` is now
+role-creation-and-connectivity bootstrap ONLY — it creates the three runtime
+logins (idempotently, guarded by `WHERE NOT EXISTS`) and grants each one
+database `CONNECT` and schema `USAGE`, nothing more. It never touches a
+table or a sequence and never issues `REVOKE ALL`. **The single authority
+for every per-table/sequence privilege on all three runtime roles —
+domain, queue, and coordinator — is `go-river-migrate`.** It is safe to run
+any number of times, in any order relative to `go-river-provision`, because
+each run re-derives the full declared posture from scratch inside one
+transaction rather than layering onto whatever state it finds. After
+applying grants, `cmd/dev-health-worker-migrate` also runs an
+executed-proof gate (`checkExecutedGrantPosture`): it re-checks
+`CheckDomainAuthorization`/`CheckCoordinatorAuthorization`/
+`CheckQueueAuthorization` against the live database it just migrated and
+exits non-zero, naming every missing `(table, privilege)` pair, if the
+posture is not actually satisfied — closing the gap where a `to_regclass`
+guard had silently skipped a required table (see the readiness-failure
+section above) and the command still reported success.
+
+**Operator rule:** never run `go-workerctl`, or anything else that reaches
+`go-river-provision`, without also running `go-river-migrate` in the same
+maintenance window. A deploy that stops after provisioning is not a partial
+success — it is a fleet running on schema-and-USAGE only. If it happens
+anyway, the recovery is to force a fresh migrate run and read the posture
+back, never to hand-edit grants:
+
+```sh
+docker compose --profile go-workers up -d --no-deps --force-recreate go-river-migrate
+```
+
+(`--no-deps` so provisioning does not run again first; `--force-recreate`
+because `go-river-migrate` is a `build:` service, so a previously-completed
+container can satisfy `depends_on: service_completed_successfully` without
+re-executing.) Confirm with a direct read of
+`information_schema.role_table_grants` for each runtime role against
+`domainPosture()`/`coordinatorPosture()` — never by trusting `workerctl`'s
+own posture gate to have already caught it, since that gate only runs at
+process start.
+
+**The production host's compose file is hand-maintained, not a git
+checkout of this repository**, and can diverge from what is reviewed here —
+CHAOS-4261 traced the incident partly to a prod-only `depends_on` edge from
+`pgbouncer-river-queue`/`pgbouncer-river-coordinator` onto
+`go-river-provision` that does not exist in this repo's
+`deploy/docker-compose/compose.production.yml`, and to `provision_river_roles.sql`
+being read from a bind-mounted host directory that `docker compose pull &&
+up -d` never refreshes. Diff the host's compose file and its bind-mounted
+SQL against this repository before every deploy; do not assume `pull`
+brought either one current.
+
 ### Live landmine: direct Alembic and authorized migration runs can still cut over
 
 Independent of everything else in this document: if the compose project

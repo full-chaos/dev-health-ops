@@ -157,11 +157,13 @@ def test_0111_adds_valid_partial_index_with_the_exact_query_predicate(
     is_valid, predicate = row
     assert is_valid, "a CONCURRENTLY build that failed midway leaves an INVALID index"
     # The predicate must be the exact NOT IN the materializer's finalize query
-    # uses (case/spacing normalized by Postgres's own pretty-printer), not a
-    # rewritten positive allowlist -- see the migration docstring / CHAOS-4107
-    # for why a positive rewrite would silently stop covering a future status.
+    # uses (Postgres's own pretty-printer renders it as a `<> ALL` array
+    # comparison with an explicit ::text cast, not the literal `NOT IN`
+    # source text), not a rewritten positive allowlist -- see the migration
+    # docstring / CHAOS-4107 for why a positive rewrite would silently stop
+    # covering a future status.
     normalized = predicate.replace("\n", " ")
-    assert "status <> ALL" in normalized or "NOT (status = ANY" in normalized
+    assert "<> ALL" in normalized
     for status in ("success", "partial_failed", "failed"):
         assert status in normalized
 

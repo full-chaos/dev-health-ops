@@ -60,8 +60,10 @@ _WHERE = "status NOT IN ('success', 'partial_failed', 'failed')"
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")
-        op.execute(
+        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}"
+        )
+        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"CREATE INDEX CONCURRENTLY {_INDEX} ON public.{_TABLE} "
             f"(created_at, id) WHERE {_WHERE}"
         )
@@ -69,4 +71,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")
+        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}"
+        )

@@ -177,15 +177,39 @@ func (stepErr materializerStepError) Error() string {
 // Unwrap is what keeps errors.Is(err, ErrUnavailable) true for every step.
 func (stepErr materializerStepError) Unwrap() error { return ErrUnavailable }
 
+// stageContextDeadlineLabel is the sqlState value materializerUnavailable
+// records when the failure was the STAGE'S OWN bounded context expiring
+// mid-statement, never a real Postgres SQLSTATE (it is deliberately not a
+// five-character code, so it can never collide with one).
+//
+// This is CHAOS-4262's own review finding, not a hypothetical: pgx v5's
+// context watcher answers a canceled ctx by tearing down the connection
+// client-side and returning a wrapped context.DeadlineExceeded -- it does
+// NOT wait for, and does not surface, whatever ErrorResponse Postgres itself
+// may log server-side (confirmed empirically against a real server: the
+// exact same cancellation that makes Postgres log "canceling statement due
+// to user request", sqlstate 57014, reaches the Go caller as a bare
+// context.DeadlineExceeded, never a *pgconn.PgError). Since runStage bounds
+// every stage with exactly this kind of context.WithTimeout
+// (internal/syncreconciler/pipeline.go), THIS is the actual shape CHAOS-4262
+// exists to classify -- errors.As for *pgconn.PgError alone would leave
+// dev_health_reconciler_stage_cancelled_total silent on the very failure the
+// metric was built to surface.
+const stageContextDeadlineLabel = "ctx_deadline_exceeded"
+
 // materializerUnavailable builds the step-identified error. cause is used
-// ONLY to recover a SQLSTATE; it is never wrapped, so no driver string (which
-// can carry row values) can reach a log line through this path -- the same
-// contract sweepUnavailable already holds.
+// ONLY to recover a SQLSTATE (or the synthetic stageContextDeadlineLabel);
+// it is never wrapped, so no driver string (which can carry row values) can
+// reach a log line through this path -- the same contract sweepUnavailable
+// already holds.
 func materializerUnavailable(step string, cause error) error {
 	stepErr := materializerStepError{step: step}
 	var pgErr *pgconn.PgError
-	if errors.As(cause, &pgErr) {
+	switch {
+	case errors.As(cause, &pgErr):
 		stepErr.sqlState = pgErr.Code
+	case errors.Is(cause, context.DeadlineExceeded):
+		stepErr.sqlState = stageContextDeadlineLabel
 	}
 	return stepErr
 }

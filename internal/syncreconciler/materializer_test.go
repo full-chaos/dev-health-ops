@@ -310,6 +310,40 @@ func TestMaterializerStepErrorCarriesSQLState(t *testing.T) {
 	}
 }
 
+// TestMaterializerStepErrorClassifiesStageContextDeadline pins the CHAOS-4262
+// codex review finding: pgx v5's context watcher answers a canceled stage
+// context by tearing the connection down client-side and returning a
+// wrapped context.DeadlineExceeded, NOT a *pgconn.PgError -- confirmed
+// empirically against a real server, the exact cancellation that makes
+// Postgres log "canceling statement due to user request" (sqlstate 57014)
+// reaches the Go caller as a bare context.DeadlineExceeded. Since runStage
+// bounds every stage with exactly this kind of context.WithTimeout, this is
+// the ACTUAL production failure shape, not the server-side statement_timeout
+// TestMaterializerStepErrorCarriesSQLState above exercises. Without this
+// classification, dev_health_reconciler_stage_cancelled_total stays silent
+// on the one failure it was built to surface.
+func TestMaterializerStepErrorClassifiesStageContextDeadline(t *testing.T) {
+	tx := &fakeMaterializerTx{
+		failAt:   2,
+		failErrs: map[int]error{2: fmt.Errorf("timeout: %w", context.DeadlineExceeded)},
+	}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) { return tx, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+	_, err = materializer.Step(context.Background(), now, now.Add(-time.Minute), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v", err)
+	}
+	if got := MaterializerStepSQLState(err); got != stageContextDeadlineLabel {
+		t.Fatalf("MaterializerStepSQLState(err) = %q, want %q", got, stageContextDeadlineLabel)
+	}
+	if got := MaterializerStepIdentity(err); got != materializerStepDispatch {
+		t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDispatch)
+	}
+}
+
 func TestMaterializerRejectsInvalidBoundariesBeforeOpeningTransaction(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
 	begins := 0

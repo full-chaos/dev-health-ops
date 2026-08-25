@@ -269,3 +269,112 @@ func TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLeve
 			elapsed, materializerStageBudget)
 	}
 }
+
+// TestMaterializerStepContextDeadlineClassifiesAsStageContextDeadline is the
+// codex adversarial-review follow-up: the earlier tests in this file force a
+// SERVER-side statement_timeout to produce sqlstate 57014, but that is not
+// how production actually cancels a stage -- runStage bounds every stage
+// with a plain context.WithTimeout (internal/syncreconciler/pipeline.go),
+// and pgx v5's context watcher answers a canceled context by tearing the
+// connection down CLIENT-side and returning a wrapped
+// context.DeadlineExceeded, never a *pgconn.PgError (confirmed empirically
+// against a real server, 2026-08-25: the same cancellation that makes
+// Postgres log "canceling statement due to user request", sqlstate 57014,
+// server-side, reaches the Go caller as a bare context.DeadlineExceeded).
+//
+// This forces that EXACT client-side path for real -- a row lock held by a
+// second session on the finalize statement's own ON CONFLICT target, so the
+// materializer's Exec genuinely blocks on the wire and its stage context
+// genuinely expires mid-flight -- rather than a pg_sleep or a server-side
+// timeout, neither of which exercises the code path this test pins.
+func TestMaterializerStepContextDeadlineClassifiesAsStageContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	const runID = "00000000-0000-4000-8000-000000004901"
+	now := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_runs (id, org_id, status, created_at)
+		VALUES ($1, 'org-materializer', 'running', $2)`, runID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'finalize_sync_run',
+			'pending', $2, 0, $2, $2
+		)`, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, independent session holds a row lock on the exact outbox row
+	// the finalize statement's ON CONFLICT (sync_run_id, kind) DO UPDATE will
+	// target -- a real, on-the-wire block, not a synthetic delay.
+	blocker, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Release()
+	blockerTx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blockerTx.Exec(ctx, `
+		SELECT 1 FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' FOR UPDATE`, runID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blockerTx.Rollback(ctx) }()
+
+	materializer, err := NewMaterializer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stepCtx, stepCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer stepCancel()
+	_, stepErr := materializer.Step(stepCtx, now, now.Add(-time.Hour), maximumStepLimit)
+	if stepErr == nil {
+		t.Fatal("Step() completed despite a row lock held for the whole stage budget -- the lock did not actually block the finalize statement")
+	}
+	if !errors.Is(stepErr, ErrUnavailable) {
+		t.Fatalf("Step() error = %v, want it to satisfy errors.Is(err, ErrUnavailable)", stepErr)
+	}
+	if got := MaterializerStepSQLState(stepErr); got != stageContextDeadlineLabel {
+		t.Fatalf("MaterializerStepSQLState(err) = %q, want %q (this is the CHAOS-4262 review finding: "+
+			"a real stage-context cancellation must classify distinctly, not silently as \"\")", got, stageContextDeadlineLabel)
+	}
+
+	// Release the lock, then prove the pool is still healthy -- a
+	// context-canceled Exec must not poison the connection for the next tick.
+	if err := blockerTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recoverCtx, recoverCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer recoverCancel()
+	if _, err := materializer.Step(recoverCtx, now, now.Add(-time.Hour), maximumStepLimit); err != nil {
+		t.Fatalf("Step() after lock release = %v, want the pool to have recovered", err)
+	}
+}

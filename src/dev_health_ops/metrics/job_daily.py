@@ -101,31 +101,6 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-# CHAOS-4264: the daily-metrics bridge (worker_metrics._run_daily_direct)
-# already computes one repo_id at a time -- a partition's peak working set
-# scales with the LARGEST single repo's per-day source-row volume, not with
-# repo_count, PROVIDED a partition's repo_ids list itself stays bounded. This
-# name is the documented knob for that upstream bound: the daily fan-out
-# dispatcher (internal/jobs/metrics/daily) should keep a partition's repo_ids
-# at or under this count so no single compatibility bridge HTTP call has to
-# iterate an unbounded repo list before its execution ledger row can be
-# marked succeeded. Nothing in this module enforces it -- job_daily.py has no
-# visibility into how many partitions a run was split into -- it exists so
-# the dispatcher has one canonical value to read instead of a magic number.
-DAILY_PARTITION_MAX_REPOS_ENV_KEY = "DEV_HEALTH_METRICS_DAILY_PARTITION_MAX_REPOS"
-DEFAULT_DAILY_PARTITION_MAX_REPOS = 5
-
-
-def daily_partition_max_repos() -> int:
-    raw = os.environ.get(DAILY_PARTITION_MAX_REPOS_ENV_KEY, "").strip()
-    if not raw:
-        return DEFAULT_DAILY_PARTITION_MAX_REPOS
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_DAILY_PARTITION_MAX_REPOS
-    return value if value > 0 else DEFAULT_DAILY_PARTITION_MAX_REPOS
-
 
 # Public aliases for backward compatibility
 _to_utc = to_utc

@@ -1355,17 +1355,25 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
 
     # CHAOS-4264: a non-zero exit is classified instead of collapsed into one
     # generic RuntimeError. safe_to_retry additionally requires
-    # worker_kind == "daily" (codex R2): only the daily partition path
-    # (_run_daily_direct) wires on_write_starting through job_daily.py, so
-    # it is the only path with real per-scope write evidence. Every
-    # remaining-metrics family (capacity/complexity/dora/release_impact/
-    # recommendations/membership_backfill) never reports progress at all --
-    # treating that silence as "definitely wrote nothing" would be a
-    # fabricated safety claim, not an observed one, and codex's review
-    # showed a raw-query-consuming table can already see a partial write
-    # from exactly this class of family. Remaining-metrics failures stay
-    # ambiguous unconditionally, exactly as before this ticket.
-    safe_to_retry = execution.worker_kind == "daily" and not progress_seen
+    # worker_kind == "daily" AND operation == "partition" (codex R2 + R3):
+    # only _run_daily_direct's "partition" branch wires on_write_starting
+    # through job_daily.py, so it is the only path with real per-scope
+    # write evidence. Every remaining-metrics family (capacity/complexity/
+    # dora/release_impact/recommendations/membership_backfill) never
+    # reports progress at all -- treating that silence as "definitely wrote
+    # nothing" would be a fabricated safety claim, not an observed one
+    # (codex R2). The daily "finalize" branch is the same trap (codex R3):
+    # run_daily_metrics_finalize writes user_metrics_daily and
+    # ic_landscape_rolling_30d directly with no progress callback of its
+    # own, so a kill after its first write would ALSO report zero progress
+    # despite having written rows, if worker_kind alone gated this. Both
+    # non-partition paths stay ambiguous unconditionally, exactly as before
+    # this ticket.
+    safe_to_retry = (
+        execution.worker_kind == "daily"
+        and execution.operation == "partition"
+        and not progress_seen
+    )
     if return_code < 0:
         reason = "process_signaled"
         message = (

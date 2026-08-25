@@ -77,6 +77,37 @@ def _daily_execution() -> worker_metrics._Execution:
     )
 
 
+def _daily_finalize_execution() -> worker_metrics._Execution:
+    """A daily/finalize execution. CHAOS-4264 codex R3: run_daily_metrics_
+    finalize writes user_metrics_daily/ic_landscape_rolling_30d directly
+    with no progress callback of its own -- worker_kind == "daily" alone is
+    not enough; safe_to_retry must also require operation == "partition"."""
+    scope = {"target_day": "2026-08-24", "repo_ids": []}
+    digest = worker_metrics._scope_digest(scope)
+    run_id = uuid.UUID("88888888-8888-4888-8888-888888888888")
+    return worker_metrics._Execution(
+        id=worker_metrics._execution_id(
+            worker_kind="daily",
+            operation="finalize",
+            run_id=run_id,
+            partition_id=None,
+            family="daily",
+            generation="daily-v1",
+            scope_digest=digest,
+        ),
+        worker_kind="daily",
+        operation="finalize",
+        run_id=run_id,
+        partition_id=None,
+        organization_id="66666666-6666-4666-8666-666666666666",
+        family="daily",
+        generation="daily-v1",
+        claim_token=uuid.UUID("99999999-9999-4999-8999-999999999999"),
+        scope=scope,
+        scope_digest=digest,
+    )
+
+
 def _runner_command(source: str, *arguments: str) -> tuple[str, ...]:
     return (sys.executable, "-c", source, *arguments)
 
@@ -375,6 +406,31 @@ async def test_metric_compatibility_process_remaining_metrics_never_safe_to_retr
     )
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "process_signaled"
+    assert excinfo.value.safe_to_retry is False
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_daily_finalize_never_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R3 finding (CHAOS-4264): run_daily_metrics_finalize writes
+    user_metrics_daily and ic_landscape_rolling_30d directly with no
+    progress callback -- worker_kind == "daily" alone is not a safe gate.
+    A signal-killed finalize with zero progress lines must stay unsafe to
+    auto-retry (safe_to_retry additionally requires operation ==
+    "partition")."""
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, os, signal, sys\n"
+            "json.load(sys.stdin)\n"
+            "os.kill(os.getpid(), signal.SIGKILL)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_finalize_execution())
     assert excinfo.value.reason == "process_signaled"
     assert excinfo.value.safe_to_retry is False
 

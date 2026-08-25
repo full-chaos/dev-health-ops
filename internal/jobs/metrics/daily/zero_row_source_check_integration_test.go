@@ -474,7 +474,9 @@ func TestClickHouseIncidentProjectionUsesMappedRepositories(t *testing.T) {
 		`CREATE TABLE operational_incidents (
     org_id String, id String, service_id Nullable(String),
     source_revision DateTime64(6, 'UTC'), source_conflict_key String, ingest_revision UInt128,
-    is_deleted UInt8, started_at Nullable(DateTime64(3, 'UTC'))
+    is_deleted UInt8, started_at Nullable(DateTime64(3, 'UTC')),
+    resolved_at Nullable(DateTime64(3, 'UTC')), normalized_status String,
+    last_synced DateTime64(3, 'UTC')
 ) ENGINE = MergeTree ORDER BY (org_id, id)`,
 		`CREATE TABLE operational_service_repository_mappings (
     org_id String, id String, service_id String, repo_id Nullable(UUID),

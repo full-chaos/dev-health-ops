@@ -3,11 +3,14 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 )
 
 // SourceDataChecker flags families whose upstream source data exists for a
@@ -197,47 +200,18 @@ func (checker *ClickHouseSourceDataChecker) exists(
 func (checker *ClickHouseSourceDataChecker) existsIncident(
 	ctx context.Context, orgID string, start, end time.Time, repositoryIDs []uuid.UUID,
 ) (bool, error) {
-	rows, err := checker.conn.Query(ctx, `
-WITH current_incidents AS (
-    SELECT *
-    FROM (
-        SELECT *
-        FROM operational_incidents
-        WHERE org_id = {org_id:String}
-        ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
-        LIMIT 1 BY org_id, id
-    )
-    WHERE is_deleted = 0
-      AND resolved_at >= {start:DateTime64(3, 'UTC')}
-      AND resolved_at < {end:DateTime64(3, 'UTC')}
-), current_mappings AS (
-    SELECT *
-    FROM (
-        SELECT *
-        FROM operational_service_repository_mappings
-        WHERE org_id = {org_id:String}
-        ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
-        LIMIT 1 BY org_id, id
-    )
-    WHERE is_deleted = 0
-      AND is_active = 1
-      AND repo_id IS NOT NULL
-      AND valid_from <= {as_of:DateTime64(6, 'UTC')}
-      AND (valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})
-)
-SELECT 1
-FROM current_incidents AS incident
-INNER JOIN current_mappings AS mapping
-    ON incident.org_id = mapping.org_id
-   AND incident.service_id = mapping.service_id
-INNER JOIN repos AS repo FINAL
-    ON mapping.org_id = repo.org_id
-   AND mapping.repo_id = repo.id
-WHERE mapping.repo_id IN {repo_ids:Array(UUID)}
-LIMIT 1`,
+	contract, err := remaining.ConfiguredOperationalOrderingContract()
+	if err != nil {
+		return false, fmt.Errorf("incident ordering contract: %w", err)
+	}
+	projection := remaining.IncidentProjectionQuery(
+		remaining.IncidentWindowResolved,
+		" AND mapping.repo_id IN {repo_ids:Array(UUID)}",
+		contract,
+	)
+	rows, err := checker.conn.Query(ctx, "SELECT 1 FROM ("+projection+") LIMIT 1",
 		clickhouse.Named("org_id", orgID),
 		clickhouse.Named("start", start),
-		clickhouse.Named("end", end),
 		clickhouse.Named("as_of", end),
 		clickhouse.Named("repo_ids", repositoryIDs),
 	)

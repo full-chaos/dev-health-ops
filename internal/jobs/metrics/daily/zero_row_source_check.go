@@ -209,10 +209,15 @@ func (checker *ClickHouseSourceDataChecker) existsIncident(
 		" AND mapping.repo_id IN {repo_ids:Array(UUID)}",
 		contract,
 	)
+	asOf := time.Now().UTC()
 	rows, err := checker.conn.Query(ctx, "SELECT 1 FROM ("+projection+") LIMIT 1",
 		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("start", start),
-		clickhouse.Named("as_of", end),
+		clickhouse.Named("start", remaining.DateTime64Argument(
+			start, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("end", remaining.DateTime64Argument(
+			end, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("as_of", remaining.DateTime64Argument(
+			asOf, remaining.DateTime64MicrosecondPrecision)),
 		clickhouse.Named("repo_ids", repositoryIDs),
 	)
 	if err != nil {

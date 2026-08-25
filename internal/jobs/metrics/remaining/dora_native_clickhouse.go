@@ -563,8 +563,10 @@ func verifyOrderingContract(
 // wire in the same shape on both sides rather than in two driver-specific
 // encodings that have to be trusted to agree.
 const (
-	millisecondPrecision = "2006-01-02 15:04:05.000"
-	microsecondPrecision = "2006-01-02 15:04:05.000000"
+	DateTime64MillisecondPrecision = "2006-01-02 15:04:05.000"
+	DateTime64MicrosecondPrecision = "2006-01-02 15:04:05.000000"
+	millisecondPrecision           = DateTime64MillisecondPrecision
+	microsecondPrecision           = DateTime64MicrosecondPrecision
 )
 
 // dateTime64Argument renders a timestamp at the precision its column declares.
@@ -573,4 +575,12 @@ const (
 // without any error to notice.
 func dateTime64Argument(value time.Time, precision string) string {
 	return value.UTC().Format(precision)
+}
+
+// DateTime64Argument exposes the canonical ClickHouse timestamp literal
+// encoding to readers in other metrics packages. Do not bind time.Time
+// directly to a DateTime64 placeholder: clickhouse-go renders it as a
+// toDateTime(...) expression that ClickHouse cannot parse as DateTime64.
+func DateTime64Argument(value time.Time, precision string) string {
+	return dateTime64Argument(value, precision)
 }

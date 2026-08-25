@@ -477,16 +477,16 @@ func TestClickHouseIncidentProjectionUsesMappedRepositories(t *testing.T) {
     is_deleted UInt8, started_at Nullable(DateTime64(3, 'UTC')),
     resolved_at Nullable(DateTime64(3, 'UTC')), normalized_status String,
     last_synced DateTime64(3, 'UTC')
-) ENGINE = MergeTree ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 		`CREATE TABLE operational_service_repository_mappings (
     org_id String, id String, service_id String, repo_id Nullable(UUID),
     source_revision DateTime64(6, 'UTC'), source_conflict_key String, ingest_revision UInt128,
     is_deleted UInt8, is_active UInt8, valid_from Nullable(DateTime64(6, 'UTC')),
     valid_to Nullable(DateTime64(6, 'UTC'))
-) ENGINE = MergeTree ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
     org_id String, id UUID
-) ENGINE = MergeTree ORDER BY (org_id, id)`,
+) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -499,8 +499,13 @@ func TestClickHouseIncidentProjectionUsesMappedRepositories(t *testing.T) {
 	)
 	if err := conn.Exec(ctx, `
 INSERT INTO operational_incidents
+    (org_id, id, service_id, source_revision, source_conflict_key,
+     ingest_revision, is_deleted, started_at, resolved_at, normalized_status,
+     last_synced)
 VALUES ('00000000-0000-4000-8000-000000000009', 'incident-1', 'service-1',
         toDateTime64('2026-08-25 01:00:00', 6, 'UTC'), 'source-1', 1, 0,
+        toDateTime64('2026-08-25 01:00:00', 3, 'UTC'),
+        toDateTime64('2026-08-25 02:00:00', 3, 'UTC'), 'resolved',
         toDateTime64('2026-08-25 02:00:00', 3, 'UTC'))`); err != nil {
 		t.Fatal(err)
 	}

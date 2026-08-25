@@ -376,8 +376,10 @@ async def test_run_daily_direct_computes_one_repo_at_a_time_and_reports_progress
     calls: list[uuid.UUID | None] = []
     progress: list[tuple[int, int]] = []
 
-    async def fake_run_daily_metrics_job(*, repo_id, **_kwargs):
+    async def fake_run_daily_metrics_job(*, repo_id, on_write_starting=None, **_kwargs):
         calls.append(repo_id)
+        if on_write_starting is not None:
+            on_write_starting()
         return {}
 
     import dev_health_ops.metrics.job_daily as job_daily_module
@@ -424,3 +426,65 @@ async def test_run_daily_direct_computes_one_repo_at_a_time_and_reports_progress
     )
     assert progress == [(1, 3), (2, 3), (3, 3)]
     assert result["repo_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_daily_direct_reports_progress_before_a_repo_crashes_mid_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R1 finding (CHAOS-4264): progress must fire at the write
+    BOUNDARY, not only on a repo's successful completion -- otherwise a
+    kill/crash after writes started but before run_daily_metrics_job returns
+    would report zero progress despite having written rows. This proves
+    on_progress observes the crashed repo's write-starting signal before the
+    exception propagates out of _run_daily_direct."""
+    repo_ids = [uuid.uuid4(), uuid.uuid4()]
+    progress: list[tuple[int, int]] = []
+
+    async def fake_run_daily_metrics_job(*, repo_id, on_write_starting=None, **_kwargs):
+        if on_write_starting is not None:
+            on_write_starting()
+        if repo_id == repo_ids[0]:
+            raise RuntimeError("simulated crash after the first write began")
+        return {}
+
+    import dev_health_ops.metrics.job_daily as job_daily_module
+
+    monkeypatch.setattr(
+        job_daily_module, "run_daily_metrics_job", fake_run_daily_metrics_job
+    )
+    scope = {"target_day": "2026-08-25", "repo_ids": [str(value) for value in repo_ids]}
+    digest = worker_metrics._scope_digest(scope)
+    run_id = uuid.UUID("11111111-1111-4111-8111-111111111112")
+    partition_id = uuid.UUID("22222222-2222-4222-8222-222222222223")
+    execution = worker_metrics._Execution(
+        id=worker_metrics._execution_id(
+            worker_kind="daily",
+            operation="partition",
+            run_id=run_id,
+            partition_id=partition_id,
+            family="daily",
+            generation="chaos-4264-progress-boundary-test",
+            scope_digest=digest,
+        ),
+        worker_kind="daily",
+        operation="partition",
+        run_id=run_id,
+        partition_id=partition_id,
+        organization_id="55555555-5555-4555-8555-555555555555",
+        family="daily",
+        generation="chaos-4264-progress-boundary-test",
+        claim_token=uuid.UUID("33333333-3333-4333-8333-333333333334"),
+        scope=scope,
+        scope_digest=digest,
+    )
+    monkeypatch.setattr(
+        worker_metrics, "require_clickhouse_uri", lambda: "clickhouse://test"
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        await worker_metrics._run_daily_direct(
+            execution, on_progress=lambda index, total: progress.append((index, total))
+        )
+    assert progress == [(1, 2)], (
+        "the crashed repo's write-starting signal must still have fired"
+    )

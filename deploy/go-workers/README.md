@@ -681,23 +681,36 @@ sudo dmesg -T | rg -i 'killed process|oom'
 `/sys/fs/cgroup/memory.events`'s `oom_kill` counter and `memory.peak`.
 Recreating the container resets both.
 
-Two independent mitigations exist as of CHAOS-4264, neither of which raises
+Three independent mitigations exist as of CHAOS-4264, none of which raise
 the `api` container's own memory limit:
 
 - The runner subprocess self-limits via `RLIMIT_AS`/`RLIMIT_DATA`
   (`worker_metrics_runner._apply_memory_limit`), configurable with
-  `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` (default 1 GiB — see the
+  `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` (default 640 MiB — see the
   `api`/`worker` service `environment:` block in `compose.yml` and
   `deploy/docker-compose/compose.production.yml`). Hitting this bound raises
   a `MemoryError` the runner catches and reports as a classified
   `resource_exhausted` exit, instead of relying on the kernel to notice the
   container-wide ceiling first.
+- A per-runner limit alone is not an aggregate memory bound: N concurrent
+  bridge requests each spawning a runner can still exhaust the shared
+  container even if every individual runner stays under its own rlimit
+  (codex review R1 flagged this). `worker_metrics._RUNNER_CONCURRENCY_SEMAPHORE`,
+  sized by `DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY` (default 1), makes
+  "container limit minus API headroom" the actual per-runner budget with no
+  multiplication. Raising either env var without the other reintroduces the
+  aggregate-exhaustion risk.
 - The compatibility bridge no longer collapses a signaled/resource-exhausted
   runner with zero recorded progress into the `ambiguous` state that used to
   require a human `/metric-executions/v1/{id}/repair` call before any retry
   could re-claim it; it authorizes the retry itself (see
   `worker_metrics._mark_retry_authorized`), so a single OOM kill no longer
-  permanently fails the partition.
+  permanently fails the partition. "Zero progress" is signalled at the write
+  BOUNDARY inside `job_daily.run_daily_metrics_job` (immediately before its
+  first ClickHouse write for a repo/day), not on that repo's successful
+  completion — a repo-level "finished" signal was too coarse and could
+  misclassify a kill-after-writes-started-but-before-return as safe (also
+  codex R1).
 
 `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` bounds the *runner*, not the
 container: alert on the container-level `memory.events` `oom_kill` counter

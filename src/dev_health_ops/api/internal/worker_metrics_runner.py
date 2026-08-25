@@ -33,7 +33,22 @@ EXIT_FAILURE = 1
 EXIT_RESOURCE_EXHAUSTED = 2
 
 _MEMORY_LIMIT_ENV_KEY = "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES"
-_DEFAULT_MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024  # 1 GiB
+# CHAOS-4264 (codex R1): this must leave real headroom under the SMALLEST
+# container memory limit this repo configures the api service with (1G in
+# deploy/docker-compose/compose.production.yml) for the API process itself
+# plus overhead -- a runner default equal to the container's own limit
+# leaves zero room for its parent and does not reliably convert the
+# incident class into a classified failure, it just moves the same OOM race
+# one layer down. 640 MiB reserves ~384 MiB for the API process under a 1G
+# container. Paired with worker_metrics._RUNNER_CONCURRENCY_SEMAPHORE
+# (default max_concurrency=1), this is the WHOLE per-runner budget, not a
+# per-runner slice of a larger aggregate. An org whose legitimate compute
+# needs more than this will get a classified resource_exhausted instead of
+# succeeding -- the correct operator response is to raise this env var
+# explicitly for that deployment's actual container limit (prod's real
+# limit is reportedly 2G on a host-only compose file this repo does not
+# control -- see deploy/go-workers/README.md), not to bump this default.
+_DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024  # 640 MiB
 
 
 def _configured_memory_limit_bytes() -> int:

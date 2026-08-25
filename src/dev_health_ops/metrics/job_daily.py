@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -766,6 +766,7 @@ async def run_daily_metrics_job(
     provider: str = "auto",
     org_id: str,
     skip_finalize: bool = False,
+    on_write_starting: Callable[[], None] | None = None,
 ) -> dict[date, list[str]]:
     """Run the daily metrics compute+write pipeline.
 
@@ -1382,6 +1383,19 @@ async def run_daily_metrics_job(
             repo_names_by_id=repo_names_by_id,
             pr_commit_stats=pr_commit_stats,
         )
+
+        # CHAOS-4264: this is the FIRST write for (repo_id, d) in the whole
+        # function -- everything above is loading/compute, no sink writes.
+        # on_write_starting is the caller's durable-proof boundary: if the
+        # process dies before this fires, nothing was written for (repo_id,
+        # d) and a retry is unconditionally safe; if it fires and the
+        # process then dies mid-write, the caller must NOT assume safety --
+        # a repo-level "finished" signal (fired only after the whole call
+        # returns) is too coarse for that, which is exactly what let a
+        # kill-after-first-write-block-but-before-return be misclassified
+        # as "no progress" before this callback existed.
+        if on_write_starting is not None:
+            on_write_starting()
 
         for s in sinks:
             s.write_repo_metrics(result.repo_metrics)

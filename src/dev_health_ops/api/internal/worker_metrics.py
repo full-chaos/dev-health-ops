@@ -63,6 +63,31 @@ _COMPATIBILITY_RUNNER_COMMAND = (
 )
 
 
+def _runner_max_concurrency() -> int:
+    raw = os.environ.get("DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY", "").strip()
+    if not raw:
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return value if value > 0 else 1
+
+
+# CHAOS-4264 (codex R1): a per-runner RLIMIT_AS is not an aggregate memory
+# bound -- the api container's cgroup enforcement is on the WHOLE container,
+# so N concurrent runner subprocesses can still exhaust it (or starve the API
+# process) even when each individually stays under its own rlimit. This
+# semaphore is the aggregate control: with the default of 1, at most one
+# runner subprocess exists at a time, so "container limit minus API headroom"
+# IS the per-runner budget with no multiplication -- exactly the calculation
+# codex's review asked for. Raise DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY
+# only alongside a correspondingly smaller
+# DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES (limit * concurrency must stay
+# under container_limit - API_headroom).
+_RUNNER_CONCURRENCY_SEMAPHORE = asyncio.Semaphore(_runner_max_concurrency())
+
+
 class _StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -960,11 +985,23 @@ async def _run_daily_direct(
     for index, repo_id in enumerate(repo_ids):
         # CHAOS-4264: one repo_id at a time -- each run_daily_metrics_job call
         # loads and releases only that repo's source rows, so a partition's
-        # peak working set does not scale with repo_count. on_progress fires
-        # only AFTER a repo's families are fully written, so the parent
-        # process can tell "N repos already landed" from "nothing landed
-        # yet" if this loop is killed mid-repo (see worker_metrics_runner._
-        # emit_progress).
+        # peak working set does not scale with repo_count.
+        #
+        # on_write_starting fires INSIDE run_daily_metrics_job, immediately
+        # before its first ClickHouse write for this repo -- not after the
+        # call returns. A repo-level "finished" signal is too coarse: codex
+        # review (CHAOS-4264 R1) correctly flagged that a kill between the
+        # first write block and the function's return would still land rows
+        # while reporting zero progress, so a killed-mid-write execution
+        # could be misclassified safe_to_retry. Firing at the write boundary
+        # instead means "no progress at all" only ever means "definitely
+        # wrote nothing" -- any write attempt, even a single one, is treated
+        # as unsafe-to-blindly-retry (ambiguous), exactly as before this
+        # ticket.
+        def _mark_progress() -> None:
+            if on_progress is not None:
+                on_progress(index + 1, repo_count)
+
         zero_rows_by_day = await run_daily_metrics_job(
             db_url=db_url,
             day=target_day,
@@ -974,12 +1011,11 @@ async def _run_daily_direct(
             sink="clickhouse",
             provider="auto",
             org_id=execution.organization_id,
+            on_write_starting=_mark_progress,
         )
         for day, families in zero_rows_by_day.items():
             if families:
                 families_zero_rows[f"{repo_id}:{day.isoformat()}"] = families
-        if on_progress is not None:
-            on_progress(index + 1, repo_count)
     result: dict[str, Any] = {
         "operation": "partition",
         "target_day": target_day.isoformat(),
@@ -1238,6 +1274,14 @@ async def _poll_peak_rss_bytes(pid: int, *, interval_seconds: float = 0.25) -> i
 
 
 async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
+    # CHAOS-4264: bound aggregate concurrency BEFORE spawning -- see
+    # _RUNNER_CONCURRENCY_SEMAPHORE for why a per-process RLIMIT_AS alone
+    # cannot protect the api container's shared cgroup.
+    async with _RUNNER_CONCURRENCY_SEMAPHORE:
+        return await _run_compatibility_process_locked(execution)
+
+
+async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, Any]:
     payload = _canonical_json(_execution_process_payload(execution)).encode()
     if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
         raise ValueError("metric compatibility process input exceeds the bound")

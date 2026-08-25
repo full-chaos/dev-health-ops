@@ -617,7 +617,20 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # registers as a donor at all. Both drive the resolver/builder directly
     # over in-memory fixtures and touch no database, so the
     # integration-tagged count stays 117.
-    assert len(expected_provider_tests) == 1075
+    #
+    # A codex round-3 finding (2026-08-24, HIGH + MEDIUM) then added 2 more
+    # ordinary tests (1075 -> 1077) in github_work_item_derived_surfaces_test.go
+    # and github_work_items_derivation_context_test.go:
+    # TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow pins the
+    # fix for the write-time sorting-key dedup, which used to be pure
+    # last-wins and could silently discard the resolver's only is_primary=1
+    # row when a reporter or assignee matched two membership facets naming
+    # the same team; TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToANonPRIssue
+    # pins author_membership's PR-only scope gate (a plain GitHub issue,
+    # WorkItemID "gh:" not "ghpr:", must never gain a team via this signal).
+    # Both drive the dedup/resolver directly over in-memory fixtures and
+    # touch no database, so the integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1077
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -634,7 +647,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1075
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1077
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -695,7 +708,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1075
+    assert len(selected_tests) == len(set(selected_tests)) == 1077
     assert set(selected_tests) == expected_tests
 
 

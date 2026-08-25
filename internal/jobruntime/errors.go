@@ -78,6 +78,26 @@ var (
 	// misclassified as Retryable spent a job's whole attempt budget on
 	// three identical failures before discarding).
 	ReasonInvalidState = reason("invalid_state")
+	// ReasonProcessSignaled marks a daily-metrics compatibility bridge
+	// attempt whose Python runner subprocess never returned its own exit
+	// path -- terminated by a signal (a kernel OOM kill, most often) rather
+	// than failing normally. CHAOS-4264: this used to collapse into an
+	// opaque CategoryRetryable with no cause, explainable only by reading
+	// Sentry/dmesg on the host.
+	ReasonProcessSignaled = reason("process_signaled")
+	// ReasonResourceExhausted marks a compatibility bridge attempt whose
+	// runner subprocess hit its own self-imposed memory bound (RLIMIT_AS)
+	// and raised a classified MemoryError instead of being killed by the
+	// kernel. Distinct from ReasonProcessSignaled: this is the runner
+	// catching its own ceiling, not an external kill (CHAOS-4264).
+	ReasonResourceExhausted = reason("resource_exhausted")
+	// ReasonAmbiguousRefused marks a compatibility bridge claim attempt
+	// that was refused because the durable execution ledger row is stuck in
+	// a state (ambiguous, or executing) whose original claim is still
+	// active -- a genuine overlap, not the common case CHAOS-4264 fixed
+	// (where the original claim had already been superseded and the bridge
+	// now reaps the row automatically instead of refusing it).
+	ReasonAmbiguousRefused = reason("ambiguous_refused")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

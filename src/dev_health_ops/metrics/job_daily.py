@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -99,6 +100,32 @@ from dev_health_ops.work_graph.extractors.ai_workflow import (
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# CHAOS-4264: the daily-metrics bridge (worker_metrics._run_daily_direct)
+# already computes one repo_id at a time -- a partition's peak working set
+# scales with the LARGEST single repo's per-day source-row volume, not with
+# repo_count, PROVIDED a partition's repo_ids list itself stays bounded. This
+# name is the documented knob for that upstream bound: the daily fan-out
+# dispatcher (internal/jobs/metrics/daily) should keep a partition's repo_ids
+# at or under this count so no single compatibility bridge HTTP call has to
+# iterate an unbounded repo list before its execution ledger row can be
+# marked succeeded. Nothing in this module enforces it -- job_daily.py has no
+# visibility into how many partitions a run was split into -- it exists so
+# the dispatcher has one canonical value to read instead of a magic number.
+DAILY_PARTITION_MAX_REPOS_ENV_KEY = "DEV_HEALTH_METRICS_DAILY_PARTITION_MAX_REPOS"
+DEFAULT_DAILY_PARTITION_MAX_REPOS = 5
+
+
+def daily_partition_max_repos() -> int:
+    raw = os.environ.get(DAILY_PARTITION_MAX_REPOS_ENV_KEY, "").strip()
+    if not raw:
+        return DEFAULT_DAILY_PARTITION_MAX_REPOS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_DAILY_PARTITION_MAX_REPOS
+    return value if value > 0 else DEFAULT_DAILY_PARTITION_MAX_REPOS
+
 
 # Public aliases for backward compatibility
 _to_utc = to_utc
@@ -1496,6 +1523,19 @@ async def run_daily_metrics_job(
             )
             for s in sinks:
                 s.write_ic_landscape_rolling(ic_landscape)
+
+        if len(days) > 1:
+            # CHAOS-4264: a backfill_days > 1 call holds this day's source
+            # rows (commit/PR/CI/testops/incident/work-item lists, complexity
+            # and blame maps) as plain local variables that Python's own
+            # refcounting already drops once the next iteration reassigns
+            # them -- except for anything a reference cycle keeps alive
+            # (tracebacks captured in a `except ... as exc` that outlives its
+            # block, a resolver closure holding a day's rows). gc.collect()
+            # forces that cycle collection at the day boundary instead of
+            # letting it accumulate across the whole backfill window; it is
+            # a no-op cost in the common single-day case, which skips it.
+            gc.collect()
 
     if families_zero_rows:
         logger.warning(

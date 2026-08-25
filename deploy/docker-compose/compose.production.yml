@@ -167,6 +167,18 @@ services:
       # Schema is applied by the one-shot `migrate` service (gated via
       # depends_on) — the API must never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
+      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
+      # metrics compatibility bridge's runner subprocess
+      # (worker_metrics_runner), independent of this service's own
+      # `deploy.resources.limits.memory` below (which the runner shares with
+      # the API process itself -- the incident this closes was the runner
+      # alone reaching 1.7 GB inside this container). Hitting this bound
+      # raises a classified MemoryError instead of leaving the container-wide
+      # cgroup OOM killer as the only thing that notices -- see
+      # deploy/go-workers/README.md "Daily-metrics compatibility bridge".
+      # Do NOT raise the limit below to "fix" this; it bounds the runner
+      # underneath whatever that limit already is.
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-1073741824}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

@@ -58,6 +58,26 @@ func retryClaim(err error) error {
 	return jobruntime.Retryable(err)
 }
 
+// retryCompatibilityError marks err Retryable and, when it is one of the
+// compatibility bridge's classified sentinels (CHAOS-4264), attaches the
+// matching bounded Reason so the River attempt log explains a signaled or
+// resource-exhausted runner without anyone having to read Sentry/dmesg.
+// Anything else (including the pre-existing ErrUnavailable) is unaffected --
+// Retryable with no reason, exactly as before this ticket.
+func retryCompatibilityError(err error) error {
+	marked := jobruntime.Retryable(err)
+	switch {
+	case errors.Is(err, ErrCompatibilityProcessSignaled):
+		return jobruntime.WithReason(marked, jobruntime.ReasonProcessSignaled)
+	case errors.Is(err, ErrCompatibilityResourceExhausted):
+		return jobruntime.WithReason(marked, jobruntime.ReasonResourceExhausted)
+	case errors.Is(err, ErrCompatibilityAmbiguousRefused):
+		return jobruntime.WithReason(marked, jobruntime.ReasonAmbiguousRefused)
+	default:
+		return marked
+	}
+}
+
 type Run struct {
 	ID             string
 	OrganizationID string
@@ -263,7 +283,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		},
 	); err != nil {
 		releasePartition(handler.store, ctx, *claim)
-		return jobruntime.Retryable(err)
+		return retryCompatibilityError(err)
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
 		// The one post-claim exit that used to return without releasing. If the
@@ -319,7 +339,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		},
 	); err != nil {
 		releaseFinalize(handler.store, ctx, *claim)
-		return jobruntime.Retryable(err)
+		return retryCompatibilityError(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		// Symmetric with the partition layer: this exit claimed and returned

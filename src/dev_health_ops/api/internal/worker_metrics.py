@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic as _monotonic
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -32,6 +33,12 @@ from dev_health_ops.api.internal.worker_auth import (
     authorize_worker_bridge,
 )
 from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.metrics.prometheus import (
+    DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
+    DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL,
+    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL,
+    DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES,
+)
 from dev_health_ops.metrics.remaining_scope_contract import (
     CapacityScope,
     ComplexityScope,
@@ -449,7 +456,7 @@ async def _reserve_execution(
         text(
             """
             SELECT worker_kind, operation, run_id, partition_id, family,
-                   generation, scope_digest, state, attempt_count
+                   generation, scope_digest, state, attempt_count, claim_token
             FROM metric_compatibility_executions
             WHERE id = CAST(:id AS uuid)
             FOR UPDATE
@@ -510,6 +517,48 @@ async def _reserve_execution(
             )
         await session.commit()
         return "execute"
+    if existing["state"] in ("ambiguous", "executing"):
+        # CHAOS-4264: the same safety check the manual repair endpoint uses
+        # (_original_claim_is_active), applied automatically at claim time.
+        # A River retry always renews the partition/run's claim_token BEFORE
+        # calling this endpoint again (see ClaimPartition/ClaimFinalize in
+        # postgres.go), so by the time we get here the row's OWN stored
+        # claim_token is already stale on the very first retry -- there is
+        # no need to wait for a human to confirm that. If the original claim
+        # is somehow still active (a genuine concurrent overlap), this falls
+        # through to the same 409 as before.
+        if not await _original_claim_is_active(session, existing):
+            reaped_from = str(existing["state"])
+            retried = await session.execute(
+                text(
+                    """
+                    UPDATE metric_compatibility_executions
+                    SET state = 'executing',
+                        claim_token = CAST(:claim_token AS uuid),
+                        attempt_count = attempt_count + 1,
+                        last_attempt_at = statement_timestamp()
+                    WHERE id = CAST(:id AS uuid)
+                      AND state = :expected_state
+                      AND attempt_count = :attempt_count
+                    RETURNING id
+                    """
+                ),
+                {
+                    "id": str(execution.id),
+                    "claim_token": str(execution.claim_token),
+                    "expected_state": reaped_from,
+                    "attempt_count": existing["attempt_count"],
+                },
+            )
+            if retried.scalar_one_or_none() is None:
+                raise HTTPException(
+                    status_code=409, detail="Execution repair state changed"
+                )
+            await session.commit()
+            DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL.labels(
+                from_state=reaped_from, to_state="executing"
+            ).inc()
+            return "execute"
     await session.commit()
     raise HTTPException(
         status_code=409,
@@ -517,6 +566,7 @@ async def _reserve_execution(
             "message": "Execution outcome requires readback",
             "execution_id": str(execution.id),
             "state": str(existing["state"]),
+            "reason": "ambiguous_refused",
         },
     )
 
@@ -740,6 +790,34 @@ async def _mark_ambiguous(
     await session.commit()
 
 
+async def _mark_retry_authorized(
+    session: AsyncSession, execution: _Execution, detail: str
+) -> None:
+    """Move a fresh failure straight to retry_authorized, skipping ambiguous.
+
+    CHAOS-4264: only reached when the runner subprocess emitted zero
+    progress lines before failing (signaled, resource-exhausted, or a plain
+    exception) -- i.e. no repository's families were written for this
+    execution, so there is nothing an ambiguous-state human review could
+    confirm or refute that a retry doesn't already handle safely. This is
+    the same terminal value _repair_execution's "retry_safe" resolution
+    writes; the only difference is that it fires automatically instead of
+    waiting on a human, and only under that stronger safety condition.
+    """
+    await session.execute(
+        text(
+            """
+            UPDATE metric_compatibility_executions
+            SET state = 'retry_authorized', failure_detail = :detail,
+                last_attempt_at = statement_timestamp()
+            WHERE id = CAST(:id AS uuid) AND state = 'executing'
+            """
+        ),
+        {"id": str(execution.id), "detail": detail[:1024]},
+    )
+    await session.commit()
+
+
 _MARK_SUCCEEDED_REMAINING_PARTITION = """
     UPDATE metric_compatibility_executions
     SET state = 'succeeded',
@@ -848,7 +926,11 @@ async def _mark_succeeded(
     )
 
 
-async def _run_daily_direct(execution: _Execution) -> dict[str, Any]:
+async def _run_daily_direct(
+    execution: _Execution,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     from dev_health_ops.metrics.job_daily import (
         run_daily_metrics_finalize,
         run_daily_metrics_job,
@@ -874,7 +956,15 @@ async def _run_daily_direct(execution: _Execution) -> dict[str, Any]:
     # surfaced so staleness is visible in the execution result instead of
     # silently indistinguishable from a fully-populated run.
     families_zero_rows: dict[str, list[str]] = {}
-    for repo_id in repo_ids:
+    repo_count = len(repo_ids)
+    for index, repo_id in enumerate(repo_ids):
+        # CHAOS-4264: one repo_id at a time -- each run_daily_metrics_job call
+        # loads and releases only that repo's source rows, so a partition's
+        # peak working set does not scale with repo_count. on_progress fires
+        # only AFTER a repo's families are fully written, so the parent
+        # process can tell "N repos already landed" from "nothing landed
+        # yet" if this loop is killed mid-repo (see worker_metrics_runner._
+        # emit_progress).
         zero_rows_by_day = await run_daily_metrics_job(
             db_url=db_url,
             day=target_day,
@@ -888,10 +978,12 @@ async def _run_daily_direct(execution: _Execution) -> dict[str, Any]:
         for day, families in zero_rows_by_day.items():
             if families:
                 families_zero_rows[f"{repo_id}:{day.isoformat()}"] = families
+        if on_progress is not None:
+            on_progress(index + 1, repo_count)
     result: dict[str, Any] = {
         "operation": "partition",
         "target_day": target_day.isoformat(),
-        "repo_count": len(repo_ids),
+        "repo_count": repo_count,
     }
     if families_zero_rows:
         result["families_zero_rows"] = families_zero_rows
@@ -1049,9 +1141,13 @@ async def _run_remaining_direct(execution: _Execution) -> dict[str, Any]:
     return await runner(execution, scope)
 
 
-async def _run_execution_direct(execution: _Execution) -> dict[str, Any]:
+async def _run_execution_direct(
+    execution: _Execution,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     if execution.worker_kind == "daily":
-        return await _run_daily_direct(execution)
+        return await _run_daily_direct(execution, on_progress=on_progress)
     if execution.worker_kind == "remaining":
         return await _run_remaining_direct(execution)
     raise RuntimeError("metric compatibility worker kind is not allowlisted")
@@ -1093,6 +1189,54 @@ async def _terminate_compatibility_process(
         await process.wait()
 
 
+class _CompatibilityProcessFailure(RuntimeError):
+    """A classified runner subprocess failure (CHAOS-4264).
+
+    ``reason`` is drawn from a fixed, bounded vocabulary
+    ({"process_signaled", "resource_exhausted", "process_failed"}) safe to
+    cross the HTTP boundary to the Go caller. ``safe_to_retry`` is true only
+    when the runner emitted zero progress lines before failing -- meaning no
+    repository's families were written for this execution, so a retry cannot
+    create partial/duplicate state and does not need a human to confirm it.
+    """
+
+    def __init__(self, message: str, *, reason: str, safe_to_retry: bool) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.safe_to_retry = safe_to_retry
+
+
+_RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE = 2
+
+
+async def _poll_peak_rss_bytes(pid: int, *, interval_seconds: float = 0.25) -> int:
+    """Sample /proc/<pid>/status while the runner subprocess is alive.
+
+    A watermark read after the fact (e.g. resource.getrusage(RUSAGE_CHILDREN))
+    is unusable here: ru_maxrss is a lifetime max across every child the api
+    process has ever reaped, not this one call, so it under-reports once a
+    single earlier child has set a higher watermark. Polling VmRSS directly
+    survives a SIGKILL too -- the last sample taken before the kill is still
+    a real reading, unlike anything the child would have to report about
+    itself on a graceful exit path it never reaches.
+    """
+    peak = 0
+    status_path = f"/proc/{pid}/status"
+    while True:
+        try:
+            with open(status_path, encoding="ascii") as handle:
+                for line in handle:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1].isdigit():
+                            peak = max(peak, int(parts[1]) * 1024)
+                        break
+        except (FileNotFoundError, ProcessLookupError, OSError):
+            break
+        await asyncio.sleep(interval_seconds)
+    return peak
+
+
 async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
     payload = _canonical_json(_execution_process_payload(execution)).encode()
     if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
@@ -1109,9 +1253,11 @@ async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
     if process.stdin is None or process.stdout is None:
         await _terminate_compatibility_process(process)
         raise RuntimeError("metric compatibility process pipes are unavailable")
+    started_at = _monotonic()
     stdout_task = asyncio.create_task(
         _read_bounded_process_stream(process.stdout, _MAX_COMPATIBILITY_PROCESS_BYTES)
     )
+    rss_task = asyncio.create_task(_poll_peak_rss_bytes(process.pid))
     input_error: BrokenPipeError | ConnectionResetError | None = None
     try:
         try:
@@ -1129,23 +1275,77 @@ async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
         if not stdout_task.done():
             stdout_task.cancel()
         await asyncio.gather(stdout_task, return_exceptions=True)
-    if return_code != 0:
-        raise RuntimeError("metric compatibility process failed")
-    if input_error is not None:
-        raise RuntimeError(
-            "metric compatibility process rejected its input"
-        ) from input_error
-    try:
-        decoded = json.loads(stdout)
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("metric compatibility process returned invalid JSON") from exc
-    if (
-        not isinstance(decoded, dict)
-        or set(decoded) != {"outcome"}
-        or not isinstance(decoded["outcome"], dict)
-    ):
-        raise ValueError("metric compatibility process returned an invalid response")
-    return decoded["outcome"]
+        if not rss_task.done():
+            rss_task.cancel()
+        peak_rss_bytes = 0
+        with contextlib.suppress(asyncio.CancelledError):
+            polled = await rss_task
+            if isinstance(polled, int):
+                peak_rss_bytes = polled
+        DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES.labels(
+            worker_kind=execution.worker_kind
+        ).set(peak_rss_bytes)
+        DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS.labels(
+            worker_kind=execution.worker_kind, operation=execution.operation
+        ).observe(_monotonic() - started_at)
+
+    lines = [line for line in stdout.split(b"\n") if line.strip()]
+    progress_seen = False
+    outcome_line: bytes | None = None
+    for line in lines:
+        try:
+            parsed = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict) and "progress" in parsed:
+            progress_seen = True
+        elif isinstance(parsed, dict) and "outcome" in parsed:
+            outcome_line = line
+
+    if return_code == 0:
+        DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason="success").inc()
+        if input_error is not None:
+            raise RuntimeError(
+                "metric compatibility process rejected its input"
+            ) from input_error
+        if outcome_line is None:
+            raise ValueError("metric compatibility process returned invalid JSON")
+        try:
+            decoded = json.loads(outcome_line)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "metric compatibility process returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(decoded, dict)
+            or set(decoded) != {"outcome"}
+            or not isinstance(decoded["outcome"], dict)
+        ):
+            raise ValueError(
+                "metric compatibility process returned an invalid response"
+            )
+        return decoded["outcome"]
+
+    # CHAOS-4264: a non-zero exit is classified instead of collapsed into one
+    # generic RuntimeError. safe_to_retry is keyed purely on progress_seen --
+    # not on WHY the process failed -- because that is the one fact that
+    # actually determines whether a retry is safe: nothing was written yet.
+    safe_to_retry = not progress_seen
+    if return_code < 0:
+        reason = "process_signaled"
+        message = (
+            f"metric compatibility process was terminated by signal {-return_code}"
+        )
+    elif return_code == _RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE:
+        reason = "resource_exhausted"
+        message = "metric compatibility process exceeded its memory bound"
+    else:
+        reason = "process_failed"
+        message = "metric compatibility process failed"
+    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason=reason).inc()
+    raise _CompatibilityProcessFailure(
+        message, reason=reason, safe_to_retry=safe_to_retry
+    )
 
 
 async def _wait_for_client_disconnect(connection: Request) -> None:
@@ -1243,6 +1443,34 @@ async def _execute(
     except asyncio.CancelledError:
         await _mark_ambiguous(session, execution, "request canceled during execution")
         raise
+    except _CompatibilityProcessFailure as exc:
+        # CHAOS-4264: a signaled/resource-exhausted/failed runner subprocess
+        # that produced zero progress lines is safe to hand straight back to
+        # River as retryable -- skip the human-review-only ambiguous state
+        # entirely, since there is nothing to review (nothing was written).
+        # Anything with at least one progress line stays ambiguous, exactly
+        # as any other failure always has.
+        if exc.safe_to_retry:
+            await _mark_retry_authorized(session, execution, f"{exc.reason}: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "Metric execution failed before any output was produced",
+                    "execution_id": str(execution.id),
+                    "state": "failed",
+                    "reason": exc.reason,
+                },
+            ) from exc
+        await _mark_ambiguous(session, execution, f"{exc.reason}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Metric execution outcome is ambiguous",
+                "execution_id": str(execution.id),
+                "state": "ambiguous",
+                "reason": exc.reason,
+            },
+        ) from exc
     except Exception as exc:
         await _mark_ambiguous(
             session, execution, f"executor raised {type(exc).__name__}"

@@ -472,6 +472,9 @@ class _Result:
     def scalar_one_or_none(self) -> Any:
         return self._scalar
 
+    def scalar_one(self) -> Any:
+        return self._scalar
+
     def mappings(self) -> _Result:
         return self
 
@@ -494,6 +497,12 @@ class _Session:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["executing", "ambiguous"])
 async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
+    """The original claim is STILL active (CHAOS-4264's
+    _original_claim_is_active EXISTS check returns true) -- this is the one
+    case that must keep refusing re-claim exactly as before this ticket. A
+    superseded claim (the common post-fix case) is covered by
+    test_stuck_ledger_row_reexecutes_once_original_claim_is_superseded
+    below."""
     execution = _execution()
     existing = {
         "worker_kind": execution.worker_kind,
@@ -505,13 +514,54 @@ async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
         "scope_digest": execution.scope_digest,
         "state": state,
         "attempt_count": 1,
+        "claim_token": execution.claim_token,
     }
-    session = _Session([_Result(), _Result(row=existing), _Result()])
+    session = _Session([_Result(), _Result(row=existing), _Result(scalar=True)])
     with pytest.raises(HTTPException) as exc:
         await worker_metrics._reserve_execution(cast(AsyncSession, session), execution)
     assert exc.value.status_code == 409
     assert isinstance(exc.value.detail, dict)
     assert exc.value.detail["state"] == state
+    assert exc.value.detail["reason"] == "ambiguous_refused"
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["executing", "ambiguous"])
+async def test_stuck_ledger_row_reexecutes_once_original_claim_is_superseded(
+    state: str,
+) -> None:
+    """CHAOS-4264: the same safety check the manual repair endpoint uses
+    (_original_claim_is_active), applied automatically at claim time. Once
+    the original claim is no longer active -- the normal shape of a River
+    retry, which always renews the partition/run claim_token before calling
+    this endpoint again -- a stuck ambiguous/executing row is reaped back to
+    executing without waiting on a human repair call."""
+    execution = _execution()
+    existing = {
+        "worker_kind": execution.worker_kind,
+        "operation": execution.operation,
+        "run_id": execution.run_id,
+        "partition_id": execution.partition_id,
+        "family": execution.family,
+        "generation": execution.generation,
+        "scope_digest": execution.scope_digest,
+        "state": state,
+        "attempt_count": 1,
+        "claim_token": execution.claim_token,
+    }
+    session = _Session(
+        [
+            _Result(),  # INSERT ... ON CONFLICT DO NOTHING: no row (already exists)
+            _Result(row=existing),  # SELECT the existing stuck row
+            _Result(scalar=False),  # _original_claim_is_active: superseded
+            _Result(scalar=str(execution.id)),  # the reap UPDATE ... RETURNING id
+        ]
+    )
+    reservation = await worker_metrics._reserve_execution(
+        cast(AsyncSession, session), execution
+    )
+    assert reservation == "execute"
     assert session.commits == 1
 
 

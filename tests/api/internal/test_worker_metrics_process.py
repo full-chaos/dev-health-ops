@@ -198,3 +198,229 @@ async def test_metric_client_disconnect_terminates_the_process_group(
     pid, child_pid = (int(value) for value in marker.read_text().split(":"))
     await _assert_process_reaped(pid)
     await _assert_process_reaped(child_pid)
+
+
+# --------------------------------------------------------------------------
+# CHAOS-4264: memory bounding + classified (not -9) subprocess failures.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason=(
+        "RLIMIT_AS enforcement is deterministic on Linux (what every "
+        "deployment target runs); macOS's virtual memory allocator does not "
+        "reliably fail an over-limit allocation the same way, so this would "
+        "be a flaky assertion about the host, not about the code."
+    ),
+)
+@pytest.mark.asyncio
+async def test_runner_memory_limit_converts_oversized_allocation_to_memory_error() -> (
+    None
+):
+    """The falsifier for CHAOS-4264 item 1(a): a synthetic oversized compute
+    under a small configured limit must fail with a classified MemoryError,
+    never reach kernel OOM-kill territory in the first place."""
+    source = (
+        "import os, sys\n"
+        "os.environ['DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES'] = str(64 * 1024 * 1024)\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "runner._apply_memory_limit()\n"
+        "try:\n"
+        "    buf = bytearray(1024 * 1024 * 1024)\n"
+        "    buf[0] = 1\n"
+        "except MemoryError:\n"
+        "    raise SystemExit(runner.EXIT_RESOURCE_EXHAUSTED)\n"
+        "raise SystemExit(97)\n"
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        source,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    assert process.returncode == worker_metrics_runner.EXIT_RESOURCE_EXHAUSTED, (
+        f"returncode={process.returncode} stderr={stderr!r}"
+    )
+
+
+def _synthetic_runner_source(*, allocate_bytes: int, limit_bytes: int) -> str:
+    """A stand-in for the real runner that exercises the SAME memory-bound
+    mechanism (worker_metrics_runner._apply_memory_limit) and the SAME
+    progress-then-outcome NDJSON wire protocol
+    (worker_metrics_runner._emit_progress / _encode_outcome), without
+    needing a live ClickHouse-backed compute to produce an oversized working
+    set. This is what test_metric_compatibility_process_* below drive
+    through _run_compatibility_process to prove the PARENT's classification
+    (not just the child's own exit path).
+    """
+    return (
+        "import contextlib, json, os, sys\n"
+        f"os.environ['DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES'] = str({limit_bytes})\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "runner._apply_memory_limit()\n"
+        "json.load(sys.stdin)\n"
+        "runner._emit_progress(1, 3)\n"
+        "runner._emit_progress(2, 3)\n"
+        "with contextlib.suppress(Exception):\n"
+        f"    buf = bytearray({allocate_bytes})\n"
+        "    buf[0] = 1\n"
+        "    sys.stdout.write(runner._encode_outcome({'repo_count': 3}) + chr(10))\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(runner.EXIT_RESOURCE_EXHAUSTED)\n"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="see memory-limit test above")
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_classifies_resource_exhausted_with_progress_as_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Progress WAS emitted (2 of 3 repos already written) before the
+    resource bound was hit -- CHAOS-4264 says this must stay conservative
+    (ambiguous-eligible), not be waved through as safe_to_retry."""
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            _synthetic_runner_source(
+                allocate_bytes=1024**3, limit_bytes=64 * 1024 * 1024
+            )
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    assert excinfo.value.safe_to_retry is False
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_classifies_signal_kill_with_no_progress_as_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No progress line was ever emitted, and the process was killed by a
+    signal (the actual CHAOS-4264 production shape: SIGKILL, return_code<0)
+    -- this must be safe to hand straight back to River, not parked in the
+    ambiguous state a human has to repair."""
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, os, signal, sys\n"
+            "json.load(sys.stdin)\n"
+            "os.kill(os.getpid(), signal.SIGKILL)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "process_signaled"
+    assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_progress_then_signal_kill_is_not_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same signal kill, but at least one repo's families were already
+    written first -- must NOT be classified safe_to_retry, matching the
+    conservative default that predates this ticket."""
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, os, signal, sys\n"
+            "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+            "json.load(sys.stdin)\n"
+            "runner._emit_progress(1, 3)\n"
+            "os.kill(os.getpid(), signal.SIGKILL)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "process_signaled"
+    assert excinfo.value.safe_to_retry is False
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_generic_failure_with_no_progress_is_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command("raise SystemExit(1)"),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "process_failed"
+    assert excinfo.value.safe_to_retry is True
+
+
+# --------------------------------------------------------------------------
+# CHAOS-4264: per-repo streaming for the daily partition path.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_daily_direct_computes_one_repo_at_a_time_and_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The falsifier for CHAOS-4264 item 1(b): a partition's repo_ids are
+    computed one at a time (each run_daily_metrics_job call scoped to a
+    single repo_id, its source rows released before the next call starts),
+    not loaded all at once -- and on_progress fires after each one, in
+    order, so the parent can tell how far a killed execution got."""
+    repo_ids = [uuid.uuid4() for _ in range(3)]
+    calls: list[uuid.UUID | None] = []
+    progress: list[tuple[int, int]] = []
+
+    async def fake_run_daily_metrics_job(*, repo_id, **_kwargs):
+        calls.append(repo_id)
+        return {}
+
+    import dev_health_ops.metrics.job_daily as job_daily_module
+
+    monkeypatch.setattr(
+        job_daily_module, "run_daily_metrics_job", fake_run_daily_metrics_job
+    )
+    scope = {
+        "target_day": "2026-08-25",
+        "repo_ids": [str(value) for value in repo_ids],
+    }
+    digest = worker_metrics._scope_digest(scope)
+    run_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    partition_id = uuid.UUID("22222222-2222-4222-8222-222222222222")
+    execution = worker_metrics._Execution(
+        id=worker_metrics._execution_id(
+            worker_kind="daily",
+            operation="partition",
+            run_id=run_id,
+            partition_id=partition_id,
+            family="daily",
+            generation="fixed-schedule:daily_metrics_fanout:2026-08-25T01:00:00Z",
+            scope_digest=digest,
+        ),
+        worker_kind="daily",
+        operation="partition",
+        run_id=run_id,
+        partition_id=partition_id,
+        organization_id="55555555-5555-4555-8555-555555555555",
+        family="daily",
+        generation="fixed-schedule:daily_metrics_fanout:2026-08-25T01:00:00Z",
+        claim_token=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        scope=scope,
+        scope_digest=digest,
+    )
+    monkeypatch.setattr(
+        worker_metrics, "require_clickhouse_uri", lambda: "clickhouse://test"
+    )
+    result = await worker_metrics._run_daily_direct(
+        execution, on_progress=lambda index, total: progress.append((index, total))
+    )
+    assert calls == repo_ids, (
+        "expected one run_daily_metrics_job call per repo_id, in order"
+    )
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+    assert result["repo_count"] == 3

@@ -563,9 +563,17 @@ func TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColu
 	if err != nil {
 		t.Fatalf("loadDonors error = %v", err)
 	}
-	const expectedProjection = "SELECT work_item_id, provider, type, toString(repo_id), native_team_key, project_key,\n       project_id, project_name, assignees, org_id"
+	// Codex round-8 finding (2026-08-25, MEDIUM): strings.Contains alone only
+	// proves the expected columns appear IN ORDER somewhere in the query --
+	// it would still pass if a future column were appended after org_id
+	// (production Scan has exactly ten destinations, so a silently widened
+	// SELECT list is a real arity regression this test exists to catch).
+	// Anchoring the projection to end immediately before "FROM work_items
+	// FINAL" (no columns in between) makes the ten-column list exact, not
+	// just a matching prefix.
+	const expectedProjection = "SELECT work_item_id, provider, type, toString(repo_id), native_team_key, project_key,\n       project_id, project_name, assignees, org_id\nFROM work_items FINAL"
 	if !strings.Contains(conn.capturedQuery, expectedProjection) {
-		t.Fatalf("donor query SELECT projection changed shape (order or columns):\n%s", conn.capturedQuery)
+		t.Fatalf("donor query SELECT projection changed shape (order, columns, or an appended column before FROM):\n%s", conn.capturedQuery)
 	}
 	if len(subjects) != 1 {
 		t.Fatalf("subjects = %+v, want exactly 1", subjects)

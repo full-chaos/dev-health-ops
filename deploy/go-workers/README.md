@@ -719,6 +719,78 @@ process is invisible to the runner's own rlimit and still only ever surfaces
 in `dmesg`/`memory.events`, never in `docker inspect` or the metrics this
 stack already exports.
 
+### `--shutdown-timeout` must exceed the longest job timeout on the selected queues, not just satisfy the flag's own minimum
+
+**Symptom:** `dev-health-worker` fails startup with
+`error_category=dependency_configuration_failed reason=queue_coverage_validation_failed`
+even though every selected queue's kinds are registered, route to `river`,
+and were successfully constructed. Nothing in that reason string mentions
+shutdown or drain budget — `queuesReady()`
+(`cmd/dev-health-worker/dependencies.go`) wraps every `ValidateStartup`
+failure in the same generic reason code, so this reads identically to an
+actual handler-coverage mismatch.
+
+**Why:** the drain-budget check (`cmd/dev-health-worker/dependencies.go`,
+around the `shutdown_timeout_below_drain_budget` reason,
+`workerFinalizationBuffer = 60 * time.Second`) requires
+`shutdown_timeout - 60s >= (the longest Timeout among the selected queues'
+registered kinds)`. `contracts/jobs/v1/registry.json` sets
+`timeout_seconds: 7200` for `metrics.daily_partition` and all six
+`metrics.remaining.*` kinds — so any worker selecting the `metrics` queue
+needs **`--shutdown-timeout=7260s`** at minimum. This is exactly why
+`deploy/docker-compose/compose.go-workers.yml`'s `go-worker-heavy` uses that
+literal value; it previously read as an arbitrary round number. A short
+value that looks reasonable for a quick manual test or CI run (10s, 60s,
+even 420s) fails this check silently under the same opaque reason string —
+confirmed by hand while building CHAOS-4266.
+
+### Provisioning order for a BRAND NEW database: `provision_river_roles.sql` before `dev-health-worker-migrate`, always
+
+The "coordinator/domain readiness failure" section above is written around
+a database that is *behind* on migrations. A database that has never been
+provisioned at all (a fresh CI Postgres, a new local volume before
+`go-river-provision` has ever run) hits the identical
+`{"failed_checks":["domain_postgres","queue_postgres"]}` symptom for a
+different reason: the three runtime roles
+(`devhealth_domain`/`devhealth_queue`/`devhealth_coordinator`) don't exist
+yet, or exist without the grants `CheckRolePosture`
+(`internal/storage/postgres/domain_authorization.go`) requires.
+`scripts/worker/provision_river_roles.sql` (run via `psql` with
+`domain_role`/`queue_role`/`coordinator_role`/`*_password` variables, exactly
+as `deploy/docker-compose/compose.go-workers.yml`'s `go-river-provision`
+service invokes it) **must run before** `dev-health-worker-migrate`, every
+time, on every fresh database — confirmed while building CHAOS-4266's CI
+gate (`ci/run_metrics_executed_proof.sh`).
+
+Two traps to avoid if you hit the readiness failure after the roles already
+exist: (1) `CheckRolePosture`'s posture check is an *exact* match, not a
+minimum — it rejects excess privileges (e.g. a table-wide grant on
+`worker_job_completion_fences`, which must be column-scoped) exactly as it
+rejects missing ones, so a blanket `GRANT ALL ON ALL TABLES` is strictly
+worse than doing nothing, not a workaround. (2) `dev-health-worker-migrate`
+only re-applies grants when it actually runs a pending migration — if the
+schema is already at the pinned version it reports `(0 applied)` and
+silently skips grant re-application, so revoking privileges by hand and
+re-running the migrate binary does not restore them; re-run
+`provision_river_roles.sql` instead, or start from a fresh database.
+
+### `post_sync` needs the `sync` queue too — `--queues=metrics` alone leaves the fanout job stuck `available` forever
+
+A worker selecting only `--queues=metrics` starts cleanly, passes readiness,
+and then does nothing further: the `sync_dispatch_outbox` relay correctly
+enqueues a `post_sync` River job (once its transport is `river` — a fresh
+install defaults it to `celery`, a silent no-op relay with no consumer; see
+CHAOS-4272), but that job's queue is `sync`
+(`internal/syncdispatchcontract.RiverQueue = "sync"`), not `metrics`, and it
+sits `available`, unclaimed, indefinitely. `post_sync` is constructed by
+`buildSyncCoordinatorWorker` (`cmd/dev-health-worker/sync_dispatch.go`), a
+different builder from `buildDailyWorker`
+(`cmd/dev-health-worker/daily.go`), gated on `--queues` containing `"sync"`
+specifically. Any worker that needs the post-sync fanout to actually run
+(as opposed to just computing already-dispatched metrics partitions) needs
+**both** `metrics` and `sync` selected — confirmed while building
+CHAOS-4266's CI gate, which uses `--queues=metrics,sync`.
+
 ## CHAOS-3142 end-to-end proof
 
 The durable record of what CHAOS-3142 proved — against a real shared local

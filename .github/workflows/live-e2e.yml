@@ -124,3 +124,104 @@ jobs:
           name: live-e2e-api-logs
           path: live-e2e-api.log
           if-no-files-found: ignore
+
+  # CHAOS-4266: executed-proof gate for the metrics family. Deliberately a
+  # SEPARATE job from `live-e2e` above, not another stage of it: that job's
+  # `--with-metrics` fixture path writes derived metric rows directly into
+  # ClickHouse and is FIXTURE-BACKED, not pipeline proof (see the comments on
+  # its fixture-generation and /api/v1/home steps). This job seeds real
+  # source rows through the real sync path, lets the real Go worker +
+  # reconciler process the resulting post-sync fanout, then asserts rows
+  # landed in ClickHouse for the seeded org's live repo ids.
+  #
+  # RED ON MAIN TODAY, ON PURPOSE: CHAOS-4263 (daily_metrics_partitions built
+  # from the wrong id space) means this job currently fails with
+  # zero_rows_with_source_data for every family. It goes green once
+  # CHAOS-4263 merges. Do not mark it a required check before that -- see the
+  # PR's RISK-NOTES.
+  metrics-executed-proof:
+    needs: [changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    services:
+      postgres:
+        image: postgres:17.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.1
+        env:
+          CLICKHOUSE_DB: default
+          CLICKHOUSE_USER: ch
+          CLICKHOUSE_PASSWORD: ch
+        ports:
+          - 8123:8123
+          # Native wire protocol: the Go worker/reconciler connect here, not
+          # 8123 (that's Python's clickhouse-connect HTTP port). Pointed at
+          # 8123 the Go client fails immediately with "ClickHouse readiness
+          # check failed" -- verified by hand, and documented in
+          # deploy/go-workers/README.md.
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
+
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run metrics executed-proof
+        id: metrics-proof
+        env:
+          DISABLE_DOTENV: "1"
+          OTEL_ENABLED: "false"
+        run: |
+          chmod +x ci/run_metrics_executed_proof.sh
+          ./ci/run_metrics_executed_proof.sh
+
+      - name: Upload metrics-executed-proof logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: metrics-executed-proof-logs
+          path: |
+            /tmp/metrics-executed-proof.*/api.log
+            /tmp/metrics-executed-proof.*/worker.log
+            /tmp/metrics-executed-proof.*/reconciler.log
+            /tmp/metrics-executed-proof.*/family-summary.json
+          if-no-files-found: ignore

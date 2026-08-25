@@ -35,6 +35,13 @@ _SRC = _REPO_ROOT / "src" / "dev_health_ops"
 _ATTEMPTED_WRITERS = {
     "internal/scheduler/sync/materializer.go": "RecordExecutedProofAttempted",
     "src/dev_health_ops/sync/planner.py": "record_executed_proof_attempts",
+    # CHAOS-4266: the executed-proof gate's synthetic cicd/deployments/
+    # incidents/tests seeding constructs a SyncRunUnit already at SUCCESS
+    # (no separate plan -> dispatch -> complete lifecycle), so it calls both
+    # record_executed_proof_attempts AND record_executed_proof_terminal in
+    # the same transaction as the insert -- see the comment at that call
+    # site in processors/sync.py.
+    "src/dev_health_ops/processors/sync.py": "record_executed_proof_attempts",
 }
 
 #: Files allowed to terminalize a unit as SUCCESS. Each MUST stamp the proven

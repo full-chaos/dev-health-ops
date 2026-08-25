@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.credentials import (
     CredentialResolutionError,
@@ -20,7 +21,17 @@ from dev_health_ops.processors.gitlab import (
     process_gitlab_projects_batch,
 )
 from dev_health_ops.processors.local import process_local_blame, process_local_repo
-from dev_health_ops.storage import detect_db_type, run_with_store
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
+    write_operational_batch,
+)
+from dev_health_ops.storage import (
+    ClickHouseStore,
+    SQLAlchemyStore,
+    detect_db_type,
+    run_with_store,
+)
 from dev_health_ops.sync.datasets import processor_sync_targets
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -30,6 +41,17 @@ from dev_health_ops.utils.cli import (
     resolve_since_datetime,
     validate_sink,
 )
+
+# Real provider registered in the Go-native post-sync capability matrix
+# (internal/providersync/capabilities.go) for cicd/deployments/incidents/tests
+# with the exact legacy targets native_post_sync.go's loadPostSyncPlan needs
+# (hasCICD/hasDeployments/hasIncidents). "synthetic" is NOT a registered
+# provider there -- a unit tagged with it would silently fail
+# providersync.Capability's lookup and never reach those flags at all, so the
+# post-sync fanout this exists to exercise would just never fire. "gitlab" is
+# used (not "github") because only gitlab's entry in that table registers an
+# "incidents" dataset; github has none.
+_SYNTHETIC_SYNC_RUN_PROVIDER = "gitlab"
 
 
 def _sync_flags_for_target(target: str) -> dict:
@@ -321,6 +343,173 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
     return 0
 
 
+_SYNC_RUN_BACKED_SYNTHETIC_TARGETS = frozenset(
+    {"cicd", "deployments", "incidents", "tests"}
+)
+
+
+def _complete_synthetic_sync_run(
+    *,
+    org_id: str,
+    repo_full_name: str,
+    target: str,
+    since_at: datetime,
+    before_at: datetime,
+) -> str:
+    """Complete a real sync_run for a synthetic cicd/deployments/incidents/tests
+    seed, through the SAME production finalize path a real provider sync uses
+    (workers.sync_units.finalize_sync_run) -- so the sync_run_units row and
+    the post_sync outbox row this leaves are byte-identical to what a real
+    completed sync leaves, not a fixture shortcut wearing that costume
+    (CHAOS-4266). Deliberately does NOT call
+    workers.post_sync_dispatch._dispatch_post_sync_tasks directly -- that is
+    the Celery-era fixture shortcut this exists to stop being mistaken for
+    pipeline proof.
+
+    Integration/IntegrationSource/IntegrationDataset rows are found-or-created
+    (unique on org_id+integration_id+provider+external_id /
+    org_id+integration_id+dataset_key) so repeated calls across the four
+    targets in one seeding run share one integration, the way one real
+    provider connection would.
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models import (
+        Integration,
+        IntegrationDataset,
+        IntegrationSource,
+        SyncRun,
+        SyncRunMode,
+        SyncRunStatus,
+        SyncRunUnit,
+        SyncRunUnitStatus,
+    )
+    from dev_health_ops.sync.executed_proof_ledger import (
+        record_executed_proof_attempts,
+        record_executed_proof_terminal,
+    )
+    from dev_health_ops.workers.sync_units import finalize_sync_run
+
+    provider = _SYNTHETIC_SYNC_RUN_PROVIDER
+    processor_flags = _sync_flags_for_target(target)
+
+    with get_postgres_session_sync() as session:
+        integration = (
+            session.query(Integration)
+            .filter(Integration.org_id == org_id, Integration.provider == provider)
+            .one_or_none()
+        )
+        if integration is None:
+            integration = Integration(
+                org_id=org_id,
+                provider=provider,
+                name=f"{provider}-synthetic-seed",
+                config={},
+                is_active=True,
+            )
+            session.add(integration)
+            session.flush()
+
+        source = (
+            session.query(IntegrationSource)
+            .filter(
+                IntegrationSource.org_id == org_id,
+                IntegrationSource.integration_id == integration.id,
+                IntegrationSource.provider == provider,
+                IntegrationSource.external_id == repo_full_name,
+            )
+            .one_or_none()
+        )
+        if source is None:
+            source = IntegrationSource(
+                org_id=org_id,
+                integration_id=integration.id,
+                provider=provider,
+                source_type="repo",
+                external_id=repo_full_name,
+                name=repo_full_name.rsplit("/", 1)[-1],
+                full_name=repo_full_name,
+                metadata_={},
+                is_enabled=True,
+            )
+            session.add(source)
+            session.flush()
+
+        dataset = (
+            session.query(IntegrationDataset)
+            .filter(
+                IntegrationDataset.org_id == org_id,
+                IntegrationDataset.integration_id == integration.id,
+                IntegrationDataset.dataset_key == target,
+            )
+            .one_or_none()
+        )
+        if dataset is None:
+            dataset = IntegrationDataset(
+                org_id=org_id,
+                integration_id=integration.id,
+                dataset_key=target,
+                is_enabled=True,
+                options={},
+            )
+            session.add(dataset)
+            session.flush()
+
+        run = SyncRun(
+            org_id=org_id,
+            integration_id=integration.id,
+            triggered_by="metrics-executed-proof-gate",
+            mode=SyncRunMode.INCREMENTAL.value,
+            status=SyncRunStatus.RUNNING.value,
+            total_units=1,
+            completed_units=0,
+            failed_units=0,
+            started_at=since_at,
+        )
+        session.add(run)
+        session.flush()
+
+        unit = SyncRunUnit(
+            org_id=org_id,
+            sync_run_id=run.id,
+            integration_id=integration.id,
+            source_id=source.id,
+            provider=provider,
+            dataset_key=target,
+            cost_class="medium",
+            mode=SyncRunMode.INCREMENTAL.value,
+            since_at=since_at,
+            before_at=before_at,
+            status=SyncRunUnitStatus.SUCCESS.value,
+            attempts=1,
+            processor_flags=processor_flags,
+        )
+        session.add(unit)
+        session.flush()
+        # CHAOS-4114: this file now INSERTs sync_run_units directly (see
+        # tests/test_executed_proof_ledger_write_path_audit.py), so it must
+        # maintain the executed-proof ledger the same way
+        # sync/planner.py's real plan_sync_run does. Unlike a real sync's
+        # plan -> dispatch -> complete lifecycle, this unit is created
+        # already at SUCCESS, so both the ATTEMPTED and PROVEN halves are
+        # recorded together, in the same transaction as the insert, rather
+        # than at two separate call sites.
+        record_executed_proof_attempts(
+            session, [(unit.provider, unit.dataset_key)], now=before_at
+        )
+        record_executed_proof_terminal(
+            session,
+            provider=unit.provider,
+            dataset_key=unit.dataset_key,
+            status=SyncRunUnitStatus.SUCCESS.value,
+            result=None,
+            now=before_at,
+        )
+        run_id = str(run.id)
+
+    finalize_sync_run(run_id)
+    return run_id
+
+
 async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
     from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
@@ -330,6 +519,14 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
     db_type = detect_db_type(db_uri)
     _, backfill_days = resolve_date_range(ns)
     days = backfill_days
+    org_id = getattr(ns, "org", None)
+
+    if target in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS and not org_id:
+        raise SystemExit(
+            f"--provider synthetic --target {target} requires a resolved org "
+            "(--org or ORG_ID env): it completes a real sync_run scoped to "
+            "that org, unlike git/prs/blame which write analytics rows only."
+        )
 
     async def _handler(store):
         ingestion_sink = IngestionSink(store)
@@ -365,7 +562,104 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
                 await ingestion_sink.insert_blame_data(blame_data)
             return
 
-    await run_with_store(db_uri, db_type, _handler, org_id=getattr(ns, "org", None))
+        if target == "cicd":
+            assert org_id is not None  # guarded above, this target requires it
+            pipeline_runs = generator.generate_ci_pipeline_runs(days=days)
+            # Mirrors fixtures/runner.py's exact ClickHouse-vs-Postgres branch:
+            # ClickHouse gets the single enriched insert_testops_pipeline_runs
+            # call (one MV event per run_id); Postgres/SQLite use the plain
+            # ORM insert_ci_pipeline_runs.
+            ch_pipeline_insert = (
+                getattr(store, "insert_testops_pipeline_runs", None)
+                if not isinstance(store, SQLAlchemyStore)
+                else None
+            )
+            if ch_pipeline_insert is not None:
+                extended_rows = generator.generate_pipeline_run_extended_rows(
+                    pipeline_runs=pipeline_runs, org_id=org_id
+                )
+                await ch_pipeline_insert(extended_rows)
+            else:
+                await store.insert_ci_pipeline_runs(pipeline_runs)
+            return
+
+        if target == "deployments":
+            deployments = generator.generate_deployments(
+                days=days, release_refs=generator._default_release_refs(days)
+            )
+            await store.insert_deployments(deployments)
+            return
+
+        if target == "incidents":
+            assert org_id is not None  # guarded above, this target requires it
+            incidents = generator.generate_incidents(days=days)
+            if not incidents:
+                return
+            if isinstance(store, ClickHouseStore):
+                # The real canonical incident write path (CHAOS-4269 traced
+                # this exact call chain): repository-derived incidents go
+                # through the operational entity model, not a legacy
+                # incidents table -- ClickHouseStore has no insert_incidents.
+                incident_sources = [
+                    IssueIncidentSource(
+                        org_id=org_id,
+                        provider="synthetic",
+                        provider_instance_id="cli-sync-synthetic",
+                        repo_id=generator.repo_id,
+                        repo_full_name=repo_name,
+                        external_id=incident.incident_id,
+                        issue_number=None,
+                        source_url=None,
+                        labels=(),
+                        raw_status=incident.status,
+                        title=incident.incident_id,
+                        description=None,
+                        created_at=incident.started_at,
+                        resolved_at=incident.resolved_at,
+                        source_version_at=incident.resolved_at or incident.started_at,
+                    )
+                    for incident in incidents
+                ]
+                await write_operational_batch(
+                    store, map_issue_incidents(incident_sources)
+                )
+            else:
+                await store.insert_incidents(incidents)
+            return
+
+        if target == "tests":
+            assert org_id is not None  # guarded above, this target requires it
+            pipeline_runs = generator.generate_ci_pipeline_runs(days=days)
+            insert_ci_job_runs = getattr(store, "insert_ci_job_runs", None)
+            if insert_ci_job_runs is None:
+                raise SystemExit(
+                    "--target tests --provider synthetic requires a "
+                    "ClickHouse sink (this store has no insert_ci_job_runs)."
+                )
+            job_runs = generator.generate_ci_job_runs(pipeline_runs, org_id=org_id)
+            await insert_ci_job_runs(job_runs)
+            test_data = generator.generate_test_executions(
+                job_runs, days=days, org_id=org_id
+            )
+            if hasattr(store, "insert_test_suite_results"):
+                await store.insert_test_suite_results(test_data["suite_results"])
+            if hasattr(store, "insert_test_case_results"):
+                await store.insert_test_case_results(test_data["case_results"])
+            return
+
+    await run_with_store(db_uri, db_type, _handler, org_id=org_id)
+
+    if target in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS:
+        assert org_id is not None  # guarded above, this target requires it
+        before_at = datetime.now(timezone.utc)
+        since_at = before_at - timedelta(days=days)
+        _complete_synthetic_sync_run(
+            org_id=org_id,
+            repo_full_name=repo_name,
+            target=target,
+            since_at=since_at,
+            before_at=before_at,
+        )
     return 0
 
 

@@ -30,11 +30,16 @@ import pytest
 from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
+    build_linked_issue_team_resolver,
     compute_work_item_team_attributions,
     resolve_team_attribution,
 )
-from dev_health_ops.models.work_items import WorkItem
-from dev_health_ops.providers.teams import LinkedIssueTeamResolver, TeamResolver
+from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
+from dev_health_ops.providers.teams import (
+    LinkedIssueTeamResolver,
+    ProjectKeyTeamResolver,
+    TeamResolver,
+)
 
 COMPUTED_AT = datetime(2026, 8, 24, tzinfo=timezone.utc)
 
@@ -365,6 +370,148 @@ def test_author_never_outranks_a_linked_issue_donor():
     assert by_source["author_membership"].team_id == "team-ops"
     assert by_source["linked_issue"].is_primary == 1
     assert by_source["linked_issue"].team_id == "team-platform"
+
+
+def test_causal_author_never_outranks_a_real_linked_issue_donor():
+    """Codex round-2 finding (2026-08-24, MEDIUM): the test above injects the
+    linked_issue candidate directly via LinkedIssueTeamResolver(_inherited=...),
+    proving only that an ALREADY-SUPPLIED linked_issue candidate outranks
+    author_membership -- it never exercises donor discovery/eligibility
+    (`_DONOR_SOURCES`), so it could stay green even if donor construction were
+    broken. This test drives the REAL production builder
+    (`build_linked_issue_team_resolver`) end to end: a Linear issue that
+    resolves to team CHAOS via its OWN project key (a first-class,
+    donor-eligible source) is linked to a GitHub PR whose author resolves to a
+    DIFFERENT team via attribution_context. The PR must inherit the donor's
+    team, not the author's."""
+    donor = WorkItem(
+        work_item_id="linear:CHAOS-2400",
+        provider="linear",
+        title="t",
+        type="task",
+        status="done",
+        status_raw="Done",
+        project_key="CHAOS",
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    pr = _pr_work_item(reporter="alice", assignees=[])
+    dependency = WorkItemDependency(
+        source_work_item_id=pr.work_item_id,
+        target_work_item_id=donor.work_item_id,
+        relationship_type="relates_to",
+        relationship_type_raw="relates_to",
+    )
+    project_key_resolver = ProjectKeyTeamResolver(
+        project_key_to_team={"CHAOS": ("CHAOS", "Chaos Team")}
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    real_resolver = build_linked_issue_team_resolver(
+        work_items=[donor, pr],
+        dependencies=[dependency],
+        project_key_resolver=project_key_resolver,
+        attribution_context=context,
+    )
+    assert real_resolver.resolve(pr.work_item_id) == ("CHAOS", "Chaos Team")
+
+    team_id, team_name, candidates = resolve_team_attribution(
+        pr,
+        team_resolver=None,
+        project_key_resolver=project_key_resolver,
+        linked_issue_resolver=real_resolver,
+        attribution_context=context,
+    )
+    assert (team_id, team_name) == ("CHAOS", "Chaos Team")
+    by_source = {c.source: c for c in candidates}
+    assert by_source["linked_issue"].is_primary == 1
+    assert by_source["linked_issue"].team_id == "CHAOS"
+    assert by_source["author_membership"].is_primary == 0
+    assert by_source["author_membership"].team_id == "team-ops"
+
+
+def test_causal_author_only_donor_never_becomes_a_linked_issue_donor():
+    """The other half of the codex round-2 finding: an item whose ONLY
+    resolvable team comes from author_membership must NOT register as a
+    linked_issue donor at all (`_DONOR_SOURCES` excludes it, ranks 0-4 only),
+    so a dependent item pointing at it gets NO inherited team -- an
+    author-only donor must never be laundered into rank-5 linked_issue
+    provenance on a dependent. Drives the same real `build_linked_issue_team_resolver`
+    builder the positive test above does."""
+    donor = WorkItem(
+        work_item_id="ghpr:full-chaos/dev-health-ops#100",
+        provider="github",
+        title="t",
+        type="pr",
+        status="done",
+        status_raw="merged",
+        reporter="bob",
+        assignees=[],
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    dependent = WorkItem(
+        work_item_id="ghpr:full-chaos/dev-health-ops#101",
+        provider="github",
+        title="t",
+        type="pr",
+        status="done",
+        status_raw="merged",
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    dependency = WorkItemDependency(
+        source_work_item_id=dependent.work_item_id,
+        target_work_item_id=donor.work_item_id,
+        relationship_type="relates_to",
+        relationship_type_raw="relates_to",
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "bob"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-donor-only",
+                    team_name="Donor Only Team",
+                    confidence="medium",
+                    evidence="assignee_membership=bob",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    # Sanity: the donor itself DOES resolve to a team, via author_membership only.
+    donor_team_id, _, donor_candidates = resolve_team_attribution(
+        donor,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert donor_team_id == "team-donor-only"
+    assert (
+        next(c.source for c in donor_candidates if c.is_primary) == "author_membership"
+    )
+
+    real_resolver = build_linked_issue_team_resolver(
+        work_items=[donor, dependent],
+        dependencies=[dependency],
+        attribution_context=context,
+    )
+    assert real_resolver.resolve(dependent.work_item_id) == (None, None)
 
 
 def test_bot_author_never_attributed():

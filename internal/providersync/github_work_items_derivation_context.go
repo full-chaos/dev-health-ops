@@ -47,7 +47,9 @@ type githubWorkItemDerivationSubject struct {
 	// author, so a PR opened by a team member with no assignee, no
 	// repo_patterns row, and no linked issue used to resolve unassigned. This
 	// mirrors compute_work_items.py's resolve_team_attribution, which now
-	// feeds item.reporter into the SAME assignee_membership candidate list.
+	// feeds item.reporter into its OWN author_membership candidate list (rank
+	// 6, below linked_issue) -- a person signal must never outrank a real
+	// linked_issue donor.
 	Reporter *string
 	OrgID    string
 }

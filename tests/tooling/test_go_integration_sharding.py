@@ -591,8 +591,34 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # since a person-shaped author signal must never beat a real linked-issue
     # donor. Drives the resolver directly over in-memory fixtures and touches
     # no database, so the integration-tagged count stays 116.
-    assert len(expected_provider_tests) == 1072
-    assert len(expected_integration_tests) == 116
+    #
+    # Then 1 more integration-tagged test (1072 -> 1073, 116 -> 117) in
+    # github_work_item_derived_effects_integration_test.go:
+    # TestGitHubWorkItemTeamAttributionSourceEnumCodesAreAppendedNotRenumbered,
+    # pinning the EXACT numeric code the migration chain assigns to every
+    # `source` value (not just that each name is present, which the sibling
+    # enum-acceptance test above already covers) -- proving migration 078
+    # appended `author_membership=9` rather than renumbering any of the
+    # pre-existing 1-8 codes, which would otherwise silently reinterpret every
+    # already-written row's stored source. Runs against a real migrated
+    # ClickHouse container (chschema.Apply), so it is integration-tagged.
+    #
+    # A codex round-2 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # tests (1073 -> 1075) in github_work_items_derivation_context_test.go:
+    # the earlier cross-team falsifier tests injected the linked_issue
+    # candidate directly, proving only that an already-supplied linked_issue
+    # candidate outranks author_membership -- never exercising donor
+    # discovery/eligibility (allowedDonorSources in buildLinkedIssueIndex).
+    # TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor
+    # drives the REAL buildLinkedIssueIndex builder end to end (a donor
+    # resolving via a first-class project_ownership fact beats an author on a
+    # different team); TestGitHubWorkItemDerivationCausalAuthorOnlyDonorNeverBecomesALinkedIssueDonor
+    # proves an item whose ONLY resolvable team is author_membership never
+    # registers as a donor at all. Both drive the resolver/builder directly
+    # over in-memory fixtures and touch no database, so the
+    # integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1075
+    assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -608,7 +634,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1072
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1075
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -669,7 +695,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1072
+    assert len(selected_tests) == len(set(selected_tests)) == 1075
     assert set(selected_tests) == expected_tests
 
 

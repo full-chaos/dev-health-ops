@@ -653,6 +653,120 @@ func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing
 	}
 }
 
+func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(t *testing.T) {
+	// Codex round-2 finding (2026-08-24, MEDIUM): the test above injects the
+	// linked_issue candidate directly via derived.linkedIssue[...] assignment,
+	// proving only that an ALREADY-SUPPLIED linked_issue candidate outranks
+	// author_membership -- it never exercises donor discovery/eligibility
+	// (allowedDonorSources in buildLinkedIssueIndex), so it could stay green
+	// even if donor construction were broken. This test drives the REAL
+	// production builder end to end: a Linear issue that resolves to team
+	// CHAOS via its OWN project ownership fact (a first-class, donor-eligible
+	// source) is linked to a GitHub PR whose author resolves to a DIFFERENT
+	// team via memberByID. The PR must inherit the donor's team, not the
+	// author's.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	donorProjectID := "linear-project-chaos"
+	donor := githubWorkItemDerivationSubject{
+		WorkItemID: "linear:CHAOS-2400", Provider: "linear",
+		ProjectID: &donorProjectID, OrgID: "org-acme",
+	}
+	pr := githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#100", Provider: "github",
+		OrgID: "org-acme",
+	}
+	reporter := "alice"
+	pr.Reporter = &reporter
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Projects: []githubWorkItemDerivationProjectFact{{
+			Provider: "linear", ProjectID: donorProjectID, TeamID: "CHAOS", TeamName: "Chaos Team",
+			IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	subjects := map[string]githubWorkItemDerivationSubject{
+		donor.WorkItemID: donor, pr.WorkItemID: pr,
+	}
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		"github", subjects, []githubWorkItemDependencyRow{{
+			SourceWorkItemID: pr.WorkItemID, TargetWorkItemID: donor.WorkItemID,
+			RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
+		}}, nil,
+	)
+	teamID, teamName, candidates := derived.resolve(pr)
+	if githubWorkItemDerivationStringValue(teamID) != "CHAOS" {
+		t.Fatalf("team id = %v, want CHAOS (the real donor must outrank the author)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Chaos Team" {
+		t.Fatalf("team name = %v, want Chaos Team", githubWorkItemDerivationStringValue(teamName))
+	}
+	bySource := map[string]githubWorkItemDerivationCandidate{}
+	for _, candidate := range candidates {
+		bySource[candidate.Source] = candidate
+	}
+	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || githubWorkItemDerivationStringValue(linked.TeamID) != "CHAOS" {
+		t.Fatalf("linked_issue candidate = %+v, want present, primary, CHAOS", linked)
+	}
+	if author := bySource["author_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	}
+}
+
+func TestGitHubWorkItemDerivationCausalAuthorOnlyDonorNeverBecomesALinkedIssueDonor(t *testing.T) {
+	// The other half of the codex round-2 finding: an item whose ONLY
+	// resolvable team comes from author_membership must NOT register as a
+	// linked_issue donor at all (allowedDonorSources in buildLinkedIssueIndex
+	// excludes it, ranks 0-4 only), so a dependent item pointing at it gets NO
+	// inherited team -- an author-only donor must never be laundered into
+	// rank-5 linked_issue provenance on a dependent.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	reporter := "bob"
+	donor := githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#100", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	}
+	dependent := githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#101", Provider: "github",
+		OrgID: "org-acme",
+	}
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-donor-only", TeamName: "Donor Only Team",
+			MemberID: "bob", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	// Sanity: the donor itself DOES resolve to a team, via author_membership only.
+	donorTeamID, _, donorCandidates := derived.resolve(donor)
+	if githubWorkItemDerivationStringValue(donorTeamID) != "team-donor-only" {
+		t.Fatalf("donor team id = %v, want team-donor-only", githubWorkItemDerivationStringValue(donorTeamID))
+	}
+	var donorPrimarySource string
+	for _, candidate := range donorCandidates {
+		if candidate.IsPrimary == 1 {
+			donorPrimarySource = candidate.Source
+		}
+	}
+	if donorPrimarySource != "author_membership" {
+		t.Fatalf("donor primary source = %q, want author_membership", donorPrimarySource)
+	}
+
+	subjects := map[string]githubWorkItemDerivationSubject{
+		donor.WorkItemID: donor, dependent.WorkItemID: dependent,
+	}
+	linkedIssue, _, _ := derived.buildLinkedIssueIndex(
+		"github", subjects, []githubWorkItemDependencyRow{{
+			SourceWorkItemID: dependent.WorkItemID, TargetWorkItemID: donor.WorkItemID,
+			RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
+		}}, nil,
+	)
+	if _, ok := linkedIssue[dependent.WorkItemID]; ok {
+		t.Fatalf("dependent inherited a team from an author-only donor: %+v", linkedIssue[dependent.WorkItemID])
+	}
+}
+
 func TestGitHubWorkItemDerivationBotAuthorNeverAttributed(t *testing.T) {
 	// chris's precision condition (2026-08-24): a bot/App author carries no
 	// team meaning and must be excluded outright, even when its identity

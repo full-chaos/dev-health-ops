@@ -1302,6 +1302,17 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         if not rss_task.done():
             rss_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
+            # CodeQL py/ineffectual-statement flags this as a no-op because
+            # the coroutine's return value (always None) is discarded, but
+            # the await itself is the point: it blocks until rss_task
+            # actually finishes reacting to the cancel() above (or raises
+            # CancelledError, suppressed here), which is what guarantees
+            # peak_rss_holder's last write below has already happened.
+            # Dismissed at the GitHub code-scanning API level with this
+            # justification -- inline `# lgtm[...]` comments do not
+            # suppress GitHub CodeQL (that syntax is a legacy LGTM.com-only
+            # mechanism; see tests/api/dev/test_terminal_frames.py for the
+            # same established pattern in this codebase).
             await rss_task
         # codex R2: read the shared holder, NOT the task's return value --
         # cancelling rss_task almost always interrupts it inside

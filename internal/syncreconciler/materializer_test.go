@@ -21,8 +21,12 @@ type materializerExec struct {
 
 type fakeMaterializerTx struct {
 	pgx.Tx
-	affected  []int64
-	failAt    int
+	affected []int64
+	failAt   int
+	// failErrs overrides the generic injected failure at a given 1-based
+	// exec index (matching failAt) with a specific error -- used to plant a
+	// *pgconn.PgError and prove its SQLSTATE survives into the step error.
+	failErrs  map[int]error
 	execs     []materializerExec
 	committed bool
 	rolled    bool
@@ -112,6 +116,9 @@ func (rows *fakeRunawayRows) Close() {}
 func (tx *fakeMaterializerTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	tx.execs = append(tx.execs, materializerExec{sql: sql, args: append([]any(nil), args...)})
 	if tx.failAt > 0 && len(tx.execs) == tx.failAt {
+		if customErr, ok := tx.failErrs[tx.failAt]; ok {
+			return pgconn.CommandTag{}, customErr
+		}
 		return pgconn.CommandTag{}, errors.New("injected materializer statement failure")
 	}
 	index := len(tx.execs) - 1
@@ -135,7 +142,7 @@ func (tx *fakeMaterializerTx) Rollback(context.Context) error {
 func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
 	cutoff := now.Add(-15 * time.Minute)
-	tx := &fakeMaterializerTx{affected: []int64{2, 1, 2, 1}}
+	tx := &fakeMaterializerTx{affected: []int64{0, 2, 1, 2, 1}}
 	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
 		return tx, nil
 	})
@@ -150,8 +157,17 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	if !reflect.DeepEqual(result, MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
 		t.Fatalf("Step() result = %#v", result)
 	}
-	if !tx.committed || !tx.rolled || len(tx.execs) != 4 {
+	if !tx.committed || !tx.rolled || len(tx.execs) != 5 {
 		t.Fatalf("transaction = committed:%t rolled:%t execs:%d", tx.committed, tx.rolled, len(tx.execs))
+	}
+
+	// CHAOS-4262: the transaction's very first statement disables JIT before
+	// any of the four materialization statements run, and takes no arguments.
+	if got := strings.TrimSpace(tx.execs[0].sql); got != "SET LOCAL jit = off" {
+		t.Fatalf("first statement = %q, want the JIT-disable SET LOCAL", got)
+	}
+	if len(tx.execs[0].args) != 0 {
+		t.Fatalf("JIT-disable statement carried arguments: %#v", tx.execs[0].args)
 	}
 
 	wantArgs := [][]any{
@@ -160,7 +176,7 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 		{now, 2},
 		{now, 2},
 	}
-	for index, execution := range tx.execs {
+	for index, execution := range tx.execs[1:] {
 		if !reflect.DeepEqual(execution.args, wantArgs[index]) {
 			t.Fatalf("statement %d arguments = %#v, want %#v", index, execution.args, wantArgs[index])
 		}
@@ -179,7 +195,7 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 			t.Fatalf("statement %d is not bounded/idempotent:\n%s", index, execution.sql)
 		}
 	}
-	rearmSQL := strings.ToUpper(tx.execs[0].sql)
+	rearmSQL := strings.ToUpper(tx.execs[1].sql)
 	for _, required := range []string{
 		"EXCLUDED.AVAILABLE_AT < SYNC_DISPATCH_OUTBOX.AVAILABLE_AT",
 		"SYNC_DISPATCH_OUTBOX.CLAIM_EXPIRES_AT > $1",
@@ -192,23 +208,32 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 		"WHERE SYNC_DISPATCH_OUTBOX.STATUS <> 'PENDING'",
 	} {
 		if !strings.Contains(rearmSQL, required) {
-			t.Fatalf("rearm SQL missing %q:\n%s", required, tx.execs[0].sql)
+			t.Fatalf("rearm SQL missing %q:\n%s", required, tx.execs[1].sql)
 		}
 	}
-	postSyncUpper := strings.ToUpper(tx.execs[3].sql)
+	postSyncUpper := strings.ToUpper(tx.execs[4].sql)
 	if !strings.Contains(postSyncUpper, "LEFT JOIN PUBLIC.SYNC_DISPATCH_OUTBOX") ||
 		!strings.Contains(postSyncUpper, "OUTBOX.ID IS NULL") ||
 		!strings.Contains(postSyncUpper, "DO NOTHING") ||
 		strings.Contains(postSyncUpper, "DO UPDATE") {
-		t.Fatalf("post_sync must remain insert-only:\n%s", tx.execs[3].sql)
+		t.Fatalf("post_sync must remain insert-only:\n%s", tx.execs[4].sql)
 	}
 }
 
 func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
-	for failAt := 1; failAt <= 4; failAt++ {
-		t.Run(strconv.Itoa(failAt), func(t *testing.T) {
-			tx := &fakeMaterializerTx{affected: []int64{1, 1, 1, 1}, failAt: failAt}
+	// materializeFailAt names which of the four materialization statements
+	// fails (1=dispatch .. 4=post_sync); the JIT-disable SET LOCAL always
+	// runs first, so the actual failing exec index is materializeFailAt+1.
+	wantSteps := []string{
+		materializerStepDispatch,
+		materializerStepFinalize,
+		materializerStepDiscovery,
+		materializerStepPostSync,
+	}
+	for materializeFailAt := 1; materializeFailAt <= 4; materializeFailAt++ {
+		t.Run(strconv.Itoa(materializeFailAt), func(t *testing.T) {
+			tx := &fakeMaterializerTx{affected: []int64{0, 1, 1, 1, 1}, failAt: materializeFailAt + 1}
 			materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
 				return tx, nil
 			})
@@ -219,11 +244,69 @@ func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 			if !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("Step() error = %v", err)
 			}
-			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != failAt {
+			if wantStep := wantSteps[materializeFailAt-1]; MaterializerStepIdentity(err) != wantStep {
+				t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", MaterializerStepIdentity(err), wantStep)
+			}
+			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != materializeFailAt+1 {
 				t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
 					result, tx.committed, tx.rolled, len(tx.execs))
 			}
 		})
+	}
+}
+
+// CHAOS-4262: the JIT-disable statement itself is as fallible as any other
+// exec on the transaction, and its failure must roll back cleanly and report
+// its own step identity rather than being folded into the dispatch step.
+func TestMaterializerJITDisableFailureRollsBackWholeStep(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+	tx := &fakeMaterializerTx{failAt: 1}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
+		return tx, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := materializer.Step(context.Background(), now, now.Add(-time.Minute), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v", err)
+	}
+	if got := MaterializerStepIdentity(err); got != materializerStepDisableJIT {
+		t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDisableJIT)
+	}
+	if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != 1 {
+		t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
+			result, tx.committed, tx.rolled, len(tx.execs))
+	}
+}
+
+// CHAOS-4262: a canceled statement's SQLSTATE must survive into the returned
+// error so a caller (pipeline telemetry) can tell a real 57014 cancellation
+// apart from every other cause folded into the same ErrUnavailable
+// classification -- without ever seeing the driver's own error text.
+func TestMaterializerStepErrorCarriesSQLState(t *testing.T) {
+	tx := &fakeMaterializerTx{
+		failAt:   2,
+		failErrs: map[int]error{2: &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}},
+	}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) { return tx, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+	_, err = materializer.Step(context.Background(), now, now.Add(-time.Minute), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v", err)
+	}
+	if got := MaterializerStepSQLState(err); got != "57014" {
+		t.Fatalf("MaterializerStepSQLState(err) = %q, want 57014", got)
+	}
+	if got := MaterializerStepIdentity(err); got != materializerStepDispatch {
+		t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDispatch)
+	}
+	// The driver's own message must never reach the returned error text.
+	if strings.Contains(err.Error(), "canceling statement") {
+		t.Fatalf("Step() error leaked driver text: %v", err)
 	}
 }
 
@@ -294,7 +377,7 @@ func TestMaterializerReportsWhenTheRunawayReportItselfFails(t *testing.T) {
 		{"iteration fails", func(tx *fakeMaterializerTx) { tx.failRowsIter = true }, runawayReportStepRows},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			tx := &fakeMaterializerTx{affected: []int64{1, 0, 0, 0}}
+			tx := &fakeMaterializerTx{affected: []int64{0, 1, 0, 0, 0}}
 			testCase.mutate(tx)
 			materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
 				return tx, nil
@@ -330,7 +413,7 @@ func TestMaterializerReportsWhenTheRunawayReportItselfFails(t *testing.T) {
 // log a broken detector on every tick and the signal would be worthless.
 func TestMaterializerLeavesTheReportStepEmptyOnAHealthyPass(t *testing.T) {
 	now := time.Date(2026, time.August, 22, 18, 0, 0, 0, time.UTC)
-	tx := &fakeMaterializerTx{affected: []int64{1, 0, 0, 0}}
+	tx := &fakeMaterializerTx{affected: []int64{0, 1, 0, 0, 0}}
 	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) { return tx, nil })
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +447,7 @@ func TestMaterializerReportsTheExactRunawayTotalNotTheSampleSize(t *testing.T) {
 		})
 	}
 	tx := &fakeMaterializerTx{
-		affected: []int64{1, 0, 0, 0},
+		affected: []int64{0, 1, 0, 0, 0},
 		runaway:  sample,
 		// 83 is CHAOS-4093's real stuck-run count.
 		runawayTotal: 83,

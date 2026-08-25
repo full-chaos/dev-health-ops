@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // budgetsWithOverride starts from DefaultStageBudgets and replaces one
@@ -201,6 +202,81 @@ func TestStageFailureIsTelemetered(t *testing.T) {
 	}
 	if !strings.Contains(text, `sync_reconciler_stage_duration_seconds{stage="materializer"}`) {
 		t.Fatalf("metrics missing the materializer duration gauge:\n%s", text)
+	}
+}
+
+// TestStageCancellationSQLStateIsTelemetered pins CHAOS-4262's fix for the
+// masking pattern CHAOS-4239's telemetry left in place: every stage failure
+// -- a real statement cancellation, a permission fault, an actual outage --
+// folds into the same ErrUnavailable/"database unavailable" text. The
+// structured log line and a dedicated counter must both carry the recovered
+// SQLSTATE distinctly, and the duration histogram must observe the pass
+// regardless of outcome.
+func TestStageCancellationSQLStateIsTelemetered(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	canceled := materializerUnavailable(materializerStepFinalize, &pgconn.PgError{
+		Code: "57014", Message: "canceling statement due to statement timeout",
+	})
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, canceled
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		nil,
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	if _, err := pipeline.Step(context.Background(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("materializer is continue-safe, Step() error = %v, want nil", err)
+	}
+
+	record, found := findSlogRecord(*captured, "syncreconciler.stage_failed")
+	if !found {
+		t.Fatal("no syncreconciler.stage_failed log record")
+	}
+	if record["sqlstate"] != "57014" {
+		t.Fatalf("record sqlstate = %v, want 57014", record["sqlstate"])
+	}
+	// The driver's own message must never reach the log line.
+	if strings.Contains(record["error"].(string), "canceling statement") {
+		t.Fatalf("record error leaked driver text: %v", record["error"])
+	}
+
+	var metrics strings.Builder
+	if err := pipeline.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	text := metrics.String()
+	for _, want := range []string{
+		`dev_health_reconciler_stage_cancelled_total{stage="materializer",sqlstate="57014"} 1`,
+		`dev_health_reconciler_stage_duration_seconds_count{stage="materializer"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `sqlstate="57014",sqlstate=`) {
+		t.Fatalf("cancellation counter emitted a duplicate label:\n%s", text)
+	}
+	if !strings.Contains(text, `dev_health_reconciler_stage_duration_seconds_bucket{stage="materializer",le="+Inf"} 1`) {
+		t.Fatalf("metrics missing the materializer duration histogram +Inf bucket:\n%s", text)
 	}
 }
 

@@ -23,8 +23,8 @@
     {"name":"ai_workflow","python":"_extract_ai_workflow_for_day","writes":["ai_workflow_runs","ai_workflow_artifact_edges","ai_workflow_issue_edges"],"port":"pending","golden":"required"},
     {"name":"work_graph_edges","python":"extract_review_deployment_incident_edges","writes":["work_graph_pr_review_outcome_edges","work_graph_pr_deployment_edges","work_graph_deployment_incident_edges"],"port":"pending","golden":"required"},
     {"name":"compounding_risk","python":"_write_compounding_risk_for_day","writes":["compounding_risk_daily"],"port":"pending","golden":"required"},
-    {"name":"testops_risk","python":"compute_release_confidence,compute_quality_drag,compute_pipeline_stability","writes":["release_confidence_daily","quality_drag_daily","pipeline_stability_daily"],"port":"pending","golden":"required"},
-    {"name":"benchmarking","python":"run_benchmarking_for_day","writes":["benchmarking_rollups"],"port":"pending","golden":"required"},
+    {"name":"testops_risk","python":"compute_release_confidence,compute_quality_drag,compute_pipeline_stability","writes":["testops_release_confidence","testops_quality_drag","testops_pipeline_stability"],"port":"pending","golden":"required"},
+    {"name":"benchmarking","python":"run_benchmarking_for_day","writes":["testops_metric_baselines","testops_maturity_bands","testops_metric_anomalies","testops_metric_correlations","testops_benchmark_insights"],"port":"pending","golden":"required"},
     {"name":"ic_finalize","python":"compute_ic_metrics_daily,compute_ic_landscape_rolling","writes":["user_metrics_daily","ic_landscape_rolling_30d"],"port":"pending","golden":"required"}
   ]
 }

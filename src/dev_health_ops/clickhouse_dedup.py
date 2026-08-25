@@ -52,6 +52,20 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     # (repo, metric_name, day)" (metric_name included, or two metrics for
     # the same repo/day would collapse into one row).
     "dora_metrics_daily": ("org_id", "repo_id", "day", "metric_name"),
+    # CHAOS-4246: registering these 5 closes the last gap -- every other
+    # append-only daily table already had a dedup entry somewhere (this
+    # registry or _DEDUP_BY_COMPUTED_AT in api/queries/metrics.py); these did
+    # not, so a raw reader (home.py's "CI Success Rate" widget, confirmed) was
+    # silently exposed to double-counting the moment a day was ever
+    # recomputed. Recomputing a day is exactly what the CHAOS-4246 fix makes
+    # happen (native_post_sync.go now re-triggers metrics.daily on a
+    # cicd/deployments/incidents post-sync event), so this registration must
+    # land in the same change, not after.
+    "cicd_metrics_daily": ("org_id", "repo_id", "day"),
+    "deploy_metrics_daily": ("org_id", "repo_id", "day"),
+    "incident_metrics_daily": ("org_id", "repo_id", "day"),
+    "testops_release_confidence": ("org_id", "repo_id", "day"),
+    "testops_pipeline_stability": ("org_id", "repo_id", "day"),
 }
 
 

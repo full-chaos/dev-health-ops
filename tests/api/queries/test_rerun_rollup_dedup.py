@@ -258,6 +258,31 @@ async def test_metric_series_argmax_dedups_append_only_repo_metrics(
 
 
 @pytest.mark.asyncio
+async def test_metric_value_argmax_dedups_cicd_metrics_daily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4246: cicd_metrics_daily fed home.py's "CI Success Rate" widget
+    with NO dedup before this -- a re-drive of a day (which the CHAOS-4246
+    fix now makes happen on a cicd post-sync event) would have inflated the
+    widget by the number of generations for that day."""
+    captured = _capture(monkeypatch, metrics)
+    await metrics.fetch_metric_value(
+        cast(BaseMetricsSink, object()),
+        table="cicd_metrics_daily",
+        column="success_rate",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter="",
+        scope_params={},
+        aggregator="avg",
+        org_id="org-a",
+    )
+    normalized = " ".join(captured["query"].split())
+    assert "argMax(success_rate, computed_at) AS success_rate" in normalized
+    assert "GROUP BY day, repo_id" in normalized
+
+
+@pytest.mark.asyncio
 async def test_weighted_pr_rework_ratio_dedups_ratio_and_weight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

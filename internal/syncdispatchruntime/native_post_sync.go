@@ -386,6 +386,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	_, hasOperational := targets["operational"]
 	git := hasGit || hasPRs
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
+	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
 	targetDay := now
 	backfillDays := 1
 	if to != nil {
@@ -409,10 +410,36 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	return &PostSyncPlan{
 		OrganizationID: orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, RepositoryIDs: repositoryIDs, From: from, To: to,
-		Daily: git || hasWorkItems, Complexity: git && currentSingleDay, DORA: dora,
+		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,
 		TeamAutoimport: autoImport,
 	}, nil
+}
+
+// dailyMetricsTrigger decides whether a completed sync should re-trigger
+// metrics.daily_partition for the organization (CHAOS-4246).
+//
+// Before this change the condition was git-only (git || hasWorkItems): a
+// sync that synced ONLY cicd/deployments/incidents data never re-triggered
+// the daily-metrics partition for the day(s) that data just landed in. A
+// day's cicd/deploy/incident families could be computed once -- by an
+// earlier git/work-item-triggered run, before that day's CI/deploy/incident
+// sync had caught up -- and then never recomputed: the partition still
+// reports succeeded, so nothing surfaces the staleness (measured in prod:
+// cicd_metrics_daily/deploy_metrics_daily/testops_release_confidence/
+// testops_pipeline_stability went to zero rows for every day after
+// 2026-08-18 despite ci_pipeline_runs/deployments staying fresh).
+//
+// Registering cicd/deployments/incidents here closes that gap. This is safe
+// to re-drive: cicd_metrics_daily, deploy_metrics_daily,
+// incident_metrics_daily, testops_release_confidence, and
+// testops_pipeline_stability are all registered in
+// clickhouse_dedup._APPEND_ONLY_DAILY_KEYS (src/dev_health_ops/
+// clickhouse_dedup.py) and api/queries/metrics.py's _DEDUP_BY_COMPUTED_AT,
+// so every known reader collapses re-drive generations to the latest
+// computed_at instead of double-counting.
+func dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents bool) bool {
+	return git || hasWorkItems || hasCICD || hasDeployments || hasIncidents
 }
 
 func utcDay(value time.Time) time.Time {

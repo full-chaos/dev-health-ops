@@ -42,6 +42,19 @@ _DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
         "work_scope_id",
         "user_identity",
     ),
+    # CHAOS-4246: closes the last un-registered append-only daily table gap.
+    # cicd_metrics_daily fed home.py's "CI Success Rate" widget via
+    # fetch_metric_value/fetch_metric_series with NO dedup before this --
+    # confirmed live. The other 4 (deploy/incident/testops_release_confidence/
+    # testops_pipeline_stability) have no known reader through this
+    # particular path today (their readers already argMax-dedup by hand), but
+    # are registered here too so a future metric-config entry inherits safety
+    # instead of silently re-introducing the gap.
+    "cicd_metrics_daily": ("day", "repo_id"),
+    "deploy_metrics_daily": ("day", "repo_id"),
+    "incident_metrics_daily": ("day", "repo_id"),
+    "testops_release_confidence": ("day", "repo_id"),
+    "testops_pipeline_stability": ("day", "repo_id"),
 }
 
 

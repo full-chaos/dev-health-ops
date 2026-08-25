@@ -794,6 +794,62 @@ func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToANonPRIssue(t *te
 	}
 }
 
+func TestGitHubWorkItemDerivationAuthorMembershipAppliesToAGitLabMergeRequest(t *testing.T) {
+	// Codex round-4 finding (2026-08-24, MEDIUM): this resolver is
+	// provider-neutral -- shared by GitHub, GitLab, and Jira via
+	// loadWorkItemDerivationContextForProvider -- so a GitHub-only "ghpr:"
+	// gate would silently diverge from Python's item.type in
+	// {"pr","merge_request"} gate, leaving every GitLab MR author unassigned
+	// in Go while Python attributes it. A GitLab MR (WorkItemID
+	// "gitlab:acme/api!9", the "!" GitLab's own MR-vs-issue convention) must
+	// gain author_membership exactly like a GitHub PR does.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "gitlab", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "gitlab:acme/api!9", Provider: "gitlab",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+		t.Fatalf("team id = %v, want team-ops", githubWorkItemDerivationStringValue(teamID))
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+		t.Fatalf("team name = %v, want Ops Team", githubWorkItemDerivationStringValue(teamName))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 1 {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue(t *testing.T) {
+	// The negative control for the test above: a GitLab ISSUE (WorkItemID
+	// "gitlab:acme/api#9", the "#" convention, not "!") must stay unassigned
+	// on this signal alone, exactly like a GitHub issue does.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "gitlab", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "gitlab:acme/api#9", Provider: "gitlab",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (GitLab issue must not gain author_membership)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
 func TestGitHubWorkItemDerivationBotAuthorNeverAttributed(t *testing.T) {
 	// chris's precision condition (2026-08-24): a bot/App author carries no
 	// team meaning and must be excluded outright, even when its identity

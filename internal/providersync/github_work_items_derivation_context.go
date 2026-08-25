@@ -671,17 +671,28 @@ func (derived githubWorkItemDerivationContext) resolve(
 	// (loaded per-claim in loadWorkItemDerivationContextForProvider), so
 	// there is no second, non-tenant-scoped lookup to bypass the gate above.
 	//
-	// Type-gated to PR ONLY (codex, 2026-08-24, MEDIUM): Reporter is
-	// populated for GitHub ISSUES too (githubWorkItemDerivationSubjectFromRow
-	// copies row.Reporter unconditionally), so without this gate a GitHub
-	// issue opened by a mapped member would ALSO gain an author_membership
-	// candidate -- silently widening this ticket's documented PR/MR-only
-	// contract. `ghpr:` is the sole production prefix for a GitHub PR's
-	// WorkItemID (github_work_items_rows.go's PR row builder); a plain GitHub
-	// issue is `gh:`. subject.Reporter on a non-PR item is simply never
-	// consulted; it falls through exactly as it did before CHAOS-4244.
+	// Type-gated to PR/MR ONLY (codex, 2026-08-24, MEDIUM; broadened to
+	// GitLab codex round-4, MEDIUM): Reporter is populated for GitHub ISSUES
+	// too (githubWorkItemDerivationSubjectFromRow copies row.Reporter
+	// unconditionally), so without this gate a GitHub issue opened by a
+	// mapped member would ALSO gain an author_membership candidate --
+	// silently widening this ticket's documented PR/MR-only contract. This
+	// resolver is provider-neutral -- shared by GitHub, GitLab, and Jira
+	// (loadWorkItemDerivationContextForProvider) -- so a GitHub-only gate
+	// would silently diverge from Python's item.type in {"pr","merge_request"}
+	// gate, leaving every GitLab MR author unassigned in Go while Python
+	// attributes it. githubWorkItemDerivationIsPullOrMergeRequestID checks
+	// BOTH production ID shapes: `ghpr:` for a GitHub PR
+	// (github_work_items_rows.go's PR row builder; plain GitHub issues are
+	// `gh:`) and GitLab's own `!`-vs-`#` convention distinguishing an MR from
+	// an issue (gitlab_work_items_rows.go's MR row builder stamps
+	// `gitlab:<repo>!<iid>`; an issue is `gitlab:<repo>#<iid>`). Jira has no
+	// PR-equivalent type, so it never matches either shape and this gate
+	// simply never opens for it. subject.Reporter on a non-PR/MR item is
+	// simply never consulted; it falls through exactly as it did before
+	// CHAOS-4244.
 	var reporterSkipReason string
-	if strings.HasPrefix(subject.WorkItemID, "ghpr:") &&
+	if githubWorkItemDerivationIsPullOrMergeRequestID(subject.WorkItemID) &&
 		subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
 		switch {
 		case githubWorkItemDerivationIsBotIdentity(*subject.Reporter):
@@ -1492,6 +1503,28 @@ func githubWorkItemDerivationSingleTeam(candidates []githubWorkItemDerivationCan
 // bot list.
 func githubWorkItemDerivationIsBotIdentity(identity string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(identity)), "[bot]")
+}
+
+// githubWorkItemDerivationIsPullOrMergeRequestID gates author_membership
+// (CHAOS-4244) to PR/MR work items, by their production WorkItemID shape --
+// this resolver is provider-neutral (shared by GitHub, GitLab, and Jira via
+// loadWorkItemDerivationContextForProvider), and none of them carry a Type
+// field on githubWorkItemDerivationSubject to gate on directly (adding one
+// would touch every existing test fixture across all three providers).
+//
+//   - GitHub: `ghpr:<owner>/<repo>#<n>` for a PR (github_work_items_rows.go's
+//     PR row builder); a plain issue is `gh:...`.
+//   - GitLab: `gitlab:<repo>!<iid>` for a merge request vs `gitlab:<repo>#<iid>`
+//     for an issue (gitlab_work_items_rows.go's MR/issue row builders) --
+//     GitLab's own web-UI convention (`!123` links an MR, `#123` an issue),
+//     reused here rather than invented.
+//   - Jira has no PR-equivalent type, so no Jira WorkItemID ever matches
+//     either shape and this gate simply never opens for it.
+func githubWorkItemDerivationIsPullOrMergeRequestID(workItemID string) bool {
+	if strings.HasPrefix(workItemID, "ghpr:") {
+		return true
+	}
+	return strings.HasPrefix(workItemID, "gitlab:") && strings.Contains(workItemID, "!")
 }
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {

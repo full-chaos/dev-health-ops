@@ -630,7 +630,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # WorkItemID "gh:" not "ghpr:", must never gain a team via this signal).
     # Both drive the dedup/resolver directly over in-memory fixtures and
     # touch no database, so the integration-tagged count stays 117.
-    assert len(expected_provider_tests) == 1077
+    #
+    # A codex round-4 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # tests (1077 -> 1079): the PR-only gate above was GitHub-only ("ghpr:"
+    # prefix), but this resolver is shared by GitHub, GitLab, and Jira --
+    # silently diverging from Python's item.type in {"pr","merge_request"}
+    # gate, leaving every GitLab MR author unassigned in Go.
+    # TestGitHubWorkItemDerivationAuthorMembershipAppliesToAGitLabMergeRequest
+    # proves a GitLab MR ("gitlab:...!...") still gains author_membership;
+    # TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue
+    # is its negative control ("gitlab:...#..."). Both drive the resolver
+    # directly over in-memory fixtures and touch no database, so the
+    # integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1079
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -647,7 +659,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1077
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1079
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -708,7 +720,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1077
+    assert len(selected_tests) == len(set(selected_tests)) == 1079
     assert set(selected_tests) == expected_tests
 
 

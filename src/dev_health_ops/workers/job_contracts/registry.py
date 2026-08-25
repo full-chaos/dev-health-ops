@@ -155,8 +155,27 @@ def load_registry(root: Path | None = None) -> Registry:
         "envelope_schema",
         "version_policy",
         "jobs",
+        "retired_kinds",
     }:
         raise ContractDecodeError("registry shape is invalid")
+    retired_kinds = document["retired_kinds"]
+    if not isinstance(retired_kinds, list):
+        raise ContractDecodeError("registry retired_kinds is invalid")
+    for retired in retired_kinds:
+        if not isinstance(retired, dict) or set(retired) != {
+            "kind",
+            "retired_on",
+            "reason",
+            "ticket",
+            "replacement",
+        }:
+            raise ContractDecodeError("registry retired kind must be an object")
+        if not all(
+            isinstance(retired[field], str) and retired[field] for field in retired
+        ):
+            raise ContractDecodeError(
+                "registry retired kind is missing a required field"
+            )
     if (
         document["schema_version"] != 1
         or document["contract_family"] != "dev-health.jobs"

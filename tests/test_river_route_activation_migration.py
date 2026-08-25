@@ -191,9 +191,23 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
     by_kind = {job["kind"]: job for job in state["jobs"]}
     pinned = set(_migration()._KINDS)
 
+    # CHAOS-4243: metrics.remaining.extra_metrics/team_metrics were registered
+    # handlers with zero producer anywhere, retired (removed from the
+    # registry and migration-state entirely) by a later revision (0110). 0066
+    # still pins them historically -- that is correct, it recorded what THAT
+    # revision did -- but they no longer exist in migration-state.json, so
+    # they cannot be checked against it like every other still-live pinned
+    # kind below.
+    retired_since_0066 = {
+        "metrics.remaining.extra_metrics",
+        "metrics.remaining.team_metrics",
+    }
+    assert retired_since_0066 <= pinned
+    assert retired_since_0066.isdisjoint(by_kind)
+
     # Each pinned kind must be routed to River by checked-in policy, otherwise
     # this migration would drive a row outside what the producer accepts.
-    for kind in pinned:
+    for kind in pinned - retired_since_0066:
         assert by_kind[kind]["route"] == "river", kind
         assert by_kind[kind]["rollback_route"] == "celery", kind
 

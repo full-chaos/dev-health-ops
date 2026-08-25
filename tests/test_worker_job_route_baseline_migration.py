@@ -54,7 +54,11 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             registry_kinds = tuple(
                 contract.kind for contract in load_registry().contracts
             )
-            assert len(registry_kinds) == 25
+            # CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics
+            # (registered handlers with zero producer anywhere) -- 25 minus
+            # those two, plus the post-0064 system.sync_coverage_refresh
+            # addition asserted below.
+            assert len(registry_kinds) == 23
             assert set(registry_kinds) - set(migration._KINDS) == {
                 "system.sync_coverage_refresh"
             }
@@ -70,8 +74,20 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             assert tuple(row[0] for row in rows) == migration._KINDS
             assert all(row[1:] == ("celery", 0, 1) for row in rows)
 
+            # CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics:
+            # resolve_worker_job_route consults the CURRENT migration-state
+            # policy, which no longer has an entry for either, so they are
+            # excluded from this live-resolution check (the seeded-row
+            # assertions above already cover the historical migration's own
+            # behavior for every kind, retired or not).
+            retired_since_0064 = {
+                "metrics.remaining.extra_metrics",
+                "metrics.remaining.team_metrics",
+            }
             with Session(bind=connection) as session:
                 for kind in migration._KINDS:
+                    if kind in retired_since_0064:
+                        continue
                     assert resolve_worker_job_route(session, kind) == "celery"
 
             _downgrade(migration, connection)

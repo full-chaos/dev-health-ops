@@ -755,5 +755,21 @@
         ]
       }
     }
+  ],
+  "retired_kinds": [
+    {
+      "kind": "metrics.remaining.extra_metrics",
+      "retired_on": "2026-08-24",
+      "reason": "registered handler with zero producer anywhere; its writers duplicated daily_metrics_fanout's existing unconditional compute",
+      "ticket": "CHAOS-4243",
+      "replacement": "run_daily_metrics_job (job_daily.py:729) -> _write_compounding_risk_for_day (job_daily.py:502, called at :1371) and run_benchmarking_for_day (benchmarking/runner.py:259, called at job_daily.py:1419)"
+    },
+    {
+      "kind": "metrics.remaining.team_metrics",
+      "retired_on": "2026-08-24",
+      "reason": "registered handler with zero producer anywhere; its writer duplicated daily_metrics_fanout's existing unconditional compute",
+      "ticket": "CHAOS-4243",
+      "replacement": "run_daily_metrics_job (job_daily.py:729) -> compute_team_wellbeing_metrics_daily (job_daily.py:1057)"
+    }
   ]
 }

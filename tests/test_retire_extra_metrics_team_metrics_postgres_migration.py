@@ -3,9 +3,11 @@
 CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics on the premise
 that no producer ever enqueued either kind. That premise is asserted here,
 not assumed: 0110 refuses to delete the two worker_job_routes rows or narrow
-remaining_metric_runs' family CHECK constraint if it finds ANY river.river_job
-row (any state) for either kind -- such a row surviving would mean something
-DID enqueue it, and 0110 would otherwise silently orphan that evidence.
+remaining_metric_runs' family CHECK constraint if it finds a pending/claimed
+worker_job_outbox row, or ANY river_job row (any state, in the configured
+River schema -- default ``river``), for either kind -- such a row surviving
+would mean something DID enqueue it, and 0110 would otherwise silently
+orphan that evidence.
 """
 
 from __future__ import annotations
@@ -194,6 +196,117 @@ def test_0110_refuses_when_a_river_job_row_exists_for_a_retired_kind(
     command.upgrade(_migration_config(), "0110")
     assert _revisions(migrated_to_0109.engine) == {"0110"}
     assert _routes(migrated_to_0109.engine) == {}
+
+
+def _insert_outbox_row(engine: Engine, kind: str, status: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO worker_job_outbox (
+                    id, dedupe_key, job_kind, contract_version, args,
+                    payload_hash, queue, priority, max_attempts,
+                    scheduled_at, status, attempt_count, next_attempt_at,
+                    created_at, updated_at
+                ) VALUES (
+                    gen_random_uuid(), :dedupe_key, :kind, 1, '{}'::json,
+                    'sha256:' || repeat('0', 64), 'metrics', 2, 3,
+                    now(), :status, 0, now(), now(), now()
+                )
+                """
+            ),
+            {"dedupe_key": f"{kind}:{status}:test", "kind": kind, "status": status},
+        )
+
+
+def test_0110_refuses_when_a_pending_or_claimed_outbox_row_exists_for_a_retired_kind(
+    migrated_to_0109: PostgresMigrationHarness,
+) -> None:
+    _insert_outbox_row(migrated_to_0109.engine, _RETIRED_KINDS[0], "pending")
+
+    with pytest.raises(RuntimeError, match=_RETIRED_KINDS[0]):
+        command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0109"}
+    assert set(_routes(migrated_to_0109.engine)) == set(_RETIRED_KINDS)
+
+    with migrated_to_0109.engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                UPDATE worker_job_outbox
+                SET status = 'claimed', claim_token = gen_random_uuid(),
+                    claimed_at = now(), claim_expires_at = now() + interval '5 minutes'
+                WHERE job_kind = :kind
+                """
+            ),
+            {"kind": _RETIRED_KINDS[0]},
+        )
+    with pytest.raises(RuntimeError, match=_RETIRED_KINDS[0]):
+        command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0109"}
+
+    # A delivered/dead row (already relayed, or already given up on) is not a
+    # live producer signal and must not block the retirement.
+    with migrated_to_0109.engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                UPDATE worker_job_outbox
+                SET status = 'dead', claim_token = NULL, claimed_at = NULL,
+                    claim_expires_at = NULL
+                WHERE job_kind = :kind
+                """
+            ),
+            {"kind": _RETIRED_KINDS[0]},
+        )
+    command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0110"}
+    assert _routes(migrated_to_0109.engine) == {}
+
+
+def test_0110_river_check_honors_a_custom_river_database_schema(
+    migrated_to_0109: PostgresMigrationHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RIVER_DATABASE_SCHEMA", "worker_queue")
+    with migrated_to_0109.engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "CREATE SCHEMA worker_queue; CREATE TABLE worker_queue.river_job "
+                "(id bigint PRIMARY KEY, kind text NOT NULL, state text NOT NULL)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO worker_queue.river_job (id, kind, state) "
+                "VALUES (1, :kind, 'completed')"
+            ),
+            {"kind": _RETIRED_KINDS[0]},
+        )
+
+    with pytest.raises(RuntimeError, match=_RETIRED_KINDS[0]):
+        command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0109"}
+
+    with migrated_to_0109.engine.begin() as connection:
+        connection.execute(
+            sa.text("DELETE FROM worker_queue.river_job WHERE kind = :kind"),
+            {"kind": _RETIRED_KINDS[0]},
+        )
+    command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0110"}
+
+
+def test_0110_rejects_an_unsafe_river_database_schema_value(
+    migrated_to_0109: PostgresMigrationHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "RIVER_DATABASE_SCHEMA", "river'; DROP TABLE worker_job_routes; --"
+    )
+
+    with pytest.raises(RuntimeError, match="not a lowercase Postgres identifier"):
+        command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0109"}
+    assert set(_routes(migrated_to_0109.engine)) == set(_RETIRED_KINDS)
 
 
 def test_0110_downgrade_restores_routes_and_the_wide_family_check(

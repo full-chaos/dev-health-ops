@@ -696,15 +696,19 @@ func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
 // acknowledged retirement rather than a breaking regression (see
 // internal/jobcontract/compatibility.go). A ledger entry is not merely a
 // note: it is the CI-facing claim that the kind exists nowhere live. This
-// test proves that claim for every retired kind, on every future retirement,
-// without hand-writing a new test per kind: the registry, the worker's
-// deployment manifest, this scheduler's remaining-metrics family inventory,
-// and the fixed-schedule producer's bindings must all agree the kind is
-// gone. CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics this
-// way -- registered handlers with zero producer anywhere, whose writers
-// duplicated daily_metrics_fanout's existing unconditional compute (see the
-// decision note in docs/contribute/architecture/go-worker-runtime.md and the
-// comment block in internal/scheduler/fixed/inventory.go immediately above
+// test proves the registry- and deployment-manifest halves of that claim for
+// EVERY retired kind, of any namespace, without hand-writing a new test per
+// kind. The remaining-metrics family inventory and fixed-schedule checks are
+// additionally proven for kinds under "metrics.remaining.*" -- the only
+// namespace this scheduler's producer or families.json can even name. A
+// retired kind outside that namespace fails this test loudly rather than
+// silently skipping its namespace-specific proof, so adding one here is a
+// required step for that future retirement, not an optional nicety. CHAOS-4243
+// retired metrics.remaining.extra_metrics/team_metrics this way -- registered
+// handlers with zero producer anywhere, whose writers duplicated
+// daily_metrics_fanout's existing unconditional compute (see the decision
+// note in docs/contribute/architecture/go-worker-runtime.md and the comment
+// block in internal/scheduler/fixed/inventory.go immediately above
 // recommendations_daily_fanout).
 func TestRetiredKindsAreFullyRemoved(t *testing.T) {
 	root := repositoryRoot(t)
@@ -751,14 +755,35 @@ func TestRetiredKindsAreFullyRemoved(t *testing.T) {
 		scheduledFamilies[binding.Family] = struct{}{}
 	}
 
+	const remainingMetricsPrefix = "metrics.remaining."
 	for _, retired := range registry.RetiredKinds {
-		family := strings.TrimPrefix(retired.Kind, "metrics.remaining.")
+		// Registry and deployment-manifest checks are namespace-agnostic and
+		// apply to every retired kind.
 		if _, exists := registeredKinds[retired.Kind]; exists {
 			t.Errorf("retired kind %q still exists in the registry; CHAOS-4243-style retirement requires full removal, not a dormant registration", retired.Kind)
 		}
 		if _, exists := deployedKinds[retired.Kind]; exists {
 			t.Errorf("retired kind %q still appears in deploy/go-workers/deployment.json's job_kinds", retired.Kind)
 		}
+
+		// The remaining-metrics family inventory and the fixed schedule are
+		// scoped to the "metrics.remaining.*" namespace by construction --
+		// neither has any concept of a kind outside it, so checking them for
+		// one would silently pass for the wrong reason (no matching entry
+		// could ever exist) rather than actually proving removal. A future
+		// retirement outside this namespace needs its OWN namespace-specific
+		// absence checks added here; this guard does not become vacuously
+		// complete just because a kind is listed in retired_kinds.
+		if !strings.HasPrefix(retired.Kind, remainingMetricsPrefix) {
+			t.Errorf(
+				"retired kind %q is outside the metrics.remaining.* namespace this guard covers; "+
+					"add a namespace-specific absence check for it in TestRetiredKindsAreFullyRemoved "+
+					"before relying on this test to prove its removal",
+				retired.Kind,
+			)
+			continue
+		}
+		family := strings.TrimPrefix(retired.Kind, remainingMetricsPrefix)
 		if _, exists := familyNames[family]; exists {
 			t.Errorf("retired family %q still exists in internal/jobs/metrics/remaining/families.json", family)
 		}

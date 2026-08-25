@@ -16,7 +16,7 @@ func TestNormalizeStartRunRequestIsDuplicateStableAndBounded(t *testing.T) {
 		OrganizationID: org,
 		TargetDay:      time.Date(2026, 7, 23, 18, 0, 0, 0, time.FixedZone("offset", -7*60*60)),
 		Generation:     "post-sync:00000000-0000-4000-8000-000000000004",
-		RepositoryIDs:  []string{repoB, repoA, repoB},
+		RepositoryIDs:  []RepositoryID{repoB, repoA, repoB},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestNormalizeStartRunRequestRejectsNonAuthoritativeReferences(t *testing.T)
 			OrganizationID: "00000000-0000-4000-8000-000000000001",
 			TargetDay:      time.Now(),
 			Generation:     "generation",
-			RepositoryIDs:  []string{"repo-slug"},
+			RepositoryIDs:  []RepositoryID{"repo-slug"},
 		},
 	} {
 		if _, _, err := normalizeStartRunRequest(request); err != ErrInvalidState {

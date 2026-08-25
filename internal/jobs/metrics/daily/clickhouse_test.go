@@ -29,7 +29,7 @@ func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(identifiers, ","), first.String()+","+second.String(); got != want {
+	if got, want := strings.Join(repositoryIDStrings(identifiers), ","), first.String()+","+second.String(); got != want {
 		t.Fatalf("identifiers=%s want=%s", got, want)
 	}
 	if len(connection.arguments) != 1 || connection.arguments[0] != organizationID {
@@ -115,15 +115,16 @@ func TestPythonDiscoverReposOracle(t *testing.T) {
 }
 
 func TestDailyOracleComparatorRejectsMismatch(t *testing.T) {
-	err := compareDailyOracleIDs([]string{"a"}, []string{"b"})
+	err := compareDailyOracleIDs([]RepositoryID{"a"}, []string{"b"})
 	if err == nil {
 		t.Fatal("the deliberate Go/Python identity mismatch was accepted")
 	}
 }
 
-func compareDailyOracleIDs(goIDs, pythonIDs []string) error {
-	if strings.Join(goIDs, ",") != strings.Join(pythonIDs, ",") {
-		return fmt.Errorf("Go ids=%s Python ids=%s", strings.Join(goIDs, ","), strings.Join(pythonIDs, ","))
+func compareDailyOracleIDs(goIDs []RepositoryID, pythonIDs []string) error {
+	goJoined := strings.Join(repositoryIDStrings(goIDs), ",")
+	if goJoined != strings.Join(pythonIDs, ",") {
+		return fmt.Errorf("Go ids=%s Python ids=%s", goJoined, strings.Join(pythonIDs, ","))
 	}
 	return nil
 }

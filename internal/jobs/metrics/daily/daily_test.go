@@ -273,16 +273,26 @@ func TestDailyContractsPreserveMetricsQueueAsRiverDefault(t *testing.T) {
 }
 
 func TestScheduledFanoutRepositoryPartitioningIsNotBoundedByPostSyncInputLimit(t *testing.T) {
-	identifiers := make([]string, 0, 1001)
+	identifiers := make([]RepositoryID, 0, 1001)
 	for value := 1; value <= 1001; value++ {
-		identifiers = append(identifiers, fmt.Sprintf("00000000-0000-4000-8000-%012d", value))
+		identifiers = append(identifiers, RepositoryID(fmt.Sprintf("00000000-0000-4000-8000-%012d", value)))
 	}
 	partitions, err := normalizeRepositoryPartitions(identifiers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(partitions) != 11 || len(partitions[0]) != dailyRepositoryPartitionSize || len(partitions[10]) != 1 {
-		t.Fatalf("partition lengths = %d/%d/%d", len(partitions), len(partitions[0]), len(partitions[10]))
+	// dailyRepositoryPartitionSize is configurable (DEV_HEALTH_DAILY_PARTITION_
+	// MAX_REPOS, CHAOS-4263/CHAOS-4264), so the expected shape is derived from
+	// it rather than a hardcoded partition count.
+	size := dailyRepositoryPartitionSize
+	wantCount := (len(identifiers) + size - 1) / size
+	wantLast := len(identifiers) % size
+	if wantLast == 0 {
+		wantLast = size
+	}
+	if len(partitions) != wantCount || len(partitions[0]) != size || len(partitions[len(partitions)-1]) != wantLast {
+		t.Fatalf("partition lengths = %d/%d/%d, want count=%d first=%d last=%d",
+			len(partitions), len(partitions[0]), len(partitions[len(partitions)-1]), wantCount, size, wantLast)
 	}
 }
 
@@ -292,7 +302,7 @@ func TestDispatcherMaterializesScheduledFanoutBeforeListingPartitions(t *testing
 		Status: "running", RepositoryDiscoveryRequired: true,
 	}}
 	discoverer := &fakeRepositoryDiscoverer{
-		identifiers: []string{"00000000-0000-4000-8000-000000000010"},
+		identifiers: []RepositoryID{"00000000-0000-4000-8000-000000000010"},
 	}
 	handler, err := NewDispatcher(store, fakePublisher{}, discoverer)
 	if err != nil {
@@ -418,7 +428,7 @@ func (store *fakeStore) DispatchablePartitions(context.Context, string) ([]Parti
 	store.dispatchListCalls++
 	return nil, nil
 }
-func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []string) (bool, error) {
+func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID) (bool, error) {
 	if store.dispatchListCalls > 0 {
 		store.materializedAfterDispatchList = true
 	}
@@ -496,12 +506,12 @@ func (compatibility failingCompatibility) Finalize(context.Context, Run) error {
 }
 
 type fakeRepositoryDiscoverer struct {
-	identifiers []string
+	identifiers []RepositoryID
 	err         error
 	calls       int
 }
 
-func (discoverer *fakeRepositoryDiscoverer) RepositoryIDs(context.Context, string) ([]string, error) {
+func (discoverer *fakeRepositoryDiscoverer) RepositoryIDs(context.Context, string) ([]RepositoryID, error) {
 	discoverer.calls++
 	return discoverer.identifiers, discoverer.err
 }

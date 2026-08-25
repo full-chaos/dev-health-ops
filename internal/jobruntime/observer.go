@@ -110,6 +110,19 @@ type DailyMetricsDiscoveryObserver interface {
 	ObserveDailyMetricsDiscovery(DailyMetricsRunTrigger, DailyMetricsDiscoveryOutcome) error
 }
 
+// DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
+// partition handler depends on when a family's upstream source data exists
+// for a partition's repositories and day, but that family's output table has
+// zero rows for the same scope (CHAOS-4263, chris's ruling 2026-08-25).
+// Distinct from DailyMetricsDiscoveryObserver's no_repositories outcome: this
+// is a run that found real repositories and had real upstream data, yet still
+// computed nothing for one or more families -- a compute-path anomaly, not an
+// empty day. Generic runtime middleware cannot infer this: only the
+// SourceDataChecker that cross-referenced source and output tables knows.
+type DailyMetricsZeroRowsObserver interface {
+	ObserveDailyMetricsFamilyZeroRowsWithSource(family string) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

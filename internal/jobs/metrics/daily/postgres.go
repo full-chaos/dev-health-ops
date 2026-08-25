@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,35 @@ import (
 
 const defaultLease = 10 * time.Minute
 
-const dailyRepositoryPartitionSize = 100
+// defaultDailyRepositoryPartitionSize is the fallback per-partition repository
+// cap when dailyRepositoryPartitionSizeEnvKey is unset or invalid.
+const defaultDailyRepositoryPartitionSize = 3
+
+// dailyRepositoryPartitionSizeEnvKey is a coordinated contract with
+// CHAOS-4264 (bridge-runner OOM + ambiguity reaper): both PRs read this exact
+// env key for the per-partition repository-count cap job_daily.py's Python
+// bridge subprocess computes in one invocation, so they agree on the bound
+// without one PR waiting on the other to land first (chris's ruling
+// 2026-08-25). The default (3) is deliberately much smaller than the prior
+// fixed 100: unlike the dora family's BackfillDays, where one bounded query
+// covers many days inside a single job execution, each extra repository here
+// adds real per-repository compute inside the SAME subprocess CHAOS-4264
+// found being SIGKILLed.
+const dailyRepositoryPartitionSizeEnvKey = "DEV_HEALTH_DAILY_PARTITION_MAX_REPOS"
+
+var dailyRepositoryPartitionSize = loadDailyRepositoryPartitionSize()
+
+func loadDailyRepositoryPartitionSize() int {
+	raw := strings.TrimSpace(os.Getenv(dailyRepositoryPartitionSizeEnvKey))
+	if raw == "" {
+		return defaultDailyRepositoryPartitionSize
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return defaultDailyRepositoryPartitionSize
+	}
+	return value
+}
 
 var dailyRunNamespace = uuid.MustParse("db1556db-28a7-58f6-982d-fc6f54dc7240")
 
@@ -232,7 +261,7 @@ ON CONFLICT DO NOTHING`,
 	return run, nil
 }
 
-func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]string, error) {
+func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]RepositoryID, error) {
 	if !validUUID(request.OrganizationID) || request.Generation == "" ||
 		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 ||
 		len(request.PrerequisiteCompletionKey) > 256 {
@@ -300,29 +329,29 @@ func isPostSyncGeneration(generation string) bool {
 	return strings.HasPrefix(generation, postSyncGenerationPrefix) && len(generation) <= 64
 }
 
-func normalizeRepositoryPartitions(repositoryIDs []string) ([][]string, error) {
-	seen := make(map[string]struct{}, len(repositoryIDs))
-	repositories := make([]string, 0, len(repositoryIDs))
+func normalizeRepositoryPartitions(repositoryIDs []RepositoryID) ([][]RepositoryID, error) {
+	seen := make(map[RepositoryID]struct{}, len(repositoryIDs))
+	repositories := make([]RepositoryID, 0, len(repositoryIDs))
 	for _, repositoryID := range repositoryIDs {
-		if !validUUID(repositoryID) {
+		if !validUUID(string(repositoryID)) {
 			return nil, ErrInvalidState
 		}
-		canonical := uuid.MustParse(repositoryID).String()
+		canonical := RepositoryID(uuid.MustParse(string(repositoryID)).String())
 		if _, duplicate := seen[canonical]; duplicate {
 			continue
 		}
 		seen[canonical] = struct{}{}
 		repositories = append(repositories, canonical)
 	}
-	sort.Strings(repositories)
+	sort.Slice(repositories, func(left, right int) bool { return repositories[left] < repositories[right] })
 	return partitionRepositoryIDs(repositories), nil
 }
 
-func partitionRepositoryIDs(repositories []string) [][]string {
-	partitions := make([][]string, 0, (len(repositories)+dailyRepositoryPartitionSize-1)/dailyRepositoryPartitionSize)
+func partitionRepositoryIDs(repositories []RepositoryID) [][]RepositoryID {
+	partitions := make([][]RepositoryID, 0, (len(repositories)+dailyRepositoryPartitionSize-1)/dailyRepositoryPartitionSize)
 	for len(repositories) > 0 {
 		size := min(dailyRepositoryPartitionSize, len(repositories))
-		partitions = append(partitions, append([]string(nil), repositories[:size]...))
+		partitions = append(partitions, append([]RepositoryID(nil), repositories[:size]...))
 		repositories = repositories[size:]
 	}
 	return partitions
@@ -357,7 +386,7 @@ func verifyStartedRun(
 	tx pgx.Tx,
 	run Run,
 	targetDay time.Time,
-	partitions [][]string,
+	partitions [][]RepositoryID,
 ) error {
 	var organizationID, generation, day string
 	if err := tx.QueryRow(ctx, `
@@ -388,7 +417,7 @@ WHERE run_id = $1::uuid ORDER BY ordinal`, run.ID)
 		if index >= len(partitions) || ordinal != index {
 			return ErrInvalidState
 		}
-		var existing []string
+		var existing []RepositoryID
 		if json.Unmarshal([]byte(raw), &existing) != nil ||
 			len(existing) != len(partitions[index]) {
 			return ErrInvalidState
@@ -471,7 +500,7 @@ RETURNING id::text, org_id::text, generation, status,
 func (store *PostgresStore) MaterializeScheduledFanout(
 	ctx context.Context,
 	run Run,
-	repositoryIDs []string,
+	repositoryIDs []RepositoryID,
 ) (bool, error) {
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
 		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation)) {

@@ -63,6 +63,7 @@ from ..sql.compiler import (
     compile_timeseries,
 )
 from ..sql.filter_translation import translate_filters
+from .investment_coverage_telemetry import INVESTMENT_COVERAGE_QUERY_FAILED_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -880,7 +881,29 @@ async def resolve_analytics(
                             else 0,
                         )
                 except Exception as e:
-                    logger.error("Coverage query failed: %s", e)
+                    # CHAOS-4241: this except swallowed a real, unrelated SQL
+                    # bug (an ambiguous ``repo_id`` identifier) for an
+                    # unknown period before it was caught by a live test --
+                    # the coverage cards degrade to an honest empty state on
+                    # ANY failure, silently. Make the fallback itself loud:
+                    # a counter (so a rising rate pages someone) alongside
+                    # the existing structured log, without changing the
+                    # UI-facing behavior (coverage still degrades to None,
+                    # never a 500).
+                    INVESTMENT_COVERAGE_QUERY_FAILED_TOTAL.labels(
+                        resolver="investment_coverage",
+                        reason=type(e).__name__,
+                    ).inc()
+                    logger.error(
+                        "investment_coverage.query_failed",
+                        extra={
+                            "resolver": "investment_coverage",
+                            "org_id": org_id,
+                            "measure": request.measure,
+                            "use_investment": bool(request.use_investment),
+                            "error": str(e),
+                        },
+                    )
                     coverage = None
 
             # CHAOS-4241 scope: this binary mapping is only known-correct for

@@ -355,26 +355,44 @@ func TestDoraDailyFanoutSkipsAnOrganizationAlreadyCoveredByPostSync(t *testing.T
 // not skip complexity/release_impact/recommendations/membership_backfill/
 // capacity -- those kinds have no second trigger to collide with, and this
 // pins that the new check does not accidentally widen past dora.
+//
+// Table-driven across all five (codex round 2, medium): the original
+// version only constructed complexity_daily_fanout, so a SkipIfCovered typo
+// on any of the other four bindings would have passed silently -- capacity
+// especially, since it is weekly work a missed skip would starve for a week.
 func TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt(t *testing.T) {
-	schedule := scheduleByID(t, "complexity_daily_fanout")
-	producer, store, _ := fanoutProducer(t, fixedOrganizationLister{
-		identifiers: []string{testOrgA},
-	})
-	store.covered = map[string]bool{testOrgA: true}
-	occurrence := NewOccurrence(
-		schedule, mustTime(t, "2026-08-25T00:45:00Z"), mustTime(t, "2026-08-25T00:45:05Z"),
-	)
-
-	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
-	if err != nil {
-		t.Fatalf("Produce() = %v", err)
+	cases := []struct {
+		scheduleID   string
+		scheduledFor string
+	}{
+		{"complexity_daily_fanout", "2026-08-25T00:45:00Z"},
+		{"release_impact_daily_fanout", "2026-08-25T01:30:00Z"},
+		{"recommendations_daily_fanout", "2026-08-25T02:00:00Z"},
+		{"membership_backfill_daily_fanout", "2026-08-25T03:30:00Z"},
+		{"capacity_forecast_weekly_fanout", "2026-08-24T04:00:00Z"}, // a Monday
 	}
-	if outcome.Handoffs != 1 || len(store.requests) != 1 {
-		t.Fatalf(
-			"outcome=%+v requests=%d -- complexity has no SkipIfCovered binding "+
-				"and must run regardless of what the store reports",
-			outcome, len(store.requests),
-		)
+	for _, test := range cases {
+		t.Run(test.scheduleID, func(t *testing.T) {
+			schedule := scheduleByID(t, test.scheduleID)
+			producer, store, _ := fanoutProducer(t, fixedOrganizationLister{
+				identifiers: []string{testOrgA},
+			})
+			store.covered = map[string]bool{testOrgA: true}
+			scheduledFor := mustTime(t, test.scheduledFor)
+			occurrence := NewOccurrence(schedule, scheduledFor, scheduledFor.Add(5*time.Second))
+
+			outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+			if err != nil {
+				t.Fatalf("Produce() = %v", err)
+			}
+			if outcome.Handoffs < 1 || len(store.requests) != 1 {
+				t.Fatalf(
+					"outcome=%+v requests=%d -- %s has no SkipIfCovered binding "+
+						"and must run regardless of what the store reports",
+					outcome, len(store.requests), test.scheduleID,
+				)
+			}
+		})
 	}
 }
 

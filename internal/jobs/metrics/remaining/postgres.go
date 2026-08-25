@@ -178,6 +178,57 @@ func (store *PostgresStore) StartRunTx(
 		}
 	}
 
+	// CHAOS-4242 round 2 (codex): dora is started by two independent
+	// triggers carrying two independent generation strings
+	// (post-sync:<sync_run_id> vs fixed-schedule:dora_daily_fanout:<time>),
+	// so the (org,family,generation,scope_key) uniqueness constraint below
+	// -- which makes ONE trigger idempotent against ITS OWN replays -- does
+	// nothing to stop the OTHER trigger from inserting a second, genuinely
+	// different run for the same org+day. RemainingMetricsCoverageStore's
+	// pre-flight in the fixed-schedule producer narrows the window but does
+	// not close it: that read happens on the outer occurrence transaction,
+	// before this call even begins, so a post-sync run committing in
+	// between is invisible to it (and post-sync's own writer never checked
+	// coverage at all). This block is the actual serialization point, on
+	// every StartRunTx call for family "dora" regardless of caller: take a
+	// transaction-scoped advisory lock keyed on (org, day) -- so a
+	// concurrent StartRunTx for the SAME org+day, from EITHER trigger,
+	// blocks until this one commits or rolls back -- then look for an
+	// already-succeeded partition for that day under ANY generation. If one
+	// exists (created by this call, a prior call, or a call that was
+	// blocked on the same lock and just committed), return THAT run instead
+	// of inserting a new one: there is nothing left to compute, and the
+	// caller (post-sync's writer) only needs a valid run ID to derive its
+	// own completion key from -- correct regardless of which generation
+	// actually did the work.
+	if request.Family == "dora" && len(request.Scopes) == 1 {
+		if day, ok := doraScopeDay(request.Scopes[0]); ok {
+			if _, err := tx.Exec(ctx,
+				"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+				"remaining_metrics_dora_day", request.OrganizationID+":"+day,
+			); err != nil {
+				return Run{}, ErrUnavailable
+			}
+			covering, found, err := store.loadRunCoveringDay(ctx, tx, request.OrganizationID, request.Family, day)
+			if err != nil {
+				return Run{}, err
+			}
+			if found {
+				completionKey, keyErr := joboutbox.CompletionKey("remaining_metric_run", covering.ID)
+				if keyErr != nil {
+					return Run{}, ErrInvalidState
+				}
+				if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+					return Run{}, ErrUnavailable
+				}
+				return covering, nil
+			}
+			// Not found: the lock is still held for the rest of this
+			// function, so a concurrent caller for the same org+day now
+			// blocks behind whichever insert happens below.
+		}
+	}
+
 	runID := deterministicRunID(request)
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
@@ -539,6 +590,46 @@ SELECT EXISTS (
 		return false, ErrUnavailable
 	}
 	return exists, nil
+}
+
+// loadRunCoveringDay finds the run (any generation) that already carries a
+// succeeded partition for this exact organization/family/day, if any. Used
+// by StartRunTx's cross-trigger dora lock (see there) -- callers other than
+// StartRunTx should have no reason to call this directly.
+func (store *PostgresStore) loadRunCoveringDay(
+	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
+) (Run, bool, error) {
+	var run Run
+	err := tx.QueryRow(ctx, `
+SELECT run.id::text, run.org_id::text, run.family, run.generation, run.scope_key, run.status, run.generation_seed
+FROM public.remaining_metric_partitions AS partition
+JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
+WHERE run.org_id = $1::uuid AND run.family = $2
+  AND partition.status = 'succeeded'
+  AND partition.scope->>'day' = $3
+ORDER BY partition.completed_at DESC
+LIMIT 1`, organizationID, family, day).Scan(
+		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, ErrUnavailable
+	}
+	return run, true, nil
+}
+
+// doraScopeDay extracts the "day" field from an already-canonicalized dora
+// scope. ok is false for any family whose scope has no such field, or a
+// malformed one -- callers treat that as "the cross-trigger lock does not
+// apply", never as an error, since only dora needs it today.
+func doraScopeDay(raw json.RawMessage) (day string, ok bool) {
+	var scope doraScope
+	if err := json.Unmarshal(raw, &scope); err != nil || scope.Day == "" {
+		return "", false
+	}
+	return scope.Day, true
 }
 
 func (store *PostgresStore) CancelRun(ctx context.Context, runID string) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -483,4 +484,147 @@ computed_at, org_id)`)
 	if gotBacklog == 0 {
 		t.Fatalf("capacity_forecasts backlog_size = %d, want > 0", gotBacklog)
 	}
+}
+
+// TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay is the
+// CHAOS-4242 codex-round-2 fix: round 1's SkipIfCovered pre-flight only
+// protects the fixed-schedule producer's OWN call to StartRunTx -- it does
+// nothing when the post-sync trigger (cmd/dev-health-worker/sync_dispatch.go's
+// remainingPostSyncWriter, which never checked coverage at all) lands
+// SECOND, and the pre-flight's own read-before-savepoint is itself a TOCTOU
+// window a concurrent commit can slip through. Both gaps are closed by
+// moving the actual guarantee into StartRunTx itself (postgres.go): a
+// transaction-scoped advisory lock keyed on (org, day), taken by EVERY
+// StartRunTx call for family "dora" regardless of caller, so whichever call
+// commits first is authoritative and the second -- whether post-sync or
+// fixed-schedule, whichever order they arrive in -- observes it under the
+// lock and reuses its run instead of inserting a duplicate.
+//
+// Both orderings are exercised because the fix must not be directional: the
+// original SkipIfCovered-only design only worked when post-sync happened to
+// go first.
+func TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay(t *testing.T) {
+	for _, order := range []struct {
+		name             string
+		firstGeneration  string
+		firstScopeKey    string
+		secondGeneration string
+		secondScopeKey   string
+	}{
+		{
+			name:             "post-sync first, fixed-schedule second",
+			firstGeneration:  "post-sync:historical-sync-run-id",
+			firstScopeKey:    "post-sync-scope-key",
+			secondGeneration: "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+			secondScopeKey:   "2026-08-24",
+		},
+		{
+			name:             "fixed-schedule first, post-sync second",
+			firstGeneration:  "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+			firstScopeKey:    "2026-08-24",
+			secondGeneration: "post-sync:historical-sync-run-id",
+			secondScopeKey:   "post-sync-scope-key",
+		},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			instance, err := containers.StartPostgres(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close(context.Background())
+			pool, err := pgxpool.New(ctx, instance.URI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			createRemainingTables(t, ctx, pool)
+
+			store, err := NewPostgresStore(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const orgID = "00000000-0000-4000-8000-000000004242"
+			scope := json.RawMessage(`{"version":1,"day":"2026-08-24","sink":"auto","interval":"daily","backfill_days":1}`)
+
+			// First trigger: creates the real run and completes its partition
+			// -- simulating the worker actually computing that day.
+			firstTx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstRun, err := store.StartRunTx(ctx, firstTx, StartRunRequest{
+				OrganizationID: orgID,
+				Family:         "dora",
+				Generation:     order.firstGeneration,
+				ScopeKey:       order.firstScopeKey,
+				Scopes:         []json.RawMessage{scope},
+			}, nopPartitionPublisher{})
+			if err != nil {
+				t.Fatalf("first StartRunTx: %v", err)
+			}
+			if err := firstTx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			partitionID := deterministicPartitionID(firstRun.ID, 1)
+			claim, err := store.ClaimPartition(ctx, partitionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if claim == nil {
+				t.Fatal("first run's partition was not claimable")
+			}
+			if err := store.CompletePartition(ctx, *claim, "rows=1;sha256=first"); err != nil {
+				t.Fatal(err)
+			}
+
+			// Second trigger: DIFFERENT generation, SAME org+day. Must
+			// return the FIRST run, not create a second one.
+			secondTx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondRun, err := store.StartRunTx(ctx, secondTx, StartRunRequest{
+				OrganizationID: orgID,
+				Family:         "dora",
+				Generation:     order.secondGeneration,
+				ScopeKey:       order.secondScopeKey,
+				Scopes:         []json.RawMessage{scope},
+			}, nopPartitionPublisher{})
+			if err != nil {
+				t.Fatalf("second StartRunTx: %v", err)
+			}
+			if err := secondTx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if secondRun.ID != firstRun.ID {
+				t.Fatalf(
+					"the second trigger created a NEW run (%s) instead of reusing "+
+						"the already-succeeded one (%s) -- this is the exact "+
+						"duplicate-write shape codex round 1 demonstrated",
+					secondRun.ID, firstRun.ID,
+				)
+			}
+
+			var runCount int
+			if err := pool.QueryRow(ctx,
+				"SELECT count(*) FROM remaining_metric_runs WHERE org_id = $1::uuid AND family = 'dora'",
+				orgID,
+			).Scan(&runCount); err != nil {
+				t.Fatal(err)
+			}
+			if runCount != 1 {
+				t.Fatalf("expected exactly 1 dora run for this org+day, found %d", runCount)
+			}
+		})
+	}
+}
+
+type nopPartitionPublisher struct{}
+
+func (nopPartitionPublisher) PublishPartitionTx(
+	context.Context, pgx.Tx, Run, Partition, string,
+) error {
+	return nil
 }

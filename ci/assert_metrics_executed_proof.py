@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from typing import TypedDict
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -77,7 +78,7 @@ def live_repo_ids(client, org_id: str) -> set[str]:
 
 
 def family_readback(
-    client, table: str, repo_ids: set[str], run_start: str
+    client, table: str, repo_ids: set[str], run_start: datetime
 ) -> dict[str, FamilyRowCount]:
     if not repo_ids:
         return {}
@@ -97,7 +98,7 @@ def family_readback(
     }
 
 
-def unscoped_repo_ids(client, table: str, run_start: str) -> set[str]:
+def unscoped_repo_ids(client, table: str, run_start: datetime) -> set[str]:
     """repo_ids the table carries for THIS run, regardless of org.
 
     Used only to detect the CHAOS-4263 failure mode directly: a family that
@@ -137,6 +138,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # clickhouse_connect binds DateTime64(6) parameters from a real datetime
+    # object, not a raw ISO8601 string -- a string with a "+00:00" offset
+    # (what Python's datetime.isoformat() produces, and what both callers of
+    # this script pass) fails ClickHouse's DateTime64 parser with
+    # "isn't parsed completely", which reads as this script being broken,
+    # not as the CHAOS-4263 defect it exists to catch.
+    run_start = datetime.fromisoformat(args.run_start)
+
     sink = ClickHouseMetricsSink(args.clickhouse_uri)
     client = sink.client
     try:
@@ -156,9 +165,9 @@ def main() -> int:
         failures: list[str] = []
         for family in args.families:
             table = REPO_DAY_FAMILIES[family]
-            readback = family_readback(client, table, repo_ids, args.run_start)
+            readback = family_readback(client, table, repo_ids, run_start)
             total_rows = sum(int(v["rows"]) for v in readback.values())
-            stray = unscoped_repo_ids(client, table, args.run_start) - repo_ids
+            stray = unscoped_repo_ids(client, table, run_start) - repo_ids
             summary[family] = {
                 "table": table,
                 "rows_written": total_rows,

@@ -118,6 +118,28 @@ def _cleanup(sink: Any, org_id: str, repo_ids: list[uuid.UUID]) -> None:
         )
 
 
+def _alice_ops_context() -> TeamAttributionContext:
+    """The org-scoped attribution_context path -- the ONLY reporter-resolution
+    path that exists (CHAOS-4110/codex, 2026-08-24: no legacy-TeamResolver
+    reporter path; TeamResolver is not org-scoped and would bypass the
+    ambiguity gate)."""
+    return TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+
+
 def _seed_repo(sink: Any, org: str, *, repo_id: uuid.UUID, slug: str) -> None:
     sink.client.insert(
         "repos",
@@ -266,9 +288,7 @@ async def test_pr_author_resolves_through_the_real_producer_and_the_production_q
         records = compute_work_item_team_attributions(
             work_items=[pr_item],
             computed_at=COMPUTED_AT,
-            team_resolver=TeamResolver(
-                member_to_team={"alice": ("team-ops", "Ops Team")}
-            ),
+            attribution_context=_alice_ops_context(),
         )
         assert any(r.is_primary and r.team_id == "team-ops" for r in records), records
         sink.write_work_item_team_attributions(records)
@@ -435,9 +455,7 @@ async def test_backfill_next_run_attributes_a_previously_unassigned_unit(sink):
         fresh_records = compute_work_item_team_attributions(
             work_items=[fresh_item],
             computed_at=next_run_at,
-            team_resolver=TeamResolver(
-                member_to_team={"alice": ("team-ops", "Ops Team")}
-            ),
+            attribution_context=_alice_ops_context(),
         )
         sink.write_work_item_team_attributions(fresh_records)
 

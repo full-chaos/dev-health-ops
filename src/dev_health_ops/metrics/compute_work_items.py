@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, TypedDict
 
@@ -167,6 +167,22 @@ def _identity_key(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+def _is_bot_identity(identity: str | None) -> bool:
+    """True for a GitHub App/bot actor identity.
+
+    ``IdentityResolver.resolve`` (providers/identity.py) falls back to
+    ``f"{provider}:{username}"`` for any identity with no email -- true of
+    every bot -- so the raw login, brackets included, survives resolution
+    (e.g. ``github:dependabot[bot]``). ``[bot]`` is reserved: GitHub does not
+    let a human register a bracketed login, the same invariant
+    ``_is_linear_integration_author`` (providers/github/normalize.py) and the
+    AI-attribution CI_BOTS/KNOWN_AI_BOTS detectors (providers/_ai_detection.py)
+    already rely on -- this reuses that convention rather than a second bot
+    list.
+    """
+    return bool(identity) and (identity or "").strip().lower().endswith("[bot]")
+
+
 def _candidate_sort_key(
     candidate: TeamAttributionCandidate,
 ) -> tuple[int, int, int, float, str, str, str, str, str]:
@@ -212,6 +228,37 @@ def _dedupe_candidates(
         seen.add(key)
         deduped.append(candidate)
     return deduped
+
+
+def _collapse_by_team_id(
+    ranked: list[TeamAttributionCandidate],
+) -> list[TeamAttributionCandidate]:
+    """Keep at most one candidate per (source, team_id) pair.
+
+    `work_item_team_attributions` is a ReplacingMergeTree ordered by
+    ``(org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`` --
+    ``evidence`` is NOT part of that key (migration 051). Two candidates for
+    the SAME source and team but with different evidence text (e.g. an
+    assignee and the reporter who happen to be the same person, or two
+    ownership facts naming the same team by different paths) therefore
+    collide at the storage key even though `_dedupe_candidates` -- which
+    keys on the full row including evidence -- treats them as distinct and
+    lets both through. A collision resolves by `computed_at` (the RMT
+    version column); when both rows are stamped in the same batch that tie
+    is effectively undefined, and readers filtering `is_primary = 1` can
+    silently lose the attribution if the surviving row happens to be the
+    non-primary one (codex, 2026-08-24). `ranked` is already sorted
+    best-first (`_ranked`), so keeping the first occurrence per team_id
+    keeps the correct primary/highest-precedence row.
+    """
+    seen_teams: set[str | None] = set()
+    collapsed: list[TeamAttributionCandidate] = []
+    for candidate in ranked:
+        if candidate.team_id in seen_teams:
+            continue
+        seen_teams.add(candidate.team_id)
+        collapsed.append(candidate)
+    return collapsed
 
 
 def _context_candidates(
@@ -365,6 +412,11 @@ def resolve_team_attribution(
         "manual_fallback": [],
         "unassigned": [],
     }
+    # CHAOS-4244: WHY the reporter path contributed nothing, if it didn't --
+    # threaded onto the final unassigned row's evidence below (only when
+    # nothing else resolved either) so the residual is traceable instead of a
+    # bare "no_candidate".
+    reporter_skip_reason: str | None = None
 
     native = _native_team_candidate(item, project_key_resolver)
     if native is not None:
@@ -445,20 +497,57 @@ def resolve_team_attribution(
         # Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped
         # signal is only usable "where the reporter's membership is
         # unambiguous (exactly one team)" -- a person on 2+ teams gives no
-        # reason to prefer one, and blanket-stamping a whole org's authorless
-        # PRs to a single team was exactly the outcome chris ruled against
-        # (CHAOS-3975's cancellation, CHAOS-4110 comment thread). An assignee
-        # keeps no such gate: it is the pre-existing rank-4 mechanism, not the
-        # new one this ticket is adding. Reporter contributes NOTHING when its
-        # membership resolves to more than one distinct team.
-        if item.reporter:
+        # reason to prefer one. An assignee keeps no such gate: it is the
+        # pre-existing rank-4 mechanism, not the new one this ticket is
+        # adding. Bot filter: a bot/App author (dependabot, github-actions,
+        # ...) carries no team meaning and must not be attributed at all --
+        # see _is_bot_identity. Neither exclusion is a rejection of person-
+        # shaped attribution (chris, 2026-08-24: the Ops-Team-mapped-to-
+        # nothing reading was a misread of a TEST-DATA choice, not a rule
+        # against it) -- they are the precision conditions chris named for
+        # shipping it. `_reporter_skip_reason` records WHY, so the eventual
+        # `unassigned` row (if nothing else resolves either) is traceable
+        # instead of a bare "no_candidate".
+        # Deliberately org-scoped ONLY: `attribution_context.member_by_identity`
+        # is ClickHouse data keyed to this item's own org (CHAOS-2600 CS6 --
+        # "ClickHouse is the only source used for analytics attribution").
+        # There is NO legacy-TeamResolver reporter path -- adding one was
+        # reviewed and rejected (codex, 2026-08-24): TeamResolver can load
+        # from a global, non-org-scoped config path with no ambiguity
+        # concept of its own, so a second reporter lookup through it would
+        # both bypass the ambiguity gate above (context says "ambiguous",
+        # legacy independently answers anyway) and risk one tenant's mapping
+        # stamping another tenant's PR. The pre-existing assignee legacy
+        # path below is untouched -- it predates this ticket and is out of
+        # scope; this reporter feature simply never extends to it.
+        if item.reporter and _is_bot_identity(item.reporter):
+            reporter_skip_reason = "bot_author"
+        elif item.reporter:
             reporter_candidates = _context_candidates(
                 attribution_context.member_by_identity,
                 item.provider,
                 _identity_key(item.reporter),
             )
-            if len({c.team_id for c in reporter_candidates}) == 1:
-                candidates_by_source["assignee_membership"].extend(reporter_candidates)
+            reporter_teams = {c.team_id for c in reporter_candidates}
+            if len(reporter_teams) == 1:
+                # Evidence is rewritten (not passed through verbatim) so a
+                # reporter-resolved row is distinguishable from an
+                # assignee-resolved one for provenance and for
+                # WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL's author/assignee
+                # split (codex, 2026-08-24: the un-rewritten evidence made
+                # "author" unreachable in real data, since the stored fact's
+                # own evidence text never says "reporter="). Safe against
+                # the ReplacingMergeTree storage-key collision this could
+                # otherwise create when the author IS the assignee (same
+                # team, two evidence strings, same (org_id, repo_id,
+                # work_item_id, team_id, source) key) because rows are
+                # collapsed by that exact key below, before persistence.
+                candidates_by_source["assignee_membership"].extend(
+                    replace(candidate, evidence=f"reporter={item.reporter}")
+                    for candidate in reporter_candidates
+                )
+            elif len(reporter_teams) > 1:
+                reporter_skip_reason = "ambiguous_membership"
 
     assignee: str | None = item.assignees[0] if item.assignees else None
     team_id, team_name = _resolve_team(team_resolver, assignee)
@@ -474,22 +563,6 @@ def resolve_team_attribution(
                 specificity=50,
             )
         )
-    if item.reporter:
-        reporter_team_id, reporter_team_name = _resolve_team(
-            team_resolver, item.reporter
-        )
-        if reporter_team_id is not None:
-            candidates_by_source["assignee_membership"].append(
-                TeamAttributionCandidate(
-                    source="assignee_membership",
-                    team_id=reporter_team_id,
-                    team_name=reporter_team_name or reporter_team_id,
-                    confidence="medium",
-                    evidence=f"reporter={item.reporter}",
-                    is_primary=1,
-                    specificity=50,
-                )
-            )
 
     if attribution_context is not None and attribution_context.manual_fallbacks:
         candidates_by_source["manual_fallback"].extend(
@@ -500,17 +573,33 @@ def resolve_team_attribution(
     rows: list[TeamAttributionCandidate] = []
     for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):
         ranked = _ranked(_dedupe_candidates(candidates_by_source[source]))
+        # Scoped to assignee_membership ONLY (CHAOS-4244): that is the one
+        # source where THIS ticket's reporter-evidence-rewrite can put an
+        # assignee row and a reporter row for the SAME person/team in the
+        # list with different evidence -- a real ReplacingMergeTree
+        # storage-key collision (evidence is not part of the key; migration
+        # 051). Every other source legitimately wants multiple same-team
+        # candidates preserved as provenance (e.g. two manual_fallback rules
+        # naming the same team by different scopes) -- collapsing those too
+        # would erase real information this ticket has no reason to touch.
+        if source == "assignee_membership":
+            ranked = _collapse_by_team_id(ranked)
         if primary is None and ranked:
             primary = ranked[0]
         rows.extend(ranked)
 
     if primary is None:
+        unassigned_evidence = (
+            f"no_candidate:{reporter_skip_reason}"
+            if reporter_skip_reason
+            else "no_candidate"
+        )
         primary = TeamAttributionCandidate(
             source="unassigned",
             team_id=None,
             team_name=None,
             confidence="none",
-            evidence="no_candidate",
+            evidence=unassigned_evidence,
             is_primary=1,
         )
         rows.append(primary)

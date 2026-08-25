@@ -483,6 +483,16 @@ func githubWorkItemTeamAttributionMetricSource(row githubWorkItemTeamAttribution
 		return "project"
 	case "repo_ownership":
 		return "repo"
+	case "unassigned":
+		// CHAOS-4244: resolve() stamps evidence "no_candidate:<reason>" when
+		// the reporter path specifically declined to contribute (bot author,
+		// ambiguous multi-team membership) -- surface that reason as its own
+		// label so the residual is legible, not folded back into the generic
+		// "unassigned" bucket.
+		if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok && reason != "" {
+			return reason
+		}
+		return "unassigned"
 	default:
 		return row.Source
 	}

@@ -76,16 +76,58 @@ def test_pr_with_no_assignee_but_known_author_stays_unassigned_today_would_fail_
     assert [c.source for c in candidates] == ["unassigned"]
 
 
-def test_pr_author_resolves_to_team_via_team_resolver():
-    """RED before the fix: assignees is empty, so the old code never looked
-    at `reporter` and this resolved unassigned. GREEN after: the author is
-    now a membership candidate, same rank (assignee_membership) as an
-    assignee, reusing the identical TeamResolver.resolve() call."""
+def test_reporter_never_resolves_through_the_legacy_team_resolver():
+    """Negative control (codex, 2026-08-24): a reporter must resolve ONLY
+    through the org-scoped attribution_context/member_by_identity path, NEVER
+    through the legacy TeamResolver -- TeamResolver can load from a global,
+    non-org-scoped config with no ambiguity concept of its own, so a second
+    reporter lookup through it would both bypass the ambiguity gate and risk
+    one tenant's mapping stamping another tenant's PR. A populated
+    team_resolver with a matching entry for the reporter, and NO
+    attribution_context at all, must still resolve unassigned. (The
+    pre-existing assignee legacy path is untouched -- see
+    test_assignee_still_outranks_nothing_and_author_never_overrides_a_real_assignee
+    for that unchanged behavior.)"""
     item = _pr_work_item(reporter="alice", assignees=[])
     team_id, team_name, candidates = resolve_team_attribution(
         item,
         team_resolver=TeamResolver(member_to_team={"alice": ("team-ops", "Ops Team")}),
         project_key_resolver=None,
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+
+
+def test_pr_author_resolves_to_team_via_attribution_context_with_relabeled_evidence():
+    """GREEN: the author resolves through the org-scoped attribution_context
+    (the only reporter path that exists), and its evidence is REWRITTEN to
+    `reporter=<identity>` (not passed through verbatim) so a reporter-
+    resolved row is distinguishable from an assignee-resolved one -- both for
+    a human reading the row and for
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL's author/assignee split
+    (codex, 2026-08-24: the un-rewritten evidence made "author" unreachable
+    in real data)."""
+    item = _pr_work_item(reporter="alice", assignees=[])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
     )
     assert (team_id, team_name) == ("team-ops", "Ops Team")
     primary = [c for c in candidates if c.is_primary]
@@ -255,10 +297,25 @@ def test_compute_work_item_team_attributions_emits_ghpr_row_for_author_only_pr()
     missing for provider='github' (checked full history, zero rows, per the
     ticket)."""
     item = _pr_work_item(reporter="alice", assignees=[])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
     records = compute_work_item_team_attributions(
         work_items=[item],
         computed_at=COMPUTED_AT,
-        team_resolver=TeamResolver(member_to_team={"alice": ("team-ops", "Ops Team")}),
+        attribution_context=context,
     )
     primary = [r for r in records if r.is_primary]
     assert len(primary) == 1
@@ -266,6 +323,211 @@ def test_compute_work_item_team_attributions_emits_ghpr_row_for_author_only_pr()
     assert primary[0].provider == "github"
     assert primary[0].team_id == "team-ops"
     assert primary[0].source == "assignee_membership"
+    assert primary[0].evidence == "reporter=alice"
+
+
+def test_bot_author_never_attributed():
+    """chris's precision condition (2026-08-24): a bot/App author (dependabot,
+    github-actions, ...) carries no team meaning and must be excluded
+    outright, even when its identity happens to match a real member_by_identity
+    row (a coincidence a config could produce, but must never be honored)."""
+    item = _pr_work_item(reporter="github:dependabot[bot]", assignees=[])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "dependabot[bot]"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=dependabot[bot]",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    records = compute_work_item_team_attributions(
+        work_items=[item],
+        computed_at=COMPUTED_AT,
+        attribution_context=context,
+    )
+    primary = [r for r in records if r.is_primary]
+    assert len(primary) == 1
+    assert primary[0].team_id is None
+    assert primary[0].source == "unassigned"
+    assert primary[0].evidence == "no_candidate:bot_author"
+
+
+def test_ambiguous_reporter_evidence_tags_the_unassigned_row():
+    """The `unassigned` row must be traceable: when nothing else resolves
+    either, its evidence carries WHY the reporter path specifically
+    declined, not a bare 'no_candidate' (CHAOS-4150 doctrine -- make the
+    miss loud)."""
+    item = _pr_work_item(reporter="alice", assignees=[])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                ),
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-platform",
+                    team_name="Platform Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                ),
+            ]
+        }
+    )
+    records = compute_work_item_team_attributions(
+        work_items=[item],
+        computed_at=COMPUTED_AT,
+        attribution_context=context,
+    )
+    primary = [r for r in records if r.is_primary]
+    assert len(primary) == 1
+    assert primary[0].evidence == "no_candidate:ambiguous_membership"
+
+
+def test_reporter_and_assignee_same_person_same_team_collapses_to_one_row():
+    """Storage-key collision guard (codex, 2026-08-24): when the author IS
+    the assignee and both resolve to the SAME team, the assignee-loop
+    candidate (evidence "assignee=...") and the reporter candidate (evidence
+    rewritten to "reporter=...") would otherwise both survive
+    `_dedupe_candidates` (different evidence) and collide at the
+    `work_item_team_attributions` ReplacingMergeTree storage key -- (org_id,
+    repo_id, work_item_id, team_id, source), which does NOT include evidence
+    (migration 051). Exactly one row for that (source, team_id) pair must
+    survive `resolve_team_attribution`."""
+    item = WorkItem(
+        work_item_id="ghpr:full-chaos/dev-health-ops#77",
+        provider="github",
+        title="t",
+        type="pr",
+        status="done",
+        status_raw="merged",
+        reporter="alice",
+        assignees=["alice"],
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    same_team_rows = [
+        c
+        for c in candidates
+        if c.source == "assignee_membership" and c.team_id == "team-ops"
+    ]
+    assert len(same_team_rows) == 1, same_team_rows
+
+
+def test_metric_source_label_splits_author_from_assignee_on_real_rows():
+    """Metric-vocabulary regression (codex, 2026-08-24): the un-rewritten
+    evidence made "author" unreachable for real context-resolved rows, since
+    the underlying fact's own evidence is always "assignee_membership=<id>"
+    regardless of whether an assignee or a reporter identity matched it. The
+    evidence-rewrite fix must make work_item_team_attribution_metric_source
+    correctly split a REAL resolver-produced reporter row from a REAL
+    resolver-produced assignee row -- not just a handcrafted "reporter="
+    literal."""
+    from dev_health_ops.metrics.prometheus import (
+        work_item_team_attribution_metric_source,
+    )
+
+    reporter_item = _pr_work_item(reporter="alice", assignees=[])
+    assignee_item = WorkItem(
+        work_item_id="ghpr:full-chaos/dev-health-ops#88",
+        provider="github",
+        title="t",
+        type="pr",
+        status="done",
+        status_raw="merged",
+        assignees=["bob"],
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ],
+            ("github", "bob"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=bob",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ],
+        }
+    )
+    _, _, reporter_candidates = resolve_team_attribution(
+        reporter_item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    _, _, assignee_candidates = resolve_team_attribution(
+        assignee_item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    reporter_primary = next(c for c in reporter_candidates if c.is_primary)
+    assignee_primary = next(c for c in assignee_candidates if c.is_primary)
+    assert (
+        work_item_team_attribution_metric_source(
+            reporter_primary.source, reporter_primary.evidence
+        )
+        == "author"
+    )
+    assert (
+        work_item_team_attribution_metric_source(
+            assignee_primary.source, assignee_primary.evidence
+        )
+        == "assignee"
+    )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,10 @@ from typing import Any
 import clickhouse_connect
 
 from dev_health_ops.clickhouse_dedup import dedup_from
-from dev_health_ops.metrics.prometheus import WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL
+from dev_health_ops.metrics.prometheus import (
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL,
+    work_item_team_attribution_metric_source,
+)
 from dev_health_ops.metrics.schemas import (
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -381,7 +384,10 @@ class ClickHouseCore(BaseMetricsSink):
         for row in rows:
             if row.is_primary:
                 WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL.labels(
-                    provider=row.provider, source=row.source
+                    provider=row.provider,
+                    source=work_item_team_attribution_metric_source(
+                        row.source, row.evidence
+                    ),
                 ).inc()
 
     def write_manual_attribution_fallbacks(

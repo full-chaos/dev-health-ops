@@ -612,3 +612,124 @@ func TestGitHubWorkItemDerivationReporterNeverOutranksAHigherSource(t *testing.T
 		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
 	}
 }
+
+func TestGitHubWorkItemDerivationBotAuthorNeverAttributed(t *testing.T) {
+	// chris's precision condition (2026-08-24): a bot/App author carries no
+	// team meaning and must be excluded outright, even when its identity
+	// happens to match a real memberByID row.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "dependabot[bot]", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "github:dependabot[bot]"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#4244", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (bot author)", teamID)
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" ||
+		candidates[0].Evidence != "no_candidate:bot_author" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationAmbiguousReporterEvidenceTagsTheUnassignedRow(t *testing.T) {
+	// The unassigned row must be traceable: when nothing else resolves
+	// either, its evidence carries WHY the reporter path specifically
+	// declined, not a bare "no_candidate" (CHAOS-4150 doctrine).
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{
+			{
+				Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			},
+			{
+				Provider: "github", TeamID: "team-platform", TeamName: "Platform Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			},
+		},
+	})
+	reporter := "alice"
+	_, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#4244", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if len(candidates) != 1 || candidates[0].Evidence != "no_candidate:ambiguous_membership" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance(t *testing.T) {
+	// When the author IS the assignee and both resolve to the SAME team,
+	// resolve() deliberately keeps BOTH candidates (assignee evidence and
+	// the rewritten "reporter=..." evidence) as provenance -- collapsing
+	// here is NOT this layer's job, unlike the Python mirror. This route's
+	// write path already dedupes by the exact ClickHouse sorting key
+	// (repo_id, work_item_id, team_id, source; evidence excluded) with a
+	// deterministic last-wins tie-break, via githubWorkItemDerivedSortingKeyDedupe
+	// in WriteGitHubWorkItemEffect -- see
+	// TestGitHubTeamAttributionCollisionIsRealAndCollapses for that proof.
+	// Only ONE of the two survives as is_primary; that is what matters here.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#77", Provider: "github",
+		Assignees: []string{"alice"}, Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+		t.Fatalf("team id = %v, want team-ops", teamID)
+	}
+	var sameTeamRows []githubWorkItemDerivationCandidate
+	primaryCount := 0
+	for _, candidate := range candidates {
+		if candidate.Source == "assignee_membership" && githubWorkItemDerivationStringValue(candidate.TeamID) == "team-ops" {
+			sameTeamRows = append(sameTeamRows, candidate)
+			primaryCount += candidate.IsPrimary
+		}
+	}
+	if len(sameTeamRows) != 2 {
+		t.Fatalf("same-team assignee_membership rows = %d, want 2 (assignee + reporter provenance): %+v", len(sameTeamRows), sameTeamRows)
+	}
+	if primaryCount != 1 {
+		t.Fatalf("primary count among same-team rows = %d, want exactly 1: %+v", primaryCount, sameTeamRows)
+	}
+	if sameTeamRows[0].Evidence == sameTeamRows[1].Evidence {
+		t.Fatalf("expected distinct evidence (assignee= vs reporter=), got identical: %+v", sameTeamRows)
+	}
+}
+
+func TestGitHubWorkItemTeamAttributionMetricSourceSplitsRealReporterFromRealAssigneeRows(t *testing.T) {
+	// Metric-vocabulary regression (codex, 2026-08-24): a real
+	// resolver-produced reporter candidate's evidence must classify as
+	// "author", not "assignee" -- proving it end to end through resolve(),
+	// not a handcrafted "reporter=" literal.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	_, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#4244", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	primary := candidates[0]
+	row := githubWorkItemTeamAttributionRow{Source: primary.Source, Evidence: primary.Evidence}
+	if got := githubWorkItemTeamAttributionMetricSource(row); got != "author" {
+		t.Fatalf("metric source = %q, want author (evidence=%q)", got, primary.Evidence)
+	}
+}

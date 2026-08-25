@@ -656,13 +656,42 @@ func (derived githubWorkItemDerivationContext) resolve(
 	//
 	// Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped signal
 	// is only usable "where the reporter's membership is unambiguous (exactly
-	// one team)". Reporter contributes NOTHING when its membership resolves
-	// to more than one distinct team -- an assignee keeps no such gate, it is
-	// the pre-existing rank-4 mechanism, not the new one this ticket adds.
+	// one team)". Bot filter: a bot/App author (dependabot, github-actions,
+	// ...) carries no team meaning -- see githubWorkItemDerivationIsBotIdentity.
+	// An assignee keeps neither gate: it is the pre-existing rank-4 mechanism,
+	// not the new one this ticket adds. reporterSkipReason records WHY, so the
+	// eventual unassigned candidate (if nothing else resolves either) is
+	// traceable instead of a bare "no_candidate".
+	// No legacy-resolver reporter path exists here, deliberately (codex,
+	// 2026-08-24): Go's memberByID is already the sole, org-scoped source
+	// (loaded per-claim in loadWorkItemDerivationContextForProvider), so
+	// there is no second, non-tenant-scoped lookup to bypass the gate above.
+	var reporterSkipReason string
 	if subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
-		reporterCandidates := derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(*subject.Reporter))]
-		if githubWorkItemDerivationSingleTeam(reporterCandidates) {
-			bySource["assignee_membership"] = append(bySource["assignee_membership"], reporterCandidates...)
+		switch {
+		case githubWorkItemDerivationIsBotIdentity(*subject.Reporter):
+			reporterSkipReason = "bot_author"
+		default:
+			reporterCandidates := derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(*subject.Reporter))]
+			switch {
+			case githubWorkItemDerivationSingleTeam(reporterCandidates):
+				// Evidence is rewritten (not passed through verbatim) so a
+				// reporter-resolved row is distinguishable from an
+				// assignee-resolved one -- see
+				// githubWorkItemTeamAttributionMetricSource. Safe against the
+				// ReplacingMergeTree storage-key collision this could
+				// otherwise cause when the author IS the assignee, because
+				// candidates are collapsed by team_id within each source
+				// below, before persistence.
+				relabeled := make([]githubWorkItemDerivationCandidate, len(reporterCandidates))
+				for index, candidate := range reporterCandidates {
+					candidate.Evidence = "reporter=" + *subject.Reporter
+					relabeled[index] = candidate
+				}
+				bySource["assignee_membership"] = append(bySource["assignee_membership"], relabeled...)
+			case len(reporterCandidates) > 0:
+				reporterSkipReason = "ambiguous_membership"
+			}
 		}
 	}
 	bySource["manual_fallback"] = append(
@@ -676,6 +705,18 @@ func (derived githubWorkItemDerivationContext) resolve(
 	var primary *githubWorkItemDerivationCandidate
 	all := make([]githubWorkItemDerivationCandidate, 0)
 	for _, source := range order {
+		// No team_id collapse here, deliberately (unlike the Python mirror):
+		// this route's write path already dedupes by the EXACT ClickHouse
+		// sorting key -- (repo_id, work_item_id, team_id, source), evidence
+		// excluded -- via githubWorkItemDerivedSortingKeyDedupe in
+		// WriteGitHubWorkItemEffect, with a deterministic last-wins tie-break
+		// on computed_at. Collapsing here too would be redundant AND wrong:
+		// it would also erase legitimate SEPARATE-team-name-same-team_id or
+		// same-team-different-rule candidates (e.g. two manual_fallback
+		// rules naming the same team) that the provenance contract still
+		// wants recorded pre-write. Python has no such write-time dedup
+		// (sinks/clickhouse/core.py inserts verbatim), which is why
+		// _collapse_by_team_id lives THERE instead.
 		candidates := rankDerivationCandidates(dedupeDerivationCandidates(bySource[source]))
 		if primary == nil && len(candidates) > 0 {
 			value := candidates[0]
@@ -684,8 +725,12 @@ func (derived githubWorkItemDerivationContext) resolve(
 		all = append(all, candidates...)
 	}
 	if primary == nil {
+		evidence := "no_candidate"
+		if reporterSkipReason != "" {
+			evidence = "no_candidate:" + reporterSkipReason
+		}
 		value := githubWorkItemDerivationCandidate{
-			Source: "unassigned", Confidence: "none", Evidence: "no_candidate",
+			Source: "unassigned", Confidence: "none", Evidence: evidence,
 			IsPrimary: 1, UpdatedAt: normalizedDerivationTime(time.Time{}),
 		}
 		primary = &value
@@ -1415,6 +1460,20 @@ func githubWorkItemDerivationSingleTeam(candidates []githubWorkItemDerivationCan
 		teams[githubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}
 	}
 	return len(teams) == 1
+}
+
+// githubWorkItemDerivationIsBotIdentity reports whether an identity is a
+// GitHub App/bot actor. Mirrors compute_work_items.py's _is_bot_identity:
+// IdentityResolver.resolve falls back to "provider:username" for any
+// identity with no email -- true of every bot -- so the raw login, brackets
+// included, survives resolution (e.g. "github:dependabot[bot]"). "[bot]" is
+// reserved: GitHub does not let a human register a bracketed login, the same
+// invariant this repo's other bot detectors already rely on
+// (isLinearIntegrationAuthor-equivalent checks, providers/_ai_detection.py's
+// CI_BOTS/KNOWN_AI_BOTS) -- this reuses that convention rather than a second
+// bot list.
+func githubWorkItemDerivationIsBotIdentity(identity string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(identity)), "[bot]")
 }
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {

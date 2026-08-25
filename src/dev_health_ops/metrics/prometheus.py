@@ -431,6 +431,35 @@ else:
 # ---------------------------------------------------------------------------
 
 
+def work_item_team_attribution_metric_source(source: str, evidence: str) -> str:
+    """Map a written work_item_team_attributions row onto CHAOS-4244's
+    coarser written-source vocabulary for WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL.
+
+    Deliberately coarser than the ClickHouse `source` enum
+    (native_team/issue_project/project_ownership/repo_ownership/
+    assignee_membership/linked_issue/manual_fallback/unassigned): "author"
+    and "assignee" split the single assignee_membership rank by WHICH
+    identity resolved it (the `evidence` prefix), and an `unassigned` row
+    carrying `no_candidate:<reason>` (bot_author, ambiguous_membership --
+    resolve_team_attribution's reporter-skip precision conditions) surfaces
+    that reason as its own label instead of folding back into the generic
+    "unassigned" bucket. Mirrors Go's
+    githubWorkItemTeamAttributionMetricSource exactly; keep both in sync.
+    """
+    if source == "assignee_membership":
+        return "author" if evidence.startswith("reporter=") else "assignee"
+    if source in ("project_ownership", "issue_project"):
+        return "project"
+    if source == "repo_ownership":
+        return "repo"
+    if source == "unassigned":
+        prefix = "no_candidate:"
+        if evidence.startswith(prefix) and len(evidence) > len(prefix):
+            return evidence[len(prefix) :]
+        return "unassigned"
+    return source
+
+
 def record_celery_task(task_name: str, state: str, duration_seconds: float) -> None:
     """Record Celery task completion metrics."""
     CELERY_TASKS_TOTAL.labels(task_name=task_name, state=state).inc()

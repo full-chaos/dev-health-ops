@@ -622,6 +622,14 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 var metricWorkItemTeamAttributionSourceVocabulary = map[string]struct{}{
 	"author": {}, "assignee": {}, "linked_issue": {}, "project": {},
 	"repo": {}, "unassigned": {},
+	// bot_author and ambiguous_membership are the two precision conditions
+	// chris named for shipping author attribution (2026-08-23/24): a bot/App
+	// author is excluded outright, and a reporter whose own membership
+	// resolves to 2+ teams contributes nothing. Both are still "unassigned"
+	// outcomes at the ClickHouse row level, but a distinct series label here
+	// is what makes the residual READABLE -- the whole point of CHAOS-4150's
+	// standing "make the misses loud" order.
+	"bot_author": {}, "ambiguous_membership": {},
 }
 
 // MetricWorkItemTeamAttributionSourceLabel bounds the written-source label.

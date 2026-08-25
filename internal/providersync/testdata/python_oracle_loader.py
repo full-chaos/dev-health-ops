@@ -136,6 +136,12 @@ _CLICKHOUSE_MIGRATIONS_SOURCE = _source(
 )
 _METRICS_SINK_BASE_SOURCE = _source("dev_health_ops/metrics/sinks/base.py")
 _METRICS_SINK_FACTORY_SOURCE = _source("dev_health_ops/metrics/sinks/factory.py")
+# CHAOS-4244: clickhouse/core.py's write_work_item_team_attributions imports
+# this for WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL. Real source, not
+# stubbed -- prometheus.py itself degrades to no-op counters when
+# prometheus_client is unavailable (its own try/except ImportError), so
+# nothing here needs a second stub for that optional dependency.
+_METRICS_PROMETHEUS_SOURCE = _source("dev_health_ops/metrics/prometheus.py")
 _CLICKHOUSE_SINK_PACKAGE = "dev_health_ops/metrics/sinks/clickhouse"
 _CLICKHOUSE_INSERT_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/_insert.py")
 _CLICKHOUSE_CONNECTION_SOURCE = _source(f"{_CLICKHOUSE_SINK_PACKAGE}/connection.py")
@@ -1082,6 +1088,7 @@ def _target_clickhouse_metrics_sink() -> None:
         "dev_health_ops.metrics.sinks.clickhouse.connection",
         _CLICKHOUSE_CONNECTION_SOURCE,
     )
+    _load_source_module("dev_health_ops.metrics.prometheus", _METRICS_PROMETHEUS_SOURCE)
     _load_source_module(
         "dev_health_ops.metrics.sinks.clickhouse.core", _CLICKHOUSE_CORE_SOURCE
     )

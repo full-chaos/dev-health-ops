@@ -46,7 +46,7 @@ func TestPostgresStoreStartRunTxReplaysWholeGenerationAtomically(t *testing.T) {
 		OrganizationID: "00000000-0000-4000-8000-000000000009",
 		TargetDay:      time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
 		Generation:     "post-sync:00000000-0000-4000-8000-000000000001",
-		RepositoryIDs:  []string{"00000000-0000-4000-8000-000000000002"},
+		RepositoryIDs:  []RepositoryID{"00000000-0000-4000-8000-000000000002"},
 	}
 	var first Run
 	for attempt := 0; attempt < 2; attempt++ {
@@ -86,7 +86,7 @@ func TestPostgresStoreStartRunTxReplaysWholeGenerationAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.RepositoryIDs = []string{"00000000-0000-4000-8000-000000000003"}
+	request.RepositoryIDs = []RepositoryID{"00000000-0000-4000-8000-000000000003"}
 	if _, err := store.StartRunTx(ctx, tx, request, publisher); !errors.Is(err, ErrInvalidState) {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("mutated duplicate err=%v", err)
@@ -163,7 +163,7 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	if err != nil || run == nil || !run.RepositoryDiscoveryRequired {
 		t.Fatalf("scheduled dispatch claim=%#v err=%v", run, err)
 	}
-	created, err := store.MaterializeScheduledFanout(ctx, *run, []string{
+	created, err := store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{
 		"00000000-0000-4000-8000-000000000002",
 		"00000000-0000-4000-8000-000000000001",
 		"00000000-0000-4000-8000-000000000002",
@@ -171,7 +171,7 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	if err != nil || !created {
 		t.Fatalf("materialize=%t err=%v", created, err)
 	}
-	if duplicate, err := store.MaterializeScheduledFanout(ctx, *run, []string{"00000000-0000-4000-8000-000000000003"}); err != nil || duplicate {
+	if duplicate, err := store.MaterializeScheduledFanout(ctx, *run, []RepositoryID{"00000000-0000-4000-8000-000000000003"}); err != nil || duplicate {
 		t.Fatalf("replay materialize=%t err=%v", duplicate, err)
 	}
 	var partitions, handoffs int
@@ -300,7 +300,7 @@ func TestPostgresStorePostSyncRunDefersToLiveDiscoveryAndSurvivesRetryAfterMater
 	// production (daily.RepositoryDiscoverer); this store-layer test supplies
 	// the discovered set directly, since MaterializeScheduledFanout is where
 	// the CHAOS-4263 fix's store-side contract lives.
-	discovered := []string{
+	discovered := []RepositoryID{
 		"00000000-0000-4000-8000-000000000002",
 		"00000000-0000-4000-8000-000000000001",
 	}

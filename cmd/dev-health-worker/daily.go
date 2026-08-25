@@ -143,6 +143,19 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				// Optional (CHAOS-4263): a partition whose source data exists
+				// but whose family output is empty must not report success.
+				// Both dependencies are already validated non-nil above, so
+				// this only fails defensively; a failure here degrades to no
+				// check rather than blocking daily-metrics startup.
+				if sourceChecker, sourceCheckerErr := daily.NewClickHouseSourceDataChecker(
+					postgresDatabase.pools.Domain, clickhouseConnection,
+				); sourceCheckerErr == nil {
+					handler.SetSourceDataChecker(sourceChecker)
+					if zeroRowsObserver, ok := observer.(jobruntime.DailyMetricsZeroRowsObserver); ok {
+						handler.SetZeroRowsObserver(zeroRowsObserver)
+					}
+				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,
 				)

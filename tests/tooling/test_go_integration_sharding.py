@@ -501,8 +501,48 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # no memory of the earlier attempt), and asserts the full persisted
     # project_membership_transitions/projects row content and the presence
     # view are byte-identical after each replay.
-    assert len(expected_provider_tests) == 1051
-    assert len(expected_integration_tests) == 115
+    #
+    # CHAOS-4193(d) then added 1 more integration-tagged test (1051 -> 1052,
+    # 115 -> 116): the github Projects v2 snapshot-diff producer's
+    # reachability proof -- seeds two board snapshots against the same real
+    # ClickHouse container (issue+PR present, then the issue dropped from the
+    # board), drives both through the real effects/readback path, and asserts
+    # the issue's project_membership_presence row appears after the first
+    # sync and disappears after the second, while the untouched PR's does
+    # not. Proves both halves the ticket owed: issue membership (no prior
+    # mechanism existed at all) and removal of either subject kind (no prior
+    # mechanism existed for either).
+    #
+    # A codex round-1 finding on that same producer then added 6 more ordinary
+    # tests (1052 -> 1058, 116 unchanged): pure decision tests over
+    # diffGitHubProjectV2Snapshot (additions restricted to work_item, removals
+    # of either subject kind, unchanged-board emits nothing, an incomplete
+    # snapshot suppresses removals only, subject keys distinguish repos) and
+    # over the shared githubProjectV2ItemSubject identification helper. None
+    # touch a real database. The finding itself: an unidentifiable board item
+    # (an incomplete PullRequest payload, or an unrecognised content typename)
+    # was silently omitted from the current snapshot, which read as "this
+    # subject left the board" for anything previously active -- a destructive
+    # false removal for a subject that never moved. Fixed by a Complete flag
+    # on the snapshot (false whenever the sync could not name a real subject
+    # it saw) that suppresses removal computation, but not additions, for that
+    # project this sync.
+    #
+    # Codex round 2 verified the fix and sharpened one round-1 disposition
+    # (the work_items-column fallback gap is not always a one-sync bootstrap
+    # -- an issue removed from its board strictly BEFORE this producer's
+    # first sync for that project never gets a first transition row at all,
+    # so its stale presence edge persists; the doc comment on
+    # GitHubProjectV2SnapshotDiffClickHouseReader was corrected to say so,
+    # left open as a bounded historical gap rather than fixed, matching
+    # #1896's own already-accepted interim caveat) and asked for one more
+    # ordinary test (1058 -> 1059, 116 unchanged): a Fetch-level case for
+    # every way a board's Complete flag can land (issue missing repository,
+    # a board of only draft issues, an unrecognised content typename, a
+    # fully identified mixed board) -- the original pagination test only
+    # exercised the mixed case incidentally.
+    assert len(expected_provider_tests) == 1059
+    assert len(expected_integration_tests) == 116
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -518,7 +558,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1051
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1059
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -579,7 +619,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1051
+    assert len(selected_tests) == len(set(selected_tests)) == 1059
     assert set(selected_tests) == expected_tests
 
 

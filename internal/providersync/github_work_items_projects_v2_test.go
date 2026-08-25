@@ -398,8 +398,24 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if result.MembershipSkips["pull_request_incomplete"] != 1 {
 		t.Fatalf("the incomplete PR was not counted: %+v", result.MembershipSkips)
 	}
-	if result.MembershipSkips["issue_deferred_to_snapshot_diff"] != 1 {
-		t.Fatalf("the issue skip was not counted: %+v", result.MembershipSkips)
+	// The issue is no longer a skip at all (CHAOS-4193): it is positively
+	// identified for the snapshot-diff pass instead.
+	if _, counted := result.MembershipSkips["issue_deferred_to_snapshot_diff"]; counted {
+		t.Fatalf("the retired label was still emitted: %+v", result.MembershipSkips)
+	}
+	if len(result.Snapshots) != 1 || len(result.Snapshots[0].Subjects) != 1 {
+		t.Fatalf("snapshots=%+v, want one project with the identified issue subject", result.Snapshots)
+	}
+	if got := result.Snapshots[0]; got.ProjectScopeID != "ghprojv2:acme#3" ||
+		got.Subjects[0].SubjectKind != "work_item" || got.Subjects[0].SubjectID != "gh:acme/api#7" {
+		t.Fatalf("snapshot=%+v", got)
+	}
+	// The unidentifiable PR in this fixture is a real board item this sync
+	// simply could not name -- the snapshot must say so, or the snapshot-diff
+	// pass would read its absence from a future complete sync's board as a
+	// removal that never happened (codex round 1 finding, CHAOS-4193d).
+	if result.Snapshots[0].Complete {
+		t.Fatalf("snapshot=%+v, want Complete=false: it contains an unidentifiable PR", result.Snapshots[0])
 	}
 	if got := result.Rows.WorkItems[0]; got.WorkItemID != "gh:acme/api#7" || got.RepoID != nil || got.ProjectID == nil || *got.ProjectID != "ghprojv2:acme#3" {
 		t.Fatalf("work item=%+v", got)
@@ -659,6 +675,15 @@ func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
 	if result.MembershipSkips["pull_request_incomplete"] != 0 {
 		t.Fatalf("an emitted PR was also counted as skipped: %+v", result.MembershipSkips)
 	}
+	// A fully identifiable board must produce a Complete snapshot, or the
+	// snapshot-diff pass would refuse to ever compute a removal for it.
+	if len(result.Snapshots) != 1 || !result.Snapshots[0].Complete {
+		t.Fatalf("snapshots=%+v, want exactly one Complete snapshot", result.Snapshots)
+	}
+	if len(result.Snapshots[0].Subjects) != 1 || result.Snapshots[0].Subjects[0].SubjectKind != "pull_request" ||
+		result.Snapshots[0].Subjects[0].SubjectID != "42" {
+		t.Fatalf("snapshot subjects=%+v", result.Snapshots[0].Subjects)
+	}
 }
 
 // TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs is the property the
@@ -696,4 +721,70 @@ func TestGitHubProjectV2MembershipEventIDIsStableAcrossResyncs(t *testing.T) {
 		t.Fatalf("event_id changed across re-sync: %q then %q -- the table would keep both rows",
 			eventIDs[0], eventIDs[1])
 	}
+}
+
+// TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome is the
+// coverage codex round 2 asked for directly: one Fetch-level case per way a
+// board's Complete flag can land, since round 1's fix (a false removal for a
+// still-present but unidentifiable subject) is only as good as every path
+// into it being covered, not just the mixed-fixture case the original
+// pagination test happened to exercise.
+func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+	fetch := func(t *testing.T, reply string) GitHubProjectV2FetchResult {
+		t.Helper()
+		doer := &gitHubProjectV2Doer{t: t, replies: []string{reply}}
+		result, err := (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim, credential, githubProjectV2TestClient(t, doer), normalizedAt, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Snapshots) != 1 {
+			t.Fatalf("snapshots=%+v, want exactly one project", result.Snapshots)
+		}
+		return result
+	}
+
+	t.Run("issue missing repository is incomplete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"no repo"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=false and no identified subjects", result.Snapshots[0])
+		}
+	})
+
+	t.Run("a board of only draft issues is complete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=true (a draft issue names no subject at all, which is complete information) and no subjects", result.Snapshots[0])
+		}
+	})
+
+	t.Run("an unrecognised content typename is incomplete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
+			t.Fatalf("snapshot=%+v, want Complete=false: GitHub added a content kind this code has never seen", result.Snapshots[0])
+		}
+	})
+
+	t.Run("a fully identified mixed board is complete", func(t *testing.T) {
+		result := fetch(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"ok","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_2","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"ok","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+			`{"id":"PVTI_3","content":{"__typename":"DraftIssue","title":"idea"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
+		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 2 {
+			t.Fatalf("snapshot=%+v, want Complete=true with 2 identified subjects", result.Snapshots[0])
+		}
+	})
 }

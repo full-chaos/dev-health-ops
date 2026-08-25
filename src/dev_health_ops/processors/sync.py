@@ -541,6 +541,28 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
             "that org, unlike git/prs/blame which write analytics rows only."
         )
 
+    # _complete_synthetic_sync_run records ATTEMPTED evidence in the CHAOS-4114
+    # executed-proof ledger under the REAL provider identity
+    # (_SYNTHETIC_SYNC_RUN_PROVIDER = "gitlab"), and that ledger is keyed
+    # globally by (provider, dataset_key), not by org. Run against a shared or
+    # production-adjacent database, this could make a currently-unproven real
+    # gitlab route look attempted-but-unproven from fake data (codex review,
+    # CHAOS-4266 round 3: a code comment alone is not a guard). Requiring an
+    # explicit env var -- set by this repo's only two legitimate callers,
+    # ci/run_metrics_executed_proof.sh and nothing else -- makes any other
+    # invocation fail closed instead of silently touching that ledger.
+    if (
+        target in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS
+        and os.environ.get("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN") != "1"
+    ):
+        raise SystemExit(
+            f"--provider synthetic --target {target} writes to the GLOBAL "
+            "CHAOS-4114 executed-proof ledger under a real provider identity "
+            "and must never run against a shared or production-adjacent "
+            "database. Set DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 explicitly "
+            "if this really is a throwaway CI/test database."
+        )
+
     async def _handler(store):
         ingestion_sink = IngestionSink(store)
         generator = SyntheticDataGenerator(repo_name=repo_name)

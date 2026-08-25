@@ -581,7 +581,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # All twelve drive the resolver/observation/label code directly over
     # in-memory fixtures and touch no database, so the integration-tagged
     # count stays 116 (unchanged by this ticket).
-    assert len(expected_provider_tests) == 1071
+    #
+    # A follow-up precedence ruling (chris, 2026-08-24) then added 1 more
+    # ordinary test (1071 -> 1072) in github_work_items_derivation_context_test.go:
+    # TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor, proving
+    # a PR with a team-mapped author AND a linked_issue donor for a DIFFERENT
+    # team resolves to the linked issue's team -- author_membership moved to
+    # its own rank 6 (below linked_issue at 5, above manual_fallback, now 7),
+    # since a person-shaped author signal must never beat a real linked-issue
+    # donor. Drives the resolver directly over in-memory fixtures and touches
+    # no database, so the integration-tagged count stays 116.
+    assert len(expected_provider_tests) == 1072
     assert len(expected_integration_tests) == 116
     assert expected_integration_tests < expected_provider_tests
 
@@ -598,7 +608,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1071
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1072
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -659,7 +669,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1071
+    assert len(selected_tests) == len(set(selected_tests)) == 1072
     assert set(selected_tests) == expected_tests
 
 

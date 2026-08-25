@@ -1,7 +1,7 @@
 -- CHAOS-4244: give a PR/MR author its OWN precedence rank, below linked_issue
 -- (rank 5) and above manual_fallback (rank 7) -- a person-shaped signal must
 -- never beat a real linked-issue donor's team. Previously the reporter
--- candidate was stamped `assignee_membership` (rank 4); this migration only
+-- candidate was stamped `assignee_membership` (rank 4) -- this migration only
 -- widens the enum (additive, matching CS1's own migrate-before-emit rule,
 -- team-attribution.md s0) so the resolver (a following PR) can emit the new
 -- value without an insert failure. Storage codes are insertion order, NOT

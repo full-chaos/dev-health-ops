@@ -558,6 +558,52 @@ def test_author_membership_never_applies_to_a_non_pr_issue():
     assert [c.source for c in candidates] == ["unassigned"]
 
 
+def test_author_membership_never_applies_to_a_linear_issue():
+    """Codex round-5 finding (2026-08-25, BLOCK): the test above proves the
+    Jira half of "Jira/Linear are excluded only by convention" -- this is the
+    Linear half. Linear also has no PR-equivalent WorkItem type, so a mapped,
+    unambiguous single-team Linear author must never gain author_membership
+    either. Python's gate (``item.type in _REPORTER_ELIGIBLE_TYPES``) is
+    already type-based, not id-prefix-based, so this is a symmetry/regression
+    proof rather than a red-first reproduction (that class of bug was Go-only
+    -- see TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape)."""
+    item = WorkItem(
+        work_item_id="linear:CHAOS-500",
+        provider="linear",
+        title="t",
+        type="story",
+        status="todo",
+        status_raw="Todo",
+        reporter="alice",
+        assignees=[],
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("linear", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+
+
 def test_bot_author_never_attributed():
     """chris's precision condition (2026-08-24): a bot/App author (dependabot,
     github-actions, ...) carries no team meaning and must be excluded

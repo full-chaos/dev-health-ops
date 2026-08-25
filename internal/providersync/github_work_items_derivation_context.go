@@ -34,8 +34,16 @@ type githubWorkItemDerivationCandidate struct {
 }
 
 type githubWorkItemDerivationSubject struct {
-	WorkItemID    string
-	Provider      string
+	WorkItemID string
+	Provider   string
+	// Type is the item's own native kind (e.g. "pr", "merge_request", "bug",
+	// "issue") -- CHAOS-4244 R5/R6 (codex, 2026-08-25): author_membership
+	// gates on Provider+Type, NOT on WorkItemID shape (see
+	// githubWorkItemDerivationIsPullOrMergeRequestType), because an
+	// ID-prefix/shape check has no way to notice a Provider that does not
+	// match the shape it is reading (a "gitlab:...!..." WorkItemID on a
+	// non-GitLab row would previously have opened the gate regardless).
+	Type          string
 	RepoID        *string
 	NativeTeamKey *string
 	ProjectKey    *string
@@ -463,7 +471,7 @@ func githubWorkItemDerivationSubjectFromRow(row githubWorkItemRow) githubWorkIte
 		repoID = &value
 	}
 	return githubWorkItemDerivationSubject{
-		WorkItemID: row.WorkItemID, Provider: row.Provider, RepoID: repoID,
+		WorkItemID: row.WorkItemID, Provider: row.Provider, Type: row.Type, RepoID: repoID,
 		NativeTeamKey: row.NativeTeamKey, ProjectKey: row.ProjectKey,
 		ProjectID: row.ProjectID, ProjectName: row.ProjectName,
 		Assignees: append([]string(nil), row.Assignees...),
@@ -672,27 +680,27 @@ func (derived githubWorkItemDerivationContext) resolve(
 	// there is no second, non-tenant-scoped lookup to bypass the gate above.
 	//
 	// Type-gated to PR/MR ONLY (codex, 2026-08-24, MEDIUM; broadened to
-	// GitLab codex round-4, MEDIUM): Reporter is populated for GitHub ISSUES
-	// too (githubWorkItemDerivationSubjectFromRow copies row.Reporter
-	// unconditionally), so without this gate a GitHub issue opened by a
-	// mapped member would ALSO gain an author_membership candidate --
-	// silently widening this ticket's documented PR/MR-only contract. This
-	// resolver is provider-neutral -- shared by GitHub, GitLab, and Jira
-	// (loadWorkItemDerivationContextForProvider) -- so a GitHub-only gate
-	// would silently diverge from Python's item.type in {"pr","merge_request"}
-	// gate, leaving every GitLab MR author unassigned in Go while Python
-	// attributes it. githubWorkItemDerivationIsPullOrMergeRequestID checks
-	// BOTH production ID shapes: `ghpr:` for a GitHub PR
-	// (github_work_items_rows.go's PR row builder; plain GitHub issues are
-	// `gh:`) and GitLab's own `!`-vs-`#` convention distinguishing an MR from
-	// an issue (gitlab_work_items_rows.go's MR row builder stamps
-	// `gitlab:<repo>!<iid>`; an issue is `gitlab:<repo>#<iid>`). Jira has no
-	// PR-equivalent type, so it never matches either shape and this gate
-	// simply never opens for it. subject.Reporter on a non-PR/MR item is
-	// simply never consulted; it falls through exactly as it did before
-	// CHAOS-4244.
+	// GitLab codex round-4, MEDIUM; switched from WorkItemID-shape to
+	// Provider+Type codex round-5, 2026-08-25, BLOCK): Reporter is populated
+	// for GitHub ISSUES too (githubWorkItemDerivationSubjectFromRow copies
+	// row.Reporter unconditionally), so without this gate a GitHub issue
+	// opened by a mapped member would ALSO gain an author_membership
+	// candidate -- silently widening this ticket's documented PR/MR-only
+	// contract. This resolver is provider-neutral -- shared by GitHub,
+	// GitLab, and Jira (loadWorkItemDerivationContextForProvider) -- so a
+	// GitHub-only gate would silently diverge from Python's item.type in
+	// {"pr","merge_request"} gate, leaving every GitLab MR author unassigned
+	// in Go while Python attributes it.
+	// githubWorkItemDerivationIsPullOrMergeRequestType checks Provider+Type,
+	// not WorkItemID shape: an ID-prefix check (the pre-R5 gate) cannot tell
+	// a well-formed row from a legacy/mismatched one whose WorkItemID merely
+	// LOOKS like a GitLab MR or GitHub PR while its Provider says otherwise.
+	// Jira/Linear have no PR-equivalent Type, so neither ever matches and
+	// this gate simply never opens for them. subject.Reporter on a non-PR/MR
+	// item is simply never consulted; it falls through exactly as it did
+	// before CHAOS-4244.
 	var reporterSkipReason string
-	if githubWorkItemDerivationIsPullOrMergeRequestID(subject.WorkItemID) &&
+	if githubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) &&
 		subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
 		switch {
 		case githubWorkItemDerivationIsBotIdentity(*subject.Reporter):
@@ -1432,7 +1440,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) loadDonors(
 	}
 	maximum := len(request.DonorWorkItemIDs) + len(request.DonorIssueKeys)*2
 	rows, err := source.Conn.Query(ctx, `
-SELECT work_item_id, provider, toString(repo_id), native_team_key, project_key,
+SELECT work_item_id, provider, type, toString(repo_id), native_team_key, project_key,
        project_id, project_name, assignees, org_id
 FROM work_items FINAL
 WHERE org_id = ? AND (
@@ -1448,7 +1456,7 @@ LIMIT ?`, orgID, request.DonorWorkItemIDs, request.DonorIssueKeys, maximum+1)
 	for rows.Next() {
 		var subject githubWorkItemDerivationSubject
 		if err := rows.Scan(
-			&subject.WorkItemID, &subject.Provider, &subject.RepoID, &subject.NativeTeamKey,
+			&subject.WorkItemID, &subject.Provider, &subject.Type, &subject.RepoID, &subject.NativeTeamKey,
 			&subject.ProjectKey, &subject.ProjectID, &subject.ProjectName,
 			&subject.Assignees, &subject.OrgID,
 		); err != nil {
@@ -1505,26 +1513,34 @@ func githubWorkItemDerivationIsBotIdentity(identity string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(identity)), "[bot]")
 }
 
-// githubWorkItemDerivationIsPullOrMergeRequestID gates author_membership
-// (CHAOS-4244) to PR/MR work items, by their production WorkItemID shape --
+// githubWorkItemDerivationIsPullOrMergeRequestType gates author_membership
+// (CHAOS-4244) to PR/MR work items, by Provider+Type -- NOT by WorkItemID
+// shape (codex R5, 2026-08-25, BLOCK): the prior `ghpr:`/`gitlab:...!...`
+// ID-prefix gate had no way to notice a Provider that did not match the shape
+// it was reading, so a malformed or legacy row whose WorkItemID happened to
+// look like a GitLab MR (contains `!`) but whose Provider was NOT actually
+// "gitlab" (e.g. "jira") would incorrectly pass. Gating on the pair the
+// derivation context already carries per-subject removes that whole class:
 // this resolver is provider-neutral (shared by GitHub, GitLab, and Jira via
-// loadWorkItemDerivationContextForProvider), and none of them carry a Type
-// field on githubWorkItemDerivationSubject to gate on directly (adding one
-// would touch every existing test fixture across all three providers).
+// loadWorkItemDerivationContextForProvider), so Type must be checked together
+// with Provider, never Type alone -- two providers could reuse the same Type
+// string with different meaning.
 //
-//   - GitHub: `ghpr:<owner>/<repo>#<n>` for a PR (github_work_items_rows.go's
-//     PR row builder); a plain issue is `gh:...`.
-//   - GitLab: `gitlab:<repo>!<iid>` for a merge request vs `gitlab:<repo>#<iid>`
-//     for an issue (gitlab_work_items_rows.go's MR/issue row builders) --
-//     GitLab's own web-UI convention (`!123` links an MR, `#123` an issue),
-//     reused here rather than invented.
-//   - Jira has no PR-equivalent type, so no Jira WorkItemID ever matches
-//     either shape and this gate simply never opens for it.
-func githubWorkItemDerivationIsPullOrMergeRequestID(workItemID string) bool {
-	if strings.HasPrefix(workItemID, "ghpr:") {
-		return true
+//   - GitHub: Type "pr" (github_work_items_rows.go's PR row builder); a plain
+//     issue is some other Type (e.g. "bug", "issue").
+//   - GitLab: Type "merge_request" (gitlab_work_items_rows.go's MR row
+//     builder); a plain issue is a different Type.
+//   - Jira/Linear have no PR-equivalent Type, so neither Provider ever
+//     matches and this gate simply never opens for them.
+func githubWorkItemDerivationIsPullOrMergeRequestType(provider, itemType string) bool {
+	switch provider {
+	case "github":
+		return itemType == "pr"
+	case "gitlab":
+		return itemType == "merge_request"
+	default:
+		return false
 	}
-	return strings.HasPrefix(workItemID, "gitlab:") && strings.Contains(workItemID, "!")
 }
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {

@@ -642,7 +642,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is its negative control ("gitlab:...#..."). Both drive the resolver
     # directly over in-memory fixtures and touch no database, so the
     # integration-tagged count stays 117.
-    assert len(expected_provider_tests) == 1079
+    #
+    # A codex round-5 finding (2026-08-25, BLOCK) then added 3 more ordinary
+    # tests (1079 -> 1082): the R4 gate checked WorkItemID STRING SHAPE
+    # ("gitlab:" prefix + contains "!") with no check that Provider actually
+    # said "gitlab" -- a legacy/mismatched row (e.g. a Jira item whose
+    # WorkItemID happened to look like a GitLab MR) could therefore wrongly
+    # pass. The fix switched the gate to Provider+Type
+    # (githubWorkItemDerivationIsPullOrMergeRequestType).
+    # TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape
+    # reproduces the exact defect (red-first against the pre-fix gate, see
+    # the test's own doc comment); TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue
+    # and TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue
+    # are the Jira/Linear negative regression proofs codex asked for ("Jira/Linear
+    # are excluded only by convention, and existing tests do not prove exclusion
+    # under mismatched or legacy rows"). All three drive the resolver directly
+    # over in-memory fixtures and touch no database, so the integration-tagged
+    # count stays 117.
+    assert len(expected_provider_tests) == 1082
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -659,7 +676,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1079
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1082
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -720,7 +737,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1079
+    assert len(selected_tests) == len(set(selected_tests)) == 1082
     assert set(selected_tests) == expected_tests
 
 

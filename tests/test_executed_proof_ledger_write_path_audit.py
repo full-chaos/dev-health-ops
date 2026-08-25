@@ -36,11 +36,14 @@ _ATTEMPTED_WRITERS = {
     "internal/scheduler/sync/materializer.go": "RecordExecutedProofAttempted",
     "src/dev_health_ops/sync/planner.py": "record_executed_proof_attempts",
     # CHAOS-4266: the executed-proof gate's synthetic cicd/deployments/
-    # incidents/tests seeding constructs a SyncRunUnit already at SUCCESS
-    # (no separate plan -> dispatch -> complete lifecycle), so it calls both
-    # record_executed_proof_attempts AND record_executed_proof_terminal in
-    # the same transaction as the insert -- see the comment at that call
-    # site in processors/sync.py.
+    # incidents/tests seeding constructs a SyncRunUnit already at SUCCESS,
+    # so it records ATTEMPTED in the same transaction as the insert.
+    # Deliberately does NOT call record_executed_proof_terminal (codex
+    # review): that would mark the shared, non-org-scoped (provider=gitlab,
+    # dataset_key) pair PROVEN from synthetic data, which could satisfy
+    # CHAOS-4060's executed-proof gate for a real gitlab route that never
+    # actually worked -- see the comment at the call site in
+    # processors/sync.py.
     "src/dev_health_ops/processors/sync.py": "record_executed_proof_attempts",
 }
 

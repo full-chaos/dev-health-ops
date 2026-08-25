@@ -383,10 +383,7 @@ def _complete_synthetic_sync_run(
         SyncRunUnit,
         SyncRunUnitStatus,
     )
-    from dev_health_ops.sync.executed_proof_ledger import (
-        record_executed_proof_attempts,
-        record_executed_proof_terminal,
-    )
+    from dev_health_ops.sync.executed_proof_ledger import record_executed_proof_attempts
     from dev_health_ops.workers.sync_units import finalize_sync_run
 
     provider = _SYNTHETIC_SYNC_RUN_PROVIDER
@@ -487,22 +484,27 @@ def _complete_synthetic_sync_run(
         session.flush()
         # CHAOS-4114: this file now INSERTs sync_run_units directly (see
         # tests/test_executed_proof_ledger_write_path_audit.py), so it must
-        # maintain the executed-proof ledger the same way
-        # sync/planner.py's real plan_sync_run does. Unlike a real sync's
-        # plan -> dispatch -> complete lifecycle, this unit is created
-        # already at SUCCESS, so both the ATTEMPTED and PROVEN halves are
-        # recorded together, in the same transaction as the insert, rather
-        # than at two separate call sites.
+        # record the ATTEMPTED half the same way sync/planner.py's real
+        # plan_sync_run does, in the same transaction as the insert.
+        #
+        # Deliberately NOT calling record_executed_proof_terminal (codex
+        # review, CHAOS-4266): the (provider, dataset_key) ledger this feeds
+        # is GLOBAL, not scoped to this synthetic org, and provider is
+        # "gitlab" (required for the Go capability lookup -- see
+        # _SYNTHETIC_SYNC_RUN_PROVIDER above). Marking a pair PROVEN here
+        # would let CHAOS-4060's executed-proof gate treat a genuinely broken
+        # real gitlab/<dataset> route as satisfied on the strength of fake
+        # data -- exactly the failure the gate exists to catch (CHAOS-4048/
+        # CHAOS-4049 shape). ATTEMPTED-only converges to the same "brand-new
+        # route" bootstrap behavior the gate already tolerates (blocks
+        # transiently until something proves it, never permanently passes a
+        # route that never really worked); a real gitlab sync's own
+        # finalize_sync_run still proves it correctly and unconditionally
+        # when it happens. This is safe for this job's own throwaway
+        # database either way -- but never run this CLI command against a
+        # shared or production-adjacent database.
         record_executed_proof_attempts(
             session, [(unit.provider, unit.dataset_key)], now=before_at
-        )
-        record_executed_proof_terminal(
-            session,
-            provider=unit.provider,
-            dataset_key=unit.dataset_key,
-            status=SyncRunUnitStatus.SUCCESS.value,
-            result=None,
-            now=before_at,
         )
         run_id = str(run.id)
 

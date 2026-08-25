@@ -56,6 +56,22 @@ run_dev_hops() {
   python3 -m dev_health_ops.cli "$@"
 }
 
+# exec-flavored counterpart for a long-running process (the api server): `exec
+# run_dev_hops ...` does NOT work -- `exec` replaces the shell with an
+# EXTERNAL executable named "run_dev_hops", which does not exist, and fails
+# with "exec: run_dev_hops: not found" before ever reaching dev-hops. Confirmed
+# the hard way: this was the actual cause of this job's first CI run failing,
+# not CHAOS-4263.
+exec_dev_hops() {
+  if command -v dev-hops >/dev/null 2>&1; then
+    exec dev-hops "$@"
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    exec uv run dev-hops "$@"
+  fi
+  exec python3 -m dev_health_ops.cli "$@"
+}
+
 require_cmd go
 require_cmd psql
 require_cmd curl
@@ -211,7 +227,7 @@ API_LOG_FILE="${TMP_DIR}/api.log"
   export REDIS_URL="redis://${VALKEY_HOST}:${VALKEY_PORT}/0"
   export ENVIRONMENT=test
   export OTEL_ENABLED=false
-  exec run_dev_hops --db "${DATABASE_URI}" --analytics-db "${CLICKHOUSE_URI}" api --host 127.0.0.1 --port "${API_PORT}"
+  exec_dev_hops --db "${DATABASE_URI}" --analytics-db "${CLICKHOUSE_URI}" api --host 127.0.0.1 --port "${API_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"
 wait_for_http_ready "dev-hops api" "http://127.0.0.1:${API_PORT}/health" "${API_LOG_FILE}" API_PID
@@ -276,12 +292,20 @@ done
 
 echo "==> waiting up to $((COMPUTE_WAIT_ATTEMPTS * COMPUTE_WAIT_SLEEP_SECS))s for the post-sync fanout to reach ClickHouse"
 ASSERT_SUMMARY_JSON="${TMP_DIR}/family-summary.json"
+# Scoped to families this job's own seeding can causally satisfy (codex
+# review): cicd/deploy/testops_pipeline/testops_test come directly from the
+# cicd/deployments/tests targets seeded above; dora is computed from
+# deployments+cicd+incidents (all seeded) per _DORA_TARGETS in
+# post_sync_dispatch.py. repo_user_commit/complexity need git commit/PR
+# history, which this job never seeds (only cicd/deployments/incidents/tests,
+# matching the ticket's stated source families) -- asserting them here would
+# fail forever, for a reason unrelated to CHAOS-4263, even after it merges.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test repo_user_commit dora \
+    --families cicd deploy testops_pipeline testops_test dora \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 

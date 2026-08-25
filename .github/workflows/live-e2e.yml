@@ -42,6 +42,17 @@ jobs:
               - 'alembic.ini'
               - 'Makefile'
               - 'scripts/**'
+              # CHAOS-4266 codex review: metrics-executed-proof builds and
+              # runs the Go worker/reconciler/migrate binaries, so a Go-only
+              # change (worker dispatch, daily/remaining metrics, job
+              # contracts) must trigger it -- without these, this filter
+              # reported code=false for exactly the surfaces this gate
+              # exists to protect, and the job silently skipped.
+              - 'cmd/**'
+              - 'internal/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'contracts/jobs/**'
               - '.github/workflows/live-e2e.yml'
 
   live-e2e:

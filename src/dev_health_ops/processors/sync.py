@@ -388,18 +388,29 @@ def _complete_synthetic_sync_run(
 
     provider = _SYNTHETIC_SYNC_RUN_PROVIDER
     processor_flags = _sync_flags_for_target(target)
+    synthetic_integration_name = f"{provider}-synthetic-seed"
 
     with get_postgres_session_sync() as session:
+        # Matched on name too, not just org_id+provider (codex review,
+        # CHAOS-4266): a real gitlab integration for this org must never be
+        # found by this lookup and have synthetic sources/runs/rows attached
+        # to it. Scoping to the marker name means this can only ever
+        # find-or-create the synthetic integration this function itself
+        # created, regardless of what real integrations the org has.
         integration = (
             session.query(Integration)
-            .filter(Integration.org_id == org_id, Integration.provider == provider)
+            .filter(
+                Integration.org_id == org_id,
+                Integration.provider == provider,
+                Integration.name == synthetic_integration_name,
+            )
             .one_or_none()
         )
         if integration is None:
             integration = Integration(
                 org_id=org_id,
                 provider=provider,
-                name=f"{provider}-synthetic-seed",
+                name=synthetic_integration_name,
                 config={},
                 is_active=True,
             )

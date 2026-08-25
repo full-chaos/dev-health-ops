@@ -48,8 +48,12 @@ Family boundaries remain explicit:
 
 - GitLab, Jira, Linear, and GitHub work-item aliases are audit identities for
   one canonical `work-items` writer per provider. Direct sibling aliases never
-  acquire a partial writer. GitLab and Linear expose the canonical 16-effect
-  manifest; Jira additionally owns `worklogs` for 17 effects.
+  acquire a partial writer. GitLab exposes the canonical 16-effect manifest.
+  GitHub and Linear additionally own `project_membership_transitions` and
+  `projects` for 18 effects each (CHAOS-4193/CHAOS-4194: presence tracking for
+  a work item's owning project, sourced from Linear history and GitHub
+  Projects v2). Jira owns `worklogs` plus the same two membership
+  destinations for 19 effects.
 - PagerDuty's 11 rows are scheduled provider-unit routes in
   `dev-health-worker`. The incident quartet remains four independent claims
   with four descriptors and no canonicalization or fan-out; the quartet shares

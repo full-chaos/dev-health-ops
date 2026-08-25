@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 const (
@@ -153,12 +155,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}
 
 	rows := jiraAtlassianRows{jiraWorkItemRows: jiraWorkItemRows{
-		WorkItems:    make([]jiraWorkItemRow, 0, len(issues)),
-		Transitions:  make([]jiraWorkItemTransitionRow, 0),
-		Dependencies: make([]jiraWorkItemDependencyRow, 0),
-		ReopenEvents: make([]jiraWorkItemReopenRow, 0),
-		Interactions: make([]jiraWorkItemInteractionRow, 0),
-		Sprints:      cloneJiraSprintRows(handler.ReferenceSprints),
+		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),
+		Transitions:        make([]jiraWorkItemTransitionRow, 0),
+		Dependencies:       make([]jiraWorkItemDependencyRow, 0),
+		ReopenEvents:       make([]jiraWorkItemReopenRow, 0),
+		Interactions:       make([]jiraWorkItemInteractionRow, 0),
+		Sprints:            cloneJiraSprintRows(handler.ReferenceSprints),
+		ProjectMemberships: make([]projectmembership.Row, 0),
+		Projects:           make([]projectmembership.CatalogRow, 0),
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
 	worklogObservations := make([]JiraWorklogFetchObservation, 0)
@@ -168,6 +172,11 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
+	// CHAOS-4193: same project-membership resolution cache/counter as
+	// jira_work_items_route.go's Collect -- see resolveJiraProjectCatalog's
+	// own doc comment.
+	jiraProjectCache := make(map[string]jiraProjectCatalogEntry)
+	unresolvedProjectMemberships := 0
 
 	for _, issue := range issues {
 		key := stringFrom(issue["key"])
@@ -194,6 +203,50 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...)
 		rows.ReopenEvents = append(rows.ReopenEvents,
 			jiraReopenEvents(claim, transitions, normalizedAt)...)
+
+		for _, move := range jiraIssueProjectMoves(jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true}, handler.Identity) {
+			if move.OccurredAt.IsZero() {
+				unresolvedProjectMemberships++
+				continue
+			}
+			toEntry, ok := resolveJiraProjectCatalog(
+				ctx, client, jiraProjectCache, &requests, move.ToProjectID, move.ToProjectName,
+				derefString(item.ProjectID), derefString(item.ProjectKey),
+			)
+			if !ok {
+				unresolvedProjectMemberships++
+				continue
+			}
+			rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
+				claim.OrgID, "jira", move.ToProjectID, toEntry.Key, toEntry.Name, normalizedAt,
+			))
+			fromProjectID, fromProjectKey := "", ""
+			if move.FromProjectID != "" {
+				if fromEntry, ok := resolveJiraProjectCatalog(
+					ctx, client, jiraProjectCache, &requests, move.FromProjectID, move.FromProjectName,
+					derefString(item.ProjectID), derefString(item.ProjectKey),
+				); ok {
+					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
+						claim.OrgID, "jira", move.FromProjectID, fromEntry.Key, fromEntry.Name, normalizedAt,
+					))
+					fromProjectID, fromProjectKey = move.FromProjectID, fromEntry.Key
+				}
+			}
+			membership := projectmembership.Row{
+				OrgID: claim.OrgID, RepoID: uuid.Nil, SubjectKind: projectmembership.SubjectWorkItem,
+				SubjectID: item.WorkItemID, Provider: "jira",
+				FromProjectID: fromProjectID, ToProjectID: move.ToProjectID,
+				FromProjectKey: fromProjectKey, ToProjectKey: toEntry.Key,
+				Actor: move.Actor, OccurredAt: move.OccurredAt.UTC(), LastSynced: normalizedAt.UTC(),
+			}
+			if move.EventID != "" {
+				membership.EventID = move.EventID
+			} else {
+				membership.EventID = projectmembership.EventID(membership)
+			}
+			rows.ProjectMemberships = append(rows.ProjectMemberships, membership)
+		}
+
 		if fetchComments {
 			comments, commentPages, commentErr := collectJiraIssueComments(
 				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
@@ -298,6 +351,11 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 	}
+	for _, row := range rows.ProjectMemberships {
+		if err := validateJiraProjectMembership(row, claim); err != nil {
+			return CompleteRouteBatch{}, err
+		}
+	}
 
 	effects, err := BuildJiraAtlassianEffects(rows)
 	if err != nil {
@@ -346,6 +404,8 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		"dependencies_synced": len(rows.Dependencies), "reopen_events_synced": len(rows.ReopenEvents),
 		"interactions_synced": len(rows.Interactions), "sprints_synced": len(rows.Sprints),
 		"worklogs_synced": len(rows.Worklogs), "project_key": projectKey,
+		"project_memberships_synced":         len(rows.ProjectMemberships),
+		"unresolved_project_memberships":     unresolvedProjectMemberships,
 		"raw_destinations":                   append([]string(nil), jiraAtlassianRawDestinations...),
 		"derived_destinations_implemented":   append([]string(nil), derivedImplemented...),
 		"derived_destinations_unimplemented": append([]string(nil), derivedUnimplemented...),

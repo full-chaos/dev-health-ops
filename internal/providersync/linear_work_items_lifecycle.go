@@ -173,6 +173,15 @@ func decodeLinearWorkItemsRouteBatch(
 				return LinearWorkItemsRows{}, err
 			}
 			rows.Sprints = decoded
+		case "project_membership_transitions", "projects":
+			// CHAOS-4193: not part of the six-destination Python-mirrored
+			// family this typed lifecycle/alias-readback boundary exists
+			// for -- the five legacy aliases (work-items/-labels/-projects/
+			// -history/-comments) predate project membership and none of
+			// them own it. Accepted (not the exhaustiveness default) so this
+			// decoder does not reject a route batch for carrying a
+			// destination outside its own scope; deliberately not decoded
+			// into LinearWorkItemsRows, which stays scoped to the six.
 		default:
 			return LinearWorkItemsRows{}, ErrInvalidConfiguration
 		}

@@ -33,16 +33,16 @@ func TestAggregateProviderDescriptorsAreNativeReadyAndPlannableMatchesTopology(t
 		{"gitlab", "work-item-projects", false, workItemRouteDestinations()},
 		{"gitlab", "work-item-history", false, workItemRouteDestinations()},
 		{"gitlab", "work-item-comments", false, workItemRouteDestinations()},
-		{"jira", "work-items", true, append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-labels", false, append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-projects", false, append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-history", false, append(workItemRouteDestinations(), "worklogs")},
-		{"jira", "work-item-comments", false, append(workItemRouteDestinations(), "worklogs")},
-		{"linear", "work-items", true, workItemRouteDestinations()},
-		{"linear", "work-item-labels", false, workItemRouteDestinations()},
-		{"linear", "work-item-projects", false, workItemRouteDestinations()},
-		{"linear", "work-item-history", false, workItemRouteDestinations()},
-		{"linear", "work-item-comments", false, workItemRouteDestinations()},
+		{"jira", "work-items", true, append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")},
+		{"jira", "work-item-labels", false, append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")},
+		{"jira", "work-item-projects", false, append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")},
+		{"jira", "work-item-history", false, append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")},
+		{"jira", "work-item-comments", false, append(workItemRouteDestinations(), "worklogs", "project_membership_transitions", "projects")},
+		{"linear", "work-items", true, append(workItemRouteDestinations(), "project_membership_transitions", "projects")},
+		{"linear", "work-item-labels", false, append(workItemRouteDestinations(), "project_membership_transitions", "projects")},
+		{"linear", "work-item-projects", false, append(workItemRouteDestinations(), "project_membership_transitions", "projects")},
+		{"linear", "work-item-history", false, append(workItemRouteDestinations(), "project_membership_transitions", "projects")},
+		{"linear", "work-item-comments", false, append(workItemRouteDestinations(), "project_membership_transitions", "projects")},
 		// PagerDuty's whole family is deliberately NOT collapsed: every dataset
 		// is its own independent, canonical, plannable claim (CHAOS-4054).
 		{"pagerduty", "services", true, []string{"operational_services", "operational_service_repository_mappings"}},
@@ -114,7 +114,7 @@ func TestWorkItemAliasesStayCanonicalOnlyAcrossIndependentFamilies(t *testing.T)
 	linear, ok := Descriptor("linear", "work-items")
 	if !ok || !linear.RouteReady || !linear.Plannable ||
 		linear.RouteDataset != "work-items" ||
-		len(linear.Destinations) != len(workItemRouteDestinations()) {
+		len(linear.Destinations) != len(workItemRouteDestinations())+2 {
 		t.Fatalf("linear route=%+v ok=%v", linear, ok)
 	}
 	for _, alias := range []string{
@@ -253,11 +253,19 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 		}
 	}
 	for _, provider := range []string{"gitlab", "jira", "linear"} {
-		// The SHARED family list: this loop covers gitlab, jira and linear,
-		// none of which write the two github-only membership surfaces.
+		// The SHARED family list: this loop covers gitlab, jira and linear.
+		// gitlab alone never writes the two membership surfaces -- its
+		// "project" concept IS repo_id, so it is refused for that kind by
+		// construction. jira and linear write them directly via their own
+		// internal sync routes as of CHAOS-4193, the same way github's does
+		// (CHAOS-4194) -- not through the external-ingest path an earlier
+		// design comment assumed.
 		wantDestinations := workItemRouteDestinations()
-		if provider == "jira" {
-			wantDestinations = append(wantDestinations, "worklogs")
+		switch provider {
+		case "jira":
+			wantDestinations = append(wantDestinations, "worklogs", "project_membership_transitions", "projects")
+		case "linear":
+			wantDestinations = append(wantDestinations, "project_membership_transitions", "projects")
 		}
 		for _, dataset := range []string{
 			"work-items", "work-item-labels", "work-item-projects",

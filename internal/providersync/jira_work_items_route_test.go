@@ -103,7 +103,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
-	if len(batch.Effects) != 6 {
+	if len(batch.Effects) != 8 {
 		t.Fatalf("effects=%v", batch.Effects)
 	}
 	if batch.Evidence.Records != 1 || batch.Evidence.Pages != 1 || batch.Evidence.Requests != 3 {
@@ -186,7 +186,7 @@ func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.Watermark != nil || len(batch.Effects) != 6 {
+	if batch.Watermark != nil || len(batch.Effects) != 8 {
 		t.Fatalf("batch=%+v", batch)
 	}
 	incomplete, ok := batch.Result["incomplete"].([]string)
@@ -250,6 +250,7 @@ func TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery(t *testing.T) {
 		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { leaseCalls++; return nil }),
 		Sprints: adapter, Dependencies: adapter, Interactions: adapter, Reopens: adapter,
 		Transitions: adapter, WorkItems: adapter,
+		ProjectMemberships: adapter, Projects: adapter,
 	}
 	for _, effect := range effects {
 		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
@@ -260,12 +261,24 @@ func TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery(t *testing.T) {
 			t.Fatalf("destination=%s inspection=%v err=%v", effect.Destination, inspection, err)
 		}
 	}
-	if adapter.writeCalls != 6 || adapter.inspectCalls != 6 || leaseCalls != 18 || adapter.lastIdentity.Provider != "jira" || adapter.lastIdentity.OrgID != claim.OrgID {
+	if adapter.writeCalls != 8 || adapter.inspectCalls != 8 || leaseCalls != 24 || adapter.lastIdentity.Provider != "jira" || adapter.lastIdentity.OrgID != claim.OrgID {
 		t.Fatalf("adapter=%+v leaseCalls=%d", adapter, leaseCalls)
 	}
 	foreign := claim
 	foreign.OrgID = "other-org"
-	if err := sink.WriteEffect(context.Background(), foreign, effects[len(effects)-1]); err == nil {
+	// "work_items" specifically, not effects[len(effects)-1]: the per-row
+	// org_id fence has nothing to check on an EMPTY destination's effect
+	// (project_membership_transitions/projects both stay empty in this
+	// fixture), so a positional "last effect" pick silently stopped proving
+	// anything once CHAOS-4193 appended two more destinations after
+	// work_items.
+	var workItemsEffect EffectBatch
+	for _, effect := range effects {
+		if effect.Destination == "work_items" {
+			workItemsEffect = effect
+		}
+	}
+	if err := sink.WriteEffect(context.Background(), foreign, workItemsEffect); err == nil {
 		t.Fatal("foreign tenant write unexpectedly accepted")
 	}
 }

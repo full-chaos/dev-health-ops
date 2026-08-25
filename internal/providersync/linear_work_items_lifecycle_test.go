@@ -197,7 +197,7 @@ func TestLinearTypedLifecycleProducesFiveAliasReadbackAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if commit.Written != 6 || len(result.Effects) != 6 || len(result.Aliases) != 5 {
+	if commit.Written != 8 || len(result.Effects) != 8 || len(result.Aliases) != 5 {
 		t.Fatalf("commit=%+v result=%+v", commit, result)
 	}
 	if err := ValidateLinearWorkItemsCompletion(claim, result); err != nil {

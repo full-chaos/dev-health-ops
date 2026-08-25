@@ -17,6 +17,8 @@ var linearFamilyDestinations = []string{
 	"investment_classifications_daily",
 	"investment_metrics_daily",
 	"issue_type_metrics_daily",
+	"project_membership_transitions",
+	"projects",
 	"sprints",
 	"work_item_cycle_times",
 	"work_item_dependencies",
@@ -119,8 +121,16 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	if missing := sink.MissingDestinations(); len(missing) != 0 {
 		t.Fatalf("missing destinations=%v", missing)
 	}
-	if !slices.Equal(workItemRouteDestinations(), linearFamilyDestinations) {
-		t.Fatalf("canonical destinations=%v want=%v", workItemRouteDestinations(), linearFamilyDestinations)
+	// linearFamilyRawDestinations, not the bare shared workItemRouteDestinations:
+	// linear's own raw route writes two more than the shared family manifest
+	// as of CHAOS-4193 (project_membership_transitions, projects), the same
+	// as github's CHAOS-4194 addition. Sorted for comparison because
+	// linearFamilyRawDestinations appends them at the end while
+	// linearFamilyDestinations (raw+derived, alphabetized) does not.
+	gotDestinations := append([]string(nil), linearFamilyRawDestinations()...)
+	slices.Sort(gotDestinations)
+	if !slices.Equal(gotDestinations, linearFamilyDestinations) {
+		t.Fatalf("canonical destinations=%v want=%v", gotDestinations, linearFamilyDestinations)
 	}
 	raw, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{})
 	if err != nil {
@@ -365,6 +375,7 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 			missing: []string{
 				"sprints", "work_item_dependencies", "work_item_interactions",
 				"work_item_reopen_events", "work_item_transitions", "work_items",
+				"project_membership_transitions", "projects",
 			},
 			effect: derived[0],
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {

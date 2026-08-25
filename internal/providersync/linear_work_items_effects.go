@@ -14,6 +14,9 @@ import (
 var linearWorkItemEffectDestinations = []string{
 	"work_items", "work_item_transitions", "work_item_dependencies",
 	"work_item_reopen_events", "work_item_interactions", "sprints",
+	// CHAOS-4193: project-membership history and the projects catalog rows
+	// that make it resolvable.
+	"project_membership_transitions", "projects",
 }
 
 // LinearWorkItemEffectRows is the provider-owned projection for the first
@@ -21,22 +24,26 @@ var linearWorkItemEffectDestinations = []string{
 // recovery ledger must distinguish an evaluated destination with no rows from
 // a route that silently forgot the destination.
 type LinearWorkItemEffectRows struct {
-	WorkItems         []json.RawMessage
-	StatusTransitions []json.RawMessage
-	Dependencies      []json.RawMessage
-	ReopenEvents      []json.RawMessage
-	Interactions      []json.RawMessage
-	Sprints           []json.RawMessage
+	WorkItems          []json.RawMessage
+	StatusTransitions  []json.RawMessage
+	Dependencies       []json.RawMessage
+	ReopenEvents       []json.RawMessage
+	Interactions       []json.RawMessage
+	Sprints            []json.RawMessage
+	ProjectMemberships []json.RawMessage
+	Projects           []json.RawMessage
 }
 
 func BuildLinearWorkItemEffects(rows LinearWorkItemEffectRows) ([]EffectBatch, error) {
 	projections := map[string][]json.RawMessage{
-		"work_items":              rows.WorkItems,
-		"work_item_transitions":   rows.StatusTransitions,
-		"work_item_dependencies":  rows.Dependencies,
-		"work_item_reopen_events": rows.ReopenEvents,
-		"work_item_interactions":  rows.Interactions,
-		"sprints":                 rows.Sprints,
+		"work_items":                     rows.WorkItems,
+		"work_item_transitions":          rows.StatusTransitions,
+		"work_item_dependencies":         rows.Dependencies,
+		"work_item_reopen_events":        rows.ReopenEvents,
+		"work_item_interactions":         rows.Interactions,
+		"sprints":                        rows.Sprints,
+		"project_membership_transitions": rows.ProjectMemberships,
+		"projects":                       rows.Projects,
 	}
 	effects := make([]EffectBatch, 0, len(linearWorkItemEffectDestinations))
 	seen := make(map[string]struct{}, len(linearWorkItemEffectDestinations))
@@ -83,10 +90,19 @@ func buildLinearWorkItemEffectsFromRows(
 	if err != nil {
 		return nil, err
 	}
+	projectMemberships, err := effectRowsFromValues(rows.ProjectMemberships)
+	if err != nil {
+		return nil, err
+	}
+	projects, err := effectRowsFromValues(rows.Projects)
+	if err != nil {
+		return nil, err
+	}
 	return BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
 		WorkItems: workItems, StatusTransitions: transitions,
 		Dependencies: dependencies, ReopenEvents: reopens,
 		Interactions: interactions, Sprints: sprints,
+		ProjectMemberships: projectMemberships, Projects: projects,
 	})
 }
 
@@ -164,13 +180,15 @@ type LinearWorkItemEffectAdapter interface {
 // dispatcher. Its adapters are injected by future worker construction; this
 // file intentionally does not register or activate that construction.
 type LinearWorkItemClickHouseEffects struct {
-	Lease             providerfoundation.LeaseGuard
-	WorkItems         LinearWorkItemEffectAdapter
-	StatusTransitions LinearWorkItemEffectAdapter
-	Dependencies      LinearWorkItemEffectAdapter
-	ReopenEvents      LinearWorkItemEffectAdapter
-	Interactions      LinearWorkItemEffectAdapter
-	Sprints           LinearWorkItemEffectAdapter
+	Lease              providerfoundation.LeaseGuard
+	WorkItems          LinearWorkItemEffectAdapter
+	StatusTransitions  LinearWorkItemEffectAdapter
+	Dependencies       LinearWorkItemEffectAdapter
+	ReopenEvents       LinearWorkItemEffectAdapter
+	Interactions       LinearWorkItemEffectAdapter
+	Sprints            LinearWorkItemEffectAdapter
+	ProjectMemberships LinearWorkItemEffectAdapter
+	Projects           LinearWorkItemEffectAdapter
 }
 
 func (sink LinearWorkItemClickHouseEffects) WriteEffect(
@@ -241,6 +259,10 @@ func (sink LinearWorkItemClickHouseEffects) adapterForDestination(
 		return sink.Interactions, true
 	case "sprints":
 		return sink.Sprints, true
+	case "project_membership_transitions":
+		return sink.ProjectMemberships, true
+	case "projects":
+		return sink.Projects, true
 	default:
 		return nil, false
 	}

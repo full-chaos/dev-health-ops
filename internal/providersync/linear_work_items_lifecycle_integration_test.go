@@ -214,7 +214,20 @@ func TestLinearTypedLifecycleUsesMigratedClickHouseAndRecoversExactWrite(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if commit.MarkedCommitted != 1 || commit.Skipped != 5 {
+	// Effects commit in ALPHABETICAL destination order (effectBatchLess), not
+	// manifest order. CHAOS-4193's two new destinations --
+	// project_membership_transitions, projects -- sort before "sprints",
+	// pushing "work_items" (this fixture's only nonempty destination, and
+	// previously the alphabetically-last, LAST-committed one out of 6) to
+	// position 8 of 8. failAt=12 (2 lease asserts per write) now lands on the
+	// EMPTY work_item_reopen_events at position 6 instead: its write happens
+	// (a no-op, since it carries no rows) and then the ack assert fails,
+	// leaving it ambiguous. Recovery reads it back as EffectAbsent (nothing
+	// was ever really written) rather than EffectExact, so it resets and
+	// replays instead of being marked committed -- and the two still-untried
+	// destinations (work_item_transitions, work_items) get written fresh in
+	// the same pass.
+	if commit.MarkedCommitted != 0 || commit.ResetForReplay != 1 || commit.Written != 3 || commit.Skipped != 5 {
 		t.Fatalf("recovery commit=%+v", commit)
 	}
 	if err := ValidateLinearWorkItemsCompletion(claim, result); err != nil {
@@ -238,6 +251,12 @@ func linearMigratedClickHouseSink(conn driver.Conn, lease providerfoundation.Lea
 		},
 		Sprints: LinearSprintsClickHouseAdapter{
 			Delegate: GitHubSprintsClickHouseAdapter{Conn: conn},
+		},
+		ProjectMemberships: LinearProjectMembershipClickHouseAdapter{
+			Delegate: GitHubProjectMembershipClickHouseAdapter{Conn: conn},
+		},
+		Projects: LinearProjectCatalogClickHouseAdapter{
+			Delegate: GitHubProjectCatalogClickHouseAdapter{Conn: conn},
 		},
 	}
 }

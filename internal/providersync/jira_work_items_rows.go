@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -26,12 +27,14 @@ type jiraWorkItemInteractionRow = githubWorkItemInteractionRow
 type jiraSprintRow = githubSprintRow
 
 type jiraWorkItemRows struct {
-	WorkItems    []jiraWorkItemRow
-	Transitions  []jiraWorkItemTransitionRow
-	Dependencies []jiraWorkItemDependencyRow
-	ReopenEvents []jiraWorkItemReopenRow
-	Interactions []jiraWorkItemInteractionRow
-	Sprints      []jiraSprintRow
+	WorkItems          []jiraWorkItemRow
+	Transitions        []jiraWorkItemTransitionRow
+	Dependencies       []jiraWorkItemDependencyRow
+	ReopenEvents       []jiraWorkItemReopenRow
+	Interactions       []jiraWorkItemInteractionRow
+	Sprints            []jiraSprintRow
+	ProjectMemberships []projectmembership.Row
+	Projects           []projectmembership.CatalogRow
 }
 
 type jiraIdentityResolver func(email, accountID, displayName string) string
@@ -147,6 +150,32 @@ func normalizeJiraWorkItem(
 	return row, transitions, nil
 }
 
+// jiraIssueProjectMoves is jiraProjectMoveItems' entry point for a raw issue
+// payload, mirroring normalizeJiraWorkItem's own changelog/createdAt
+// derivation exactly (same fields, same object-shape branching) rather than
+// threading a fourth return value through normalizeJiraWorkItem itself --
+// that function has three other call sites (jira_atlassian_route.go and two
+// test files) this change does not touch. Called separately, once per issue,
+// by jira_work_items_route.go's Collect.
+func jiraIssueProjectMoves(
+	issue jiraWorkItemFixtureInput,
+	resolveIdentity jiraIdentityResolver,
+) []jiraProjectMoveItem {
+	raw := issue.Raw
+	fields, ok := jiraMapValue(raw["fields"])
+	if !ok {
+		return nil
+	}
+	createdAt := jiraTime(jiraField(fields, "created", issue.ObjectShape))
+	fallback := time.Time{}
+	if createdAt == nil {
+		createdAt = &fallback
+	}
+	identityShape := issue.ObjectShape || issue.AtlassianShape
+	changelog, _ := jiraMapValue(jiraField(raw, "changelog", issue.ObjectShape))
+	return jiraProjectMoveItems(changelog, *createdAt, issue.ObjectShape, identityShape, resolveIdentity)
+}
+
 func validateJiraWorkItem(row jiraWorkItemRow, claim Claim) error {
 	if row.Provider != "jira" || row.OrgID == "" || row.OrgID != claim.OrgID ||
 		row.WorkItemID == "" || row.Title == "" || row.Type == "" || row.Status == "" ||
@@ -188,6 +217,16 @@ func validateJiraInteraction(row jiraWorkItemInteractionRow, claim Claim) error 
 	if row.WorkItemID == "" || row.Provider != "jira" || row.InteractionType != "comment" ||
 		row.OccurredAt.IsZero() || row.BodyLength < 0 || row.LastSynced.IsZero() ||
 		row.OrgID == "" || row.OrgID != claim.OrgID {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
+}
+
+func validateJiraProjectMembership(row projectmembership.Row, claim Claim) error {
+	if row.Provider != "jira" || row.SubjectKind != projectmembership.SubjectWorkItem ||
+		row.SubjectID == "" || row.ToProjectID == "" || row.OccurredAt.IsZero() ||
+		row.EventID == "" || row.OrgID == "" || row.OrgID != claim.OrgID ||
+		row.LastSynced.IsZero() {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil
@@ -276,6 +315,95 @@ func normalizeJiraTransitions(
 		}
 	}
 	return rows
+}
+
+// jiraProjectMoveItem is one changelog "project" item, unresolved: ids and the
+// changelog's own display names only, pure and network-free. Resolving the
+// REAL project key (jira_work_items_route.go's Collect) needs a live lookup
+// this package's row-normalization functions deliberately do not have access
+// to, so that step lives in the route, not here.
+type jiraProjectMoveItem struct {
+	FromProjectID   string
+	FromProjectName string
+	ToProjectID     string
+	ToProjectName   string
+	Actor           string
+	OccurredAt      time.Time
+	EventID         string // native changelog history id, "jira:"+id; "" if absent
+}
+
+// jiraProjectMoveItems extracts CHAOS-4193's project-membership facts from a
+// jira issue's changelog.
+//
+// A SEPARATE loop from normalizeJiraTransitions (status), reading the SAME
+// histories: a "project" item's fromString/toString carry the project NAME,
+// not a status, so sharing one loop body would feed project names into status
+// normalization. Confirmed live (CHAOS-4193 probe, real Move OPS-9 -> API-24,
+// 2026-08-24): a Move logs a "Key" item (old/new ISSUE key -- carries no
+// project data, not parsed here) and a "project" item (from/to are internal
+// numeric project ids; fromString/toString are the project NAME, never
+// necessarily the key -- API's name happened to equal its key, Billing/BILL
+// from the same tenant's project list does not) together on ONE history entry
+// sharing its native `id`.
+//
+// A Jira issue always belongs to exactly one project, so unlike GitHub's
+// board-membership snapshot (which has a genuine "added with no prior board"
+// case) fromProjectID is never actually empty here in practice -- but nothing
+// in the changelog schema GUARANTEES that, so an empty `from` is passed
+// through rather than assumed impossible; the row's own "" first-assignment
+// convention already covers it correctly either way.
+func jiraProjectMoveItems(
+	changelog map[string]any,
+	createdAt time.Time,
+	objectShape bool,
+	identityObjectShape bool,
+	resolveIdentity jiraIdentityResolver,
+) []jiraProjectMoveItem {
+	histories := mapSlice(changelog["histories"])
+	items := make([]jiraProjectMoveItem, 0)
+	for _, value := range histories {
+		mapped, ok := jiraMapValue(value)
+		if !ok {
+			continue
+		}
+		occurred := createdAt
+		if at := jiraTime(jiraField(mapped, "created", objectShape)); at != nil {
+			occurred = *at
+		}
+		historyID := stringFrom(jiraField(mapped, "id", objectShape))
+		author := jiraField(mapped, "author", objectShape)
+		actor := jiraResolveUser(author, identityObjectShape, resolveIdentity)
+		if !objectShape {
+			actor = jiraResolveMapUser(author, resolveIdentity)
+		}
+		for _, itemValue := range mapSlice(jiraField(mapped, "items", objectShape)) {
+			item, ok := jiraMapValue(itemValue)
+			if !ok || !strings.EqualFold(stringFrom(jiraField(item, "field", objectShape)), "project") {
+				continue
+			}
+			toID := stringFrom(jiraField(item, "to", objectShape))
+			if toID == "" {
+				// A "project" item that names no destination is malformed --
+				// every real Move has one. Not the ruled unresolvable/drop
+				// counter (that is for a RESOLUTION failure on a real id);
+				// this is a defensive skip of a payload shape that should
+				// never occur.
+				continue
+			}
+			eventID := ""
+			if historyID != "" {
+				eventID = "jira:" + historyID
+			}
+			items = append(items, jiraProjectMoveItem{
+				FromProjectID:   stringFrom(jiraField(item, "from", objectShape)),
+				FromProjectName: stringFrom(jiraField(item, "fromString", objectShape)),
+				ToProjectID:     toID,
+				ToProjectName:   stringFrom(jiraField(item, "toString", objectShape)),
+				Actor:           actor, OccurredAt: occurred, EventID: eventID,
+			})
+		}
+	}
+	return items
 }
 
 func deriveJiraLifecycle(

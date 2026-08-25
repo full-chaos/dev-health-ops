@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 const (
@@ -43,9 +45,12 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       team { id key name }
       history(first: 50) {
         nodes {
+          id
           createdAt
           fromState { name type }
           toState { name type }
+          fromProjectId
+          toProjectId
           actor { name email }
         }
         pageInfo { hasNextPage endCursor }
@@ -141,9 +146,12 @@ query LinearWorkItemsHistory($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     history(first: $first, after: $after) {
       nodes {
+        id
         createdAt
         fromState { name type }
         toState { name type }
+        fromProjectId
+        toProjectId
         actor { name email }
       }
       pageInfo { hasNextPage endCursor }
@@ -290,10 +298,13 @@ type linearRelationsPayload struct {
 }
 
 type linearHistoryEntry struct {
-	CreatedAt string                 `json:"createdAt"`
-	FromState *linearStatePayload    `json:"fromState"`
-	ToState   *linearStatePayload    `json:"toState"`
-	Actor     *linearIdentityPayload `json:"actor"`
+	ID            string                 `json:"id"`
+	CreatedAt     string                 `json:"createdAt"`
+	FromState     *linearStatePayload    `json:"fromState"`
+	ToState       *linearStatePayload    `json:"toState"`
+	FromProjectID *string                `json:"fromProjectId"`
+	ToProjectID   *string                `json:"toProjectId"`
+	Actor         *linearIdentityPayload `json:"actor"`
 }
 
 // linearWorkItemRow is the complete normalized WorkItem field set plus the
@@ -356,12 +367,14 @@ type linearWorkItemInteractionRow = githubWorkItemInteractionRow
 type linearSprintRow = githubSprintRow
 
 type linearWorkItemRows struct {
-	WorkItems         []linearWorkItemRow
-	StatusTransitions []linearWorkItemTransitionRow
-	Dependencies      []linearWorkItemDependencyRow
-	ReopenEvents      []linearWorkItemReopenRow
-	Interactions      []linearWorkItemInteractionRow
-	Sprints           []linearSprintRow
+	WorkItems          []linearWorkItemRow
+	StatusTransitions  []linearWorkItemTransitionRow
+	Dependencies       []linearWorkItemDependencyRow
+	ReopenEvents       []linearWorkItemReopenRow
+	Interactions       []linearWorkItemInteractionRow
+	Sprints            []linearSprintRow
+	ProjectMemberships []projectmembership.Row
+	Projects           []projectmembership.CatalogRow
 }
 
 // LinearWorkItemsRouteHandler is the provider-only canonical work-items
@@ -1264,6 +1277,19 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 				rows.ReopenEvents = append(rows.ReopenEvents, normalizeLinearReopens(
 					teamClaim, item.WorkItemID, payload.History.Nodes, normalizedAt,
 				)...)
+				currentProjectID, currentProjectName := "", ""
+				if item.ProjectID != nil {
+					currentProjectID = *item.ProjectID
+				}
+				if item.ProjectName != nil {
+					currentProjectName = *item.ProjectName
+				}
+				memberships, catalog := normalizeLinearProjectMemberships(
+					teamClaim, item.WorkItemID, currentProjectID, currentProjectName,
+					payload.History.Nodes, normalizedAt,
+				)
+				rows.ProjectMemberships = append(rows.ProjectMemberships, memberships...)
+				rows.Projects = append(rows.Projects, catalog...)
 			}
 			if fetchComments {
 				rows.Interactions = append(rows.Interactions, normalizeLinearInteractions(
@@ -1272,6 +1298,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 		}
 	}
+	rows.Projects = mergeLinearProjectCatalogNames(rows.Projects)
 	effects, err := buildLinearWorkItemEffectsFromRows(rows)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -1280,18 +1307,21 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
-			"work_items_synced":    len(rows.WorkItems),
-			"transitions_synced":   len(rows.StatusTransitions),
-			"dependencies_synced":  len(rows.Dependencies),
-			"reopen_events_synced": len(rows.ReopenEvents),
-			"interactions_synced":  len(rows.Interactions),
-			"sprints_synced":       len(rows.Sprints),
+			"work_items_synced":          len(rows.WorkItems),
+			"transitions_synced":         len(rows.StatusTransitions),
+			"dependencies_synced":        len(rows.Dependencies),
+			"reopen_events_synced":       len(rows.ReopenEvents),
+			"interactions_synced":        len(rows.Interactions),
+			"sprints_synced":             len(rows.Sprints),
+			"project_memberships_synced": len(rows.ProjectMemberships),
+			"projects_synced":            len(rows.Projects),
 		},
 		Watermark: &watermark,
 		Evidence: FetchEvidence{Provider: "linear", Dataset: "work-items",
 			Requests: pagesSeen, Pages: pagesSeen,
 			Records: len(rows.WorkItems) + len(rows.StatusTransitions) + len(rows.Dependencies) +
-				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints)},
+				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) +
+				len(rows.ProjectMemberships) + len(rows.Projects)},
 	}, nil
 }
 
@@ -1470,6 +1500,174 @@ func normalizeLinearTransitions(
 		}
 	}
 	return transitions
+}
+
+// mergeLinearProjectCatalogNames coalesces catalog rows for the same
+// (org_id, provider, id) touched by more than one work item within a single
+// Collect call. Each work item's own normalizeLinearProjectMemberships call
+// only sees ITS OWN current project id/name, so two work items that both
+// touch the same historical project id independently emit a row for it --
+// one with a known name (its own current project), one with "" (no lookup,
+// ruled). Both land in the same rows.Projects slice, and the sink's dedup
+// keeps whichever happened to append last, silently discarding a name
+// already available elsewhere in the SAME batch (codex review finding,
+// CHAOS-4193). All rows at one key already share an identical epoch
+// updated_at (linearEnsureProjectsRow), so Name is the only field that can
+// legitimately differ -- this keeps the first row's shape and only fills in
+// its Name if a later row has one.
+func mergeLinearProjectCatalogNames(rows []projectmembership.CatalogRow) []projectmembership.CatalogRow {
+	if len(rows) < 2 {
+		return rows
+	}
+	position := make(map[string]int, len(rows))
+	merged := make([]projectmembership.CatalogRow, 0, len(rows))
+	for _, row := range rows {
+		key := row.OrgID + workItemKeySeparator + row.Provider + workItemKeySeparator + row.ID
+		if index, seen := position[key]; seen {
+			if merged[index].Name == "" && row.Name != "" {
+				merged[index].Name = row.Name
+			}
+			continue
+		}
+		position[key] = len(merged)
+		merged = append(merged, row)
+	}
+	return merged
+}
+
+// normalizeLinearProjectMemberships extracts CHAOS-4193's project-membership
+// rows from a linear issue's history. Reads the SAME entries
+// normalizeLinearTransitions does but a SEPARATE loop: a project-move entry's
+// FromProjectID/ToProjectID coexist with nil FromState/ToState (confirmed
+// live via GraphQL introspection on IssueHistory, CHAOS-4193 probe
+// 2026-08-24 -- both the scalar id pair and the fromProject/toProject object
+// relation exist; the scalar pair is what the two queries above select,
+// cheaper than the object-relation pattern fromState/toState use), so sharing
+// one loop body would conflate "no status change" with "no history entry to
+// emit at all".
+//
+// to_project_key is ALWAYS "" (ruled 2026-08-24): Linear projects have no key
+// concept, and the sink admits an id with no key -- only a key with no id is
+// refused. No live lookup for a project NAME either (ruled, "no lookup" --
+// the id alone decides the unassignment sentinel): the row's own name is ""
+// unless it happens to match the work item's OWN current project (the one
+// case a name is already on hand for free, from the SAME payload). Linear
+// already has its own `projects` catalog writer
+// (linear_reference_catalog_effects_clickhouse.go) that fills in the real
+// name on its own cadence; EnsureProjectsRow is still called unconditionally
+// here (ruled: "idempotent, same contract as every producer, removes the
+// race question") so the resolve-to-`projects` constraint holds by
+// construction even before that writer has run for a given project.
+func normalizeLinearProjectMemberships(
+	claim Claim,
+	workItemID string,
+	currentProjectID, currentProjectName string,
+	history []linearHistoryEntry,
+	normalizedAt time.Time,
+) ([]projectmembership.Row, []projectmembership.CatalogRow) {
+	memberships := make([]projectmembership.Row, 0)
+	catalog := make([]projectmembership.CatalogRow, 0)
+	for _, entry := range history {
+		if entry.FromProjectID == nil && entry.ToProjectID == nil {
+			continue
+		}
+		toID, fromID := "", ""
+		if entry.ToProjectID != nil {
+			toID = strings.TrimSpace(*entry.ToProjectID)
+		}
+		if entry.FromProjectID != nil {
+			fromID = strings.TrimSpace(*entry.FromProjectID)
+		}
+		// ("", "") is the one real contradiction (migration 077's own doc
+		// comment): a row naming NEITHER side could not retire or create any
+		// membership. A removal -- (P, "") -- is a normal, valid shape and
+		// must reach the sink, or a subject's last-known project never
+		// retires and project_membership_presence reports it indefinitely.
+		if toID == "" && fromID == "" {
+			continue
+		}
+		// A history entry with no parseable native timestamp is dropped, not
+		// defaulted to the sync clock: occurred_at is a sorting-key member,
+		// so substituting normalizedAt would change on every later sync and
+		// the same native event id would accumulate a new row each time
+		// instead of ReplacingMergeTree collapsing it to one.
+		occurredAt := parseLinearTime(entry.CreatedAt)
+		if occurredAt == nil {
+			continue
+		}
+		actor := ""
+		if entry.Actor != nil {
+			if identity := linearIdentity(*entry.Actor); identity != "unknown" {
+				actor = identity
+			}
+		}
+		// linearEnsureProjectsRow, NOT projectmembership.EnsureProjectsRow:
+		// Linear (unlike github) has its OWN richer `projects` writer
+		// (linear_reference_catalog_effects_clickhouse.go, lifecycle/team/
+		// lead/url columns from migrations 073/074). `projects` is
+		// ReplacingMergeTree(updated_at) -- a base-columns-only ensure row
+		// stamped with the CURRENT sync time would out-version and blank
+		// those columns back to their table defaults the moment it runs
+		// after the real catalog sync. Anchoring updated_at at the Unix
+		// epoch instead means this row can only ever WIN when no row exists
+		// yet (making the membership resolvable from the first observation),
+		// and can never displace a real catalog row once one lands, now or
+		// later -- closing the corruption path without adding a resolution
+		// read this producer's architecture deliberately avoids.
+		if toID != "" {
+			catalog = append(catalog, linearEnsureProjectsRow(claim.OrgID, toID, projectDisplayName(toID, currentProjectID, currentProjectName), normalizedAt))
+		}
+		if fromID != "" {
+			catalog = append(catalog, linearEnsureProjectsRow(claim.OrgID, fromID, projectDisplayName(fromID, currentProjectID, currentProjectName), normalizedAt))
+		}
+		row := projectmembership.Row{
+			OrgID: claim.OrgID, RepoID: uuid.Nil, SubjectKind: projectmembership.SubjectWorkItem,
+			SubjectID: workItemID, Provider: "linear",
+			FromProjectID: fromID, ToProjectID: toID,
+			FromProjectKey: "", ToProjectKey: "",
+			Actor: actor, OccurredAt: occurredAt.UTC(), LastSynced: normalizedAt.UTC(),
+		}
+		if entry.ID != "" {
+			row.EventID = "linear:" + entry.ID
+		} else {
+			row.EventID = projectmembership.EventID(row)
+		}
+		if linearProjectMembershipValid(row, claim) {
+			memberships = append(memberships, row)
+		}
+	}
+	return memberships, catalog
+}
+
+// projectDisplayName is the free name available without a live lookup
+// (ruled 2026-08-24: no lookup for Linear project names) -- the work item's
+// OWN current project name when the touched id matches it, "" otherwise.
+func projectDisplayName(id, currentProjectID, currentProjectName string) string {
+	if id != "" && id == currentProjectID {
+		return currentProjectName
+	}
+	return ""
+}
+
+// linearProjectsEpoch anchors linearEnsureProjectsRow's updated_at so it can
+// never out-version a real catalog row (see that function's own doc
+// comment). Not time.Time{} (ClickHouse's DateTime64 has no representation
+// for the Go zero time and would either reject the row or clamp it
+// unpredictably); the Unix epoch is a valid, unambiguous DateTime64(3) value
+// older than any real sync could ever produce.
+var linearProjectsEpoch = time.Unix(0, 0).UTC()
+
+func linearEnsureProjectsRow(orgID, id, name string, normalizedAt time.Time) projectmembership.CatalogRow {
+	row := projectmembership.EnsureProjectsRow(orgID, "linear", id, "", name, normalizedAt)
+	row.UpdatedAt = linearProjectsEpoch
+	return row
+}
+
+func linearProjectMembershipValid(row projectmembership.Row, claim Claim) bool {
+	return row.Provider == "linear" && row.SubjectKind == projectmembership.SubjectWorkItem &&
+		row.SubjectID != "" && (row.ToProjectID != "" || row.FromProjectID != "") &&
+		!row.OccurredAt.IsZero() && row.EventID != "" && row.OrgID != "" &&
+		row.OrgID == claim.OrgID && !row.LastSynced.IsZero()
 }
 
 func parseLinearTime(value string) *time.Time {

@@ -104,6 +104,8 @@ flowchart TD
     P["Provider event<br/>(Jira project / GitHub Projects V2 / Linear project)"]
     G["GitHub Projects V2 sync<br/>providersync, board items"]
     RE["github work-items route<br/>mergeGitHubProjectV2Rows"]
+    JI["jira work-items route<br/>(plain + Atlassian)<br/>jiraIssueProjectMoves + resolveJiraProjectCatalog"]
+    LI["linear work-items route<br/>normalizeLinearProjectMemberships"]
     EB["effects builder<br/>one EffectBatch per declared destination"]
     AD["membership adapter<br/>write + readback-fenced inspect"]
     AC["projects adapter<br/>ensureProjectsRow, base 051 columns"]
@@ -126,10 +128,14 @@ flowchart TD
 
     P --> B --> N
     P --> G
+    P -- "changelog project move,<br/>catalog lookup by id" --> JI
+    P -- "history fromProjectId/toProjectId" --> LI
     G -- "PullRequest items<br/>(repo_id, number)" --> RE
     G -. "no membership row,<br/>counted not dropped" .-> GS
     G -- "one row per configured board" --> RE
     RE --> EB
+    JI --> EB
+    LI --> EB
     EB -- "project_membership_transitions" --> AD
     EB -- "projects" --> AC
     AD --> T
@@ -255,13 +261,17 @@ Load-bearing properties, and why each is where it is:
   sink refuses to write anything at all while any destination lacks an adapter,
   so a half-wired family fails closed instead of quietly writing fifteen of
   seventeen tables.
-- **The destination list is per-consumer, and these two are github-only.** The
-  published capability matrix advertises a destination set per provider, so
-  adding these to the shared list would have told other teams that gitlab
-  writes project memberships — a provider whose "project" concept IS `repo_id`
-  and which is refused for the kind by construction. github advertises two more
-  than the shared work-item family; the Linear expired-lease retry policy
-  advertises two fewer, because no retry-safety proof exists for either.
+- **The destination list is per-consumer, and gitlab is excluded, not
+  everyone else.** The published capability matrix advertises a destination
+  set per provider, so adding these to the shared list would have told other
+  teams that gitlab writes project memberships — a provider whose "project"
+  concept IS `repo_id` and which is refused for the kind by construction.
+  github, jira, and linear each advertise two more than the shared
+  work-item family (CHAOS-4194 for github; CHAOS-4193 for jira and linear,
+  producing directly from Jira's own project-move changelog and Linear's own
+  issue history — not through the `External batch` path above); the Linear
+  expired-lease retry policy still advertises two fewer, because no
+  retry-safety proof exists for it yet.
 - **`projects` rows are ensured by the producer.** GitHub Projects V2 wrote no
   `projects` row anywhere before CHAOS-4194 -- the fetcher stamped the id onto
   work items and the entity it named was never created -- so every github

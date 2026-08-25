@@ -65,6 +65,7 @@ func TestBuildJiraAtlassianEffectsRoutesEveryDestinationAndFencesWorklogs(t *tes
 	sink := JiraAtlassianClickHouseEffects{
 		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { leaseCalls++; return nil }),
 		Sprints: legacy, Dependencies: legacy, Interactions: legacy, Reopens: legacy, Transitions: legacy, WorkItems: legacy, Worklogs: worklogs,
+		ProjectMemberships: legacy, Projects: legacy,
 	}
 	for _, effect := range effects {
 		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
@@ -97,7 +98,13 @@ func TestBuildJiraAtlassianEffectsRoutesEveryDestinationAndFencesWorklogs(t *tes
 	if missing := incomplete.MissingDestinations(); len(missing) != 1 || missing[0] != "worklogs" {
 		t.Fatalf("missing=%v", missing)
 	}
-	if err := incomplete.WriteEffect(context.Background(), claim, effects[len(effects)-1]); !errors.Is(err, ErrInvalidConfiguration) {
+	var worklogsEffect EffectBatch
+	for _, effect := range effects {
+		if effect.Destination == "worklogs" {
+			worklogsEffect = effect
+		}
+	}
+	if err := incomplete.WriteEffect(context.Background(), claim, worklogsEffect); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing worklog adapter error=%v", err)
 	}
 }

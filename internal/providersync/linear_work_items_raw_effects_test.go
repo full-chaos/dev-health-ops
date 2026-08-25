@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 )
 
 func TestLinearRawEffectAdaptersFenceProviderBeforeDelegating(t *testing.T) {
@@ -46,5 +48,32 @@ func TestLinearRawEffectAdaptersFenceProviderBeforeDelegating(t *testing.T) {
 	}
 	if err := (LinearSprintsClickHouseAdapter{}).WriteLinearWorkItemEffect(context.Background(), sprintIdentity, byDestination["sprints"]); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("foreign row sprint error=%v", err)
+	}
+}
+
+// A prior draft of the project-membership sink guard hard-required
+// ToProjectID, rejecting every valid removal row (from=P, to="") that
+// normalizeLinearProjectMemberships emits. Reproduces the exact class of row
+// that bug rejected -- proof this guard, not just the normalizer, now
+// accepts it (codex review finding, CHAOS-4193).
+func TestLinearProjectMembershipRowValidAcceptsARemoval(t *testing.T) {
+	removal := projectmembership.Row{
+		OrgID: "org-acme", Provider: "linear", SubjectKind: projectmembership.SubjectWorkItem,
+		SubjectID: "linear:ENG-1", FromProjectID: "project-old", ToProjectID: "",
+		EventID: "linear:hist-1",
+	}
+	if !linearProjectMembershipRowValid(removal, "org-acme") {
+		t.Fatalf("removal=%+v, want valid -- migration 077 defines (P, \"\") as a removal, not malformed", removal)
+	}
+}
+
+func TestLinearProjectMembershipRowValidRejectsNeitherSideNamed(t *testing.T) {
+	neither := projectmembership.Row{
+		OrgID: "org-acme", Provider: "linear", SubjectKind: projectmembership.SubjectWorkItem,
+		SubjectID: "linear:ENG-1", FromProjectID: "", ToProjectID: "",
+		EventID: "linear:hist-1",
+	}
+	if linearProjectMembershipRowValid(neither, "org-acme") {
+		t.Fatalf("row=%+v, want invalid -- (\"\", \"\") names no membership at all", neither)
 	}
 }

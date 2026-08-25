@@ -34,12 +34,14 @@ func TestBuildLinearWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("effect construction is order-sensitive:\nfirst=%+v\nsecond=%+v", first, second)
 	}
-	if len(first) != 6 || first[0].Destination != "work_items" ||
+	if len(first) != 8 || first[0].Destination != "work_items" ||
 		first[1].Destination != "work_item_transitions" ||
 		first[2].Destination != "work_item_dependencies" ||
 		first[3].Destination != "work_item_reopen_events" ||
 		first[4].Destination != "work_item_interactions" ||
-		first[5].Destination != "sprints" {
+		first[5].Destination != "sprints" ||
+		first[6].Destination != "project_membership_transitions" ||
+		first[7].Destination != "projects" {
 		t.Fatalf("effects=%+v", first)
 	}
 	for index, effect := range first {
@@ -48,7 +50,8 @@ func TestBuildLinearWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 		}
 	}
 	if len(first[0].Rows) != 2 || len(first[1].Rows) != 0 || len(first[2].Rows) != 0 ||
-		len(first[3].Rows) != 0 || len(first[4].Rows) != 0 || len(first[5].Rows) != 0 {
+		len(first[3].Rows) != 0 || len(first[4].Rows) != 0 || len(first[5].Rows) != 0 ||
+		len(first[6].Rows) != 0 || len(first[7].Rows) != 0 {
 		t.Fatalf("empty destination was dropped: %+v", first)
 	}
 	if _, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
@@ -172,12 +175,14 @@ func TestLinearWorkItemEffectsRecoverAfterMidWrite(t *testing.T) {
 func TestLinearWorkItemEffectsDispatchEveryRawDestination(t *testing.T) {
 	claim := nativeTestClaim("linear", "work-items")
 	effects, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
-		WorkItems:         []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1"}`)},
-		StatusTransitions: []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"todo","to_status":"in_progress"}`)},
-		Dependencies:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","source_work_item_id":"ghpr:acme/repo#9","target_work_item_id":"linear:ENG-1","relationship_type":"relates_to","relationship_type_raw":"linear_attachment","relationship_semantics_version":"canonical-blocks.v2"}`)},
-		ReopenEvents:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"done","to_status":"in_progress"}`)},
-		Interactions:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","interaction_type":"comment","occurred_at":"2026-07-30T11:00:00Z","body_length":4}`)},
-		Sprints:           []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","sprint_id":"linear:cycle:7","name":"Cycle 7","state":"active"}`)},
+		WorkItems:          []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1"}`)},
+		StatusTransitions:  []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"todo","to_status":"in_progress"}`)},
+		Dependencies:       []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","source_work_item_id":"ghpr:acme/repo#9","target_work_item_id":"linear:ENG-1","relationship_type":"relates_to","relationship_type_raw":"linear_attachment","relationship_semantics_version":"canonical-blocks.v2"}`)},
+		ReopenEvents:       []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"done","to_status":"in_progress"}`)},
+		Interactions:       []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","interaction_type":"comment","occurred_at":"2026-07-30T11:00:00Z","body_length":4}`)},
+		Sprints:            []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","sprint_id":"linear:cycle:7","name":"Cycle 7","state":"active"}`)},
+		ProjectMemberships: []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","subject_kind":"work_item","subject_id":"linear:ENG-1","repo_id":"00000000-0000-0000-0000-000000000000","from_project_id":"","to_project_id":"project-platform","from_project_key":"","to_project_key":"","actor":"","occurred_at":"2026-07-30T11:00:00Z","last_synced":"2026-07-30T11:00:00Z","event_id":"linear:hist-1"}`)},
+		Projects:           []json.RawMessage{json.RawMessage(`{"id":"project-platform","org_id":"org-acme","provider":"linear","project_key":"","name":"Platform","is_active":1,"updated_at":"2026-07-30T11:00:00Z","last_synced":"2026-07-30T11:00:00Z"}`)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -333,6 +338,12 @@ func linearWorkItemEffectsFixture(
 		},
 		Sprints: linearDestinationCheckingAdapter{
 			destination: "sprints", delegate: backend,
+		},
+		ProjectMemberships: linearDestinationCheckingAdapter{
+			destination: "project_membership_transitions", delegate: backend,
+		},
+		Projects: linearDestinationCheckingAdapter{
+			destination: "projects", delegate: backend,
 		},
 	}
 }

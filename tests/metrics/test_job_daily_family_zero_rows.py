@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-import dev_health_ops.connectors  # noqa: F401  # break providers<->connectors cycle
+import dev_health_ops.connectors  # noqa: F401  # lgtm[py/unused-import]
 from dev_health_ops.metrics import job_daily
 
 DAY = date(2025, 12, 18)
@@ -98,7 +98,7 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
         return None
 
     monkeypatch.setattr(job_daily, "init_team_resolver", _noop_init_team_resolver)
-    monkeypatch.setattr(job_daily, "get_team_resolver", lambda: _NullResolver())
+    monkeypatch.setattr(job_daily, "get_team_resolver", _NullResolver)
     monkeypatch.setattr(
         job_daily, "build_repo_pattern_resolver", lambda *a, **k: _NullResolver()
     )

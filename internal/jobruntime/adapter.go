@@ -282,6 +282,9 @@ func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error
 	choice, envelope, err := adapter.execute(parent, job, labels)
 	if choice.result == ResultCancel {
 		observe(func() { adapter.observer.JobCancelled(parent, labels, choice.category) })
+		if !choice.reason.isZero() {
+			observe(func() { adapter.observer.ObserveDeterministicFailure(parent, labels, choice.reason) })
+		}
 	}
 	adapter.logFinish(parent, job, envelope, choice, started)
 	if err == nil {

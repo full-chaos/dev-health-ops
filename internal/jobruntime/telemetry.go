@@ -168,6 +168,11 @@ type cancellationLabels struct {
 	Reason ErrorCategory
 }
 
+type deterministicFailureLabels struct {
+	Kind   string
+	Reason Reason
+}
+
 type syncLeaseResultLabels struct {
 	Lease  SyncLeaseLabels
 	Result SyncLeaseResult
@@ -232,6 +237,7 @@ type MetricsCollector struct {
 	jobAttempts               map[attemptLabels]uint64
 	jobPanics                 map[string]uint64
 	cancellations             map[cancellationLabels]uint64
+	deterministicFailures     map[deterministicFailureLabels]uint64
 	domainMismatch            map[string]uint64
 	syncLeaseExpired          map[syncLeaseResultLabels]uint64
 	reportRunLeaseExpired     map[ReportRunLeaseResult]uint64
@@ -343,6 +349,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		jobAttempts:                        make(map[attemptLabels]uint64),
 		jobPanics:                          make(map[string]uint64),
 		cancellations:                      make(map[cancellationLabels]uint64),
+		deterministicFailures:              make(map[deterministicFailureLabels]uint64),
 		domainMismatch:                     make(map[string]uint64, len(dimensions.DomainTypes)),
 		syncLeaseExpired:                   make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
 		reportRunLeaseExpired:              make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
@@ -559,6 +566,21 @@ func (collector *MetricsCollector) JobCancelled(_ context.Context, labels JobLab
 	defer collector.mu.Unlock()
 	if _, ok := collector.allowedJobs[labels]; ok {
 		collector.cancellations[cancellationLabels{Kind: labels.Kind, Reason: reason}]++
+	}
+}
+
+// ObserveDeterministicFailure satisfies Observer. Reason's zero value
+// (isZero) is never bucketed: an unset Reason means no call site attached
+// one, not that a genuine empty-string reason occurred (Reason's exported
+// constructor space is a closed compile-time catalog -- see errors.go).
+func (collector *MetricsCollector) ObserveDeterministicFailure(_ context.Context, labels JobLabels, reason Reason) {
+	if reason.isZero() {
+		return
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.allowedJobs[labels]; ok {
+		collector.deterministicFailures[deterministicFailureLabels{Kind: labels.Kind, Reason: reason}]++
 	}
 }
 
@@ -1334,6 +1356,23 @@ func (collector *MetricsCollector) writeJobs(output *strings.Builder) {
 		writeUintSample(output, "worker_job_cancellations_total", []metricLabel{
 			{"kind", labels.Kind}, {"reason", string(labels.Reason)},
 		}, collector.cancellations[labels])
+	}
+
+	writeMetadata(output, "worker_job_deterministic_failures_total", "Permanent failures by kind and bounded reason (CHAOS-4242).", "counter")
+	deterministicKeys := make([]deterministicFailureLabels, 0, len(collector.deterministicFailures))
+	for labels := range collector.deterministicFailures {
+		deterministicKeys = append(deterministicKeys, labels)
+	}
+	sort.Slice(deterministicKeys, func(left, right int) bool {
+		if deterministicKeys[left].Kind != deterministicKeys[right].Kind {
+			return deterministicKeys[left].Kind < deterministicKeys[right].Kind
+		}
+		return deterministicKeys[left].Reason.String() < deterministicKeys[right].Reason.String()
+	})
+	for _, labels := range deterministicKeys {
+		writeUintSample(output, "worker_job_deterministic_failures_total", []metricLabel{
+			{"kind", labels.Kind}, {"reason", labels.Reason.String()},
+		}, collector.deterministicFailures[labels])
 	}
 
 	writeMetadata(output, "worker_domain_state_mismatch_total", "Domain precondition mismatches by bounded domain type.", "counter")

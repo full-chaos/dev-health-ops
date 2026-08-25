@@ -45,6 +45,14 @@ type Observer interface {
 	// execution start. It is void, like every other Observer method, so a
 	// telemetry fault can never fail a job.
 	JobWait(context.Context, JobLabels, time.Duration)
+	// ObserveDeterministicFailure reports a Permanent failure that carries a
+	// bounded Reason -- narrower than JobFinished/JobCancelled's category
+	// alone, so one specific defect class (e.g. an invalid durable-state
+	// precondition, CHAOS-4242) can be alerted on distinctly from every
+	// other permanent cancellation sharing the same category. Called only
+	// when a Reason was actually attached via WithReason; most permanent
+	// failures carry none and never call this.
+	ObserveDeterministicFailure(context.Context, JobLabels, Reason)
 }
 
 // SyncLeaseObserver is the narrower capability concrete expired-lease

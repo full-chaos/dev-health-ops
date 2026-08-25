@@ -444,6 +444,39 @@ func TestAdapterNeverLogsAnUnmarkedHandlerErrorsCause(t *testing.T) {
 	}
 }
 
+// TestAdapterCarriesReasonInvalidStateFromAPermanentComputeFailure proves
+// the CHAOS-4242 classification fix end to end through the FULL Adapter
+// pipeline, not just PartitionHandler in isolation (see
+// internal/jobs/metrics/remaining/handler_test.go's
+// TestPartitionHandlerClassifiesAnInvalidStateComputeFailureAsPermanent,
+// which cannot observe this: PartitionHandler.Work returns the raw
+// *markedError one layer below Adapter, and ReasonInvalidState only
+// becomes externally visible -- in the bounded safeError text, and via
+// Observer.ObserveDeterministicFailure -- once Adapter.Work classifies it).
+func TestAdapterCarriesReasonInvalidStateFromAPermanentComputeFailure(t *testing.T) {
+	t.Parallel()
+	observer := &recordingObserver{}
+	cause := errors.New("partition 28f8b70b scope: unexpected end of JSON input")
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return WithReason(Permanent(WithSafeCause(fmt.Errorf("remaining metrics durable state is invalid: %w", cause))), ReasonInvalidState)
+	}), observer, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &bytes.Buffer{})
+	job := retentionJob(t, 1)
+
+	err := adapter.Work(context.Background(), job)
+	if err == nil {
+		t.Fatal("expected a safe error")
+	}
+	if got := err.Error(); !strings.Contains(got, "dev-health job failed [permanent: invalid_state]") {
+		t.Fatalf("Error() = %q, want the bounded permanent+invalid_state safeError", got)
+	}
+	if len(observer.deterministicReasons) != 1 || observer.deterministicReasons[0] != ReasonInvalidState {
+		t.Fatalf(
+			"ObserveDeterministicFailure reasons = %v, want exactly one ReasonInvalidState",
+			observer.deterministicReasons,
+		)
+	}
+}
+
 func TestAdapterNextRetryIsBoundedAndDeterministic(t *testing.T) {
 	t.Parallel()
 	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error { return nil }), &recordingObserver{}, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &bytes.Buffer{})
@@ -566,12 +599,13 @@ func (claim *recordingClaim) Finish(ctx context.Context, completion Completion) 
 }
 
 type recordingObserver struct {
-	result         Result
-	category       ErrorCategory
-	panicked       bool
-	domainMismatch bool
-	cancelled      bool
-	jobWaits       []time.Duration
+	result               Result
+	category             ErrorCategory
+	panicked             bool
+	domainMismatch       bool
+	cancelled            bool
+	jobWaits             []time.Duration
+	deterministicReasons []Reason
 }
 
 func (*recordingObserver) RuntimeRegistered(context.Context, RuntimeInfo) {}
@@ -589,6 +623,9 @@ func (observer *recordingObserver) DomainMismatch(context.Context, string) {
 func (*recordingObserver) BudgetWait(context.Context, JobLabels, time.Duration, string) {}
 func (observer *recordingObserver) JobWait(_ context.Context, _ JobLabels, wait time.Duration) {
 	observer.jobWaits = append(observer.jobWaits, wait)
+}
+func (observer *recordingObserver) ObserveDeterministicFailure(_ context.Context, _ JobLabels, reason Reason) {
+	observer.deterministicReasons = append(observer.deterministicReasons, reason)
 }
 
 // TestAdapterAcceptsEnvelopeCarryingTraceParent is the CHAOS-4093 regression.

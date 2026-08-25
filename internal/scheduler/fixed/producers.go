@@ -350,6 +350,26 @@ type remainingFamilyBinding struct {
 	// RequiresGraphBuild marks a family whose legacy dispatcher chained a
 	// work-graph build before the projection.
 	RequiresGraphBuild bool
+	// SkipIfCovered marks a family that ALSO runs on a post-sync trigger
+	// with a different generation format, so the (org_id, family,
+	// generation, scope_key) uniqueness constraint alone cannot stop this
+	// schedule from creating a second, independent run for a day the other
+	// trigger already computed (CHAOS-4242) -- checked via
+	// RemainingMetricsCoverageStore before StartRunTx, best-effort: a store
+	// that does not implement the capability skips the check entirely
+	// rather than failing the build, the same degrade-gracefully pattern
+	// DORAObserver/doraRefusalObserver use elsewhere.
+	SkipIfCovered bool
+}
+
+// RemainingMetricsCoverageStore is the narrow, optional capability
+// startOrganization uses to detect whether ANY trigger already produced a
+// succeeded partition for an organization's day, for families marked
+// SkipIfCovered. Kept separate from RemainingMetricsStore (rather than
+// widening it) so every OTHER binding's store dependency is unaffected --
+// nil-checked and skipped, not required.
+type RemainingMetricsCoverageStore interface {
+	HasSucceededPartition(ctx context.Context, tx pgx.Tx, organizationID, family, day string) (bool, error)
 }
 
 // generationSeedNamespace derives the immutable capacity seed.
@@ -555,6 +575,13 @@ func NewRemainingMetricsFanoutProducer(
 						"sink": "auto", "interval": "daily",
 					})
 				},
+				// dora also dispatches on the post-sync trigger
+				// (cmd/dev-health-worker/sync_dispatch.go's
+				// postSyncRemainingScope "dora" case) with generation
+				// "post-sync:<sync_run_id>", a different format from this
+				// schedule's "fixed-schedule:dora_daily_fanout:<time>" --
+				// see RemainingMetricsCoverageStore's doc comment.
+				SkipIfCovered: true,
 			},
 			"recommendations_daily_fanout": {
 				Family: "recommendations",
@@ -711,6 +738,24 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 	day string,
 	scope json.RawMessage,
 ) (int, error) {
+	// CHAOS-4242: a family whose OTHER trigger (post-sync) may have already
+	// covered this exact org+day under a generation this schedule's own
+	// uniqueness check can never see. Checked on the outer tx, before a
+	// savepoint is even opened, so a fully-covered occurrence costs one
+	// read per organization rather than a wasted nested transaction.
+	if binding.SkipIfCovered {
+		if coverage, ok := producer.store.(RemainingMetricsCoverageStore); ok {
+			covered, err := coverage.HasSucceededPartition(ctx, tx, organizationID, binding.Family, day)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"check existing %s coverage for organization: %w", binding.Family, err,
+				)
+			}
+			if covered {
+				return 0, nil
+			}
+		}
+	}
 	nested, err := tx.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("open savepoint for organization: %w", err)

@@ -496,6 +496,51 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 	return nil
 }
 
+// HasSucceededPartition reports whether ANY run of this organization/family
+// -- regardless of which trigger created it or what generation it carries
+// -- already has a succeeded partition whose scope covers exactly this day.
+//
+// CHAOS-4242: dora is dispatched by two independent triggers with two
+// independent generation formats (post-sync's "post-sync:<sync_run_id>" vs
+// the fixed schedule's "fixed-schedule:dora_daily_fanout:<time>"), so the
+// (org_id, family, generation, scope_key) uniqueness constraint that makes
+// replaying ONE trigger's own occurrence idempotent cannot stop the OTHER
+// trigger from creating a second, independent run for the same org+day.
+// dora_metrics_daily is a plain MergeTree with no dedup on replay (matching
+// Python's own append-only job_dora.py -- a parity-correct characteristic
+// of the table, not a defect this store papers over by writing
+// differently), so a second run is a real duplicate-rows outcome, not a
+// merely wasted claim. This is the pre-flight check the fixed schedule's
+// dora binding uses to skip an organization the other trigger already
+// covered, rather than create that duplicate.
+//
+// Scoped to (org_id, family) plus an exact `scope->>'day'` match rather than
+// a generation/scope_key comparison, because the two triggers' scope_key
+// FORMATS also differ (post-sync: the full serialized scope; fixed
+// schedule: the bare day string) -- day is the one field both agree on.
+func (store *PostgresStore) HasSucceededPartition(
+	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
+) (bool, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) ||
+		family == "" || day == "" {
+		return false, ErrUnavailable
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM public.remaining_metric_partitions AS partition
+    JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
+    WHERE run.org_id = $1::uuid AND run.family = $2
+      AND partition.status = 'succeeded'
+      AND partition.scope->>'day' = $3
+)`, organizationID, family, day).Scan(&exists)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	return exists, nil
+}
+
 func (store *PostgresStore) CancelRun(ctx context.Context, runID string) error {
 	if !store.valid() || !validUUID(runID) {
 		return ErrUnavailable

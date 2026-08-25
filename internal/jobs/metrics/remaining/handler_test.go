@@ -2,6 +2,8 @@ package remaining
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +63,84 @@ func TestPartitionHandlerRenewsAndCompletesWithBoundedEvidence(t *testing.T) {
 			"renewals=%d completions=%d evidence=%q",
 			store.renewals, store.completions, store.evidence,
 		)
+	}
+}
+
+// TestPartitionHandlerClassifiesAnInvalidStateComputeFailureAsPermanent is
+// the CHAOS-4242 classification fix: before this fix, EVERY
+// ComputePartition failure -- including one wrapping ErrInvalidState, which
+// is by construction deterministic (the same scope produces the same
+// json.Unmarshal failure on every attempt) -- was marked Retryable, so a
+// native-executor precondition failure burned a job's entire attempt
+// budget on three identical failures before discarding. This asserts the
+// SAME failure the ClaimPartition-scope regression produces is now
+// Permanent, carries jobruntime.ReasonInvalidState, and releases the claim
+// exactly as the Retryable path always did.
+func TestPartitionHandlerClassifiesAnInvalidStateComputeFailureAsPermanent(t *testing.T) {
+	store := &handlerStore{
+		run: Run{
+			ID: handlerRunID, OrganizationID: handlerOrgID,
+			Family: "capacity", Status: "running",
+		},
+		claim: handlerClaim(),
+	}
+	wrapped := fmt.Errorf("%w: partition %s scope: unexpected end of JSON input", ErrInvalidState, handlerPartitionID)
+	compatibility := &handlerCompatibility{computeErr: jobruntime.WithSafeCause(wrapped)}
+	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
+		store, compatibility, "capacity",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workErr := handler.Work(t.Context(), capacityExecution())
+	if workErr == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf(
+			"an ErrInvalidState compute failure was not classified Permanent: %v",
+			workErr,
+		)
+	}
+	// PartitionHandler.Work returns the raw jobruntime-marked error, one
+	// layer below Adapter -- its ReasonInvalidState attachment only becomes
+	// externally observable (in the safeError text, and via
+	// Observer.ObserveDeterministicFailure) once Adapter.Work classifies
+	// it, which TestAdapterCarriesReasonInvalidStateFromAPermanentCompute
+	// Failure (internal/jobruntime) proves end to end.
+	if store.releases != 1 || store.completions != 0 {
+		t.Fatalf(
+			"releases=%d completions=%d, want the same release-not-complete "+
+				"shape the (now unreachable for this cause) Retryable path had",
+			store.releases, store.completions,
+		)
+	}
+}
+
+// TestPartitionHandlerKeepsAGenuinelyTransientComputeFailureRetryable proves
+// the classification fix in the sibling test above is narrowly scoped to
+// ErrInvalidState -- an ordinary transient failure (a dropped ClickHouse
+// connection, a Postgres timeout) must still retry, or a real blip would
+// discard permanently after one attempt instead of getting the retry budget
+// it needs.
+func TestPartitionHandlerKeepsAGenuinelyTransientComputeFailureRetryable(t *testing.T) {
+	store := &handlerStore{
+		run: Run{
+			ID: handlerRunID, OrganizationID: handlerOrgID,
+			Family: "capacity", Status: "running",
+		},
+		claim: handlerClaim(),
+	}
+	compatibility := &handlerCompatibility{computeErr: errors.New("dial tcp: connection refused")}
+	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
+		store, compatibility, "capacity",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workErr := handler.Work(t.Context(), capacityExecution())
+	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("a non-ErrInvalidState compute failure was not Retryable: %v", workErr)
 	}
 }
 
@@ -184,6 +264,11 @@ type handlerCompatibility struct {
 	delay               time.Duration
 	waitForCancellation bool
 	canceled            bool
+	// computeErr, when set, is returned immediately instead of the
+	// delay/cancellation behavior below -- CHAOS-4242's classification test
+	// uses this to simulate a native executor's precondition failure
+	// (ErrInvalidState-wrapped) without needing a real ClickHouse/scope.
+	computeErr error
 }
 
 func (executor *handlerCompatibility) ComputePartition(
@@ -191,6 +276,9 @@ func (executor *handlerCompatibility) ComputePartition(
 	_ Run,
 	_ Partition,
 ) error {
+	if executor.computeErr != nil {
+		return executor.computeErr
+	}
 	if executor.waitForCancellation {
 		<-ctx.Done()
 		executor.canceled = true

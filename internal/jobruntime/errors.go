@@ -69,6 +69,15 @@ var (
 	// CategoryPanic result. It never carries the recovered value or a stack
 	// trace -- only the fact that this is where the panic was caught.
 	ReasonHandlerPanic = reason("handler_panic_recovered")
+	// ReasonInvalidState marks a Permanent failure caused by a deterministic
+	// durable-state precondition -- a malformed/missing scope, a domain
+	// mismatch, a required field a caller never supplied. It never varies
+	// with the attempt count: the same input produces the same failure
+	// every time, which is exactly why it is Permanent rather than
+	// Retryable (CHAOS-4242 -- a native-executor precondition failure
+	// misclassified as Retryable spent a job's whole attempt budget on
+	// three identical failures before discarding).
+	ReasonInvalidState = reason("invalid_state")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

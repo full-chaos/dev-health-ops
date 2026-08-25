@@ -92,6 +92,122 @@ func TestClaimPartitionReturnsScope(t *testing.T) {
 	if string(gotScope) != string(wantCanonical) {
 		t.Fatalf("ClaimPartition scope = %s, want %s", gotScope, wantCanonical)
 	}
+
+	// PendingPartitions is the OTHER Partition-returning method -- it always
+	// selected scope correctly (postgres.go), which is exactly why it was
+	// never suspected: ClaimPartition was the only Store method callers
+	// actually reach through PartitionHandler.Work. Table-driven over both
+	// so the next method added to Store that returns a Partition is caught
+	// here rather than rediscovered live.
+	secondScope := json.RawMessage(`{"version":1,"day":"2026-08-25","sink":"auto","interval":"daily","backfill_days":1}`)
+	secondRun, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "dora-v2",
+		ScopeKey:       "all-repos",
+		Scopes:         []json.RawMessage{secondScope},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingPartitions(ctx, secondRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("PendingPartitions returned %d partitions, want 1", len(pending))
+	}
+	pendingScope, err := canonicalJSON(pending[0].Scope)
+	if err != nil {
+		t.Fatalf("PendingPartitions returned an unusable scope: %v", err)
+	}
+	wantSecondCanonical, err := canonicalJSON(secondScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pendingScope) != string(wantSecondCanonical) {
+		t.Fatalf("PendingPartitions scope = %s, want %s", pendingScope, wantSecondCanonical)
+	}
+}
+
+// TestFailedPartitionIsReclaimableWithScopeIntact is the CHAOS-4242
+// stale-window recovery proof. Prod has had no DORA rows since 2026-08-19:
+// every affected day's post-sync dispatch already created a
+// remaining_metric_partitions row, attempted it 3 times, and left it
+// status='failed' when the discard happened -- it never self-deletes.
+// ClaimPartition's own WHERE clause already treats 'failed' as reclaimable
+// (status IN ('pending','failed')), so once this fix ships, retrying any of
+// those discarded River jobs (dev-health-workerctl's existing `jobs retry`
+// command, StateDiscarded is retry-eligible per
+// internal/joboperator/service.go's retryEligible) re-claims the SAME
+// partition row -- with its scope now intact -- and writes the missing
+// day's rows for the FIRST and only time. No new backfill machinery, no
+// duplicate-write risk: these partitions never wrote anything the first
+// time, because they always failed before reaching ComputePartition's
+// ClickHouse calls.
+func TestFailedPartitionIsReclaimableWithScopeIntact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const orgID = "00000000-0000-4000-8000-000000004242"
+	staleScope := json.RawMessage(`{"version":1,"day":"2026-08-19","sink":"auto","interval":"daily","backfill_days":1}`)
+	run, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:historical-sync-run-id",
+		ScopeKey:       string(staleScope),
+		Scopes:         []json.RawMessage{staleScope},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(run.ID, 1)
+
+	// Simulate the pre-fix history: claimed, computed, failed, 3 times.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.remaining_metric_partitions
+SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, attempt_count = 3
+WHERE id = $1::uuid`, partitionID); err != nil {
+		t.Fatal(err)
+	}
+
+	reclaimed, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed == nil {
+		t.Fatal("a failed partition from before the fix was not reclaimable -- the historical gap can never self-heal")
+	}
+	gotScope, err := canonicalJSON(reclaimed.Partition.Scope)
+	if err != nil {
+		t.Fatalf("reclaimed partition scope is unusable: %v", err)
+	}
+	wantCanonical, err := canonicalJSON(staleScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotScope) != string(wantCanonical) {
+		t.Fatalf("reclaimed scope = %s, want %s", gotScope, wantCanonical)
+	}
+	if err := store.CompletePartition(ctx, *reclaimed, "rows=1;sha256=recovered"); err != nil {
+		t.Fatalf("reclaimed partition did not complete: %v", err)
+	}
 }
 
 // TestDORAExecutorComputesThroughTheRealClaimPath is the CHAOS-4242
@@ -232,11 +348,12 @@ func strPtr(value string) *string { return &value }
 // identical json.Unmarshal(partition.Scope, &scope) call DORAExecutor does,
 // and both kinds share the exact same PostgresStore.ClaimPartition, so this
 // pins that the CHAOS-4242 fix is not DORA-specific: it is a Store-layer
-// fix that both native executors depend on identically. No throughput
-// history is seeded, so the executor legitimately skips every scope and
-// writes nothing -- the assertion that matters is that it gets PAST the
-// scope decode at all (before the fix this failed with the same "durable
-// state is invalid ... scope: unexpected end of JSON input" as DORA did).
+// fix that both native executors depend on identically.
+//
+// This seeds one day of real work_item_metrics_daily throughput/backlog and
+// reads back through capacity_forecasts -- "does a row land", not merely
+// "did ComputePartition return nil" (team-lead review, 2026-08-24: getting
+// past the scope decode is not sufficient proof by itself).
 func TestCapacityExecutorComputesThroughTheRealClaimPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -256,16 +373,47 @@ func TestCapacityExecutorComputesThroughTheRealClaimPath(t *testing.T) {
 	conn := migratedClickHouse(t, ctx, OperationalOrderingRevision)
 
 	const orgID = "00000000-0000-4000-8000-000000004242"
+	const workScopeID = "chaos-4242-capacity-repro-scope"
+	// loadThroughput/loadBacklog window against executor.nowUTC() (real
+	// wall-clock, not the scope's own fields), so the seeded day must sit
+	// inside [now-history_days, now] of the ACTUAL current time -- "yesterday"
+	// rather than a hardcoded date keeps this independent of when the suite
+	// runs.
+	throughputDay := time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)
+
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_metrics_daily (
+day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+wip_unassigned_end_of_day, bug_completed_ratio, story_points_completed,
+computed_at, org_id)`)
+	if err != nil {
+		t.Fatalf("prepare work_item_metrics_daily batch: %v", err)
+	}
+	if err := batch.Append(
+		throughputDay, "github", workScopeID, "", "",
+		uint32(5), uint32(5),
+		uint32(0), uint32(0), uint32(10),
+		uint32(0), 0.0, 0.0,
+		throughputDay, orgID,
+	); err != nil {
+		t.Fatalf("append work_item_metrics_daily row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send work_item_metrics_daily batch: %v", err)
+	}
+
 	store, err := NewPostgresStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := json.RawMessage(`{"version":1,"all_teams":true,"history_days":90,"simulations":100}`)
+	scope := json.RawMessage(
+		`{"version":1,"all_teams":false,"work_scope_id":"` + workScopeID + `","history_days":90,"simulations":100}`,
+	)
 	run, err := store.StartRun(ctx, StartRunRequest{
 		OrganizationID: orgID,
 		Family:         "capacity",
 		Generation:     "capacity-v1",
-		ScopeKey:       "all-teams",
+		ScopeKey:       "chaos-4242-scope",
 		GenerationSeed: int64Pointer(4242),
 		Scopes:         []json.RawMessage{scope},
 	})
@@ -313,5 +461,26 @@ func TestCapacityExecutorComputesThroughTheRealClaimPath(t *testing.T) {
 				"does: ClaimPartition must return a usable scope",
 			err,
 		)
+	}
+
+	// Readback through the production route: does a row actually land.
+	var (
+		gotOrgID       string
+		gotWorkScopeID string
+		gotBacklog     uint32
+	)
+	row := conn.QueryRow(ctx, `
+		SELECT org_id, work_scope_id, backlog_size FROM capacity_forecasts
+		WHERE org_id = {org_id:String} AND work_scope_id = {work_scope_id:String}`,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("work_scope_id", workScopeID),
+	)
+	if err := row.Scan(&gotOrgID, &gotWorkScopeID, &gotBacklog); err != nil {
+		t.Fatalf("readback capacity_forecasts: %v", err)
+	}
+	if gotOrgID != orgID || gotWorkScopeID != workScopeID {
+		t.Fatalf("capacity_forecasts org_id/work_scope_id = %q/%q, want %q/%q", gotOrgID, gotWorkScopeID, orgID, workScopeID)
+	}
+	if gotBacklog == 0 {
+		t.Fatalf("capacity_forecasts backlog_size = %d, want > 0", gotBacklog)
 	}
 }

@@ -25,6 +25,20 @@ const (
 
 type recordingRemainingStore struct {
 	requests []remaining.StartRunRequest
+	// covered simulates RemainingMetricsCoverageStore.HasSucceededPartition
+	// for CHAOS-4242's SkipIfCovered tests: an organization ID present here
+	// (with a true value) is reported as already having a succeeded
+	// partition for the requested family/day. nil (the zero value) means no
+	// coverage capability is exercised beyond "everything reports false" --
+	// the type still satisfies the interface, which is what every OTHER
+	// existing fanout test relies on staying a no-op.
+	covered map[string]bool
+}
+
+func (store *recordingRemainingStore) HasSucceededPartition(
+	_ context.Context, _ pgx.Tx, organizationID, _, _ string,
+) (bool, error) {
+	return store.covered[organizationID], nil
 }
 
 type recordingDailyFanoutStore struct {
@@ -283,6 +297,102 @@ func TestCapacityFanoutSuppliesTheRequiredGenerationSeed(t *testing.T) {
 	_ = replayed
 	if got, want := deterministicGenerationSeed(occurrence, testOrgA), *store.requests[0].GenerationSeed; got != want {
 		t.Fatalf("replayed seed = %d, want %d", got, want)
+	}
+}
+
+// TestDoraDailyFanoutSkipsAnOrganizationAlreadyCoveredByPostSync is the
+// CHAOS-4242 regression for a codex-round-1 BLOCKING finding: dora is
+// dispatched by TWO independent triggers -- the post-sync primary path
+// (generation "post-sync:<sync_run_id>") and this fixed schedule
+// (generation "fixed-schedule:dora_daily_fanout:<time>"). Those generation
+// strings never collide, so the (org_id, family, generation, scope_key)
+// uniqueness constraint alone cannot stop the fixed schedule from creating
+// a SECOND, independent run for an org+day the post-sync trigger already
+// computed -- and dora_metrics_daily is a plain MergeTree with no dedup on
+// replay, so a second run means duplicate rows, not just wasted work.
+//
+// This proves the SkipIfCovered pre-flight actually skips the covered
+// organization while still dispatching the uncovered one in the SAME
+// occurrence -- not merely that the flag is set on the binding.
+func TestDoraDailyFanoutSkipsAnOrganizationAlreadyCoveredByPostSync(t *testing.T) {
+	schedule := scheduleByID(t, "dora_daily_fanout")
+	producer, store, _ := fanoutProducer(t, fixedOrganizationLister{
+		identifiers: []string{testOrgA, testOrgB},
+	})
+	// testOrgA already has a succeeded dora partition for this occurrence's
+	// day (simulating a post-sync run that beat the fixed schedule to it);
+	// testOrgB has none.
+	store.covered = map[string]bool{testOrgA: true}
+	occurrence := NewOccurrence(
+		schedule, mustTime(t, "2026-08-25T02:15:00Z"), mustTime(t, "2026-08-25T02:15:05Z"),
+	)
+
+	outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if outcome.Handoffs != 1 || len(store.requests) != 1 {
+		t.Fatalf(
+			"outcome=%+v requests=%d -- want exactly ONE run started, for the "+
+				"uncovered organization only",
+			outcome, len(store.requests),
+		)
+	}
+	if store.requests[0].OrganizationID != testOrgB {
+		t.Fatalf(
+			"the covered organization's run was started instead of skipped: %+v",
+			store.requests,
+		)
+	}
+	if store.requests[0].Family != "dora" {
+		t.Fatalf("family = %s", store.requests[0].Family)
+	}
+}
+
+// TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt is the
+// negative half: every OTHER remainingFamilyBinding leaves SkipIfCovered
+// false, so even a store that reports every organization as "covered" must
+// not skip complexity/release_impact/recommendations/membership_backfill/
+// capacity -- those kinds have no second trigger to collide with, and this
+// pins that the new check does not accidentally widen past dora.
+//
+// Table-driven across all five (codex round 2, medium): the original
+// version only constructed complexity_daily_fanout, so a SkipIfCovered typo
+// on any of the other four bindings would have passed silently -- capacity
+// especially, since it is weekly work a missed skip would starve for a week.
+func TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt(t *testing.T) {
+	cases := []struct {
+		scheduleID   string
+		scheduledFor string
+	}{
+		{"complexity_daily_fanout", "2026-08-25T00:45:00Z"},
+		{"release_impact_daily_fanout", "2026-08-25T01:30:00Z"},
+		{"recommendations_daily_fanout", "2026-08-25T02:00:00Z"},
+		{"membership_backfill_daily_fanout", "2026-08-25T03:30:00Z"},
+		{"capacity_forecast_weekly_fanout", "2026-08-24T04:00:00Z"}, // a Monday
+	}
+	for _, test := range cases {
+		t.Run(test.scheduleID, func(t *testing.T) {
+			schedule := scheduleByID(t, test.scheduleID)
+			producer, store, _ := fanoutProducer(t, fixedOrganizationLister{
+				identifiers: []string{testOrgA},
+			})
+			store.covered = map[string]bool{testOrgA: true}
+			scheduledFor := mustTime(t, test.scheduledFor)
+			occurrence := NewOccurrence(schedule, scheduledFor, scheduledFor.Add(5*time.Second))
+
+			outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+			if err != nil {
+				t.Fatalf("Produce() = %v", err)
+			}
+			if outcome.Handoffs < 1 || len(store.requests) != 1 {
+				t.Fatalf(
+					"outcome=%+v requests=%d -- %s has no SkipIfCovered binding "+
+						"and must run regardless of what the store reports",
+					outcome, len(store.requests), test.scheduleID,
+				)
+			}
+		})
 	}
 }
 

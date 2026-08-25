@@ -95,6 +95,20 @@ func (handler *PartitionHandler[T]) Work(
 		},
 	); err != nil {
 		releaseClaim(handler.store, ctx, *claim)
+		// CHAOS-4242: a ComputePartition failure wrapping ErrInvalidState is
+		// a deterministic precondition failure (malformed/empty scope, no
+		// organization, an unparseable day, capacity's missing seed) -- the
+		// SAME failure on retry 1, 2, and 3, exactly like the LoadRun branch
+		// above. Marking it Retryable (as this branch did before) burns the
+		// job's whole attempt budget on three identical failures before
+		// discarding -- work that accomplishes nothing, on the fast path
+		// that is the actual native-executor precondition bug this ticket
+		// is about. Anything else here (a ClickHouse/Postgres query error,
+		// a compatibility-bridge HTTP failure) is genuinely transient and
+		// stays Retryable.
+		if errors.Is(err, ErrInvalidState) {
+			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
+		}
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(

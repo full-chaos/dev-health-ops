@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -281,12 +282,15 @@ func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error
 	choice, envelope, err := adapter.execute(parent, job, labels)
 	if choice.result == ResultCancel {
 		observe(func() { adapter.observer.JobCancelled(parent, labels, choice.category) })
-	}
-	if err == nil {
-		adapter.logFinish(parent, job, envelope, choice, started)
-		return nil
+		if !choice.reason.isZero() {
+			observe(func() { adapter.observer.ObserveDeterministicFailure(parent, labels, choice.reason) })
+		}
 	}
 	adapter.logFinish(parent, job, envelope, choice, started)
+	if err == nil {
+		return nil
+	}
+	adapter.logCause(parent, job, choice, err)
 	return transportError(choice)
 }
 
@@ -557,6 +561,71 @@ func (adapter *Adapter[T]) logFinish(ctx context.Context, job *river.Job[T], env
 		)
 	}
 	adapter.logger.InfoContext(ctx, "job finished", attributes...)
+}
+
+// logCause surfaces a handler error's SAFE cause text, at WARN, with
+// structured fields -- CHAOS-4242.
+//
+// errors.go is a deliberate boundary: ErrorCategory/Reason are the only
+// things safe to cross into logs, metrics, River error rows, and operator
+// responses; classify()/transportError() never let the underlying cause
+// reach any of those, and that boundary is right -- a job's outbound
+// safeError stays "dev-health job failed [retryable]" here too, unchanged.
+// But the same boundary also meant NO log anywhere ever carried the cause,
+// which is why CHAOS-4242 took direct measurement against a live stack to
+// diagnose instead of a grep.
+//
+// This does NOT walk err's Unwrap() chain and log whatever it finds --
+// TestAdapterMiddlewareOutcomesAreSafeAndDeterministic plants fake secrets
+// ("credential=do-not-log", "panic-secret", "unclassified-secret") directly
+// in ordinary handler-returned errors and asserts none of them ever reach a
+// log or the returned error, because a handler error can legitimately carry
+// upstream response bodies, tokens, or other caller-supplied content the
+// runtime has no way to vet. Logging arbitrary handler text would violate
+// that guarantee on every single job kind, not just the two CHAOS-4242 is
+// about.
+//
+// Instead this only surfaces text a handler explicitly opted in via
+// WithSafeCause -- errors this package's own callers build from static
+// format strings and non-secret identifiers, never from unvetted content.
+// Nothing is logged for an error that opted in nothing, which is the
+// correct default: covering more of a handler failure's causal chain is a
+// per-call-site decision the handler author makes deliberately, not
+// something this generic adapter can decide is safe on its own.
+func (adapter *Adapter[T]) logCause(ctx context.Context, job *river.Job[T], choice decision, err error) {
+	cause, ok := safeCauseChain(err)
+	if !ok {
+		return
+	}
+	attributes := []any{
+		"kind", adapter.descriptor.Kind,
+		"error_category", choice.category,
+		"cause", cause,
+	}
+	if job != nil && job.JobRow != nil {
+		attributes = append(attributes, "job_id", job.ID, "attempt", job.Attempt)
+	}
+	adapter.logger.WarnContext(ctx, "job failed", attributes...)
+}
+
+// safeCauseChain walks err's Unwrap() chain collecting every SafeLogCause()
+// text a WithSafeCause-marked error along it carries, most-wrapped first.
+// Returns ok=false (log nothing) when the chain carries no opted-in cause at
+// all -- the default for any ordinary, unmarked handler error.
+func safeCauseChain(err error) (string, bool) {
+	var parts []string
+	seen := make(map[error]bool)
+	for err != nil && !seen[err] {
+		seen[err] = true
+		if marked, ok := err.(safeCauseProvider); ok {
+			parts = append(parts, marked.SafeLogCause())
+		}
+		err = errors.Unwrap(err)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return strings.Join(parts, " <- "), true
 }
 
 // jobTracerName scopes the span by the package that creates it, the

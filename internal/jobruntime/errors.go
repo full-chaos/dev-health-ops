@@ -69,6 +69,15 @@ var (
 	// CategoryPanic result. It never carries the recovered value or a stack
 	// trace -- only the fact that this is where the panic was caught.
 	ReasonHandlerPanic = reason("handler_panic_recovered")
+	// ReasonInvalidState marks a Permanent failure caused by a deterministic
+	// durable-state precondition -- a malformed/missing scope, a domain
+	// mismatch, a required field a caller never supplied. It never varies
+	// with the attempt count: the same input produces the same failure
+	// every time, which is exactly why it is Permanent rather than
+	// Retryable (CHAOS-4242 -- a native-executor precondition failure
+	// misclassified as Retryable spent a job's whole attempt budget on
+	// three identical failures before discarding).
+	ReasonInvalidState = reason("invalid_state")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe
@@ -93,6 +102,39 @@ type markedError struct {
 
 func (err *markedError) Error() string { return "job error category: " + string(err.category) }
 func (err *markedError) Unwrap() error { return err.cause }
+
+// safeCauseProvider is implemented by an error that itself declares its
+// message is safe to appear in Adapter's WARN "job failed" log line
+// (CHAOS-4242) -- never in ErrorCategory/Reason/River rows, which stay
+// governed exactly as before.
+type safeCauseProvider interface{ SafeLogCause() string }
+
+// WithSafeCause marks err's message as safe for that WARN log line. It is
+// opt-in and narrow on purpose: a handler error can legitimately carry
+// upstream response bodies, tokens, or other caller-supplied content the
+// runtime has no way to vet, so nothing is logged unless a call site says
+// so explicitly (see logCause in adapter.go, and
+// TestAdapterMiddlewareOutcomesAreSafeAndDeterministic, which plants fake
+// secrets in ordinary handler errors and asserts they never reach a log).
+//
+// Use this only for errors built from static format strings plus
+// caller-controlled-but-non-secret identifiers -- partition/run/job IDs,
+// scope field names, day strings. Never wrap anything that might embed
+// upstream response content, a connection string, or a credential.
+func WithSafeCause(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &safeCauseError{err}
+}
+
+// safeCauseError wraps err, promoting its Error() method unchanged (via the
+// embedded interface) while adding SafeLogCause() so Adapter's logCause can
+// find it by walking the error's Unwrap() chain.
+type safeCauseError struct{ error }
+
+func (wrapped *safeCauseError) SafeLogCause() string { return wrapped.error.Error() }
+func (wrapped *safeCauseError) Unwrap() error        { return wrapped.error }
 
 // Retryable marks an expected transient handler failure.
 func Retryable(err error) error { return mark(CategoryRetryable, err, false) }

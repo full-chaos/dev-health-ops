@@ -111,6 +111,35 @@ func checkedInSchedules() []Schedule {
 				"producer must preserve the in-flight daily_finalize skip.",
 		},
 		{
+			ID: "dora_daily_fanout",
+			// CHAOS-4242: DORA never had a legacy Beat entry -- job_dora.py ran
+			// only via the post-sync remaining_metrics dispatch, never on a
+			// cron. That is a genuinely new schedule, not a port, so it is
+			// Native with no LegacyBeatEntry, the same shape as
+			// daily_metrics_fanout. It exists because a discarded
+			// metrics.remaining.dora job (CHAOS-4242's own native-executor
+			// precondition regression is the concrete case that surfaced the
+			// gap) had NO self-healing path at all: post-sync dispatch fires
+			// once, and with no fixed-schedule catch-up behind it, a silently
+			// discarded run left dora_metrics_daily stale for 5+ days before
+			// anyone noticed. capacity got the same protection at R2
+			// (capacity_forecast_weekly_fanout); this closes the matching gap
+			// for dora.
+			Native:           true,
+			Cadence:          DailyAt(2, 15),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpBounded,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRemainingDORA,
+			ProducerID:       ProducerRemainingMetricsFanout,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "CHAOS-4242 self-healing catch-up. DORA reads raw synced deployment/" +
+				"incident tables, not another remaining-metrics output, so it carries no " +
+				"ordering dependency on its 00:45-02:00 siblings; 02:15 only keeps it out of " +
+				"their slots.",
+		},
+		{
 			ID: "membership_backfill_daily_fanout",
 			// CHAOS-4026 (2026-08-21): the legacy Beat entry
 			// "run-membership-backfill-daily" (and its dispatch_membership_backfill

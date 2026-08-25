@@ -1,6 +1,6 @@
 ---
 page_id: con-team-attribution
-summary: Work-item team attribution — the 8-source precedence model, provider coverage contract, drift-review reconciliation, the Go worker transport, and the recovery/backfill runbook.
+summary: Work-item team attribution — the 9-source precedence model, provider coverage contract, drift-review reconciliation, the Go worker transport, and the recovery/backfill runbook.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -68,16 +68,26 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > no repo_patterns row, and no linked issue fell all the way through to
 > `unassigned` even though the author WAS resolvable — 18.47% of local work
 > units, all PR-only evidence against this project's own repos, no linked
-> issue. The fix widens `assignee_membership`'s candidate pool to also include
-> the item's reporter (author) — still rank 4, same evidence contract, no new
-> precedence tier and no `Enum8` widening — so an author who *is* a team
-> member now contributes a candidate instead of contributing nothing. No
+> issue. The fix adds the item's reporter (author) as a membership candidate,
+> resolved through the same org-scoped identity lookup as the assignee. No
 > pathway change: GitHub PRs were already modeled as `WorkItem`s and already
 > flowed into this resolver (`providers/github/normalize.py:541` /
-> `internal/providersync/github_work_items_rows.go:517`); only the candidate
-> POOL fed into the existing rank-4 stage changed. See
-> `metrics/compute_work_items.py:425-471` and
-> `internal/providersync/github_work_items_derivation_context.go:597-646`.
+> `internal/providersync/github_work_items_rows.go:517`).
+>
+> **Ruling superseding the first cut (chris, 2026-08-24): author is its OWN
+> rank 6, NOT `assignee_membership`'s rank 4.** The initial implementation
+> folded the author candidate into `assignee_membership` (still rank 4, no
+> new precedence tier) — codex adversarial review flagged that this let a
+> person-shaped signal beat a real `linked_issue` donor (rank 5) far more
+> often than the pre-existing assignee mechanism ever did, since an author is
+> set on nearly every PR while an assignee rarely is. Chris's ruling: an
+> author is a PERSON signal, "at best a low-precedence fallback" — it must
+> NOT beat a real linked_issue donor. The fix gives the author candidate its
+> own source, `author_membership`, ranked BELOW `linked_issue` (5) and ABOVE
+> `manual_fallback` (now 7) — this widens the `Enum8` (migration 078; CS1's
+> own migrate-before-emit rule) and adds a 9th precedence stage. See
+> `metrics/compute_work_items.py:405-642` and
+> `internal/providersync/github_work_items_derivation_context.go:605-754`.
 
 ---
 
@@ -113,25 +123,28 @@ external issue-key *prefix* alone is not linked-issue inheritance.
 Every final attribution carries provenance: `org_id, work_item_id, provider, team_id, team_name,
 source, confidence, evidence, is_primary, computed_at`.
 `source ∈ {native_team, issue_project, project_ownership, repo_ownership, assignee_membership,
-linked_issue, manual_fallback, unassigned}`; `confidence ∈ {high, medium, low, manual, none}`.
+linked_issue, author_membership, manual_fallback, unassigned}`; `confidence ∈ {high, medium, low, manual, none}`.
 
 > **Schema prerequisite (CS1).** The `issue_project` / `manual_fallback` sources and the `manual` /
 > `none` confidence values require the ClickHouse `Enum8` widening on `work_item_team_attributions`
 > (migration 053) to land **before** any resolver emits them — emitting an unknown enum value fails
 > the insert. This is CHAOS-2600 ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).
+> `author_membership` followed the same rule under **CHAOS-4244** (migration 078).
 >
 > **Restoration check (2026-08-19):** confirmed current. Migration `053_manual_attribution_fallbacks.sql`
-> widens `work_item_team_attributions.source` to the full 8-value enum
+> widens `work_item_team_attributions.source` to an 8-value enum
 > (`native_team=1, linked_issue=2, project_ownership=3, repo_ownership=4, assignee_membership=5,
 > unassigned=6, issue_project=7, manual_fallback=8`) and `confidence` to 5 values, on top of the base
-> table created by migration 051. Both migrations are still applied and the enum still matches this
-> section exactly.
+> table created by migration 051. **CHAOS-4244 (2026-08-24)** appended a 9th code, migration
+> `078_author_membership_source.sql`: `author_membership=9`. All three migrations are still applied
+> and the enum still matches this section exactly.
 >
 > **These `Enum8` codes are storage identifiers, not precedence — do not read them as the ladder.**
 > `Enum8` can only be *appended* to (a code, once assigned, is never renumbered), so the codes are
-> insertion order across two migrations, nothing more. Proof by contradiction: `issue_project` is
+> insertion order across three migrations, nothing more. Proof by contradiction: `issue_project` is
 > stored as `7` above, but it ranks **1** in the actual precedence (`_SOURCE_ORDER` below) — second
-> only to `native_team`. The one and only precedence order is `_SOURCE_ORDER` in
+> only to `native_team`; `author_membership` is stored as `9` (the highest code) but ranks **6**, well
+> above `manual_fallback` and `unassigned`. The one and only precedence order is `_SOURCE_ORDER` in
 > `metrics/compute_work_items.py`, cited in §0.1 below; the storage codes exist so ClickHouse has a
 > compact column type, and that is all they exist for.
 
@@ -155,13 +168,15 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee OR reporter/author identity, CHAOS-4244)"}
+    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee identity)"}
     AM -->|"yes"| Win
     AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
-    LK -->|"no"| MF{"6 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
+    LK -->|"no"| AU{"6 · author_membership candidate?<br/>(reporter/author identity, CHAOS-4244 — single-team, non-bot only)"}
+    AU -->|"yes"| Win
+    AU -->|"no"| MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
-    MF -->|"no"| UN["is_primary = unassigned (7)"]
+    MF -->|"no"| UN["is_primary = unassigned (8)"]
     Win --> P["Persist work_item_team_attributions:<br/>ALL candidate rows; is_primary on the winner"]
     UN --> P
     P --> API["Expose source / confidence / evidence via GraphQL"]
@@ -172,48 +187,55 @@ flowchart TD
 still persisted as candidates — precedence decides `is_primary`, not which sources are computed);
 `linked_issue` (5) requires a real `work_item_dependencies` donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
-`manual_fallback` is NOT a valid donor, so a bare prefix can never be laundered into rank-5
-inheritance (it falls through to 6); `manual_fallback` (6) can only beat `unassigned`; a whole org
-at `unassigned` usually means the ClickHouse `teams` dimension is empty.
+`author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
+signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);
+`author_membership` (6) can beat `manual_fallback` and `unassigned` but never a real linked_issue,
+ownership, or membership fact — a PERSON signal, "at best a low-precedence fallback" (chris,
+CHAOS-4244); `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
+means the ClickHouse `teams` dimension is empty.
 
-> **Restoration verification (2026-08-19): this ladder is implemented, not just intended.** A prior
-> reading of this repository, using the `Enum8` storage codes instead of the precedence order,
-> reported a *different* six-member ladder missing `issue_project` and `manual_fallback`. That
-> reading was wrong (see the Enum8 warning in §0 above) — the ladder above is exactly what runs.
-> Verbatim, `metrics/compute_work_items.py:136-144`:
+> **Restoration verification (2026-08-19, updated 2026-08-24 for CHAOS-4244): this ladder is
+> implemented, not just intended.** A prior reading of this repository, using the `Enum8` storage
+> codes instead of the precedence order, reported a *different* six-member ladder missing
+> `issue_project` and `manual_fallback`. That reading was wrong (see the Enum8 warning in §0 above) —
+> the ladder above is exactly what runs. Verbatim, `metrics/compute_work_items.py:143-153`:
 > ```python
 > _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
 >     "native_team": 0, "issue_project": 1, "project_ownership": 2,
 >     "repo_ownership": 3, "assignee_membership": 4, "linked_issue": 5,
->     "manual_fallback": 6, "unassigned": 7,
+>     "author_membership": 6, "manual_fallback": 7, "unassigned": 8,
 > }
 > ```
-> Applied at `compute_work_items.py:456` — `for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):`,
+> Applied at `compute_work_items.py:587` — `for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):`,
 > first non-empty group in that order is primary. An independent second implementation of the same
-> 8-value, same-order ladder exists SQL-side as `_SOURCE_RANK_SQL` in
-> `api/graphql/resolvers/team_attribution.py:138-149` (a `multiIf` chain), with a comment there
+> 9-value, same-order ladder exists SQL-side as `_SOURCE_RANK_SQL` in
+> `api/graphql/resolvers/team_attribution.py:142-154` (a `multiIf` chain), with a comment there
 > instructing it be kept in lockstep with this dict.
 >
 > The `manual_fallback` donor guard the doc describes below is also real, not aspirational —
-> `_DONOR_SOURCES` at `compute_work_items.py:155-163`, used at `:574` to gate which sources a
+> `_DONOR_SOURCES` at `compute_work_items.py:164-172`, used at `:727` to gate which sources a
 > `linked_issue` donor may pass on: `{native_team, issue_project, project_ownership, repo_ownership,
-> assignee_membership}` — ranks 0–4 only. `manual_fallback` and `unassigned` are excluded by
-> construction, so a fallback rule (especially the provider-neutral `issue_key_prefix` scope) can
-> never be laundered into rank-5 `linked_issue` provenance on a dependent item, exactly as this page
-> already said.
+> assignee_membership}` — ranks 0–4 only, UNCHANGED by CHAOS-4244. `author_membership`,
+> `manual_fallback` and `unassigned` are excluded by construction, so neither a person-shaped author
+> signal nor a fallback rule (especially the provider-neutral `issue_key_prefix` scope) can ever be
+> laundered into rank-5 `linked_issue` provenance on a dependent item, exactly as this page already
+> said — and a required test (`test_author_never_outranks_a_linked_issue_donor` /
+> `TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor`) pins a PR with a team-mapped
+> author AND a linked_issue donor for a DIFFERENT team resolving to the **linked issue's** team.
 
 ### 0.2 Source reference matrix
 
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project → owning team | high | 2–7 | 0 | `project_id, owner_team` |
-| 2 | `project_ownership` | `team_project_ownership` | high | 3–7 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–7 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | `team_memberships` (assignee OR reporter/author identity, CHAOS-4244) | medium | 5–7 | 0–3 | `member_id, identity` (evidence text: `assignee=<id>` or `reporter=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–7 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
-| 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
-| 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
+| 1 | `issue_project` | native issue project → owning team | high | 2–8 | 0 | `project_id, owner_team` |
+| 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
+| 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
+| 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–8 | 0–3 | `member_id, identity` (evidence text: `assignee=<id>`) |
+| 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
+| 6 | `author_membership` | `team_memberships` (PR/MR reporter identity, CHAOS-4244 — single-team, non-bot only) | medium | 7–8 | 0–5 | `member_id, identity` (evidence text: `reporter=<id>`) |
+| 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
+| 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
 > **Added at restoration (2026-08-19): ranks 2 and 3 are provider-disjoint, not overlapping tiers.**
 > This is not in the original recovered text and is easy to misread as damage. GitHub writes
@@ -232,12 +254,13 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
 | PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? donor's own team? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
 | A PR that WAS attributed via `linked_issue` silently becomes `unassigned` on a later run | 5 → 7 | is the donor edge older than the sync window? compare the edge's `last_synced` against the run window — donor and dependent stamped minutes apart rules staleness out | **fixed CHAOS-4112**: the donor preload unions the STORED inheritable edges for the items being recomputed with the fresh ones (`_merge_stored_inheritable_edges`), so an edge aging out of the window no longer un-attributes the PR. Watch `devhealth_work_item_team_attribution_downgrades_total` — a teamed→`unassigned` transition is always a bug |
-| `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=6`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
-| A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
-| A PR inherits via `linked_issue` from a donor that only has a `manual_fallback` (e.g. `issue_key_prefix`) rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; a manual-only donor is never a linked_issue donor (done CS3) |
+| `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=7`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
+| An author beats a real `linked_issue` donor | precedence | `_SOURCE_ORDER` has `author_membership=6` (below `linked_issue=5`)? did a fix accidentally fold it back into `assignee_membership=4`? | restore rank — author is a PERSON signal, never above a real linked_issue donor (CHAOS-4244, chris's 2026-08-24 ruling) |
+| A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 7 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
+| A PR inherits via `linked_issue` from a donor that only has an `author_membership` or `manual_fallback` rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6/7 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; an author-only or manual-only donor is never a linked_issue donor (done CS3; author exclusion CHAOS-4244) |
 | Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the ownership tables' `ORDER BY`, so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
 | Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
-| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 6 (done CS3) |
+| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 7 (done CS3; renumbered from 6 by CHAOS-4244) |
 | Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
 | Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
 
@@ -578,12 +601,13 @@ divergence will be silent.
 
 ## 1. Attribution cascade (decision flow)
 
-> **Implemented model: see §0 (CHAOS-2600).** As of CS2 the resolver applies the 8-source staged
-> precedence in §0 (`native_team > issue_project > project_ownership > repo_ownership >
-> assignee_membership > linked_issue > manual_fallback > unassigned`) — `linked_issue` is now a true
-> fallback below ownership/assignee, and the issue's own project key resolves as `issue_project`.
-> The 4-tier cascade below predates that change and is kept for historical context; where they
-> differ, **§0 governs**.
+> **Implemented model: see §0 (CHAOS-2600).** As of CS2 the resolver applies the (now 9-source,
+> CHAOS-4244) staged precedence in §0 (`native_team > issue_project > project_ownership >
+> repo_ownership > assignee_membership > linked_issue > author_membership > manual_fallback >
+> unassigned`) — `linked_issue` is now a true fallback below ownership/assignee, the issue's own
+> project key resolves as `issue_project`, and a PR/MR author resolves as its own `author_membership`
+> tier, below `linked_issue` and above `manual_fallback`. The 4-tier cascade below predates that
+> change and is kept for historical context; where they differ, **§0 governs**.
 
 `resolve_base_team()` runs tiers 1–3; the linked-issue resolver is tier 4. The
 first match wins and nothing ever overrides a real team.

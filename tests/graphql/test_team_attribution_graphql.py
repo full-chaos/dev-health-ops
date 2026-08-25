@@ -89,6 +89,7 @@ async def test_maps_rows_to_provenance(mock_context):
         ("repo_ownership", TeamAttributionSource.REPO_OWNERSHIP),
         ("assignee_membership", TeamAttributionSource.ASSIGNEE_MEMBERSHIP),
         ("linked_issue", TeamAttributionSource.LINKED_ISSUE),
+        ("author_membership", TeamAttributionSource.AUTHOR_MEMBERSHIP),
         ("manual_fallback", TeamAttributionSource.MANUAL_FALLBACK),
         ("unassigned", TeamAttributionSource.UNASSIGNED),
     ],

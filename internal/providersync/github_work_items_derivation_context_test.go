@@ -472,9 +472,11 @@ var _ githubWorkItemDerivationContextSource = (*fakeGitHubWorkItemDerivationCont
 // "assignee" field never carries -- GitHub distinguishes the two, and most
 // PRs are opened with no assignee set. This mirrors
 // compute_work_items.py's resolve_team_attribution, which now feeds
-// item.reporter into the same assignee_membership candidate list.
+// item.reporter into its own author_membership candidate list (chris's
+// 2026-08-24 ruling: rank 6, below linked_issue, above manual_fallback --
+// NOT the same rank as assignee_membership).
 
-func TestGitHubWorkItemDerivationAuthorWithNoAssigneeResolvesViaAssigneeMembership(t *testing.T) {
+func TestGitHubWorkItemDerivationAuthorWithNoAssigneeResolvesViaAuthorMembership(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
@@ -493,7 +495,7 @@ func TestGitHubWorkItemDerivationAuthorWithNoAssigneeResolvesViaAssigneeMembersh
 	if githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
 		t.Fatalf("team name = %v, want Ops Team", teamName)
 	}
-	if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].IsPrimary != 1 {
+	if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 1 {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 }
@@ -581,9 +583,9 @@ func TestGitHubWorkItemDerivationUnambiguousReporterMembershipStillResolves(t *t
 }
 
 func TestGitHubWorkItemDerivationReporterNeverOutranksAHigherSource(t *testing.T) {
-	// The author candidate is still rank 4 (assignee_membership): a
-	// repo_ownership fact must keep winning even when the reporter also
-	// resolves to a DIFFERENT team.
+	// The author candidate is rank 6 (author_membership): a repo_ownership
+	// fact (rank 3) must keep winning even when the reporter also resolves
+	// to a DIFFERENT team.
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
@@ -608,8 +610,46 @@ func TestGitHubWorkItemDerivationReporterNeverOutranksAHigherSource(t *testing.T
 	for _, candidate := range candidates {
 		bySource[candidate.Source] = candidate
 	}
-	if author := bySource["assignee_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+	if author := bySource["author_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
 		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing.T) {
+	// CHAOS-4244 precedence ruling (chris, 2026-08-24): a PR with a
+	// team-mapped author AND a linked_issue donor for a DIFFERENT team must
+	// resolve to the linked issue's team -- author_membership (rank 6) sits
+	// BELOW linked_issue (rank 5). This directly falsifies codex round 1's
+	// finding 2 (author, sharing assignee_membership's rank 4, could beat a
+	// real linked_issue donor) now that author has its own lower rank.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	derived.linkedIssue["ghpr:full-chaos/dev-health-ops#9"] = [2]string{"team-platform", "Platform Team"}
+	reporter := "alice"
+	teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:full-chaos/dev-health-ops#9", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-platform" {
+		t.Fatalf("team id = %v, want team-platform (linked_issue must outrank the author)", teamID)
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Platform Team" {
+		t.Fatalf("team name = %v, want Platform Team", teamName)
+	}
+	bySource := map[string]githubWorkItemDerivationCandidate{}
+	for _, candidate := range candidates {
+		bySource[candidate.Source] = candidate
+	}
+	if author := bySource["author_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	}
+	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || githubWorkItemDerivationStringValue(linked.TeamID) != "team-platform" {
+		t.Fatalf("linked_issue candidate = %+v, want present, primary, team-platform", linked)
 	}
 }
 
@@ -667,15 +707,14 @@ func TestGitHubWorkItemDerivationAmbiguousReporterEvidenceTagsTheUnassignedRow(t
 
 func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance(t *testing.T) {
 	// When the author IS the assignee and both resolve to the SAME team,
-	// resolve() deliberately keeps BOTH candidates (assignee evidence and
-	// the rewritten "reporter=..." evidence) as provenance -- collapsing
-	// here is NOT this layer's job, unlike the Python mirror. This route's
-	// write path already dedupes by the exact ClickHouse sorting key
-	// (repo_id, work_item_id, team_id, source; evidence excluded) with a
-	// deterministic last-wins tie-break, via githubWorkItemDerivedSortingKeyDedupe
-	// in WriteGitHubWorkItemEffect -- see
-	// TestGitHubTeamAttributionCollisionIsRealAndCollapses for that proof.
-	// Only ONE of the two survives as is_primary; that is what matters here.
+	// resolve() keeps BOTH candidates as provenance -- one assignee_membership
+	// row (rank 4, evidence "assignee=...") and one author_membership row
+	// (rank 6, evidence "reporter=..."). Splitting the source (CHAOS-4244's
+	// precedence ruling) makes them structurally distinct at the ClickHouse
+	// storage key (source differs, not just evidence) -- no collision, no
+	// collapse needed on this route, unlike the earlier same-source design.
+	// The assignee_membership row must win primary: it outranks
+	// author_membership even for the identical team.
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
@@ -691,22 +730,20 @@ func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistin
 	if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
 		t.Fatalf("team id = %v, want team-ops", teamID)
 	}
-	var sameTeamRows []githubWorkItemDerivationCandidate
-	primaryCount := 0
+	bySource := map[string]githubWorkItemDerivationCandidate{}
 	for _, candidate := range candidates {
-		if candidate.Source == "assignee_membership" && githubWorkItemDerivationStringValue(candidate.TeamID) == "team-ops" {
-			sameTeamRows = append(sameTeamRows, candidate)
-			primaryCount += candidate.IsPrimary
-		}
+		bySource[candidate.Source] = candidate
 	}
-	if len(sameTeamRows) != 2 {
-		t.Fatalf("same-team assignee_membership rows = %d, want 2 (assignee + reporter provenance): %+v", len(sameTeamRows), sameTeamRows)
+	assignee, ok := bySource["assignee_membership"]
+	if !ok || assignee.IsPrimary != 1 || githubWorkItemDerivationStringValue(assignee.TeamID) != "team-ops" {
+		t.Fatalf("assignee candidate = %+v (present=%v), want present, primary, team-ops", assignee, ok)
 	}
-	if primaryCount != 1 {
-		t.Fatalf("primary count among same-team rows = %d, want exactly 1: %+v", primaryCount, sameTeamRows)
+	author, ok := bySource["author_membership"]
+	if !ok || author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v (present=%v), want present, non-primary, team-ops", author, ok)
 	}
-	if sameTeamRows[0].Evidence == sameTeamRows[1].Evidence {
-		t.Fatalf("expected distinct evidence (assignee= vs reporter=), got identical: %+v", sameTeamRows)
+	if assignee.Evidence == author.Evidence {
+		t.Fatalf("expected distinct evidence (assignee= vs reporter=), got identical: %q", assignee.Evidence)
 	}
 }
 

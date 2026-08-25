@@ -34,7 +34,7 @@ from dev_health_ops.metrics.compute_work_items import (
     resolve_team_attribution,
 )
 from dev_health_ops.models.work_items import WorkItem
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import LinkedIssueTeamResolver, TeamResolver
 
 COMPUTED_AT = datetime(2026, 8, 24, tzinfo=timezone.utc)
 
@@ -132,7 +132,7 @@ def test_pr_author_resolves_to_team_via_attribution_context_with_relabeled_evide
     assert (team_id, team_name) == ("team-ops", "Ops Team")
     primary = [c for c in candidates if c.is_primary]
     assert len(primary) == 1
-    assert primary[0].source == "assignee_membership"
+    assert primary[0].source == "author_membership"
     assert primary[0].evidence == "reporter=alice"
 
 
@@ -163,7 +163,7 @@ def test_pr_author_resolves_to_team_via_attribution_context():
         attribution_context=context,
     )
     assert (team_id, team_name) == ("team-platform", "Platform Team")
-    assert any(c.source == "assignee_membership" and c.is_primary for c in candidates)
+    assert any(c.source == "author_membership" and c.is_primary for c in candidates)
 
 
 def test_assignee_still_outranks_nothing_and_author_never_overrides_a_real_assignee():
@@ -322,8 +322,49 @@ def test_compute_work_item_team_attributions_emits_ghpr_row_for_author_only_pr()
     assert primary[0].work_item_id == "ghpr:full-chaos/dev-health-ops#4244"
     assert primary[0].provider == "github"
     assert primary[0].team_id == "team-ops"
-    assert primary[0].source == "assignee_membership"
+    assert primary[0].source == "author_membership"
     assert primary[0].evidence == "reporter=alice"
+
+
+def test_author_never_outranks_a_linked_issue_donor():
+    """CHAOS-4244 precedence ruling (chris, 2026-08-24): a PR with a
+    team-mapped author AND a linked_issue donor for a DIFFERENT team must
+    resolve to the linked issue's team -- author_membership (rank 6) sits
+    BELOW linked_issue (rank 5). This directly falsifies codex round 1's
+    finding 2 (author, sharing assignee_membership's rank 4, could beat a
+    real linked_issue donor) now that author has its own lower rank."""
+    item = _pr_work_item(reporter="alice", assignees=[])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    linked_issue_resolver = LinkedIssueTeamResolver(
+        _inherited={item.work_item_id: ("team-platform", "Platform Team")}
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        linked_issue_resolver=linked_issue_resolver,
+        attribution_context=context,
+    )
+    assert (team_id, team_name) == ("team-platform", "Platform Team")
+    by_source = {c.source: c for c in candidates}
+    assert by_source["author_membership"].is_primary == 0
+    assert by_source["author_membership"].team_id == "team-ops"
+    assert by_source["linked_issue"].is_primary == 1
+    assert by_source["linked_issue"].team_id == "team-platform"
 
 
 def test_bot_author_never_attributed():
@@ -399,16 +440,19 @@ def test_ambiguous_reporter_evidence_tags_the_unassigned_row():
     assert primary[0].evidence == "no_candidate:ambiguous_membership"
 
 
-def test_reporter_and_assignee_same_person_same_team_collapses_to_one_row():
-    """Storage-key collision guard (codex, 2026-08-24): when the author IS
-    the assignee and both resolve to the SAME team, the assignee-loop
-    candidate (evidence "assignee=...") and the reporter candidate (evidence
-    rewritten to "reporter=...") would otherwise both survive
-    `_dedupe_candidates` (different evidence) and collide at the
-    `work_item_team_attributions` ReplacingMergeTree storage key -- (org_id,
-    repo_id, work_item_id, team_id, source), which does NOT include evidence
-    (migration 051). Exactly one row for that (source, team_id) pair must
-    survive `resolve_team_attribution`."""
+def test_reporter_and_assignee_same_person_same_team_stay_distinct_provenance():
+    """When the author IS the assignee and both resolve to the SAME team,
+    `resolve_team_attribution` keeps BOTH candidates as provenance: one
+    `assignee_membership` row (rank 4, evidence "assignee=...") and one
+    `author_membership` row (rank 6, evidence "reporter=..."). Splitting the
+    source (CHAOS-4244's precedence ruling) makes them structurally distinct
+    at the `work_item_team_attributions` ReplacingMergeTree storage key --
+    (org_id, repo_id, work_item_id, team_id, source), which does NOT include
+    evidence (migration 051) -- source itself now differs, so the earlier
+    same-source collision this test used to guard against (codex, 2026-08-24)
+    is no longer possible via the source split alone. The assignee_membership
+    row must win primary: it outranks author_membership even for the
+    identical team."""
     item = WorkItem(
         work_item_id="ghpr:full-chaos/dev-health-ops#77",
         provider="github",
@@ -443,12 +487,14 @@ def test_reporter_and_assignee_same_person_same_team_collapses_to_one_row():
         attribution_context=context,
     )
     assert (team_id, team_name) == ("team-ops", "Ops Team")
-    same_team_rows = [
-        c
-        for c in candidates
-        if c.source == "assignee_membership" and c.team_id == "team-ops"
-    ]
-    assert len(same_team_rows) == 1, same_team_rows
+    by_source = {c.source: c for c in candidates if c.team_id == "team-ops"}
+    assert set(by_source) == {"assignee_membership", "author_membership"}
+    assert by_source["assignee_membership"].is_primary == 1
+    assert by_source["author_membership"].is_primary == 0
+    assert (
+        by_source["assignee_membership"].evidence
+        != by_source["author_membership"].evidence
+    )
 
 
 def test_metric_source_label_splits_author_from_assignee_on_real_rows():

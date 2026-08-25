@@ -467,17 +467,15 @@ is_primary, confidence, evidence, computed_at)`)
 // githubWorkItemTeamAttributionMetricSource maps a written row onto
 // CHAOS-4244's coarser written-source vocabulary (author/assignee/
 // linked_issue/project/repo/unassigned; anything else collapses to "other"
-// via MetricWorkItemTeamAttributionSourceLabel). "author" and "assignee" both
-// carry Source "assignee_membership" in the stored precedence enum -- they
-// only differ in Evidence's identity prefix, which resolve_team_attribution
-// (mirrored here in derived.resolve) always stamps as "reporter=" or
-// "assignee=" (github_work_items_derivation_context.go:597-646).
+// via MetricWorkItemTeamAttributionSourceLabel). author_membership and
+// assignee_membership are now separate stored sources (chris's 2026-08-24
+// precedence ruling gave the author its own rank 6, below linked_issue), so
+// this is a plain per-source label rather than an Evidence-prefix split.
 func githubWorkItemTeamAttributionMetricSource(row githubWorkItemTeamAttributionRow) string {
 	switch row.Source {
+	case "author_membership":
+		return "author"
 	case "assignee_membership":
-		if strings.HasPrefix(row.Evidence, "reporter=") {
-			return "author"
-		}
 		return "assignee"
 	case "project_ownership", "issue_project":
 		return "project"

@@ -651,8 +651,10 @@ func (derived githubWorkItemDerivationContext) resolve(
 	}
 	// CHAOS-4244: mirrors compute_work_items.py's resolve_team_attribution --
 	// the reporter (author) is a membership signal GitHub's "assignee" field
-	// never carries. Still rank 4 (assignee_membership); no new precedence
-	// tier and no ClickHouse enum widening.
+	// never carries. Stamps its OWN source/rank (author_membership, rank 6 --
+	// chris's ruling, 2026-08-24: an author is a PERSON signal, "at best a
+	// low-precedence fallback", and must NOT beat a real linked_issue donor
+	// (rank 5), so it cannot share assignee_membership's rank 4).
 	//
 	// Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped signal
 	// is only usable "where the reporter's membership is unambiguous (exactly
@@ -675,20 +677,22 @@ func (derived githubWorkItemDerivationContext) resolve(
 			reporterCandidates := derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(*subject.Reporter))]
 			switch {
 			case githubWorkItemDerivationSingleTeam(reporterCandidates):
-				// Evidence is rewritten (not passed through verbatim) so a
-				// reporter-resolved row is distinguishable from an
-				// assignee-resolved one -- see
-				// githubWorkItemTeamAttributionMetricSource. Safe against the
-				// ReplacingMergeTree storage-key collision this could
-				// otherwise cause when the author IS the assignee, because
-				// candidates are collapsed by team_id within each source
-				// below, before persistence.
+				// Source AND Evidence are rewritten (not passed through
+				// verbatim): reporterCandidates come from the SAME
+				// memberByID map the assignee loop above reads, pre-stamped
+				// Source "assignee_membership" at fact-load time, so the
+				// override must happen here, at the point of use. This puts
+				// the reporter-resolved row in its own author_membership
+				// rank rather than assignee_membership's, and is
+				// distinguishable from an assignee-resolved one for
+				// provenance and for githubWorkItemTeamAttributionMetricSource.
 				relabeled := make([]githubWorkItemDerivationCandidate, len(reporterCandidates))
 				for index, candidate := range reporterCandidates {
+					candidate.Source = "author_membership"
 					candidate.Evidence = "reporter=" + *subject.Reporter
 					relabeled[index] = candidate
 				}
-				bySource["assignee_membership"] = append(bySource["assignee_membership"], relabeled...)
+				bySource["author_membership"] = append(bySource["author_membership"], relabeled...)
 			case len(reporterCandidates) > 0:
 				reporterSkipReason = "ambiguous_membership"
 			}
@@ -700,7 +704,8 @@ func (derived githubWorkItemDerivationContext) resolve(
 
 	order := []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
-		"assignee_membership", "linked_issue", "manual_fallback", "unassigned",
+		"assignee_membership", "linked_issue", "author_membership",
+		"manual_fallback", "unassigned",
 	}
 	var primary *githubWorkItemDerivationCandidate
 	all := make([]githubWorkItemDerivationCandidate, 0)

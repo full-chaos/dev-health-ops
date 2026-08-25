@@ -75,7 +75,8 @@ func githubDerivedIntegrationConn(t *testing.T, ctx context.Context) driver.Conn
 var (
 	githubWorkItemDerivedEmittableSources = []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
-		"assignee_membership", "linked_issue", "manual_fallback", "unassigned",
+		"assignee_membership", "linked_issue", "author_membership",
+		"manual_fallback", "unassigned",
 	}
 	githubWorkItemDerivedEmittableConfidences = []string{
 		"high", "medium", "manual", "none",

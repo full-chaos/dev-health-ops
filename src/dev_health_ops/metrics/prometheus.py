@@ -437,17 +437,21 @@ def work_item_team_attribution_metric_source(source: str, evidence: str) -> str:
 
     Deliberately coarser than the ClickHouse `source` enum
     (native_team/issue_project/project_ownership/repo_ownership/
-    assignee_membership/linked_issue/manual_fallback/unassigned): "author"
-    and "assignee" split the single assignee_membership rank by WHICH
-    identity resolved it (the `evidence` prefix), and an `unassigned` row
+    assignee_membership/linked_issue/author_membership/manual_fallback/
+    unassigned): author_membership and assignee_membership are now separate
+    stored sources (CHAOS-4244's precedence ruling gave the author its own
+    rank 6, below linked_issue), so this collapses to a plain per-source
+    label rather than the earlier evidence-prefix split. An `unassigned` row
     carrying `no_candidate:<reason>` (bot_author, ambiguous_membership --
     resolve_team_attribution's reporter-skip precision conditions) surfaces
     that reason as its own label instead of folding back into the generic
     "unassigned" bucket. Mirrors Go's
     githubWorkItemTeamAttributionMetricSource exactly; keep both in sync.
     """
+    if source == "author_membership":
+        return "author"
     if source == "assignee_membership":
-        return "author" if evidence.startswith("reporter=") else "assignee"
+        return "assignee"
     if source in ("project_ownership", "issue_project"):
         return "project"
     if source == "repo_ownership":

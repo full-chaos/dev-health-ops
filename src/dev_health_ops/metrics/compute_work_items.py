@@ -72,6 +72,7 @@ TeamAttributionSource = Literal[
     "repo_ownership",
     "assignee_membership",
     "linked_issue",
+    "author_membership",
     "manual_fallback",
     "unassigned",
 ]
@@ -94,7 +95,7 @@ class TeamAttributionCandidate:
 
 @dataclass(frozen=True)
 class ManualFallbackRule:
-    """An explicit `manual_attribution_fallbacks` row (rank 6, never an override).
+    """An explicit `manual_attribution_fallbacks` row (rank 7, never an override).
 
     Used only when no native/imported/linked source resolved. `scope_type` is one
     of repo | project | member | issue_key_prefix.
@@ -131,8 +132,14 @@ class TeamAttributionContext:
 
 # CHAOS-2600: deterministic staged precedence. linked_issue is a TRUE FALLBACK
 # (rank 5) below every native/imported fact — it never overrides ownership or
-# assignee membership; it only beats manual_fallback and unassigned. native_team
-# stays top. See docs/contribute/architecture/team-attribution.md §0.
+# assignee membership; it only beats author_membership, manual_fallback and
+# unassigned. native_team stays top. See
+# docs/contribute/architecture/team-attribution.md §0.
+#
+# CHAOS-4244 (chris ruling, 2026-08-24): a PR/MR author is a PERSON signal,
+# "at best a low-precedence fallback" — it must NOT beat a real linked_issue
+# donor. author_membership therefore gets its OWN rank (6), below linked_issue
+# and above manual_fallback, rather than sharing assignee_membership's rank 4.
 _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "native_team": 0,
     "issue_project": 1,
@@ -140,16 +147,18 @@ _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "repo_ownership": 3,
     "assignee_membership": 4,
     "linked_issue": 5,
-    "manual_fallback": 6,
-    "unassigned": 7,
+    "author_membership": 6,
+    "manual_fallback": 7,
+    "unassigned": 8,
 }
 
 # Sources a work item may pass on when it acts as a linked-issue *donor*. A donor
 # may only contribute a team it earned from a first-class attribution fact
-# (sources 0-4). manual_fallback (rank 6) and unassigned are excluded so a
-# fallback rule — especially the provider-neutral `issue_key_prefix` scope —
-# can never be laundered into rank-5 `linked_issue` provenance on a dependent
-# item. linked_issue itself is absent here because donor resolution runs with
+# (sources 0-4). author_membership (rank 6), manual_fallback (rank 7) and
+# unassigned are excluded so a person-shaped signal or a fallback rule —
+# especially the provider-neutral `issue_key_prefix` scope — can never be
+# laundered into rank-5 `linked_issue` provenance on a dependent item.
+# linked_issue itself is absent here because donor resolution runs with
 # `linked_issue_resolver=None` (no transitive inheritance). See
 # docs/contribute/architecture/team-attribution.md §0.
 _DONOR_SOURCES: frozenset[TeamAttributionSource] = frozenset(
@@ -339,7 +348,7 @@ def _issue_key_prefix(item: WorkItem) -> str | None:
 def _manual_fallback_candidates(
     item: WorkItem, fallbacks: Sequence[ManualFallbackRule]
 ) -> list[TeamAttributionCandidate]:
-    """Build manual_fallback candidates (rank 6) matching the item's scope.
+    """Build manual_fallback candidates (rank 7) matching the item's scope.
 
     The precedence loop ensures these only become primary when no native/imported/
     linked source matched — manual fallback is never an override. An ``issue_key_prefix``
@@ -409,6 +418,7 @@ def resolve_team_attribution(
         "repo_ownership": [],
         "assignee_membership": [],
         "linked_issue": [],
+        "author_membership": [],
         "manual_fallback": [],
         "unassigned": [],
     }
@@ -486,13 +496,14 @@ def resolve_team_attribution(
         # GitHub's own "assignee" field never carries -- GitHub distinguishes
         # the two, and most PRs are opened with no assignee set at all. This
         # reuses the SAME member_by_identity resolution the assignee loop
-        # above uses (still rank 4, assignee_membership) rather than adding a
-        # new precedence tier, so no ClickHouse enum widening is needed. See
-        # docs/contribute/architecture/team-attribution.md "Why this exists":
-        # author membership was previously skipped as unreliable ALONE, but a
-        # match is still a strictly better signal than the unassigned floor
-        # it used to fall to, and it never outranks a real assignee, repo, or
-        # project ownership fact.
+        # above uses, but stamps its OWN source/rank (author_membership,
+        # rank 6 -- chris's ruling, 2026-08-24: an author is a PERSON signal,
+        # "at best a low-precedence fallback", and must NOT beat a real
+        # linked_issue donor (rank 5), so it cannot share assignee_membership's
+        # rank 4). See docs/contribute/architecture/team-attribution.md "Why
+        # this exists": author membership was previously skipped as
+        # unreliable ALONE, but a match is still a strictly better signal
+        # than the unassigned floor it used to fall to.
         #
         # Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped
         # signal is only usable "where the reporter's membership is
@@ -530,20 +541,22 @@ def resolve_team_attribution(
             )
             reporter_teams = {c.team_id for c in reporter_candidates}
             if len(reporter_teams) == 1:
-                # Evidence is rewritten (not passed through verbatim) so a
-                # reporter-resolved row is distinguishable from an
-                # assignee-resolved one for provenance and for
-                # WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL's author/assignee
-                # split (codex, 2026-08-24: the un-rewritten evidence made
-                # "author" unreachable in real data, since the stored fact's
-                # own evidence text never says "reporter="). Safe against
-                # the ReplacingMergeTree storage-key collision this could
-                # otherwise create when the author IS the assignee (same
-                # team, two evidence strings, same (org_id, repo_id,
-                # work_item_id, team_id, source) key) because rows are
-                # collapsed by that exact key below, before persistence.
-                candidates_by_source["assignee_membership"].extend(
-                    replace(candidate, evidence=f"reporter={item.reporter}")
+                # source AND evidence are rewritten (not passed through
+                # verbatim) so a reporter-resolved row lands in its own
+                # author_membership rank rather than assignee_membership's,
+                # and is distinguishable from an assignee-resolved one for
+                # provenance and for WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL's
+                # author/assignee split. Splitting the source also makes the
+                # earlier ReplacingMergeTree storage-key collision
+                # (author == assignee, same team, same (org_id, repo_id,
+                # work_item_id, team_id, source) key) structurally impossible:
+                # the two rows now differ by source, not just evidence.
+                candidates_by_source["author_membership"].extend(
+                    replace(
+                        candidate,
+                        source="author_membership",
+                        evidence=f"reporter={item.reporter}",
+                    )
                     for candidate in reporter_candidates
                 )
             elif len(reporter_teams) > 1:
@@ -573,16 +586,22 @@ def resolve_team_attribution(
     rows: list[TeamAttributionCandidate] = []
     for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):
         ranked = _ranked(_dedupe_candidates(candidates_by_source[source]))
-        # Scoped to assignee_membership ONLY (CHAOS-4244): that is the one
-        # source where THIS ticket's reporter-evidence-rewrite can put an
-        # assignee row and a reporter row for the SAME person/team in the
-        # list with different evidence -- a real ReplacingMergeTree
-        # storage-key collision (evidence is not part of the key; migration
-        # 051). Every other source legitimately wants multiple same-team
-        # candidates preserved as provenance (e.g. two manual_fallback rules
-        # naming the same team by different scopes) -- collapsing those too
-        # would erase real information this ticket has no reason to touch.
-        if source == "assignee_membership":
+        # Scoped to author_membership ONLY (CHAOS-4244): now that the author
+        # candidate stamps its OWN source, it can no longer collide with a
+        # real assignee row at the ReplacingMergeTree storage key -- source
+        # differs, so that original collision (migration 051's key excludes
+        # evidence, not source) is now structurally impossible. The residual
+        # reason to keep this here: the SAME reporter identity can resolve
+        # via 2+ facets (member_id, email, ...) naming the SAME team, which
+        # after the evidence rewrite above can still differ in specificity/
+        # priority/updated_at and so survive `_dedupe_candidates` (which keys
+        # on the full row) as separate same-team rows -- belt-and-suspenders,
+        # not a required fix. Every other source legitimately wants multiple
+        # same-team candidates preserved as provenance (e.g. two
+        # manual_fallback rules naming the same team by different scopes) --
+        # collapsing those too would erase real information this ticket has
+        # no reason to touch.
+        if source == "author_membership":
             ranked = _collapse_by_team_id(ranked)
         if primary is None and ranked:
             primary = ranked[0]

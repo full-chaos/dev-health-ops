@@ -611,14 +611,15 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
 // (native_team/issue_project/project_ownership/repo_ownership/
-// assignee_membership/linked_issue/manual_fallback/unassigned): "author" and
-// "assignee" split the single assignee_membership rank by WHICH identity
-// resolved it (evidence-prefix derived, see
-// MetricWorkItemTeamAttributionSourceLabel's caller), which is the dimension
-// this series exists to make visible -- chris's <=2% target and the
-// reporter-membership rescue question both hinge on that split, not on the
-// stored rank alone. native_team and manual_fallback collapse to "other" like
-// every other bounded vocabulary in this file.
+// assignee_membership/linked_issue/author_membership/manual_fallback/
+// unassigned): "author" and "assignee" are now separate stored sources
+// (chris's 2026-08-24 precedence ruling gave the author its own rank 6,
+// below linked_issue) rather than an evidence-prefix split of one shared
+// rank, which is the dimension this series exists to make visible --
+// chris's <=2% target and the reporter-membership rescue question both
+// hinge on that split, not on the stored rank alone. native_team and
+// manual_fallback collapse to "other" like every other bounded vocabulary
+// in this file.
 var metricWorkItemTeamAttributionSourceVocabulary = map[string]struct{}{
 	"author": {}, "assignee": {}, "linked_issue": {}, "project": {},
 	"repo": {}, "unassigned": {},

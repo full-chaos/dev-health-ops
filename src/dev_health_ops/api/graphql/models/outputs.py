@@ -565,6 +565,7 @@ class TeamAttributionSource(Enum):
     REPO_OWNERSHIP = "repo_ownership"
     ASSIGNEE_MEMBERSHIP = "assignee_membership"
     LINKED_ISSUE = "linked_issue"
+    AUTHOR_MEMBERSHIP = "author_membership"
     MANUAL_FALLBACK = "manual_fallback"
     UNASSIGNED = "unassigned"
 

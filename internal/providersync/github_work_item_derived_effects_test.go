@@ -437,18 +437,19 @@ func TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage(t *testing.T)
 
 // TestGitHubWorkItemTeamAttributionMetricSourceSplitsAuthorFromAssignee
 // (CHAOS-4244) pins the label mapping WriteGitHubWorkItemEffect uses to feed
-// dev_health_work_item_team_attributions_written_total: two rows sharing the
-// SAME stored Source ("assignee_membership") must render as two DIFFERENT
-// metric labels, because Evidence's identity prefix is the only thing that
-// distinguishes an author-resolved row from an assignee-resolved one.
+// dev_health_work_item_team_attributions_written_total: author_membership and
+// assignee_membership are separate stored sources (chris's 2026-08-24
+// precedence ruling gave the author its own rank 6, below linked_issue) that
+// map onto the "author"/"assignee" metric labels directly -- no Evidence
+// inspection needed any more.
 func TestGitHubWorkItemTeamAttributionMetricSourceSplitsAuthorFromAssignee(t *testing.T) {
 	cases := []struct {
 		name   string
 		row    githubWorkItemTeamAttributionRow
 		wantMS string
 	}{
-		{"reporter evidence", githubWorkItemTeamAttributionRow{Source: "assignee_membership", Evidence: "reporter=alice"}, "author"},
-		{"assignee evidence", githubWorkItemTeamAttributionRow{Source: "assignee_membership", Evidence: "assignee=carol"}, "assignee"},
+		{"author_membership", githubWorkItemTeamAttributionRow{Source: "author_membership", Evidence: "reporter=alice"}, "author"},
+		{"assignee_membership", githubWorkItemTeamAttributionRow{Source: "assignee_membership", Evidence: "assignee=carol"}, "assignee"},
 		{"project_ownership", githubWorkItemTeamAttributionRow{Source: "project_ownership"}, "project"},
 		{"issue_project", githubWorkItemTeamAttributionRow{Source: "issue_project"}, "project"},
 		{"repo_ownership", githubWorkItemTeamAttributionRow{Source: "repo_ownership"}, "repo"},

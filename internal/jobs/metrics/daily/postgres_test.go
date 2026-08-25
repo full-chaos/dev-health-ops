@@ -23,3 +23,22 @@ func TestScheduledFanoutPrefixIsThePythonGatePrefix(t *testing.T) {
 		t.Fatal("the store rejects a generation the Python gate treats as authoritative")
 	}
 }
+
+// TestPostSyncAndScheduledFanoutGenerationPrefixesAreDisjoint pins that the two
+// deferred-discovery generation families (CHAOS-4263) never overlap. If they
+// ever did, isScheduledFanoutGeneration -- whose exact prefix is the
+// CHAOS-4066 Python contract asserted above -- would start matching post-sync
+// runs the Python readiness gate was never told about.
+func TestPostSyncAndScheduledFanoutGenerationPrefixesAreDisjoint(t *testing.T) {
+	postSync := postSyncGenerationPrefix + "00000000-0000-4000-8000-000000000001"
+	scheduled := scheduledFanoutGenerationPrefix + "2026-08-25T01:00:00Z"
+
+	if !isPostSyncGeneration(postSync) || isScheduledFanoutGeneration(postSync) {
+		t.Fatalf("post-sync generation %q: isPostSyncGeneration=%t isScheduledFanoutGeneration=%t, want true/false",
+			postSync, isPostSyncGeneration(postSync), isScheduledFanoutGeneration(postSync))
+	}
+	if !isScheduledFanoutGeneration(scheduled) || isPostSyncGeneration(scheduled) {
+		t.Fatalf("scheduled-fanout generation %q: isScheduledFanoutGeneration=%t isPostSyncGeneration=%t, want true/false",
+			scheduled, isScheduledFanoutGeneration(scheduled), isPostSyncGeneration(scheduled))
+	}
+}

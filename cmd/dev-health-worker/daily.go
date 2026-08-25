@@ -98,6 +98,9 @@ func buildDailyWorker(
 			leaseObservers = append(leaseObservers, leaseObserver)
 		}
 		store, storeErr := daily.NewPostgresStore(postgresDatabase.pools.Domain, leaseObservers...)
+		if discoveryObserver, ok := observer.(jobruntime.DailyMetricsDiscoveryObserver); ok {
+			store.SetDiscoveryObserver(discoveryObserver)
+		}
 		publisher, publisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 		clickhouseConnection, clickhouseErr := clickhousestore.Open(
 			context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),

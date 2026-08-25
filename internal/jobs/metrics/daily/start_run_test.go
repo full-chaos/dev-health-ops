@@ -30,7 +30,14 @@ func TestNormalizeStartRunRequestIsDuplicateStableAndBounded(t *testing.T) {
 	}
 }
 
-func TestNormalizeStartRunRequestCreatesOneOrgPartitionWithoutRepositories(t *testing.T) {
+// TestNormalizeStartRunRequestWithNoRepositoriesDefersDiscoveryInsteadOfCreatingAVacuousPartition
+// pins the CHAOS-4263 fix: a post-sync request that carries no repository IDs
+// must leave zero partitions, so ClaimDispatch marks the run
+// RepositoryDiscoveryRequired and the heavy worker resolves live ClickHouse
+// repository identity through the same path the scheduled fan-out uses.
+// Before this fix, an empty request synthesized one zero-repository partition
+// that reported a successful compute having touched no repository at all.
+func TestNormalizeStartRunRequestWithNoRepositoriesDefersDiscoveryInsteadOfCreatingAVacuousPartition(t *testing.T) {
 	t.Parallel()
 	_, partitions, err := normalizeStartRunRequest(StartRunRequest{
 		OrganizationID: "00000000-0000-4000-8000-000000000001",
@@ -40,8 +47,8 @@ func TestNormalizeStartRunRequestCreatesOneOrgPartitionWithoutRepositories(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(partitions) != 1 || len(partitions[0]) != 0 {
-		t.Fatalf("partitions=%#v", partitions)
+	if len(partitions) != 0 {
+		t.Fatalf("partitions=%#v, want none (discovery deferred)", partitions)
 	}
 }
 

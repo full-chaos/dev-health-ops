@@ -224,19 +224,15 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	if incomplete := githubWorkItemsRouteIncomplete(t, batch); len(incomplete) != 0 {
 		t.Fatalf("incomplete=%+v", incomplete)
 	}
-}
 
-// TestGitHubWorkItemsRouteWithholdsWatermarkForDegradedProjectsSnapshot proves
-// the incomplete evidence survives the real route boundary. The provider may
-// still land unrelated rows, but a null board response must not complete the
-// family or advance any alias watermark.
-func TestGitHubWorkItemsRouteWithholdsWatermarkForDegradedProjectsSnapshot(t *testing.T) {
-	claim := githubWorkItemsRESTClaim()
-	claim.DatasetOptions = map[string]any{
+	// Null organization and projectV2 responses are incomplete evidence. The
+	// route must withhold the watermark and retain warning/telemetry causality.
+	degradedClaim := githubWorkItemsRESTClaim()
+	degradedClaim.DatasetOptions = map[string]any{
 		"include_issues": false, "include_pull_requests": false,
 		"fetch_comments": false, "fetch_milestones": false,
 	}
-	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+	degradedClaim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
 		map[string]any{"org_login": "acme", "project_number": 3},
 	}}
 	for _, test := range []struct {
@@ -264,8 +260,8 @@ func TestGitHubWorkItemsRouteWithholdsWatermarkForDegradedProjectsSnapshot(t *te
 				ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
 				Deriver:                       deriver,
 			}).Collect(
-				context.Background(), claim,
-				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+				context.Background(), degradedClaim,
+				providerfoundation.Credential{Provider: "github", ID: degradedClaim.CredentialID},
 				client, time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
 			)
 			if err != nil {

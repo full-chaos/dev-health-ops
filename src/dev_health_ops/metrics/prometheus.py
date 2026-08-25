@@ -362,6 +362,21 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    # ---------------------------------------------------------------------------
+    # metrics.daily_partition per-family visibility (CHAOS-4246)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_metrics_family_failures_total",
+        "job_daily.py sub-families (cicd/deploy/incident/testops_risk) that "
+        "computed zero rows for a (org, repo, day) the partition otherwise "
+        "reported succeeded for. Zero rows can be a legitimate day (no CI "
+        "activity) or a genuine gap (upstream sync lag, unmapped join) -- "
+        "this counter does not distinguish the two, it only makes the "
+        "silence visible (CHAOS-4246: cicd/deploy/testops_risk went stale "
+        "for 16 days with every partition reporting success).",
+        ["family", "cause"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -398,6 +413,7 @@ else:
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
+    DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +504,18 @@ def record_investment_membership_scope_stale(
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS.labels(scope_mode=scope_mode).set(
         lag_seconds
     )
+
+
+def record_metrics_family_zero_rows(*, family: str, cause: str) -> None:
+    """Record a metrics.daily_partition sub-family that computed zero rows.
+
+    ``cause`` is drawn from a fixed vocabulary by the caller (e.g.
+    "no_rows_computed"), never from row contents.
+    """
+    DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL.labels(
+        family=family,
+        cause=cause,
+    ).inc()
 
 
 @contextmanager

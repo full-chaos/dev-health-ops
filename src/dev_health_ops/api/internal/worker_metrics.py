@@ -868,8 +868,16 @@ async def _run_daily_direct(execution: _Execution) -> dict[str, Any]:
         return {"operation": "finalize", "target_day": target_day.isoformat()}
 
     repo_ids = [uuid.UUID(value) for value in execution.scope["repo_ids"]]
+    # CHAOS-4246: run_daily_metrics_job degrades (never raises) on a family
+    # that computed zero rows for the day -- collect that per repo so a
+    # partition that reports "succeeded" still carries which families, if
+    # any, produced nothing. families_zero_rows is deliberately NOT used to
+    # fail the partition (zero rows is often a legitimate quiet day); it is
+    # surfaced so staleness is visible in the execution result instead of
+    # silently indistinguishable from a fully-populated run.
+    families_zero_rows: dict[str, list[str]] = {}
     for repo_id in repo_ids:
-        await run_daily_metrics_job(
+        zero_rows_by_day = await run_daily_metrics_job(
             db_url=db_url,
             day=target_day,
             backfill_days=1,
@@ -879,11 +887,17 @@ async def _run_daily_direct(execution: _Execution) -> dict[str, Any]:
             provider="auto",
             org_id=execution.organization_id,
         )
-    return {
+        for day, families in zero_rows_by_day.items():
+            if families:
+                families_zero_rows[f"{repo_id}:{day.isoformat()}"] = families
+    result: dict[str, Any] = {
         "operation": "partition",
         "target_day": target_day.isoformat(),
         "repo_count": len(repo_ids),
     }
+    if families_zero_rows:
+        result["families_zero_rows"] = families_zero_rows
+    return result
 
 
 async def _run_capacity(execution: _Execution, scope: CapacityScope) -> dict[str, Any]:

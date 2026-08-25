@@ -70,6 +70,7 @@ from dev_health_ops.metrics.knowledge import (
 )
 from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+from dev_health_ops.metrics.prometheus import record_metrics_family_zero_rows
 from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
@@ -738,7 +739,18 @@ async def run_daily_metrics_job(
     provider: str = "auto",
     org_id: str,
     skip_finalize: bool = False,
-) -> None:
+) -> dict[date, list[str]]:
+    """Run the daily metrics compute+write pipeline.
+
+    Returns a ``{day: [family, ...]}`` map of sub-families (currently
+    cicd/deploy/incident/testops_risk -- CHAOS-4246) that computed zero rows
+    for that day despite the rest of the run succeeding. This is a
+    DEGRADE signal, not a failure: zero rows is often legitimate (no CI
+    activity, no deploys, no incidents that day), so an empty result for one
+    family never raises or aborts the job. Callers that want the partition to
+    reflect it should surface this map (e.g. in the HTTP execution result or
+    a log line) rather than relying on the job's plain completion.
+    """
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
@@ -828,6 +840,14 @@ async def run_daily_metrics_job(
     # Rolling buffer for pipeline stability (7-day window)
     pipeline_metrics_buffer: list[Any] = []
 
+    # CHAOS-4246: cicd/deploy/incident/testops_risk stayed at zero rows for
+    # 16 days while every metrics.daily_partition run reported succeeded --
+    # the compute+write path was correct, but nothing recorded that these
+    # specific families produced nothing. families_zero_rows makes that
+    # visible per day without failing the job (see run_daily_metrics_job
+    # docstring for why this degrades rather than fails).
+    families_zero_rows: dict[date, list[str]] = {}
+
     # Work-item dependency edges are org-scoped and time-independent (a PR's
     # link to the issue it closes does not expire), so load them once for the
     # whole run rather than per day. They power linked-issue team inheritance.
@@ -897,6 +917,30 @@ async def run_daily_metrics_job(
                     exc_info=True,
                 )
                 linked_issue_resolver = None
+
+    def _note_family_zero_rows(family: str, rows: Any, *, day: date) -> None:
+        """Record (log + counter) a family that computed zero rows for `day`.
+
+        Degrades, never raises: zero rows is frequently legitimate (a repo
+        with no CI activity, no deploys, or no incidents that day), so this
+        must never fail the partition (CHAOS-4246). It exists so that case
+        is distinguishable from "never ran" in logs/metrics instead of being
+        indistinguishable from a genuinely quiet day.
+        """
+        if rows:
+            return
+        logger.warning(
+            "metrics.daily family produced zero rows",
+            extra={
+                "family": family,
+                "day": day.isoformat(),
+                "org_id": org_id,
+                "repo_id": str(repo_id) if repo_id else None,
+                "cause": "no_rows_computed",
+            },
+        )
+        record_metrics_family_zero_rows(family=family, cause="no_rows_computed")
+        families_zero_rows.setdefault(day, []).append(family)
 
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
@@ -1368,6 +1412,13 @@ async def run_daily_metrics_job(
             if all_file_hotspots and hasattr(s, "write_file_hotspot_daily"):
                 s.write_file_hotspot_daily(all_file_hotspots)
 
+        # CHAOS-4246: cicd/deploy/incident are written unconditionally above
+        # (write_*_metrics no-ops on an empty list) -- note it here so a run
+        # of zero rows is visible instead of indistinguishable from success.
+        _note_family_zero_rows("cicd", cicd_metrics, day=d)
+        _note_family_zero_rows("deploy", deploy_metrics, day=d)
+        _note_family_zero_rows("incident", incident_metrics, day=d)
+
         _write_compounding_risk_for_day(
             sinks=sinks,
             primary_sink=primary_sink,
@@ -1411,6 +1462,9 @@ async def run_daily_metrics_job(
                 s.write_quality_drag(quality_drag)
             if pipeline_stab:
                 s.write_pipeline_stability(pipeline_stab)
+        _note_family_zero_rows("testops_risk.release_confidence", release_conf, day=d)
+        _note_family_zero_rows("testops_risk.quality_drag", quality_drag, day=d)
+        _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.
@@ -1442,6 +1496,19 @@ async def run_daily_metrics_job(
             )
             for s in sinks:
                 s.write_ic_landscape_rolling(ic_landscape)
+
+    if families_zero_rows:
+        logger.warning(
+            "metrics.daily run completed with zero-row families",
+            extra={
+                "org_id": org_id,
+                "repo_id": str(repo_id) if repo_id else None,
+                "families_zero_rows": {
+                    d.isoformat(): fams for d, fams in families_zero_rows.items()
+                },
+            },
+        )
+    return families_zero_rows
 
 
 async def run_daily_metrics_finalize(

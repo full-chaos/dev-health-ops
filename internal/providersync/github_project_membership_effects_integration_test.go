@@ -59,6 +59,7 @@ func newProjectMembershipEffectsConn(t *testing.T) (context.Context, driver.Conn
 // only by accident, and a `projects` row with no membership proves nothing at
 // all.
 func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *testing.T) {
+	t.Run("durable_null_snapshots", testGitHubProjectsV2NullSnapshotsPreserveDurableMembershipAndWatermark)
 	ctx, conn := newProjectMembershipEffectsConn(t)
 	claim := githubWorkItemOracleClaim()
 	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{

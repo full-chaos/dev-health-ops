@@ -675,24 +675,6 @@ var remainingBridgeFamiliesRequiringAFixedSchedule = []string{
 	"capacity",
 }
 
-// remainingBridgeFamiliesDeliberatelyNotScheduled are metrics.remaining
-// families with a registered handler but NO fixed-schedule (or post-sync)
-// producer, on purpose (CHAOS-4243): daily_metrics_fanout's existing Python
-// compatibility bridge (run_daily_metrics_job,
-// ops/src/dev_health_ops/metrics/job_daily.py:729-1446) already computes and
-// writes every table these two families target, unconditionally, on every
-// partition/finalize call -- see the comment block in
-// internal/scheduler/fixed/inventory.go immediately above
-// recommendations_daily_fanout for the line-by-line citation. Adding a
-// second schedule for either would double-compute and double-write against
-// the same ClickHouse tables every night. This test guards the decision: if
-// someone re-adds a byScheduleID binding for either family without revisiting
-// that reasoning, this test's own claim (no binding exists) goes stale and
-// should be revisited, not silently overridden.
-var remainingBridgeFamiliesDeliberatelyNotScheduled = []string{
-	"extra_metrics", "team_metrics",
-}
-
 func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
 	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
 	boundFamilies := make(map[string]bool, len(producer.byScheduleID))
@@ -704,16 +686,44 @@ func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
 			t.Errorf("remaining-metrics family %q has no fixed-schedule producer binding", family)
 		}
 	}
-	for _, family := range remainingBridgeFamiliesDeliberatelyNotScheduled {
-		if boundFamilies[family] {
-			t.Errorf(
-				"remaining-metrics family %q is bound to a fixed schedule, but "+
-					"CHAOS-4243 deliberately excluded it as a duplicate of "+
-					"daily_metrics_fanout's existing compute -- if that reasoning "+
-					"changed, update remainingBridgeFamiliesDeliberatelyNotScheduled "+
-					"and the inventory.go comment together",
-				family,
-			)
+}
+
+// TestExtraMetricsAndTeamMetricsWereFullyRetired guards the CHAOS-4243
+// retire-means-remove ruling: metrics.remaining.extra_metrics/team_metrics
+// were registered handlers with zero producer anywhere (daily_metrics_fanout's
+// existing Python compatibility bridge, run_daily_metrics_job,
+// ops/src/dev_health_ops/metrics/job_daily.py:729-1446, already computes and
+// writes every table both families would have targeted -- see the decision
+// note in docs/contribute/architecture/go-worker-runtime.md and the comment
+// block in internal/scheduler/fixed/inventory.go immediately above
+// recommendations_daily_fanout). Leaving them registered-but-unbound was
+// judged itself a broken state, so both kinds were deleted entirely --
+// from the registry, the worker's handler wiring, and this scheduler's
+// family lists. This test fails if either kind is ever reintroduced without
+// revisiting that decision, whether as a schedule binding or merely a
+// registry/worker registration.
+func TestExtraMetricsAndTeamMetricsWereFullyRetired(t *testing.T) {
+	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
+	for _, binding := range producer.byScheduleID {
+		if binding.Family == "extra_metrics" || binding.Family == "team_metrics" {
+			t.Errorf("retired remaining-metrics family %q has a fixed-schedule producer binding", binding.Family)
+		}
+	}
+
+	registry := testRegistry(t)
+	for _, descriptor := range registry.Descriptors() {
+		if descriptor.Kind == "metrics.remaining.extra_metrics" || descriptor.Kind == "metrics.remaining.team_metrics" {
+			t.Errorf("retired kind %q still exists in the registry; CHAOS-4243 requires full removal, not a dormant registration", descriptor.Kind)
+		}
+	}
+
+	inventory, err := remaining.Load()
+	if err != nil {
+		t.Fatalf("remaining.Load() = %v", err)
+	}
+	for _, family := range inventory.Families {
+		if family.Name == "extra_metrics" || family.Name == "team_metrics" {
+			t.Errorf("retired family %q still exists in internal/jobs/metrics/remaining/families.json", family.Name)
 		}
 	}
 }

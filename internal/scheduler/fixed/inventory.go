@@ -90,17 +90,21 @@ func checkedInSchedules() []Schedule {
 			Rationale: "CHAOS-2381 release_impact_daily materialization. Ordered after the " +
 				"01:00 daily metrics dispatch so joined deployments exist.",
 		},
-		// CHAOS-4243 investigated wiring extra_metrics_daily_fanout and
-		// team_metrics_daily_fanout here (matching the *_daily_fanout pattern
-		// below) for the metrics.remaining.extra_metrics/team_metrics kinds,
-		// which are registered handlers with zero producer. DELIBERATELY NOT
-		// ADDED: daily_metrics_fanout below already performs every write
-		// these two families would perform, via its existing Python
+		// CHAOS-4243 decision note: metrics.remaining.extra_metrics/team_metrics
+		// no longer exist anywhere in this codebase (not in this scheduler, not
+		// in contracts/jobs/v1/registry.json, not in cmd/dev-health-worker's
+		// handler wiring, not in internal/jobs/metrics/remaining/families.json).
+		// They were registered handlers with zero producer anywhere -- the
+		// orchestrator ruled that "registered but unbound" is itself the broken
+		// state, so retirement meant deleting the kinds entirely, not wiring a
+		// fixed-schedule fanout for them (which was investigated and reverted;
+		// see git history). daily_metrics_fanout below already performs every
+		// write both families would have performed, via its existing Python
 		// compatibility bridge (daily.HTTPCompatibilityExecutor ->
 		// /internal/worker/daily-metrics/v1/execute -> _run_daily_direct ->
 		// run_daily_metrics_job, ops/src/dev_health_ops/metrics/job_daily.py:
-		// 729-1446). That single function unconditionally computes and
-		// writes, on every partition call:
+		// 729-1446). That single function unconditionally computes and writes,
+		// on every partition call:
 		//   - compute_team_wellbeing_metrics_daily -> team_metrics_daily (line 1057)
 		//   - _write_compounding_risk_for_day -> compounding_risk_daily (line 1371)
 		//   - compute_release_confidence/quality_drag/pipeline_stability ->
@@ -109,22 +113,17 @@ func checkedInSchedules() []Schedule {
 		// and, on the paired finalize call (skip_finalize=False, lines 1428-1444):
 		//   - compute_ic_metrics_daily -> user_metrics_daily (ic)
 		//   - compute_ic_landscape_rolling -> ic_landscape_rolling_30d
-		// This is every table both families' families.json entries target.
-		// Wiring a second schedule that calls metrics.remaining.extra_metrics/
-		// team_metrics (whose own handlers call the SAME run_daily_metrics_job
-		// a second time, see worker_metrics.py's _run_extra_metrics/
-		// _run_team_metrics) would double-compute and double-write against the
-		// same ClickHouse tables every night, not close a coverage gap.
-		// team_metrics_daily/user_metrics_daily/ic_landscape_rolling_30d read
-		// fresh in both measured environments precisely because
-		// daily_metrics_fanout already produces them this way.
-		// testops_release_confidence/quality_drag/pipeline_stability ARE
-		// measured stale (16 days, local) despite this unconditional call --
-		// that is `if release_conf:`/`if quality_drag:`/`if pipeline_stab:`
-		// (job_daily.py:1408-1413) producing a falsy record from the input
-		// data, a compute-level gap in the ALREADY-RUNNING pathway, not a
-		// missing producer. Fixing that is a different, more invasive change
-		// than a schedule binding and is out of this ticket's scope.
+		// This was every table both families' families.json entries targeted --
+		// wiring a second schedule for either would have double-computed and
+		// double-written against the same ClickHouse tables every night, not
+		// closed a coverage gap. testops_release_confidence/quality_drag/
+		// pipeline_stability ARE measured stale (16 days, local) despite this
+		// unconditional call -- that is `if release_conf:`/`if quality_drag:`/
+		// `if pipeline_stab:` (job_daily.py:1408-1413) producing a falsy record
+		// from the input data, a compute-level gap in the already-running
+		// pathway, not a missing producer. Out of this ticket's scope.
+		// TestExtraMetricsAndTeamMetricsWereFullyRetired (producers_test.go)
+		// guards against either kind being reintroduced without revisiting this.
 		{
 			ID: "recommendations_daily_fanout",
 			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-recommendations"

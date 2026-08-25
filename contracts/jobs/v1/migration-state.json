@@ -205,26 +205,6 @@
       ]
     },
     {
-      "kind": "metrics.remaining.extra_metrics",
-      "state": "go_default",
-      "producer_version": 1,
-      "consumer_versions": [
-        1
-      ],
-      "required_queues": [
-        "metrics"
-      ],
-      "route": "river",
-      "rollback_route": "celery",
-      "evidence": [
-        "contract_schema",
-        "cross_language_golden",
-        "family_inventory",
-        "handler_wiring",
-        "resource_budget_contract"
-      ]
-    },
-    {
       "kind": "metrics.remaining.membership_backfill",
       "state": "go_default",
       "producer_version": 1,
@@ -266,26 +246,6 @@
     },
     {
       "kind": "metrics.remaining.release_impact",
-      "state": "go_default",
-      "producer_version": 1,
-      "consumer_versions": [
-        1
-      ],
-      "required_queues": [
-        "metrics"
-      ],
-      "route": "river",
-      "rollback_route": "celery",
-      "evidence": [
-        "contract_schema",
-        "cross_language_golden",
-        "family_inventory",
-        "handler_wiring",
-        "resource_budget_contract"
-      ]
-    },
-    {
-      "kind": "metrics.remaining.team_metrics",
       "state": "go_default",
       "producer_version": 1,
       "consumer_versions": [

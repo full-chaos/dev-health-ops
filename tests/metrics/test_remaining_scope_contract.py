@@ -61,26 +61,6 @@ def test_python_scopes_match_go_golden() -> None:
                 ],
             },
         ),
-        (
-            "extra_metrics",
-            {
-                "version": 1,
-                "day": "2026-07-23",
-                "backfill_days": 1,
-                "sink": "postgres",
-                "provider": "all",
-            },
-        ),
-        (
-            "team_metrics",
-            {
-                "version": 1,
-                "day": "2026-07-23",
-                "backfill_days": 1,
-                "sink": "auto",
-                "provider": "linear",
-            },
-        ),
     ],
 )
 def test_python_scopes_reject_drift(family: str, scope: dict[str, object]) -> None:

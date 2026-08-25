@@ -31,11 +31,9 @@ const (
 	KindRemainingCapacity        = "metrics.remaining.capacity"
 	KindRemainingComplexity      = "metrics.remaining.complexity"
 	KindRemainingDORA            = "metrics.remaining.dora"
-	KindRemainingExtraMetrics    = "metrics.remaining.extra_metrics"
 	KindRemainingMembership      = "metrics.remaining.membership_backfill"
 	KindRemainingRecommendations = "metrics.remaining.recommendations"
 	KindRemainingReleaseImpact   = "metrics.remaining.release_impact"
-	KindRemainingTeamMetrics     = "metrics.remaining.team_metrics"
 	KindWorkGraphBuild           = "workgraph.build"
 	KindInvestmentMaterialize    = "investment.materialize"
 	KindInvestmentDispatch       = "investment.dispatch"
@@ -356,11 +354,9 @@ var definitions = map[string]contractDefinition{
 	KindRemainingCapacity:        remainingDefinition(KindRemainingCapacity),
 	KindRemainingComplexity:      remainingDefinition(KindRemainingComplexity),
 	KindRemainingDORA:            remainingDefinition(KindRemainingDORA),
-	KindRemainingExtraMetrics:    remainingDefinition(KindRemainingExtraMetrics),
 	KindRemainingMembership:      remainingDefinition(KindRemainingMembership),
 	KindRemainingRecommendations: remainingDefinition(KindRemainingRecommendations),
 	KindRemainingReleaseImpact:   remainingDefinition(KindRemainingReleaseImpact),
-	KindRemainingTeamMetrics:     remainingDefinition(KindRemainingTeamMetrics),
 	KindSyncProviderUnit: {
 		Kind:              KindSyncProviderUnit,
 		CurrentVersion:    ContractVersionV1,
@@ -544,9 +540,8 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		}
 		payload = value
 	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
-		KindRemainingExtraMetrics, KindRemainingMembership,
-		KindRemainingRecommendations, KindRemainingReleaseImpact,
-		KindRemainingTeamMetrics:
+		KindRemainingMembership,
+		KindRemainingRecommendations, KindRemainingReleaseImpact:
 		var value RemainingMetricsPartitionPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode remaining metrics payload: %w", err)
@@ -817,9 +812,8 @@ func (payload RemainingMetricsPartitionPayload) validate() error {
 func remainingKind(kind string) bool {
 	switch kind {
 	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
-		KindRemainingExtraMetrics, KindRemainingMembership,
-		KindRemainingRecommendations, KindRemainingReleaseImpact,
-		KindRemainingTeamMetrics:
+		KindRemainingMembership,
+		KindRemainingRecommendations, KindRemainingReleaseImpact:
 		return true
 	default:
 		return false

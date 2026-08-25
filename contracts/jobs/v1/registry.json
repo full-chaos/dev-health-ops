@@ -329,38 +329,6 @@
       }
     },
     {
-      "kind": "metrics.remaining.extra_metrics",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "queue": "metrics",
-      "handler_owner": "internal/jobs/metrics/remaining",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_remaining_partition",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "remaining_metrics_partition",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 2
-      },
-      "sensitive_fields": [],
-      "domain_link": "remaining_metric_partition",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.remaining_partition.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.remaining_partition.v1.json"
-        ]
-      }
-    },
-    {
       "kind": "metrics.remaining.membership_backfill",
       "current_version": 1,
       "supported_versions": [
@@ -426,38 +394,6 @@
     },
     {
       "kind": "metrics.remaining.release_impact",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "queue": "metrics",
-      "handler_owner": "internal/jobs/metrics/remaining",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_remaining_partition",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "remaining_metrics_partition",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 2
-      },
-      "sensitive_fields": [],
-      "domain_link": "remaining_metric_partition",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.remaining_partition.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.remaining_partition.v1.json"
-        ]
-      }
-    },
-    {
-      "kind": "metrics.remaining.team_metrics",
       "current_version": 1,
       "supported_versions": [
         1

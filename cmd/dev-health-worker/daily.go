@@ -336,10 +336,6 @@ func buildDailyWorker(
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingDORAArgs](
 					workers, registry, spec, store, doraExecutor, dependencies, family.Name,
 				)
-			case jobcontract.KindRemainingExtraMetrics:
-				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingExtraMetricsArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
-				)
 			case jobcontract.KindRemainingMembership:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingMembershipArgs](
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
@@ -350,10 +346,6 @@ func buildDailyWorker(
 				)
 			case jobcontract.KindRemainingReleaseImpact:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
-				)
-			case jobcontract.KindRemainingTeamMetrics:
-				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingTeamMetricsArgs](
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
 				)
 			default:

@@ -16,11 +16,9 @@ var familyJobKinds = map[string]string{
 	"capacity":            jobcontract.KindRemainingCapacity,
 	"complexity":          jobcontract.KindRemainingComplexity,
 	"dora":                jobcontract.KindRemainingDORA,
-	"extra_metrics":       jobcontract.KindRemainingExtraMetrics,
 	"membership_backfill": jobcontract.KindRemainingMembership,
 	"recommendations":     jobcontract.KindRemainingRecommendations,
 	"release_impact":      jobcontract.KindRemainingReleaseImpact,
-	"team_metrics":        jobcontract.KindRemainingTeamMetrics,
 }
 
 func JobKindForFamily(family string) (string, bool) {

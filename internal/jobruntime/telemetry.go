@@ -1097,7 +1097,7 @@ func (collector *MetricsCollector) ObserveCapacityRefused(reason string) error {
 // discipline as doraRefusalReasons/capacityRefusalReasons.
 var compatibilityBridgeFamilies = []string{
 	"complexity", "release_impact", "recommendations",
-	"membership_backfill", "extra_metrics", "team_metrics",
+	"membership_backfill",
 }
 
 // ObserveCompatibilityPartition implements remaining.CompatibilityObserver.

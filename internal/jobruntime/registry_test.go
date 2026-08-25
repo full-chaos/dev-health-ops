@@ -236,7 +236,7 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 25 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
+	if len(descriptors) != 23 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
 		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
 		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
 		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
@@ -246,21 +246,19 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[7].Kind != jobcontract.KindRemainingCapacity ||
 		descriptors[8].Kind != jobcontract.KindRemainingComplexity ||
 		descriptors[9].Kind != jobcontract.KindRemainingDORA ||
-		descriptors[10].Kind != jobcontract.KindRemainingExtraMetrics ||
-		descriptors[11].Kind != jobcontract.KindRemainingMembership ||
-		descriptors[12].Kind != jobcontract.KindRemainingRecommendations ||
-		descriptors[13].Kind != jobcontract.KindRemainingReleaseImpact ||
-		descriptors[14].Kind != jobcontract.KindRemainingTeamMetrics ||
-		descriptors[15].Kind != jobcontract.KindBillingNotification ||
-		descriptors[16].Kind != jobcontract.KindWebhookDelivery ||
-		descriptors[17].Kind != jobcontract.KindReportExecuteOnDemand ||
-		descriptors[18].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[19].Kind != jobcontract.KindSyncProviderUnit ||
-		descriptors[20].Kind != jobcontract.KindTeamAutoimport ||
-		descriptors[21].Kind != jobcontract.KindHeartbeat ||
-		descriptors[22].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[23].Kind != jobcontract.KindSyncCoverageRefresh ||
-		descriptors[24].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[10].Kind != jobcontract.KindRemainingMembership ||
+		descriptors[11].Kind != jobcontract.KindRemainingRecommendations ||
+		descriptors[12].Kind != jobcontract.KindRemainingReleaseImpact ||
+		descriptors[13].Kind != jobcontract.KindBillingNotification ||
+		descriptors[14].Kind != jobcontract.KindWebhookDelivery ||
+		descriptors[15].Kind != jobcontract.KindReportExecuteOnDemand ||
+		descriptors[16].Kind != jobcontract.KindReportExecuteScheduled ||
+		descriptors[17].Kind != jobcontract.KindSyncProviderUnit ||
+		descriptors[18].Kind != jobcontract.KindTeamAutoimport ||
+		descriptors[19].Kind != jobcontract.KindHeartbeat ||
+		descriptors[20].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[21].Kind != jobcontract.KindSyncCoverageRefresh ||
+		descriptors[22].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any

@@ -616,11 +616,9 @@ func TestSelectedQueuesComposeMultipleBuilderFamilies(t *testing.T) {
 		jobcontract.KindRemainingCapacity:        true,
 		jobcontract.KindRemainingComplexity:      true,
 		jobcontract.KindRemainingDORA:            true,
-		jobcontract.KindRemainingExtraMetrics:    true,
 		jobcontract.KindRemainingMembership:      true,
 		jobcontract.KindRemainingRecommendations: true,
 		jobcontract.KindRemainingReleaseImpact:   true,
-		jobcontract.KindRemainingTeamMetrics:     true,
 	}
 	// The real report builder is replaced by a fake here so the composition
 	// rules are tested without a ClickHouse dependency; the production builder
@@ -1669,11 +1667,9 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 		jobcontract.KindRemainingCapacity:        true,
 		jobcontract.KindRemainingComplexity:      true,
 		jobcontract.KindRemainingDORA:            true,
-		jobcontract.KindRemainingExtraMetrics:    true,
 		jobcontract.KindRemainingMembership:      true,
 		jobcontract.KindRemainingRecommendations: true,
 		jobcontract.KindRemainingReleaseImpact:   true,
-		jobcontract.KindRemainingTeamMetrics:     true,
 	})
 	for _, test := range []struct {
 		name    string

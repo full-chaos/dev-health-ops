@@ -73,20 +73,6 @@
       "parity_state": "inventory_only"
     },
     {
-      "name": "extra_metrics",
-      "python_sources": ["src/dev_health_ops/metrics/job_compounding_risk.py", "src/dev_health_ops/metrics/compute_testops_risk.py", "src/dev_health_ops/metrics/benchmarking/runner.py"],
-      "writes": ["compounding_risk_daily", "release_confidence_daily", "quality_drag_daily", "pipeline_stability_daily", "benchmarking_rollups"],
-      "max_concurrency": 2,
-      "clickhouse_read_budget": 2,
-      "clickhouse_write_budget": 2,
-      "replay": "append_latest_generation",
-      "route_key": "metrics.remaining.extra_metrics",
-      "route": "river",
-      "rollback_route": "celery",
-      "historical_limitation": "Each existing metric's checked-in lookback and recomputation window remains unchanged.",
-      "parity_state": "inventory_only"
-    },
-    {
       "name": "membership_backfill",
       "python_sources": ["src/dev_health_ops/workers/work_graph_tasks.py", "src/dev_health_ops/work_graph/investment/backfill.py"],
       "writes": ["work_unit_membership", "work_unit_membership_runs"],
@@ -98,20 +84,6 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The full current work graph is projected from existing persisted investments; components without a current persisted categorization are skipped and no LLM is invoked.",
-      "parity_state": "inventory_only"
-    },
-    {
-      "name": "team_metrics",
-      "python_sources": ["src/dev_health_ops/metrics/job_daily.py", "src/dev_health_ops/metrics/compute_wellbeing.py", "src/dev_health_ops/metrics/compute_ic.py"],
-      "writes": ["team_metrics_daily", "user_metrics_daily", "ic_landscape_rolling_30d"],
-      "max_concurrency": 2,
-      "clickhouse_read_budget": 2,
-      "clickhouse_write_budget": 2,
-      "replay": "append_latest_generation",
-      "route_key": "metrics.remaining.team_metrics",
-      "route": "river",
-      "rollback_route": "celery",
-      "historical_limitation": "Only persisted identity and ClickHouse team-attribution facts are used; legacy PostgreSQL team mappings are not reconstructed.",
       "parity_state": "inventory_only"
     }
   ]

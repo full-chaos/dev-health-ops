@@ -124,17 +124,21 @@ env | grep DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER   # must print nothing
 
 ## Phase 3 — Per-kind verification
 
-`0066` retargets 23 kinds. After it commits, `job-routes apply` is a verifying
-no-op for every one of them, which makes it a safe read-back:
+`0066` retargeted 23 kinds at the time this runbook was written. Two of them,
+`metrics.remaining.extra_metrics`/`metrics.remaining.team_metrics`, were
+registered handlers with zero producer and were removed entirely by
+CHAOS-4243 (not retargeted -- deleted from the registry, the worker, and this
+list). The verification loop below reflects the current 21-kind registry;
+`job-routes apply` is a verifying no-op for every one of them, which makes it
+a safe read-back:
 
 ```bash
 for kind in \
   investment.chunk investment.dispatch investment.finalize investment.materialize \
   metrics.daily_dispatch metrics.daily_finalize metrics.daily_partition \
   metrics.remaining.capacity metrics.remaining.complexity metrics.remaining.dora \
-  metrics.remaining.extra_metrics metrics.remaining.membership_backfill \
+  metrics.remaining.membership_backfill \
   metrics.remaining.recommendations metrics.remaining.release_impact \
-  metrics.remaining.team_metrics \
   operational.billing_notification operational.webhook_delivery \
   report.execute_on_demand report.execute_scheduled \
   sync.team_autoimport system.heartbeat system.retention_cleanup workgraph.build

@@ -73,24 +73,6 @@
         "version": 1
       },
       "canonical": "{\"repo_ids\":[\"55555555-5555-4555-8555-555555555555\",\"66666666-6666-4666-8666-666666666666\"],\"version\":1}"
-    },
-    {
-      "family": "extra_metrics",
-      "input": {
-        "backfill_days": 3,
-        "day": "2026-07-23",
-        "version": 1
-      },
-      "canonical": "{\"backfill_days\":3,\"day\":\"2026-07-23\",\"version\":1}"
-    },
-    {
-      "family": "team_metrics",
-      "input": {
-        "backfill_days": 2,
-        "day": "2026-07-23",
-        "version": 1
-      },
-      "canonical": "{\"backfill_days\":2,\"day\":\"2026-07-23\",\"version\":1}"
     }
   ]
 }

@@ -36,11 +36,9 @@ from dev_health_ops.metrics.remaining_scope_contract import (
     CapacityScope,
     ComplexityScope,
     DoraScope,
-    ExtraMetricsScope,
     MembershipBackfillScope,
     RecommendationsScope,
     ReleaseImpactScope,
-    TeamMetricsScope,
     parse_scope,
 )
 
@@ -1031,69 +1029,6 @@ async def _run_membership(
     }
 
 
-async def _run_extra_metrics(
-    execution: _Execution, scope: ExtraMetricsScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
-    from dev_health_ops.metrics.job_compounding_risk import run_compounding_risk_job
-    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-    db_url = require_clickhouse_uri()
-    target_day = date.fromisoformat(scope.day)
-    compounding_risk_rows = await run_compounding_risk_job(
-        db_url=db_url,
-        day=target_day,
-        backfill_days=scope.backfill_days,
-        org_id=execution.organization_id,
-    )
-    sink = ClickHouseMetricsSink(db_url)
-    try:
-        setattr(sink, "org_id", execution.organization_id)
-        benchmark_records = 0
-        for offset in range(scope.backfill_days):
-            current = target_day - timedelta(days=offset)
-            outputs = await run_in_threadpool(
-                run_benchmarking_for_day,
-                sink,
-                as_of_day=current,
-                computed_at=datetime.now(timezone.utc),
-                org_id=execution.organization_id,
-            )
-            benchmark_records += sum(len(rows) for rows in outputs.values())
-    finally:
-        sink.close()
-    # CHAOS-4243: benchmark_records alone previously stood in for this
-    # family's whole rows_written signal, so a day that wrote real
-    # compounding-risk rows but zero benchmark rows (or vice versa) reported
-    # a misleading count. records_written is the true aggregate across both
-    # writers this family owns; benchmark_records/compounding_risk_rows stay
-    # in the durable evidence for diagnosability.
-    return {
-        "family": execution.family,
-        "compounding_risk_rows": compounding_risk_rows,
-        "benchmark_records": benchmark_records,
-        "records_written": compounding_risk_rows + benchmark_records,
-    }
-
-
-async def _run_team_metrics(
-    execution: _Execution, scope: TeamMetricsScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_daily import run_daily_metrics_job
-
-    await run_daily_metrics_job(
-        db_url=require_clickhouse_uri(),
-        day=date.fromisoformat(scope.day),
-        backfill_days=scope.backfill_days,
-        repo_id=None,
-        repo_name=None,
-        sink="clickhouse",
-        provider="auto",
-        org_id=execution.organization_id,
-    )
-    return {"family": execution.family, "day": scope.day}
-
-
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
 _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "capacity": _run_capacity,
@@ -1102,8 +1037,6 @@ _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "release_impact": _run_release_impact,
     "recommendations": _run_recommendations,
     "membership_backfill": _run_membership,
-    "extra_metrics": _run_extra_metrics,
-    "team_metrics": _run_team_metrics,
 }
 
 
@@ -1254,13 +1187,19 @@ async def _run_until_client_disconnect(
 # through CompatibilityOutcome directly (dora_native.go/capacity_native.go)
 # and never call this HTTP bridge, so they are not listed here.
 #
-# complexity and team_metrics are DELIBERATE GAPS, not oversights:
-# run_complexity_db_job (job_complexity_db.py) returns a process exit code,
-# not a row count, and run_daily_metrics_job (job_daily.py, called by
-# _run_team_metrics below) returns nothing at all -- both would need a
-# return-contract change to the underlying compute function itself, a larger
-# and riskier change than this ticket's wire-contract fix. Both stay silently
-# "success" with no rows_written signal until that follow-up lands.
+# complexity is a DELIBERATE GAP, not an oversight: run_complexity_db_job
+# (job_complexity_db.py) returns a process exit code, not a row count, which
+# would need a return-contract change to the underlying compute function
+# itself, a larger and riskier change than this ticket's wire-contract fix.
+# It stays silently "success" with no rows_written signal until that
+# follow-up lands.
+#
+# extra_metrics and team_metrics no longer exist: both were registered
+# handlers with zero producer anywhere (CHAOS-4243), retired (removed, not
+# left dormant) rather than fixed. See
+# docs/contribute/architecture/go-worker-runtime.md for the decision note
+# naming the inline compute sites that already cover every table they would
+# have written.
 #
 # recommendations is ALSO a deliberate omission (CHAOS-4243 codex round 3):
 # _compute_recommendations_for_org's docstring is explicit that its int
@@ -1278,12 +1217,6 @@ _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
     "capacity": "forecast_count",
     "release_impact": "records_written",
     "membership_backfill": "memberships_written",
-    # records_written is the aggregate across BOTH writers extra_metrics owns
-    # (compounding-risk + benchmarking) -- reporting benchmark_records alone
-    # let a day that wrote real compounding-risk rows but zero benchmark rows
-    # (or the reverse) surface a misleading rows_written (CHAOS-4243 codex
-    # round 2).
-    "extra_metrics": "records_written",
 }
 
 

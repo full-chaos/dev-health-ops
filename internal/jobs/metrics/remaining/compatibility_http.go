@@ -105,10 +105,11 @@ type compatibilityRequest struct {
 type compatibilityResponse struct {
 	Status string `json:"status"`
 	// RowsWritten is an optional row-count signal the Python bridge emits for
-	// families whose evidence carries one (release_impact, extra_metrics,
-	// recommendations as of CHAOS-4243). Absent (nil) means "not applicable
-	// for this family", never "zero" -- only an explicit 0 in the payload
-	// means zero rows were written.
+	// families whose evidence carries one (release_impact, membership_backfill
+	// as of CHAOS-4243; recommendations is deliberately excluded because its
+	// `fired` return value excludes persisted tombstone rows). Absent (nil)
+	// means "not applicable for this family", never "zero" -- only an
+	// explicit 0 in the payload means zero rows were written.
 	RowsWritten *int `json:"rows_written"`
 }
 

@@ -223,16 +223,16 @@ def test_remaining_execution_rejects_unknown_persisted_family() -> None:
         )
 
 
-def test_remaining_runner_is_a_closed_eight_family_allowlist() -> None:
+def test_remaining_runner_is_a_closed_six_family_allowlist() -> None:
+    # extra_metrics/team_metrics were removed by CHAOS-4243 (registered
+    # handlers with zero producer, retired rather than left dormant).
     assert set(worker_metrics._REMAINING_RUNNERS) == {
         "capacity",
         "complexity",
         "dora",
-        "extra_metrics",
         "membership_backfill",
         "recommendations",
         "release_impact",
-        "team_metrics",
     }
 
 
@@ -362,45 +362,6 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
         )
         is None
     )
-
-
-@pytest.mark.asyncio
-async def test_run_extra_metrics_aggregates_compounding_risk_and_benchmarking(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CHAOS-4243 codex round 2: benchmark_records alone previously stood in
-    for this family's rows_written signal, so a day that wrote real
-    compounding-risk rows but zero benchmark rows reported a misleading
-    zero. records_written must be the true sum of both writers.
-    """
-    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/default")
-    from dev_health_ops.metrics.remaining_scope_contract import ExtraMetricsScope
-
-    execution = _execution(family="extra_metrics")
-    scope = ExtraMetricsScope.model_validate(
-        {"version": 1, "day": "2026-08-24", "backfill_days": 1}
-    )
-
-    with (
-        patch(
-            "dev_health_ops.metrics.job_compounding_risk.run_compounding_risk_job",
-            new=AsyncMock(return_value=7),
-        ),
-        patch(
-            "dev_health_ops.metrics.benchmarking.runner.run_benchmarking_for_day",
-            return_value={},
-        ),
-        patch(
-            "dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink",
-            return_value=cast(Any, type("S", (), {"close": lambda self: None})()),
-        ),
-    ):
-        evidence = await worker_metrics._run_extra_metrics(execution, scope)
-
-    assert evidence["compounding_risk_rows"] == 7
-    assert evidence["benchmark_records"] == 0
-    assert evidence["records_written"] == 7
-    assert worker_metrics._evidence_row_count(execution.family, evidence) == 7
 
 
 @pytest.mark.asyncio

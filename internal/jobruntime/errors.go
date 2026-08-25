@@ -219,6 +219,51 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 	return decision{result: ResultCancel, category: CategoryPermanent, cancel: true}
 }
 
+// classifyBudgetWait classifies a budget.Acquire failure -- a wait for fleet
+// or organization capacity that failed before the handler ever ran.
+//
+// Unlike classify, "is this the final attempt" is answered by River's own
+// job.MaxAttempts (the ceiling that actually governs whether River retries),
+// never adapter.descriptor.MaxAttempts (the contract's own domain-attempt
+// ceiling): no domain attempt has been made yet, so there is nothing to
+// charge against it. validateRow only requires job.MaxAttempts to be AT
+// LEAST descriptor.MaxAttempts, so a caller may legitimately give River more
+// retry headroom against infrastructure backpressure than the contract's own
+// ceiling allows (CHAOS-4235: TestMultiReplicaFleetSurvivesDatabaseOutage
+// does this deliberately for system.heartbeat's insert). Using the contract
+// ceiling here mislabeled that still-retryable-at-River wait as
+// ResultDiscard; passing River's own ceiling keeps the label accurate in
+// BOTH directions -- it also correctly reports ResultDiscard for the common
+// production case where the two ceilings match (system.heartbeat's real
+// insert path sets MaxAttempts=1 for the same reason its contract does: a
+// retried heartbeat post would report the same day twice; see
+// internal/scheduler/fixed/inventory.go), where the wait genuinely IS
+// exhausting River's last attempt.
+//
+// Neither branch ever sets cancel=true, matching classify's own behavior for
+// this category: River's executor, not this decision, is what actually
+// enforces job.MaxAttempts. `jobRow.Attempt >= jobRow.MaxAttempts` runs
+// unconditionally on any returned non-cancel error
+// (internal/jobexecutor/job_executor.go's reportError), so this function's
+// Result has never controlled -- and still does not control -- whether a
+// job whose budget wait keeps failing is bounded. It only controls what
+// gets reported while that River-owned bound is reached.
+func classifyBudgetWait(ctx context.Context, err error, attempt, riverMaxAttempts int) decision {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		// Mirrors classify: a remote River cancellation already marks the
+		// row, while a process drain must leave the job retryable.
+		return decision{result: ResultCancel, category: CategoryCancelled}
+	}
+	category := CategoryBudget
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		category = CategoryTimeout
+	}
+	if attempt >= riverMaxAttempts {
+		return decision{result: ResultDiscard, category: category}
+	}
+	return decision{result: ResultRetry, category: category}
+}
+
 func retryDecision(category ErrorCategory, why Reason, attempt, maxAttempts int) decision {
 	if attempt >= maxAttempts {
 		return decision{result: ResultDiscard, category: category, reason: why}

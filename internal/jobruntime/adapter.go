@@ -381,7 +381,15 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	}
 	observe(func() { adapter.observer.BudgetWait(ctx, labels, time.Since(waitStarted), waitResult) })
 	if err != nil {
-		choice = classify(ctx, mark(CategoryBudget, err, false), job.Attempt, adapter.descriptor.MaxAttempts)
+		// classifyBudgetWait, not classify: no domain attempt has run yet at
+		// this point, so "is this the final attempt" is answered by River's
+		// own job.MaxAttempts, not adapter.descriptor.MaxAttempts (CHAOS-4235;
+		// see classifyBudgetWait's doc comment for why those two ceilings can
+		// legitimately differ, and why using the wrong one mislabeled a
+		// still-retryable-at-River wait as ResultDiscard). Whichever Result
+		// this reports, River's executor -- not this decision -- is what
+		// actually enforces job.MaxAttempts.
+		choice = classifyBudgetWait(ctx, err, job.Attempt, job.MaxAttempts)
 		return choice, envelope, err
 	}
 	if lease == nil {

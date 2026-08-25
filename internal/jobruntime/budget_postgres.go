@@ -16,6 +16,31 @@ const (
 	concurrencyRetryDelay   = 100 * time.Millisecond
 )
 
+// CHAOS-4235 REMOVED an acquireQueryTimeout that once bounded each tryAcquire
+// poll iteration to 5s in addition to the caller's own ctx, as defense-in-
+// depth against a hang this investigation never actually reproduced (an
+// isolated diagnostic drove a real TCP-level outage against a blocked Acquire
+// poll 30 times with zero hangs -- every trial failed fast on a real DB error
+// well inside its deadline). Two rounds of adversarial review each found a
+// distinct, real correctness bug in it instead: the first version returned
+// its own sub-timeout as a terminal Acquire() error rather than retrying,
+// failing legitimately slow-but-successful DB round-trips outright; the
+// fixed version was then shown to shorten -- not eliminate -- an inherent
+// ambiguous-commit window (tx.Commit's acknowledgment can be delayed past any
+// bound while PostgreSQL has already durably applied it), and shortening that
+// window to 5s and repeating it on every ~100ms poll iteration, rather than
+// once per Acquire call against the caller's own (often much longer)
+// deadline, measurably increased the chance of orphaning a newly-inserted
+// lease row: tryAcquire returns an unwrapped sentinel error on a commit
+// timeout, not the caller, so nothing holds the lease to release it, and the
+// row occupies its budget slot for the full lease duration (15 minutes)
+// until its own expiry is swept by a later call. For a fleet-limit-1,
+// single-attempt contract (system.heartbeat in production), one such event
+// can consume the ONLY concurrency slot for up to 15 minutes. Two proven bugs
+// against zero proven benefit: removed rather than patched a third time. The
+// caller's own ctx (the job's contract deadline) still bounds tryAcquire
+// directly, exactly as it did before this investigation touched this file.
+
 var errConcurrencyBudgetUnavailable = errors.New("concurrency budget store is unavailable")
 
 // ConcurrencyBudgetObserver records bounded fleet-budget state. It receives

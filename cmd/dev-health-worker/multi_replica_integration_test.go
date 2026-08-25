@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -529,6 +530,12 @@ type multiReplicaBridge struct {
 	releaseOnce  sync.Once
 	mu           sync.Mutex
 	bySchedule   map[string]int
+	// parked is true for exactly as long as the first handler is blocked
+	// inside serveHTTP below, waiting on releaseFirst or its own request
+	// context. A caller that depends on "the first handler is still parked"
+	// (CHAOS-4235's forced-contention setup) should assert stillParked()
+	// rather than infer it from elapsed time.
+	parked atomic.Bool
 }
 
 func newMultiReplicaBridge() *multiReplicaBridge {
@@ -554,9 +561,17 @@ func (bridge *multiReplicaBridge) serveHTTP(output http.ResponseWriter, request 
 	block := false
 	bridge.first.Do(func() {
 		block = true
+		// parked must be true BEFORE the send: a receiver on firstStarted
+		// (waitForFirst) can observe the value and a caller can then check
+		// stillParked() before this goroutine gets scheduled again. Storing
+		// after the send left a real window where that check saw the zero
+		// value even though this handler was about to block (codex
+		// adversarial review, CHAOS-4235).
+		bridge.parked.Store(true)
 		bridge.firstStarted <- payload.ScheduledFor
 	})
 	if block {
+		defer bridge.parked.Store(false)
 		select {
 		case <-bridge.releaseFirst:
 		case <-request.Context().Done():
@@ -583,6 +598,14 @@ func (bridge *multiReplicaBridge) waitForFirst(t *testing.T) string {
 
 func (bridge *multiReplicaBridge) release() {
 	bridge.releaseOnce.Do(func() { close(bridge.releaseFirst) })
+}
+
+// stillParked reports whether the first handler is, right now, still
+// blocked inside serveHTTP. A caller that needs job 1's replica to still
+// have no free worker slot must check this instead of assuming elapsed
+// time was short enough (CHAOS-4235).
+func (bridge *multiReplicaBridge) stillParked() bool {
+	return bridge.parked.Load()
 }
 
 func (bridge *multiReplicaBridge) effects() map[string]int {

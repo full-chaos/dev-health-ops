@@ -221,6 +221,15 @@ jobs:
         env:
           DISABLE_DOTENV: "1"
           OTEL_ENABLED: "false"
+          # Workspace-relative, not under TMP_DIR: the script's own cleanup()
+          # trap rm -rf's TMP_DIR on exit, before this job's own "Upload logs"
+          # step runs -- logs left only there are already gone by upload time
+          # (codex review, CHAOS-4266; confirmed on the first live CI run).
+          # Mirrors LIVE_E2E_API_LOG_FILE in the live-e2e job above.
+          METRICS_PROOF_API_LOG_FILE: ./metrics-executed-proof-api.log
+          METRICS_PROOF_WORKER_LOG_FILE: ./metrics-executed-proof-worker.log
+          METRICS_PROOF_RECONCILER_LOG_FILE: ./metrics-executed-proof-reconciler.log
+          METRICS_PROOF_SUMMARY_JSON_FILE: ./metrics-executed-proof-family-summary.json
         run: |
           chmod +x ci/run_metrics_executed_proof.sh
           ./ci/run_metrics_executed_proof.sh
@@ -231,8 +240,8 @@ jobs:
         with:
           name: metrics-executed-proof-logs
           path: |
-            /tmp/metrics-executed-proof.*/api.log
-            /tmp/metrics-executed-proof.*/worker.log
-            /tmp/metrics-executed-proof.*/reconciler.log
-            /tmp/metrics-executed-proof.*/family-summary.json
+            metrics-executed-proof-api.log
+            metrics-executed-proof-worker.log
+            metrics-executed-proof-reconciler.log
+            metrics-executed-proof-family-summary.json
           if-no-files-found: ignore

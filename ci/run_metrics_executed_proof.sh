@@ -219,7 +219,13 @@ PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
 
 echo "==> starting dev-hops api (the Go worker's operational bridge)"
 JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
-API_LOG_FILE="${TMP_DIR}/api.log"
+# Overridable to a path OUTSIDE TMP_DIR (matching LIVE_E2E_API_LOG_FILE in
+# ci/run_live_backend_e2e.sh): cleanup() below unconditionally rm -rf's
+# TMP_DIR on exit, which runs before the workflow's own "Upload logs" step,
+# so logs left only in TMP_DIR are already gone by upload time (codex
+# review, CHAOS-4266 -- confirmed on the first live CI run: all 4 artifacts
+# reported "No files were found").
+API_LOG_FILE="${METRICS_PROOF_API_LOG_FILE:-${TMP_DIR}/api.log}"
 (
   export DATABASE_URI="${POSTGRES_SUPERUSER_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}"
@@ -233,7 +239,7 @@ API_PID="$!"
 wait_for_http_ready "dev-hops api" "http://127.0.0.1:${API_PORT}/health" "${API_LOG_FILE}" API_PID
 
 echo "==> starting dev-health-worker (queues: metrics, sync)"
-WORKER_LOG_FILE="${TMP_DIR}/worker.log"
+WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
 (
   export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
   export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
@@ -260,7 +266,7 @@ WORKER_PID="$!"
 wait_for_http_ready "dev-health-worker" "http://127.0.0.1:${WORKER_HTTP_PORT}/readyz" "${WORKER_LOG_FILE}" WORKER_PID
 
 echo "==> starting dev-health-reconciler"
-RECONCILER_LOG_FILE="${TMP_DIR}/reconciler.log"
+RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
 (
   export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
   export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
@@ -291,7 +297,7 @@ for target in cicd deployments incidents tests; do
 done
 
 echo "==> waiting up to $((COMPUTE_WAIT_ATTEMPTS * COMPUTE_WAIT_SLEEP_SECS))s for the post-sync fanout to reach ClickHouse"
-ASSERT_SUMMARY_JSON="${TMP_DIR}/family-summary.json"
+ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summary.json}"
 # Scoped to families this job's own seeding can causally satisfy (codex
 # review): cicd/deploy/testops_pipeline/testops_test come directly from the
 # cicd/deployments/tests targets seeded above; dora is computed from

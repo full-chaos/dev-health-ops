@@ -43,7 +43,7 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
 	reader := GitHubProjectV2SnapshotDiffClickHouseReader{Conn: conn}
 	sink, err := NewGitHubWorkItemClickHouseEffects(
-		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

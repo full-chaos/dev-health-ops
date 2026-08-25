@@ -4,6 +4,8 @@ package providersync
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +77,8 @@ func githubDerivedIntegrationConn(t *testing.T, ctx context.Context) driver.Conn
 var (
 	githubWorkItemDerivedEmittableSources = []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
-		"assignee_membership", "linked_issue", "manual_fallback", "unassigned",
+		"assignee_membership", "linked_issue", "author_membership",
+		"manual_fallback", "unassigned",
 	}
 	githubWorkItemDerivedEmittableConfidences = []string{
 		"high", "medium", "manual", "none",
@@ -130,6 +133,83 @@ func TestGitHubWorkItemTeamAttributionEnumsAcceptEveryResolverValue(t *testing.T
 				}
 			}
 		})
+	}
+}
+
+var githubWorkItemDerivedSourceEnumElement = regexp.MustCompile(`'([^']+)'\s*=\s*(\d+)`)
+
+// githubWorkItemDerivedParseEnum8Codes parses a ClickHouse
+// `Enum8('name' = code, ...)` type string into name->code. It fails the test
+// outright on a malformed type rather than returning a partial map, so a
+// parsing gap can never masquerade as a passing code-mapping assertion.
+func githubWorkItemDerivedParseEnum8Codes(t *testing.T, columnType string) map[string]int {
+	t.Helper()
+	matches := githubWorkItemDerivedSourceEnumElement.FindAllStringSubmatch(columnType, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no Enum8 elements parsed from column type: %s", columnType)
+	}
+	codes := make(map[string]int, len(matches))
+	for _, match := range matches {
+		code, err := strconv.Atoi(match[2])
+		if err != nil {
+			t.Fatalf("non-numeric enum code %q in column type: %s", match[2], columnType)
+		}
+		codes[match[1]] = code
+	}
+	return codes
+}
+
+// TestGitHubWorkItemTeamAttributionSourceEnumCodesAreAppendedNotRenumbered
+// pins the exact `source` Enum8 code for every value across migrations
+// 051/053/078 (CHAOS-4244), not just that each name is PRESENT (the sibling
+// test above). Enum8 storage codes are insertion order, NOT precedence --
+// team-attribution.md s0 warns readers not to read them as the ladder -- but
+// that only holds if migrations only ever APPEND a new code, never renumber
+// an existing one. A migration that renumbers (e.g. slotting
+// `author_membership` in the MIDDLE of the existing codes instead of
+// appending it as 9) would silently reinterpret every already-written row's
+// stored source. This test fails on exactly that class of migration bug,
+// independent of `_SOURCE_ORDER` (which decides PRECEDENCE, a separate
+// concern this test does not touch).
+func TestGitHubWorkItemTeamAttributionSourceEnumCodesAreAppendedNotRenumbered(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+
+	var columnType string
+	if err := conn.QueryRow(ctx,
+		"SELECT type FROM system.columns WHERE table = 'work_item_team_attributions' "+
+			"AND name = 'source' AND database = currentDatabase()",
+	).Scan(&columnType); err != nil {
+		t.Fatal(err)
+	}
+	got := githubWorkItemDerivedParseEnum8Codes(t, columnType)
+	want := map[string]int{
+		"native_team":         1,
+		"linked_issue":        2,
+		"project_ownership":   3,
+		"repo_ownership":      4,
+		"assignee_membership": 5,
+		"unassigned":          6,
+		"issue_project":       7,
+		"manual_fallback":     8,
+		"author_membership":   9,
+	}
+	for name, wantCode := range want {
+		gotCode, ok := got[name]
+		if !ok {
+			t.Errorf("enum is missing %q entirely: %s", name, columnType)
+			continue
+		}
+		if gotCode != wantCode {
+			t.Errorf("%q stored as code %d, want %d (a migration renumbered an "+
+				"existing code instead of appending) -- column type: %s",
+				name, gotCode, wantCode, columnType)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("enum has %d elements, want exactly %d (an untracked value was "+
+			"added or removed) -- got=%v want=%v", len(got), len(want), got, want)
 	}
 }
 

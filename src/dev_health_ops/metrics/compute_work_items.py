@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, TypedDict
 
@@ -72,6 +72,7 @@ TeamAttributionSource = Literal[
     "repo_ownership",
     "assignee_membership",
     "linked_issue",
+    "author_membership",
     "manual_fallback",
     "unassigned",
 ]
@@ -94,7 +95,7 @@ class TeamAttributionCandidate:
 
 @dataclass(frozen=True)
 class ManualFallbackRule:
-    """An explicit `manual_attribution_fallbacks` row (rank 6, never an override).
+    """An explicit `manual_attribution_fallbacks` row (rank 7, never an override).
 
     Used only when no native/imported/linked source resolved. `scope_type` is one
     of repo | project | member | issue_key_prefix.
@@ -131,8 +132,14 @@ class TeamAttributionContext:
 
 # CHAOS-2600: deterministic staged precedence. linked_issue is a TRUE FALLBACK
 # (rank 5) below every native/imported fact — it never overrides ownership or
-# assignee membership; it only beats manual_fallback and unassigned. native_team
-# stays top. See docs/contribute/architecture/team-attribution.md §0.
+# assignee membership; it only beats author_membership, manual_fallback and
+# unassigned. native_team stays top. See
+# docs/contribute/architecture/team-attribution.md §0.
+#
+# CHAOS-4244 (chris ruling, 2026-08-24): a PR/MR author is a PERSON signal,
+# "at best a low-precedence fallback" — it must NOT beat a real linked_issue
+# donor. author_membership therefore gets its OWN rank (6), below linked_issue
+# and above manual_fallback, rather than sharing assignee_membership's rank 4.
 _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "native_team": 0,
     "issue_project": 1,
@@ -140,16 +147,18 @@ _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
     "repo_ownership": 3,
     "assignee_membership": 4,
     "linked_issue": 5,
-    "manual_fallback": 6,
-    "unassigned": 7,
+    "author_membership": 6,
+    "manual_fallback": 7,
+    "unassigned": 8,
 }
 
 # Sources a work item may pass on when it acts as a linked-issue *donor*. A donor
 # may only contribute a team it earned from a first-class attribution fact
-# (sources 0-4). manual_fallback (rank 6) and unassigned are excluded so a
-# fallback rule — especially the provider-neutral `issue_key_prefix` scope —
-# can never be laundered into rank-5 `linked_issue` provenance on a dependent
-# item. linked_issue itself is absent here because donor resolution runs with
+# (sources 0-4). author_membership (rank 6), manual_fallback (rank 7) and
+# unassigned are excluded so a person-shaped signal or a fallback rule —
+# especially the provider-neutral `issue_key_prefix` scope — can never be
+# laundered into rank-5 `linked_issue` provenance on a dependent item.
+# linked_issue itself is absent here because donor resolution runs with
 # `linked_issue_resolver=None` (no transitive inheritance). See
 # docs/contribute/architecture/team-attribution.md §0.
 _DONOR_SOURCES: frozenset[TeamAttributionSource] = frozenset(
@@ -165,6 +174,31 @@ _DONOR_SOURCES: frozenset[TeamAttributionSource] = frozenset(
 
 def _identity_key(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def _is_bot_identity(identity: str | None) -> bool:
+    """True for a GitHub App/bot actor identity.
+
+    ``IdentityResolver.resolve`` (providers/identity.py) falls back to
+    ``f"{provider}:{username}"`` for any identity with no email -- true of
+    every bot -- so the raw login, brackets included, survives resolution
+    (e.g. ``github:dependabot[bot]``). ``[bot]`` is reserved: GitHub does not
+    let a human register a bracketed login, the same invariant
+    ``_is_linear_integration_author`` (providers/github/normalize.py) and the
+    AI-attribution CI_BOTS/KNOWN_AI_BOTS detectors (providers/_ai_detection.py)
+    already rely on -- this reuses that convention rather than a second bot
+    list.
+    """
+    return bool(identity) and (identity or "").strip().lower().endswith("[bot]")
+
+
+# CHAOS-4244's author_membership signal is documented and tested as a PR/MR
+# author attribution mechanism ("Why this exists": GitHub PRs, item.reporter
+# as the PR's opener) -- not a general reporter-based attribution for every
+# work-item type. Gating here keeps a Jira/Linear/GitHub/GitLab ISSUE (bug,
+# task, story, ...) opened by a mapped member from silently gaining a team via
+# a signal this ticket never reviewed or tested for that scope.
+_REPORTER_ELIGIBLE_TYPES: frozenset[str] = frozenset({"pr", "merge_request"})
 
 
 def _candidate_sort_key(
@@ -212,6 +246,37 @@ def _dedupe_candidates(
         seen.add(key)
         deduped.append(candidate)
     return deduped
+
+
+def _collapse_by_team_id(
+    ranked: list[TeamAttributionCandidate],
+) -> list[TeamAttributionCandidate]:
+    """Keep at most one candidate per (source, team_id) pair.
+
+    `work_item_team_attributions` is a ReplacingMergeTree ordered by
+    ``(org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`` --
+    ``evidence`` is NOT part of that key (migration 051). Two candidates for
+    the SAME source and team but with different evidence text (e.g. an
+    assignee and the reporter who happen to be the same person, or two
+    ownership facts naming the same team by different paths) therefore
+    collide at the storage key even though `_dedupe_candidates` -- which
+    keys on the full row including evidence -- treats them as distinct and
+    lets both through. A collision resolves by `computed_at` (the RMT
+    version column); when both rows are stamped in the same batch that tie
+    is effectively undefined, and readers filtering `is_primary = 1` can
+    silently lose the attribution if the surviving row happens to be the
+    non-primary one (codex, 2026-08-24). `ranked` is already sorted
+    best-first (`_ranked`), so keeping the first occurrence per team_id
+    keeps the correct primary/highest-precedence row.
+    """
+    seen_teams: set[str | None] = set()
+    collapsed: list[TeamAttributionCandidate] = []
+    for candidate in ranked:
+        if candidate.team_id in seen_teams:
+            continue
+        seen_teams.add(candidate.team_id)
+        collapsed.append(candidate)
+    return collapsed
 
 
 def _context_candidates(
@@ -292,7 +357,7 @@ def _issue_key_prefix(item: WorkItem) -> str | None:
 def _manual_fallback_candidates(
     item: WorkItem, fallbacks: Sequence[ManualFallbackRule]
 ) -> list[TeamAttributionCandidate]:
-    """Build manual_fallback candidates (rank 6) matching the item's scope.
+    """Build manual_fallback candidates (rank 7) matching the item's scope.
 
     The precedence loop ensures these only become primary when no native/imported/
     linked source matched — manual fallback is never an override. An ``issue_key_prefix``
@@ -362,9 +427,15 @@ def resolve_team_attribution(
         "repo_ownership": [],
         "assignee_membership": [],
         "linked_issue": [],
+        "author_membership": [],
         "manual_fallback": [],
         "unassigned": [],
     }
+    # CHAOS-4244: WHY the reporter path contributed nothing, if it didn't --
+    # threaded onto the final unassigned row's evidence below (only when
+    # nothing else resolved either) so the residual is traceable instead of a
+    # bare "no_candidate".
+    reporter_skip_reason: str | None = None
 
     native = _native_team_candidate(item, project_key_resolver)
     if native is not None:
@@ -430,6 +501,88 @@ def resolve_team_attribution(
                     _identity_key(assignee_identity),
                 )
             )
+        # CHAOS-4244: a PR/MR's reporter (the author) is a membership signal
+        # GitHub's own "assignee" field never carries -- GitHub distinguishes
+        # the two, and most PRs are opened with no assignee set at all. This
+        # reuses the SAME member_by_identity resolution the assignee loop
+        # above uses, but stamps its OWN source/rank (author_membership,
+        # rank 6 -- chris's ruling, 2026-08-24: an author is a PERSON signal,
+        # "at best a low-precedence fallback", and must NOT beat a real
+        # linked_issue donor (rank 5), so it cannot share assignee_membership's
+        # rank 4). See docs/contribute/architecture/team-attribution.md "Why
+        # this exists": author membership was previously skipped as
+        # unreliable ALONE, but a match is still a strictly better signal
+        # than the unassigned floor it used to fall to.
+        #
+        # Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped
+        # signal is only usable "where the reporter's membership is
+        # unambiguous (exactly one team)" -- a person on 2+ teams gives no
+        # reason to prefer one. An assignee keeps no such gate: it is the
+        # pre-existing rank-4 mechanism, not the new one this ticket is
+        # adding. Bot filter: a bot/App author (dependabot, github-actions,
+        # ...) carries no team meaning and must not be attributed at all --
+        # see _is_bot_identity. Neither exclusion is a rejection of person-
+        # shaped attribution (chris, 2026-08-24: the Ops-Team-mapped-to-
+        # nothing reading was a misread of a TEST-DATA choice, not a rule
+        # against it) -- they are the precision conditions chris named for
+        # shipping it. `_reporter_skip_reason` records WHY, so the eventual
+        # `unassigned` row (if nothing else resolves either) is traceable
+        # instead of a bare "no_candidate".
+        # Deliberately org-scoped ONLY: `attribution_context.member_by_identity`
+        # is ClickHouse data keyed to this item's own org (CHAOS-2600 CS6 --
+        # "ClickHouse is the only source used for analytics attribution").
+        # There is NO legacy-TeamResolver reporter path -- adding one was
+        # reviewed and rejected (codex, 2026-08-24): TeamResolver can load
+        # from a global, non-org-scoped config path with no ambiguity
+        # concept of its own, so a second reporter lookup through it would
+        # both bypass the ambiguity gate above (context says "ambiguous",
+        # legacy independently answers anyway) and risk one tenant's mapping
+        # stamping another tenant's PR. The pre-existing assignee legacy
+        # path below is untouched -- it predates this ticket and is out of
+        # scope; this reporter feature simply never extends to it.
+        #
+        # Type-gated to PR/MR ONLY (codex, 2026-08-24, MEDIUM): the resolver
+        # used `item.reporter` unconditionally, so a Jira/Linear/GitHub/GitLab
+        # ISSUE (bug/task/story/...) created by a mapped member would ALSO
+        # gain an author_membership candidate -- silently widening this
+        # ticket's contract (documented throughout as PR/MR author
+        # attribution, e.g. "Why this exists" above) to issue attribution,
+        # unreviewed and untested. `item.reporter` on a non-PR/MR item is
+        # simply never consulted; it falls through exactly as it did before
+        # CHAOS-4244.
+        reporter_eligible = item.type in _REPORTER_ELIGIBLE_TYPES and bool(
+            item.reporter
+        )
+        if reporter_eligible and _is_bot_identity(item.reporter):
+            reporter_skip_reason = "bot_author"
+        elif reporter_eligible:
+            reporter_candidates = _context_candidates(
+                attribution_context.member_by_identity,
+                item.provider,
+                _identity_key(item.reporter),
+            )
+            reporter_teams = {c.team_id for c in reporter_candidates}
+            if len(reporter_teams) == 1:
+                # source AND evidence are rewritten (not passed through
+                # verbatim) so a reporter-resolved row lands in its own
+                # author_membership rank rather than assignee_membership's,
+                # and is distinguishable from an assignee-resolved one for
+                # provenance and for WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL's
+                # author/assignee split. Splitting the source also makes the
+                # earlier ReplacingMergeTree storage-key collision
+                # (author == assignee, same team, same (org_id, repo_id,
+                # work_item_id, team_id, source) key) structurally impossible:
+                # the two rows now differ by source, not just evidence.
+                candidates_by_source["author_membership"].extend(
+                    replace(
+                        candidate,
+                        source="author_membership",
+                        evidence=f"reporter={item.reporter}",
+                    )
+                    for candidate in reporter_candidates
+                )
+            elif len(reporter_teams) > 1:
+                reporter_skip_reason = "ambiguous_membership"
 
     assignee: str | None = item.assignees[0] if item.assignees else None
     team_id, team_name = _resolve_team(team_resolver, assignee)
@@ -455,17 +608,39 @@ def resolve_team_attribution(
     rows: list[TeamAttributionCandidate] = []
     for source in sorted(candidates_by_source, key=lambda s: _SOURCE_ORDER[s]):
         ranked = _ranked(_dedupe_candidates(candidates_by_source[source]))
+        # Scoped to author_membership ONLY (CHAOS-4244): now that the author
+        # candidate stamps its OWN source, it can no longer collide with a
+        # real assignee row at the ReplacingMergeTree storage key -- source
+        # differs, so that original collision (migration 051's key excludes
+        # evidence, not source) is now structurally impossible. The residual
+        # reason to keep this here: the SAME reporter identity can resolve
+        # via 2+ facets (member_id, email, ...) naming the SAME team, which
+        # after the evidence rewrite above can still differ in specificity/
+        # priority/updated_at and so survive `_dedupe_candidates` (which keys
+        # on the full row) as separate same-team rows -- belt-and-suspenders,
+        # not a required fix. Every other source legitimately wants multiple
+        # same-team candidates preserved as provenance (e.g. two
+        # manual_fallback rules naming the same team by different scopes) --
+        # collapsing those too would erase real information this ticket has
+        # no reason to touch.
+        if source == "author_membership":
+            ranked = _collapse_by_team_id(ranked)
         if primary is None and ranked:
             primary = ranked[0]
         rows.extend(ranked)
 
     if primary is None:
+        unassigned_evidence = (
+            f"no_candidate:{reporter_skip_reason}"
+            if reporter_skip_reason
+            else "no_candidate"
+        )
         primary = TeamAttributionCandidate(
             source="unassigned",
             team_id=None,
             team_name=None,
             confidence="none",
-            evidence="no_candidate",
+            evidence=unassigned_evidence,
             is_primary=1,
         )
         rows.append(primary)

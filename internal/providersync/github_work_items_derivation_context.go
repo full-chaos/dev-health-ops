@@ -34,15 +34,32 @@ type githubWorkItemDerivationCandidate struct {
 }
 
 type githubWorkItemDerivationSubject struct {
-	WorkItemID    string
-	Provider      string
+	WorkItemID string
+	Provider   string
+	// Type is the item's own native kind (e.g. "pr", "merge_request", "bug",
+	// "issue") -- CHAOS-4244 R5/R6 (codex, 2026-08-25): author_membership
+	// gates on Provider+Type, NOT on WorkItemID shape (see
+	// githubWorkItemDerivationIsPullOrMergeRequestType), because an
+	// ID-prefix/shape check has no way to notice a Provider that does not
+	// match the shape it is reading (a "gitlab:...!..." WorkItemID on a
+	// non-GitLab row would previously have opened the gate regardless).
+	Type          string
 	RepoID        *string
 	NativeTeamKey *string
 	ProjectKey    *string
 	ProjectID     *string
 	ProjectName   *string
 	Assignees     []string
-	OrgID         string
+	// Reporter is the item's author (e.g. a PR's opener). CHAOS-4244: GitHub's
+	// "assignee" field is distinct from and far less commonly set than the
+	// author, so a PR opened by a team member with no assignee, no
+	// repo_patterns row, and no linked issue used to resolve unassigned. This
+	// mirrors compute_work_items.py's resolve_team_attribution, which now
+	// feeds item.reporter into its OWN author_membership candidate list (rank
+	// 6, below linked_issue) -- a person signal must never outrank a real
+	// linked_issue donor.
+	Reporter *string
+	OrgID    string
 }
 
 type githubWorkItemDerivationTeamFact struct {
@@ -454,10 +471,11 @@ func githubWorkItemDerivationSubjectFromRow(row githubWorkItemRow) githubWorkIte
 		repoID = &value
 	}
 	return githubWorkItemDerivationSubject{
-		WorkItemID: row.WorkItemID, Provider: row.Provider, RepoID: repoID,
+		WorkItemID: row.WorkItemID, Provider: row.Provider, Type: row.Type, RepoID: repoID,
 		NativeTeamKey: row.NativeTeamKey, ProjectKey: row.ProjectKey,
 		ProjectID: row.ProjectID, ProjectName: row.ProjectName,
-		Assignees: append([]string(nil), row.Assignees...), OrgID: row.OrgID,
+		Assignees: append([]string(nil), row.Assignees...),
+		Reporter:  row.Reporter, OrgID: row.OrgID,
 	}
 }
 
@@ -641,17 +659,101 @@ func (derived githubWorkItemDerivationContext) resolve(
 			derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(assignee))]...,
 		)
 	}
+	// CHAOS-4244: mirrors compute_work_items.py's resolve_team_attribution --
+	// the reporter (author) is a membership signal GitHub's "assignee" field
+	// never carries. Stamps its OWN source/rank (author_membership, rank 6 --
+	// chris's ruling, 2026-08-24: an author is a PERSON signal, "at best a
+	// low-precedence fallback", and must NOT beat a real linked_issue donor
+	// (rank 5), so it cannot share assignee_membership's rank 4).
+	//
+	// Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped signal
+	// is only usable "where the reporter's membership is unambiguous (exactly
+	// one team)". Bot filter: a bot/App author (dependabot, github-actions,
+	// ...) carries no team meaning -- see githubWorkItemDerivationIsBotIdentity.
+	// An assignee keeps neither gate: it is the pre-existing rank-4 mechanism,
+	// not the new one this ticket adds. reporterSkipReason records WHY, so the
+	// eventual unassigned candidate (if nothing else resolves either) is
+	// traceable instead of a bare "no_candidate".
+	// No legacy-resolver reporter path exists here, deliberately (codex,
+	// 2026-08-24): Go's memberByID is already the sole, org-scoped source
+	// (loaded per-claim in loadWorkItemDerivationContextForProvider), so
+	// there is no second, non-tenant-scoped lookup to bypass the gate above.
+	//
+	// Type-gated to PR/MR ONLY (codex, 2026-08-24, MEDIUM; broadened to
+	// GitLab codex round-4, MEDIUM; switched from WorkItemID-shape to
+	// Provider+Type codex round-5, 2026-08-25, BLOCK): Reporter is populated
+	// for GitHub ISSUES too (githubWorkItemDerivationSubjectFromRow copies
+	// row.Reporter unconditionally), so without this gate a GitHub issue
+	// opened by a mapped member would ALSO gain an author_membership
+	// candidate -- silently widening this ticket's documented PR/MR-only
+	// contract. This resolver is provider-neutral -- shared by GitHub,
+	// GitLab, and Jira (loadWorkItemDerivationContextForProvider) -- so a
+	// GitHub-only gate would silently diverge from Python's item.type in
+	// {"pr","merge_request"} gate, leaving every GitLab MR author unassigned
+	// in Go while Python attributes it.
+	// githubWorkItemDerivationIsPullOrMergeRequestType checks Provider+Type,
+	// not WorkItemID shape: an ID-prefix check (the pre-R5 gate) cannot tell
+	// a well-formed row from a legacy/mismatched one whose WorkItemID merely
+	// LOOKS like a GitLab MR or GitHub PR while its Provider says otherwise.
+	// Jira/Linear have no PR-equivalent Type, so neither ever matches and
+	// this gate simply never opens for them. subject.Reporter on a non-PR/MR
+	// item is simply never consulted; it falls through exactly as it did
+	// before CHAOS-4244.
+	var reporterSkipReason string
+	if githubWorkItemDerivationIsPullOrMergeRequestType(subject.Provider, subject.Type) &&
+		subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
+		switch {
+		case githubWorkItemDerivationIsBotIdentity(*subject.Reporter):
+			reporterSkipReason = "bot_author"
+		default:
+			reporterCandidates := derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(*subject.Reporter))]
+			switch {
+			case githubWorkItemDerivationSingleTeam(reporterCandidates):
+				// Source AND Evidence are rewritten (not passed through
+				// verbatim): reporterCandidates come from the SAME
+				// memberByID map the assignee loop above reads, pre-stamped
+				// Source "assignee_membership" at fact-load time, so the
+				// override must happen here, at the point of use. This puts
+				// the reporter-resolved row in its own author_membership
+				// rank rather than assignee_membership's, and is
+				// distinguishable from an assignee-resolved one for
+				// provenance and for githubWorkItemTeamAttributionMetricSource.
+				relabeled := make([]githubWorkItemDerivationCandidate, len(reporterCandidates))
+				for index, candidate := range reporterCandidates {
+					candidate.Source = "author_membership"
+					candidate.Evidence = "reporter=" + *subject.Reporter
+					relabeled[index] = candidate
+				}
+				bySource["author_membership"] = append(bySource["author_membership"], relabeled...)
+			case len(reporterCandidates) > 0:
+				reporterSkipReason = "ambiguous_membership"
+			}
+		}
+	}
 	bySource["manual_fallback"] = append(
 		bySource["manual_fallback"], derived.manualCandidates(subject)...,
 	)
 
 	order := []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
-		"assignee_membership", "linked_issue", "manual_fallback", "unassigned",
+		"assignee_membership", "linked_issue", "author_membership",
+		"manual_fallback", "unassigned",
 	}
 	var primary *githubWorkItemDerivationCandidate
 	all := make([]githubWorkItemDerivationCandidate, 0)
 	for _, source := range order {
+		// No team_id collapse here, deliberately (unlike the Python mirror):
+		// this route's write path already dedupes by the EXACT ClickHouse
+		// sorting key -- (repo_id, work_item_id, team_id, source), evidence
+		// excluded -- via githubWorkItemDerivedSortingKeyDedupe in
+		// WriteGitHubWorkItemEffect, with a deterministic last-wins tie-break
+		// on computed_at. Collapsing here too would be redundant AND wrong:
+		// it would also erase legitimate SEPARATE-team-name-same-team_id or
+		// same-team-different-rule candidates (e.g. two manual_fallback
+		// rules naming the same team) that the provenance contract still
+		// wants recorded pre-write. Python has no such write-time dedup
+		// (sinks/clickhouse/core.py inserts verbatim), which is why
+		// _collapse_by_team_id lives THERE instead.
 		candidates := rankDerivationCandidates(dedupeDerivationCandidates(bySource[source]))
 		if primary == nil && len(candidates) > 0 {
 			value := candidates[0]
@@ -660,8 +762,12 @@ func (derived githubWorkItemDerivationContext) resolve(
 		all = append(all, candidates...)
 	}
 	if primary == nil {
+		evidence := "no_candidate"
+		if reporterSkipReason != "" {
+			evidence = "no_candidate:" + reporterSkipReason
+		}
 		value := githubWorkItemDerivationCandidate{
-			Source: "unassigned", Confidence: "none", Evidence: "no_candidate",
+			Source: "unassigned", Confidence: "none", Evidence: evidence,
 			IsPrimary: 1, UpdatedAt: normalizedDerivationTime(time.Time{}),
 		}
 		primary = &value
@@ -1334,7 +1440,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) loadDonors(
 	}
 	maximum := len(request.DonorWorkItemIDs) + len(request.DonorIssueKeys)*2
 	rows, err := source.Conn.Query(ctx, `
-SELECT work_item_id, provider, toString(repo_id), native_team_key, project_key,
+SELECT work_item_id, provider, type, toString(repo_id), native_team_key, project_key,
        project_id, project_name, assignees, org_id
 FROM work_items FINAL
 WHERE org_id = ? AND (
@@ -1350,7 +1456,7 @@ LIMIT ?`, orgID, request.DonorWorkItemIDs, request.DonorIssueKeys, maximum+1)
 	for rows.Next() {
 		var subject githubWorkItemDerivationSubject
 		if err := rows.Scan(
-			&subject.WorkItemID, &subject.Provider, &subject.RepoID, &subject.NativeTeamKey,
+			&subject.WorkItemID, &subject.Provider, &subject.Type, &subject.RepoID, &subject.NativeTeamKey,
 			&subject.ProjectKey, &subject.ProjectID, &subject.ProjectName,
 			&subject.Assignees, &subject.OrgID,
 		); err != nil {
@@ -1377,6 +1483,64 @@ func githubWorkItemDerivationStringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// githubWorkItemDerivationSingleTeam reports whether a candidate list names
+// exactly one distinct team_id. CHAOS-4244's reporter ambiguity gate: a
+// person's membership resolving to zero candidates or to two+ different
+// teams gives no signal to prefer one, so the caller must contribute
+// nothing. An empty list is NOT single -- it is handled by the caller
+// appending nothing either way, but this keeps the predicate's name honest.
+func githubWorkItemDerivationSingleTeam(candidates []githubWorkItemDerivationCandidate) bool {
+	teams := map[string]struct{}{}
+	for _, candidate := range candidates {
+		teams[githubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}
+	}
+	return len(teams) == 1
+}
+
+// githubWorkItemDerivationIsBotIdentity reports whether an identity is a
+// GitHub App/bot actor. Mirrors compute_work_items.py's _is_bot_identity:
+// IdentityResolver.resolve falls back to "provider:username" for any
+// identity with no email -- true of every bot -- so the raw login, brackets
+// included, survives resolution (e.g. "github:dependabot[bot]"). "[bot]" is
+// reserved: GitHub does not let a human register a bracketed login, the same
+// invariant this repo's other bot detectors already rely on
+// (isLinearIntegrationAuthor-equivalent checks, providers/_ai_detection.py's
+// CI_BOTS/KNOWN_AI_BOTS) -- this reuses that convention rather than a second
+// bot list.
+func githubWorkItemDerivationIsBotIdentity(identity string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(identity)), "[bot]")
+}
+
+// githubWorkItemDerivationIsPullOrMergeRequestType gates author_membership
+// (CHAOS-4244) to PR/MR work items, by Provider+Type -- NOT by WorkItemID
+// shape (codex R5, 2026-08-25, BLOCK): the prior `ghpr:`/`gitlab:...!...`
+// ID-prefix gate had no way to notice a Provider that did not match the shape
+// it was reading, so a malformed or legacy row whose WorkItemID happened to
+// look like a GitLab MR (contains `!`) but whose Provider was NOT actually
+// "gitlab" (e.g. "jira") would incorrectly pass. Gating on the pair the
+// derivation context already carries per-subject removes that whole class:
+// this resolver is provider-neutral (shared by GitHub, GitLab, and Jira via
+// loadWorkItemDerivationContextForProvider), so Type must be checked together
+// with Provider, never Type alone -- two providers could reuse the same Type
+// string with different meaning.
+//
+//   - GitHub: Type "pr" (github_work_items_rows.go's PR row builder); a plain
+//     issue is some other Type (e.g. "bug", "issue").
+//   - GitLab: Type "merge_request" (gitlab_work_items_rows.go's MR row
+//     builder); a plain issue is a different Type.
+//   - Jira/Linear have no PR-equivalent Type, so neither Provider ever
+//     matches and this gate simply never opens for them.
+func githubWorkItemDerivationIsPullOrMergeRequestType(provider, itemType string) bool {
+	switch provider {
+	case "github":
+		return itemType == "pr"
+	case "gitlab":
+		return itemType == "merge_request"
+	default:
+		return false
+	}
 }
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {

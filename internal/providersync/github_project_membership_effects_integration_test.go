@@ -95,7 +95,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 		t.Fatal(err)
 	}
 	sink, err := NewGitHubWorkItemClickHouseEffects(
-		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

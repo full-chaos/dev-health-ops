@@ -435,6 +435,37 @@ func TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage(t *testing.T)
 	}
 }
 
+// TestGitHubWorkItemTeamAttributionMetricSourceSplitsAuthorFromAssignee
+// (CHAOS-4244) pins the label mapping WriteGitHubWorkItemEffect uses to feed
+// dev_health_work_item_team_attributions_written_total: author_membership and
+// assignee_membership are separate stored sources (chris's 2026-08-24
+// precedence ruling gave the author its own rank 6, below linked_issue) that
+// map onto the "author"/"assignee" metric labels directly -- no Evidence
+// inspection needed any more.
+func TestGitHubWorkItemTeamAttributionMetricSourceSplitsAuthorFromAssignee(t *testing.T) {
+	cases := []struct {
+		name   string
+		row    githubWorkItemTeamAttributionRow
+		wantMS string
+	}{
+		{"author_membership", githubWorkItemTeamAttributionRow{Source: "author_membership", Evidence: "reporter=alice"}, "author"},
+		{"assignee_membership", githubWorkItemTeamAttributionRow{Source: "assignee_membership", Evidence: "assignee=carol"}, "assignee"},
+		{"project_ownership", githubWorkItemTeamAttributionRow{Source: "project_ownership"}, "project"},
+		{"issue_project", githubWorkItemTeamAttributionRow{Source: "issue_project"}, "project"},
+		{"repo_ownership", githubWorkItemTeamAttributionRow{Source: "repo_ownership"}, "repo"},
+		{"linked_issue passthrough", githubWorkItemTeamAttributionRow{Source: "linked_issue"}, "linked_issue"},
+		{"unassigned passthrough", githubWorkItemTeamAttributionRow{Source: "unassigned"}, "unassigned"},
+		{"native_team passthrough, bounded downstream", githubWorkItemTeamAttributionRow{Source: "native_team"}, "native_team"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := githubWorkItemTeamAttributionMetricSource(tt.row); got != tt.wantMS {
+				t.Fatalf("githubWorkItemTeamAttributionMetricSource(%+v) = %q, want %q", tt.row, got, tt.wantMS)
+			}
+		})
+	}
+}
+
 // TestGitHubWorkItemDerivedAdaptersSatisfyTheCompositeInterface keeps the three
 // adapters wired to the dispatcher's contract. Without it they would compile
 // as unreferenced exported types and could drift out of the interface silently.

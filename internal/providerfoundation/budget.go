@@ -258,33 +258,35 @@ func (g ValkeyBackoffGate) Penalize(ctx context.Context, delay time.Duration) er
 }
 
 type Metrics struct {
-	mu                         sync.Mutex
-	requests                   map[string]uint64
-	budgetDenied               map[string]uint64
-	budgetReleaseErrors        map[string]uint64
-	inventoryPageCap           map[string]uint64
-	perRunTruncation           map[string]uint64
-	artifactSkipped            map[string]uint64
-	snapshotDiscarded          map[string]uint64
-	resumeReanchor             map[string]uint64
-	unitTerminalWithRows       map[string]uint64
-	incidentEntitlementRefused map[string]uint64
-	allArtifactsUnreadable     map[string]uint64
+	mu                             sync.Mutex
+	requests                       map[string]uint64
+	budgetDenied                   map[string]uint64
+	budgetReleaseErrors            map[string]uint64
+	inventoryPageCap               map[string]uint64
+	perRunTruncation               map[string]uint64
+	artifactSkipped                map[string]uint64
+	snapshotDiscarded              map[string]uint64
+	resumeReanchor                 map[string]uint64
+	unitTerminalWithRows           map[string]uint64
+	incidentEntitlementRefused     map[string]uint64
+	allArtifactsUnreadable         map[string]uint64
+	workItemTeamAttributionWritten map[string]uint64
 }
 
 func NewMetrics() *Metrics {
 	return &Metrics{
-		requests:                   map[string]uint64{},
-		budgetDenied:               map[string]uint64{},
-		budgetReleaseErrors:        map[string]uint64{},
-		inventoryPageCap:           map[string]uint64{},
-		perRunTruncation:           map[string]uint64{},
-		artifactSkipped:            map[string]uint64{},
-		snapshotDiscarded:          map[string]uint64{},
-		resumeReanchor:             map[string]uint64{},
-		unitTerminalWithRows:       map[string]uint64{},
-		incidentEntitlementRefused: map[string]uint64{},
-		allArtifactsUnreadable:     map[string]uint64{},
+		requests:                       map[string]uint64{},
+		budgetDenied:                   map[string]uint64{},
+		budgetReleaseErrors:            map[string]uint64{},
+		inventoryPageCap:               map[string]uint64{},
+		perRunTruncation:               map[string]uint64{},
+		artifactSkipped:                map[string]uint64{},
+		snapshotDiscarded:              map[string]uint64{},
+		resumeReanchor:                 map[string]uint64{},
+		unitTerminalWithRows:           map[string]uint64{},
+		incidentEntitlementRefused:     map[string]uint64{},
+		allArtifactsUnreadable:         map[string]uint64{},
+		workItemTeamAttributionWritten: map[string]uint64{},
 	}
 }
 
@@ -605,6 +607,57 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 	m.allArtifactsUnreadable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// metricWorkItemTeamAttributionSourceVocabulary is the closed set of
+// CHAOS-4244 written-source labels for work_item_team_attributions. This is
+// deliberately a COARSER vocabulary than the ClickHouse `source` enum
+// (native_team/issue_project/project_ownership/repo_ownership/
+// assignee_membership/linked_issue/author_membership/manual_fallback/
+// unassigned): "author" and "assignee" are now separate stored sources
+// (chris's 2026-08-24 precedence ruling gave the author its own rank 6,
+// below linked_issue) rather than an evidence-prefix split of one shared
+// rank, which is the dimension this series exists to make visible --
+// chris's <=2% target and the reporter-membership rescue question both
+// hinge on that split, not on the stored rank alone. native_team and
+// manual_fallback collapse to "other" like every other bounded vocabulary
+// in this file.
+var metricWorkItemTeamAttributionSourceVocabulary = map[string]struct{}{
+	"author": {}, "assignee": {}, "linked_issue": {}, "project": {},
+	"repo": {}, "unassigned": {},
+	// bot_author and ambiguous_membership are the two precision conditions
+	// chris named for shipping author attribution (2026-08-23/24): a bot/App
+	// author is excluded outright, and a reporter whose own membership
+	// resolves to 2+ teams contributes nothing. Both are still "unassigned"
+	// outcomes at the ClickHouse row level, but a distinct series label here
+	// is what makes the residual READABLE -- the whole point of CHAOS-4150's
+	// standing "make the misses loud" order.
+	"bot_author": {}, "ambiguous_membership": {},
+}
+
+// MetricWorkItemTeamAttributionSourceLabel bounds the written-source label.
+func MetricWorkItemTeamAttributionSourceLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricWorkItemTeamAttributionSourceVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordWorkItemTeamAttributionWritten counts ONE PRIMARY
+// work_item_team_attributions row written, by bounded provider and written
+// source (CHAOS-4244). source="unassigned" is the residual chris's <=2%
+// target measures against -- this is the live series twin of the durable
+// per-run tally in providersync's workItemDerivationObservations (which
+// survives as the worker_job_runs record; this is the operator-facing
+// scrape).
+func (m *Metrics) RecordWorkItemTeamAttributionWritten(provider, source string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workItemTeamAttributionWritten[metricProvider(provider)+":"+MetricWorkItemTeamAttributionSourceLabel(source)]++
+}
+
 // writeProviderDatasetCounter renders one provider:dataset keyed counter
 // family in stable key order.
 func writeProviderDatasetCounter(
@@ -791,9 +844,46 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
-	return writeProviderDatasetCounter(
+	if err := writeProviderDatasetCounter(
 		writer, "dev_health_provider_all_artifacts_unreadable_total",
 		"Provider units failed because every cicd/tests artifact observed was unreadable, by bounded provider and dataset.",
 		m.allArtifactsUnreadable,
+	); err != nil {
+		return err
+	}
+	return writeProviderLabeledCounter(
+		writer, "dev_health_work_item_team_attributions_written_total",
+		"work_item_team_attributions rows written, by bounded provider and written source (CHAOS-4244).",
+		"source", m.workItemTeamAttributionWritten,
 	)
+}
+
+// writeProviderLabeledCounter is the two-label twin of
+// writeProviderDatasetCounter, for series that pair provider with a bounded
+// label OTHER than dataset (e.g. "source"). Every key is built from bounded
+// vocabularies, so SplitN into exactly two parts is total.
+func writeProviderLabeledCounter(
+	writer io.Writer, name, help, labelName string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s{provider=%q,%s=%q} %d\n",
+			name, parts[0], labelName, parts[1], values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }

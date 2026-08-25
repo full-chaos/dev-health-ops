@@ -126,6 +126,19 @@ func githubWorkItemDerivedCollisionFixture(
 // showing the resolver produces a collision, which leaves "the dedup collapses
 // it" and "there was nothing to collapse" indistinguishable. This asserts the
 // COLLISION first, then the collapse.
+//
+// CHAOS-4244 codex round-3 (HIGH): this test used to assert the dedup kept
+// whichever colliding row happened to sort LAST in the resolver's output --
+// which, for this exact fixture, is the NON-PRIMARY duplicate (m2,
+// is_primary=0), while the resolver's actual is_primary=1 winner (m1) was
+// silently discarded. That was the bug, not a documented tie-break: a real
+// batch write would have persisted an item with NO primary attribution row
+// even though it genuinely resolved a team. The dedup is now primary-aware
+// (githubTeamAttributionIsPrimary) and must keep the PRIMARY row regardless
+// of its position in the batch -- see
+// TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow for the
+// position-independent proof; this test additionally confirms it holds for a
+// REAL resolver-produced collision, not just a handcrafted fixture.
 func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 	computedAt := time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC)
 	surfaces := githubWorkItemDerivedCollisionFixture(t, computedAt)
@@ -158,9 +171,24 @@ func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 		t.Errorf("collided rows must differ in evidence, got %q twice",
 			collided[0].Evidence)
 	}
+	// The fixture must genuinely produce exactly one primary among the
+	// colliding pair -- otherwise this test cannot tell "kept the primary"
+	// from "kept an arbitrary row" apart.
+	var wantPrimaryEvidence string
+	primaryCount := 0
+	for _, row := range collided {
+		if row.IsPrimary == 1 {
+			primaryCount++
+			wantPrimaryEvidence = row.Evidence
+		}
+	}
+	if primaryCount != 1 {
+		t.Fatalf("fixture must produce exactly one primary among the collided pair, got %d: %+v",
+			primaryCount, collided)
+	}
 
 	deduped := githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
 	if len(deduped) != len(byKey) {
 		t.Fatalf("dedup left %d rows for %d distinct sorting keys", len(deduped), len(byKey))
@@ -177,9 +205,9 @@ func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 	if survivor == nil {
 		t.Fatal("dedup dropped the collided sorting key entirely")
 	}
-	if survivor.Evidence != collided[1].Evidence {
-		t.Errorf("dedup kept evidence %q, want the LAST occurrence %q",
-			survivor.Evidence, collided[1].Evidence)
+	if survivor.IsPrimary != 1 || survivor.Evidence != wantPrimaryEvidence {
+		t.Errorf("dedup kept evidence %q (is_primary=%d), want the PRIMARY row's evidence %q",
+			survivor.Evidence, survivor.IsPrimary, wantPrimaryEvidence)
 	}
 }
 
@@ -213,7 +241,7 @@ func TestGitHubTeamAttributionDedupePrefersHighestVersion(t *testing.T) {
 		t.Fatal("fixture rows must share a sorting key")
 	}
 	deduped := githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
 	if len(deduped) != 1 {
 		t.Fatalf("dedup left %d rows, want 1", len(deduped))
@@ -245,10 +273,68 @@ func TestGitHubTeamAttributionDedupeTieBreaksByOrder(t *testing.T) {
 		[]githubWorkItemTeamAttributionRow{
 			row("assignee_membership=m1"), row("assignee_membership=m2"),
 		},
-		githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+		githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
 	if len(deduped) != 1 || deduped[0].Evidence != "assignee_membership=m2" {
 		t.Fatalf("equal versions must keep the LAST row, got %+v", deduped)
+	}
+}
+
+// TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow (CHAOS-4244
+// codex round-3, HIGH): a reporter or assignee matched via two membership
+// facets naming the SAME team produces two rows sharing this exact sorting
+// key (repo_id, work_item_id, team_id, source -- NOT is_primary or evidence),
+// one is_primary=1 (the resolver's actual winner) and one is_primary=0 (a
+// lower-specificity duplicate provenance row). Before this fix, an
+// equal-version tie-break was pure last-wins and had no idea which row was
+// primary -- if the non-primary duplicate happened to sort LAST, it would
+// silently replace the primary row in storage, leaving the item with NO
+// is_primary=1 row even though it genuinely resolved a team. The primary row
+// must survive regardless of its position in the batch.
+func TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow(t *testing.T) {
+	stamp := time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC)
+	teamID := "team-ops"
+	row := func(evidence string, isPrimary int) githubWorkItemTeamAttributionRow {
+		return githubWorkItemTeamAttributionRow{
+			WorkItemID: "acme/api#40", Provider: "github",
+			Source: "author_membership", IsPrimary: isPrimary, Confidence: "medium",
+			Evidence: evidence, ComputedAt: stamp, TeamID: &teamID,
+			OrgID: "org-acme",
+		}
+	}
+	// The PRIMARY row is FIRST (the resolver emits it first, ranked highest by
+	// specificity) and the non-primary duplicate is LAST -- the exact ordering
+	// that used to lose under plain last-wins.
+	primaryFirst := []githubWorkItemTeamAttributionRow{
+		row("reporter=alice (member_id facet)", 1),
+		row("reporter=alice (email facet)", 0),
+	}
+	deduped := githubWorkItemDerivedSortingKeyDedupe(
+		primaryFirst,
+		githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
+	)
+	if len(deduped) != 1 || deduped[0].IsPrimary != 1 {
+		t.Fatalf("primary-first: dedup must keep the PRIMARY row, got %+v", deduped)
+	}
+	if deduped[0].Evidence != "reporter=alice (member_id facet)" {
+		t.Errorf("primary-first: kept evidence %q, want the primary row's evidence", deduped[0].Evidence)
+	}
+
+	// Same rows, non-primary first -- the primary must STILL survive, proving
+	// the preference isn't accidentally just "first wins".
+	primaryLast := []githubWorkItemTeamAttributionRow{
+		row("reporter=alice (email facet)", 0),
+		row("reporter=alice (member_id facet)", 1),
+	}
+	deduped = githubWorkItemDerivedSortingKeyDedupe(
+		primaryLast,
+		githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
+	)
+	if len(deduped) != 1 || deduped[0].IsPrimary != 1 {
+		t.Fatalf("primary-last: dedup must keep the PRIMARY row, got %+v", deduped)
+	}
+	if deduped[0].Evidence != "reporter=alice (member_id facet)" {
+		t.Errorf("primary-last: kept evidence %q, want the primary row's evidence", deduped[0].Evidence)
 	}
 }
 

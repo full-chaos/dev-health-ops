@@ -133,8 +133,12 @@ async def resolve_work_item_team_attributions(
 # CHAOS-2600 CS7: staged source precedence as a SQL CASE, mirroring
 # compute_work_items._SOURCE_ORDER. A unit's owning team is the one backed by the
 # strongest (lowest-rank) member-item source; an unrecognised source degrades to
-# the floor (8) so it never out-ranks a real signal. Keep in lockstep with the
+# the floor (9) so it never out-ranks a real signal. Keep in lockstep with the
 # enum in models/outputs.py and the Python map in compute_work_items.py.
+#
+# CHAOS-4244 (chris ruling, 2026-08-24): author_membership is its own rank 6,
+# below linked_issue (5) and above manual_fallback (7 — bumped from 6) — a
+# PR/MR author is a PERSON signal and must not beat a real linked_issue donor.
 _SOURCE_RANK_SQL = (
     "multiIf("
     "a.source='native_team',0,"
@@ -143,9 +147,10 @@ _SOURCE_RANK_SQL = (
     "a.source='repo_ownership',3,"
     "a.source='assignee_membership',4,"
     "a.source='linked_issue',5,"
-    "a.source='manual_fallback',6,"
-    "a.source='unassigned',7,"
-    "8)"
+    "a.source='author_membership',6,"
+    "a.source='manual_fallback',7,"
+    "a.source='unassigned',8,"
+    "9)"
 )
 
 

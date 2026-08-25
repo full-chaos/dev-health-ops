@@ -377,6 +377,15 @@ if _PROMETHEUS_AVAILABLE:
         ["family", "cause"],
     )
 
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_work_item_team_attributions_written_total",
+        "work_item_team_attributions rows written, by provider and winning "
+        "source (CHAOS-4244). source='unassigned' is the residual: "
+        "sum(...{source='unassigned'}) / sum(...) is chris's <=2% target, "
+        "readable per provider without a ClickHouse query.",
+        ["provider", "source"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -414,11 +423,45 @@ else:
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
+    WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------
 # Convenience helpers
 # ---------------------------------------------------------------------------
+
+
+def work_item_team_attribution_metric_source(source: str, evidence: str) -> str:
+    """Map a written work_item_team_attributions row onto CHAOS-4244's
+    coarser written-source vocabulary for WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL.
+
+    Deliberately coarser than the ClickHouse `source` enum
+    (native_team/issue_project/project_ownership/repo_ownership/
+    assignee_membership/linked_issue/author_membership/manual_fallback/
+    unassigned): author_membership and assignee_membership are now separate
+    stored sources (CHAOS-4244's precedence ruling gave the author its own
+    rank 6, below linked_issue), so this collapses to a plain per-source
+    label rather than the earlier evidence-prefix split. An `unassigned` row
+    carrying `no_candidate:<reason>` (bot_author, ambiguous_membership --
+    resolve_team_attribution's reporter-skip precision conditions) surfaces
+    that reason as its own label instead of folding back into the generic
+    "unassigned" bucket. Mirrors Go's
+    githubWorkItemTeamAttributionMetricSource exactly; keep both in sync.
+    """
+    if source == "author_membership":
+        return "author"
+    if source == "assignee_membership":
+        return "assignee"
+    if source in ("project_ownership", "issue_project"):
+        return "project"
+    if source == "repo_ownership":
+        return "repo"
+    if source == "unassigned":
+        prefix = "no_candidate:"
+        if evidence.startswith(prefix) and len(evidence) > len(prefix):
+            return evidence[len(prefix) :]
+        return "unassigned"
+    return source
 
 
 def record_celery_task(task_name: str, state: str, duration_seconds: float) -> None:

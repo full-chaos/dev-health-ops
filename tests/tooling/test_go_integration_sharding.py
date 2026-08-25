@@ -541,8 +541,162 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # a board of only draft issues, an unrecognised content typename, a
     # fully identified mixed board) -- the original pagination test only
     # exercised the mixed case incidentally.
-    assert len(expected_provider_tests) == 1059
-    assert len(expected_integration_tests) == 116
+    #
+    # CHAOS-4244 then added 12 more ordinary top-level providersync tests
+    # (1059 -> 1071, developed in parallel with CHAOS-4193(d) above and
+    # rebased onto it -- the two branches' counts are additive), all in
+    # github_work_items_derivation_context_test.go except where noted:
+    #   - three pinning the reporter/author membership candidate (resolves
+    #     via the existing assignee_membership rank, stays unassigned with
+    #     neither an assignee nor a reporter, and never outranks a
+    #     repo_ownership fact);
+    #   - two pinning the CHAOS-4110 ambiguity gate (a reporter whose
+    #     membership resolves to two DIFFERENT teams contributes nothing;
+    #     multiple candidate rows naming the SAME team still resolve);
+    #   - two in work_item_cross_provider_donor_test.go pinning the
+    #     written-by-source observation tally reaching the route's result
+    #     map (and that a non-observer deriver still gets a present, empty
+    #     tally rather than no key at all);
+    #   - one in github_work_item_derived_effects_test.go pinning the
+    #     written-source metric-label mapping the ClickHouse writer feeds to
+    #     dev_health_work_item_team_attributions_written_total (author vs
+    #     assignee split on the SAME stored assignee_membership source, via
+    #     the evidence prefix);
+    #   - four added by a codex adversarial-review round (2026-08-24) that
+    #     found and fixed three HIGH-severity gaps in the Python mirror
+    #     (Python's legacy TeamResolver reporter path bypassed the ambiguity
+    #     gate entirely and was removed outright; a ReplacingMergeTree
+    #     storage-key collision -- team_id/source only, evidence excluded,
+    #     migration 051 -- when the reporter and assignee are the same
+    #     person; the metric-label classifier could never actually match a
+    #     real resolver-produced "author" row) plus a MEDIUM in the shared
+    #     label logic: a bot/App author exclusion test, an
+    #     ambiguity-tags-the-unassigned-row test, a same-person
+    #     distinct-provenance test (Go needed NO collapse fix -- its
+    #     write-time githubWorkItemDerivedSortingKeyDedupe in
+    #     WriteGitHubWorkItemEffect already deduped deterministically by the
+    #     real storage key; Python's sink had no such step, which is why
+    #     _collapse_by_team_id lives there, scoped to assignee_membership
+    #     only), and a real-row metric-source-split test.
+    # All twelve drive the resolver/observation/label code directly over
+    # in-memory fixtures and touch no database, so the integration-tagged
+    # count stays 116 (unchanged by this ticket).
+    #
+    # A follow-up precedence ruling (chris, 2026-08-24) then added 1 more
+    # ordinary test (1071 -> 1072) in github_work_items_derivation_context_test.go:
+    # TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor, proving
+    # a PR with a team-mapped author AND a linked_issue donor for a DIFFERENT
+    # team resolves to the linked issue's team -- author_membership moved to
+    # its own rank 6 (below linked_issue at 5, above manual_fallback, now 7),
+    # since a person-shaped author signal must never beat a real linked-issue
+    # donor. Drives the resolver directly over in-memory fixtures and touches
+    # no database, so the integration-tagged count stays 116.
+    #
+    # Then 1 more integration-tagged test (1072 -> 1073, 116 -> 117) in
+    # github_work_item_derived_effects_integration_test.go:
+    # TestGitHubWorkItemTeamAttributionSourceEnumCodesAreAppendedNotRenumbered,
+    # pinning the EXACT numeric code the migration chain assigns to every
+    # `source` value (not just that each name is present, which the sibling
+    # enum-acceptance test above already covers) -- proving migration 078
+    # appended `author_membership=9` rather than renumbering any of the
+    # pre-existing 1-8 codes, which would otherwise silently reinterpret every
+    # already-written row's stored source. Runs against a real migrated
+    # ClickHouse container (chschema.Apply), so it is integration-tagged.
+    #
+    # A codex round-2 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # tests (1073 -> 1075) in github_work_items_derivation_context_test.go:
+    # the earlier cross-team falsifier tests injected the linked_issue
+    # candidate directly, proving only that an already-supplied linked_issue
+    # candidate outranks author_membership -- never exercising donor
+    # discovery/eligibility (allowedDonorSources in buildLinkedIssueIndex).
+    # TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor
+    # drives the REAL buildLinkedIssueIndex builder end to end (a donor
+    # resolving via a first-class project_ownership fact beats an author on a
+    # different team); TestGitHubWorkItemDerivationCausalAuthorOnlyDonorNeverBecomesALinkedIssueDonor
+    # proves an item whose ONLY resolvable team is author_membership never
+    # registers as a donor at all. Both drive the resolver/builder directly
+    # over in-memory fixtures and touch no database, so the
+    # integration-tagged count stays 117.
+    #
+    # A codex round-3 finding (2026-08-24, HIGH + MEDIUM) then added 2 more
+    # ordinary tests (1075 -> 1077) in github_work_item_derived_surfaces_test.go
+    # and github_work_items_derivation_context_test.go:
+    # TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow pins the
+    # fix for the write-time sorting-key dedup, which used to be pure
+    # last-wins and could silently discard the resolver's only is_primary=1
+    # row when a reporter or assignee matched two membership facets naming
+    # the same team; TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToANonPRIssue
+    # pins author_membership's PR-only scope gate (a plain GitHub issue,
+    # WorkItemID "gh:" not "ghpr:", must never gain a team via this signal).
+    # Both drive the dedup/resolver directly over in-memory fixtures and
+    # touch no database, so the integration-tagged count stays 117.
+    #
+    # A codex round-4 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # tests (1077 -> 1079): the PR-only gate above was GitHub-only ("ghpr:"
+    # prefix), but this resolver is shared by GitHub, GitLab, and Jira --
+    # silently diverging from Python's item.type in {"pr","merge_request"}
+    # gate, leaving every GitLab MR author unassigned in Go.
+    # TestGitHubWorkItemDerivationAuthorMembershipAppliesToAGitLabMergeRequest
+    # proves a GitLab MR ("gitlab:...!...") still gains author_membership;
+    # TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue
+    # is its negative control ("gitlab:...#..."). Both drive the resolver
+    # directly over in-memory fixtures and touch no database, so the
+    # integration-tagged count stays 117.
+    #
+    # A codex round-5 finding (2026-08-25, BLOCK) then added 3 more ordinary
+    # tests (1079 -> 1082): the R4 gate checked WorkItemID STRING SHAPE
+    # ("gitlab:" prefix + contains "!") with no check that Provider actually
+    # said "gitlab" -- a legacy/mismatched row (e.g. a Jira item whose
+    # WorkItemID happened to look like a GitLab MR) could therefore wrongly
+    # pass. The fix switched the gate to Provider+Type
+    # (githubWorkItemDerivationIsPullOrMergeRequestType).
+    # TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape
+    # reproduces the exact defect (red-first against the pre-fix gate, see
+    # the test's own doc comment); TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue
+    # and TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue
+    # are the Jira/Linear negative regression proofs codex asked for ("Jira/Linear
+    # are excluded only by convention, and existing tests do not prove exclusion
+    # under mismatched or legacy rows"). All three drive the resolver directly
+    # over in-memory fixtures and touch no database, so the integration-tagged
+    # count stays 117.
+    #
+    # A codex round-6 finding (2026-08-25, BLOCK) then added 1 more ordinary
+    # test (1082 -> 1083): the round-5 fix's tests all built
+    # githubWorkItemDerivationSubject{} literals by hand, bypassing
+    # githubWorkItemDerivationSubjectFromRow -- the actual production
+    # row-to-subject conversion -- and no test anywhere in this package had
+    # ever exercised loadDonors's Scan() with real returned data (every Rows
+    # double's Next() returns false immediately), so a column-order
+    # regression between the SELECT list and the Scan destinations could ship
+    # undetected. The three round-5 tests above were rewritten to build a
+    # githubWorkItemRow and convert it via githubWorkItemDerivationSubjectFromRow
+    # (no new top-level test, just a rewrite -- doesn't change this count);
+    # TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColumnOrder
+    # is new and drives loadDonors's Scan against a fake driver.Rows that
+    # actually returns one row. Still no database, so the integration-tagged
+    # count stays 117.
+    #
+    # A codex round-7 finding (2026-08-25, BLOCK, 2 HIGH, both reproduced by
+    # hand via mutate-and-rerun) then added 1 more ordinary test (1083 ->
+    # 1084): (1) the round-6 negative tests all use Provider "jira", so the
+    # provider+type gate is already closed on Provider alone -- they stayed
+    # green even with "Type: row.Type" deleted from
+    # githubWorkItemDerivationSubjectFromRow entirely, never actually proving
+    # Type propagates; (2) fakeDonorRowsConn ignored the query text and
+    # always returned hand-ordered values, so a SELECT-column reorder left
+    # Scan() untouched still passed -- the donor-scan test only ever proved
+    # Scan-destination order, not SELECT-list order.
+    # TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership
+    # is new: a real githubWorkItemRow (github/pr and gitlab/merge_request
+    # subtests) converted through the actual production
+    # githubWorkItemDerivationSubjectFromRow, asserting both the converted
+    # Type AND that author_membership still resolves -- confirmed red when
+    # Type propagation is removed. The donor-scan test above also gained a
+    # pinned SELECT-projection string assertion (no new top-level test, just
+    # an added assertion) -- confirmed red when the SELECT column order is
+    # swapped. Still no database, so the integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1084
+    assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -558,7 +712,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1059
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1084
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -619,7 +773,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1059
+    assert len(selected_tests) == len(set(selected_tests)) == 1084
     assert set(selected_tests) == expected_tests
 
 

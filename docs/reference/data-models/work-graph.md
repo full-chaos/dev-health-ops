@@ -38,8 +38,9 @@ match present becomes the primary (`is_primary`) attribution:
 | 3 | `repo_ownership` | Explicit team-to-repository ownership (GitHub) |
 | 4 | `assignee_membership` | The assignee's team membership |
 | 5 | `linked_issue` | A linked issue's own team, inherited across a supported dependency edge (a GitHub/GitLab PR closing a Linear issue, for example) |
-| 6 | `manual_fallback` | An explicit admin-configured fallback rule (repo, project, member, or issue-key prefix) |
-| 7 | `unassigned` | Nothing matched |
+| 6 | `author_membership` | The PR/MR author's (reporter's) team membership, when unambiguous and not a bot — never overrides a real linked issue |
+| 7 | `manual_fallback` | An explicit admin-configured fallback rule (repo, project, member, or issue-key prefix) |
+| 8 | `unassigned` | Nothing matched |
 
 Ranks 2 and 3 are provider-disjoint by design, not overlapping coverage: GitHub has no native Project
 entity and writes only repo ownership; GitLab, Jira, and Linear write only project ownership. Every

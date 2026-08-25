@@ -125,33 +125,41 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 		wantErr    error
 	}{
 		{
+			// CHAOS-4264 R2: bodies here are the REAL shape a FastAPI
+			// HTTPException(detail={...}) actually serializes to -- verified
+			// against a live fastapi.testclient.TestClient response, not
+			// assumed. An earlier version of this fixture used a flat
+			// top-level body matching a bug in classifyCompatibilityError's
+			// struct (a top-level "reason" field that real responses never
+			// have), so the test passed while the parser silently matched
+			// nothing in production.
 			name:       "signaled runner on a 503",
 			statusCode: http.StatusServiceUnavailable,
-			body:       `{"message":"Metric execution failed before any output was produced","state":"failed","reason":"process_signaled"}`,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"process_signaled"}}`,
 			wantErr:    ErrCompatibilityProcessSignaled,
 		},
 		{
 			name:       "resource-exhausted runner on a 503",
 			statusCode: http.StatusServiceUnavailable,
-			body:       `{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted"}`,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted"}}`,
 			wantErr:    ErrCompatibilityResourceExhausted,
 		},
 		{
 			name:       "refused claim on a 409",
 			statusCode: http.StatusConflict,
-			body:       `{"message":"Execution outcome requires readback","state":"ambiguous","reason":"ambiguous_refused"}`,
+			body:       `{"detail":{"message":"Execution outcome requires readback","state":"ambiguous","reason":"ambiguous_refused"}}`,
 			wantErr:    ErrCompatibilityAmbiguousRefused,
 		},
 		{
 			name:       "true ambiguous 503 with no reason predates this ticket",
 			statusCode: http.StatusServiceUnavailable,
-			body:       `{"message":"Metric execution outcome is ambiguous","state":"ambiguous"}`,
+			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous"}}`,
 			wantErr:    ErrUnavailable,
 		},
 		{
 			name:       "unrecognized reason value",
 			statusCode: http.StatusServiceUnavailable,
-			body:       `{"message":"x","state":"failed","reason":"something_new"}`,
+			body:       `{"detail":{"message":"x","state":"failed","reason":"something_new"}}`,
 			wantErr:    ErrUnavailable,
 		},
 		{

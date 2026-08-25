@@ -35,7 +35,6 @@ from dev_health_ops.api.internal.worker_auth import (
 from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
-    DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES,
 )
@@ -542,48 +541,20 @@ async def _reserve_execution(
             )
         await session.commit()
         return "execute"
-    if existing["state"] in ("ambiguous", "executing"):
-        # CHAOS-4264: the same safety check the manual repair endpoint uses
-        # (_original_claim_is_active), applied automatically at claim time.
-        # A River retry always renews the partition/run's claim_token BEFORE
-        # calling this endpoint again (see ClaimPartition/ClaimFinalize in
-        # postgres.go), so by the time we get here the row's OWN stored
-        # claim_token is already stale on the very first retry -- there is
-        # no need to wait for a human to confirm that. If the original claim
-        # is somehow still active (a genuine concurrent overlap), this falls
-        # through to the same 409 as before.
-        if not await _original_claim_is_active(session, existing):
-            reaped_from = str(existing["state"])
-            retried = await session.execute(
-                text(
-                    """
-                    UPDATE metric_compatibility_executions
-                    SET state = 'executing',
-                        claim_token = CAST(:claim_token AS uuid),
-                        attempt_count = attempt_count + 1,
-                        last_attempt_at = statement_timestamp()
-                    WHERE id = CAST(:id AS uuid)
-                      AND state = :expected_state
-                      AND attempt_count = :attempt_count
-                    RETURNING id
-                    """
-                ),
-                {
-                    "id": str(execution.id),
-                    "claim_token": str(execution.claim_token),
-                    "expected_state": reaped_from,
-                    "attempt_count": existing["attempt_count"],
-                },
-            )
-            if retried.scalar_one_or_none() is None:
-                raise HTTPException(
-                    status_code=409, detail="Execution repair state changed"
-                )
-            await session.commit()
-            DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL.labels(
-                from_state=reaped_from, to_state="executing"
-            ).inc()
-            return "execute"
+    # CHAOS-4264 (codex R2): an earlier version of this function auto-reaped
+    # any ambiguous/executing row back to executing once
+    # _original_claim_is_active went false -- but that check only proves no
+    # one else currently holds the lease, which is ALWAYS eventually true
+    # (every River retry renews the claim_token before calling this endpoint
+    # again). It is not evidence that no partial write happened, so it
+    # defeated the ambiguous state's entire purpose for exactly the
+    # progress-having failures that state exists to protect. Removed: a
+    # stuck ambiguous/executing row falls through to the same 409 below as
+    # it always did before this ticket, requiring the manual
+    # /metric-executions/v1/{id}/repair readback. The only automatic
+    # resolution this ticket adds is _mark_retry_authorized in _execute,
+    # which has real same-execution evidence (see safe_to_retry above) --
+    # not a claim-staleness proxy for it.
     await session.commit()
     raise HTTPException(
         status_code=409,
@@ -1245,7 +1216,9 @@ class _CompatibilityProcessFailure(RuntimeError):
 _RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE = 2
 
 
-async def _poll_peak_rss_bytes(pid: int, *, interval_seconds: float = 0.25) -> int:
+async def _poll_peak_rss_bytes(
+    pid: int, peak_holder: list[int], *, interval_seconds: float = 0.25
+) -> None:
     """Sample /proc/<pid>/status while the runner subprocess is alive.
 
     A watermark read after the fact (e.g. resource.getrusage(RUSAGE_CHILDREN))
@@ -1255,8 +1228,15 @@ async def _poll_peak_rss_bytes(pid: int, *, interval_seconds: float = 0.25) -> i
     survives a SIGKILL too -- the last sample taken before the kill is still
     a real reading, unlike anything the child would have to report about
     itself on a graceful exit path it never reaches.
+
+    codex R2: the peak is written into ``peak_holder`` (a mutable one-element
+    list) on every iteration rather than returned at the end. The caller
+    cancels this task as soon as it observes the subprocess has exited --
+    almost always while this coroutine is inside ``asyncio.sleep``, which
+    raises CancelledError there and never reaches a ``return`` statement. A
+    return-value-only design silently reported 0 for every execution in
+    practice, discarding the one signal this metric exists to expose.
     """
-    peak = 0
     status_path = f"/proc/{pid}/status"
     while True:
         try:
@@ -1265,12 +1245,11 @@ async def _poll_peak_rss_bytes(pid: int, *, interval_seconds: float = 0.25) -> i
                     if line.startswith("VmRSS:"):
                         parts = line.split()
                         if len(parts) >= 2 and parts[1].isdigit():
-                            peak = max(peak, int(parts[1]) * 1024)
+                            peak_holder[0] = max(peak_holder[0], int(parts[1]) * 1024)
                         break
         except (FileNotFoundError, ProcessLookupError, OSError):
-            break
+            return
         await asyncio.sleep(interval_seconds)
-    return peak
 
 
 async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
@@ -1301,7 +1280,8 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     stdout_task = asyncio.create_task(
         _read_bounded_process_stream(process.stdout, _MAX_COMPATIBILITY_PROCESS_BYTES)
     )
-    rss_task = asyncio.create_task(_poll_peak_rss_bytes(process.pid))
+    peak_rss_holder = [0]
+    rss_task = asyncio.create_task(_poll_peak_rss_bytes(process.pid, peak_rss_holder))
     input_error: BrokenPipeError | ConnectionResetError | None = None
     try:
         try:
@@ -1321,14 +1301,17 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         await asyncio.gather(stdout_task, return_exceptions=True)
         if not rss_task.done():
             rss_task.cancel()
-        peak_rss_bytes = 0
         with contextlib.suppress(asyncio.CancelledError):
-            polled = await rss_task
-            if isinstance(polled, int):
-                peak_rss_bytes = polled
+            await rss_task
+        # codex R2: read the shared holder, NOT the task's return value --
+        # cancelling rss_task almost always interrupts it inside
+        # asyncio.sleep, which raises CancelledError before any `return`
+        # statement runs. The holder already has every sample taken up to
+        # one polling interval before this point, which is what actually
+        # survives the cancellation.
         DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES.labels(
             worker_kind=execution.worker_kind
-        ).set(peak_rss_bytes)
+        ).set(peak_rss_holder[0])
         DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS.labels(
             worker_kind=execution.worker_kind, operation=execution.operation
         ).observe(_monotonic() - started_at)
@@ -1371,10 +1354,18 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         return decoded["outcome"]
 
     # CHAOS-4264: a non-zero exit is classified instead of collapsed into one
-    # generic RuntimeError. safe_to_retry is keyed purely on progress_seen --
-    # not on WHY the process failed -- because that is the one fact that
-    # actually determines whether a retry is safe: nothing was written yet.
-    safe_to_retry = not progress_seen
+    # generic RuntimeError. safe_to_retry additionally requires
+    # worker_kind == "daily" (codex R2): only the daily partition path
+    # (_run_daily_direct) wires on_write_starting through job_daily.py, so
+    # it is the only path with real per-scope write evidence. Every
+    # remaining-metrics family (capacity/complexity/dora/release_impact/
+    # recommendations/membership_backfill) never reports progress at all --
+    # treating that silence as "definitely wrote nothing" would be a
+    # fabricated safety claim, not an observed one, and codex's review
+    # showed a raw-query-consuming table can already see a partial write
+    # from exactly this class of family. Remaining-metrics failures stay
+    # ambiguous unconditionally, exactly as before this ticket.
+    safe_to_retry = execution.worker_kind == "daily" and not progress_seen
     if return_code < 0:
         reason = "process_signaled"
         message = (

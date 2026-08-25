@@ -28,12 +28,19 @@ var (
 )
 
 // compatibilityErrorBody is the shape of a non-2xx response body from the
-// Python bridge (worker_metrics._execute / _reserve_execution). Only
-// "reason" is read here, and only against the fixed switch below -- an
-// unrecognized or missing reason falls back to the pre-existing
-// ErrUnavailable, exactly as if this field did not exist.
+// Python bridge. FastAPI's HTTPException(detail={...}) serializes as
+// {"detail": {...}} -- NOT a flat top-level object -- so "reason" (and
+// everything else worker_metrics._execute/_reserve_execution puts in
+// detail) is nested one level down. Only "reason" is read here, and only
+// against the fixed switch below -- an unrecognized or missing reason falls
+// back to the pre-existing ErrUnavailable, exactly as if this field did not
+// exist (codex R2: verified against a real FastAPI TestClient response
+// before this shape was checked in -- an earlier version of this struct
+// looked for a top-level "reason" and silently never matched anything).
 type compatibilityErrorBody struct {
-	Reason string `json:"reason"`
+	Detail struct {
+		Reason string `json:"reason"`
+	} `json:"detail"`
 }
 
 func classifyCompatibilityError(data []byte) error {
@@ -41,7 +48,7 @@ func classifyCompatibilityError(data []byte) error {
 	if json.Unmarshal(data, &body) != nil {
 		return ErrUnavailable
 	}
-	switch body.Reason {
+	switch body.Detail.Reason {
 	case "process_signaled":
 		return ErrCompatibilityProcessSignaled
 	case "resource_exhausted":

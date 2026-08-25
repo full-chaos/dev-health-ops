@@ -420,20 +420,6 @@ if _PROMETHEUS_AVAILABLE:
             buckets=(1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0),
         )
     )
-    DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL = (
-        _prometheus_client_module.Counter(
-            "dev_health_metric_compat_executions_reaped_total",
-            "metric_compatibility_executions rows automatically moved out of a "
-            "stuck state (ambiguous, or executing past its partition/run lease) "
-            "back to executing because the original durable claim had already "
-            "been superseded -- the same safety check the manual "
-            "/metric-executions/v1/{id}/repair endpoint uses, applied inline at "
-            "claim time instead of waiting on a human (CHAOS-4264: one OOM kill "
-            "used to permanently fail a partition because the ambiguous row "
-            "refused every subsequent River retry).",
-            ["from_state", "to_state"],
-        )
-    )
 
 else:
     # Graceful no-ops when prometheus_client is unavailable
@@ -476,7 +462,6 @@ else:
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
-    DEV_HEALTH_METRIC_COMPAT_EXECUTIONS_REAPED_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,38 @@ def _execution() -> worker_metrics._Execution:
     )
 
 
+def _daily_execution() -> worker_metrics._Execution:
+    """A daily/partition execution -- the only worker_kind whose progress
+    signal is real (CHAOS-4264 codex R2: safe_to_retry requires
+    worker_kind == "daily" because only _run_daily_direct wires
+    on_write_starting through job_daily.py)."""
+    scope = {"target_day": "2026-08-24", "repo_ids": []}
+    digest = worker_metrics._scope_digest(scope)
+    run_id = uuid.UUID("44444444-4444-4444-8444-444444444444")
+    partition_id = uuid.UUID("55555555-5555-4555-8555-555555555555")
+    return worker_metrics._Execution(
+        id=worker_metrics._execution_id(
+            worker_kind="daily",
+            operation="partition",
+            run_id=run_id,
+            partition_id=partition_id,
+            family="daily",
+            generation="daily-v1",
+            scope_digest=digest,
+        ),
+        worker_kind="daily",
+        operation="partition",
+        run_id=run_id,
+        partition_id=partition_id,
+        organization_id="66666666-6666-4666-8666-666666666666",
+        family="daily",
+        generation="daily-v1",
+        claim_token=uuid.UUID("77777777-7777-4777-8777-777777777777"),
+        scope=scope,
+        scope_digest=digest,
+    )
+
+
 def _runner_command(source: str, *arguments: str) -> tuple[str, ...]:
     return (sys.executable, "-c", source, *arguments)
 
@@ -291,7 +323,7 @@ async def test_metric_compatibility_process_classifies_resource_exhausted_with_p
         ),
     )
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_execution())
+        await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "resource_exhausted"
     assert excinfo.value.safe_to_retry is False
 
@@ -303,7 +335,35 @@ async def test_metric_compatibility_process_classifies_signal_kill_with_no_progr
     """No progress line was ever emitted, and the process was killed by a
     signal (the actual CHAOS-4264 production shape: SIGKILL, return_code<0)
     -- this must be safe to hand straight back to River, not parked in the
-    ambiguous state a human has to repair."""
+    ambiguous state a human has to repair. Uses a daily execution: only the
+    daily path has real per-scope write evidence (codex R2), so it is the
+    only worker_kind that can ever be safe_to_retry."""
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, os, signal, sys\n"
+            "json.load(sys.stdin)\n"
+            "os.kill(os.getpid(), signal.SIGKILL)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "process_signaled"
+    assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_remaining_metrics_never_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex R2 finding (CHAOS-4264): remaining-metrics families
+    (capacity/complexity/dora/release_impact/recommendations/
+    membership_backfill) never emit progress at all, so "zero progress"
+    would be indistinguishable from "wrote one repo's rows then crashed" --
+    a fabricated safety claim, not an observed one. Even a signal-killed
+    remaining execution with zero progress lines must stay unsafe to
+    auto-retry (safe_to_retry requires worker_kind == "daily")."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -316,7 +376,7 @@ async def test_metric_compatibility_process_classifies_signal_kill_with_no_progr
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_execution())
     assert excinfo.value.reason == "process_signaled"
-    assert excinfo.value.safe_to_retry is True
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio
@@ -338,7 +398,7 @@ async def test_metric_compatibility_process_progress_then_signal_kill_is_not_saf
         ),
     )
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_execution())
+        await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_signaled"
     assert excinfo.value.safe_to_retry is False
 
@@ -353,7 +413,7 @@ async def test_metric_compatibility_process_generic_failure_with_no_progress_is_
         _runner_command("raise SystemExit(1)"),
     )
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_execution())
+        await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_failed"
     assert excinfo.value.safe_to_retry is True
 

@@ -47,7 +47,17 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     "testops_test": "testops_test_metrics_daily",
     "repo_user_commit": "repo_metrics_daily",
     "dora": "dora_metrics_daily",
-    "complexity": "file_metrics_daily",
+    # "complexity" is the family internal/jobs/metrics/daily/families.json
+    # calls "file_hotspots" (python: compute_file_hotspots) -- its table is
+    # file_metrics_daily. The actual `metrics complexity` CLI command (a
+    # separate job, job_complexity.py/job_complexity_db.py, not in
+    # families.json at all) writes repo_complexity_daily/
+    # file_complexity_snapshots instead. This dict originally pointed
+    # "complexity" at file_hotspots' table -- caught during CHAOS-3092 Wave 1
+    # scoping (lane-3092-scope) -- fixed so each family name here checks the
+    # table its own compute call actually writes.
+    "complexity": "repo_complexity_daily",
+    "file_hotspots": "file_metrics_daily",
 }
 
 

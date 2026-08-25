@@ -106,6 +106,10 @@ KEEP_ENV_NAMES: frozenset[str] = frozenset(
         "GITLAB_URL",
         # --- set by a CI lane or by ci/local_validate.sh for the process under test.
         "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER",
+        # Set only by ci/run_metrics_executed_proof.sh and local_validate's
+        # metrics_readback stage; without it `dev-hops sync --provider synthetic`
+        # exits so synthetic seeding can never reach a real org's proof ledger.
+        "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN",
         "DISABLE_DOTENV",
         "ENVIRONMENT",
         "JWT_SECRET_KEY",

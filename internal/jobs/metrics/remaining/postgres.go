@@ -202,14 +202,16 @@ func (store *PostgresStore) StartRunTx(
 	// own completion key from -- correct regardless of which generation
 	// actually did the work.
 	if request.Family == "dora" && len(request.Scopes) == 1 {
-		if day, ok := doraScopeDay(request.Scopes[0]); ok {
+		if day, backfillDays, ok := doraScopeDayAndBackfill(request.Scopes[0]); ok {
 			if _, err := tx.Exec(ctx,
 				"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
 				"remaining_metrics_dora_day", request.OrganizationID+":"+day,
 			); err != nil {
 				return Run{}, ErrUnavailable
 			}
-			covering, found, err := store.loadRunCoveringDay(ctx, tx, request.OrganizationID, request.Family, day)
+			covering, found, err := store.loadRunCoveringDay(
+				ctx, tx, request.OrganizationID, request.Family, day, backfillDays,
+			)
 			if err != nil {
 				return Run{}, err
 			}
@@ -576,6 +578,10 @@ func (store *PostgresStore) HasSucceededPartition(
 		family == "" || day == "" {
 		return false, ErrUnavailable
 	}
+	// run.status = 'succeeded', not just partition.status -- codex round 3:
+	// CompletePartition and CancelRun are separate statements, so a
+	// partition already marked succeeded whose run was (or is
+	// concurrently being) canceled must never read back as coverage.
 	var exists bool
 	err := tx.QueryRow(ctx, `
 SELECT EXISTS (
@@ -583,6 +589,7 @@ SELECT EXISTS (
     FROM public.remaining_metric_partitions AS partition
     JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
     WHERE run.org_id = $1::uuid AND run.family = $2
+      AND run.status = 'succeeded'
       AND partition.status = 'succeeded'
       AND partition.scope->>'day' = $3
 )`, organizationID, family, day).Scan(&exists)
@@ -596,8 +603,23 @@ SELECT EXISTS (
 // succeeded partition for this exact organization/family/day, if any. Used
 // by StartRunTx's cross-trigger dora lock (see there) -- callers other than
 // StartRunTx should have no reason to call this directly.
+// loadRunCoveringDay requires (codex round 3, both CONFIRMED):
+//
+//   - run.status = 'succeeded', not just partition.status = 'succeeded'.
+//     CompletePartition and CancelRun are separate statements; a partition
+//     already marked succeeded whose run was (or is concurrently being)
+//     canceled must never be read back as valid coverage -- that would let
+//     joboutbox.MarkCompletionTx mint a completion fence for work the
+//     domain itself disowned.
+//   - the covering partition's OWN backfill_days is >= the requesting
+//     scope's backfill_days. The fixed schedule always requests
+//     backfill_days=1; post-sync can request up to 90 for a real gap
+//     catch-up (postSyncRemainingScope). Comparing day alone let a
+//     backfill_days=1 run satisfy a later backfill_days=30 request for the
+//     same anchor day, silently leaving the 29 days behind the anchor
+//     uncomputed while the wider request was told "already covered".
 func (store *PostgresStore) loadRunCoveringDay(
-	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
+	ctx context.Context, tx pgx.Tx, organizationID, family, day string, minBackfillDays int,
 ) (Run, bool, error) {
 	var run Run
 	err := tx.QueryRow(ctx, `
@@ -605,10 +627,12 @@ SELECT run.id::text, run.org_id::text, run.family, run.generation, run.scope_key
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
+  AND run.status = 'succeeded'
   AND partition.status = 'succeeded'
   AND partition.scope->>'day' = $3
+  AND coalesce((partition.scope->>'backfill_days')::int, 1) >= $4
 ORDER BY partition.completed_at DESC
-LIMIT 1`, organizationID, family, day).Scan(
+LIMIT 1`, organizationID, family, day, minBackfillDays).Scan(
 		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -630,6 +654,23 @@ func doraScopeDay(raw json.RawMessage) (day string, ok bool) {
 		return "", false
 	}
 	return scope.Day, true
+}
+
+// doraScopeDayAndBackfill is doraScopeDay plus the scope's backfill_days --
+// CHAOS-4242 round 3 (codex): the cross-trigger lock's coverage check must
+// not compare on day alone. The fixed schedule always requests
+// backfill_days=1; post-sync can request up to 90 (a real gap catch-up,
+// postSyncRemainingScope in cmd/dev-health-worker/sync_dispatch.go). A
+// day-only match let a backfill_days=1 run (say, the fixed schedule)
+// falsely satisfy a LATER backfill_days=30 request for the same anchor
+// day: the wider request would be told "already covered" and silently
+// skip computing the 29 days behind the anchor.
+func doraScopeDayAndBackfill(raw json.RawMessage) (day string, backfillDays int, ok bool) {
+	var scope doraScope
+	if err := json.Unmarshal(raw, &scope); err != nil || scope.Day == "" || scope.BackfillDays < 1 {
+		return "", 0, false
+	}
+	return scope.Day, scope.BackfillDays, true
 }
 
 func (store *PostgresStore) CancelRun(ctx context.Context, runID string) error {

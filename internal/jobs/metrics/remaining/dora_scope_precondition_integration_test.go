@@ -628,3 +628,198 @@ func (nopPartitionPublisher) PublishPartitionTx(
 ) error {
 	return nil
 }
+
+// TestStartRunTxDoesNotLetANarrowRunSatisfyAWiderBackfillRequest is the
+// codex-round-3 fix for a real gap in the round-2 dedup: loadRunCoveringDay
+// matched on (org, family, day) alone. The fixed schedule always requests
+// backfill_days=1; post-sync can request up to 90 for a real gap catch-up
+// (postSyncRemainingScope, cmd/dev-health-worker/sync_dispatch.go). Before
+// this fix, a backfill_days=1 run succeeding FIRST for an anchor day would
+// satisfy a LATER backfill_days=30 request for that same anchor day,
+// silently leaving the 29 days behind the anchor uncomputed while the wider
+// request was told "already covered".
+func TestStartRunTxDoesNotLetANarrowRunSatisfyAWiderBackfillRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004242"
+
+	// Narrow run: the fixed schedule's usual backfill_days=1, succeeds first.
+	narrowScope := json.RawMessage(`{"version":1,"day":"2026-08-24","sink":"auto","interval":"daily","backfill_days":1}`)
+	narrowTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrowRun, err := store.StartRunTx(ctx, narrowTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+		ScopeKey:       "2026-08-24",
+		Scopes:         []json.RawMessage{narrowScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("narrow StartRunTx: %v", err)
+	}
+	if err := narrowTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	narrowPartitionID := deterministicPartitionID(narrowRun.ID, 1)
+	claim, err := store.ClaimPartition(ctx, narrowPartitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("narrow run's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "rows=1;sha256=narrow"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wide run: post-sync backfill catch-up, SAME anchor day, backfill_days=30.
+	wideScope := json.RawMessage(`{"version":1,"day":"2026-08-24","sink":"auto","interval":"daily","backfill_days":30}`)
+	wideTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wideRun, err := store.StartRunTx(ctx, wideTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:catch-up-sync-run-id",
+		ScopeKey:       "post-sync-wide-scope",
+		Scopes:         []json.RawMessage{wideScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("wide StartRunTx: %v", err)
+	}
+	if err := wideTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if wideRun.ID == narrowRun.ID {
+		t.Fatalf(
+			"the wider backfill_days=30 request was satisfied by the narrower "+
+				"backfill_days=1 run (%s) -- this silently drops 29 days of "+
+				"catch-up work behind the anchor day",
+			narrowRun.ID,
+		)
+	}
+	// The wide run must actually have a claimable partition -- it was not
+	// itself silently skipped either.
+	widePartition, err := store.ClaimPartition(ctx, deterministicPartitionID(wideRun.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if widePartition == nil {
+		t.Fatal("the wide run's own partition is not claimable")
+	}
+}
+
+// TestStartRunTxDoesNotTreatACanceledRunAsCoverage is the other codex-round-3
+// fix: the coverage query filtered partition.status='succeeded' but not
+// run.status, so a partition marked succeeded whose run was (independently)
+// canceled would still read back as valid coverage, and a later trigger
+// would mint a completion fence for work the domain itself disowned.
+func TestStartRunTxDoesNotTreatACanceledRunAsCoverage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004242"
+	scope := json.RawMessage(`{"version":1,"day":"2026-08-24","sink":"auto","interval":"daily","backfill_days":1}`)
+
+	firstTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := store.StartRunTx(ctx, firstTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:sync-run-1",
+		ScopeKey:       "post-sync-scope-1",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(firstRun.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("first run's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "rows=1;sha256=first"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the exact racy state codex described directly: the partition
+	// stays 'succeeded' (CompletePartition's own write, untouched) but the
+	// RUN independently transitions to canceled -- reproducing "CancelRun
+	// changes the run to canceled" without needing to actually win a race
+	// against CompletePartition's own internal transition.
+	if _, err := pool.Exec(ctx,
+		"UPDATE remaining_metric_runs SET status = 'canceled' WHERE id = $1::uuid",
+		firstRun.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	secondTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartRunTx(ctx, secondTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+		ScopeKey:       "2026-08-24",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("second StartRunTx: %v", err)
+	}
+	if err := secondTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if secondRun.ID == firstRun.ID {
+		t.Fatalf(
+			"a canceled run (%s) was returned as coverage -- a completion "+
+				"fence was minted for work the domain disowned",
+			firstRun.ID,
+		)
+	}
+}

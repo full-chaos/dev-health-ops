@@ -192,6 +192,15 @@ def _is_bot_identity(identity: str | None) -> bool:
     return bool(identity) and (identity or "").strip().lower().endswith("[bot]")
 
 
+# CHAOS-4244's author_membership signal is documented and tested as a PR/MR
+# author attribution mechanism ("Why this exists": GitHub PRs, item.reporter
+# as the PR's opener) -- not a general reporter-based attribution for every
+# work-item type. Gating here keeps a Jira/Linear/GitHub/GitLab ISSUE (bug,
+# task, story, ...) opened by a mapped member from silently gaining a team via
+# a signal this ticket never reviewed or tested for that scope.
+_REPORTER_ELIGIBLE_TYPES: frozenset[str] = frozenset({"pr", "merge_request"})
+
+
 def _candidate_sort_key(
     candidate: TeamAttributionCandidate,
 ) -> tuple[int, int, int, float, str, str, str, str, str]:
@@ -531,9 +540,22 @@ def resolve_team_attribution(
         # stamping another tenant's PR. The pre-existing assignee legacy
         # path below is untouched -- it predates this ticket and is out of
         # scope; this reporter feature simply never extends to it.
-        if item.reporter and _is_bot_identity(item.reporter):
+        #
+        # Type-gated to PR/MR ONLY (codex, 2026-08-24, MEDIUM): the resolver
+        # used `item.reporter` unconditionally, so a Jira/Linear/GitHub/GitLab
+        # ISSUE (bug/task/story/...) created by a mapped member would ALSO
+        # gain an author_membership candidate -- silently widening this
+        # ticket's contract (documented throughout as PR/MR author
+        # attribution, e.g. "Why this exists" above) to issue attribution,
+        # unreviewed and untested. `item.reporter` on a non-PR/MR item is
+        # simply never consulted; it falls through exactly as it did before
+        # CHAOS-4244.
+        reporter_eligible = item.type in _REPORTER_ELIGIBLE_TYPES and bool(
+            item.reporter
+        )
+        if reporter_eligible and _is_bot_identity(item.reporter):
             reporter_skip_reason = "bot_author"
-        elif item.reporter:
+        elif reporter_eligible:
             reporter_candidates = _context_candidates(
                 attribution_context.member_by_identity,
                 item.provider,

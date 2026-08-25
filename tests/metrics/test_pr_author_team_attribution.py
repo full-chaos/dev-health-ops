@@ -514,6 +514,50 @@ def test_causal_author_only_donor_never_becomes_a_linked_issue_donor():
     assert real_resolver.resolve(dependent.work_item_id) == (None, None)
 
 
+def test_author_membership_never_applies_to_a_non_pr_issue():
+    """Codex round-3 finding (2026-08-24, MEDIUM): `author_membership` is
+    documented and tested throughout as a PR/MR author attribution mechanism
+    ("Why this exists": GitHub PRs, item.reporter as the PR's opener) -- the
+    resolver must NOT silently widen this to every WorkItem type. A Jira bug
+    (or any non-PR/MR issue) created by a mapped member must stay unassigned
+    on this signal alone, exactly as it did before CHAOS-4244."""
+    item = WorkItem(
+        work_item_id="jira:CHAOS-500",
+        provider="jira",
+        title="t",
+        type="bug",
+        status="todo",
+        status_raw="To Do",
+        reporter="alice",
+        assignees=[],
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("jira", "alice"): [
+                TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id="team-ops",
+                    team_name="Ops Team",
+                    confidence="medium",
+                    evidence="assignee_membership=alice",
+                    is_primary=1,
+                    specificity=50,
+                )
+            ]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=context,
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+
+
 def test_bot_author_never_attributed():
     """chris's precision condition (2026-08-24): a bot/App author (dependabot,
     github-actions, ...) carries no team meaning and must be excluded

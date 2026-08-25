@@ -767,6 +767,33 @@ func TestGitHubWorkItemDerivationCausalAuthorOnlyDonorNeverBecomesALinkedIssueDo
 	}
 }
 
+func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToANonPRIssue(t *testing.T) {
+	// Codex round-3 finding (2026-08-24, MEDIUM): author_membership is
+	// documented and tested throughout as a PR author attribution mechanism
+	// -- resolve() must NOT silently widen this to every GitHub work-item
+	// type. A plain GitHub issue (WorkItemID "gh:", not "ghpr:") opened by a
+	// mapped member must stay unassigned on this signal alone, exactly as it
+	// did before CHAOS-4244.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#9", Provider: "github",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (non-PR issue must not gain author_membership)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
 func TestGitHubWorkItemDerivationBotAuthorNeverAttributed(t *testing.T) {
 	// chris's precision condition (2026-08-24): a bot/App author carries no
 	// team meaning and must be excluded outright, even when its identity

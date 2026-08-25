@@ -212,15 +212,35 @@ func githubWorkItemDerivedSeconds(value time.Time) time.Time {
 // which the resolver genuinely produces when two ownership facts name one team
 // differently -- collapse to one stored row, `found` is 1, the team_name
 // mismatch reads as Conflict, and recovery is wedged permanently.
+//
+// `preferred` breaks an equal-version tie in favor of the PRIMARY row before
+// falling back to last-wins (CHAOS-4244 codex round-3, HIGH: a reporter or
+// assignee matched via two membership facets naming the SAME team produces
+// two rows sharing this exact sorting key -- team_id/source, not evidence or
+// is_primary -- and a naive last-wins tie-break can discard the resolver's
+// only is_primary=1 row, leaving the item with no primary attribution at all
+// even though it genuinely resolved one). When primary-ness ALSO ties (both
+// or neither row is primary), last-wins still decides, unchanged from
+// before -- the case TestGitHubTeamAttributionCollisionIsRealAndCollapses pins.
 func githubWorkItemDerivedSortingKeyDedupe[T any](
-	rows []T, key func(T) string, version func(T) time.Time,
+	rows []T, key func(T) string, version func(T) time.Time, preferred func(T) bool,
 ) []T {
 	winner := make(map[string]int, len(rows))
 	for index, row := range rows {
 		current, exists := winner[key(row)]
-		// `!Before` keeps the LATER index on an exact tie, which is the
-		// last-wins tie-break.
-		if !exists || !version(row).Before(version(rows[current])) {
+		if !exists {
+			winner[key(row)] = index
+			continue
+		}
+		existing := rows[current]
+		switch {
+		case version(row).Before(version(existing)):
+			// existing is strictly newer; keep it.
+		case version(existing).Before(version(row)):
+			winner[key(row)] = index
+		case preferred(row) || !preferred(existing):
+			// Equal version: the incoming row wins if it is primary, or if
+			// neither/both are primary (last-wins, unchanged tie-break).
 			winner[key(row)] = index
 		}
 	}
@@ -277,6 +297,13 @@ func githubTeamAttributionSortingKey(row githubWorkItemTeamAttributionRow) strin
 		githubWorkItemDerivedRepoID(row.RepoID).String(), row.WorkItemID,
 		githubWorkItemDerivedNullableString(row.TeamID), row.Source,
 	}, "\x00")
+}
+
+// githubTeamAttributionIsPrimary is the equal-version dedup tie-break
+// preference (CHAOS-4244 codex round-3, HIGH): a colliding row must never
+// discard the resolver's only is_primary=1 row.
+func githubTeamAttributionIsPrimary(row githubWorkItemTeamAttributionRow) bool {
+	return row.IsPrimary == 1
 }
 
 func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
@@ -427,7 +454,7 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	// facts naming the same team differently produce two rows with an identical
 	// sorting key that differ only in team_name.
 	rows = githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
@@ -440,6 +467,15 @@ is_primary, confidence, evidence, computed_at)`)
 	// it those paths leak the prepared batch's connection, exactly as every
 	// sibling adapter in this package already guards against.
 	defer batch.Abort()
+	// CHAOS-4244: only the PRIMARY row is the winner this series counts --
+	// candidate rows for lower-precedence sources are provenance, not the
+	// outcome chris's <=2% target measures. Staged here and recorded only
+	// AFTER Send() succeeds (codex, 2026-08-24, MEDIUM): incrementing inside
+	// this loop would count rows the batch never durably wrote whenever a
+	// later Append/lease/Send failure aborts it, and a caller's retry of the
+	// same batch would then double-count the rows that DID make it through
+	// the first, failed attempt.
+	primaryRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
 	for _, row := range rows {
 		if err := batch.Append(
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
@@ -449,19 +485,22 @@ is_primary, confidence, evidence, computed_at)`)
 		); err != nil {
 			return err
 		}
-		// CHAOS-4244: only the PRIMARY row is the winner this series counts --
-		// candidate rows for lower-precedence sources are provenance, not the
-		// outcome chris's <=2% target measures.
 		if row.IsPrimary == 1 {
-			sink.Metrics.RecordWorkItemTeamAttributionWritten(
-				row.Provider, githubWorkItemTeamAttributionMetricSource(row),
-			)
+			primaryRows = append(primaryRows, row)
 		}
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	for _, row := range primaryRows {
+		sink.Metrics.RecordWorkItemTeamAttributionWritten(
+			row.Provider, githubWorkItemTeamAttributionMetricSource(row),
+		)
+	}
+	return nil
 }
 
 // githubWorkItemTeamAttributionMetricSource maps a written row onto
@@ -517,7 +556,7 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkIte
 	// The expectation must name the row the WRITE will actually leave behind,
 	// or the readback compares against a row storage discarded.
 	rows = githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
 	return inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {
 		return sink.inspect(ctx, identity, row)

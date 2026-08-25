@@ -204,6 +204,8 @@ func (deriver *GitHubWorkItemDeriver) StoredEdgeMergeObservation() githubWorkIte
 // TeamAttributionWrittenObservation reports this unit's PRIMARY
 // team_attribution rows tallied by source (CHAOS-4244) -- a
 // `source="unassigned"` count is the residual chris's <=2% target measures.
+// This is PRE-WRITE derivation volume, not deduplicated persisted-row count
+// (codex, 2026-08-24, MEDIUM): see teamAttributionBySource's doc.
 func (deriver *GitHubWorkItemDeriver) TeamAttributionWrittenObservation() map[string]int {
 	if deriver == nil {
 		return map[string]int{}

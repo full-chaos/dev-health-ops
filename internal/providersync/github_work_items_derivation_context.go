@@ -670,8 +670,19 @@ func (derived githubWorkItemDerivationContext) resolve(
 	// 2026-08-24): Go's memberByID is already the sole, org-scoped source
 	// (loaded per-claim in loadWorkItemDerivationContextForProvider), so
 	// there is no second, non-tenant-scoped lookup to bypass the gate above.
+	//
+	// Type-gated to PR ONLY (codex, 2026-08-24, MEDIUM): Reporter is
+	// populated for GitHub ISSUES too (githubWorkItemDerivationSubjectFromRow
+	// copies row.Reporter unconditionally), so without this gate a GitHub
+	// issue opened by a mapped member would ALSO gain an author_membership
+	// candidate -- silently widening this ticket's documented PR/MR-only
+	// contract. `ghpr:` is the sole production prefix for a GitHub PR's
+	// WorkItemID (github_work_items_rows.go's PR row builder); a plain GitHub
+	// issue is `gh:`. subject.Reporter on a non-PR item is simply never
+	// consulted; it falls through exactly as it did before CHAOS-4244.
 	var reporterSkipReason string
-	if subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
+	if strings.HasPrefix(subject.WorkItemID, "ghpr:") &&
+		subject.Reporter != nil && strings.TrimSpace(*subject.Reporter) != "" {
 		switch {
 		case githubWorkItemDerivationIsBotIdentity(*subject.Reporter):
 			reporterSkipReason = "bot_author"

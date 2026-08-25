@@ -34,6 +34,20 @@ import (
 // Everything else this table needs -- issue additions (no prior mechanism
 // existed at all) and removals of either subject kind (no prior mechanism
 // existed for either) -- has exactly one source, this diff.
+//
+// KNOWN, NOT FIXED (codex round 1 finding, CHAOS-4193d): githubProjectV2Fetcher.Fetch
+// preserves Python's per-CLAIM fanout (documented on GitHubProjectV2Fetcher
+// itself) -- two overlapping claims that both configure the same org-wide
+// project each run their own read-then-diff independently, and a subject that
+// changed between the two claims' reads can commit two rows for the same real
+// event with different occurred_at values (their EventIDs therefore differ
+// too, so ReplacingMergeTree keeps both). This does not corrupt presence --
+// argMax over (occurred_at, event_id) still resolves to the correct current
+// state -- it only means the transitions table can carry duplicate-in-effect
+// rows for the fanout's duration. That amplification is the SAME
+// already-documented, already-deferred characteristic GitHubProjectV2Fetcher's
+// own doc comment describes ("a separately tracked follow-up ... must not be
+// smuggled in here"); this file inherits it rather than reintroducing it.
 
 // githubProjectV2SnapshotSubject is one board item's durable identity, kept
 // provider- and destination-neutral so it can name either a pull_request or a
@@ -49,13 +63,25 @@ func (subject githubProjectV2SnapshotSubject) key() string {
 	return subject.SubjectKind + "\x00" + subject.RepoID.String() + "\x00" + subject.SubjectID
 }
 
-// githubProjectV2BoardSnapshot is one project's complete, identifiable
-// current membership -- every PullRequest and Issue item this sync's fully
-// paginated fetch returned for that board, minus whatever this sync could not
-// positively identify (see githubProjectV2ItemSubject).
+// githubProjectV2BoardSnapshot is one project's current membership -- every
+// PullRequest and Issue item this sync's fully paginated fetch returned for
+// that board that could be positively identified (see
+// githubProjectV2ItemSubject).
+//
+// Complete is FALSE when this sync's fetch for the project also contained at
+// least one item with a real subject (PullRequest or Issue, never DraftIssue)
+// that could NOT be identified -- an incomplete PullRequest payload, or a
+// content typename this code has never seen. That item is still genuinely on
+// the board; this sync simply could not name it, which is a different fact
+// from "it is gone" (codex round 1 finding, CHAOS-4193d). diffGitHubProjectV2Snapshot
+// refuses to compute removals against an incomplete snapshot -- an
+// unidentified but still-present subject must never be read as absent -- but
+// still computes additions, since every subject THIS sync DID identify is
+// genuinely present regardless of what else on the board it could not name.
 type githubProjectV2BoardSnapshot struct {
 	ProjectScopeID string
 	Subjects       []githubProjectV2SnapshotSubject
+	Complete       bool
 }
 
 // githubProjectV2ItemSubject identifies the durable subject a board item
@@ -72,6 +98,21 @@ type githubProjectV2BoardSnapshot struct {
 // A case (2) uses the diff's observation time), so an item missing createdAt
 // is still a real, present board member for snapshot purposes -- excluding it
 // here would manufacture a false removal for a subject that never left.
+//
+// KNOWN, NOT FIXED (codex round 1 finding, CHAOS-4193d): the Issue subject_id
+// embeds `repository.nameWithOwner` verbatim, case-sensitive, while
+// repositoryIdentity (below) lowercases the same string before hashing it
+// into RepoID. If GitHub ever returned two different castings of the same
+// repository's nameWithOwner across two syncs, RepoID would match but
+// SubjectID would not, and the diff would read that as one subject leaving
+// and a different one arriving. This is not a new risk this file introduces:
+// normalizeGitHubProjectV2Item's own work_item_id derivation (github_work_items_projects_v2.go,
+// "gh:"+repo+"#"+number) has carried the identical shape since #1896, and
+// this function intentionally MATCHES it -- diverging here would desync this
+// file's subject identity from the id the column-arm fallback and every
+// other github work-item row already use for the same subject, which is a
+// strictly worse mismatch than a hypothetical casing flip GitHub's API does
+// not exhibit in practice.
 func githubProjectV2ItemSubject(item gitHubProjectV2ItemPayload) (githubProjectV2SnapshotSubject, bool) {
 	content := item.Content
 	var subjectKind, subjectID string
@@ -112,6 +153,27 @@ type githubProjectV2SnapshotDiffReader interface {
 
 // GitHubProjectV2SnapshotDiffClickHouseReader answers "what does the table
 // itself currently say is active on this board", per subject.
+//
+// KNOWN, NOT FIXED (codex round 1 finding, CHAOS-4193d): this reads ONLY
+// project_membership_transitions, not project_membership_presence's
+// work_items-column fallback arm (migration 077's `work_item_column` source,
+// which already carries a github Issue's CURRENT project_id from the
+// pre-existing normalizeGitHubProjectV2Item write). A github Issue that has
+// never had a transition row therefore reads as "not previously active" here
+// even if it has sat on the same board for months. That is a ONE-SYNC
+// bootstrap gap, not a permanent one: the diff below treats such an issue as
+// a fresh addition and commits its first transition row, and every sync
+// after that reads it correctly through this query. The residual risk is
+// narrower still than it sounds -- an issue would have to be removed from its
+// board in the single window between #1896 (CHAOS-4194, the column write)
+// landing and this producer's first sync for that project, which #1896's own
+// PR body already recorded as an accepted interim gap ("presence view may
+// over-report a PR removed from a board until 4193 lands"). Reading the
+// column arm here to close that narrow window would mean re-deriving the
+// view's own fallback-exclusion logic (project != ”, provider-scoped,
+// NOT IN subjects_with_history) a second time in Go, which is a second place
+// for the two to silently disagree -- not a trade worth making for a gap this
+// bounded.
 type GitHubProjectV2SnapshotDiffClickHouseReader struct{ Conn driver.Conn }
 
 // gitHubProjectV2PriorActiveSubjectsQuery reproduces, for ONE project, exactly
@@ -178,16 +240,22 @@ type githubProjectV2SnapshotDiffCounts struct {
 // prior contributes NOTHING, which is the ruled "no change -> emit nothing":
 // re-running this diff every sync on an unchanged board must not accumulate a
 // row per sync.
+//
+// complete gates removals ONLY (codex round 1 finding, CHAOS-4193d): when this
+// sync could not identify every real subject on the board (githubProjectV2BoardSnapshot.Complete
+// == false), a prior subject absent from `current` might simply be one this
+// sync failed to name, not one that left. Reading that absence as a removal
+// would be destructive -- it retires a membership that is still real.
+// Additions are unaffected: every subject THIS sync DID positively identify
+// is genuinely present, regardless of what else on the board it could not
+// name, so there is no equivalent hazard on that side.
 func diffGitHubProjectV2Snapshot(
 	claim Claim,
 	projectScopeID string,
 	current, prior []githubProjectV2SnapshotSubject,
+	complete bool,
 	normalizedAt time.Time,
 ) ([]projectmembership.Row, githubProjectV2SnapshotDiffCounts) {
-	currentSet := make(map[string]struct{}, len(current))
-	for _, subject := range current {
-		currentSet[subject.key()] = struct{}{}
-	}
 	priorSet := make(map[string]struct{}, len(prior))
 	for _, subject := range prior {
 		priorSet[subject.key()] = struct{}{}
@@ -209,6 +277,13 @@ func diffGitHubProjectV2Snapshot(
 		row.EventID = projectmembership.EventID(row)
 		rows = append(rows, row)
 		counts.IssueAdditions++
+	}
+	if !complete {
+		return rows, counts
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, subject := range current {
+		currentSet[subject.key()] = struct{}{}
 	}
 	for _, subject := range prior {
 		if _, present := currentSet[subject.key()]; present {
@@ -244,7 +319,7 @@ func resolveGitHubProjectV2SnapshotDiff(
 			return nil, err
 		}
 		diffRows, counts := diffGitHubProjectV2Snapshot(
-			claim, snapshot.ProjectScopeID, snapshot.Subjects, prior, normalizedAt,
+			claim, snapshot.ProjectScopeID, snapshot.Subjects, prior, snapshot.Complete, normalizedAt,
 		)
 		rows = append(rows, diffRows...)
 		totals.IssueAdditions += counts.IssueAdditions

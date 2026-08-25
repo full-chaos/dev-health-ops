@@ -512,7 +512,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # not. Proves both halves the ticket owed: issue membership (no prior
     # mechanism existed at all) and removal of either subject kind (no prior
     # mechanism existed for either).
-    assert len(expected_provider_tests) == 1052
+    #
+    # A codex round-1 finding on that same producer then added 6 more ordinary
+    # tests (1052 -> 1058, 116 unchanged): pure decision tests over
+    # diffGitHubProjectV2Snapshot (additions restricted to work_item, removals
+    # of either subject kind, unchanged-board emits nothing, an incomplete
+    # snapshot suppresses removals only, subject keys distinguish repos) and
+    # over the shared githubProjectV2ItemSubject identification helper. None
+    # touch a real database. The finding itself: an unidentifiable board item
+    # (an incomplete PullRequest payload, or an unrecognised content typename)
+    # was silently omitted from the current snapshot, which read as "this
+    # subject left the board" for anything previously active -- a destructive
+    # false removal for a subject that never moved. Fixed by a Complete flag
+    # on the snapshot (false whenever the sync could not name a real subject
+    # it saw) that suppresses removal computation, but not additions, for that
+    # project this sync.
+    assert len(expected_provider_tests) == 1058
     assert len(expected_integration_tests) == 116
     assert expected_integration_tests < expected_provider_tests
 
@@ -529,7 +544,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1052
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1058
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -590,7 +605,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1052
+    assert len(selected_tests) == len(set(selected_tests)) == 1058
     assert set(selected_tests) == expected_tests
 
 

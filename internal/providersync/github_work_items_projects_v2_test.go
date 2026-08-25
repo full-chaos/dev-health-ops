@@ -410,6 +410,13 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 		got.Subjects[0].SubjectKind != "work_item" || got.Subjects[0].SubjectID != "gh:acme/api#7" {
 		t.Fatalf("snapshot=%+v", got)
 	}
+	// The unidentifiable PR in this fixture is a real board item this sync
+	// simply could not name -- the snapshot must say so, or the snapshot-diff
+	// pass would read its absence from a future complete sync's board as a
+	// removal that never happened (codex round 1 finding, CHAOS-4193d).
+	if result.Snapshots[0].Complete {
+		t.Fatalf("snapshot=%+v, want Complete=false: it contains an unidentifiable PR", result.Snapshots[0])
+	}
 	if got := result.Rows.WorkItems[0]; got.WorkItemID != "gh:acme/api#7" || got.RepoID != nil || got.ProjectID == nil || *got.ProjectID != "ghprojv2:acme#3" {
 		t.Fatalf("work item=%+v", got)
 	}
@@ -667,6 +674,15 @@ func TestGitHubProjectV2FetcherEmitsPullRequestBoardMembership(t *testing.T) {
 	}
 	if result.MembershipSkips["pull_request_incomplete"] != 0 {
 		t.Fatalf("an emitted PR was also counted as skipped: %+v", result.MembershipSkips)
+	}
+	// A fully identifiable board must produce a Complete snapshot, or the
+	// snapshot-diff pass would refuse to ever compute a removal for it.
+	if len(result.Snapshots) != 1 || !result.Snapshots[0].Complete {
+		t.Fatalf("snapshots=%+v, want exactly one Complete snapshot", result.Snapshots)
+	}
+	if len(result.Snapshots[0].Subjects) != 1 || result.Snapshots[0].Subjects[0].SubjectKind != "pull_request" ||
+		result.Snapshots[0].Subjects[0].SubjectID != "42" {
+		t.Fatalf("snapshot subjects=%+v", result.Snapshots[0].Subjects)
 	}
 }
 

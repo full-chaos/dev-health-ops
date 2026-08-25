@@ -233,6 +233,16 @@ func (GitHubProjectV2Fetcher) Fetch(
 			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
 		))
 		boardSubjects := make([]githubProjectV2SnapshotSubject, 0, len(items))
+		// boardIncomplete tracks whether this sync could positively identify
+		// EVERY board item that has a subject to name (codex round 1 finding,
+		// CHAOS-4193d). A DraftIssue genuinely has no subject -- omitting it is
+		// complete information, not a gap. An unidentifiable PullRequest or
+		// Issue (missing repository/number, or a typename GitHub has not told
+		// us about yet) is different: the item IS still on the board, this
+		// sync simply could not name it, and treating its absence from
+		// boardSubjects as "gone" would tell the diff a still-present subject
+		// was removed. See githubProjectV2BoardSnapshot.Complete.
+		boardIncomplete := false
 		for _, item := range items {
 			// Membership is decided BEFORE the work-item normalization, and
 			// independently of it. A pull request is not a work item and never
@@ -252,6 +262,8 @@ func (GitHubProjectV2Fetcher) Fetch(
 			}
 			if subject, ok := githubProjectV2ItemSubject(item); ok {
 				boardSubjects = append(boardSubjects, subject)
+			} else if item.Content.Typename != "DraftIssue" {
+				boardIncomplete = true
 			}
 			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
@@ -271,7 +283,7 @@ func (GitHubProjectV2Fetcher) Fetch(
 			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
 		result.Snapshots = append(result.Snapshots, githubProjectV2BoardSnapshot{
-			ProjectScopeID: projectScopeID, Subjects: boardSubjects,
+			ProjectScopeID: projectScopeID, Subjects: boardSubjects, Complete: !boardIncomplete,
 		})
 	}
 	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)

@@ -1021,7 +1021,14 @@ async def _run_membership(
             repo_ids=scope.repo_ids or None,
         ),
     )
-    return {"family": execution.family, "stats": stats}
+    # CHAOS-4243: stats["memberships"] is backfill_memberships's own total
+    # membership-row count; surfaced as a flat top-level int (rather than
+    # only nested in `stats`) so _evidence_row_count can report it.
+    return {
+        "family": execution.family,
+        "stats": stats,
+        "memberships_written": stats.get("memberships", 0),
+    }
 
 
 async def _run_extra_metrics(
@@ -1033,7 +1040,7 @@ async def _run_extra_metrics(
 
     db_url = require_clickhouse_uri()
     target_day = date.fromisoformat(scope.day)
-    await run_compounding_risk_job(
+    compounding_risk_rows = await run_compounding_risk_job(
         db_url=db_url,
         day=target_day,
         backfill_days=scope.backfill_days,
@@ -1042,7 +1049,7 @@ async def _run_extra_metrics(
     sink = ClickHouseMetricsSink(db_url)
     try:
         setattr(sink, "org_id", execution.organization_id)
-        total = 0
+        benchmark_records = 0
         for offset in range(scope.backfill_days):
             current = target_day - timedelta(days=offset)
             outputs = await run_in_threadpool(
@@ -1052,10 +1059,21 @@ async def _run_extra_metrics(
                 computed_at=datetime.now(timezone.utc),
                 org_id=execution.organization_id,
             )
-            total += sum(len(rows) for rows in outputs.values())
+            benchmark_records += sum(len(rows) for rows in outputs.values())
     finally:
         sink.close()
-    return {"family": execution.family, "benchmark_records": total}
+    # CHAOS-4243: benchmark_records alone previously stood in for this
+    # family's whole rows_written signal, so a day that wrote real
+    # compounding-risk rows but zero benchmark rows (or vice versa) reported
+    # a misleading count. records_written is the true aggregate across both
+    # writers this family owns; benchmark_records/compounding_risk_rows stay
+    # in the durable evidence for diagnosability.
+    return {
+        "family": execution.family,
+        "compounding_risk_rows": compounding_risk_rows,
+        "benchmark_records": benchmark_records,
+        "records_written": compounding_risk_rows + benchmark_records,
+    }
 
 
 async def _run_team_metrics(
@@ -1231,11 +1249,29 @@ async def _run_until_client_disconnect(
 # _REMAINING_RUNNERS below) that carries a genuine row count. A family absent
 # here, or whose evidence value isn't a plain int, gets no rows_written key
 # at all -- "not applicable", never coerced to a false 0.
+#
+# dora and capacity's native Go executors report their own rows_written
+# through CompatibilityOutcome directly (dora_native.go/capacity_native.go)
+# and never call this HTTP bridge, so they are not listed here.
+#
+# complexity and team_metrics are DELIBERATE GAPS, not oversights:
+# run_complexity_db_job (job_complexity_db.py) returns a process exit code,
+# not a row count, and run_daily_metrics_job (job_daily.py, called by
+# _run_team_metrics below) returns nothing at all -- both would need a
+# return-contract change to the underlying compute function itself, a larger
+# and riskier change than this ticket's wire-contract fix. Both stay silently
+# "success" with no rows_written signal until that follow-up lands.
 _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
     "capacity": "forecast_count",
     "release_impact": "records_written",
     "recommendations": "fired",
-    "extra_metrics": "benchmark_records",
+    "membership_backfill": "memberships_written",
+    # records_written is the aggregate across BOTH writers extra_metrics owns
+    # (compounding-risk + benchmarking) -- reporting benchmark_records alone
+    # let a day that wrote real compounding-risk rows but zero benchmark rows
+    # (or the reverse) surface a misleading rows_written (CHAOS-4243 codex
+    # round 2).
+    "extra_metrics": "records_written",
 }
 
 

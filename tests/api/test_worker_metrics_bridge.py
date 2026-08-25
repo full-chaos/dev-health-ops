@@ -354,6 +354,67 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_extra_metrics_aggregates_compounding_risk_and_benchmarking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4243 codex round 2: benchmark_records alone previously stood in
+    for this family's rows_written signal, so a day that wrote real
+    compounding-risk rows but zero benchmark rows reported a misleading
+    zero. records_written must be the true sum of both writers.
+    """
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/default")
+    from dev_health_ops.metrics.remaining_scope_contract import ExtraMetricsScope
+
+    execution = _execution(family="extra_metrics")
+    scope = ExtraMetricsScope.model_validate(
+        {"version": 1, "day": "2026-08-24", "backfill_days": 1}
+    )
+
+    with (
+        patch(
+            "dev_health_ops.metrics.job_compounding_risk.run_compounding_risk_job",
+            new=AsyncMock(return_value=7),
+        ),
+        patch(
+            "dev_health_ops.metrics.benchmarking.runner.run_benchmarking_for_day",
+            return_value={},
+        ),
+        patch(
+            "dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink",
+            return_value=cast(Any, type("S", (), {"close": lambda self: None})()),
+        ),
+    ):
+        evidence = await worker_metrics._run_extra_metrics(execution, scope)
+
+    assert evidence["compounding_risk_rows"] == 7
+    assert evidence["benchmark_records"] == 0
+    assert evidence["records_written"] == 7
+    assert worker_metrics._evidence_row_count(execution.family, evidence) == 7
+
+
+@pytest.mark.asyncio
+async def test_run_membership_surfaces_a_flat_rows_written_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/default")
+    execution = _execution(family="membership_backfill")
+    from dev_health_ops.metrics.remaining_scope_contract import (
+        MembershipBackfillScope,
+    )
+
+    scope = MembershipBackfillScope.model_validate({"version": 1, "repo_ids": []})
+
+    with patch(
+        "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+        return_value={"components": 2, "matched": 2, "skipped": 0, "memberships": 5},
+    ):
+        evidence = await worker_metrics._run_membership(execution, scope)
+
+    assert evidence["memberships_written"] == 5
+    assert worker_metrics._evidence_row_count(execution.family, evidence) == 5
+
+
+@pytest.mark.asyncio
 async def test_execute_surfaces_rows_written_for_a_zero_row_release_impact_completion() -> (
     None
 ):

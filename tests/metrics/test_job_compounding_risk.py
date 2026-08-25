@@ -98,9 +98,11 @@ def test_full_input_recompute_writes_non_null_non_unknown_row(
         job_compounding_risk, "ClickHouseMetricsSink", lambda db_url: sink
     )
 
-    exit_code = _run()
+    # CHAOS-4243: run_compounding_risk_job returns the rows-written count
+    # (previously a bug returned a literal 0 exit-code sentinel instead).
+    rows_written = _run()
 
-    assert exit_code == 0
+    assert rows_written == 1
     assert len(sink.written) == 1
     row = sink.written[0]
     assert row.compounding_risk is not None
@@ -131,9 +133,9 @@ def test_missing_complexity_history_reports_missing_complexity_delta_reason(
     )
 
     with caplog.at_level("INFO", logger=job_compounding_risk.logger.name):
-        exit_code = _run()
+        rows_written = _run()
 
-    assert exit_code == 0
+    assert rows_written == 1
     row = sink.written[0]
     assert row.compounding_risk is None
     assert row.severity == "unknown"
@@ -207,9 +209,9 @@ def test_backfill_day_with_no_repo_metrics_rows_is_named_in_final_summary(
 
     empty_day = DAY - timedelta(days=1)
     with caplog.at_level("INFO", logger=job_compounding_risk.logger.name):
-        exit_code = _run(backfill_days=2)
+        rows_written = _run(backfill_days=2)
 
-    assert exit_code == 0
+    assert rows_written == 1  # only the day with rows produced output
     assert len(sink.written) == 1  # only the day with rows produced output
 
     done_messages = [

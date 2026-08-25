@@ -351,6 +351,17 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
         )
         is None
     )
+    # CHAOS-4243 codex round 3: "fired" undercounts recommendations'
+    # true persisted row total (tombstones excluded) -- a run that writes
+    # rows but fires none would misreport rows_written=0. recommendations
+    # is deliberately absent from _EVIDENCE_ROW_COUNT_KEYS, so even a
+    # present "fired" key must stay unmapped.
+    assert (
+        worker_metrics._evidence_row_count(
+            "recommendations", {"family": "recommendations", "fired": 0}
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

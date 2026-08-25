@@ -1261,10 +1261,22 @@ async def _run_until_client_disconnect(
 # return-contract change to the underlying compute function itself, a larger
 # and riskier change than this ticket's wire-contract fix. Both stay silently
 # "success" with no rows_written signal until that follow-up lands.
+#
+# recommendations is ALSO a deliberate omission (CHAOS-4243 codex round 3):
+# _compute_recommendations_for_org's docstring is explicit that its int
+# return is "the number of *fired* recommendations written (tombstones
+# excluded)" -- the function persists the FULL rule state per team, fired
+# rows AND explicit fired=False tombstones, so a run can write many rows
+# while `fired` reads 0. Mapping "fired" here would report a misleading
+# rows_written (a wrong non-zero-looking-like-zero case), which is worse
+# than reporting none at all. Fixing this properly needs
+# _compute_recommendations_for_org to return the true persisted count
+# (len(records)) alongside fired_count -- a signature change with several
+# existing test call sites (tests/test_recommendations_task.py), deferred
+# as a separate, larger change.
 _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
     "capacity": "forecast_count",
     "release_impact": "records_written",
-    "recommendations": "fired",
     "membership_backfill": "memberships_written",
     # records_written is the aggregate across BOTH writers extra_metrics owns
     # (compounding-risk + benchmarking) -- reporting benchmark_records alone

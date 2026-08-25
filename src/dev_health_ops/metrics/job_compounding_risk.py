@@ -194,7 +194,17 @@ async def run_compounding_risk_job(
         aggregate_reason_counts,
         days_with_no_repo_rows,
     )
-    return 0
+    # CHAOS-4243: this used to unconditionally `return 0`, an exit-code
+    # habit that silently discarded the row count this function computes
+    # (total_rows) and just spent the previous ~15 lines logging. That made
+    # `run_compounding_risk_job`'s int return lie about being a row count --
+    # every caller, including the CLI wrapper below, always saw 0 regardless
+    # of how many rows actually wrote. run_release_impact_job (the sibling
+    # job in job_release_impact.py) already returns its real written count;
+    # _cmd_compounding_risk below is updated to match _cmd_release_impact's
+    # pattern (discard the count, always exit 0 on success) so this change
+    # is CLI-exit-code neutral.
+    return total_rows
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -217,12 +227,17 @@ async def _cmd_compounding_risk(ns: argparse.Namespace) -> int:
         db_url = resolve_sink_uri(ns)
         day, backfill_days = resolve_date_range(ns)
         org_id = getattr(ns, "org", None) or os.getenv("ORG_ID") or ""
-        return await run_compounding_risk_job(
+        # CHAOS-4243: run_compounding_risk_job now returns the real rows-
+        # written count, not a 0/1 exit code. Matches _cmd_release_impact's
+        # pattern in job_release_impact.py: discard the count, always exit 0
+        # on success -- a normal day writing rows is not a CLI failure.
+        await run_compounding_risk_job(
             db_url=db_url,
             day=day,
             backfill_days=backfill_days,
             org_id=org_id,
         )
+        return 0
     except Exception as exc:
         logger.error("compounding-risk job failed: %s", exc)
         return 1

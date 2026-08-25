@@ -40,6 +40,13 @@ const (
 	// default (CHAOS-4092) so a deployment that never sets the override sees
 	// no behavior change from this option's introduction.
 	defaultSyncObservationTimeout = 2 * time.Second
+	// DefaultSyncObservationTimeout exports the same value for callers that
+	// need to tell "the reconciler's own baked-in fallback" apart from an
+	// operator's genuine SYNC_OBSERVATION_TIMEOUT override (CHAOS-4239):
+	// Load never leaves SyncObservationTimeout at Go's zero value for the
+	// reconciler service, so a bare "!= 0" check cannot make that
+	// distinction on its own. See cmd/dev-health-reconciler/dependencies.go.
+	DefaultSyncObservationTimeout = defaultSyncObservationTimeout
 	defaultRiverDatabaseSchema    = "river"
 	defaultDomainDatabaseRole     = "devhealth_domain"
 	defaultQueueDatabaseRole      = "devhealth_queue"
@@ -161,20 +168,37 @@ type Config struct {
 	CancelledJobRetention       time.Duration
 	DiscardedJobRetention       time.Duration
 	RiverJobCleanerTimeout      time.Duration
-	// SyncObservationTimeout bounds one sync-dispatch observer step
-	// (reconciler-only). CHAOS-4092: exceeding it is STILL fatal to the
-	// whole process today, exactly as the hardcoded 2s was -- syncreconciler
-	// Loop.step's deadline-exceeded error is unconditionally fatal, and its
-	// owner tears the whole service down on that error (the incident
-	// mechanism). This override does not change that failure mode; it only
-	// moves the threshold, so an operator can widen the budget in place of a
-	// redeploy while the structural fix (an index-friendly terminal-repair
-	// join) is what actually keeps steps fast. A repair stage failing only
-	// ITS OWN stage loudly instead of killing the process is a proposed
-	// follow-up, not implemented here. It is a liveness knob, not a
-	// correctness one: syncreconciler.LoopConfig.validate bounds it to
-	// [10ms, 30s] regardless of what is configured here.
-	SyncObservationTimeout         time.Duration
+	// SyncObservationTimeout bounds the sync-dispatch mutation pipeline's
+	// outer per-step envelope (reconciler-only). CHAOS-4092 introduced this
+	// override when exceeding it was still fatal to the whole process,
+	// exactly as the hardcoded 2s was; CHAOS-4239 changed that underlying
+	// behavior structurally -- syncreconciler.Loop no longer tears the
+	// process down for this. Each pipeline stage now runs under its own
+	// bounded budget (syncreconciler.DefaultStageBudgets), the composed
+	// envelope is derived from their sum (see dependencies.go), and
+	// exceeding EITHER a stage's own budget or this outer envelope degrades
+	// only that tick (syncreconciler.ErrDegradedStage /
+	// syncreconciler.ErrStepEnvelopeExceeded -- logged, counted, self-healing
+	// on the next tick that fits) instead of exiting the process. This
+	// option still lets an operator override the composed default in place
+	// of a redeploy, honored even when it undercuts the composition (WARNed,
+	// not rejected). It remains a liveness knob, not a correctness one:
+	// syncreconciler.LoopConfig.validate bounds it to [10ms, 30s] regardless
+	// of what is configured here.
+	SyncObservationTimeout time.Duration
+	// SyncObservationTimeoutExplicit is true only when SYNC_OBSERVATION_TIMEOUT /
+	// --sync-observation-timeout was actually present in the environment/CLI
+	// (CHAOS-4239). SyncObservationTimeout alone cannot tell "the operator
+	// explicitly chose this value" apart from "nobody configured anything and
+	// Load's own fallback (defaultSyncObservationTimeout) filled it in" --
+	// both produce the identical 2s. A caller that needs that distinction
+	// (cmd/dev-health-reconciler/dependencies.go, composing the mutation
+	// loop's outer envelope from syncreconciler.DefaultStageBudgets instead)
+	// reads this field rather than comparing the value to a sentinel, which
+	// would silently ignore an operator who deliberately chose exactly the
+	// package default and would need hand-updating every time that default
+	// number changed.
+	SyncObservationTimeoutExplicit bool
 	OperationalBridgeURL           string
 	OperationalBridgeToken         secrets.Value
 	OperationalBridgeTimeout       time.Duration
@@ -507,6 +531,14 @@ func Load(spec Spec) (Config, error) {
 	// re-checks them, so this is belt-and-suspenders against the two
 	// constant sets drifting, not the only enforcement.
 	if cfg.Service == "dev-health-reconciler" {
+		// Captured directly from lookup, ahead of durationEnv, because
+		// durationEnv's contract is "return the fallback when unset" -- it
+		// deliberately does not distinguish an absent variable from one set
+		// to the empty string, and by design returns the identical value
+		// either way an operator could reach by choice or by doing nothing.
+		// SyncObservationTimeoutExplicit exists specifically so a caller does not
+		// have to guess which happened from the value alone (CHAOS-4239).
+		cfg.SyncObservationTimeoutExplicit = settingConfigured(lookup, "SYNC_OBSERVATION_TIMEOUT")
 		cfg.SyncObservationTimeout, err = durationEnv(
 			lookup,
 			"SYNC_OBSERVATION_TIMEOUT",

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -139,7 +140,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -199,12 +200,17 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 }
 
 // TestSyncObservationTimeoutPropagatesFromConfig pins CHAOS-4092's wiring:
-// cfg.SyncObservationTimeout, not the syncreconciler package default, decides
-// the observer loop's per-step budget when the operator set an override, and
-// a bare config.Config{} (every other reconciler test's shape, and what a
-// caller who never wires the option would produce) leaves
-// DefaultLoopConfig's built-in 2s standing rather than tripping
-// LoopConfig.validate's >= 10ms floor with a zero value.
+// cfg.SyncObservationTimeout, not the computed default, decides the observer
+// loop's per-step budget when the operator set an override, and a bare
+// config.Config{} (every other reconciler test's shape, and what a caller who
+// never wires the option would produce) leaves the CHAOS-4239 composed
+// default standing rather than tripping LoopConfig.validate's >= 10ms floor
+// with a zero value. That composed default is
+// syncreconciler.DefaultStageBudgets().Sum() (3.75s) plus
+// stageBudgetOuterEnvelopeMargin (250ms) = 4s -- no longer
+// DefaultLoopConfig's flat 2s, which described a single bounded Stepper call
+// and was never sized for the 7-stage mutation pipeline (see the doc comment
+// on DefaultLoopConfig and on the ObservationTimeout override below).
 func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 
@@ -232,6 +238,10 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 	t.Run("override reaches the loop", func(t *testing.T) {
 		cfg := reconcilerProductionShapedConfig(t)
 		cfg.SyncObservationTimeout = 7 * time.Second
+		// A hand-built override on a config.Config{} value must also flip
+		// the bool: SyncObservationTimeoutExplicit, not the value, is what
+		// dependencies.go now trusts (chris's ruling, CHAOS-4239 round 2).
+		cfg.SyncObservationTimeoutExplicit = true
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
 			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
@@ -245,6 +255,80 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		}
 	})
 
+	// The three subtests below drive config.Load itself (not a hand-built
+	// config.Config{}) with a controlled SYNC_OBSERVATION_TIMEOUT lookup, per
+	// chris's CHAOS-4239 readiness/precedence ruling: (a) Load with the
+	// variable unset must still compose the 4s stage-budget envelope: (b) an
+	// operator who explicitly sets it to exactly 2s -- the one value
+	// indistinguishable from Load's own fallback by VALUE alone -- must still
+	// have it honored, with a WARN that it undercuts the composed budget; (c)
+	// a value clearly above the composed envelope is honored with no warning.
+
+	t.Run("Load with the variable unset composes the stage-budget envelope", func(t *testing.T) {
+		cfg := reconcilerProductionShapedConfig(t)
+		if cfg.SyncObservationTimeoutExplicit {
+			t.Fatal("reconcilerProductionShapedConfig sets no environment; SyncObservationTimeoutExplicit must be false")
+		}
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s", captured, want)
+		}
+	})
+
+	t.Run("an explicit 2s is honored and warns it undercuts the composed envelope", func(t *testing.T) {
+		cfg := reconcilerLoadedConfigWithSyncObservationTimeout(t, "2s")
+		if !cfg.SyncObservationTimeoutExplicit || cfg.SyncObservationTimeout != 2*time.Second {
+			t.Fatalf("test setup: SyncObservationTimeout=%s Set=%v, want 2s/true", cfg.SyncObservationTimeout, cfg.SyncObservationTimeoutExplicit)
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			logger, newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 2*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want the explicit 2s honored", captured)
+		}
+		if !strings.Contains(buf.String(), "sync_observation_timeout is below the composed") {
+			t.Fatalf("expected a WARN that the explicit value undercuts the composed envelope; log:\n%s", buf.String())
+		}
+	})
+
+	t.Run("an explicit 10s is honored without warning", func(t *testing.T) {
+		cfg := reconcilerLoadedConfigWithSyncObservationTimeout(t, "10s")
+		if !cfg.SyncObservationTimeoutExplicit || cfg.SyncObservationTimeout != 10*time.Second {
+			t.Fatalf("test setup: SyncObservationTimeout=%s Set=%v, want 10s/true", cfg.SyncObservationTimeout, cfg.SyncObservationTimeoutExplicit)
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			logger, newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured != 10*time.Second {
+			t.Fatalf("ObservationTimeout = %s, want the explicit 10s honored", captured)
+		}
+		if strings.Contains(buf.String(), "sync_observation_timeout is below the composed") {
+			t.Fatalf("a value above the composed envelope must not warn; log:\n%s", buf.String())
+		}
+	})
+
 	t.Run("bare config.Config{} keeps the package default", func(t *testing.T) {
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
@@ -255,8 +339,47 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if captured != 2*time.Second {
-			t.Fatalf("ObservationTimeout = %s, want DefaultLoopConfig's 2s", captured)
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s (stage budgets sum + margin)", captured, want)
+		}
+	})
+
+	// TestSyncObservationTimeoutPropagatesFromConfig/a_config.Load-shaped_config_still_gets_the_composed_default
+	// pins the bug a codex review caught on CHAOS-4239: config.Load NEVER
+	// leaves SyncObservationTimeout at Go's zero value for this service --
+	// durationEnv falls back to config.DefaultSyncObservationTimeout (2s)
+	// whenever SYNC_OBSERVATION_TIMEOUT is unset -- so every REAL deployment
+	// carries a non-zero 2s here even when the operator configured nothing.
+	// The "bare config.Config{}" subtest above cannot catch a regression of
+	// this: it is the one shape config.Load can never actually produce.
+	// Without the second comparison in dependencies.go, this exact
+	// config.Load-shaped input silently clobbered the composed
+	// syncreconciler.DefaultStageBudgets().Sum() envelope back down to the
+	// flat 2s CHAOS-4239 exists to stop using, and the whole fix shipped
+	// inert against the only input production ever actually sends it.
+	t.Run("a config.Load-shaped config still gets the composed default", func(t *testing.T) {
+		var captured time.Duration
+		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(),
+			config.Config{
+				RiverDatabaseSchema: "river",
+				// This is exactly what config.Load produces for the
+				// reconciler service when SYNC_OBSERVATION_TIMEOUT is unset
+				// -- durationEnv's fallback, never Go's zero value.
+				SyncObservationTimeout: config.DefaultSyncObservationTimeout,
+			},
+			health.NewRegistry(100*time.Millisecond),
+			reconcilerTestLogger(), newSources(t, &captured),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := syncreconciler.DefaultStageBudgets().Sum() + stageBudgetOuterEnvelopeMargin
+		if captured != want {
+			t.Fatalf("ObservationTimeout = %s, want the composed default %s: a config.Load-shaped "+
+				"input (SyncObservationTimeout already at its own package default, not Go's zero) "+
+				"must not be mistaken for an explicit operator override", captured, want)
 		}
 	})
 }
@@ -285,6 +408,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		string,
 		*syncdispatchcontract.Registry,
 		config.Config,
+		*health.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
@@ -504,7 +628,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		return nil, errors.New("sync mutation construction failed")
 	}
@@ -701,7 +825,7 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 	}
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
-		*syncdispatchcontract.Registry, config.Config,
+		*syncdispatchcontract.Registry, config.Config, *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil
@@ -731,6 +855,29 @@ func reconcilerProductionShapedConfig(t *testing.T) config.Config {
 	})
 	if err != nil {
 		t.Fatalf("loading a production-defaulted config for %q: %v", reconcilerSpec.Service, err)
+	}
+	return cfg
+}
+
+// reconcilerLoadedConfigWithSyncObservationTimeout is config.Load's own
+// output with every environment variable unset EXCEPT
+// SYNC_OBSERVATION_TIMEOUT, which is set to raw -- so
+// cfg.SyncObservationTimeoutExplicit comes out true the same way a real operator
+// setting the env var or --sync-observation-timeout flag would produce, not
+// hand-set on a config.Config{} literal.
+func reconcilerLoadedConfigWithSyncObservationTimeout(t *testing.T, raw string) config.Config {
+	t.Helper()
+	cfg, err := config.Load(config.Spec{
+		Service: reconcilerSpec.Service,
+		LookupEnv: func(key string) (string, bool) {
+			if key == "SYNC_OBSERVATION_TIMEOUT" {
+				return raw, true
+			}
+			return "", false
+		},
+	})
+	if err != nil {
+		t.Fatalf("loading a config with SYNC_OBSERVATION_TIMEOUT=%q for %q: %v", raw, reconcilerSpec.Service, err)
 	}
 	return cfg
 }

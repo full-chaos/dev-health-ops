@@ -1523,3 +1523,64 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
             in environment["COORDINATOR_DATABASE_URI"]
         )
         assert environment["COORDINATOR_DATABASE_MODE"] == "session"
+
+
+def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
+    """CHAOS-4239: "any stage kills the process" (the crash-loop this ticket
+    fixes) and "a wedged process is never restarted" are the same defect from
+    opposite directions. The Go per-stage budgets and step-overrun watchdog
+    make /readyz report unhealthy when a stage is stuck; without a Compose
+    healthcheck nothing outside the container ever asks, so a wedged
+    reconciler would sit invisible in `docker ps` alongside a state that says
+    "unless-stopped" forever.
+
+    The runtime image is distroless (docker/go-worker.Dockerfile,
+    gcr.io/distroless/static-debian12) with no shell and no curl/wget, so the
+    test string must be the reconciler binary's own `healthcheck`
+    subcommand (cmd/dev-health-reconciler/main.go), never a CMD-SHELL
+    one-liner that could not run in this image at all.
+
+    No other service in this overlay declares a healthcheck to match
+    interval/timeout/retries against -- this asserts the reconciler's own
+    values are present and sane, not copied from a sibling.
+
+    Mutation coverage (manually verified): deleting the `healthcheck` key,
+    or changing `test` to a CMD-SHELL form, or to a command other than the
+    binary's own `healthcheck` subcommand, each fail this test.
+    """
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    healthcheck = services["go-reconciler"].get("healthcheck")
+    assert healthcheck is not None, "go-reconciler must declare a healthcheck"
+
+    test = healthcheck.get("test")
+    assert isinstance(test, list) and test[:1] == ["CMD"], (
+        "the runtime image is distroless -- has no shell, no curl, no wget -- "
+        "so the healthcheck must use exec ('CMD', ...) form, never CMD-SHELL"
+    )
+    assert test == [
+        "CMD",
+        "/usr/local/bin/dev-health-reconciler",
+        "healthcheck",
+    ], (
+        "the healthcheck must invoke the reconciler binary's own `healthcheck` "
+        "subcommand: nothing else executable exists in the distroless image"
+    )
+
+    for key in ("interval", "timeout", "retries", "start_period"):
+        assert key in healthcheck, f"go-reconciler healthcheck is missing {key!r}"
+    assert set(healthcheck) == {
+        "test",
+        "interval",
+        "timeout",
+        "retries",
+        "start_period",
+    }
+
+    for other_name, other_spec in services.items():
+        if other_name == "go-reconciler":
+            continue
+        assert "healthcheck" not in other_spec, (
+            f"{other_name} declares a healthcheck too, but this test's "
+            "docstring claims go-reconciler's is the only one in this "
+            "overlay -- update the docstring if that changed on purpose"
+        )

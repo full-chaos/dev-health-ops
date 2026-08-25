@@ -3,9 +3,16 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 )
 
@@ -13,6 +20,21 @@ const (
 	defaultMutationLeaseDuration    = 5 * time.Minute
 	maximumMutationStaleDispatchAge = 24 * time.Hour
 )
+
+// ErrDegradedStage marks a MutationPipeline.Step error as CHAOS-4239's
+// stage-scoped failure, not a fatal one. Loop.run unwraps it with errors.Is
+// and keeps ticking instead of tearing the whole process down -- the failing
+// stage already recorded itself loudly (syncreconciler.stage_failed,
+// sync_reconciler_stage_failures_total) before this ever reaches Loop.
+//
+// Only the observer stage's own failure is ever wrapped this way. The other
+// five stages absorb their own errors internally (see the stage
+// classification comment on MutationPipeline.Step) precisely so that a
+// repair/sweep/terminal-repair/materializer/kernel hiccup never needs Loop's
+// cooperation to survive; the observer is different because Loop trusts a
+// nil Step error to mean "the returned Observation is fresh," and a failed
+// observer call cannot honor that promise (see carryUnmeasuredGaugesLocked).
+var ErrDegradedStage = errors.New("syncreconciler: pipeline stage degraded")
 
 // sweepReportSample bounds the identifier list on the selection log line. A
 // pass can select up to `limit` units, and a log line carrying a hundred UUIDs
@@ -68,6 +90,16 @@ type KernelStepper interface {
 type MutationPipelineConfig struct {
 	StaleDispatchAge time.Duration
 	LeaseDuration    time.Duration
+	// StageBudgets replaces one flat deadline for the whole pipeline call
+	// with one bounded sub-context per stage (CHAOS-4239). Must name exactly
+	// the stages MutationPipeline.Step runs -- see StageBudgets.validate.
+	StageBudgets StageBudgets
+	// Registry is optional. When set, NewMutationPipeline self-registers a
+	// metrics fragment carrying the per-stage failure counters and duration
+	// gauges added for CHAOS-4239, the same way syncreconciler.Loop already
+	// registers its own. Nil skips registration -- most unit tests construct
+	// a MutationPipeline without a process-wide registry at all.
+	Registry *health.Registry
 }
 
 func DefaultMutationPipelineConfig() MutationPipelineConfig {
@@ -80,6 +112,7 @@ func DefaultMutationPipelineConfig() MutationPipelineConfig {
 		// override the same way Python does (CHAOS-3929).
 		StaleDispatchAge: syncdispatchcontract.DispatchStaleAge(),
 		LeaseDuration:    defaultMutationLeaseDuration,
+		StageBudgets:     DefaultStageBudgets(),
 	}
 }
 
@@ -87,7 +120,8 @@ func (config MutationPipelineConfig) valid() bool {
 	return config.StaleDispatchAge > 0 &&
 		config.StaleDispatchAge <= maximumMutationStaleDispatchAge &&
 		config.LeaseDuration >= minimumLeaseDuration &&
-		config.LeaseDuration <= maximumLeaseDuration
+		config.LeaseDuration <= maximumLeaseDuration &&
+		config.StageBudgets.validate() == nil
 }
 
 // MutationPipeline composes the already-reviewed repair, materialization, and
@@ -107,6 +141,8 @@ type MutationPipeline struct {
 	postSync     PostSyncHandoff
 	sweep        UnreclaimableSweepStepper
 	config       MutationPipelineConfig
+
+	stages stageTelemetry
 }
 
 // UnreclaimableSweepStepper is the CHAOS-4005 safety net. It is a positional
@@ -134,7 +170,7 @@ func NewMutationPipeline(
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil || observer == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return &MutationPipeline{
+	pipeline := &MutationPipeline{
 		repair:       repair,
 		terminal:     terminal,
 		materializer: materializer,
@@ -144,7 +180,133 @@ func NewMutationPipeline(
 		postSync:     postSync,
 		sweep:        sweep,
 		config:       config,
-	}, nil
+		stages:       newStageTelemetry(),
+	}
+	if config.Registry != nil {
+		if err := config.Registry.RegisterMetrics("sync_reconciler_pipeline", pipeline); err != nil {
+			return nil, fmt.Errorf("register sync reconciler pipeline metrics: %w", err)
+		}
+		// One required readiness check per stage, healthy by default (a
+		// stage that has not yet run, or has not yet failed
+		// consecutiveFailureDegradeThreshold times, must never hold up
+		// startup readiness on its own). CheckStatus.Name is a bounded,
+		// pre-registered identifier -- the same safety property every other
+		// required check in this codebase relies on -- so naming the exact
+		// degraded stage on readyz costs nothing the HTTP surface's "never
+		// return check error text" invariant already protects.
+		for _, stage := range orderedStages {
+			stage := stage
+			checkErr := config.Registry.RegisterRequired(stageReadinessCheckName(stage), func(context.Context) error {
+				if pipeline.stages.isDegraded(stage) {
+					return errStageDegraded
+				}
+				// CHAOS-4239 round 3: a stage that ignores its own stageCtx
+				// and never returns produces no failure and no success --
+				// isDegraded above would never see it. isOverrunActive is a
+				// flag the watchdog timer armed in runStage sets when it
+				// fires (see stageTelemetry.reportOverrun); this check only
+				// reads it, it never computes the overrun itself, so
+				// detection does not depend on anyone ever calling this
+				// check at all.
+				if pipeline.stages.isOverrunActive(stage) {
+					return errStepOverrun
+				}
+				return nil
+			})
+			if checkErr != nil {
+				return nil, fmt.Errorf("register sync reconciler stage %q readiness: %w", stage, checkErr)
+			}
+		}
+	}
+	return pipeline, nil
+}
+
+// errStageDegraded is never returned to a caller or exposed on the HTTP
+// surface -- health.CheckFunc's contract already keeps check error TEXT off
+// /readyz (see health/registry.go's doc comment); only the pre-registered
+// check NAME (stageReadinessCheckName) is exposed, which is what names the
+// stage.
+var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
+	fmt.Sprintf("%d consecutive ticks", consecutiveFailureDegradeThreshold))
+
+// errStepOverrun is never returned to a caller or exposed on the HTTP
+// surface -- see errStageDegraded's doc comment for the same contract. It
+// distinguishes "still running, past its budget plus margin" from
+// errStageDegraded's "has already returned and failed repeatedly" in logs
+// and in which of the two sentinels a reader searches for, even though both
+// fail the identical readyz check by the identical name.
+var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
+
+// runStage bounds one stage call to its own budget instead of letting it
+// share the whole tick's envelope with its five siblings (CHAOS-4239), and
+// records the outcome unconditionally: a stage that runs to completion inside
+// its budget still gets its duration recorded, so the gauge is never silently
+// empty for a healthy stage.
+//
+// A failure caused by the PARENT context (loop shutdown, not this stage's own
+// tighter deadline) is deliberately excluded from the stage_failed telemetry
+// and left for the caller to detect via ctx.Err() and propagate -- it is not
+// a stage degrading, it is the process stopping.
+func (pipeline *MutationPipeline) runStage(
+	ctx context.Context, stage StageName, fn func(context.Context) error,
+) error {
+	budget := pipeline.config.StageBudgets[stage]
+	stageCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	// markRunning/markIdle bracket the call so a stage that ignores stageCtx
+	// and never returns is still visible from a completely different
+	// goroutine (CHAOS-4239 round 3) -- everything below this line only runs
+	// once fn actually returns, which is exactly the case this pair exists
+	// to cover for.
+	pipeline.stages.markRunning(stage)
+	// The watchdog is an ARMED timer, not something computed lazily by
+	// whoever happens to poll readyz or scrape /metrics later -- chris
+	// explicitly required this in round-3 follow-up review, since nothing
+	// guarantees a deployment does either. Its callback runs on ITS OWN
+	// goroutine, independent of whatever goroutine ends up stuck inside fn,
+	// so it fires and reports the overrun regardless of whether fn ever
+	// returns. Stop()'d the instant the stage actually does return;
+	// reportOverrun itself is a no-op if that race is lost by a hair (the
+	// stage returned right as the timer was firing).
+	watchdog := time.AfterFunc(budget+stepOverrunMargin, func() {
+		if pipeline.stages.reportOverrun(stage) {
+			slog.Warn(
+				"syncreconciler.step_overrun",
+				"stage", string(stage),
+				"budget_ms", budget.Milliseconds(),
+				"threshold_ms", (budget + stepOverrunMargin).Milliseconds(),
+			)
+		}
+	})
+	defer func() {
+		watchdog.Stop()
+		pipeline.stages.markIdle(stage)
+	}()
+
+	start := time.Now()
+	err := fn(stageCtx)
+	elapsed := time.Since(start)
+	pipeline.stages.recordDuration(stage, elapsed)
+
+	if err == nil {
+		pipeline.stages.recordSuccess(stage)
+		return nil
+	}
+	if ctx.Err() != nil {
+		// Shutdown, not a stage failure -- the caller decides whether to
+		// propagate ctx.Err() itself.
+		return err
+	}
+	pipeline.stages.recordFailure(stage)
+	slog.Error(
+		"syncreconciler.stage_failed",
+		"stage", string(stage),
+		"budget_ms", budget.Milliseconds(),
+		"elapsed_ms", elapsed.Milliseconds(),
+		"error", err.Error(),
+	)
+	return err
 }
 
 func (pipeline *MutationPipeline) Step(
@@ -192,16 +354,51 @@ func (pipeline *MutationPipeline) Step(
 			"step", reportStep,
 		)
 	}()
-	// swept carries the sweep and materializer figures out through EVERY
-	// return below, not just the happy one. The existing
-	// ExhaustedDeliveriesRecovered comment states the rule and the reason: a
-	// later stage failing does not un-happen what an earlier one already
-	// committed, and an observation reporting zero after the sweep destroyed
-	// work would put a real terminalization under its own alert threshold.
+
+	// STAGE-SCOPED FAILURE (CHAOS-4239). Every stage below runs under its own
+	// budget via runStage, which logs+counts a failure regardless of what
+	// happens next. What happens next is a per-stage classification, not one
+	// shared rule:
+	//
+	//   - LeaseRepair and Kernel are the two stages a failure aborts the rest
+	//     of THIS TICK'S mutation work for (not the process -- see below).
+	//     Repair is first and everything after it assumes expired leases were
+	//     already freed; Kernel is the actual claim-and-publish stage, and
+	//     nothing mutation-shaped follows it anyway. Skipping straight to the
+	//     Observer preserves exactly the ordering guarantee the pre-CHAOS-4239
+	//     code already had (a repair failure already skipped sweep, terminal
+	//     repair, materializer and kernel every time) -- the only change is
+	//     that the tick no longer ends there, and the process no longer dies.
+	//   - UnreclaimableSweep, TerminalDeliveryRepair and Materializer are
+	//     read-adjacent safety nets and repair passes over largely disjoint
+	//     tables (see the pool-composition comment on buildSyncMutationPipeline
+	//     in cmd/dev-health-reconciler/dependencies.go); a stall in one buys
+	//     nothing by blocking the others, so each failure is absorbed and the
+	//     pipeline continues. Sweep already worked this way before this
+	//     ticket; TerminalDeliveryRepair and Materializer are upgraded from
+	//     "abort the tick" to "continue" here, matching sweep's precedent.
+	//   - Observer always runs last, REGARDLESS of what happened above -- it
+	//     is read-only and independent, and it is also the stage whose output
+	//     Loop trusts wholesale on a nil Step error. Because Loop cannot tell
+	//     a fresh Observation from a stale one except by trusting Step's
+	//     return, an Observer failure is the one case this function still
+	//     returns as an error (wrapped in ErrDegradedStage so Loop.run knows
+	//     to keep ticking instead of tearing the process down). Every other
+	//     stage's failure is fully absorbed here and never reaches Loop as an
+	//     error at all.
 	swept := Observation{}
-	if _, err := pipeline.repair.Step(ctx, now, limit); err != nil {
-		return swept, err
+	aborted := false
+
+	if err := pipeline.runStage(ctx, StageLeaseRepair, func(stageCtx context.Context) error {
+		_, stepErr := pipeline.repair.Step(stageCtx, now, limit)
+		return stepErr
+	}); err != nil {
+		if ctx.Err() != nil {
+			return swept, err
+		}
+		aborted = true
 	}
+
 	// CHAOS-4005: the never-leased strand. Lease repair above reaches only a
 	// RUNNING unit whose lease expired; a unit stuck in 'dispatching' holds no
 	// lease, so nothing else in this pass can free it. Runs BEFORE the
@@ -211,8 +408,13 @@ func (pipeline *MutationPipeline) Step(
 	// A sweep failure is deliberately NOT fatal to the pass: it is a safety
 	// net, and taking lease repair down with it would trade a bounded strand
 	// for an unbounded one.
-	if pipeline.sweep != nil {
-		sweepResult, sweepErr := pipeline.sweep.Step(ctx, now, limit)
+	if !aborted && pipeline.sweep != nil {
+		var sweepResult UnreclaimableSweepResult
+		sweepErr := pipeline.runStage(ctx, StageUnreclaimableSweep, func(stageCtx context.Context) error {
+			var stepErr error
+			sweepResult, stepErr = pipeline.sweep.Step(stageCtx, now, limit)
+			return stepErr
+		})
 		// A fenced decline is not an error -- the sweep correctly refused to
 		// write against a route that moved underneath it -- but it must not be
 		// invisible either. Without this line an operator sees a healthy pass
@@ -268,10 +470,7 @@ func (pipeline *MutationPipeline) Step(
 			swept.UnreclaimableMeasured = true
 		}
 		if sweepErr != nil {
-			// Cancellation belongs to the caller and must propagate; anything
-			// else is the safety net failing, which must not fail the pass.
-			if errors.Is(sweepErr, context.Canceled) ||
-				errors.Is(sweepErr, context.DeadlineExceeded) {
+			if ctx.Err() != nil {
 				return swept, sweepErr
 			}
 			// But it must never fail SILENTLY. Swallowing this without a word
@@ -291,46 +490,76 @@ func (pipeline *MutationPipeline) Step(
 			swept.UnreclaimableSweepFailures = 1
 		}
 	}
-	terminal, err := pipeline.terminal.Step(ctx, now, limit)
-	if err != nil {
-		return swept, err
+
+	var terminal TerminalDeliveryRepairResult
+	terminalRan := false
+	if !aborted {
+		terminalErr := pipeline.runStage(ctx, StageTerminalDeliveryRepair, func(stageCtx context.Context) error {
+			var stepErr error
+			terminal, stepErr = pipeline.terminal.Step(stageCtx, now, limit)
+			return stepErr
+		})
+		if terminalErr != nil && ctx.Err() != nil {
+			return swept, terminalErr
+		}
+		terminalRan = terminalErr == nil
 	}
-	// A repair cannot recover more rows than its own bounded window. Treating
-	// an out-of-range count as a failed step keeps a miscounting repair from
-	// quietly inflating the recovery metric operators alert on.
-	if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
-		terminal.RescueOnlyCancelsRecovered < 0 ||
-		terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
-		terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
-		terminal.Recovered > limit {
-		// The count itself is untrustworthy here, so it is the one case that
-		// deliberately reports nothing rather than a number it cannot stand behind.
-		return swept, ErrUnavailable
-	}
+
 	// The repair commits its own transaction before anything below runs, so its
 	// recoveries are already durable no matter how this step ends. Every return
 	// from here on carries the count: an observation reporting zero recoveries
 	// after rows were in fact reclaimed would let a cycling delivery stay under
 	// its own alert threshold, which is the failure the counter exists to catch.
 	recovered := swept
-	recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
-	// A rescue-only cancel is a registry or queue-routing fault: the job was
-	// inserted onto a queue whose client does not execute that kind. Unlike
-	// the other two recoveries it will repeat deterministically until someone
-	// changes a deployment, so it is logged rather than only counted
-	// (CHAOS-4097).
-	if terminal.RescueOnlyCancelsRecovered > 0 {
-		slog.Warn(
-			"syncreconciler.rescue_only_cancel_recovered",
-			"recovered", terminal.RescueOnlyCancelsRecovered,
-		)
+	if terminalRan {
+		// A repair cannot recover more rows than its own bounded window.
+		// Treating an out-of-range count as a failed step keeps a
+		// miscounting repair from quietly inflating the recovery metric
+		// operators alert on. This is a data-integrity guard, not a timeout:
+		// it deliberately reports nothing rather than a count it cannot
+		// stand behind, exactly as before CHAOS-4239.
+		if terminal.ExhaustedRecovered < 0 || terminal.ExhaustedRecovered > terminal.Recovered ||
+			terminal.RescueOnlyCancelsRecovered < 0 ||
+			terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
+			terminal.ExhaustedRecovered+terminal.RescueOnlyCancelsRecovered > terminal.Recovered ||
+			terminal.Recovered > limit {
+			slog.Error(
+				"syncreconciler.stage_failed",
+				"stage", string(StageTerminalDeliveryRepair),
+				"error", ErrUnavailable.Error(),
+				"reason", "recovered count outside its own bounded window",
+			)
+			pipeline.stages.recordFailure(StageTerminalDeliveryRepair)
+		} else {
+			recovered.ExhaustedDeliveriesRecovered = int64(terminal.ExhaustedRecovered)
+			// A rescue-only cancel is a registry or queue-routing fault: the job
+			// was inserted onto a queue whose client does not execute that kind.
+			// Unlike the other two recoveries it will repeat deterministically
+			// until someone changes a deployment, so it is logged rather than
+			// only counted (CHAOS-4097).
+			if terminal.RescueOnlyCancelsRecovered > 0 {
+				slog.Warn(
+					"syncreconciler.rescue_only_cancel_recovered",
+					"recovered", terminal.RescueOnlyCancelsRecovered,
+				)
+			}
+		}
 	}
-	materialized, err := pipeline.materializer.Step(
-		ctx,
-		now,
-		now.Add(-pipeline.config.StaleDispatchAge),
-		limit,
-	)
+
+	var materialized MaterializerResult
+	var materializerErr error
+	if !aborted {
+		materializerErr = pipeline.runStage(ctx, StageMaterializer, func(stageCtx context.Context) error {
+			var stepErr error
+			materialized, stepErr = pipeline.materializer.Step(
+				stageCtx, now, now.Add(-pipeline.config.StaleDispatchAge), limit,
+			)
+			return stepErr
+		})
+		if materializerErr != nil && ctx.Err() != nil {
+			return recovered, materializerErr
+		}
+	}
 	// CHAOS-4097: one sync_dispatch_outbox row reached attempts = 72601 in
 	// production, generating roughly 1500 no-op River jobs a minute for
 	// twenty-two hours, and nothing anywhere said a word. Counters do not
@@ -368,7 +597,13 @@ func (pipeline *MutationPipeline) Step(
 	if materialized.RunawayReportStep != "" {
 		reportStep = materialized.RunawayReportStep
 	}
-	reportDelivered = materialized.RunawayReportStep == "" && err == nil
+	// !aborted guards this the same way the rest of the accounting does: when
+	// repair already aborted the tick, the materializer never ran at all, and
+	// its zero-value MaterializerResult{} has an empty RunawayReportStep for
+	// the same reason a genuinely successful, nothing-to-report pass would --
+	// without this guard the two are indistinguishable and a repair outage
+	// would read as a delivered report.
+	reportDelivered = !aborted && materialized.RunawayReportStep == "" && materializerErr == nil
 	// THE EXACT TOTAL, never len(Runaway) (review finding). Runaway is a
 	// sample capped at runawayDispatchScan; CHAOS-4093 held 83 stuck runs, so
 	// a gauge fed from the sample would have reported 20 for an incident more
@@ -384,25 +619,40 @@ func (pipeline *MutationPipeline) Step(
 	// the previous value standing rather than overwriting a real count with a
 	// zero nobody took (review finding).
 	recovered.RunawayMeasured = reportDelivered
-	if err != nil {
+
+	if !aborted {
+		if err := pipeline.runStage(ctx, StageKernel, func(stageCtx context.Context) error {
+			_, stepErr := pipeline.kernel.Step(
+				stageCtx, now, limit, pipeline.config.LeaseDuration, pipeline.publish, pipeline.postSync,
+			)
+			return stepErr
+		}); err != nil {
+			if ctx.Err() != nil {
+				return recovered, err
+			}
+			aborted = true
+		}
+	}
+
+	// Observer always runs, whatever happened above -- it is read-only,
+	// independent of every earlier stage, and it is the stage whose success
+	// or failure this function ultimately reports to Loop (see the stage
+	// classification comment near the top of this method).
+	if err := ctx.Err(); err != nil {
 		return recovered, err
 	}
-	if _, err := pipeline.kernel.Step(
-		ctx,
-		now,
-		limit,
-		pipeline.config.LeaseDuration,
-		pipeline.publish,
-		pipeline.postSync,
-	); err != nil {
-		return recovered, err
-	}
-	observation, err = pipeline.observer.Step(ctx, now, limit)
+	var observed Observation
+	observerErr := pipeline.runStage(ctx, StageObserver, func(stageCtx context.Context) error {
+		var stepErr error
+		observed, stepErr = pipeline.observer.Step(stageCtx, now, limit)
+		return stepErr
+	})
 	// The read-only Observer leaves every pipeline-authored field zero, so
 	// they are copied across rather than merged. One assignment per field,
 	// spelled out: a struct-level copy would silently drop the observer's own
 	// queue snapshot, and a loop over reflection would hide the next field
 	// somebody forgets to carry.
+	observation = observed
 	observation.ExhaustedDeliveriesRecovered = recovered.ExhaustedDeliveriesRecovered
 	observation.RunawayDispatchWakeups = recovered.RunawayDispatchWakeups
 	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
@@ -410,5 +660,260 @@ func (pipeline *MutationPipeline) Step(
 	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
 	observation.RunawayMeasured = recovered.RunawayMeasured
 	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
-	return observation, err
+	if observerErr != nil {
+		if ctx.Err() != nil {
+			return observation, observerErr
+		}
+		// The one stage whose failure this function still reports as an
+		// error -- see the classification comment above. ErrDegradedStage
+		// tells Loop.run this is CHAOS-4239's stage-scoped failure, not a
+		// fatal one: log it, keep ticking, let the next tick self-heal.
+		return observation, fmt.Errorf("observer stage: %w: %w", ErrDegradedStage, observerErr)
+	}
+	return observation, nil
+}
+
+// consecutiveFailureDegradeThreshold is chris's readiness ruling on
+// CHAOS-4239: a single stage blip must not flap the reconciler's overall
+// readiness (that's the false-alarm failure mode), but a stage failing on
+// EVERY tick -- the shape the ticket's own cold-start symptom took -- must be
+// visible on readyz by name, not only to someone reading a Prometheus
+// counter. Three consecutive failures is the line; one success clears it
+// immediately, so a stage that recovers is never held degraded by a stale
+// streak.
+const consecutiveFailureDegradeThreshold = 3
+
+// stepOverrunMargin pads a stage's own budget before its in-flight duration
+// counts as an overrun (CHAOS-4239 round 3). It exists for the same reason
+// stageBudgetOuterEnvelopeMargin does in dependencies.go: a stage that
+// returns right at its own deadline should not immediately read as stuck.
+const stepOverrunMargin = 250 * time.Millisecond
+
+// stageTelemetry is the CHAOS-4239 metrics fragment: a lifetime failure
+// counter, a last-observed-duration gauge, a readiness-affecting
+// consecutive-failure streak, and in-flight overrun tracking per stage,
+// keyed the same way sync_dispatch_observer's own WritePrometheus keys its
+// fixed kinds -- every known stage always exports a line, zero until it
+// first runs or fails, so a stage that has never failed is visibly zero
+// rather than absent.
+type stageTelemetry struct {
+	mu          sync.Mutex
+	failures    map[StageName]uint64
+	durations   map[StageName]time.Duration
+	consecutive map[StageName]int
+	degraded    map[StageName]bool
+
+	// running, overrunActive and overruns answer a question none of the
+	// fields above can: a stage whose call IGNORES its own stageCtx and
+	// simply never returns produces no failure, no success, and no duration
+	// sample -- runStage is itself blocked inside fn(stageCtx) and nothing
+	// about that call graph ever reaches recordFailure or recordSuccess.
+	// Every non-fatal-degradation mechanism this file builds
+	// (ErrDegradedStage, ErrStepEnvelopeExceeded) depends on the call
+	// RETURNING eventually; a stage that never returns is invisible to all
+	// of them, which would make CHAOS-4239's "process stays up" fix trade a
+	// loud crash-loop for a silent zombie hang (chris's round-3 finding).
+	//
+	// Detection is an ARMED per-step timer, not something computed lazily
+	// when a poller happens to ask (chris explicitly rejected the lazy
+	// design in round-3 follow-up review: nothing guarantees a deployment
+	// polls readyz or scrapes metrics at all, and lazy detection would then
+	// never fire). runStage arms a time.AfterFunc at stage start, for
+	// budget+stepOverrunMargin; its callback runs on ITS OWN goroutine --
+	// independent of whatever goroutine is stuck inside fn -- and reports
+	// the overrun unconditionally the moment it fires, whether or not
+	// anyone is watching. The timer is stopped the instant the stage
+	// actually returns.
+	running       map[StageName]bool
+	overrunActive map[StageName]bool
+	overruns      map[StageName]uint64
+}
+
+func newStageTelemetry() stageTelemetry {
+	return stageTelemetry{
+		failures:      make(map[StageName]uint64, len(orderedStages)),
+		durations:     make(map[StageName]time.Duration, len(orderedStages)),
+		consecutive:   make(map[StageName]int, len(orderedStages)),
+		degraded:      make(map[StageName]bool, len(orderedStages)),
+		running:       make(map[StageName]bool, len(orderedStages)),
+		overrunActive: make(map[StageName]bool, len(orderedStages)),
+		overruns:      make(map[StageName]uint64, len(orderedStages)),
+	}
+}
+
+// markRunning records that a stage's call has started. Call this BEFORE
+// invoking the stage's own function, never after -- the whole point is
+// visibility into a call that might never return.
+func (telemetry *stageTelemetry) markRunning(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.running[stage] = true
+	telemetry.overrunActive[stage] = false
+}
+
+// markIdle clears a stage's in-flight and overrun state once its call
+// returns, however it returned -- readiness must clear the instant a
+// previously-stuck stage finally does, per chris's ruling. Call via defer
+// immediately after markRunning so it always runs, on every exit path.
+func (telemetry *stageTelemetry) markIdle(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.running[stage] = false
+	telemetry.overrunActive[stage] = false
+}
+
+// reportOverrun is called from the watchdog timer's OWN goroutine (armed by
+// runStage, independent of whatever goroutine is potentially still stuck
+// inside the stage's call) when a stage has been running past its budget
+// plus margin. It returns false, doing nothing, if the stage has already
+// returned by the time the timer fires -- a benign race between the
+// timer firing and runStage's deferred Stop()/markIdle -- so a fast stage
+// that finished right at the wire is never misreported.
+func (telemetry *stageTelemetry) reportOverrun(stage StageName) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	if !telemetry.running[stage] {
+		return false
+	}
+	telemetry.overrunActive[stage] = true
+	telemetry.overruns[stage]++
+	return true
+}
+
+func (telemetry *stageTelemetry) isOverrunActive(stage StageName) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	return telemetry.overrunActive[stage]
+}
+
+func (telemetry *stageTelemetry) overrunSnapshot() map[StageName]uint64 {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	overruns := make(map[StageName]uint64, len(telemetry.overruns))
+	for stage, count := range telemetry.overruns {
+		overruns[stage] = count
+	}
+	return overruns
+}
+
+// recordFailure is called ONLY for a failure runStage has already decided is
+// a real stage failure (not a parent-context cancellation -- see runStage).
+// It both grows the lifetime counter and advances the readiness-affecting
+// consecutive streak.
+func (telemetry *stageTelemetry) recordFailure(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.failures[stage]++
+	telemetry.consecutive[stage]++
+	if telemetry.consecutive[stage] >= consecutiveFailureDegradeThreshold {
+		telemetry.degraded[stage] = true
+	}
+}
+
+// recordSuccess clears the consecutive-failure streak the moment a stage
+// succeeds. One success is enough -- there is no separate "recovered N times"
+// threshold on the way back down, so a stage does not stay marked degraded
+// on readyz after it has visibly started working again.
+func (telemetry *stageTelemetry) recordSuccess(stage StageName) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.consecutive[stage] = 0
+	telemetry.degraded[stage] = false
+}
+
+func (telemetry *stageTelemetry) isDegraded(stage StageName) bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	return telemetry.degraded[stage]
+}
+
+func (telemetry *stageTelemetry) recordDuration(stage StageName, elapsed time.Duration) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.durations[stage] = elapsed
+}
+
+func (telemetry *stageTelemetry) snapshot() (map[StageName]uint64, map[StageName]time.Duration) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	failures := make(map[StageName]uint64, len(telemetry.failures))
+	for stage, count := range telemetry.failures {
+		failures[stage] = count
+	}
+	durations := make(map[StageName]time.Duration, len(telemetry.durations))
+	for stage, elapsed := range telemetry.durations {
+		durations[stage] = elapsed
+	}
+	return failures, durations
+}
+
+func (telemetry *stageTelemetry) degradedSnapshot() map[StageName]bool {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	degraded := make(map[StageName]bool, len(telemetry.degraded))
+	for stage, isDegraded := range telemetry.degraded {
+		degraded[stage] = isDegraded
+	}
+	return degraded
+}
+
+// stageReadinessCheckName is the health.Registry required-check name for a
+// stage's degraded state, sharing sync_reconciler_stage_*'s prefix so an
+// operator can go from a metric label straight to the matching readyz check
+// name without translating between two vocabularies.
+func stageReadinessCheckName(stage StageName) string {
+	return "sync_reconciler_stage_" + string(stage)
+}
+
+// WritePrometheus satisfies health.MetricsSource. It is registered only when
+// MutationPipelineConfig.Registry is set.
+func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
+	if pipeline == nil || output == nil {
+		return errors.New("Prometheus output is required")
+	}
+	failures, durations := pipeline.stages.snapshot()
+	degraded := pipeline.stages.degradedSnapshot()
+	budgets := pipeline.config.StageBudgets
+
+	stages := make([]string, 0, len(orderedStages))
+	for _, stage := range orderedStages {
+		stages = append(stages, string(stage))
+	}
+	sort.Strings(stages)
+	// Reads only: the watchdog armed in runStage (CHAOS-4239 round 3) is the
+	// sole source of truth for overrun detection, so a scrape never needs to
+	// (and must not) recompute it here.
+	overruns := pipeline.stages.overrunSnapshot()
+
+	var text strings.Builder
+	text.WriteString("# HELP sync_reconciler_stage_failures_total Pipeline stage passes that exceeded their own budget or errored (CHAOS-4239). The pipeline continues past every stage except lease_repair and kernel; a stage climbing here degrades only its own work, never the process.\n# TYPE sync_reconciler_stage_failures_total counter\n")
+	for _, name := range stages {
+		fmt.Fprintf(&text, "sync_reconciler_stage_failures_total{stage=%q} %d\n", name, failures[StageName(name)])
+	}
+	text.WriteString("# HELP sync_reconciler_stage_duration_seconds Wall-clock time the most recent pass spent in this stage, whether it succeeded or not.\n# TYPE sync_reconciler_stage_duration_seconds gauge\n")
+	for _, name := range stages {
+		fmt.Fprintf(&text, "sync_reconciler_stage_duration_seconds{stage=%q} %s\n", name, formatSeconds(durations[StageName(name)]))
+	}
+	text.WriteString("# HELP sync_reconciler_stage_budget_seconds The bounded sub-context this stage runs under. Static per deployment; exported so elapsed and budget can be read from the same dashboard without checking the source.\n# TYPE sync_reconciler_stage_budget_seconds gauge\n")
+	for _, name := range stages {
+		fmt.Fprintf(&text, "sync_reconciler_stage_budget_seconds{stage=%q} %s\n", name, formatSeconds(budgets[StageName(name)]))
+	}
+	fmt.Fprintf(&text, "# HELP sync_reconciler_stage_degraded Whether this stage has failed its last %d consecutive ticks. Matches the sync_reconciler_stage_<name> readyz check by name; one success clears both.\n# TYPE sync_reconciler_stage_degraded gauge\n", consecutiveFailureDegradeThreshold)
+	for _, name := range stages {
+		value := 0
+		if degraded[StageName(name)] {
+			value = 1
+		}
+		fmt.Fprintf(&text, "sync_reconciler_stage_degraded{stage=%q} %d\n", name, value)
+	}
+	text.WriteString("# HELP sync_reconciler_step_overrun_total Stage calls that ignored their own bounded context and were still running past their budget plus margin the last time this was checked (CHAOS-4239 round 3). Unlike sync_reconciler_stage_failures_total, this counts calls that never returned at all -- the only way such a call is visible.\n# TYPE sync_reconciler_step_overrun_total counter\n")
+	for _, name := range stages {
+		fmt.Fprintf(&text, "sync_reconciler_step_overrun_total{stage=%q} %d\n", name, overruns[StageName(name)])
+	}
+	_, err := io.WriteString(output, text.String())
+	return err
+}
+
+func formatSeconds(duration time.Duration) string {
+	return strconv.FormatFloat(duration.Seconds(), 'g', -1, 64)
 }

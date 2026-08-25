@@ -594,6 +594,56 @@ while the override is still in place. **Reactivating is a deploy step, not a
 merge step** — remove the override and confirm the sweep reports its
 would-terminalize selection before considering `active` (CHAOS-4035).
 
+### One deadline per stage, not one deadline for the whole pipeline
+
+The reconciler mutation pipeline (`internal/syncreconciler.MutationPipeline.Step`,
+composed at `dependencies.go:250-323`) runs six stages every tick — lease
+repair, the unreclaimable sweep, terminal delivery repair, the materializer,
+the kernel (which also runs the publish closure inline), and the observer.
+Before CHAOS-4239 all six shared **one** flat `context.WithTimeout` applied to
+the whole `Step` call (`syncreconciler.Loop.step`'s `ObservationTimeout`,
+2s by default) — so any one stage running long starved its siblings of
+whatever time it left, and `Loop`'s `Errors()` channel treated the resulting
+deadline as fatal to the **whole process**: `internal/platform/lifecycle`'s
+component model tears every other running component down with it. A slow
+terminal-delivery-repair join (CHAOS-4092) or cold-start latency in any other
+stage reliably crash-looped the reconciler and, worse, re-relayed outbox work
+on every restart cycle.
+
+The fix is structural, not a bigger number:
+
+* Each stage now runs under its **own** bounded sub-context, sized from what
+  that stage actually does (`syncreconciler.DefaultStageBudgets`,
+  `stage_budget.go`) — not a shared guess. The outer `Loop.step` envelope
+  (`dependencies.go`'s `syncLoopConfig.ObservationTimeout`) is computed as the
+  **sum** of those budgets plus a fixed scheduling margin, so the two cannot
+  drift the way the flat-2s comment already had; it is a pure last-resort
+  backstop now, not the primary bound.
+* A stage classification decides what a failure does to the rest of the tick.
+  Lease repair and the kernel abort the tick's remaining mutation work on
+  failure (matching the pre-fix ordering exactly — a repair failure already
+  skipped everything after it); the sweep, terminal delivery repair, and the
+  materializer are continue-safe, since they operate on largely disjoint
+  tables and a stall in one buys nothing by blocking the others. The observer
+  always runs last regardless, because it is read-only and independent.
+* Every stage's own failure is logged (`syncreconciler.stage_failed`) and
+  counted (`sync_reconciler_stage_failures_total{stage}`,
+  `sync_reconciler_stage_duration_seconds{stage}`) — visible on its own,
+  whether or not it changes the tick's overall outcome.
+* Critically, **the process no longer dies for this**. `Loop.run` only tears
+  the process down for an error class it cannot self-heal from; a stage
+  degrading (wrapped in `syncreconciler.ErrDegradedStage`, produced only when
+  the observer itself fails — see the doc comment on that sentinel for why
+  the observer is the one stage whose own failure still has to be reported as
+  a `Step` error) logs, keeps the loop ticking, and self-heals on the next
+  successful tick instead.
+
+Pathway note: this changed error/deadline handling only. It did not change
+which pool any stage runs on, which tables it reads or writes, or the lock
+ordering the kernel mermaid diagram later in this document describes — that
+diagram and the "Components that hold more than one pool" table above remain
+accurate as-is.
+
 ### Repair failures must name themselves
 
 `internal/syncreconciler` returns one package-wide sentinel, `ErrUnavailable`,

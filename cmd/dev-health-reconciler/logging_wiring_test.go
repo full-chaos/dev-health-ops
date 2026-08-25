@@ -90,7 +90,7 @@ func TestSyncDispatchObserverLoopReceivesTheComposedLoggerFromReconcilerComposit
 	}
 	forcedErr := errors.New("sync dispatch observation probe failure")
 	sources.buildSyncMutation = func(
-		_, _, _ *pgxpool.Pool, _ string, _ *syncdispatchcontract.Registry, _ config.Config,
+		_, _, _ *pgxpool.Pool, _ string, _ *syncdispatchcontract.Registry, _ config.Config, _ *health.Registry,
 	) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, forcedErr

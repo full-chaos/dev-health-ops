@@ -391,7 +391,123 @@ func TestLoopPeriodicErrorClosesReadinessAndSurfacesError(t *testing.T) {
 	}
 }
 
-func TestLoopInitialObservationDeadlineIsBoundedAndSanitized(t *testing.T) {
+// TestLoopDegradedStageOnInitialStepDoesNotFailStartAndSelfHeals pins
+// CHAOS-4239's fix for the ticket's primary observed failure window: the
+// first ~40s after each container restart. Before this fix, ANY Step error
+// on the very first tick failed Start and took the whole runtime down with
+// it -- exactly the crash-loop CHAOS-4239 exists to end. A stage wrapped in
+// ErrDegradedStage must instead leave Start (and the process) running,
+// leaving only readiness closed until a tick succeeds.
+func TestLoopDegradedStageOnInitialStepDoesNotFailStartAndSelfHeals(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)}
+	degraded := fmt.Errorf("observer stage: %w: %w", ErrDegradedStage, errors.New("boom"))
+	calls := make(chan struct{}, 2)
+	callIndex := 0
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		callIndex++
+		defer func() { calls <- struct{}{} }()
+		if callIndex == 1 {
+			return Observation{}, degraded
+		}
+		return testObservation(), nil
+	}), clock)
+	openReadinessGate(t, registry)
+
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: a degraded stage must not fail startup", err)
+	}
+	<-calls // the degraded initial step
+	if readiness := registry.Readiness(context.Background()); readiness.Ready {
+		t.Fatalf("readiness after a degraded initial step = %#v, want closed until a tick succeeds", readiness)
+	}
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("degraded initial step unexpectedly surfaced on Errors(): %v", err)
+	default:
+	}
+
+	clock.mu.Lock()
+	clock.now = clock.now.Add(time.Second)
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now()
+	<-calls // the next, successful tick
+	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("readiness after the next successful tick = %#v, want the loop to self-heal", readiness)
+	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLoopDegradedStageDuringPollingKeepsTickingAndSelfHeals is the periodic
+// counterpart: a degraded tick after Start must not close over Errors() or
+// stop the ticker loop the way every OTHER Step error still correctly does
+// (TestLoopPeriodicErrorClosesReadinessAndSurfacesError, unchanged). The loop
+// keeps ticking, readiness closes for the degraded tick, and the very next
+// successful tick reopens it -- the process survives what used to be fatal.
+func TestLoopDegradedStageDuringPollingKeepsTickingAndSelfHeals(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)}
+	degraded := fmt.Errorf("observer stage: %w: %w", ErrDegradedStage, errors.New("boom"))
+	calls := make(chan struct{}, 3)
+	callIndex := 0
+	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
+		callIndex++
+		defer func() { calls <- struct{}{} }()
+		if callIndex == 2 {
+			return Observation{}, degraded
+		}
+		return testObservation(), nil
+	}), clock)
+	openReadinessGate(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-calls // initial, successful step
+	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("readiness after the initial step = %#v, want open", readiness)
+	}
+
+	clock.mu.Lock()
+	clock.now = clock.now.Add(time.Second)
+	ticker := clock.ticker
+	clock.mu.Unlock()
+
+	ticker.ticks <- clock.Now()
+	<-calls // the degraded tick
+	if readiness := registry.Readiness(context.Background()); readiness.Ready {
+		t.Fatalf("readiness during a degraded tick = %#v, want closed", readiness)
+	}
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("a degraded tick killed the loop -- Errors() = %v, want the process to survive it", err)
+	default:
+	}
+
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-calls // the next, successful tick -- proves the loop kept ticking
+	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
+		t.Fatalf("readiness after the recovery tick = %#v, want the loop to self-heal", readiness)
+	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLoopInitialObservationDeadlineDegradesRatherThanFailsStart is CHAOS-4239
+// round 2's update to what was
+// TestLoopInitialObservationDeadlineIsBoundedAndSanitized: a step whose own
+// outer envelope (not Loop's top-level ctx) expires on the very first tick
+// now degrades (ErrStepEnvelopeExceeded) instead of failing Start -- exactly
+// the same non-fatal treatment ErrDegradedStage already gets, and for the
+// same reason (the ticket's primary observed failure window was the first
+// ~40s after each container restart). The step's own error detail
+// (potentially secret-bearing, as in production a driver error can carry a
+// DSN) is discarded entirely in favor of the generic context error the
+// moment the outer envelope itself is what expired -- there is nothing left
+// to sanitize because nothing from the stepper's own error ever reaches the
+// caller.
+func TestLoopInitialObservationDeadlineDegradesRatherThanFailsStart(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
 	exited := make(chan struct{})
 	loop, registry := newTestLoopWithTimeout(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (Observation, error) {
@@ -401,12 +517,8 @@ func TestLoopInitialObservationDeadlineIsBoundedAndSanitized(t *testing.T) {
 	}), clock, minObservationTimeout)
 	openReadinessGate(t, registry)
 
-	err := loop.Start(context.Background())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Start() error = %v, want deadline", err)
-	}
-	if strings.Contains(err.Error(), "postgres://") || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("Start() leaked step error detail: %v", err)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: an outer-envelope deadline must not fail startup (CHAOS-4239 round 2)", err)
 	}
 	select {
 	case <-exited:
@@ -414,27 +526,41 @@ func TestLoopInitialObservationDeadlineIsBoundedAndSanitized(t *testing.T) {
 		t.Fatal("initial step goroutine did not exit after deadline")
 	}
 	if readiness := registry.Readiness(context.Background()); readiness.Ready {
-		t.Fatalf("deadline readiness = %#v", readiness)
+		t.Fatalf("deadline readiness = %#v, want closed", readiness)
 	}
 	select {
 	case fatal := <-loop.Errors():
 		t.Fatalf("initial deadline unexpectedly surfaced on Errors(): %v", fatal)
 	default:
 	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func TestLoopPeriodicObservationDeadlineIsFatalAndSanitized(t *testing.T) {
+// TestLoopPeriodicObservationDeadlineDegradesAndSelfHeals is CHAOS-4239 round
+// 2's update to what was TestLoopPeriodicObservationDeadlineIsFatalAndSanitized:
+// a periodic tick's own outer envelope expiring must not surface on
+// Errors() or stop the ticker either -- ErrStepEnvelopeExceeded gets the
+// same non-fatal treatment as ErrDegradedStage. Readiness closes for the
+// degraded tick and reopens on the very next successful one, proving the
+// loop kept ticking on its own.
+func TestLoopPeriodicObservationDeadlineDegradesAndSelfHeals(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
 	pollExited := make(chan struct{})
 	calls := 0
 	loop, registry := newTestLoopWithTimeout(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (Observation, error) {
 		calls++
-		if calls == 1 {
+		switch calls {
+		case 1:
+			return testObservation(), nil
+		case 2:
+			<-ctx.Done()
+			close(pollExited)
+			return Observation{}, fmt.Errorf("postgres://operator:secret@db/app: %w", ctx.Err())
+		default:
 			return testObservation(), nil
 		}
-		<-ctx.Done()
-		close(pollExited)
-		return Observation{}, fmt.Errorf("postgres://operator:secret@db/app: %w", ctx.Err())
 	}), clock, minObservationTimeout)
 	openReadinessGate(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
@@ -444,20 +570,18 @@ func TestLoopPeriodicObservationDeadlineIsFatalAndSanitized(t *testing.T) {
 	ticker := clock.ticker
 	clock.mu.Unlock()
 	ticker.ticks <- clock.Now().Add(time.Second)
-	fatal := <-loop.Errors()
-	if !errors.Is(fatal, context.DeadlineExceeded) {
-		t.Fatalf("Errors() = %v, want deadline", fatal)
-	}
-	if strings.Contains(fatal.Error(), "postgres://") || strings.Contains(fatal.Error(), "secret") {
-		t.Fatalf("Errors() leaked step error detail: %v", fatal)
-	}
 	select {
 	case <-pollExited:
-	default:
+	case <-time.After(5 * time.Second):
 		t.Fatal("periodic step goroutine did not exit after deadline")
 	}
+	select {
+	case fatal := <-loop.Errors():
+		t.Fatalf("a degraded outer-envelope tick killed the loop -- Errors() = %v, want the process to survive it", fatal)
+	case <-time.After(50 * time.Millisecond):
+	}
 	if readiness := registry.Readiness(context.Background()); readiness.Ready {
-		t.Fatalf("deadline readiness = %#v", readiness)
+		t.Fatalf("deadline readiness = %#v, want closed", readiness)
 	}
 	var metrics bytes.Buffer
 	if err := loop.WritePrometheus(&metrics); err != nil {
@@ -465,6 +589,23 @@ func TestLoopPeriodicObservationDeadlineIsFatalAndSanitized(t *testing.T) {
 	}
 	if !strings.Contains(metrics.String(), "sync_dispatch_observer_up 0\n") {
 		t.Fatalf("deadline metrics =\n%s", metrics.String())
+	}
+
+	// The loop must still be ticking on its own: the poll interval alone
+	// (minPollInterval, from newTestLoop's config) drives the ticker in
+	// production, but this test drives it explicitly like every other
+	// periodic test in this file.
+	ticker.ticks <- clock.Now().Add(2 * time.Second)
+	deadline := time.After(5 * time.Second)
+	for {
+		if registry.Readiness(context.Background()).Ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("loop never self-healed after the outer-envelope deadline cleared")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1407,8 +1548,13 @@ func TestADeadlinePassStillCarriesItsMeasuredGauges(t *testing.T) {
 	}), clock, 10*time.Millisecond)
 	openReadinessGate(t, registry)
 
-	if err := loop.Start(context.Background()); err == nil {
-		t.Fatal("Start() = nil, want the deadline error")
+	// CHAOS-4239 round 2: an outer-envelope deadline on the initial step no
+	// longer fails Start (ErrStepEnvelopeExceeded's non-fatal treatment,
+	// same as ErrDegradedStage) -- the claim this test exists to pin, that
+	// gauges measured before the deadline still get published, is unchanged
+	// by that and is exactly what the assertions below still check.
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: an outer-envelope deadline must not fail startup", err)
 	}
 
 	var metrics bytes.Buffer

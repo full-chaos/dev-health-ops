@@ -154,27 +154,37 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 	}
 }
 
-func TestMutationPipelineStopsAtFirstFailedStage(t *testing.T) {
+// TestMutationPipelineAbortsRemainingMutationStagesWhenRepairFails pins the
+// CHAOS-4239 stage classification for lease repair: it is one of the two
+// stages (with kernel) whose failure aborts the rest of the tick's MUTATION
+// work, matching exactly what the pre-CHAOS-4239 pipeline already did (a
+// repair failure always skipped sweep, terminal repair, materializer and
+// kernel). What changed is what happens next: the tick no longer ends there.
+// The observer still runs -- it is read-only and independent -- and because
+// it succeeds here, Step returns nil: a stage failing no longer has to kill
+// the whole reconciler process to be reported (it already logged and counted
+// itself via runStage before Step ever returns).
+func TestMutationPipelineAbortsRemainingMutationStagesWhenRepairFails(t *testing.T) {
 	sentinel := errors.New("repair unavailable")
-	called := false
+	var terminalCalled, materializerCalled, kernelCalled, observerCalled bool
 	pipeline, err := NewMutationPipeline(
 		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
 			return LeaseRepairResult{}, sentinel
 		}),
 		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
-			called = true
+			terminalCalled = true
 			return TerminalDeliveryRepairResult{}, nil
 		}),
 		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
-			called = true
+			materializerCalled = true
 			return MaterializerResult{}, nil
 		}),
 		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
-			called = true
+			kernelCalled = true
 			return KernelResult{}, nil
 		}),
 		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
-			called = true
+			observerCalled = true
 			return Observation{}, nil
 		}),
 		nil,
@@ -186,8 +196,15 @@ func TestMutationPipelineStopsAtFirstFailedStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = pipeline.Step(context.Background(), time.Now(), 10)
-	if !errors.Is(err, sentinel) || called {
-		t.Fatalf("err=%v called=%v", err, called)
+	if err != nil {
+		t.Fatalf("a repair failure must not fail the tick -- it degrades gracefully, not fatally: %v", err)
+	}
+	if terminalCalled || materializerCalled || kernelCalled {
+		t.Fatalf("a mutation stage ran after repair aborted the tick: terminal=%v materializer=%v kernel=%v",
+			terminalCalled, materializerCalled, kernelCalled)
+	}
+	if !observerCalled {
+		t.Fatal("the observer must still run after repair aborts the tick -- it is read-only and independent")
 	}
 }
 
@@ -277,7 +294,13 @@ func TestMutationPipelineReportsExhaustedDeliveryRecoveries(t *testing.T) {
 
 // A repair reporting more exhausted recoveries than recoveries, or more
 // recoveries than its own window allows, is miscounting. Exporting that would
-// inflate the metric operators page on, so the step fails instead.
+// inflate the metric operators page on, so the count itself is never
+// trusted -- ExhaustedDeliveriesRecovered stays at its safe zero default for
+// this tick. Since CHAOS-4239, terminal-delivery repair is a continue-safe
+// stage (see the classification comment on MutationPipeline.Step): an
+// untrustworthy count is a data-integrity guard, not the flat-deadline
+// timeout this ticket exists to stop treating as fatal, so it no longer
+// aborts materializer/kernel/observer or fails the tick.
 func TestMutationPipelineRejectsImpossibleRecoveryCounts(t *testing.T) {
 	for name, result := range map[string]TerminalDeliveryRepairResult{
 		"exhausted exceeds recovered": {Recovered: 1, ExhaustedRecovered: 2},
@@ -289,8 +312,13 @@ func TestMutationPipelineRejectsImpossibleRecoveryCounts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := pipeline.Step(context.Background(), time.Now().UTC(), 17); !errors.Is(err, ErrUnavailable) {
-				t.Fatalf("err = %v, want ErrUnavailable", err)
+			observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
+			if err != nil {
+				t.Fatalf("an untrustworthy count must not fail the tick: %v", err)
+			}
+			if observation.ExhaustedDeliveriesRecovered != 0 {
+				t.Fatalf("ExhaustedDeliveriesRecovered = %d, want 0: an untrustworthy count "+
+					"must never be published", observation.ExhaustedDeliveriesRecovered)
 			}
 		})
 	}
@@ -369,8 +397,13 @@ func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			observation, err := pipeline.Step(context.Background(), time.Now().UTC(), 17)
-			if !errors.Is(err, sentinel) {
-				t.Fatalf("err = %v, want the failing stage's error", err)
+			// CHAOS-4239: materializer and kernel are both continue-safe (or,
+			// for kernel, nothing mutation-shaped follows it anyway); the
+			// observer still runs and succeeds, so the tick as a whole is not
+			// an error. The failing stage already logged and counted itself
+			// via runStage before Step returned.
+			if err != nil {
+				t.Fatalf("err = %v, want nil: a single stage failing must not fail the tick", err)
 			}
 			if observation.ExhaustedDeliveriesRecovered != 4 {
 				t.Fatalf(

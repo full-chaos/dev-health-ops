@@ -289,7 +289,13 @@ RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.t
 echo "==> seeding real source rows through the real sync path (dev-hops sync <target> --provider synthetic), run_start=${RUN_START}"
 for target in cicd deployments incidents tests; do
   echo "   -- ${target}"
+  # DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1: required by sync_synthetic_target
+  # (codex review, CHAOS-4266 round 3) because this path writes to the
+  # GLOBAL, org-unscoped CHAOS-4114 executed-proof ledger under the real
+  # "gitlab" provider identity -- safe ONLY because this job's Postgres is
+  # its own throwaway database, never a shared or production-adjacent one.
   ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+    DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 \
     run_dev_hops sync "${target}" \
     --provider synthetic \
     --repo-name "${REPO_NAME}" \

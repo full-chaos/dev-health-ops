@@ -218,6 +218,32 @@ def test_sync_synthetic_target_requires_org_for_sync_run_backed_targets(
         asyncio.run(sync_mod.sync_synthetic_target(ns, target))
 
 
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+def test_sync_synthetic_target_requires_ledger_ack_env_var(monkeypatch, target):
+    """CHAOS-4266 (codex round 3): _complete_synthetic_sync_run writes to the
+    GLOBAL, org-unscoped CHAOS-4114 executed-proof ledger under the real
+    "gitlab" provider identity -- a code comment warning against a shared
+    database is not a guard, so an explicit env var is required and this must
+    fail loudly, before touching any store, when it is unset."""
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo")
+    monkeypatch.delenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", raising=False)
+
+    async def unreachable_run_with_store(*_args, **_kwargs):
+        raise AssertionError(
+            "run_with_store must not be called before the ledger-ack guard fires"
+        )
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", unreachable_run_with_store)
+
+    with pytest.raises(SystemExit, match="DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN"):
+        import asyncio
+
+        asyncio.run(sync_mod.sync_synthetic_target(ns, target))
+
+
 @pytest.mark.asyncio
 async def test_sync_synthetic_target_cicd_writes_pipeline_runs_and_completes_sync_run(
     monkeypatch,
@@ -237,6 +263,7 @@ async def test_sync_synthetic_target_cicd_writes_pipeline_runs_and_completes_syn
     monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
 
     result = await sync_mod.sync_synthetic_target(ns, "cicd")
 
@@ -266,6 +293,7 @@ async def test_sync_synthetic_target_deployments_writes_deployments_and_complete
     monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
 
     result = await sync_mod.sync_synthetic_target(ns, "deployments")
 
@@ -296,6 +324,7 @@ async def test_sync_synthetic_target_incidents_writes_incidents_and_completes_sy
     monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
 
     result = await sync_mod.sync_synthetic_target(ns, "incidents")
 
@@ -326,6 +355,7 @@ async def test_sync_synthetic_target_tests_writes_job_and_test_rows_and_complete
     monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
 
     result = await sync_mod.sync_synthetic_target(ns, "tests")
 
@@ -351,6 +381,7 @@ async def test_sync_synthetic_target_tests_requires_clickhouse_sink(monkeypatch)
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
     monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
 
     with pytest.raises(SystemExit, match="requires a ClickHouse sink"):
         await sync_mod.sync_synthetic_target(ns, "tests")

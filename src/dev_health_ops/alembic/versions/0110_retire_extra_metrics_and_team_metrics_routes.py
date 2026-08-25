@@ -99,7 +99,12 @@ def _river_schema() -> str:
     bind parameters, so this validation is what makes it safe to interpolate
     directly into the query text below.
     """
-    schema = os.environ.get(_RIVER_SCHEMA_ENV, "").strip() or _DEFAULT_RIVER_SCHEMA
+    # Matches Go's envOrDefault exactly: fall back only when the raw value is
+    # blank once trimmed, but validate (and use) the RAW, untrimmed value --
+    # a padded value like "worker_queue " is non-blank so it is not defaulted,
+    # and then rejected by the identifier check below, in both languages.
+    raw = os.environ.get(_RIVER_SCHEMA_ENV, "")
+    schema = raw if raw.strip() != "" else _DEFAULT_RIVER_SCHEMA
     if len(schema) > 63 or not _SAFE_IDENTIFIER_RE.match(schema):
         raise RuntimeError(
             f"{_RIVER_SCHEMA_ENV}={schema!r} is not a lowercase Postgres identifier"
@@ -129,13 +134,21 @@ def _assert_no_pending_outbox_rows_for_retired_kinds() -> None:
 def _assert_no_river_job_rows_for_retired_kinds() -> None:
     bind = op.get_bind()
     schema = _river_schema()
+    # `schema` is not user input reaching these queries -- it is validated by
+    # _river_schema() above against a strict lowercase-identifier regex
+    # (mirroring Go's validateIdentifier) before it is ever interpolated. A
+    # schema name cannot be a bind parameter in any SQL dialect; this is the
+    # same pattern internal/jobroute/quiescer.go uses on the Go side via
+    # pgx.Identifier{schema, "river_job"}.Sanitize().
     table_exists = bind.execute(
-        sa.text(f"SELECT to_regclass('{schema}.river_job') IS NOT NULL")
+        sa.text(  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+            f"SELECT to_regclass('{schema}.river_job') IS NOT NULL"
+        )
     ).scalar_one()
     if not table_exists:
         return
     found = bind.execute(
-        sa.text(
+        sa.text(  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
             f"SELECT kind, count(*) AS n FROM {schema}.river_job "
             "WHERE kind = ANY(:kinds) GROUP BY kind ORDER BY kind"
         ),

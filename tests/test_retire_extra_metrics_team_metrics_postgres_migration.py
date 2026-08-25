@@ -309,6 +309,20 @@ def test_0110_rejects_an_unsafe_river_database_schema_value(
     assert set(_routes(migrated_to_0109.engine)) == set(_RETIRED_KINDS)
 
 
+def test_0110_rejects_a_whitespace_padded_river_database_schema_value(
+    migrated_to_0109: PostgresMigrationHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Matches Go's envOrDefault: a non-blank-when-trimmed value is used AS-IS
+    # (not trimmed), so a trailing-space value must be rejected by the
+    # identifier check, not silently cleaned up into a valid one.
+    monkeypatch.setenv("RIVER_DATABASE_SCHEMA", "worker_queue ")
+
+    with pytest.raises(RuntimeError, match="not a lowercase Postgres identifier"):
+        command.upgrade(_migration_config(), "0110")
+    assert _revisions(migrated_to_0109.engine) == {"0109"}
+    assert set(_routes(migrated_to_0109.engine)) == set(_RETIRED_KINDS)
+
+
 def test_0110_downgrade_restores_routes_and_the_wide_family_check(
     migrated_to_0109: PostgresMigrationHarness,
 ) -> None:

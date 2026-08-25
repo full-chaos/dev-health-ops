@@ -341,7 +341,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				}
 				routeHandler = providersync.GitHubWorkItemsRouteHandler{
 					Projects: providersync.GitHubProjectV2Fetcher{},
-					Deriver:  ghDeriver,
+					ProjectMembershipSnapshotDiff: providersync.GitHubProjectV2SnapshotDiffClickHouseReader{
+						Conn: clickhouseConnection,
+					},
+					Deriver: ghDeriver,
 				}
 				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "gitlab" &&

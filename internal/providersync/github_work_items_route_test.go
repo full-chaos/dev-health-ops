@@ -14,6 +14,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// githubProjectV2NoopSnapshotDiffReader is the ProjectMembershipSnapshotDiff
+// double for every route test not specifically exercising CHAOS-4193(d)'s
+// diff: it answers "nothing was previously active", so the diff step is a
+// well-formed no-op and these tests keep proving what they always proved.
+// Snapshot-diff-specific behavior has its own dedicated tests instead of
+// asserting through this stand-in.
+type githubProjectV2NoopSnapshotDiffReader struct{}
+
+func (githubProjectV2NoopSnapshotDiffReader) PriorActiveSubjects(
+	context.Context, string, string,
+) ([]githubProjectV2SnapshotSubject, error) {
+	return nil, nil
+}
+
 type githubWorkItemsRouteDoer struct {
 	t              *testing.T
 	rest           *githubWorkItemsRESTDoer
@@ -138,10 +152,11 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 			Transport: "graphql", RouteFamily: "work_item_prs",
 			Dimension: BudgetGraphQLCost, RequestCount: 3,
 		},
-		Targets: 1,
+		Targets:   1,
+		Snapshots: []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
 	}}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	handler := GitHubWorkItemsRouteHandler{Projects: projects, Deriver: deriver}
+	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}
 
 	batch, err := handler.Collect(
 		context.Background(), claim,
@@ -235,7 +250,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -268,7 +283,7 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 		rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	_, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	_, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -316,7 +331,7 @@ func TestGitHubWorkItemsRouteTreatsEnvironmentProjectsAsNoConfiguration(t *testi
 	}
 	projects := &githubWorkItemsRouteProjectPolicy{}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -354,7 +369,7 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{
-		Projects: GitHubProjectV2Fetcher{}, Deriver: deriver,
+		Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver,
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -414,7 +429,7 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -470,7 +485,7 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":1,"body":"c","createdAt":{"bad":true},"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -532,7 +547,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 		graphqlReplies: []string{stalled, stalled},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -595,7 +610,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			}
 			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 			batch, err := (GitHubWorkItemsRouteHandler{
-				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, Deriver: deriver,
+				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver,
 			}).Collect(
 				context.Background(), claim,
 				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -642,7 +657,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 		graphqlStatus:  []int{http.StatusForbidden},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -670,7 +685,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -704,8 +719,9 @@ func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *
 		}},
 	}
 	batch, err := (GitHubWorkItemsRouteHandler{
-		Projects: GitHubProjectV2Fetcher{},
-		Deriver:  &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+		Projects:                      GitHubProjectV2Fetcher{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		Deriver:                       &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -763,8 +779,9 @@ func TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration(t 
 		t: t, rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
 	}
 	_, err := (GitHubWorkItemsRouteHandler{
-		Projects: GitHubProjectV2Fetcher{},
-		Deriver:  &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+		Projects:                      GitHubProjectV2Fetcher{},
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		Deriver:                       &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -809,8 +826,9 @@ func TestGitHubWorkItemsRouteErrorRetainsRequiredPhasePhysicalUsage(t *testing.T
 		err: cause,
 	}
 	_, err := (GitHubWorkItemsRouteHandler{
-		Projects: projects,
-		Deriver:  &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+		Projects:                      projects,
+		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+		Deriver:                       &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -984,10 +1002,11 @@ func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Ti
 			Transport: "graphql", RouteFamily: "work_item_prs",
 			Dimension: BudgetGraphQLCost, RequestCount: 3,
 		},
-		Targets: 1,
+		Targets:   1,
+		Snapshots: []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
 	}}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	handler := GitHubWorkItemsRouteHandler{Projects: projects, Deriver: deriver}
+	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, Deriver: deriver}
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},

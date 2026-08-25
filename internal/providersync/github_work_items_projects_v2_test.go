@@ -398,8 +398,17 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if result.MembershipSkips["pull_request_incomplete"] != 1 {
 		t.Fatalf("the incomplete PR was not counted: %+v", result.MembershipSkips)
 	}
-	if result.MembershipSkips["issue_deferred_to_snapshot_diff"] != 1 {
-		t.Fatalf("the issue skip was not counted: %+v", result.MembershipSkips)
+	// The issue is no longer a skip at all (CHAOS-4193): it is positively
+	// identified for the snapshot-diff pass instead.
+	if _, counted := result.MembershipSkips["issue_deferred_to_snapshot_diff"]; counted {
+		t.Fatalf("the retired label was still emitted: %+v", result.MembershipSkips)
+	}
+	if len(result.Snapshots) != 1 || len(result.Snapshots[0].Subjects) != 1 {
+		t.Fatalf("snapshots=%+v, want one project with the identified issue subject", result.Snapshots)
+	}
+	if got := result.Snapshots[0]; got.ProjectScopeID != "ghprojv2:acme#3" ||
+		got.Subjects[0].SubjectKind != "work_item" || got.Subjects[0].SubjectID != "gh:acme/api#7" {
+		t.Fatalf("snapshot=%+v", got)
 	}
 	if got := result.Rows.WorkItems[0]; got.WorkItemID != "gh:acme/api#7" || got.RepoID != nil || got.ProjectID == nil || *got.ProjectID != "ghprojv2:acme#3" {
 		t.Fatalf("work item=%+v", got)

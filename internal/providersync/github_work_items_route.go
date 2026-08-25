@@ -172,11 +172,19 @@ type githubWorkItemsDeriver interface {
 // effect sink/readback, or watermark. Effect construction delegates to the
 // shared 16-destination foundation; this handler only supplies its row sets.
 type GitHubWorkItemsRouteHandler struct {
-	REST            GitHubWorkItemsRESTCollector
-	Social          GitHubWorkItemPRSocialFetcher
-	Projects        githubWorkItemsProjectPolicy
-	Deriver         githubWorkItemsDeriver
-	ResolveIdentity githubIdentityResolver
+	REST     GitHubWorkItemsRESTCollector
+	Social   GitHubWorkItemPRSocialFetcher
+	Projects githubWorkItemsProjectPolicy
+	// ProjectMembershipSnapshotDiff is CHAOS-4193(d)'s read-then-diff seam:
+	// the FINAL argMax read against project_membership_transitions that
+	// ruling A case (2) requires before the route may emit an issue
+	// addition or a removal of either subject kind. Required unconditionally
+	// for the same reason Projects is (D18): a handler built without one is
+	// misconstructed for every claim, not just the ones that happen to
+	// configure a Projects v2 target.
+	ProjectMembershipSnapshotDiff githubProjectV2SnapshotDiffReader
+	Deriver                       githubWorkItemsDeriver
+	ResolveIdentity               githubIdentityResolver
 }
 
 var githubWorkItemDerivedDestinations = []string{
@@ -223,6 +231,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// discovering that only on the first tenant that configured a project would
 	// make the defect look like a tenant-specific data problem.
 	if handler.Projects == nil {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if handler.ProjectMembershipSnapshotDiff == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	options, err := githubWorkItemsRESTOptionsForClaim(claim)
@@ -364,6 +375,18 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		if err := validateGitHubWorkItemsProjectResult(claim, projectResult, len(projectTargets)); err != nil {
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
+		// CHAOS-4193(d): the read-then-diff pass. Runs after validation (so it
+		// only ever diffs a result already proven well-formed) and before the
+		// merge, appending its rows to the SAME ProjectMemberships slice the
+		// native-event PullRequest additions above already populated -- one
+		// destination, one adapter, no new effect wiring.
+		diffRows, err := resolveGitHubProjectV2SnapshotDiff(
+			ctx, handler.ProjectMembershipSnapshotDiff, claim, projectResult.Snapshots, normalizedAt,
+		)
+		if err != nil {
+			return CompleteRouteBatch{}, usage.wrap(err)
+		}
+		projectResult.Rows.ProjectMemberships = append(projectResult.Rows.ProjectMemberships, diffRows...)
 		rows = mergeGitHubProjectV2Rows(rows, projectResult.Rows)
 		projectState = "included"
 	}
@@ -427,6 +450,7 @@ func validateGitHubWorkItemsProjectResult(
 	targets int,
 ) error {
 	if claim.Validate() != nil || targets < 1 || result.Targets != targets ||
+		len(result.Snapshots) != targets ||
 		result.Evidence.Provider != "github" ||
 		result.Evidence.Dataset != "projects-v2" || result.Evidence.Requests < 0 ||
 		result.Evidence.Pages < 0 || result.Evidence.Pages > result.Evidence.Requests ||

@@ -78,16 +78,19 @@ func fetchGitHubProjectV2ForLogging(t *testing.T, reply string) GitHubProjectV2F
 // because a line that concatenated every count into one message string would
 // satisfy a substring check while being unqueryable by reason in a log
 // backend, which is the entire point of emitting it.
+//
+// CHAOS-4193 retired "issue_deferred_to_snapshot_diff": an issue is no longer
+// skipped, so it can no longer co-occur with a genuine skip reason to prove
+// two DIFFERENT reasons are live at once. A draft issue (permanent, no
+// subject to name) and an unidentifiable pull request (attention-worthy) fill
+// that role instead.
 func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 	records := captureMembershipLogs(t)
-	// One issue (deferred to the snapshot-diff producer) and one PullRequest
-	// with no repository or createdAt (unidentifiable), so two DIFFERENT skip
-	// reasons are live at once and the line cannot pass by reporting a total.
 	result := fetchGitHubProjectV2ForLogging(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-		`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
 		`{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"unidentifiable"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
-	if result.MembershipSkips["issue_deferred_to_snapshot_diff"] != 1 ||
+	if result.MembershipSkips["draft_issue_has_no_subject"] != 1 ||
 		result.MembershipSkips["pull_request_incomplete"] != 1 {
 		t.Fatalf("premise failed, the fetch did not produce both skip reasons: %+v", result.MembershipSkips)
 	}
@@ -99,8 +102,9 @@ func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 		t.Fatalf("log event name = %q", record.Message)
 	}
 	// An unidentifiable pull request means the query or the payload changed
-	// under us; that is not the same news as an issue we deliberately deferred,
-	// and it must not arrive at the level operators filter out.
+	// under us; that is not the same news as a draft issue, which is a
+	// permanent, expected non-subject, and it must not arrive at the level
+	// operators filter out.
 	if record.Level != slog.LevelWarn {
 		t.Fatalf("level = %s, want WARN when an attention-worthy reason is non-zero", record.Level)
 	}
@@ -109,16 +113,17 @@ func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 	for key, want := range map[string]any{
 		"provider": "github", "dataset": claim.Dataset, "org_id": claim.OrgID,
 		"unit": claim.ID, "integration": claim.IntegrationID,
-		"issue_deferred_to_snapshot_diff": int64(1),
-		"pull_request_incomplete":         int64(1),
+		"draft_issue_has_no_subject": int64(1),
+		"pull_request_incomplete":    int64(1),
 	} {
 		if got, present := attrs[key]; !present || got != want {
 			t.Errorf("attr %s = %#v (present=%t), want %#v", key, got, present, want)
 		}
 	}
 	// A reason that did not occur must be ABSENT, not reported as zero. A
-	// permanent zero series reads as coverage of a case nobody exercised.
-	for _, absent := range []string{"draft_issue_has_no_subject", "unknown_content_type"} {
+	// permanent zero series reads as coverage of a case nobody exercised. The
+	// retired label must never be emitted again, whatever occurs.
+	for _, absent := range []string{"unknown_content_type", "issue_deferred_to_snapshot_diff"} {
 		if _, present := attrs[absent]; present {
 			t.Errorf("attr %s was emitted with no occurrences", absent)
 		}
@@ -141,17 +146,21 @@ func TestGitHubProjectV2LogsNothingWhenEveryItemIsEmitted(t *testing.T) {
 	}
 }
 
-// TestGitHubProjectV2LogsDeferredIssuesAtInfo separates the two levels. Every
-// sync of a real board defers every issue on it, so if that alone escalated to
-// WARN the line would be permanently warning about working as designed -- and
-// the genuinely attention-worthy reasons would be invisible inside the noise.
-func TestGitHubProjectV2LogsDeferredIssuesAtInfo(t *testing.T) {
+// TestGitHubProjectV2LogsDraftIssuesAtInfo separates the two levels using the
+// vocabulary CHAOS-4193 leaves behind. A draft issue can never carry a
+// membership -- that is permanent and expected on any real board, not news --
+// so if it alone escalated to WARN the line would be permanently warning
+// about working as designed, and the genuinely attention-worthy reasons would
+// be invisible inside the noise. (The prior version of this test proved the
+// same property of the issue-deferral reason, which CHAOS-4193 retired: an
+// issue is no longer skipped at all.)
+func TestGitHubProjectV2LogsDraftIssuesAtInfo(t *testing.T) {
 	records := captureMembershipLogs(t)
 	fetchGitHubProjectV2ForLogging(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-		`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	if len(*records) != 1 {
-		t.Fatalf("deferred issues produced %d log records, want 1", len(*records))
+		t.Fatalf("draft issues produced %d log records, want 1", len(*records))
 	}
 	if (*records)[0].Level != slog.LevelInfo {
 		t.Fatalf("level = %s, want INFO for a deferral that happens every sync", (*records)[0].Level)

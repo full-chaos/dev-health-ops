@@ -80,7 +80,18 @@ type GitHubProjectV2FetchResult struct {
 	// long as it existed. Every remaining not-emitted case is now countable by
 	// a label that says which case it is, so the next such gap is visible
 	// before someone has to read the normalizer to find it.
+	//
+	// Issue items are deliberately absent from this map (CHAOS-4193): they are
+	// no longer skipped at all, only deferred to the read-then-diff pass in
+	// github_project_membership_snapshot_diff.go, which has no per-item
+	// membership row to skip in the first place.
 	MembershipSkips map[string]int
+	// Snapshots is one entry per fetched project, carrying every board item
+	// this sync could positively identify (CHAOS-4193). It is the current
+	// half of the snapshot-diff producer's read-then-diff -- the ClickHouse
+	// read supplies the prior half -- and is otherwise unused by this Fetch
+	// call, which never touches ClickHouse itself.
+	Snapshots []githubProjectV2BoardSnapshot
 }
 
 // GitHubProjectV2Fetcher preserves Python's per-source fanout: callers may
@@ -221,6 +232,7 @@ func (GitHubProjectV2Fetcher) Fetch(
 			claim.OrgID, "github", projectScopeID, "",
 			fmt.Sprintf("%s #%d", target.OrgLogin, target.ProjectNumber), normalizedAt,
 		))
+		boardSubjects := make([]githubProjectV2SnapshotSubject, 0, len(items))
 		for _, item := range items {
 			// Membership is decided BEFORE the work-item normalization, and
 			// independently of it. A pull request is not a work item and never
@@ -230,8 +242,16 @@ func (GitHubProjectV2Fetcher) Fetch(
 			// "not a work item" and the loop read that as "nothing here".
 			if membership, ok := githubProjectV2MembershipRow(claim, item, projectScopeID, normalizedAt); ok {
 				result.Rows.ProjectMemberships = append(result.Rows.ProjectMemberships, membership)
-			} else {
+			} else if item.Content.Typename != "Issue" {
+				// An Issue's membership is no longer a skip at all
+				// (CHAOS-4193): it is deferred to the snapshot-diff pass
+				// below, which has no per-item row to skip in the first
+				// place. Every OTHER not-emitted case still counts here
+				// unchanged.
 				result.MembershipSkips[githubProjectV2MembershipSkipReason(item)]++
+			}
+			if subject, ok := githubProjectV2ItemSubject(item); ok {
+				boardSubjects = append(boardSubjects, subject)
 			}
 			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
@@ -250,6 +270,9 @@ func (GitHubProjectV2Fetcher) Fetch(
 			}
 			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
+		result.Snapshots = append(result.Snapshots, githubProjectV2BoardSnapshot{
+			ProjectScopeID: projectScopeID, Subjects: boardSubjects,
+		})
 	}
 	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
 	return finishGitHubProjectV2Fetch(result), nil
@@ -567,12 +590,14 @@ type gitHubProjectV2ChangePayload struct {
 // while looking entirely well-formed -- and the caller counts the skip, so the
 // absence is visible.
 //
-// Issues are NOT emitted here, and that is a deferral rather than an omission:
-// github work-item membership is observable only by diffing which board an item
-// appears on between syncs, and that snapshot-diff mechanism is sequenced
-// behind the jira and linear producers on CHAOS-4193 (its producer scope pass,
-// item 4). Emitting an issue row from this loop would have to invent an
-// occurred_at for a change nobody observed.
+// Issues are NOT emitted here, and stay that way even now that CHAOS-4193's
+// snapshot-diff pass has shipped: emitting an issue row from THIS loop would
+// have to invent an occurred_at for a change nobody observed, which is exactly
+// what the diff exists to avoid -- it uses the diff's own observation time
+// instead (ruling A case (2), github_project_membership_snapshot_diff.go).
+// Issue additions and removals of either subject kind are that file's job, not
+// this function's; this function stays the ruling A case (1) native-event path
+// for pull requests only.
 func githubProjectV2MembershipRow(
 	claim Claim,
 	item gitHubProjectV2ItemPayload,
@@ -620,18 +645,21 @@ func githubProjectV2MembershipRow(
 // one (the raw typename, say) would let a provider schema change mint
 // unbounded series.
 //
-// The four values are genuinely different situations and are kept apart rather
-// than folded into one "skipped" bucket, since the response to each differs:
-// an issue is deferred work, a draft issue can never carry a membership at all,
-// an incomplete pull request is a real signal that the query or the payload
-// changed, and an unknown typename means GitHub added a content kind nobody
-// has looked at.
+// The three values are genuinely different situations and are kept apart
+// rather than folded into one "skipped" bucket, since the response to each
+// differs: a draft issue can never carry a membership at all, an incomplete
+// pull request is a real signal that the query or the payload changed, and an
+// unknown typename means GitHub added a content kind nobody has looked at.
+//
+// Issue is deliberately ABSENT from this switch (CHAOS-4193, retiring the
+// former "issue_deferred_to_snapshot_diff" label): the caller no longer calls
+// this function for an Issue item at all, because an Issue is no longer
+// skipped -- it is positively handled by the snapshot-diff pass, which has no
+// per-item row to label a skip against.
 func githubProjectV2MembershipSkipReason(item gitHubProjectV2ItemPayload) string {
 	switch item.Content.Typename {
 	case "PullRequest":
 		return "pull_request_incomplete"
-	case "Issue":
-		return "issue_deferred_to_snapshot_diff"
 	case "DraftIssue":
 		return "draft_issue_has_no_subject"
 	default:

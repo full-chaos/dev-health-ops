@@ -506,23 +506,33 @@ def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
     # first: this docstring and the script's own explanatory comments both
     # say "REVOKE ALL" in prose (describing what the OLD script did), and a
     # raw substring check would flag its own documentation.
+    #
+    # `line.split("--", 1)` is not quote-aware: a `--` inside a single-quoted
+    # SQL string literal would truncate that line early and hide whatever
+    # follows from the checks below. This script's only string literals are
+    # role names and passwords passed in as psql variables, none of which
+    # contain `--` today, so this is a latent gap in the guard rather than a
+    # live false negative -- flagged by codex round 2 on CHAOS-4261's PR. A
+    # full quote-aware tokenizer was judged disproportionate for a ~100-line
+    # bootstrap script; if this script ever grows a literal containing `--`,
+    # this comment is the signal to revisit that judgment.
     code_only = "\n".join(
         line.split("--", 1)[0] for line in upgrade_script.splitlines()
     )
     assert "REVOKE ALL" not in code_only
-    assert (
-        re.search(r"GRANT\s+(SELECT|INSERT|UPDATE|DELETE)[^;]*ON TABLE", code_only)
-        is None
-    ), (
+    # Any privilege, not just SELECT/INSERT/UPDATE/DELETE: REFERENCES,
+    # TRIGGER, MAINTAIN, and ALL PRIVILEGES are all real, grantable
+    # table-level privileges a narrower verb list would silently miss.
+    assert re.search(r"GRANT\s+\S[^;]*ON TABLE", code_only) is None, (
         "provision_river_roles.sql grants a table-level privilege again -- "
         "this makes it a grant authority, which is exactly the CHAOS-4261 "
         "defect. Per-table/sequence grants belong solely in "
         "internal/storage/river/migrate.go, applied by go-river-migrate."
     )
-    # Any privilege, not just SELECT/INSERT/UPDATE/DELETE: coordinatorGrantStatements'
-    # OWN sequence grant in migrate.go is `GRANT USAGE ON SEQUENCE ...`, which a
-    # verb-restricted regex here would silently miss if it ever leaked into this
-    # bootstrap-only script.
+    # Same reasoning for sequences: coordinatorGrantStatements' OWN sequence
+    # grant in migrate.go is `GRANT USAGE ON SEQUENCE ...`, which a
+    # verb-restricted regex here would silently miss if it ever leaked into
+    # this bootstrap-only script.
     assert re.search(r"GRANT\s+\S[^;]*ON SEQUENCE", code_only) is None
 
 

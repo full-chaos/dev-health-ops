@@ -23,6 +23,18 @@ var postureGateRoles = []string{"domain", "queue", "coordinator"}
 // (an Alembic revision behind head -- see deploy/go-workers/README.md), so
 // "the migration returned no error" and "the role is actually ready" are
 // two different claims; only this executed check proves the second one.
+//
+// Scope, stated precisely because it is easy to over-claim: OK==true means
+// no declared table/column/sequence requirement in DomainPosture/
+// QueuePosture/CoordinatorPosture was found missing. It does NOT mean a
+// role holds nothing beyond that posture (an excess table privilege, a
+// wrong River-schema grant, bad role membership, or a role attribute
+// problem can all coexist with OK==true here -- see DiagnoseRolePosture's
+// own doc comment, which states this limitation explicitly). Proving THAT
+// half of the property is what each runtime binary's own strict,
+// current_user-bound startup check (CheckDomainAuthorization/
+// CheckQueueAuthorization/CheckCoordinatorAuthorization) is for, and
+// nothing here substitutes for it.
 type postureGateResult struct {
 	OK             bool
 	GrantsApplied  map[string]int
@@ -56,10 +68,16 @@ type postureGateResult struct {
 // ANYTHING at all (a single stray or leftover grant read as "complete"); the
 // per-table posture below closes that gap the same way domain/coordinator
 // already work.
+//
+// Takes no schema parameter: DiagnoseRolePosture (unlike CheckRolePosture)
+// never inspects the River schema at all, so a River-schema privilege
+// problem is invisible to this gate regardless -- one more reason OK==true
+// here is a narrower claim than "this role is fully ready" (see
+// postureGateResult's doc comment).
 func checkExecutedGrantPosture(
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	domainRole, queueRole, coordinatorRole, schema string,
+	domainRole, queueRole, coordinatorRole string,
 	logger *slog.Logger,
 ) postureGateResult {
 	result := postureGateResult{

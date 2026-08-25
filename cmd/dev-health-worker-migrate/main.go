@@ -154,7 +154,7 @@ func execute(
 	// instead of reporting success on a partially-applied grant set the
 	// way the prod incident's `go-river-provision` REVOKE ALL once did
 	// silently.
-	postureResult := checkExecutedGrantPosture(ctx, pool, domainRole, queueRole, coordinatorRole, schema, logger)
+	postureResult := checkExecutedGrantPosture(ctx, pool, domainRole, queueRole, coordinatorRole, logger)
 	writePostureTelemetry(stdout, postureResult)
 	if !postureResult.OK {
 		fmt.Fprintln(

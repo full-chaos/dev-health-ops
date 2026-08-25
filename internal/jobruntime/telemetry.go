@@ -102,6 +102,35 @@ type dailyMetricsLeaseLabels struct {
 	Result DailyMetricsLeaseResult
 }
 
+// DailyMetricsRunTrigger identifies which of the two entry points created a
+// daily-metrics run: the nightly all-org fixed schedule, or a post-sync
+// re-drive for one completed sync (CHAOS-4263). The set is closed: those are
+// the only two callers of daily.PostgresStore's Start*RunTx methods.
+type DailyMetricsRunTrigger string
+
+const (
+	DailyMetricsRunTriggerScheduledFanout DailyMetricsRunTrigger = "scheduled_fanout"
+	DailyMetricsRunTriggerPostSync        DailyMetricsRunTrigger = "post_sync"
+)
+
+// DailyMetricsDiscoveryOutcome is the bounded result of resolving live
+// ClickHouse repository identity for one daily-metrics run (CHAOS-4263).
+// NoRepositories must be counted, not just logged: before this, a run that
+// discovered zero repositories terminalized as an ordinary success, and a
+// dashboard reading zero on this series could not tell "no stale orgs today"
+// apart from "the discovery step never runs".
+type DailyMetricsDiscoveryOutcome string
+
+const (
+	DailyMetricsDiscoveryOutcomeMaterialized   DailyMetricsDiscoveryOutcome = "materialized"
+	DailyMetricsDiscoveryOutcomeNoRepositories DailyMetricsDiscoveryOutcome = "no_repositories"
+)
+
+type dailyMetricsDiscoveryLabels struct {
+	Trigger DailyMetricsRunTrigger
+	Outcome DailyMetricsDiscoveryOutcome
+}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -243,6 +272,7 @@ type MetricsCollector struct {
 	reportRunLeaseExpired     map[ReportRunLeaseResult]uint64
 	idempotencyRenewalRetired map[IdempotencyRenewalRetiredReason]uint64
 	dailyMetricsLease         map[dailyMetricsLeaseLabels]uint64
+	dailyMetricsDiscovery     map[dailyMetricsDiscoveryLabels]uint64
 	workGraphReleaseLost      uint64
 	remainingReleaseLost      uint64
 	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
@@ -326,6 +356,7 @@ var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
 var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
@@ -365,6 +396,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		reportRunLeaseExpired:              make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
 		idempotencyRenewalRetired:          make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
 		dailyMetricsLease:                  make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
+		dailyMetricsDiscovery:              make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		zeroUnitFinalizations:              make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:  make(map[string]uint64),
 		coverageCacheInvalidationsConsumed: make(map[string]uint64),
@@ -434,6 +466,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, labels := range dailyMetricsLeaseSeries() {
 		collector.dailyMetricsLease[labels] = 0
+	}
+	for _, labels := range dailyMetricsDiscoverySeries() {
+		collector.dailyMetricsDiscovery[labels] = 0
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -718,6 +753,23 @@ func (collector *MetricsCollector) ObserveDailyMetricsLease(
 		return errors.New("daily metrics lease dimensions are not registered")
 	}
 	collector.dailyMetricsLease[labels]++
+	return nil
+}
+
+// ObserveDailyMetricsDiscovery records the outcome of resolving live
+// ClickHouse repository identity for one daily-metrics run, whichever of the
+// two triggers created it (CHAOS-4263).
+func (collector *MetricsCollector) ObserveDailyMetricsDiscovery(
+	trigger DailyMetricsRunTrigger,
+	outcome DailyMetricsDiscoveryOutcome,
+) error {
+	labels := dailyMetricsDiscoveryLabels{Trigger: trigger, Outcome: outcome}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.dailyMetricsDiscovery[labels]; !ok {
+		return errors.New("daily metrics discovery dimensions are not registered")
+	}
+	collector.dailyMetricsDiscovery[labels]++
 	return nil
 }
 
@@ -1290,6 +1342,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeReportRunLeases(&output)
 	collector.writeIdempotencyRenewalRetired(&output)
 	collector.writeDailyMetricsLeases(&output)
+	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeZeroUnitFinalizations(&output)
@@ -1557,6 +1610,15 @@ func (collector *MetricsCollector) writeDailyMetricsLeases(output *strings.Build
 		writeUintSample(output, "worker_daily_metrics_lease_total", []metricLabel{
 			{"stage", string(labels.Stage)}, {"result", string(labels.Result)},
 		}, collector.dailyMetricsLease[labels])
+	}
+}
+
+func (collector *MetricsCollector) writeDailyMetricsDiscovery(output *strings.Builder) {
+	writeMetadata(output, "worker_daily_metrics_discovery_total", "Repository-discovery outcomes for daily-metrics runs, by trigger and bounded outcome (CHAOS-4263).", "counter")
+	for _, labels := range dailyMetricsDiscoverySeries() {
+		writeUintSample(output, "worker_daily_metrics_discovery_total", []metricLabel{
+			{"trigger", string(labels.Trigger)}, {"outcome", string(labels.Outcome)},
+		}, collector.dailyMetricsDiscovery[labels])
 	}
 }
 
@@ -1835,6 +1897,23 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 			DailyMetricsLeaseResultReclaimed, DailyMetricsLeaseResultReleaseLost, DailyMetricsLeaseResultSnoozed,
 		} {
 			series = append(series, dailyMetricsLeaseLabels{Stage: stage, Result: result})
+		}
+	}
+	return series
+}
+
+// dailyMetricsDiscoverySeries is the closed cross product of triggers and
+// outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
+// non-empty every time" from "discovery never runs for this trigger".
+func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
+	series := make([]dailyMetricsDiscoveryLabels, 0, 4)
+	for _, trigger := range []DailyMetricsRunTrigger{
+		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
+	} {
+		for _, outcome := range []DailyMetricsDiscoveryOutcome{
+			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,
+		} {
+			series = append(series, dailyMetricsDiscoveryLabels{Trigger: trigger, Outcome: outcome})
 		}
 	}
 	return series

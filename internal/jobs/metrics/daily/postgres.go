@@ -24,14 +24,42 @@ var dailyRunNamespace = uuid.MustParse("db1556db-28a7-58f6-982d-fc6f54dc7240")
 
 const scheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 
+// postSyncGenerationPrefix identifies a daily-metrics run created per
+// completed sync (CHAOS-4263). Distinct from scheduledFanoutGenerationPrefix,
+// whose exact value is a cross-language contract with Python's
+// recommendations readiness gate (CHAOS-4066, see isScheduledFanoutGeneration)
+// and must not be widened or reused for this.
+const postSyncGenerationPrefix = "post-sync:"
+
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool          *pgxpool.Pool
-	lease         time.Duration
-	now           func() time.Time
-	leaseObserver jobruntime.DailyMetricsLeaseObserver
+	pool              *pgxpool.Pool
+	lease             time.Duration
+	now               func() time.Time
+	leaseObserver     jobruntime.DailyMetricsLeaseObserver
+	discoveryObserver jobruntime.DailyMetricsDiscoveryObserver
+}
+
+// SetDiscoveryObserver wires the optional repository-discovery outcome
+// observer (CHAOS-4263). Telemetry must never gate durable state: a nil or
+// never-set observer makes observeDiscovery a silent no-op, matching
+// leaseObserver's discipline.
+func (store *PostgresStore) SetDiscoveryObserver(observer jobruntime.DailyMetricsDiscoveryObserver) {
+	if store == nil {
+		return
+	}
+	store.discoveryObserver = observer
+}
+
+func (store *PostgresStore) observeDiscovery(
+	trigger jobruntime.DailyMetricsRunTrigger,
+	outcome jobruntime.DailyMetricsDiscoveryOutcome,
+) {
+	if store.discoveryObserver != nil {
+		_ = store.discoveryObserver.ObserveDailyMetricsDiscovery(trigger, outcome)
+	}
 }
 
 func NewPostgresStore(
@@ -117,7 +145,17 @@ ON CONFLICT DO NOTHING`,
 		return Run{}, ErrUnavailable
 	}
 	if command.RowsAffected() == 0 {
-		if err := verifyStartedRun(ctx, tx, run, request.TargetDay, partitions); err != nil {
+		if len(partitions) == 0 {
+			// Repository discovery was deferred on the request that first
+			// created this run (CHAOS-4263): its partitions are not this
+			// request's to verify. By the time a retry lands here, the heavy
+			// worker may already have materialized a live ClickHouse snapshot,
+			// and that snapshot is authoritative -- never this retry's own
+			// (always empty) recomputation of it.
+			if err := verifyDeferredDiscoveryRun(ctx, tx, run, request.TargetDay); err != nil {
+				return Run{}, err
+			}
+		} else if err := verifyStartedRun(ctx, tx, run, request.TargetDay, partitions); err != nil {
 			return Run{}, err
 		}
 		var status string
@@ -184,7 +222,7 @@ ON CONFLICT DO NOTHING`,
 		return Run{}, ErrUnavailable
 	}
 	if command.RowsAffected() == 0 {
-		if err := verifyScheduledFanoutRun(ctx, tx, run, normalized.TargetDay); err != nil {
+		if err := verifyDeferredDiscoveryRun(ctx, tx, run, normalized.TargetDay); err != nil {
 			return Run{}, err
 		}
 	}
@@ -213,9 +251,15 @@ func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]str
 	for _, partition := range partitions {
 		request.RepositoryIDs = append(request.RepositoryIDs, partition...)
 	}
-	if len(partitions) == 0 {
-		partitions = append(partitions, []string{})
-	}
+	// An empty RepositoryIDs request (the post-sync caller no longer resolves
+	// any -- CHAOS-4263) leaves partitions empty rather than synthesizing one
+	// zero-repository partition. A synthetic empty partition reports a
+	// successful compute despite never touching a real repository; leaving
+	// zero partitions instead makes ClaimDispatch mark this run
+	// RepositoryDiscoveryRequired, so it resolves live ClickHouse repository
+	// identity exactly like the scheduled fixed-schedule fan-out already does,
+	// and MaterializeScheduledFanout's existing no_repositories handling
+	// applies if that discovery genuinely finds nothing.
 	return request, partitions, nil
 }
 
@@ -247,6 +291,15 @@ func isScheduledFanoutGeneration(generation string) bool {
 	return strings.HasPrefix(generation, scheduledFanoutGenerationPrefix) && len(generation) <= 64
 }
 
+// isPostSyncGeneration reports whether a generation belongs to a post-sync
+// daily-metrics run. Repository discovery for these is deferred to the same
+// live ClickHouse RepositoryDiscoverer the nightly fixed schedule uses
+// (CHAOS-4263), rather than the dead Postgres integration_sources ids the
+// triggering sync itself carries in sync_run_units.
+func isPostSyncGeneration(generation string) bool {
+	return strings.HasPrefix(generation, postSyncGenerationPrefix) && len(generation) <= 64
+}
+
 func normalizeRepositoryPartitions(repositoryIDs []string) ([][]string, error) {
 	seen := make(map[string]struct{}, len(repositoryIDs))
 	repositories := make([]string, 0, len(repositoryIDs))
@@ -275,7 +328,16 @@ func partitionRepositoryIDs(repositories []string) [][]string {
 	return partitions
 }
 
-func verifyScheduledFanoutRun(ctx context.Context, tx pgx.Tx, run Run, targetDay time.Time) error {
+// verifyDeferredDiscoveryRun confirms an existing daily_metrics_runs row
+// matches the caller's own identity for a run whose repository discovery is
+// deferred (the nightly fixed schedule, or a post-sync re-drive per
+// CHAOS-4263). It intentionally does not compare partitions: by the time a
+// retry lands here the heavy worker may already have materialized a live
+// ClickHouse snapshot, and that snapshot is authoritative, never a retry's own
+// (always empty, for this class of request) recomputation of it. The
+// generation format itself was already validated once, at whichever
+// Start*RunTx call originally created this row.
+func verifyDeferredDiscoveryRun(ctx context.Context, tx pgx.Tx, run Run, targetDay time.Time) error {
 	var organizationID, generation, day string
 	if err := tx.QueryRow(ctx, `
 SELECT org_id::text, generation, target_day::text
@@ -284,7 +346,7 @@ FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).
 		return ErrUnavailable
 	}
 	if organizationID != run.OrganizationID || generation != run.Generation ||
-		day != targetDay.Format("2006-01-02") || !isScheduledFanoutGeneration(generation) {
+		day != targetDay.Format("2006-01-02") {
 		return ErrInvalidState
 	}
 	return nil
@@ -373,12 +435,19 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 		return nil, ErrUnavailable
 	}
 	var run Run
+	// RepositoryDiscoveryRequired is generation-agnostic: it is true exactly
+	// when the run was created with no partitions yet, whichever entry point
+	// created it (the nightly fixed schedule, or a post-sync re-drive per
+	// CHAOS-4263). Both StartScheduledFanoutRunTx and StartRunTx (for an empty
+	// RepositoryIDs request) leave partitions unmaterialized for this reason;
+	// a request with explicit RepositoryIDs inserts its partitions in the same
+	// transaction that creates the run, so it is never seen as pending here.
 	err := store.pool.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')
 RETURNING id::text, org_id::text, generation, status,
-  generation LIKE '`+scheduledFanoutGenerationPrefix+`%' AND NOT EXISTS (
+  NOT EXISTS (
     SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = daily_metrics_runs.id
   )`, store.now().UTC(), runID).
 		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &run.RepositoryDiscoveryRequired)
@@ -405,7 +474,7 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 	repositoryIDs []string,
 ) (bool, error) {
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
-		!isScheduledFanoutGeneration(run.Generation) {
+		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation)) {
 		return false, ErrInvalidState
 	}
 	partitions, err := normalizeRepositoryPartitions(repositoryIDs)
@@ -483,6 +552,15 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	if err := tx.Commit(ctx); err != nil {
 		return false, ErrUnavailable
 	}
+	outcome := jobruntime.DailyMetricsDiscoveryOutcomeMaterialized
+	if len(partitions) == 0 {
+		outcome = jobruntime.DailyMetricsDiscoveryOutcomeNoRepositories
+	}
+	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
+	if isPostSyncGeneration(run.Generation) {
+		trigger = jobruntime.DailyMetricsRunTriggerPostSync
+	}
+	store.observeDiscovery(trigger, outcome)
 	return true, nil
 }
 

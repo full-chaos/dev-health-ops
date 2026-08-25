@@ -65,6 +65,11 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.ObserveIdempotencyRenewalRetired(IdempotencyRenewalTransientExhausted); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveDailyMetricsDiscovery(DailyMetricsRunTriggerPostSync, DailyMetricsDiscoveryOutcomeNoRepositories); err != nil {
+		t.Fatal(err)
+	}
+	// scheduled_fanout/materialized is deliberately left unobserved so its
+	// pre-seeded zero (asserted below) is proven, not merely assumed.
 	// The fenced reason is deliberately left unobserved so its pre-seeded zero
 	// is proven. A retirement counter that only appears after the first
 	// retirement gives an alert nothing to bind to until the incident is
@@ -126,6 +131,10 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_daily_metrics_lease_total{stage="partition",result="reclaimed"} 0`,
 		`worker_daily_metrics_lease_total{stage="partition",result="release_lost"} 0`,
 		`worker_daily_metrics_lease_total{stage="partition",result="snoozed"} 0`,
+		`worker_daily_metrics_discovery_total{trigger="scheduled_fanout",outcome="materialized"} 0`,
+		`worker_daily_metrics_discovery_total{trigger="scheduled_fanout",outcome="no_repositories"} 0`,
+		`worker_daily_metrics_discovery_total{trigger="post_sync",outcome="materialized"} 0`,
+		`worker_daily_metrics_discovery_total{trigger="post_sync",outcome="no_repositories"} 1`,
 		`worker_workgraph_lease_release_lost_total 1`,
 		`worker_remaining_metrics_lease_release_lost_total 0`,
 		`worker_stream_lag{stream="external_ingest",consumer_group="sink_workers"} 19`,
@@ -149,7 +158,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		"worker_job_attempts_total", "worker_job_panics_total", "worker_job_cancellations_total",
 		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
 		"worker_idempotency_renewal_retired_total",
-		"worker_daily_metrics_lease_total",
+		"worker_daily_metrics_lease_total", "worker_daily_metrics_discovery_total",
 		"worker_workgraph_lease_release_lost_total", "worker_remaining_metrics_lease_release_lost_total",
 		"worker_stream_lag", "worker_stream_pending",
 		"worker_stream_oldest_pending_seconds", "worker_budget_wait_seconds",

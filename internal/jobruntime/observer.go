@@ -97,6 +97,19 @@ type DailyMetricsLeaseObserver interface {
 	ObserveDailyMetricsLease(DailyMetricsLeaseStage, DailyMetricsLeaseResult) error
 }
 
+// DailyMetricsDiscoveryObserver is the narrow capability the daily-metrics
+// store depends on after it resolves live ClickHouse repository identity for
+// a run (CHAOS-4263). Generic runtime middleware cannot infer this: a run
+// that discovers zero repositories and a run that discovers a healthy
+// non-empty set both look like an ordinary successful materialization from
+// the outside, and only the store that ran the discovery knows which
+// happened. Before this observer existed, a zero-repository run terminalized
+// silently -- visible only as a job_daily.py log line saying every family
+// produced zero rows, never as a durable, alertable signal.
+type DailyMetricsDiscoveryObserver interface {
+	ObserveDailyMetricsDiscovery(DailyMetricsRunTrigger, DailyMetricsDiscoveryOutcome) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

@@ -47,6 +47,54 @@ func TestPostSyncRemainingScopeMatchesBoundedFamilyContract(t *testing.T) {
 	}
 }
 
+// TestPostSyncDailyBackfillDaysIsBoundedAndExcludesDayD pins the CHAOS-4263
+// re-drive window: day D itself is never included (the caller dispatches it
+// unconditionally), the returned days walk strictly backward from day D, and
+// a sync claiming an implausibly wide window is clamped to
+// maxPostSyncDailyBackfillDays rather than fanning out one pipeline per day
+// in it.
+func TestPostSyncDailyBackfillDaysIsBoundedAndExcludesDayD(t *testing.T) {
+	t.Parallel()
+	targetDay := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+
+	if got := postSyncDailyBackfillDays(syncdispatchruntime.PostSyncPlan{
+		TargetDay: targetDay, BackfillDays: 1,
+	}); got != nil {
+		t.Fatalf("single-day sync: got=%v, want none", got)
+	}
+
+	got := postSyncDailyBackfillDays(syncdispatchruntime.PostSyncPlan{
+		TargetDay: targetDay, BackfillDays: 4,
+	})
+	want := []time.Time{
+		time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("4-day sync backfill days=%v, want=%v", got, want)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Fatalf("4-day sync backfill days=%v, want=%v", got, want)
+		}
+		if got[i].Equal(targetDay) {
+			t.Fatalf("backfill days include day D itself: %v", got)
+		}
+	}
+
+	unbounded := postSyncDailyBackfillDays(syncdispatchruntime.PostSyncPlan{
+		TargetDay: targetDay, BackfillDays: 180,
+	})
+	if len(unbounded) != maxPostSyncDailyBackfillDays {
+		t.Fatalf("180-day sync backfill days=%d, want capped at %d", len(unbounded), maxPostSyncDailyBackfillDays)
+	}
+	oldest := unbounded[len(unbounded)-1]
+	if want := targetDay.AddDate(0, 0, -maxPostSyncDailyBackfillDays); !oldest.Equal(want) {
+		t.Fatalf("oldest backfill day=%v, want=%v", oldest, want)
+	}
+}
+
 func TestPostSyncWorkGraphScopePreservesLegacyWindowShape(t *testing.T) {
 	t.Parallel()
 	from := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)

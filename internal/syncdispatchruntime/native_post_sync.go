@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -20,7 +19,6 @@ type PostSyncPlan struct {
 	SyncRunID      string
 	TargetDay      time.Time
 	BackfillDays   int
-	RepositoryIDs  []string
 	From           *time.Time
 	To             *time.Time
 	Daily          bool
@@ -304,7 +302,7 @@ FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID
 	}
 
 	rows, err := tx.Query(ctx, `
-SELECT provider, dataset_key, source_id::text, since_at, before_at
+SELECT provider, dataset_key, since_at, before_at
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status = 'success'
 ORDER BY id`, args.SyncRunID())
@@ -314,7 +312,6 @@ ORDER BY id`, args.SyncRunID())
 	defer rows.Close()
 	var (
 		targets        = map[string]struct{}{}
-		repositories   = map[string]struct{}{}
 		from           *time.Time
 		to             *time.Time
 		unboundedFrom  bool
@@ -322,9 +319,9 @@ ORDER BY id`, args.SyncRunID())
 		successfulUnit bool
 	)
 	for rows.Next() {
-		var provider, dataset, sourceID string
+		var provider, dataset string
 		var since, before *time.Time
-		if err := rows.Scan(&provider, &dataset, &sourceID, &since, &before); err != nil {
+		if err := rows.Scan(&provider, &dataset, &since, &before); err != nil {
 			return nil, ErrPostSyncUnavailable
 		}
 		capability, ok := providersync.Capability(provider, dataset)
@@ -332,15 +329,8 @@ ORDER BY id`, args.SyncRunID())
 			continue
 		}
 		successfulUnit = true
-		unitGit := false
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
-			if target == "git" || target == "prs" {
-				unitGit = true
-			}
-		}
-		if unitGit {
-			repositories[sourceID] = struct{}{}
 		}
 		if since == nil {
 			unboundedFrom = true
@@ -402,14 +392,9 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	}
 	currentSingleDay := (from == nil && to == nil) ||
 		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
-	repositoryIDs := make([]string, 0, len(repositories))
-	for id := range repositories {
-		repositoryIDs = append(repositoryIDs, id)
-	}
-	sort.Strings(repositoryIDs)
 	return &PostSyncPlan{
 		OrganizationID: orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
-		BackfillDays: backfillDays, RepositoryIDs: repositoryIDs, From: from, To: to,
+		BackfillDays: backfillDays, From: from, To: to,
 		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,
 		TeamAutoimport: autoImport,

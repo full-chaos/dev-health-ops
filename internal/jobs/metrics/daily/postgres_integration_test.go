@@ -225,6 +225,208 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	}
 }
 
+// TestPostgresStorePostSyncRunDefersToLiveDiscoveryAndSurvivesRetryAfterMaterialization
+// pins the CHAOS-4263 fix at the store layer: a post-sync StartRunTx request
+// no longer embeds sync_run_units.source_id (the dead Postgres
+// integration_sources id space) as this run's partitions. Instead it leaves
+// the run with zero partitions, so ClaimDispatch reports
+// RepositoryDiscoveryRequired and the heavy worker resolves live ClickHouse
+// repository identity through MaterializeScheduledFanout -- the exact same
+// path the nightly fixed schedule already used correctly. It also proves a
+// second post-sync StartRunTx call for the same sync (at-least-once outbox
+// redelivery) after that materialization has already happened does not error
+// or disturb the materialized partitions.
+func TestPostgresStorePostSyncRunDefersToLiveDiscoveryAndSurvivesRetryAfterMaterialization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := StartRunRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000009",
+		TargetDay:      time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		Generation:     "post-sync:00000000-0000-4000-8000-000000000010",
+		// RepositoryIDs is deliberately empty: the post-sync writer no longer
+		// derives it from sync_run_units.source_id (CHAOS-4263 root cause).
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunTx(ctx, tx, request, publisher)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var partitionsBeforeDiscovery int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&partitionsBeforeDiscovery); err != nil {
+		t.Fatal(err)
+	}
+	if partitionsBeforeDiscovery != 0 {
+		t.Fatalf("post-sync run created %d partitions before discovery ran; want 0 (discovery deferred, CHAOS-4263)", partitionsBeforeDiscovery)
+	}
+
+	claimed, err := store.ClaimDispatch(ctx, run.ID)
+	if err != nil || claimed == nil || !claimed.RepositoryDiscoveryRequired {
+		t.Fatalf("post-sync dispatch claim=%#v err=%v, want RepositoryDiscoveryRequired=true", claimed, err)
+	}
+
+	// The heavy worker resolves this against ClickHouse repos.id in
+	// production (daily.RepositoryDiscoverer); this store-layer test supplies
+	// the discovered set directly, since MaterializeScheduledFanout is where
+	// the CHAOS-4263 fix's store-side contract lives.
+	discovered := []string{
+		"00000000-0000-4000-8000-000000000002",
+		"00000000-0000-4000-8000-000000000001",
+	}
+	created, err := store.MaterializeScheduledFanout(ctx, *claimed, discovered)
+	if err != nil || !created {
+		t.Fatalf("post-sync materialize=%t err=%v", created, err)
+	}
+	var partitionCount int
+	var ids string
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&partitionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT repo_ids::text FROM daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if partitionCount != 1 || ids != `["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]` {
+		t.Fatalf("post-sync materialized partitions=%d ids=%s", partitionCount, ids)
+	}
+
+	// At-least-once post-sync redelivery for the same sync, after discovery
+	// has already materialized real partitions: must not error, must not
+	// duplicate the run, and must not disturb the materialized partitions.
+	retryTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, err := store.StartRunTx(ctx, retryTx, request, publisher)
+	if err != nil {
+		_ = retryTx.Rollback(ctx)
+		t.Fatalf("post-sync retry after materialization: %v", err)
+	}
+	if err := retryTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if retried.ID != run.ID {
+		t.Fatalf("retry run id=%s want=%s", retried.ID, run.ID)
+	}
+	var runs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Fatalf("retry duplicated the run, count=%d", runs)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&partitionCount); err != nil {
+		t.Fatal(err)
+	}
+	if partitionCount != 1 {
+		t.Fatalf("retry disturbed materialized partitions, count=%d", partitionCount)
+	}
+}
+
+// TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoRepositories
+// pins the second CHAOS-4263 gap for the post-sync trigger specifically: a
+// post-sync run whose live discovery genuinely finds zero repositories must
+// terminalize as no_repositories with its completion fence, exactly like the
+// scheduled fan-out's existing empty-snapshot handling, never as a silent
+// zero-row "succeeded" partition.
+func TestPostgresStorePostSyncRunWithZeroDiscoveredRepositoriesRecordsNoRepositories(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := StartRunRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000009",
+		TargetDay:      time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		Generation:     "post-sync:00000000-0000-4000-8000-000000000011",
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunTx(ctx, tx, request, publisher)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimDispatch(ctx, run.ID)
+	if err != nil || claimed == nil || !claimed.RepositoryDiscoveryRequired {
+		t.Fatalf("post-sync dispatch claim=%#v err=%v", claimed, err)
+	}
+	if created, err := store.MaterializeScheduledFanout(ctx, *claimed, nil); err != nil || !created {
+		t.Fatalf("post-sync empty materialize=%t err=%v", created, err)
+	}
+
+	var status, finalization string
+	var partitionCount, fences int
+	if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id=$1::uuid`, run.ID).Scan(&status, &finalization); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id=$1::uuid`, run.ID).Scan(&partitionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_completion_fences WHERE completion_key=$1`, "daily_metrics_run:"+run.ID).Scan(&fences); err != nil {
+		t.Fatal(err)
+	}
+	if status != "no_repositories" || finalization != "succeeded" || partitionCount != 0 || fences != 1 {
+		t.Fatalf("post-sync empty status=%s finalization=%s partitions=%d fences=%d", status, finalization, partitionCount, fences)
+	}
+}
+
 func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

@@ -282,13 +282,13 @@ func (staticLaunchDarklyReferenceResolver) ResolveLaunchDarklyCodeReferences(
 		claim.OrgID, "launchdarkly", projectKey, "checkout",
 	)
 	return []launchDarklyLinkRow{launchDarklyReferenceLink(
-			claim.OrgID, "checkout", "file", "repo:file.go", normalizedAt,
-		)}, []launchDarklyEdgeRow{newLaunchDarklyEdge(
-			claim.OrgID, flagID, "feature_flag", "repo:file.go", "file",
-			"guards", "11111111-1111-4111-8111-111111111111",
-			"launchdarkly", launchDarklyCodeReferenceConfidence,
-			"ld_code_ref:repo:main:file.go:L1", normalizedAt, normalizedAt,
-		)}, nil
+		claim.OrgID, "checkout", "file", "repo:file.go", normalizedAt,
+	)}, []launchDarklyEdgeRow{newLaunchDarklyEdge(
+		claim.OrgID, flagID, "feature_flag", "repo:file.go", "file",
+		"guards", "11111111-1111-4111-8111-111111111111",
+		"launchdarkly", launchDarklyCodeReferenceConfidence,
+		"ld_code_ref:repo:main:file.go:L1", normalizedAt, normalizedAt,
+	)}, nil
 }
 
 type launchDarklyRouteResponse struct {

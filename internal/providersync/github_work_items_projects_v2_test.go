@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -428,6 +429,70 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 		if !strings.Contains(outerQuery, leaf) {
 			t.Errorf("query missing documented leaf bound %q", leaf)
 		}
+	}
+}
+
+// TestGitHubProjectV2NullBoardResponsesAreIncompleteSnapshots pins the
+// destructive-failure boundary: a null organization or projectV2 is an
+// inaccessible board, not an empty board. A genuinely empty, non-null board
+// remains authoritative and must still retire prior memberships.
+func TestGitHubProjectV2NullBoardResponsesAreIncompleteSnapshots(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	prior := []githubProjectV2SnapshotSubject{{
+		SubjectKind: projectmembership.SubjectWorkItem,
+		SubjectID:   "gh:acme/api#7",
+		RepoID:      githubProjectV2TestRepoID(t),
+	}}
+	normalizedAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name         string
+		reply        string
+		wantComplete bool
+		wantRemovals int
+	}{
+		{
+			name:         "null organization",
+			reply:        `{"data":{"organization":null}}`,
+			wantComplete: false,
+			wantRemovals: 0,
+		},
+		{
+			name:         "null project",
+			reply:        `{"data":{"organization":{"projectV2":null}}}`,
+			wantComplete: false,
+			wantRemovals: 0,
+		},
+		{
+			name:         "genuinely empty board",
+			reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+			wantComplete: true,
+			wantRemovals: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &gitHubProjectV2Doer{t: t, replies: []string{test.reply}}
+			result, err := (GitHubProjectV2Fetcher{}).Fetch(
+				context.Background(), claim,
+				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+				githubProjectV2TestClient(t, doer), normalizedAt, nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Snapshots) != 1 || result.Snapshots[0].Complete != test.wantComplete {
+				t.Fatalf("snapshot=%+v, want Complete=%t", result.Snapshots, test.wantComplete)
+			}
+			rows, counts := diffGitHubProjectV2Snapshot(
+				claim, "ghprojv2:acme#3", result.Snapshots[0].Subjects, prior,
+				result.Snapshots[0].Complete, normalizedAt,
+			)
+			if counts.Removals != test.wantRemovals || len(rows) != test.wantRemovals {
+				t.Fatalf("rows=%+v counts=%+v, want %d removals", rows, counts, test.wantRemovals)
+			}
+		})
 	}
 }
 

@@ -271,6 +271,7 @@ type Metrics struct {
 	incidentEntitlementRefused     map[string]uint64
 	allArtifactsUnreadable         map[string]uint64
 	workItemTeamAttributionWritten map[string]uint64
+	projectsV2DegradedSnapshots    map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -287,6 +288,7 @@ func NewMetrics() *Metrics {
 		incidentEntitlementRefused:     map[string]uint64{},
 		allArtifactsUnreadable:         map[string]uint64{},
 		workItemTeamAttributionWritten: map[string]uint64{},
+		projectsV2DegradedSnapshots:    map[string]uint64{},
 	}
 }
 
@@ -658,6 +660,31 @@ func (m *Metrics) RecordWorkItemTeamAttributionWritten(provider, source string) 
 	m.workItemTeamAttributionWritten[metricProvider(provider)+":"+MetricWorkItemTeamAttributionSourceLabel(source)]++
 }
 
+// MetricProjectsV2DegradedReasonLabel bounds the provider response classes
+// emitted by the GitHub Projects V2 collector. The vocabulary is closed so a
+// provider payload cannot mint unbounded Prometheus series.
+func MetricProjectsV2DegradedReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	switch lowered {
+	case "null_organization", "null_project", "structural_degradation":
+		return lowered
+	default:
+		return "other"
+	}
+}
+
+// RecordProjectsV2DegradedSnapshot counts one GitHub Projects V2 response that
+// could not establish an authoritative board snapshot. The collector keeps
+// other rows but withholds the family watermark until a complete response.
+func (m *Metrics) RecordProjectsV2DegradedSnapshot(reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.projectsV2DegradedSnapshots[MetricProjectsV2DegradedReasonLabel(reason)]++
+}
+
 // writeProviderDatasetCounter renders one provider:dataset keyed counter
 // family in stable key order.
 func writeProviderDatasetCounter(
@@ -851,11 +878,30 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
-	return writeProviderLabeledCounter(
+	if err := writeProviderLabeledCounter(
 		writer, "dev_health_work_item_team_attributions_written_total",
 		"work_item_team_attributions rows written, by bounded provider and written source (CHAOS-4244).",
 		"source", m.workItemTeamAttributionWritten,
-	)
+	); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_providersync_projects_v2_degraded_snapshots_total GitHub Projects V2 responses that were structurally degraded, by reason.\n"+"# TYPE dev_health_providersync_projects_v2_degraded_snapshots_total counter\n"); err != nil {
+		return err
+	}
+	reasons := make([]string, 0, len(m.projectsV2DegradedSnapshots))
+	for reason := range m.projectsV2DegradedSnapshots {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		if _, err := fmt.Fprintf(writer,
+			"dev_health_providersync_projects_v2_degraded_snapshots_total{reason=%q} %d\n",
+			reason, m.projectsV2DegradedSnapshots[reason]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeProviderLabeledCounter is the two-label twin of

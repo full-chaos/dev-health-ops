@@ -92,6 +92,28 @@ type GitHubProjectV2FetchResult struct {
 	// read supplies the prior half -- and is otherwise unused by this Fetch
 	// call, which never touches ClickHouse itself.
 	Snapshots []githubProjectV2BoardSnapshot
+	// Incomplete carries durable evidence for a board response that GitHub
+	// returned in a structurally degraded shape. The route keeps the other
+	// rows, but this entry withholds the family watermark until a later sync
+	// observes the board authoritatively.
+	Incomplete []GitHubWorkItemsIncomplete
+}
+
+const (
+	githubProjectsV2IncompleteComponent = "projects_v2"
+	githubProjectsV2NullOrganization    = "null_organization"
+	githubProjectsV2NullProject         = "null_project"
+	githubProjectsV2StructuralDegraded  = "structural_degradation"
+)
+
+func githubProjectsV2DegradedCause(cause string) bool {
+	switch cause {
+	case githubProjectsV2NullOrganization, githubProjectsV2NullProject,
+		githubProjectsV2StructuralDegraded:
+		return true
+	default:
+		return false
+	}
 }
 
 // GitHubProjectV2Fetcher preserves Python's per-source fanout: callers may
@@ -216,10 +238,11 @@ func (GitHubProjectV2Fetcher) Fetch(
 	// Preserve that exact behavior across targets, including duplicate targets.
 	workItemIndex := map[string]int{}
 	for _, target := range targets {
-		items, err := fetchGitHubProjectV2Target(ctx, &counted, target, &result.Evidence)
+		targetResult, err := fetchGitHubProjectV2Target(ctx, &counted, target, &result.Evidence)
 		if err != nil {
 			return finishGitHubProjectV2Fetch(result), err
 		}
+		items := targetResult.Items
 		projectScopeID := fmt.Sprintf("ghprojv2:%s#%d", target.OrgLogin, target.ProjectNumber)
 		// The board itself has to exist in `projects` before anything can
 		// point at it. Nothing wrote this row before CHAOS-4194 -- the fetcher
@@ -282,9 +305,16 @@ func (GitHubProjectV2Fetcher) Fetch(
 			}
 			result.Rows.StatusTransitions = append(result.Rows.StatusTransitions, transitions...)
 		}
+		complete := targetResult.Complete && !boardIncomplete
 		result.Snapshots = append(result.Snapshots, githubProjectV2BoardSnapshot{
-			ProjectScopeID: projectScopeID, Subjects: boardSubjects, Complete: !boardIncomplete,
+			ProjectScopeID: projectScopeID, Subjects: boardSubjects, Complete: complete,
 		})
+		if targetResult.DegradedReason != "" {
+			result.Incomplete = append(result.Incomplete, GitHubWorkItemsIncomplete{
+				Component: githubProjectsV2IncompleteComponent,
+				Cause:     targetResult.DegradedReason,
+			})
+		}
 	}
 	reportGitHubProjectV2MembershipSkips(claim, result.MembershipSkips)
 	return finishGitHubProjectV2Fetch(result), nil
@@ -368,6 +398,12 @@ type gitHubProjectV2CountingDoer struct {
 	graphqlPath     string
 }
 
+type gitHubProjectV2TargetFetchResult struct {
+	Items          []gitHubProjectV2ItemPayload
+	Complete       bool
+	DegradedReason string
+}
+
 func (doer gitHubProjectV2CountingDoer) Do(request *http.Request) (*http.Response, error) {
 	*doer.requests++
 	if request.URL.EscapedPath() == doer.graphqlPath {
@@ -381,7 +417,7 @@ func fetchGitHubProjectV2Target(
 	client *providerfoundation.HTTPClient,
 	target GitHubProjectV2Target,
 	evidence *FetchEvidence,
-) ([]gitHubProjectV2ItemPayload, error) {
+) (gitHubProjectV2TargetFetchResult, error) {
 	items := []gitHubProjectV2ItemPayload{}
 	outerCursor := ""
 	seenOuter := map[string]struct{}{}
@@ -395,32 +431,56 @@ func fetchGitHubProjectV2Target(
 		}
 		var envelope gitHubProjectV2ItemsEnvelope
 		if err := fetchGitHubProjectV2GraphQL(ctx, client, gitHubProjectsV2ItemsQuery, variables, &envelope, evidence); err != nil {
-			return nil, err
+			return gitHubProjectV2TargetFetchResult{}, err
 		}
-		if envelope.Data.Organization == nil || envelope.Data.Organization.ProjectV2 == nil {
-			return items, nil
+		if envelope.Data.Organization == nil {
+			client.Metrics.RecordProjectsV2DegradedSnapshot(githubProjectsV2NullOrganization)
+			slog.Warn("github_projects_v2.degraded_snapshot",
+				"reason", githubProjectsV2NullOrganization, "org_login", target.OrgLogin,
+				"project_number", target.ProjectNumber)
+			return gitHubProjectV2TargetFetchResult{
+				Items: items, DegradedReason: githubProjectsV2NullOrganization,
+			}, nil
 		}
-		connection := envelope.Data.Organization.ProjectV2.Items
+		if envelope.Data.Organization.ProjectV2 == nil {
+			client.Metrics.RecordProjectsV2DegradedSnapshot(githubProjectsV2NullProject)
+			slog.Warn("github_projects_v2.degraded_snapshot",
+				"reason", githubProjectsV2NullProject, "org_login", target.OrgLogin,
+				"project_number", target.ProjectNumber)
+			return gitHubProjectV2TargetFetchResult{
+				Items: items, DegradedReason: githubProjectsV2NullProject,
+			}, nil
+		}
+		if envelope.Data.Organization.ProjectV2.Items == nil || envelope.Data.Organization.ProjectV2.Items.Nodes == nil {
+			client.Metrics.RecordProjectsV2DegradedSnapshot(githubProjectsV2StructuralDegraded)
+			slog.Warn("github_projects_v2.degraded_snapshot",
+				"reason", githubProjectsV2StructuralDegraded, "org_login", target.OrgLogin,
+				"project_number", target.ProjectNumber)
+			return gitHubProjectV2TargetFetchResult{
+				Items: items, DegradedReason: githubProjectsV2StructuralDegraded,
+			}, nil
+		}
+		connection := *envelope.Data.Organization.ProjectV2.Items
 		for index := range connection.Nodes {
 			item := connection.Nodes[index]
 			if item.Changes.PageInfo.HasNextPage {
 				cursor := strings.TrimSpace(item.Changes.PageInfo.EndCursor)
 				if cursor == "" || strings.TrimSpace(item.ID) == "" {
-					return nil, providerfoundation.ErrPaginationInvalid
+					return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 				}
 				seenChanges := map[string]struct{}{}
 				for {
 					if _, repeated := seenChanges[cursor]; repeated {
-						return nil, providerfoundation.ErrPaginationInvalid
+						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 					}
 					seenChanges[cursor] = struct{}{}
 					var continuation gitHubProjectV2ChangesEnvelope
 					if err := fetchGitHubProjectV2GraphQL(ctx, client, gitHubProjectsV2ChangesQuery,
 						map[string]any{"itemId": item.ID, "after": cursor}, &continuation, evidence); err != nil {
-						return nil, err
+						return gitHubProjectV2TargetFetchResult{}, err
 					}
 					if continuation.Data.Node == nil {
-						return nil, providerfoundation.ErrPaginationInvalid
+						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 					}
 					more := continuation.Data.Node.Changes
 					item.Changes.Nodes = append(item.Changes.Nodes, more.Nodes...)
@@ -429,7 +489,7 @@ func fetchGitHubProjectV2Target(
 					}
 					next := strings.TrimSpace(more.PageInfo.EndCursor)
 					if next == "" || next == cursor {
-						return nil, providerfoundation.ErrPaginationInvalid
+						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 					}
 					cursor = next
 				}
@@ -437,14 +497,14 @@ func fetchGitHubProjectV2Target(
 			items = append(items, item)
 		}
 		if !connection.PageInfo.HasNextPage {
-			return items, nil
+			return gitHubProjectV2TargetFetchResult{Items: items, Complete: true}, nil
 		}
 		next := strings.TrimSpace(connection.PageInfo.EndCursor)
 		if next == "" || next == outerCursor {
-			return nil, providerfoundation.ErrPaginationInvalid
+			return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 		}
 		if _, repeated := seenOuter[next]; repeated {
-			return nil, providerfoundation.ErrPaginationInvalid
+			return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 		}
 		seenOuter[next] = struct{}{}
 		outerCursor = next
@@ -498,7 +558,7 @@ type gitHubProjectV2ItemsEnvelope struct {
 	Data struct {
 		Organization *struct {
 			ProjectV2 *struct {
-				Items gitHubProjectV2Connection[gitHubProjectV2ItemPayload] `json:"items"`
+				Items *gitHubProjectV2Connection[gitHubProjectV2ItemPayload] `json:"items"`
 			} `json:"projectV2"`
 		} `json:"organization"`
 	} `json:"data"`

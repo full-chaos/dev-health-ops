@@ -106,6 +106,14 @@ func githubWorkItemsIncompleteIsOptional(partial GitHubWorkItemsIncomplete) bool
 	if githubWorkItemsBlockingIncompleteCauses[partial.Cause] {
 		return false
 	}
+	// Projects V2 null/structurally degraded responses are provider-side
+	// incompleteness. Keep the other collected rows, suppress the watermark,
+	// and leave the snapshot-diff removal arm disabled until a later sync gets a
+	// positive board response. This is distinct from the removed policy_pending
+	// state: the collector is constructed and did reach GitHub.
+	if partial.Component == githubProjectsV2IncompleteComponent {
+		return githubProjectsV2DegradedCause(partial.Cause)
+	}
 	return githubWorkItemsOptionalIncompleteComponents[partial.Component]
 }
 
@@ -375,6 +383,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		if err := validateGitHubWorkItemsProjectResult(claim, projectResult, len(projectTargets)); err != nil {
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
+		incomplete = append(incomplete, projectResult.Incomplete...)
 		// CHAOS-4193(d): the read-then-diff pass. Runs after validation (so it
 		// only ever diffs a result already proven well-formed) and before the
 		// merge, appending its rows to the SAME ProjectMemberships slice the
@@ -462,8 +471,14 @@ func validateGitHubWorkItemsProjectResult(
 		result.Usage.RequestCount != result.Evidence.Requests ||
 		len(result.Rows.Dependencies) != 0 || len(result.Rows.ReopenEvents) != 0 ||
 		len(result.Rows.Interactions) != 0 || len(result.Rows.Sprints) != 0 ||
-		len(result.Rows.AIAttributions) != 0 {
+		len(result.Rows.AIAttributions) != 0 || len(result.Incomplete) > maxEffectRows {
 		return ErrInvalidConfiguration
+	}
+	for _, partial := range result.Incomplete {
+		if partial.Component != githubProjectsV2IncompleteComponent ||
+			!githubProjectsV2DegradedCause(partial.Cause) || partial.SubjectID != "" {
+			return ErrInvalidConfiguration
+		}
 	}
 	// REGRESSION FIXED HERE, and it is worth naming. CHAOS-4194 added the two
 	// membership families to the fetch result's Records count without widening

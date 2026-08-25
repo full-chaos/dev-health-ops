@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,6 +223,72 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	}
 	if incomplete := githubWorkItemsRouteIncomplete(t, batch); len(incomplete) != 0 {
 		t.Fatalf("incomplete=%+v", incomplete)
+	}
+}
+
+// TestGitHubWorkItemsRouteWithholdsWatermarkForDegradedProjectsSnapshot proves
+// the incomplete evidence survives the real route boundary. The provider may
+// still land unrelated rows, but a null board response must not complete the
+// family or advance any alias watermark.
+func TestGitHubWorkItemsRouteWithholdsWatermarkForDegradedProjectsSnapshot(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions = map[string]any{
+		"include_issues": false, "include_pull_requests": false,
+		"fetch_comments": false, "fetch_milestones": false,
+	}
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	for _, test := range []struct {
+		name   string
+		reply  string
+		reason string
+	}{
+		{name: "null organization", reply: `{"data":{"organization":null}}`, reason: githubProjectsV2NullOrganization},
+		{name: "null project", reply: `{"data":{"organization":{"projectV2":null}}}`, reason: githubProjectsV2NullProject},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &githubWorkItemsRouteDoer{
+				t: t,
+				rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+					"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+				}},
+				graphqlReplies: []string{test.reply},
+			}
+			metrics := providerfoundation.NewMetrics()
+			client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+			client.Metrics = metrics
+			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+			batch, err := (GitHubWorkItemsRouteHandler{
+				Projects:                      GitHubProjectV2Fetcher{},
+				ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+				Deriver:                       deriver,
+			}).Collect(
+				context.Background(), claim,
+				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+				client, time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.Watermark != nil {
+				t.Fatalf("degraded Projects V2 response advanced watermark: %v", batch.Watermark)
+			}
+			wantIncomplete := []GitHubWorkItemsIncomplete{{
+				Component: githubProjectsV2IncompleteComponent, Cause: test.reason,
+			}}
+			if got := githubWorkItemsRouteIncomplete(t, batch); !reflect.DeepEqual(got, wantIncomplete) {
+				t.Fatalf("incomplete=%+v want=%+v", got, wantIncomplete)
+			}
+			var exposition bytes.Buffer
+			if err := metrics.WritePrometheus(&exposition); err != nil {
+				t.Fatal(err)
+			}
+			wantMetric := `dev_health_providersync_projects_v2_degraded_snapshots_total{reason="` + test.reason + `"} 1`
+			if !strings.Contains(exposition.String(), wantMetric) {
+				t.Fatalf("metrics missing %q in:\n%s", wantMetric, exposition.String())
+			}
+		})
 	}
 }
 

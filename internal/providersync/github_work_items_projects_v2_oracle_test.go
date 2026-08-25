@@ -242,7 +242,7 @@ func TestGitHubProjectV2PaginationMatchesLivePythonProducer(t *testing.T) {
 				t.Fatal(err)
 			}
 			row := gitHubProjectV2PaginationOracleRow{}
-			for _, item := range items {
+			for _, item := range items.Items {
 				row.ItemIDs = append(row.ItemIDs, item.ID)
 				row.ChangeCounts = append(row.ChangeCounts, len(item.Changes.Nodes))
 			}

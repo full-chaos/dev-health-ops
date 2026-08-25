@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,14 +20,29 @@ import (
 // machinery is needed in this PR -- project_membership_transitions is
 // ReplacingMergeTree(last_synced) keyed by a content-determined event_id, and
 // `projects` rows are ensured onto a ReplacingMergeTree keyed (org_id,
-// provider, id). This test is the proof that ruling asked for: an
-// expired-lease reclaim restarts a unit from a completely fresh ledger with
-// no memory of the earlier attempt, so it replays the SAME committer.Commit
-// call against a SECOND, unrelated ledger. If ClickHouse's FINAL state
-// (transition count, catalog count, presence view) is not byte-identical
-// after that replay, the ledger's own dedup was doing the work the ruling
-// assumed the ENGINE does -- and that overturns the ruling rather than being
-// something to patch around here.
+// provider, id).
+//
+// Two distinct replay shapes are both exercised, per a task-route codex
+// finding that the first draft only proved the second and never touched the
+// ledger's own recovery/readback control flow:
+//
+//  1. A genuine interrupted-then-recovered commit: the lease fails right
+//     after the `projects` write physically lands but before its
+//     acknowledgement, leaving that effect GenerationBlockWriting. Recovery
+//     reuses the SAME ledger, so it drives commitPrepared's
+//     EffectReadbackRequired branch and existenceOnlyProjectCatalogReadback
+//     for real -- this is the exact readback path round 2/5 fixed.
+//  2. An independent expired-lease reclaim: a completely FRESH, unrelated
+//     ledger with no memory of attempt 1 replays the identical content. If
+//     the first ledger's own bookkeeping were doing the convergence work, a
+//     second unrelated ledger would defeat it, and only the ENGINE's
+//     natural-key convergence is left to make this pass.
+//
+// Both phases assert the FULL persisted row content against known expected
+// values (not just counts), since every row's content is fixed once, up
+// front, and reused unchanged across every commit call in this test -- a
+// replay that silently corrupted a field while preserving counts must still
+// fail here.
 func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("linear", "work-items")
@@ -35,6 +51,8 @@ func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(
 
 	workItemID := "linear:ENG-idem-1"
 	fromID, toID := "project-idem-old", "project-idem-new"
+	actor := "linear@example.com"
+	eventID := "linear:hist-idem-1"
 
 	item := LinearWorkItemRow{
 		WorkItemID: workItemID, Provider: "linear", Title: "Replay idempotency proof",
@@ -48,8 +66,8 @@ func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(
 		SubjectID: workItemID, Provider: "linear",
 		FromProjectID: fromID, ToProjectID: toID,
 		FromProjectKey: "", ToProjectKey: "",
-		Actor: "linear@example.com", OccurredAt: occurredAt, LastSynced: now,
-		EventID: "linear:hist-idem-1",
+		Actor: actor, OccurredAt: occurredAt, LastSynced: now,
+		EventID: eventID,
 	}
 	catalogFrom := linearEnsureProjectsRow(claim.OrgID, fromID, "", now)
 	catalogTo := linearEnsureProjectsRow(claim.OrgID, toID, "Idem New", now)
@@ -71,6 +89,9 @@ func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(
 		t.Fatal(err)
 	}
 
+	// Same content, built ONCE and reused for every commit call in this test
+	// (all three phases) -- that is what makes "unchanged" a meaningful
+	// assertion rather than a tautology.
 	effects, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
 		WorkItems:          []json.RawMessage{itemRaw},
 		ProjectMemberships: []json.RawMessage{membershipRaw},
@@ -80,44 +101,69 @@ func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(
 		t.Fatal(err)
 	}
 
-	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink := linearMigratedClickHouseSink(conn, lease)
-
-	commit := func() {
-		t.Helper()
-		ledger := &memoryEffectLedger{}
-		committer := EffectCommitter{
-			Ledger: ledger, Sink: sink, Readback: sink,
-			Now: func() time.Time { return now },
-		}
-		if _, err := committer.Commit(ctx, claim, effects, now); err != nil {
-			t.Fatalf("commit: %v", err)
-		}
+	type transitionSnapshot struct {
+		FromProjectID, ToProjectID   string
+		FromProjectKey, ToProjectKey string
+		Actor, EventID               string
+		OccurredAt                   time.Time
 	}
-
-	countTransitions := func() uint64 {
+	queryTransition := func() transitionSnapshot {
 		t.Helper()
-		var count uint64
+		var row transitionSnapshot
 		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM project_membership_transitions FINAL `+
-				`WHERE org_id = ? AND subject_kind = ? AND subject_id = ?`,
+			`SELECT from_project_id, to_project_id, from_project_key, to_project_key, actor, event_id, occurred_at `+
+				`FROM project_membership_transitions FINAL WHERE org_id = ? AND subject_kind = ? AND subject_id = ?`,
 			claim.OrgID, projectmembership.SubjectWorkItem, workItemID,
-		).Scan(&count); err != nil {
+		).Scan(&row.FromProjectID, &row.ToProjectID, &row.FromProjectKey, &row.ToProjectKey,
+			&row.Actor, &row.EventID, &row.OccurredAt); err != nil {
 			t.Fatal(err)
 		}
-		return count
+		return row
 	}
-	countProjects := func() uint64 {
+	wantTransition := transitionSnapshot{
+		FromProjectID: fromID, ToProjectID: toID,
+		FromProjectKey: "", ToProjectKey: "",
+		Actor: actor, EventID: eventID, OccurredAt: occurredAt.UTC(),
+	}
+
+	type catalogSnapshot struct {
+		ID, Name, ProjectKey string
+		IsActive             uint8
+	}
+	queryCatalog := func() []catalogSnapshot {
 		t.Helper()
-		var count uint64
-		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'linear' AND id IN (?, ?)`,
+		result, err := conn.Query(ctx,
+			`SELECT id, name, project_key, is_active FROM projects FINAL `+
+				`WHERE org_id = ? AND provider = 'linear' AND id IN (?, ?) ORDER BY id`,
 			claim.OrgID, fromID, toID,
-		).Scan(&count); err != nil {
+		)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return count
+		defer result.Close()
+		rows := make([]catalogSnapshot, 0)
+		for result.Next() {
+			var row catalogSnapshot
+			var key *string
+			if err := result.Scan(&row.ID, &row.Name, &key, &row.IsActive); err != nil {
+				t.Fatal(err)
+			}
+			if key != nil {
+				row.ProjectKey = *key
+			}
+			rows = append(rows, row)
+		}
+		if err := result.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return rows
 	}
+	// "project-idem-new" sorts before "project-idem-old" ('n' < 'o').
+	wantCatalog := []catalogSnapshot{
+		{ID: toID, Name: "Idem New", ProjectKey: "", IsActive: 1},
+		{ID: fromID, Name: "", ProjectKey: "", IsActive: 1},
+	}
+
 	type presenceRow struct {
 		ProjectID string
 		Source    string
@@ -146,37 +192,77 @@ func TestLinearProjectMembershipReplayAfterExpiredLeaseIsIdempotentAtClickHouse(
 		}
 		return rows
 	}
+	wantPresence := []presenceRow{{ProjectID: toID, Source: "transition"}}
 
-	commit()
-	firstTransitions, firstProjects := countTransitions(), countProjects()
-	firstPresence := queryPresence()
-	if firstTransitions != 1 {
-		t.Fatalf("transitions after first commit=%d, want 1", firstTransitions)
-	}
-	if firstProjects != 2 {
-		t.Fatalf("projects after first commit=%d, want 2", firstProjects)
-	}
-	if len(firstPresence) != 1 || firstPresence[0].ProjectID != toID {
-		t.Fatalf("presence after first commit=%+v, want one active row for %s", firstPresence, toID)
+	assertState := func(label string) {
+		t.Helper()
+		if transition := queryTransition(); transition != wantTransition {
+			t.Fatalf("%s: transition=%+v want=%+v", label, transition, wantTransition)
+		}
+		catalog := queryCatalog()
+		if len(catalog) != len(wantCatalog) || catalog[0] != wantCatalog[0] || catalog[1] != wantCatalog[1] {
+			t.Fatalf("%s: catalog=%+v want=%+v", label, catalog, wantCatalog)
+		}
+		presence := queryPresence()
+		if len(presence) != len(wantPresence) || presence[0] != wantPresence[0] {
+			t.Fatalf("%s: presence=%+v want=%+v", label, presence, wantPresence)
+		}
 	}
 
-	// Simulate an expired-lease reclaim: a completely FRESH ledger, no memory
-	// of the first attempt, replaying the exact same content against the
-	// SAME live ClickHouse. This is the strongest form of the proof -- if the
-	// first ledger's own bookkeeping were doing the work, a brand new,
-	// unrelated ledger would defeat it, and only the ENGINE's natural-key
-	// convergence is left to make this pass.
-	commit()
-	secondTransitions, secondProjects := countTransitions(), countProjects()
-	secondPresence := queryPresence()
+	// Phase 1: a genuine interrupted-then-recovered commit. The lease fails
+	// on its 4th Assert call, which -- effects commit in ALPHABETICAL
+	// destination order (effectBatchLess), and WriteEffect asserts once
+	// before and once after the real write -- lands as the ACK assert for
+	// "projects" (2nd of 8: project_membership_transitions,
+	// projects, sprints, work_item_dependencies, work_item_interactions,
+	// work_item_reopen_events, work_item_transitions, work_items). The
+	// catalog rows physically land in ClickHouse before the ack fails,
+	// leaving that effect GenerationBlockWriting with nothing else attempted.
+	crashingLease := &linearLifecycleCountingLease{failAt: 4}
+	crashingSink := linearMigratedClickHouseSink(conn, crashingLease)
+	ledger := &memoryEffectLedger{}
+	firstAttempt := EffectCommitter{
+		Ledger: ledger, Sink: crashingSink, Readback: crashingSink,
+		Now: func() time.Time { return now },
+	}
+	if _, err := firstAttempt.Commit(ctx, claim, effects, now); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("first commit error=%v, want ErrLeaseLost", err)
+	}
 
-	if secondTransitions != firstTransitions {
-		t.Fatalf("transitions changed on replay: first=%d second=%d", firstTransitions, secondTransitions)
+	// Recovery reuses the SAME ledger with a healthy lease -- this is what
+	// actually exercises commitPrepared's EffectReadbackRequired branch and
+	// existenceOnlyProjectCatalogReadback, not just a second from-scratch
+	// write.
+	healthyLease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	recoverySink := linearMigratedClickHouseSink(conn, healthyLease)
+	recovery := EffectCommitter{
+		Ledger: ledger, Sink: recoverySink, Readback: recoverySink,
+		Now: func() time.Time { return now.Add(time.Minute) },
 	}
-	if secondProjects != firstProjects {
-		t.Fatalf("projects changed on replay: first=%d second=%d", firstProjects, secondProjects)
+	recoveryResult, err := recovery.Commit(ctx, claim, effects, now)
+	if err != nil {
+		t.Fatalf("recovery commit: %v", err)
 	}
-	if len(secondPresence) != len(firstPresence) || secondPresence[0] != firstPresence[0] {
-		t.Fatalf("presence changed on replay: first=%+v second=%+v", firstPresence, secondPresence)
+	// 1 destination (project_membership_transitions) fully acknowledged in
+	// attempt 1 -> Skipped. 1 destination (projects) was written but not
+	// acknowledged -> readback confirms it via existence, MarkedCommitted.
+	// The remaining 6 (five empty, plus work_items) were never attempted in
+	// attempt 1 -> Written fresh here.
+	if recoveryResult.Skipped != 1 || recoveryResult.MarkedCommitted != 1 || recoveryResult.Written != 6 {
+		t.Fatalf("recovery result=%+v, want {Skipped:1 MarkedCommitted:1 Written:6 ...}", recoveryResult)
 	}
+	assertState("after crash-recovery (phase 1)")
+
+	// Phase 2: an independent expired-lease reclaim -- a completely FRESH
+	// ledger with no memory of phase 1 at all, replaying the exact same
+	// content against the SAME live ClickHouse.
+	replaySink := linearMigratedClickHouseSink(conn, healthyLease)
+	replay := EffectCommitter{
+		Ledger: &memoryEffectLedger{}, Sink: replaySink, Readback: replaySink,
+		Now: func() time.Time { return now.Add(2 * time.Minute) },
+	}
+	if _, err := replay.Commit(ctx, claim, effects, now); err != nil {
+		t.Fatalf("replay commit: %v", err)
+	}
+	assertState("after independent replay (phase 2)")
 }

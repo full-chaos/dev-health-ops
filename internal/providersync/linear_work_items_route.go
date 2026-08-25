@@ -1314,12 +1314,14 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			"interactions_synced":        len(rows.Interactions),
 			"sprints_synced":             len(rows.Sprints),
 			"project_memberships_synced": len(rows.ProjectMemberships),
+			"projects_synced":            len(rows.Projects),
 		},
 		Watermark: &watermark,
 		Evidence: FetchEvidence{Provider: "linear", Dataset: "work-items",
 			Requests: pagesSeen, Pages: pagesSeen,
 			Records: len(rows.WorkItems) + len(rows.StatusTransitions) + len(rows.Dependencies) +
-				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) + len(rows.ProjectMemberships)},
+				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) +
+				len(rows.ProjectMemberships) + len(rows.Projects)},
 	}, nil
 }
 

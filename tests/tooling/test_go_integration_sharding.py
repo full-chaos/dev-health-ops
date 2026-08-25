@@ -675,7 +675,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is new and drives loadDonors's Scan against a fake driver.Rows that
     # actually returns one row. Still no database, so the integration-tagged
     # count stays 117.
-    assert len(expected_provider_tests) == 1083
+    #
+    # A codex round-7 finding (2026-08-25, BLOCK, 2 HIGH, both reproduced by
+    # hand via mutate-and-rerun) then added 1 more ordinary test (1083 ->
+    # 1084): (1) the round-6 negative tests all use Provider "jira", so the
+    # provider+type gate is already closed on Provider alone -- they stayed
+    # green even with "Type: row.Type" deleted from
+    # githubWorkItemDerivationSubjectFromRow entirely, never actually proving
+    # Type propagates; (2) fakeDonorRowsConn ignored the query text and
+    # always returned hand-ordered values, so a SELECT-column reorder left
+    # Scan() untouched still passed -- the donor-scan test only ever proved
+    # Scan-destination order, not SELECT-list order.
+    # TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership
+    # is new: a real githubWorkItemRow (github/pr and gitlab/merge_request
+    # subtests) converted through the actual production
+    # githubWorkItemDerivationSubjectFromRow, asserting both the converted
+    # Type AND that author_membership still resolves -- confirmed red when
+    # Type propagation is removed. The donor-scan test above also gained a
+    # pinned SELECT-projection string assertion (no new top-level test, just
+    # an added assertion) -- confirmed red when the SELECT column order is
+    # swapped. Still no database, so the integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1084
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -692,7 +712,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1083
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1084
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -753,7 +773,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1083
+    assert len(selected_tests) == len(set(selected_tests)) == 1084
     assert set(selected_tests) == expected_tests
 
 

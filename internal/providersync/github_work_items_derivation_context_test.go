@@ -529,14 +529,24 @@ func (fakeDonorRows) HasData() bool                    { return true }
 
 type fakeDonorRowsConn struct {
 	driver.Conn
-	rows *fakeDonorRows
+	rows          *fakeDonorRows
+	capturedQuery string
 }
 
-func (conn *fakeDonorRowsConn) Query(context.Context, string, ...any) (driver.Rows, error) {
+func (conn *fakeDonorRowsConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+	conn.capturedQuery = query
 	return conn.rows, nil
 }
 
 func TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColumnOrder(t *testing.T) {
+	// Codex round-7 finding (2026-08-25, HIGH, reproduced by hand: swapping
+	// "provider, type" to "type, provider" in the SELECT list while leaving
+	// Scan() untouched still passed this test before this assertion existed,
+	// because fakeDonorRowsConn ignores the query text entirely and always
+	// hands back the same hand-ordered values). The Scan-order assertions
+	// below only catch a Scan-destination reorder; they say nothing about
+	// whether the SELECT list itself still matches. Pin the exact column
+	// list/order as text so a SELECT-only reorder fails THIS test too.
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	nativeTeamKey := "native-key"
 	projectKey := "proj-key"
@@ -552,6 +562,10 @@ func TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColu
 	})
 	if err != nil {
 		t.Fatalf("loadDonors error = %v", err)
+	}
+	const expectedProjection = "SELECT work_item_id, provider, type, toString(repo_id), native_team_key, project_key,\n       project_id, project_name, assignees, org_id"
+	if !strings.Contains(conn.capturedQuery, expectedProjection) {
+		t.Fatalf("donor query SELECT projection changed shape (order or columns):\n%s", conn.capturedQuery)
 	}
 	if len(subjects) != 1 {
 		t.Fatalf("subjects = %+v, want exactly 1", subjects)
@@ -581,6 +595,57 @@ func TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColu
 	}
 	if subject.OrgID != "org-acme" {
 		t.Fatalf("OrgID = %q, want org-acme", subject.OrgID)
+	}
+}
+
+func TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership(t *testing.T) {
+	// Codex round-7 finding (2026-08-25, HIGH, reproduced by hand: removing
+	// "Type: row.Type" from githubWorkItemDerivationSubjectFromRow left every
+	// R6 Jira/Linear/mismatched-provider negative test green, because all
+	// three use Provider "jira" -- the provider+type gate is already closed
+	// on Provider alone, so those tests never actually exercise whether Type
+	// propagated). This is the positive case codex asked for: a real
+	// githubWorkItemRow with Provider "github" and Type "pr", converted
+	// through the actual production githubWorkItemDerivationSubjectFromRow,
+	// must still resolve via author_membership -- if Type propagation broke,
+	// the gate would close and this would resolve unassigned instead. Table
+	// includes the GitLab MR case too, since the gate is provider-paired.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name     string
+		provider string
+		itemType string
+	}{
+		{name: "github_pr", provider: "github", itemType: "pr"},
+		{name: "gitlab_merge_request", provider: "gitlab", itemType: "merge_request"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{{
+					Provider: testCase.provider, TeamID: "team-ops", TeamName: "Ops Team",
+					MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+				}},
+			})
+			reporter := "alice"
+			row := githubWorkItemRow{
+				WorkItemID: "acme/api#9", Provider: testCase.provider, Title: "t", Type: testCase.itemType,
+				Status: "open", Reporter: &reporter, OrgID: "org-acme",
+			}
+			subject := githubWorkItemDerivationSubjectFromRow(row)
+			if subject.Type != row.Type {
+				t.Fatalf("githubWorkItemDerivationSubjectFromRow(row).Type = %q, want %q (row.Type must propagate)", subject.Type, row.Type)
+			}
+			teamID, teamName, candidates := derived.resolve(subject)
+			if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+				t.Fatalf("team id = %v, want team-ops (Type propagation must keep the author_membership gate open)", githubWorkItemDerivationStringValue(teamID))
+			}
+			if githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+				t.Fatalf("team name = %v, want Ops Team", githubWorkItemDerivationStringValue(teamName))
+			}
+			if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 1 {
+				t.Fatalf("candidates = %+v", candidates)
+			}
+		})
 	}
 }
 

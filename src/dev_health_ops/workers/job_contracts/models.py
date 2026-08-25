@@ -31,11 +31,9 @@ KIND_INVESTMENT_FINALIZE = "investment.finalize"
 KIND_REMAINING_CAPACITY = "metrics.remaining.capacity"
 KIND_REMAINING_COMPLEXITY = "metrics.remaining.complexity"
 KIND_REMAINING_DORA = "metrics.remaining.dora"
-KIND_REMAINING_EXTRA_METRICS = "metrics.remaining.extra_metrics"
 KIND_REMAINING_MEMBERSHIP = "metrics.remaining.membership_backfill"
 KIND_REMAINING_RECOMMENDATIONS = "metrics.remaining.recommendations"
 KIND_REMAINING_RELEASE_IMPACT = "metrics.remaining.release_impact"
-KIND_REMAINING_TEAM_METRICS = "metrics.remaining.team_metrics"
 KIND_SYNC_PROVIDER_UNIT = "sync.provider_unit"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 # Retention policies are table-scoped: each names exactly one operational
@@ -255,15 +253,6 @@ class RemainingDORAPayload:
 
 
 @dataclass(frozen=True, slots=True)
-class RemainingExtraMetricsPayload:
-    KIND: ClassVar[str] = KIND_REMAINING_EXTRA_METRICS
-    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
-    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
-
-    partition_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class RemainingMembershipPayload:
     KIND: ClassVar[str] = KIND_REMAINING_MEMBERSHIP
     CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
@@ -284,15 +273,6 @@ class RemainingRecommendationsPayload:
 @dataclass(frozen=True, slots=True)
 class RemainingReleaseImpactPayload:
     KIND: ClassVar[str] = KIND_REMAINING_RELEASE_IMPACT
-    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
-    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
-
-    partition_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class RemainingTeamMetricsPayload:
-    KIND: ClassVar[str] = KIND_REMAINING_TEAM_METRICS
     CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
     DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
 
@@ -330,11 +310,9 @@ JobPayload: TypeAlias = (
     | RemainingCapacityPayload
     | RemainingComplexityPayload
     | RemainingDORAPayload
-    | RemainingExtraMetricsPayload
     | RemainingMembershipPayload
     | RemainingRecommendationsPayload
     | RemainingReleaseImpactPayload
-    | RemainingTeamMetricsPayload
     | ProviderUnitPayload
 )
 

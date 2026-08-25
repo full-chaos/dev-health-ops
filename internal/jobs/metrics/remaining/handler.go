@@ -3,6 +3,7 @@ package remaining
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -18,7 +19,7 @@ type Store interface {
 }
 
 type CompatibilityExecutor interface {
-	ComputePartition(context.Context, Run, Partition) error
+	ComputePartition(context.Context, Run, Partition) (CompatibilityOutcome, error)
 }
 
 type PartitionHandler[T jobruntime.ContractArgs] struct {
@@ -84,6 +85,7 @@ func (handler *PartitionHandler[T]) Work(
 		releaseClaim(handler.store, ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
+	var outcome CompatibilityOutcome
 	if err := runWithLeaseRenewal(
 		ctx,
 		claim.LeaseDuration,
@@ -91,7 +93,9 @@ func (handler *PartitionHandler[T]) Work(
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition)
+			var workErr error
+			outcome, workErr = handler.compatibility.ComputePartition(workCtx, run, claim.Partition)
+			return workErr
 		},
 	); err != nil {
 		releaseClaim(handler.store, ctx, *claim)
@@ -114,11 +118,24 @@ func (handler *PartitionHandler[T]) Work(
 	if err := handler.store.CompletePartition(
 		ctx,
 		*claim,
-		"compatibility_execution:"+claim.Partition.ID,
+		compatibilityCompletionResult(claim.Partition.ID, outcome),
 	); err != nil {
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// compatibilityCompletionResult builds the durable output_evidence string.
+// A reported rows_written (including an explicit zero) is embedded so a
+// zero-row completion is never stored identically to a real write --
+// CHAOS-4243: "the job must report rows_written=0 distinctly, never plain
+// success." RowsWritten == nil (not applicable for this family) keeps the
+// original unqualified format.
+func compatibilityCompletionResult(partitionID string, outcome CompatibilityOutcome) string {
+	if outcome.RowsWritten == nil {
+		return "compatibility_execution:" + partitionID
+	}
+	return fmt.Sprintf("compatibility_execution:%s:rows_written=%d", partitionID, *outcome.RowsWritten)
 }
 
 func runWithLeaseRenewal(

@@ -832,7 +832,7 @@ changing any of the source files.
 | Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `heavy` (`dev-health-worker`) | `investment` | `investment.chunk`<br>`investment.dispatch`<br>`investment.finalize`<br>`investment.materialize` | 900-7200 | 3 | — | — | Go-native -- no Celery predecessor<br>`investment.chunk`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`investment.dispatch`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`investment.finalize`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`investment.materialize`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
-| `heavy` (`dev-health-worker`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.extra_metrics`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.team_metrics` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.daily_finalize`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.daily_partition`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.capacity`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.complexity`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.dora`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.extra_metrics`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.team_metrics`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
+| `heavy` (`dev-health-worker`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.daily_finalize`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.daily_partition`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.capacity`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.complexity`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.dora`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
 | `heavy` (`dev-health-worker`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`report.execute_on_demand`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json)<br>`report.execute_scheduled`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
 | `heavy` (`dev-health-worker`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue.<br>`workgraph.build`: state=`go_default`, route=`river`, rollback_route=`celery` (migration-state.json) |
 | `ops` (`dev-health-worker`) | `coverage` | `system.sync_coverage_refresh` | 900 | 3 | — | — | Go-native -- no Celery predecessor<br>`system.sync_coverage_refresh`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
@@ -853,6 +853,59 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | --- | --- |
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
+
+### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: retired, not fixed (CHAOS-4243)
+
+Both kinds were registered handlers (`cmd/dev-health-worker/daily.go`) with
+zero producer anywhere — the fixed-schedule fanout (`internal/scheduler/fixed
+/producers.go`'s `RemainingMetricsFanoutProducer.byScheduleID`) and the
+post-sync scope switch (`cmd/dev-health-worker/sync_dispatch.go`'s
+`postSyncRemainingScope`) both skipped them, so no partition was ever
+enqueued in either environment.
+
+CHAOS-4243 investigated wiring a fixed-schedule entry for each (matching
+`complexity_daily_fanout`/`release_impact_daily_fanout`/
+`recommendations_daily_fanout`/`membership_backfill_daily_fanout`'s pattern)
+and rejected it: `daily_metrics_fanout`'s existing Python compatibility
+bridge (`daily.HTTPCompatibilityExecutor` →
+`/internal/worker/daily-metrics/v1/execute` → `_run_daily_direct` →
+`run_daily_metrics_job`,
+`ops/src/dev_health_ops/metrics/job_daily.py:729-1446`) already computes and
+writes every table both families targeted — `compute_team_wellbeing_metrics_daily`
+(team_metrics_daily), `_write_compounding_risk_for_day` (compounding_risk_daily),
+`compute_release_confidence`/`quality_drag`/`pipeline_stability`, and
+`run_benchmarking_for_day` (benchmarking_rollups) unconditionally on every
+partition call, plus `compute_ic_metrics_daily`/`compute_ic_landscape_rolling`
+on the paired finalize call. Wiring a second schedule that called
+`metrics.remaining.extra_metrics`/`team_metrics` (whose own handlers called
+the SAME `run_daily_metrics_job` a second time,
+`worker_metrics.py`'s now-deleted `_run_extra_metrics`/`_run_team_metrics`)
+would have double-computed and double-written against the same ClickHouse
+tables every night rather than closed a coverage gap.
+
+**These inline call sites in `job_daily.py`, driven by
+`daily_metrics_fanout`, are the producer of record for every table either
+retired family would have written** — nothing else covers them, and nothing
+needs to: `compute_team_wellbeing_metrics_daily` (team_metrics_daily),
+`_write_compounding_risk_for_day` (compounding_risk_daily),
+`compute_release_confidence`/`quality_drag`/`pipeline_stability`,
+`run_benchmarking_for_day` (benchmarking_rollups), and, on the finalize call,
+`compute_ic_metrics_daily`/`compute_ic_landscape_rolling`.
+
+Leaving the two kinds registered-but-unreachable was judged itself the
+broken state the audit exists to catch, so the orchestrator ruled retirement
+must mean full removal, not a dormant registration: the `Kind*` constants,
+their contract definitions, their `RemainingMetricsPartitionPayload`-typed
+Go args, the `cmd/dev-health-worker/daily.go` handler bindings, the
+`contracts/jobs/v1/registry.json`/`migration-state.json` rows, the
+`internal/jobs/metrics/remaining/families.json` family entries, the
+`worker_metrics.py` HTTP-bridge handlers and their scope-contract classes,
+and the `deploy/go-workers/deployment.json` kind list were all deleted in
+the same change. This means there is no new pathway to diagram: nothing
+changed in how `daily_metrics_fanout` reaches those tables — the two
+`metrics.remaining.*` kinds simply no longer exist, guarded by
+`TestExtraMetricsAndTeamMetricsWereFullyRetired` in
+`internal/scheduler/fixed/producers_test.go`.
 
 ## The native sync-dispatch coordinator pathway
 

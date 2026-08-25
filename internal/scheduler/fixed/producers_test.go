@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
@@ -661,6 +663,132 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 			if _, err := jobcontract.Decode(request.Kind, encoded); err != nil {
 				t.Fatalf("%s envelope failed strict decode: %v", id, err)
 			}
+		}
+	}
+}
+
+// remainingBridgeFamilies is the checked-in set of metrics.remaining families
+// whose DB CHECK constraint (ck_remaining_metric_run_family, migration for
+// remaining_metric_runs) and internal/jobs/metrics/remaining/families.json
+// both declare. dora is excluded: it has no fixed-schedule fanout by design
+// (post-sync only, CHAOS-4242 territory).
+var remainingBridgeFamiliesRequiringAFixedSchedule = []string{
+	"complexity", "release_impact", "recommendations", "membership_backfill",
+	"capacity",
+}
+
+func TestEveryGoDefaultRemainingFamilyHasAFixedScheduleProducer(t *testing.T) {
+	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
+	boundFamilies := make(map[string]bool, len(producer.byScheduleID))
+	for _, binding := range producer.byScheduleID {
+		boundFamilies[binding.Family] = true
+	}
+	for _, family := range remainingBridgeFamiliesRequiringAFixedSchedule {
+		if !boundFamilies[family] {
+			t.Errorf("remaining-metrics family %q has no fixed-schedule producer binding", family)
+		}
+	}
+}
+
+// TestRetiredKindsAreFullyRemoved is a table-driven guard sourced from
+// contracts/jobs/v1/registry.json's own retired_kinds ledger -- the same
+// ledger that makes CompareTrees treat a retired kind's absence as an
+// acknowledged retirement rather than a breaking regression (see
+// internal/jobcontract/compatibility.go). A ledger entry is not merely a
+// note: it is the CI-facing claim that the kind exists nowhere live. This
+// test proves the registry- and deployment-manifest halves of that claim for
+// EVERY retired kind, of any namespace, without hand-writing a new test per
+// kind. The remaining-metrics family inventory and fixed-schedule checks are
+// additionally proven for kinds under "metrics.remaining.*" -- the only
+// namespace this scheduler's producer or families.json can even name. A
+// retired kind outside that namespace fails this test loudly rather than
+// silently skipping its namespace-specific proof, so adding one here is a
+// required step for that future retirement, not an optional nicety. CHAOS-4243
+// retired metrics.remaining.extra_metrics/team_metrics this way -- registered
+// handlers with zero producer anywhere, whose writers duplicated
+// daily_metrics_fanout's existing unconditional compute (see the decision
+// note in docs/contribute/architecture/go-worker-runtime.md and the comment
+// block in internal/scheduler/fixed/inventory.go immediately above
+// recommendations_daily_fanout).
+func TestRetiredKindsAreFullyRemoved(t *testing.T) {
+	root := repositoryRoot(t)
+	contractRoot := filepath.Join(root, "contracts", "jobs", "v1")
+
+	registry, err := jobcontract.LoadRegistry(contractRoot)
+	if err != nil {
+		t.Fatalf("jobcontract.LoadRegistry() = %v", err)
+	}
+	if len(registry.RetiredKinds) == 0 {
+		t.Fatal("retired_kinds is empty; this guard has nothing to check -- remove it only alongside removing the ledger's purpose")
+	}
+
+	manifest, _, err := deploymentcontract.Load(
+		filepath.Join(root, "deploy", "go-workers", "deployment.json"), registry,
+	)
+	if err != nil {
+		t.Fatalf("deploymentcontract.Load() = %v", err)
+	}
+
+	inventory, err := remaining.Load()
+	if err != nil {
+		t.Fatalf("remaining.Load() = %v", err)
+	}
+
+	producer, _, _ := fanoutProducer(t, fixedOrganizationLister{identifiers: []string{testOrgA}})
+
+	registeredKinds := make(map[string]struct{}, len(registry.Jobs))
+	for _, job := range registry.Jobs {
+		registeredKinds[job.Kind] = struct{}{}
+	}
+	deployedKinds := make(map[string]struct{})
+	for _, process := range manifest.Processes {
+		for _, kind := range process.JobKinds {
+			deployedKinds[kind] = struct{}{}
+		}
+	}
+	familyNames := make(map[string]struct{}, len(inventory.Families))
+	for _, family := range inventory.Families {
+		familyNames[family.Name] = struct{}{}
+	}
+	scheduledFamilies := make(map[string]struct{}, len(producer.byScheduleID))
+	for _, binding := range producer.byScheduleID {
+		scheduledFamilies[binding.Family] = struct{}{}
+	}
+
+	const remainingMetricsPrefix = "metrics.remaining."
+	for _, retired := range registry.RetiredKinds {
+		// Registry and deployment-manifest checks are namespace-agnostic and
+		// apply to every retired kind.
+		if _, exists := registeredKinds[retired.Kind]; exists {
+			t.Errorf("retired kind %q still exists in the registry; CHAOS-4243-style retirement requires full removal, not a dormant registration", retired.Kind)
+		}
+		if _, exists := deployedKinds[retired.Kind]; exists {
+			t.Errorf("retired kind %q still appears in deploy/go-workers/deployment.json's job_kinds", retired.Kind)
+		}
+
+		// The remaining-metrics family inventory and the fixed schedule are
+		// scoped to the "metrics.remaining.*" namespace by construction --
+		// neither has any concept of a kind outside it, so checking them for
+		// one would silently pass for the wrong reason (no matching entry
+		// could ever exist) rather than actually proving removal. A future
+		// retirement outside this namespace needs its OWN namespace-specific
+		// absence checks added here; this guard does not become vacuously
+		// complete just because a kind is listed in retired_kinds.
+		if !strings.HasPrefix(retired.Kind, remainingMetricsPrefix) {
+			t.Errorf(
+				"retired kind %q is outside the metrics.remaining.* namespace this guard covers; "+
+					"add a namespace-specific absence check for it in TestRetiredKindsAreFullyRemoved "+
+					"before relying on this test to prove its removal",
+				retired.Kind,
+			)
+			continue
+		}
+		family := strings.TrimPrefix(retired.Kind, remainingMetricsPrefix)
+		if _, exists := familyNames[family]; exists {
+			t.Errorf("retired family %q still exists in internal/jobs/metrics/remaining/families.json", family)
+		}
+		if _, exists := scheduledFamilies[family]; exists {
+			t.Errorf("retired family %q still has a fixed-schedule producer binding", family)
 		}
 	}
 }

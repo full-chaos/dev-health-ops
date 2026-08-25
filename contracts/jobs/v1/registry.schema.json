@@ -4,7 +4,7 @@
   "title": "Dev Health bounded job registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "contract_family", "envelope_schema", "version_policy", "jobs"],
+  "required": ["schema_version", "contract_family", "envelope_schema", "version_policy", "jobs", "retired_kinds"],
   "properties": {
     "schema_version": {"const": 1},
     "contract_family": {"const": "dev-health.jobs"},
@@ -23,6 +23,10 @@
       "type": "array",
       "minItems": 1,
       "items": {"$ref": "#/$defs/job"}
+    },
+    "retired_kinds": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/retired_kind"}
     }
   },
   "$defs": {
@@ -64,6 +68,18 @@
         "organization_scope": {"enum": ["global", "tenant"]},
         "schema_versions": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "string"}}, "additionalProperties": false},
         "fixtures": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "array", "minItems": 1, "items": {"type": "string"}}}, "additionalProperties": false}
+      }
+    },
+    "retired_kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "retired_on", "reason", "ticket", "replacement"],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "maxLength": 96},
+        "retired_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "reason": {"type": "string", "minLength": 1},
+        "ticket": {"type": "string", "pattern": "^[A-Z]+-[0-9]+$"},
+        "replacement": {"type": "string", "minLength": 1}
       }
     }
   }

@@ -36,11 +36,9 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		KindRemainingCapacity,
 		KindRemainingComplexity,
 		KindRemainingDORA,
-		KindRemainingExtraMetrics,
 		KindRemainingMembership,
 		KindRemainingRecommendations,
 		KindRemainingReleaseImpact,
-		KindRemainingTeamMetrics,
 	} {
 		tests = append(tests, struct {
 			kind    string

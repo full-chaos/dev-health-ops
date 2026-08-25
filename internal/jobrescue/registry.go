@@ -135,16 +135,12 @@ func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Des
 		return add[jobruntime.RemainingComplexityArgs](workers, descriptor)
 	case jobcontract.KindRemainingDORA:
 		return add[jobruntime.RemainingDORAArgs](workers, descriptor)
-	case jobcontract.KindRemainingExtraMetrics:
-		return add[jobruntime.RemainingExtraMetricsArgs](workers, descriptor)
 	case jobcontract.KindRemainingMembership:
 		return add[jobruntime.RemainingMembershipArgs](workers, descriptor)
 	case jobcontract.KindRemainingRecommendations:
 		return add[jobruntime.RemainingRecommendationsArgs](workers, descriptor)
 	case jobcontract.KindRemainingReleaseImpact:
 		return add[jobruntime.RemainingReleaseImpactArgs](workers, descriptor)
-	case jobcontract.KindRemainingTeamMetrics:
-		return add[jobruntime.RemainingTeamMetricsArgs](workers, descriptor)
 	case jobcontract.KindBillingNotification:
 		return add[jobruntime.BillingNotificationArgs](workers, descriptor)
 	case jobcontract.KindWebhookDelivery:

@@ -17,11 +17,9 @@ var (
 	_ ContractArgs                = RemainingCapacityArgs{}
 	_ ContractArgs                = RemainingComplexityArgs{}
 	_ ContractArgs                = RemainingDORAArgs{}
-	_ ContractArgs                = RemainingExtraMetricsArgs{}
 	_ ContractArgs                = RemainingMembershipArgs{}
 	_ ContractArgs                = RemainingRecommendationsArgs{}
 	_ ContractArgs                = RemainingReleaseImpactArgs{}
-	_ ContractArgs                = RemainingTeamMetricsArgs{}
 	_ river.Worker[HeartbeatArgs] = (*Adapter[HeartbeatArgs])(nil)
 )
 

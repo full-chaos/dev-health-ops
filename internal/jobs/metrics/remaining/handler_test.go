@@ -144,6 +144,50 @@ func TestPartitionHandlerKeepsAGenuinelyTransientComputeFailureRetryable(t *test
 	}
 }
 
+// TestPartitionHandlerRecordsAZeroRowCompletionDistinctly is the CHAOS-4243
+// acceptance case at the handler layer: a reported rows_written (including an
+// explicit zero) must be embedded in the durable CompletePartition result so
+// a zero-row completion is never stored identically to
+// "compatibility_execution:<id>", the same string a real write produces.
+func TestPartitionHandlerRecordsAZeroRowCompletionDistinctly(t *testing.T) {
+	store := &handlerStore{
+		run: Run{
+			ID: handlerRunID, OrganizationID: handlerOrgID,
+			Family: "release_impact", Status: "running",
+		},
+		claim: handlerClaim(),
+	}
+	zero := 0
+	compatibility := &handlerCompatibility{delay: 5 * time.Millisecond, rowsWritten: &zero}
+	handler, err := NewPartitionHandler[jobruntime.RemainingReleaseImpactArgs](
+		store, compatibility, "release_impact",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(t.Context(), releaseImpactExecution()); err != nil {
+		t.Fatal(err)
+	}
+	want := "compatibility_execution:" + handlerPartitionID + ":rows_written=0"
+	if store.evidence != want {
+		t.Fatalf("evidence = %q, want %q", store.evidence, want)
+	}
+}
+
+func TestCompatibilityCompletionResult(t *testing.T) {
+	if got := compatibilityCompletionResult("p1", CompatibilityOutcome{}); got != "compatibility_execution:p1" {
+		t.Fatalf("nil RowsWritten = %q, want unqualified format", got)
+	}
+	five := 5
+	if got := compatibilityCompletionResult("p1", CompatibilityOutcome{RowsWritten: &five}); got != "compatibility_execution:p1:rows_written=5" {
+		t.Fatalf("RowsWritten=5 = %q", got)
+	}
+	zero := 0
+	if got := compatibilityCompletionResult("p1", CompatibilityOutcome{RowsWritten: &zero}); got != "compatibility_execution:p1:rows_written=0" {
+		t.Fatalf("RowsWritten=0 = %q, must be distinct from the unqualified format", got)
+	}
+}
+
 // CHAOS-4002: handler.go has a third releaseClaim discard site (LoadRun
 // failure) that TestPartitionHandlerRejectsCrossFamilyExecution (validation
 // mismatch) and TestPartitionHandlerLeaseLossCancelsCompatibility (lease loss
@@ -215,6 +259,29 @@ func capacityExecution() *jobruntime.Execution[jobruntime.RemainingCapacityArgs]
 	}
 }
 
+func releaseImpactExecution() *jobruntime.Execution[jobruntime.RemainingReleaseImpactArgs] {
+	organizationID := handlerOrgID
+	domain := jobcontract.DomainLink{
+		Type: "remaining_metric_partition",
+		ID:   handlerPartitionID,
+	}
+	args := jobruntime.RemainingReleaseImpactArgs{
+		EnvelopeArgs: jobruntime.EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]{
+			ContractVersion: jobcontract.ContractVersionV1,
+			OrganizationID:  &organizationID,
+			CorrelationID:   "remaining:" + handlerRunID,
+			IdempotencyKey:  "remaining:partition:" + handlerPartitionID,
+			Domain:          domain,
+			Payload: jobcontract.RemainingMetricsPartitionPayload{
+				PartitionID: handlerPartitionID,
+			},
+		},
+	}
+	return &jobruntime.Execution[jobruntime.RemainingReleaseImpactArgs]{
+		Args: args, Envelope: args.ContractEnvelope(), OrganizationID: &organizationID,
+	}
+}
+
 func handlerClaim() *Claim {
 	return &Claim{
 		Partition:     Partition{ID: handlerPartitionID, RunID: handlerRunID},
@@ -269,28 +336,31 @@ type handlerCompatibility struct {
 	// uses this to simulate a native executor's precondition failure
 	// (ErrInvalidState-wrapped) without needing a real ClickHouse/scope.
 	computeErr error
+	// rowsWritten is returned verbatim as the outcome's RowsWritten. nil
+	// (the zero value) keeps existing callers' "not applicable" behavior.
+	rowsWritten *int
 }
 
 func (executor *handlerCompatibility) ComputePartition(
 	ctx context.Context,
 	_ Run,
 	_ Partition,
-) error {
+) (CompatibilityOutcome, error) {
 	if executor.computeErr != nil {
-		return executor.computeErr
+		return CompatibilityOutcome{}, executor.computeErr
 	}
 	if executor.waitForCancellation {
 		<-ctx.Done()
 		executor.canceled = true
-		return ctx.Err()
+		return CompatibilityOutcome{}, ctx.Err()
 	}
 	timer := time.NewTimer(executor.delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		return nil
+		return CompatibilityOutcome{RowsWritten: executor.rowsWritten}, nil
 	case <-ctx.Done():
 		executor.canceled = true
-		return ctx.Err()
+		return CompatibilityOutcome{}, ctx.Err()
 	}
 }

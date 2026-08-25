@@ -24,6 +24,19 @@ _CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 _MODULE = "dev_health_ops.alembic.versions.0066_activate_river_worker_job_routes"
+# CHAOS-4243: retired after this revision was authored. 0110 (application_schema
+# branch) deletes their worker_job_routes rows outright whenever it applies,
+# independent of whether this file's Celery-to-River cutover (river_cutover
+# branch) has run at all. Every assertion below that captures "all of
+# migration._KINDS" as an expected route set must exclude these two once a
+# test's own upgrade path has reached 0110.
+_RETIRED_KINDS = frozenset(
+    {"metrics.remaining.extra_metrics", "metrics.remaining.team_metrics"}
+)
+
+
+def _live_kinds(migration: ModuleType) -> list[str]:
+    return sorted(kind for kind in migration._KINDS if kind not in _RETIRED_KINDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,10 +178,15 @@ def test_application_migrator_applies_safe_schema_without_0066_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0109"}
+    assert _revisions(migrated_to_0065.engine) == {"0110"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _table_exists(migrated_to_0065.engine, "dev_conversations")
-    assert _routes(migrated_to_0065.engine, migration) == before
+    # 0110 deletes the two retired kinds' routes regardless of the Celery-to-
+    # River cutover opt-in -- it is on the application_schema branch, not
+    # gated behind DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER.
+    assert _routes(migrated_to_0065.engine, migration) == [
+        row for row in before if row[0] not in _RETIRED_KINDS
+    ]
 
 
 def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
@@ -189,18 +207,30 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0109"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0110"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
+    # 0110 deleted the two retired kinds' routes on this same upgrade.
     assert _routes(migrated_to_0065.engine, migration) == [
-        (kind, "river", False, 2) for kind in sorted(migration._KINDS)
+        (kind, "river", False, 2) for kind in _live_kinds(migration)
     ]
 
     command.downgrade(_migration_config(), "0065")
 
     assert _revisions(migrated_to_0065.engine) == {"0065"}
-    assert _routes(migrated_to_0065.engine, migration) == [
-        (kind, "celery", False, 3) for kind in sorted(migration._KINDS)
-    ]
+    # 0110's downgrade re-seeds the two retired kinds at generation 1
+    # (celery, unpaused) -- it does not know about 0066's own generation
+    # counter, and by the time 0066's downgrade runs they are already on
+    # celery, so _retarget has nothing pending for them and leaves them at
+    # generation 1 while every other kind, retargeted twice (0066 upgrade,
+    # then 0066 downgrade), lands on generation 3.
+    routes = _routes(migrated_to_0065.engine, migration)
+    by_kind = {row[0]: row for row in routes}
+    assert {kind: by_kind[kind][1:] for kind in _live_kinds(migration)} == {
+        kind: ("celery", False, 3) for kind in _live_kinds(migration)
+    }
+    assert {kind: by_kind[kind][1:] for kind in _RETIRED_KINDS} == {
+        kind: ("celery", False, 1) for kind in _RETIRED_KINDS
+    }
 
 
 def test_application_migrator_opt_in_applies_both_heads(
@@ -214,10 +244,11 @@ def test_application_migrator_opt_in_applies_both_heads(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0109"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0110"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
+    # 0110 deleted the two retired kinds' routes on this same upgrade.
     assert _routes(migrated_to_0065.engine, migration) == [
-        (kind, "river", False, 2) for kind in sorted(migration._KINDS)
+        (kind, "river", False, 2) for kind in _live_kinds(migration)
     ]
 
 
@@ -255,8 +286,14 @@ def test_old_linear_0071_provenance_converges_to_both_heads(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0109"}
-    assert _routes(migrated_to_0065.engine, migration) == before
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0110"}
+    # 0110 (CHAOS-4243, authored well after this legacy-provenance scenario)
+    # is new to this run too and deletes the two retired kinds' routes --
+    # every other route is unchanged, exactly as the docstring above expects
+    # for 0066's own idempotent re-application.
+    assert _routes(migrated_to_0065.engine, migration) == [
+        row for row in before if row[0] not in _RETIRED_KINDS
+    ]
 
 
 def test_0066_real_postgres_locks_routes_before_retargeting(

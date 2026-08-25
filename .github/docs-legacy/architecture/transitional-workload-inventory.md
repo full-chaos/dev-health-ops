@@ -338,6 +338,27 @@ When you add, remove, or re-home a legacy surface:
    dangling with a stale anchor.
 4. Re-run the gate and `pytest tests/workers/test_transitional_inventory_contract.py`.
 
+**Removing a `registry_kind` row is a separate, additional acknowledgement.**
+Deleting a row here tells the CUT-01 census the surface is no longer
+untracked; it says nothing to `cmd/worker-contractcheck`'s `compare` step
+(`internal/jobcontract/compatibility.go`), which independently treats any
+registered kind that disappears from `contracts/jobs/v1/registry.json`
+between merged commits as a breaking regression, on purpose -- most removals
+of a live kind ARE a regression. To retire a kind that genuinely has zero
+producer anywhere (CHAOS-4243 established that "registered but unbound" is
+itself the broken state, not an acceptable final one), add a matching entry
+to registry.json's own `retired_kinds` array in the same commit that deletes
+the kind: `{kind, retired_on, reason, ticket, replacement}`, where
+`replacement` names the file:line of whatever inline compute already covers
+the kind's tables (there always is one, or the kind was doing real work and
+should not be retired). `CompareTrees` treats a removal as acknowledged only
+when the kind appears there; `TestRetiredKindsAreFullyRemoved`
+(`internal/scheduler/fixed/producers_test.go`) is table-driven off that same
+array and fails if the kind still exists in the registry, the deployment
+manifest, `internal/jobs/metrics/remaining/families.json`, or the fixed
+schedule -- so one ledger entry is both the compatibility-gate waiver and the
+full-removal proof for every future retirement, not just this one.
+
 When the whole inventory is finally decommissioned (TRD §8.3: "removed with
 the final Celery cleanup after CI proves no legacy surface remains"), delete
 this document, the contract file, the CI script, and its test module in the

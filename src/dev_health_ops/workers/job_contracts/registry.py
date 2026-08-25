@@ -25,11 +25,9 @@ from .models import (
     KIND_REMAINING_CAPACITY,
     KIND_REMAINING_COMPLEXITY,
     KIND_REMAINING_DORA,
-    KIND_REMAINING_EXTRA_METRICS,
     KIND_REMAINING_MEMBERSHIP,
     KIND_REMAINING_RECOMMENDATIONS,
     KIND_REMAINING_RELEASE_IMPACT,
-    KIND_REMAINING_TEAM_METRICS,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
@@ -157,8 +155,27 @@ def load_registry(root: Path | None = None) -> Registry:
         "envelope_schema",
         "version_policy",
         "jobs",
+        "retired_kinds",
     }:
         raise ContractDecodeError("registry shape is invalid")
+    retired_kinds = document["retired_kinds"]
+    if not isinstance(retired_kinds, list):
+        raise ContractDecodeError("registry retired_kinds is invalid")
+    for retired in retired_kinds:
+        if not isinstance(retired, dict) or set(retired) != {
+            "kind",
+            "retired_on",
+            "reason",
+            "ticket",
+            "replacement",
+        }:
+            raise ContractDecodeError("registry retired kind must be an object")
+        if not all(
+            isinstance(retired[field], str) and retired[field] for field in retired
+        ):
+            raise ContractDecodeError(
+                "registry retired kind is missing a required field"
+            )
     if (
         document["schema_version"] != 1
         or document["contract_family"] != "dev-health.jobs"
@@ -249,11 +266,9 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_REMAINING_CAPACITY: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_COMPLEXITY: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_DORA: (CONTRACT_VERSION_V1,),
-        KIND_REMAINING_EXTRA_METRICS: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_MEMBERSHIP: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_RECOMMENDATIONS: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_RELEASE_IMPACT: (CONTRACT_VERSION_V1,),
-        KIND_REMAINING_TEAM_METRICS: (CONTRACT_VERSION_V1,),
         KIND_SYNC_PROVIDER_UNIT: (CONTRACT_VERSION_V1,),
         KIND_TEAM_AUTOIMPORT: (CONTRACT_VERSION_V1,),
     }

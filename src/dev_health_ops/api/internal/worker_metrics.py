@@ -36,11 +36,9 @@ from dev_health_ops.metrics.remaining_scope_contract import (
     CapacityScope,
     ComplexityScope,
     DoraScope,
-    ExtraMetricsScope,
     MembershipBackfillScope,
     RecommendationsScope,
     ReleaseImpactScope,
-    TeamMetricsScope,
     parse_scope,
 )
 
@@ -1021,59 +1019,14 @@ async def _run_membership(
             repo_ids=scope.repo_ids or None,
         ),
     )
-    return {"family": execution.family, "stats": stats}
-
-
-async def _run_extra_metrics(
-    execution: _Execution, scope: ExtraMetricsScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
-    from dev_health_ops.metrics.job_compounding_risk import run_compounding_risk_job
-    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-    db_url = require_clickhouse_uri()
-    target_day = date.fromisoformat(scope.day)
-    await run_compounding_risk_job(
-        db_url=db_url,
-        day=target_day,
-        backfill_days=scope.backfill_days,
-        org_id=execution.organization_id,
-    )
-    sink = ClickHouseMetricsSink(db_url)
-    try:
-        setattr(sink, "org_id", execution.organization_id)
-        total = 0
-        for offset in range(scope.backfill_days):
-            current = target_day - timedelta(days=offset)
-            outputs = await run_in_threadpool(
-                run_benchmarking_for_day,
-                sink,
-                as_of_day=current,
-                computed_at=datetime.now(timezone.utc),
-                org_id=execution.organization_id,
-            )
-            total += sum(len(rows) for rows in outputs.values())
-    finally:
-        sink.close()
-    return {"family": execution.family, "benchmark_records": total}
-
-
-async def _run_team_metrics(
-    execution: _Execution, scope: TeamMetricsScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_daily import run_daily_metrics_job
-
-    await run_daily_metrics_job(
-        db_url=require_clickhouse_uri(),
-        day=date.fromisoformat(scope.day),
-        backfill_days=scope.backfill_days,
-        repo_id=None,
-        repo_name=None,
-        sink="clickhouse",
-        provider="auto",
-        org_id=execution.organization_id,
-    )
-    return {"family": execution.family, "day": scope.day}
+    # CHAOS-4243: stats["memberships"] is backfill_memberships's own total
+    # membership-row count; surfaced as a flat top-level int (rather than
+    # only nested in `stats`) so _evidence_row_count can report it.
+    return {
+        "family": execution.family,
+        "stats": stats,
+        "memberships_written": stats.get("memberships", 0),
+    }
 
 
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
@@ -1084,8 +1037,6 @@ _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "release_impact": _run_release_impact,
     "recommendations": _run_recommendations,
     "membership_backfill": _run_membership,
-    "extra_metrics": _run_extra_metrics,
-    "team_metrics": _run_team_metrics,
 }
 
 
@@ -1224,11 +1175,66 @@ async def _run_until_client_disconnect(
         await asyncio.gather(process_task, disconnect_task, return_exceptions=True)
 
 
+# CHAOS-4243: the Go compatibility bridge (internal/jobs/metrics/remaining/
+# compatibility_http.go) parses an optional rows_written field so a
+# zero-row completion is never stored identically to a real write. This maps
+# each remaining-metrics family to the evidence key (see the runners in
+# _REMAINING_RUNNERS below) that carries a genuine row count. A family absent
+# here, or whose evidence value isn't a plain int, gets no rows_written key
+# at all -- "not applicable", never coerced to a false 0.
+#
+# dora and capacity's native Go executors report their own rows_written
+# through CompatibilityOutcome directly (dora_native.go/capacity_native.go)
+# and never call this HTTP bridge, so they are not listed here.
+#
+# complexity is a DELIBERATE GAP, not an oversight: run_complexity_db_job
+# (job_complexity_db.py) returns a process exit code, not a row count, which
+# would need a return-contract change to the underlying compute function
+# itself, a larger and riskier change than this ticket's wire-contract fix.
+# It stays silently "success" with no rows_written signal until that
+# follow-up lands.
+#
+# extra_metrics and team_metrics no longer exist: both were registered
+# handlers with zero producer anywhere (CHAOS-4243), retired (removed, not
+# left dormant) rather than fixed. See
+# docs/contribute/architecture/go-worker-runtime.md for the decision note
+# naming the inline compute sites that already cover every table they would
+# have written.
+#
+# recommendations is ALSO a deliberate omission (CHAOS-4243 codex round 3):
+# _compute_recommendations_for_org's docstring is explicit that its int
+# return is "the number of *fired* recommendations written (tombstones
+# excluded)" -- the function persists the FULL rule state per team, fired
+# rows AND explicit fired=False tombstones, so a run can write many rows
+# while `fired` reads 0. Mapping "fired" here would report a misleading
+# rows_written (a wrong non-zero-looking-like-zero case), which is worse
+# than reporting none at all. Fixing this properly needs
+# _compute_recommendations_for_org to return the true persisted count
+# (len(records)) alongside fired_count -- a signature change with several
+# existing test call sites (tests/test_recommendations_task.py), deferred
+# as a separate, larger change.
+_EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
+    "capacity": "forecast_count",
+    "release_impact": "records_written",
+    "membership_backfill": "memberships_written",
+}
+
+
+def _evidence_row_count(family: str, evidence: dict[str, Any]) -> int | None:
+    key = _EVIDENCE_ROW_COUNT_KEYS.get(family)
+    if key is None:
+        return None
+    value = evidence.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 async def _execute(
     session: AsyncSession,
     execution: _Execution,
     connection: Request,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     reservation = await _reserve_execution(session, execution)
     if reservation == "skipped":
         return {"status": "skipped", "execution_id": str(execution.id)}
@@ -1250,7 +1256,12 @@ async def _execute(
             },
         ) from exc
     await _mark_succeeded(session, execution, evidence)
-    return {"status": "success", "execution_id": str(execution.id)}
+    response: dict[str, Any] = {"status": "success", "execution_id": str(execution.id)}
+    if execution.worker_kind == "remaining":
+        rows_written = _evidence_row_count(execution.family, evidence)
+        if rows_written is not None:
+            response["rows_written"] = rows_written
+    return response
 
 
 @router.post("/daily-metrics/v1/execute")
@@ -1259,7 +1270,7 @@ async def execute_daily_metrics(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     connection: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     authorize_worker_bridge(authorization)
     execution = await _load_daily_execution(session, request)
     return await _execute(session, execution, connection)
@@ -1271,7 +1282,7 @@ async def execute_remaining_metrics(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     connection: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     authorize_worker_bridge(authorization)
     execution = await _load_remaining_execution(session, request)
     return await _execute(session, execution, connection)

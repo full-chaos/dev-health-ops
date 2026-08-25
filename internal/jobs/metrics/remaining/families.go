@@ -18,11 +18,9 @@ var expectedFamilies = []string{
 	"capacity",
 	"complexity",
 	"dora",
-	"extra_metrics",
 	"membership_backfill",
 	"recommendations",
 	"release_impact",
-	"team_metrics",
 }
 
 type Inventory struct {

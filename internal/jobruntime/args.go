@@ -248,18 +248,6 @@ func (args RemainingDORAArgs) ContractEnvelope() jobcontract.Envelope {
 	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
 }
 
-type RemainingExtraMetricsArgs struct {
-	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
-}
-
-func (RemainingExtraMetricsArgs) Kind() string { return jobcontract.KindRemainingExtraMetrics }
-func (RemainingExtraMetricsArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
-}
-func (args RemainingExtraMetricsArgs) ContractEnvelope() jobcontract.Envelope {
-	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
-}
-
 type RemainingMembershipArgs struct {
 	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
 }
@@ -295,18 +283,6 @@ func (RemainingReleaseImpactArgs) SupportedContractVersions() []int {
 	return []int{jobcontract.ContractVersionV1}
 }
 func (args RemainingReleaseImpactArgs) ContractEnvelope() jobcontract.Envelope {
-	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
-}
-
-type RemainingTeamMetricsArgs struct {
-	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
-}
-
-func (RemainingTeamMetricsArgs) Kind() string { return jobcontract.KindRemainingTeamMetrics }
-func (RemainingTeamMetricsArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
-}
-func (args RemainingTeamMetricsArgs) ContractEnvelope() jobcontract.Envelope {
 	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
 }
 

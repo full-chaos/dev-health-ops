@@ -198,24 +198,6 @@ class MembershipBackfillScope(_StrictScope):
         return canonical
 
 
-class _DailyFamilyScope(_StrictScope):
-    day: str
-    backfill_days: int = Field(ge=1, le=30)
-
-    @field_validator("day")
-    @classmethod
-    def validate_day(cls, value: str) -> str:
-        return _date_text(value)
-
-
-class ExtraMetricsScope(_DailyFamilyScope):
-    _family = "extra_metrics"
-
-
-class TeamMetricsScope(_DailyFamilyScope):
-    _family = "team_metrics"
-
-
 SCOPE_MODELS: dict[str, type[_StrictScope]] = {
     model._family: model
     for model in (
@@ -225,8 +207,6 @@ SCOPE_MODELS: dict[str, type[_StrictScope]] = {
         ReleaseImpactScope,
         RecommendationsScope,
         MembershipBackfillScope,
-        ExtraMetricsScope,
-        TeamMetricsScope,
     )
 }
 

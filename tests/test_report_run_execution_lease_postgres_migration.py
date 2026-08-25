@@ -241,4 +241,4 @@ def test_0098_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert _INDEX in _index_map(migrated_to_0097.engine)
-    assert _revisions(migrated_to_0097.engine) == {"0109"}
+    assert _revisions(migrated_to_0097.engine) == {"0110"}

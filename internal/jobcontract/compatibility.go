@@ -40,9 +40,21 @@ func CompareTrees(baseRoot, candidateRoot string) ([]BreakingChange, error) {
 	for _, job := range candidateRegistry.Jobs {
 		candidates[job.Kind] = job
 	}
+	// retired is the candidate's own acknowledgement, in the same tree as the
+	// removal, that a kind's absence is a reviewed retirement rather than a
+	// silent regression. A kind must carry this entry to make its removal
+	// non-breaking -- the default stays "removal is breaking" for every kind
+	// that doesn't.
+	retired := make(map[string]struct{}, len(candidateRegistry.RetiredKinds))
+	for _, kind := range candidateRegistry.RetiredKinds {
+		retired[kind.Kind] = struct{}{}
+	}
 	for _, baseJob := range baseRegistry.Jobs {
 		candidateJob, ok := candidates[baseJob.Kind]
 		if !ok {
+			if _, acknowledged := retired[baseJob.Kind]; acknowledged {
+				continue
+			}
 			changes = append(changes, BreakingChange{Path: baseJob.Kind, Reason: "registered kind was removed"})
 			continue
 		}

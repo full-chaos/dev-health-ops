@@ -120,6 +120,24 @@ _KINDS = (
     "workgraph.build",
 )
 
+# CHAOS-4243 (added after this revision was authored): extra_metrics/
+# team_metrics were retired -- registered handlers with zero producer
+# anywhere -- and 0110 deletes their worker_job_routes rows outright rather
+# than leave them dormant. In any environment that replays the full
+# migration history including this revision's opt-in cutover (live-e2e's
+# fresh-database CI run is exactly that), Alembic's topological order across
+# independent branches is not guaranteed to run this revision before 0110,
+# so their rows may already be gone by the time this runs. _KINDS itself
+# stays exactly what it recorded when this revision was authored -- do not
+# remove them from it, that would misrepresent what 0064 seeded and this
+# revision retargeted at the time. This is the one, narrowly-scoped
+# exception to "a later contract edit must not silently change what this
+# revision did": the readiness check tolerates their absence, nothing else
+# about this revision's behavior changes.
+_RETIRED_SINCE_THIS_REVISION = frozenset(
+    {"metrics.remaining.extra_metrics", "metrics.remaining.team_metrics"}
+)
+
 
 def _routes() -> TableClause:
     return sa.table(
@@ -162,7 +180,11 @@ def _retarget(target: str, accepted: frozenset[str]) -> None:
     routes = _routes()
     existing = _existing_rows(routes)
 
-    missing = [kind for kind in _KINDS if kind not in existing]
+    missing = [
+        kind
+        for kind in _KINDS
+        if kind not in existing and kind not in _RETIRED_SINCE_THIS_REVISION
+    ]
     if missing:
         # 0064 seeds a row for every checked-in kind, including deferred ones.
         # A gap here means the baseline never ran or a row was deleted, and

@@ -34,6 +34,19 @@ type ConcurrencyPolicy struct {
 	Limit int    `json:"limit"`
 }
 
+// RetiredKind is an acknowledged, reviewed removal of a previously
+// registered job kind. Its presence is what makes CompareTrees treat that
+// kind's absence from the candidate registry as an intentional retirement
+// rather than a breaking regression -- see CompareTrees and
+// TestRetiredKindsAreFullyRemoved (internal/scheduler/fixed).
+type RetiredKind struct {
+	Kind        string `json:"kind"`
+	RetiredOn   string `json:"retired_on"`
+	Reason      string `json:"reason"`
+	Ticket      string `json:"ticket"`
+	Replacement string `json:"replacement"`
+}
+
 type JobDefinition struct {
 	Kind              string              `json:"kind"`
 	CurrentVersion    int                 `json:"current_version"`
@@ -62,6 +75,7 @@ type Registry struct {
 	EnvelopeSchema string          `json:"envelope_schema"`
 	VersionPolicy  VersionPolicy   `json:"version_policy"`
 	Jobs           []JobDefinition `json:"jobs"`
+	RetiredKinds   []RetiredKind   `json:"retired_kinds"`
 }
 
 type MigrationJob struct {
@@ -198,6 +212,28 @@ func (registry Registry) validate(root string, checkCompiledTypes bool) error {
 	}
 	if checkCompiledTypes && len(seen) != len(definitions) {
 		return errors.New("Go contract type has no registry entry")
+	}
+
+	retiredSeen := make(map[string]struct{}, len(registry.RetiredKinds))
+	previousRetired := ""
+	for _, retired := range registry.RetiredKinds {
+		if !kindPattern.MatchString(retired.Kind) || len(retired.Kind) > 96 {
+			return fmt.Errorf("invalid retired kind %q", retired.Kind)
+		}
+		if retired.Kind <= previousRetired {
+			return errors.New("retired_kinds must be sorted by kind")
+		}
+		previousRetired = retired.Kind
+		if _, exists := retiredSeen[retired.Kind]; exists {
+			return fmt.Errorf("duplicate retired kind %q", retired.Kind)
+		}
+		retiredSeen[retired.Kind] = struct{}{}
+		if retired.RetiredOn == "" || retired.Reason == "" || retired.Ticket == "" || retired.Replacement == "" {
+			return fmt.Errorf("retired kind %s is missing a required field", retired.Kind)
+		}
+		if _, active := seen[retired.Kind]; active {
+			return fmt.Errorf("retired kind %s is still a registered job", retired.Kind)
+		}
 	}
 	return nil
 }
@@ -495,11 +531,9 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindRemainingCapacity:        {"partition_id"},
 		KindRemainingComplexity:      {"partition_id"},
 		KindRemainingDORA:            {"partition_id"},
-		KindRemainingExtraMetrics:    {"partition_id"},
 		KindRemainingMembership:      {"partition_id"},
 		KindRemainingRecommendations: {"partition_id"},
 		KindRemainingReleaseImpact:   {"partition_id"},
-		KindRemainingTeamMetrics:     {"partition_id"},
 		KindWorkGraphBuild:           {"request_id"},
 		KindInvestmentMaterialize:    {"request_id"},
 		KindInvestmentDispatch:       {"request_id"},

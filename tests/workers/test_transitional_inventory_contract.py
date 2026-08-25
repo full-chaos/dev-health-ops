@@ -76,8 +76,13 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # `getattr(signature, "apply_async")()` call site, the publish that drove
     # the Celery fallthrough for provider units. The fallthrough is deleted,
     # so a claimed unit is either staged in the durable sync.provider_unit
-    # outbox or terminalized -- there is no second runtime to publish to.
-    assert inventory["row_count"] == 102
+    # outbox or terminalized -- there is no second runtime to publish to,
+    # = 102, - 2 removed under CHAOS-4243: the metrics.remaining.extra_metrics/
+    # team_metrics registry_kind rows. Both kinds were registered handlers
+    # with zero producer anywhere; retirement meant deleting them entirely
+    # from the registry and the worker, not leaving them dormant, so their
+    # rows are removed rather than re-anchored.
+    assert inventory["row_count"] == 100
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

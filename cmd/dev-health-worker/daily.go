@@ -175,12 +175,18 @@ func buildDailyWorker(
 			remainingLeaseObservers = append(remainingLeaseObservers, leaseObserver)
 		}
 		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain, remainingLeaseObservers...)
+		var compatibilityObserver remaining.CompatibilityObserver
+		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
+			compatibilityObserver = candidate
+		}
 		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
 			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			remaining.HTTPCompatibilityConfig{
 				Endpoint:              baseURL + "/internal/worker/remaining-metrics/v1/execute",
 				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
 				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
+				Logger:                logger,
+				Observer:              compatibilityObserver,
 			},
 		)
 		budget, budgetErr := remaining.NewBudget(inventory)
@@ -330,10 +336,6 @@ func buildDailyWorker(
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingDORAArgs](
 					workers, registry, spec, store, doraExecutor, dependencies, family.Name,
 				)
-			case jobcontract.KindRemainingExtraMetrics:
-				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingExtraMetricsArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
-				)
 			case jobcontract.KindRemainingMembership:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingMembershipArgs](
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
@@ -344,10 +346,6 @@ func buildDailyWorker(
 				)
 			case jobcontract.KindRemainingReleaseImpact:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
-				)
-			case jobcontract.KindRemainingTeamMetrics:
-				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingTeamMetricsArgs](
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
 				)
 			default:

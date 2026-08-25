@@ -60,16 +60,6 @@ type membershipScope struct {
 	Version int      `json:"version"`
 	RepoIDs []string `json:"repo_ids,omitempty"`
 }
-type extraMetricsScope struct {
-	Version      int    `json:"version"`
-	Day          string `json:"day"`
-	BackfillDays int    `json:"backfill_days"`
-}
-type teamMetricsScope struct {
-	Version      int    `json:"version"`
-	Day          string `json:"day"`
-	BackfillDays int    `json:"backfill_days"`
-}
 
 func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, error) {
 	switch family {
@@ -125,24 +115,6 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		}
 		if value.Version != ScopeVersion || len(value.RepoIDs) > 256 || !allUUID(value.RepoIDs) {
 			return nil, errors.New("invalid membership scope")
-		}
-		return json.Marshal(value)
-	case "extra_metrics":
-		var value extraMetricsScope
-		if err := strictScope(raw, &value); err != nil {
-			return nil, err
-		}
-		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 {
-			return nil, errors.New("invalid extra metrics scope")
-		}
-		return json.Marshal(value)
-	case "team_metrics":
-		var value teamMetricsScope
-		if err := strictScope(raw, &value); err != nil {
-			return nil, err
-		}
-		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 {
-			return nil, errors.New("invalid team metrics scope")
 		}
 		return json.Marshal(value)
 	}

@@ -875,12 +875,23 @@ def discover_stream_surfaces(root: Path) -> list[Surface]:
     return out
 
 
+_RETIRED_KINDS_SECTION_RE = re.compile(r'^\s*"retired_kinds":\s*\[')
+
+
 def discover_json_kinds(root: Path, relpath: str, cls: str) -> list[Surface]:
     path = root / relpath
     if not path.exists():
         return []
     out = []
     for i, line in enumerate(path.read_text().splitlines(), start=1):
+        # registry.json's own retired_kinds ledger (CHAOS-4243) records
+        # ALREADY-REMOVED kinds for cmd/worker-contractcheck's compatibility
+        # gate, each with its own "kind" field -- not a dispatchable
+        # registry_kind surface this census tracks. Stop scanning once that
+        # section starts rather than teach this regex JSON structure; every
+        # real job entry precedes it under "jobs".
+        if _RETIRED_KINDS_SECTION_RE.match(line):
+            break
         m = JSON_KIND_RE.search(line)
         if m:
             out.append(Surface(cls, relpath, i, m.group(1)))

@@ -329,38 +329,6 @@
       }
     },
     {
-      "kind": "metrics.remaining.extra_metrics",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "queue": "metrics",
-      "handler_owner": "internal/jobs/metrics/remaining",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_remaining_partition",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "remaining_metrics_partition",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 2
-      },
-      "sensitive_fields": [],
-      "domain_link": "remaining_metric_partition",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.remaining_partition.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.remaining_partition.v1.json"
-        ]
-      }
-    },
-    {
       "kind": "metrics.remaining.membership_backfill",
       "current_version": 1,
       "supported_versions": [
@@ -426,38 +394,6 @@
     },
     {
       "kind": "metrics.remaining.release_impact",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "queue": "metrics",
-      "handler_owner": "internal/jobs/metrics/remaining",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_remaining_partition",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "remaining_metrics_partition",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 2
-      },
-      "sensitive_fields": [],
-      "domain_link": "remaining_metric_partition",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.remaining_partition.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.remaining_partition.v1.json"
-        ]
-      }
-    },
-    {
-      "kind": "metrics.remaining.team_metrics",
       "current_version": 1,
       "supported_versions": [
         1
@@ -818,6 +754,22 @@
           "examples/workgraph.build.v1.json"
         ]
       }
+    }
+  ],
+  "retired_kinds": [
+    {
+      "kind": "metrics.remaining.extra_metrics",
+      "retired_on": "2026-08-24",
+      "reason": "registered handler with zero producer anywhere; its writers duplicated daily_metrics_fanout's existing unconditional compute",
+      "ticket": "CHAOS-4243",
+      "replacement": "run_daily_metrics_job (job_daily.py:729) -> _write_compounding_risk_for_day (job_daily.py:502, called at :1371) and run_benchmarking_for_day (benchmarking/runner.py:259, called at job_daily.py:1419)"
+    },
+    {
+      "kind": "metrics.remaining.team_metrics",
+      "retired_on": "2026-08-24",
+      "reason": "registered handler with zero producer anywhere; its writer duplicated daily_metrics_fanout's existing unconditional compute",
+      "ticket": "CHAOS-4243",
+      "replacement": "run_daily_metrics_job (job_daily.py:729) -> compute_team_wellbeing_metrics_daily (job_daily.py:1057)"
     }
   ]
 }

@@ -551,13 +551,23 @@ any number of times, in any order relative to `go-river-provision`, because
 each run re-derives the full declared posture from scratch inside one
 transaction rather than layering onto whatever state it finds. After
 applying grants, `cmd/dev-health-worker-migrate` also runs an
-executed-proof gate (`checkExecutedGrantPosture`): it re-checks
+executed-proof gate (`checkExecutedGrantPosture`): it re-derives the live
+posture via `postgresstore.DiagnoseRolePosture` (NOT
 `CheckDomainAuthorization`/`CheckCoordinatorAuthorization`/
-`CheckQueueAuthorization` against the live database it just migrated and
-exits non-zero, naming every missing `(table, privilege)` pair, if the
-posture is not actually satisfied — closing the gap where a `to_regclass`
-guard had silently skipped a required table (see the readiness-failure
-section above) and the command still reported success.
+`CheckQueueAuthorization` — those assert `current_user = expectedRole` and
+this one-shot command, connected solely as the migration/admin identity,
+holds no domain/queue/coordinator password to satisfy that) and exits
+non-zero, naming every missing `(table, privilege)` pair, if a declared
+requirement is not actually satisfied — closing the gap where a
+`to_regclass` guard had silently skipped a required table (see the
+readiness-failure section above) and the command still reported success.
+**This is a narrower claim than full authorization:** it proves nothing
+about excess privileges, River-schema grants, or role membership — that
+half of the property is still proven only by each runtime binary's own
+strict, `current_user`-bound check at startup
+(`CheckDomainAuthorization`/`CheckQueueAuthorization`/
+`CheckCoordinatorAuthorization`). A clean `go-river-migrate` run does not
+substitute for a healthy `/readyz`.
 
 **Operator rule:** never run `go-workerctl`, or anything else that reaches
 `go-river-provision`, without also running `go-river-migrate` in the same

@@ -1184,8 +1184,12 @@ metrics_readback_diff_relevant() {
   if [ -z "${changed}" ]; then
     return 0 # diff failed, or genuinely empty (e.g. no commits yet) — run it.
   fi
+  # Includes the oracle script and its synthetic-seeding path too (codex
+  # review, CHAOS-4266) -- a PR that only touches
+  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
+  # this one does, must not have this stage silently skip.
   printf '%s\n' "${changed}" | grep -qE \
-    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics)'
+    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)'
 }
 
 metrics_readback() {

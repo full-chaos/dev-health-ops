@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -299,11 +300,16 @@ func (pipeline *MutationPipeline) runStage(
 		return err
 	}
 	pipeline.stages.recordFailure(stage)
+	sqlstate := stageSQLState(err)
+	if sqlstate != "" {
+		pipeline.stages.recordCancellation(stage, sqlstate)
+	}
 	slog.Error(
 		"syncreconciler.stage_failed",
 		"stage", string(stage),
 		"budget_ms", budget.Milliseconds(),
 		"elapsed_ms", elapsed.Milliseconds(),
+		"sqlstate", sqlstate,
 		"error", err.Error(),
 	)
 	return err
@@ -689,6 +695,63 @@ const consecutiveFailureDegradeThreshold = 3
 // returns right at its own deadline should not immediately read as stuck.
 const stepOverrunMargin = 250 * time.Millisecond
 
+// stageDurationBuckets bounds the CHAOS-4262 per-stage duration histogram.
+// Stage budgets top out at maximumStageBudget (10s), so the buckets stay
+// fine-grained in the sub-second range where every budget actually lives
+// (400ms-1000ms by default) and only need one bucket past a second.
+var stageDurationBuckets = []float64{
+	0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 2, 5, 10,
+}
+
+// stageHistogram is a dependency-free Prometheus histogram, deliberately
+// reimplemented here rather than imported from internal/jobruntime: that
+// package's histogram is sized for whole-job durations up to an hour
+// (durationBuckets tops out at 3600s) and pulling it in would couple the
+// reconciler's stage telemetry to the worker job-execution package for a
+// handful of shared lines.
+type stageHistogram struct {
+	buckets []uint64
+	count   uint64
+	sum     float64
+}
+
+func newStageHistogram() *stageHistogram {
+	return &stageHistogram{buckets: make([]uint64, len(stageDurationBuckets)+1)}
+}
+
+func (histogram *stageHistogram) observe(value float64) {
+	index := len(stageDurationBuckets)
+	for candidate, upperBound := range stageDurationBuckets {
+		if value <= upperBound {
+			index = candidate
+			break
+		}
+	}
+	histogram.buckets[index]++
+	histogram.count++
+	histogram.sum += value
+}
+
+// stageSQLState recovers the SQLSTATE a stage's own step-identified error
+// carries, or "" if none was recovered. It never exposes the driver's own
+// message -- only the five-character code -- matching the contract
+// materializerStepError and unreclaimableStepError already hold.
+func stageSQLState(err error) string {
+	var materializerErr materializerStepError
+	if errors.As(err, &materializerErr) {
+		return materializerErr.sqlState
+	}
+	var sweepErr unreclaimableStepError
+	if errors.As(err, &sweepErr) {
+		return sweepErr.sqlState
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
+
 // stageTelemetry is the CHAOS-4239 metrics fragment: a lifetime failure
 // counter, a last-observed-duration gauge, a readiness-affecting
 // consecutive-failure streak, and in-flight overrun tracking per stage,
@@ -727,9 +790,29 @@ type stageTelemetry struct {
 	running       map[StageName]bool
 	overrunActive map[StageName]bool
 	overruns      map[StageName]uint64
+
+	// histograms is the CHAOS-4262 duration distribution per stage --
+	// durations above already exports only the MOST RECENT pass, which
+	// cannot answer "how often does this stage run near its budget" the way
+	// a histogram can.
+	histograms map[StageName]*stageHistogram
+	// cancellations counts a stage failure by the SQLSTATE its step error
+	// carried, keyed [stage][sqlstate]. This is the CHAOS-4262 fix for the
+	// masking pattern CHAOS-4242 already named: every stage failure folds
+	// into the same ErrUnavailable/"database unavailable" classification
+	// regardless of cause, so a real statement cancellation (57014, a
+	// JIT-inflated planner estimate crossing the stage budget) read
+	// identically to an actual outage. errors.Is(err, ErrUnavailable) still
+	// holds for every caller that branches on it -- this is additional,
+	// non-replacing classification surfaced only here, in metrics.
+	cancellations map[StageName]map[string]uint64
 }
 
 func newStageTelemetry() stageTelemetry {
+	histograms := make(map[StageName]*stageHistogram, len(orderedStages))
+	for _, stage := range orderedStages {
+		histograms[stage] = newStageHistogram()
+	}
 	return stageTelemetry{
 		failures:      make(map[StageName]uint64, len(orderedStages)),
 		durations:     make(map[StageName]time.Duration, len(orderedStages)),
@@ -738,6 +821,8 @@ func newStageTelemetry() stageTelemetry {
 		running:       make(map[StageName]bool, len(orderedStages)),
 		overrunActive: make(map[StageName]bool, len(orderedStages)),
 		overruns:      make(map[StageName]uint64, len(orderedStages)),
+		histograms:    histograms,
+		cancellations: make(map[StageName]map[string]uint64, len(orderedStages)),
 	}
 }
 
@@ -831,6 +916,56 @@ func (telemetry *stageTelemetry) recordDuration(stage StageName, elapsed time.Du
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.durations[stage] = elapsed
+	if histogram := telemetry.histograms[stage]; histogram != nil {
+		histogram.observe(elapsed.Seconds())
+	}
+}
+
+// recordCancellation is called only when a stage's own step error carried a
+// SQLSTATE (see stageSQLState). It is keyed by the exact code -- 57014 for a
+// canceled statement, 42501 for a permission fault, and so on -- rather than
+// collapsed to a single "had a sqlstate" bucket, because CHAOS-4262 and
+// CHAOS-4261 were two different production incidents that both surfaced as
+// the same "database unavailable" log line and needed different first
+// responses.
+func (telemetry *stageTelemetry) recordCancellation(stage StageName, sqlstate string) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	byState := telemetry.cancellations[stage]
+	if byState == nil {
+		byState = make(map[string]uint64, 1)
+		telemetry.cancellations[stage] = byState
+	}
+	byState[sqlstate]++
+}
+
+func (telemetry *stageTelemetry) histogramSnapshot() map[StageName]*stageHistogram {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	snapshot := make(map[StageName]*stageHistogram, len(telemetry.histograms))
+	for stage, histogram := range telemetry.histograms {
+		if histogram == nil {
+			continue
+		}
+		copied := *histogram
+		copied.buckets = append([]uint64(nil), histogram.buckets...)
+		snapshot[stage] = &copied
+	}
+	return snapshot
+}
+
+func (telemetry *stageTelemetry) cancellationSnapshot() map[StageName]map[string]uint64 {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	snapshot := make(map[StageName]map[string]uint64, len(telemetry.cancellations))
+	for stage, byState := range telemetry.cancellations {
+		copied := make(map[string]uint64, len(byState))
+		for sqlstate, count := range byState {
+			copied[sqlstate] = count
+		}
+		snapshot[stage] = copied
+	}
+	return snapshot
 }
 
 func (telemetry *stageTelemetry) snapshot() (map[StageName]uint64, map[StageName]time.Duration) {
@@ -874,6 +1009,8 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	failures, durations := pipeline.stages.snapshot()
 	degraded := pipeline.stages.degradedSnapshot()
 	budgets := pipeline.config.StageBudgets
+	histograms := pipeline.stages.histogramSnapshot()
+	cancellations := pipeline.stages.cancellationSnapshot()
 
 	stages := make([]string, 0, len(orderedStages))
 	for _, stage := range orderedStages {
@@ -910,8 +1047,64 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	for _, name := range stages {
 		fmt.Fprintf(&text, "sync_reconciler_step_overrun_total{stage=%q} %d\n", name, overruns[StageName(name)])
 	}
+	// CHAOS-4262: a full distribution, not just the most recent pass --
+	// sync_reconciler_stage_duration_seconds above answers "how long was the
+	// last pass", this answers "how often does this stage run close to its
+	// budget", which is what caught the materializer JIT-compile regression
+	// crossing its 600ms budget on a query that takes ~2ms to execute.
+	text.WriteString("# HELP dev_health_reconciler_stage_duration_seconds Distribution of wall-clock time spent per pipeline stage pass, whether it succeeded or not (CHAOS-4262).\n# TYPE dev_health_reconciler_stage_duration_seconds histogram\n")
+	for _, name := range stages {
+		writeStageHistogram(&text, "dev_health_reconciler_stage_duration_seconds", name, histograms[StageName(name)])
+	}
+	// CHAOS-4262: every stage failure collapses to the same ErrUnavailable
+	// classification (see stageSQLState's doc comment) so that lifecycle and
+	// readiness code never depends on driver detail -- but that means an
+	// operator reading sync_reconciler_stage_failures_total alone cannot tell
+	// a real statement cancellation (57014) apart from a permission fault
+	// (42501, CHAOS-4261's incident) or an actual outage. This is keyed only
+	// by the pairs actually observed, like any other Prometheus counter with
+	// a dynamic label -- there is no bounded enumeration of every SQLSTATE to
+	// pre-declare zero for.
+	text.WriteString("# HELP dev_health_reconciler_stage_cancelled_total Pipeline stage failures broken out by the driver SQLSTATE recovered from the failing statement, so a canceled statement (57014) is never folded into the generic \"database unavailable\" classification.\n# TYPE dev_health_reconciler_stage_cancelled_total counter\n")
+	for _, name := range stages {
+		byState := cancellations[StageName(name)]
+		sqlstates := make([]string, 0, len(byState))
+		for sqlstate := range byState {
+			sqlstates = append(sqlstates, sqlstate)
+		}
+		sort.Strings(sqlstates)
+		for _, sqlstate := range sqlstates {
+			fmt.Fprintf(&text, "dev_health_reconciler_stage_cancelled_total{stage=%q,sqlstate=%q} %d\n",
+				name, sqlstate, byState[sqlstate])
+		}
+	}
 	_, err := io.WriteString(output, text.String())
 	return err
+}
+
+// writeStageHistogram emits one stage's Prometheus histogram series
+// (_bucket/_sum/_count), mirroring internal/jobruntime's writeHistogram shape
+// without importing that package (see stageHistogram's doc comment).
+func writeStageHistogram(text *strings.Builder, name, stage string, metric *stageHistogram) {
+	if metric == nil {
+		metric = newStageHistogram()
+	}
+	cumulative := uint64(0)
+	for index, bound := range stageDurationBuckets {
+		cumulative += metric.buckets[index]
+		fmt.Fprintf(text, "%s_bucket{stage=%q,le=%q} %d\n", name, stage, formatMetricFloat(bound), cumulative)
+	}
+	cumulative += metric.buckets[len(stageDurationBuckets)]
+	fmt.Fprintf(text, "%s_bucket{stage=%q,le=\"+Inf\"} %d\n", name, stage, cumulative)
+	fmt.Fprintf(text, "%s_sum{stage=%q} %s\n", name, stage, formatMetricFloat(metric.sum))
+	fmt.Fprintf(text, "%s_count{stage=%q} %d\n", name, stage, metric.count)
+}
+
+func formatMetricFloat(value float64) string {
+	if value == 0 {
+		return "0"
+	}
+	return strconv.FormatFloat(value, 'g', -1, 64)
 }
 
 func formatSeconds(duration time.Duration) string {

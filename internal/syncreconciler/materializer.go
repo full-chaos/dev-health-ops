@@ -2,9 +2,11 @@ package syncreconciler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -138,6 +140,103 @@ func newMaterializer(begin materializerBeginFunc) (*Materializer, error) {
 	return &Materializer{begin: begin}, nil
 }
 
+// Step's own step identity, mirroring unreclaimableStepError (CHAOS-4035's
+// lesson, internal/syncreconciler/unreclaimable_sweep.go): a bare
+// ErrUnavailable told an operator nothing about which of the four
+// materialization statements -- or the transaction envelope around them --
+// stopped working. CHAOS-4262 needed exactly this distinction: the finalize
+// statement's SQLSTATE was 57014 (query_canceled, a JIT-inflated planner
+// estimate crossing the stage budget), not a database outage, and the two
+// demand opposite first responses from an operator.
+const (
+	materializerStepBegin      = "begin coordinator transaction"
+	materializerStepDisableJIT = "disable JIT for the materializer transaction"
+	materializerStepDispatch   = "dispatch materialization upsert of public.sync_dispatch_outbox"
+	materializerStepFinalize   = "finalize materialization upsert of public.sync_dispatch_outbox"
+	materializerStepDiscovery  = "discovery materialization upsert of public.sync_dispatch_outbox"
+	materializerStepPostSync   = "post_sync materialization insert of public.sync_dispatch_outbox"
+	materializerStepRowCount   = "materialization affected-row count"
+	materializerStepCommit     = "commit coordinator transaction"
+)
+
+// materializerStepError names the Step statement that failed while keeping
+// the package-stable ErrUnavailable classification callers already branch on.
+type materializerStepError struct {
+	step     string
+	sqlState string
+}
+
+func (stepErr materializerStepError) Error() string {
+	if stepErr.sqlState != "" {
+		return "materializer " + stepErr.step + " failed (sqlstate " +
+			stepErr.sqlState + "): " + ErrUnavailable.Error()
+	}
+	return "materializer " + stepErr.step + " failed: " + ErrUnavailable.Error()
+}
+
+// Unwrap is what keeps errors.Is(err, ErrUnavailable) true for every step.
+func (stepErr materializerStepError) Unwrap() error { return ErrUnavailable }
+
+// stageContextDeadlineLabel is the sqlState value materializerUnavailable
+// records when the failure was the STAGE'S OWN bounded context expiring
+// mid-statement, never a real Postgres SQLSTATE (it is deliberately not a
+// five-character code, so it can never collide with one).
+//
+// This is CHAOS-4262's own review finding, not a hypothetical: pgx v5's
+// context watcher answers a canceled ctx by tearing down the connection
+// client-side and returning a wrapped context.DeadlineExceeded -- it does
+// NOT wait for, and does not surface, whatever ErrorResponse Postgres itself
+// may log server-side (confirmed empirically against a real server: the
+// exact same cancellation that makes Postgres log "canceling statement due
+// to user request", sqlstate 57014, reaches the Go caller as a bare
+// context.DeadlineExceeded, never a *pgconn.PgError). Since runStage bounds
+// every stage with exactly this kind of context.WithTimeout
+// (internal/syncreconciler/pipeline.go), THIS is the actual shape CHAOS-4262
+// exists to classify -- errors.As for *pgconn.PgError alone would leave
+// dev_health_reconciler_stage_cancelled_total silent on the very failure the
+// metric was built to surface.
+const stageContextDeadlineLabel = "ctx_deadline_exceeded"
+
+// materializerUnavailable builds the step-identified error. cause is used
+// ONLY to recover a SQLSTATE (or the synthetic stageContextDeadlineLabel);
+// it is never wrapped, so no driver string (which can carry row values) can
+// reach a log line through this path -- the same contract sweepUnavailable
+// already holds.
+func materializerUnavailable(step string, cause error) error {
+	stepErr := materializerStepError{step: step}
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(cause, &pgErr):
+		stepErr.sqlState = pgErr.Code
+	case errors.Is(cause, context.DeadlineExceeded):
+		stepErr.sqlState = stageContextDeadlineLabel
+	}
+	return stepErr
+}
+
+// MaterializerStepIdentity returns the Step statement name carried by a
+// materializer failure, or "" if err did not come from Step. Exported so
+// pipeline telemetry and tests can key off it without ever seeing the
+// underlying driver error.
+func MaterializerStepIdentity(err error) string {
+	var stepErr materializerStepError
+	if errors.As(err, &stepErr) {
+		return stepErr.step
+	}
+	return ""
+}
+
+// MaterializerStepSQLState returns the SQLSTATE carried by a materializer
+// failure, or "" if none was recovered. errors.Is(err, ErrUnavailable) still
+// holds regardless -- this is additional classification, not a replacement.
+func MaterializerStepSQLState(err error) string {
+	var stepErr materializerStepError
+	if errors.As(err, &stepErr) {
+		return stepErr.sqlState
+	}
+	return ""
+}
+
 // Step materializes one deterministic candidate window per frozen kind in one
 // transaction. staleDispatchCutoff is supplied by command composition so this
 // domain component does not duplicate environment policy.
@@ -160,29 +259,43 @@ func (materializer *Materializer) Step(
 
 	tx, err := materializer.begin(ctx)
 	if err != nil || tx == nil {
-		return MaterializerResult{}, ErrUnavailable
+		return MaterializerResult{}, materializerUnavailable(materializerStepBegin, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// CHAOS-4262: the planner's cost estimate for the four candidate CTEs
+	// below is five orders of magnitude off reality (0 rows out of a
+	// multi-thousand-row sync_runs scan estimated at ~646k total cost) --
+	// comfortably over jit_above_cost, so Postgres compiles a JIT plan for
+	// work that takes ~2ms to execute. The compile alone (measured ~361ms in
+	// prod) then crosses this stage's 600ms budget and the statement is
+	// canceled (sqlstate 57014) every cycle. SET LOCAL scopes the change to
+	// this transaction only, so every other statement on this pooled
+	// connection keeps its normal JIT behavior.
+	if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDisableJIT, err)
+	}
 
 	result := MaterializerResult{}
 	steps := []struct {
 		sql   string
 		args  []any
 		count *int64
+		step  string
 	}{
-		{materializeDispatchSQL, []any{now, staleDispatchCutoff, limit}, &result.Dispatch},
-		{materializeFinalizeSQL, []any{now, limit}, &result.Finalize},
-		{materializeDiscoverySQL, []any{now, limit}, &result.Discovery},
-		{materializePostSyncSQL, []any{now, limit}, &result.PostSync},
+		{materializeDispatchSQL, []any{now, staleDispatchCutoff, limit}, &result.Dispatch, materializerStepDispatch},
+		{materializeFinalizeSQL, []any{now, limit}, &result.Finalize, materializerStepFinalize},
+		{materializeDiscoverySQL, []any{now, limit}, &result.Discovery, materializerStepDiscovery},
+		{materializePostSyncSQL, []any{now, limit}, &result.PostSync, materializerStepPostSync},
 	}
 	for _, step := range steps {
 		tag, execErr := tx.Exec(ctx, step.sql, step.args...)
 		if execErr != nil {
-			return MaterializerResult{}, ErrUnavailable
+			return MaterializerResult{}, materializerUnavailable(step.step, execErr)
 		}
 		affected := tag.RowsAffected()
 		if affected < 0 || affected > int64(limit) {
-			return MaterializerResult{}, ErrUnavailable
+			return MaterializerResult{}, materializerUnavailable(materializerStepRowCount, nil)
 		}
 		*step.count = affected
 	}
@@ -201,7 +314,7 @@ func (materializer *Materializer) Step(
 		result.Runaway, result.RunawayTotal, result.RunawayTruncated = runaway, total, truncated
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return MaterializerResult{}, ErrUnavailable
+		return MaterializerResult{}, materializerUnavailable(materializerStepCommit, err)
 	}
 	return result, nil
 }

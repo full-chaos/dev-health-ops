@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# CHAOS-4266: executed-proof gate for the metrics family. Unlike
+# run_live_backend_e2e.sh's `--with-metrics` fixture path (which writes
+# derived metric rows directly into ClickHouse, bypassing sync entirely --
+# see the FIXTURE-BACKED comments in that script), this job drives the REAL
+# pipeline: seed real source rows through the real sync path (cicd/
+# deployments/incidents/tests via `dev-hops sync <target> --provider
+# synthetic`, CHAOS-4266's sync.py extension), let the REAL Go worker +
+# reconciler process the resulting sync_dispatch_outbox(kind=post_sync) row
+# exactly as a real provider sync would, then assert rows landed in
+# ClickHouse (ci/assert_metrics_executed_proof.py).
+#
+# This is deliberately RED on current main: CHAOS-4263 (daily_metrics_
+# partitions built from the wrong id space) means the partition this run
+# produces carries repo_ids=[] even though the seeded org has a real repo in
+# ClickHouse, so no family computes any rows. It goes green once CHAOS-4263
+# merges -- do not mark it a required check before that (RISK-NOTES).
+#
+# RISK-NOTES: this is a LIGHTER topology than prod/local-dev's
+# deploy/docker-compose/compose.go-workers.yml -- no PgBouncer, no
+# transaction-mode pooling, direct role DSNs, only the "metrics" and "sync"
+# queues (not the full investment/reports/workgraph "heavy" set, which this
+# gate does not need and was not verified here). CHAOS-4261 owns the
+# production grant-provisioning gate; this script provisions the same three
+# roles for CI's own throwaway database via the same checked-in
+# scripts/worker/provision_river_roles.sql, not a hand-rolled substitute.
+
+EXIT_MISSING_DEP=3
+EXIT_FAILURE=10
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
+
+PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH
+
+require_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "ERROR: Required command '${cmd}' is not available."
+    exit "${EXIT_MISSING_DEP}"
+  fi
+}
+
+run_dev_hops() {
+  if command -v dev-hops >/dev/null 2>&1; then
+    dev-hops "$@"
+    return
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    uv run dev-hops "$@"
+    return
+  fi
+  python3 -m dev_health_ops.cli "$@"
+}
+
+require_cmd go
+require_cmd psql
+require_cmd curl
+
+# ---------------------------------------------------------------------------
+# Connection settings. Defaults match this job's own services: block in
+# .github/workflows/live-e2e.yml; every value is overridable for local runs.
+# ---------------------------------------------------------------------------
+POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_SUPERUSER="${POSTGRES_SUPERUSER:-postgres}"
+POSTGRES_SUPERUSER_PASSWORD="${POSTGRES_SUPERUSER_PASSWORD:-postgres}"
+POSTGRES_DB="${POSTGRES_DB:-test_db}"
+
+CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
+CLICKHOUSE_HTTP_PORT="${CLICKHOUSE_HTTP_PORT:-8123}"
+CLICKHOUSE_NATIVE_PORT="${CLICKHOUSE_NATIVE_PORT:-9000}"
+CLICKHOUSE_USER="${CLICKHOUSE_USER:-ch}"
+CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-ch}"
+CLICKHOUSE_DB="${CLICKHOUSE_DB:-default}"
+
+VALKEY_HOST="${VALKEY_HOST:-localhost}"
+VALKEY_PORT="${VALKEY_PORT:-6379}"
+
+# Analytics DSNs: Python's clickhouse-connect speaks HTTP (8123); Go's
+# clickhouse-go speaks the native wire protocol (9000). Pointing the Go
+# binaries at 8123 fails immediately with "ClickHouse readiness check failed"
+# (confirmed by hand; see deploy/go-workers/README.md).
+CLICKHOUSE_URI_HTTP="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT}/${CLICKHOUSE_DB}"
+CLICKHOUSE_URI_NATIVE="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:${CLICKHOUSE_NATIVE_PORT}/${CLICKHOUSE_DB}"
+POSTGRES_SUPERUSER_URI="postgresql+asyncpg://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+
+RIVER_DOMAIN_ROLE="devhealth_domain"
+RIVER_QUEUE_ROLE="devhealth_queue"
+RIVER_COORDINATOR_ROLE="devhealth_coordinator"
+RIVER_DOMAIN_PASSWORD="devhealth_domain"
+RIVER_QUEUE_PASSWORD="devhealth_queue"
+RIVER_COORDINATOR_PASSWORD="devhealth_coordinator"
+
+SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-ci-metrics-executed-proof-key}"
+WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN:-ci-metrics-executed-proof-bridge-token}"
+ORG_ID="${METRICS_PROOF_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
+REPO_NAME="${METRICS_PROOF_REPO_NAME:-ci-metrics-executed-proof/repo}"
+BACKFILL_DAYS="${METRICS_PROOF_BACKFILL_DAYS:-7}"
+
+API_PORT="${METRICS_PROOF_API_PORT:-18081}"
+WORKER_HTTP_PORT="${METRICS_PROOF_WORKER_PORT:-18085}"
+RECONCILER_HTTP_PORT="${METRICS_PROOF_RECONCILER_PORT:-18086}"
+
+READINESS_ATTEMPTS="${METRICS_PROOF_READINESS_ATTEMPTS:-60}"
+READINESS_SLEEP_SECS="${METRICS_PROOF_READINESS_SLEEP_SECS:-2}"
+COMPUTE_WAIT_ATTEMPTS="${METRICS_PROOF_COMPUTE_WAIT_ATTEMPTS:-40}"
+COMPUTE_WAIT_SLEEP_SECS="${METRICS_PROOF_COMPUTE_WAIT_SLEEP_SECS:-3}"
+
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/metrics-executed-proof.XXXXXX")"
+BIN_DIR="${TMP_DIR}/bin"
+mkdir -p "${BIN_DIR}"
+
+API_PID=""
+WORKER_PID=""
+RECONCILER_PID=""
+
+cleanup() {
+  local rc=$?
+  for pid in "${API_PID}" "${WORKER_PID}" "${RECONCILER_PID}"; do
+    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+      kill "${pid}" >/dev/null 2>&1 || true
+      wait "${pid}" >/dev/null 2>&1 || true
+    fi
+  done
+  rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
+  return "${rc}"
+}
+trap cleanup EXIT INT TERM
+
+wait_for_http_ready() {
+  local name="$1" url="$2" log_file="$3" pid_var_name="$4"
+  local i
+  for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
+    if curl -sS -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null | grep -q '^200$'; then
+      echo "${name} ready after ${i} attempt(s)."
+      return 0
+    fi
+    local pid="${!pid_var_name}"
+    if [ -n "${pid}" ] && ! kill -0 "${pid}" >/dev/null 2>&1; then
+      echo "ERROR: ${name} process exited before becoming ready."
+      tail -n 200 "${log_file}" || true
+      return 1
+    fi
+    sleep "${READINESS_SLEEP_SECS}"
+  done
+  echo "ERROR: Timed out waiting for ${name} readiness at ${url}."
+  tail -n 200 "${log_file}" || true
+  return 1
+}
+
+echo "==> building Go binaries (dev-health-worker-migrate, dev-health-worker, dev-health-reconciler)"
+go build -o "${BIN_DIR}/dev-health-worker-migrate" ./cmd/dev-health-worker-migrate
+go build -o "${BIN_DIR}/dev-health-worker" ./cmd/dev-health-worker
+go build -o "${BIN_DIR}/dev-health-reconciler" ./cmd/dev-health-reconciler
+
+echo "==> applying Postgres (Alembic) migrations"
+DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+  run_dev_hops --db "${POSTGRES_SUPERUSER_URI}" migrate postgres upgrade
+
+echo "==> applying ClickHouse migrations"
+CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
+  run_dev_hops migrate clickhouse upgrade
+
+echo "==> provisioning the three River runtime roles (scripts/worker/provision_river_roles.sql)"
+PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+  --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+  --set=ON_ERROR_STOP=1 \
+  --set=domain_role="${RIVER_DOMAIN_ROLE}" \
+  --set=queue_role="${RIVER_QUEUE_ROLE}" \
+  --set=coordinator_role="${RIVER_COORDINATOR_ROLE}" \
+  --set=domain_password="${RIVER_DOMAIN_PASSWORD}" \
+  --set=queue_password="${RIVER_QUEUE_PASSWORD}" \
+  --set=coordinator_password="${RIVER_COORDINATOR_PASSWORD}" \
+  --file="${ROOT_DIR}/scripts/worker/provision_river_roles.sql"
+
+echo "==> applying the pinned River schema + per-table domain/queue/coordinator grants"
+MIGRATION_DATABASE_URI="postgresql://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" \
+  RIVER_DOMAIN_DATABASE_ROLE="${RIVER_DOMAIN_ROLE}" \
+  RIVER_QUEUE_DATABASE_ROLE="${RIVER_QUEUE_ROLE}" \
+  RIVER_COORDINATOR_DATABASE_ROLE="${RIVER_COORDINATOR_ROLE}" \
+  "${BIN_DIR}/dev-health-worker-migrate"
+
+# A fresh Alembic install creates sync_dispatch_transport_routes rows with
+# transport='celery' for every sync-orchestration kind (post_sync,
+# dispatch_sync_run, finalize_sync_run, reference_discovery) -- prod flips
+# these to 'river' as an explicit, authorized cutover action (CHAOS-4026),
+# which a fresh CI database has no history to inherit. Without this flip the
+# reconciler's outbox relay (internal/joboutbox) finds these kinds routed to
+# celery and never enqueues the River job that would let dev-health-worker
+# process the post_sync fanout at all -- confirmed by hand: the relay is
+# silent (no log line, no state change) against the un-flipped default, and
+# reproducibly enqueues within c1s of being flipped. This is CI-only test-data
+# setup on a throwaway database, not a product code change.
+echo "==> routing sync-orchestration kinds to river for this CI run (fresh installs default to celery)"
+PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+  --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+  --set=ON_ERROR_STOP=1 \
+  -c "UPDATE sync_dispatch_transport_routes SET transport='river', rollback_transport='celery', generation=generation+1, updated_at=now() WHERE kind IN ('post_sync','dispatch_sync_run','finalize_sync_run','reference_discovery') AND transport <> 'river';"
+
+echo "==> starting dev-hops api (the Go worker's operational bridge)"
+JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
+API_LOG_FILE="${TMP_DIR}/api.log"
+(
+  export DATABASE_URI="${POSTGRES_SUPERUSER_URI}"
+  export CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}"
+  export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN JWT_SECRET_KEY
+  export REDIS_URL="redis://${VALKEY_HOST}:${VALKEY_PORT}/0"
+  export ENVIRONMENT=test
+  export OTEL_ENABLED=false
+  exec run_dev_hops --db "${DATABASE_URI}" --analytics-db "${CLICKHOUSE_URI}" api --host 127.0.0.1 --port "${API_PORT}"
+) >"${API_LOG_FILE}" 2>&1 &
+API_PID="$!"
+wait_for_http_ready "dev-hops api" "http://127.0.0.1:${API_PORT}/health" "${API_LOG_FILE}" API_PID
+
+echo "==> starting dev-health-worker (queues: metrics, sync)"
+WORKER_LOG_FILE="${TMP_DIR}/worker.log"
+(
+  export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+  export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+  export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
+  export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
+  export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+  exec "${BIN_DIR}/dev-health-worker" \
+    --queues=metrics,sync \
+    --queue-concurrency=metrics=2,sync=1 \
+    --worker-group=heavy \
+    --shutdown-timeout=7260s \
+    --http-addr=":${WORKER_HTTP_PORT}" \
+    --river-schema=river \
+    --domain-database-role="${RIVER_DOMAIN_ROLE}" \
+    --queue-database-role="${RIVER_QUEUE_ROLE}" \
+    --queue-database-mode=session \
+    --domain-transaction-pooler=false \
+    --operational-bridge-url="http://127.0.0.1:${API_PORT}" \
+    --operational-bridge-allow-insecure=true \
+    --pagerduty-webhook-transport=celery \
+    --log-level=info
+) >"${WORKER_LOG_FILE}" 2>&1 &
+WORKER_PID="$!"
+wait_for_http_ready "dev-health-worker" "http://127.0.0.1:${WORKER_HTTP_PORT}/readyz" "${WORKER_LOG_FILE}" WORKER_PID
+
+echo "==> starting dev-health-reconciler"
+RECONCILER_LOG_FILE="${TMP_DIR}/reconciler.log"
+(
+  export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+  export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+  export COORDINATOR_DATABASE_URI="postgresql://${RIVER_COORDINATOR_ROLE}:${RIVER_COORDINATOR_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+  exec "${BIN_DIR}/dev-health-reconciler" \
+    --http-addr=":${RECONCILER_HTTP_PORT}" \
+    --river-schema=river \
+    --domain-database-role="${RIVER_DOMAIN_ROLE}" \
+    --queue-database-role="${RIVER_QUEUE_ROLE}" \
+    --coordinator-database-role="${RIVER_COORDINATOR_ROLE}" \
+    --queue-database-mode=session \
+    --coordinator-database-mode=session \
+    --domain-transaction-pooler=false \
+    --log-level=info
+) >"${RECONCILER_LOG_FILE}" 2>&1 &
+RECONCILER_PID="$!"
+wait_for_http_ready "dev-health-reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${RECONCILER_LOG_FILE}" RECONCILER_PID
+
+RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+echo "==> seeding real source rows through the real sync path (dev-hops sync <target> --provider synthetic), run_start=${RUN_START}"
+for target in cicd deployments incidents tests; do
+  echo "   -- ${target}"
+  ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+    run_dev_hops sync "${target}" \
+    --provider synthetic \
+    --repo-name "${REPO_NAME}" \
+    --backfill "${BACKFILL_DAYS}"
+done
+
+echo "==> waiting up to $((COMPUTE_WAIT_ATTEMPTS * COMPUTE_WAIT_SLEEP_SECS))s for the post-sync fanout to reach ClickHouse"
+ASSERT_SUMMARY_JSON="${TMP_DIR}/family-summary.json"
+assert_readback() {
+  PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
+    --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
+    --org-id "${ORG_ID}" \
+    --run-start "${RUN_START}" \
+    --families cicd deploy testops_pipeline testops_test repo_user_commit dora \
+    --summary-json "${ASSERT_SUMMARY_JSON}"
+}
+
+i=0
+until [ "${i}" -ge "${COMPUTE_WAIT_ATTEMPTS}" ]; do
+  if assert_readback >"${TMP_DIR}/assert.log" 2>&1; then
+    echo "   readback succeeded after $((i * COMPUTE_WAIT_SLEEP_SECS))s"
+    break
+  fi
+  i=$((i + 1))
+  sleep "${COMPUTE_WAIT_SLEEP_SECS}"
+done
+
+echo "==> final readback assertion (this is the pass/fail signal for the job)"
+cat "${TMP_DIR}/assert.log" 2>/dev/null || true
+FINAL_RC=0
+assert_readback || FINAL_RC=$?
+
+if [ -f "${ASSERT_SUMMARY_JSON}" ]; then
+  echo "==> per-family rows-written summary"
+  cat "${ASSERT_SUMMARY_JSON}"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    # One line per family (rows_written_<family>=<n>) rather than the whole
+    # JSON blob behind a `name<<DELIMITER` block: that delimiter syntax reads
+    # as an unterminated heredoc to ci/*.sh's heredoc-pipe-wedge scanner
+    # (tests/tooling/test_local_validate_heredocs.py), which does not parse
+    # bash well enough to see it is inside a quoted `echo` string, not an
+    # actual heredoc.
+    python3 -c "
+import json
+summary = json.load(open('${ASSERT_SUMMARY_JSON}'))
+for family, info in summary.items():
+    print(f'rows_written_{family}={info[\"rows_written\"]}')
+" >>"${GITHUB_OUTPUT}"
+  fi
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "### metrics-executed-proof: per-family rows written"
+      echo '```json'
+      cat "${ASSERT_SUMMARY_JSON}"
+      echo '```'
+    } >>"${GITHUB_STEP_SUMMARY}"
+  fi
+fi
+
+echo "==> worker / reconciler logs (tail)"
+echo "--- worker ---"
+tail -n 100 "${WORKER_LOG_FILE}" || true
+echo "--- reconciler ---"
+tail -n 100 "${RECONCILER_LOG_FILE}" || true
+
+exit "${FINAL_RC}"

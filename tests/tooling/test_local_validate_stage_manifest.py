@@ -286,10 +286,10 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
 
     assert result.returncode == 0, combined
     assert "GATE PASSED." in combined, combined
-    assert "GATE_STAGE_MANIFEST result=PASSED declared=8 executed=8" in combined, (
+    assert "GATE_STAGE_MANIFEST result=PASSED declared=9 executed=9" in combined, (
         combined
     )
-    assert "[8/8:" in combined, combined
+    assert "[9/9:" in combined, combined
     for stage_id in (
         "lint_format",
         "lint_check",
@@ -297,6 +297,7 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
         "ch_probe",
         "ch_scratch_create",
         "ch_migrate",
+        "metrics_readback",
         "unit_suite",
         "ch_argmax_proof",
     ):

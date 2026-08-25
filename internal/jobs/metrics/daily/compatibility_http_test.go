@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -105,6 +106,89 @@ func TestHTTPCompatibilityRetryUsesAuthoritativeGenerationAndSkipsCompletedOutpu
 	}
 	if writes["daily-v1:"+testRunID+":"+testPartitionID] != 1 {
 		t.Fatalf("compatibility retry duplicated authoritative output: %#v", writes)
+	}
+}
+
+// CHAOS-4264: the Python bridge's error body now carries a bounded "reason"
+// on both the 503 a failed execution returns and the 409 a refused claim
+// returns. This is the falsifier for classifyCompatibilityError: an
+// unrecognized/missing reason must still fall back to ErrUnavailable
+// unchanged (no regression for every error shape that predates this
+// ticket), while each of the three named reasons must map to its own
+// sentinel so daily.go's retryCompatibilityError can attach the matching
+// jobruntime.Reason.
+func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantErr    error
+	}{
+		{
+			// CHAOS-4264 R2: bodies here are the REAL shape a FastAPI
+			// HTTPException(detail={...}) actually serializes to -- verified
+			// against a live fastapi.testclient.TestClient response, not
+			// assumed. An earlier version of this fixture used a flat
+			// top-level body matching a bug in classifyCompatibilityError's
+			// struct (a top-level "reason" field that real responses never
+			// have), so the test passed while the parser silently matched
+			// nothing in production.
+			name:       "signaled runner on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"process_signaled"}}`,
+			wantErr:    ErrCompatibilityProcessSignaled,
+		},
+		{
+			name:       "resource-exhausted runner on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted"}}`,
+			wantErr:    ErrCompatibilityResourceExhausted,
+		},
+		{
+			name:       "refused claim on a 409",
+			statusCode: http.StatusConflict,
+			body:       `{"detail":{"message":"Execution outcome requires readback","state":"ambiguous","reason":"ambiguous_refused"}}`,
+			wantErr:    ErrCompatibilityAmbiguousRefused,
+		},
+		{
+			name:       "true ambiguous 503 with no reason predates this ticket",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous"}}`,
+			wantErr:    ErrUnavailable,
+		},
+		{
+			name:       "unrecognized reason value",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"x","state":"failed","reason":"something_new"}}`,
+			wantErr:    ErrUnavailable,
+		},
+		{
+			name:       "non-JSON body",
+			statusCode: http.StatusInternalServerError,
+			body:       "not json",
+			wantErr:    ErrUnavailable,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(testCase.statusCode)
+				_, _ = writer.Write([]byte(testCase.body))
+			}))
+			defer server.Close()
+			executor, err := NewHTTPCompatibilityExecutor(
+				&http.Client{Timeout: time.Second},
+				HTTPCompatibilityConfig{Endpoint: server.URL + "/internal/worker/daily-metrics/v1/execute", BearerToken: "token"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
+			got := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID})
+			if !errors.Is(got, testCase.wantErr) {
+				t.Fatalf("ComputePartition error = %v, want %v", got, testCase.wantErr)
+			}
+		})
 	}
 }
 

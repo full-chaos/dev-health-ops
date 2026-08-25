@@ -126,6 +126,63 @@ func TestPartitionCompletionFailureReleasesTheClaim(t *testing.T) {
 	}
 }
 
+// CHAOS-4264: a signaled/resource-exhausted/refused compatibility bridge
+// attempt must still be Retryable (no behavior change to River's retry
+// decision) but must carry the matching bounded jobruntime.Reason instead of
+// the pre-existing bare ErrUnavailable, so an attempt log line explains
+// itself without anyone reading Sentry or host dmesg.
+func TestRetryCompatibilityErrorAttachesBoundedReasonAndPreservesCause(t *testing.T) {
+	cases := []struct {
+		name  string
+		cause error
+	}{
+		{name: "signaled", cause: ErrCompatibilityProcessSignaled},
+		{name: "resource_exhausted", cause: ErrCompatibilityResourceExhausted},
+		{name: "ambiguous_refused", cause: ErrCompatibilityAmbiguousRefused},
+		{name: "unclassified", cause: ErrUnavailable},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			marked := retryCompatibilityError(testCase.cause)
+			if !strings.Contains(marked.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("Error() = %q, want the retryable category", marked.Error())
+			}
+			if !errors.Is(marked, testCase.cause) {
+				t.Fatalf("retryCompatibilityError(%v) lost its cause: %v", testCase.cause, marked)
+			}
+		})
+	}
+}
+
+// TestPartitionCompatibilityFailureIsRetryableWithReason drives the failure
+// through the real Handler.Work path (not just retryCompatibilityError in
+// isolation) so the wiring at the actual call site is what's under test, not
+// just the helper.
+func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProcessSignaled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if !errors.Is(err, ErrCompatibilityProcessSignaled) {
+		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProcessSignaled", err)
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("partitionReleases = %d, want 1", store.partitionReleases)
+	}
+}
+
 func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
@@ -424,6 +481,19 @@ type fakeCompatibility struct{}
 
 func (fakeCompatibility) ComputePartition(context.Context, Run, Partition) error { return nil }
 func (fakeCompatibility) Finalize(context.Context, Run) error                    { return nil }
+
+// failingCompatibility always fails with a fixed, caller-chosen error --
+// used to prove the classified compatibility bridge sentinels (CHAOS-4264)
+// reach the caller unchanged through Handler.Work's retry wrapping.
+type failingCompatibility struct{ err error }
+
+func (compatibility failingCompatibility) ComputePartition(context.Context, Run, Partition) error {
+	return compatibility.err
+}
+
+func (compatibility failingCompatibility) Finalize(context.Context, Run) error {
+	return compatibility.err
+}
 
 type fakeRepositoryDiscoverer struct {
 	identifiers []string

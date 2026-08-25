@@ -386,6 +386,41 @@ if _PROMETHEUS_AVAILABLE:
         ["provider", "source"],
     )
 
+    # ---------------------------------------------------------------------------
+    # Metric compatibility bridge runner subprocess (CHAOS-4264)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _prometheus_client_module.Gauge(
+        "dev_health_metric_compat_runner_rss_bytes",
+        "Peak resident set size observed for the metric compatibility bridge "
+        "runner subprocess (worker_metrics_runner), sampled from "
+        "/proc/<pid>/status while the child runs so a kernel OOM kill "
+        "(SIGKILL, no graceful exit) still leaves a reading (CHAOS-4264: "
+        "the runner reached 1.7 GB inside a 2 GiB api container with no "
+        "cgroup-level signal reaching Docker or SigNoz).",
+        ["worker_kind"],
+    )
+    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_metric_compat_process_exits_total",
+        "Metric compatibility bridge runner subprocess exits by classified "
+        "reason. 'success' and 'process_failed' are ordinary outcomes; "
+        "'process_signaled' and 'resource_exhausted' mean the process never "
+        "returned its own exit path (killed) or hit its self-imposed "
+        "memory bound -- both are the CHAOS-4264 failure class that used to "
+        "surface only as an opaque -9 in Sentry.",
+        ["reason"],
+    )
+    DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = (
+        _prometheus_client_module.Histogram(
+            "dev_health_metric_compat_execution_duration_seconds",
+            "Wall-clock duration of one metric compatibility bridge "
+            "execution (subprocess spawn through exit), labeled by "
+            "worker_kind/operation so a daily partition's long tail is "
+            "distinguishable from a remaining-metrics family's.",
+            ["worker_kind", "operation"],
+            buckets=(1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0),
+        )
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -424,6 +459,9 @@ else:
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
     WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _noop_counter()
+    DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
+    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
+    DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
 
 
 # ---------------------------------------------------------------------------

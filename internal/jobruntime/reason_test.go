@@ -142,6 +142,41 @@ func TestSafeErrorUnreasonedFailureNeverLeaksCause(t *testing.T) {
 	}
 }
 
+// TestCompatibilityBridgeReasonsSurviveToRiverErrorRow proves the three
+// CHAOS-4264 Reason constants (used by internal/jobs/metrics/daily's
+// retryCompatibilityError) render through the same safe-error pipeline as
+// every other bounded reason -- distinguishable in the River attempt log
+// without leaking the underlying HTTP/process error text.
+func TestCompatibilityBridgeReasonsSurviveToRiverErrorRow(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name   string
+		reason Reason
+	}{
+		{name: "process_signaled", reason: ReasonProcessSignaled},
+		{name: "resource_exhausted", reason: ReasonResourceExhausted},
+		{name: "ambiguous_refused", reason: ReasonAmbiguousRefused},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New("daily metrics compatibility runner was terminated by signal 9 (pid 1330111)")
+			marked := WithReason(Retryable(cause), testCase.reason)
+			choice := classify(context.Background(), marked, 1, 5)
+			got := unwrapSafe(t, transportError(choice)).Error()
+
+			if !strings.Contains(got, testCase.reason.String()) {
+				t.Fatalf("Error() = %q, want it to contain the reason %q", got, testCase.reason)
+			}
+			if !strings.Contains(got, string(CategoryRetryable)) {
+				t.Fatalf("Error() = %q, want it to keep the retryable category", got)
+			}
+			if strings.Contains(got, "1330111") || strings.Contains(got, "terminated by signal") {
+				t.Fatalf("Error() = %q, leaked the underlying cause text", got)
+			}
+		})
+	}
+}
+
 // TestWithReasonIsANoOpOnUnmarkedErrors proves the reason stays strictly
 // opt-in: an unclassified handler error (the fail-closed default) is
 // unaffected by WithReason, because there is no markedError to attach it to.

@@ -276,6 +276,20 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       SENTRY_TRACES_RATE: ${SENTRY_TRACES_RATE:-0}
       SENTRY_SEND_PII: ${SENTRY_SEND_PII:-true}
+      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
+      # metrics compatibility bridge's runner subprocess
+      # (worker_metrics_runner), independent of this container's own memory
+      # limit (which the runner shares with the API process itself). Hitting
+      # this bound raises a classified MemoryError instead of leaving the
+      # container-wide cgroup OOM killer as the only thing that notices --
+      # see deploy/go-workers/README.md "Daily-metrics compatibility bridge"
+      # for the incident this closes (CHAOS-4264). Paired with
+      # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (default 1): this is the
+      # WHOLE per-runner budget, not a slice of a larger aggregate -- codex
+      # R1 flagged that a per-runner limit without a concurrency bound is
+      # not an aggregate memory bound at all.
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
+      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
     depends_on:
       postgres:
         condition: service_healthy

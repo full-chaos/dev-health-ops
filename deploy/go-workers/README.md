@@ -660,6 +660,65 @@ container's actual environment (`docker inspect --format
 '{{range .Config.Env}}{{println .}}{{end}}'`), not by reading the compose
 file.
 
+### Daily-metrics compatibility bridge: a child OOM kill inside `api` shows up nowhere `docker`/SigNoz look (CHAOS-4264)
+
+The daily/remaining-metrics compatibility bridge (`internal/jobs/metrics/daily`,
+`internal/jobs/metrics/remaining`) still runs its Python compute as a child
+process of the `api` container (`worker_metrics._run_compatibility_process`
+spawns `python -m dev_health_ops.api.internal.worker_metrics_runner`), sharing
+that container's `deploy.resources.limits.memory` cgroup with the API process
+itself. On 2026-08-25 that child alone reached 1.7 GB RSS inside a 2 GiB `api`
+container and was killed by the kernel memcg OOM killer. `docker inspect`'s
+`OOMKilled` field only reflects PID 1 (the API process), so it read `false`;
+SigNoz's `docker_stats` metrics showed memory usage climbing but recorded no
+kill event at all. The only host-level evidence was the kernel ring buffer:
+
+```
+sudo dmesg -T | rg -i 'killed process|oom'
+```
+
+(a short ring buffer — capture same day) or, for a still-running container,
+`/sys/fs/cgroup/memory.events`'s `oom_kill` counter and `memory.peak`.
+Recreating the container resets both.
+
+Three independent mitigations exist as of CHAOS-4264, none of which raise
+the `api` container's own memory limit:
+
+- The runner subprocess self-limits via `RLIMIT_AS`/`RLIMIT_DATA`
+  (`worker_metrics_runner._apply_memory_limit`), configurable with
+  `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` (default 640 MiB — see the
+  `api`/`worker` service `environment:` block in `compose.yml` and
+  `deploy/docker-compose/compose.production.yml`). Hitting this bound raises
+  a `MemoryError` the runner catches and reports as a classified
+  `resource_exhausted` exit, instead of relying on the kernel to notice the
+  container-wide ceiling first.
+- A per-runner limit alone is not an aggregate memory bound: N concurrent
+  bridge requests each spawning a runner can still exhaust the shared
+  container even if every individual runner stays under its own rlimit
+  (codex review R1 flagged this). `worker_metrics._RUNNER_CONCURRENCY_SEMAPHORE`,
+  sized by `DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY` (default 1), makes
+  "container limit minus API headroom" the actual per-runner budget with no
+  multiplication. Raising either env var without the other reintroduces the
+  aggregate-exhaustion risk.
+- The compatibility bridge no longer collapses a signaled/resource-exhausted
+  runner with zero recorded progress into the `ambiguous` state that used to
+  require a human `/metric-executions/v1/{id}/repair` call before any retry
+  could re-claim it; it authorizes the retry itself (see
+  `worker_metrics._mark_retry_authorized`), so a single OOM kill no longer
+  permanently fails the partition. "Zero progress" is signalled at the write
+  BOUNDARY inside `job_daily.run_daily_metrics_job` (immediately before its
+  first ClickHouse write for a repo/day), not on that repo's successful
+  completion — a repo-level "finished" signal was too coarse and could
+  misclassify a kill-after-writes-started-but-before-return as safe (also
+  codex R1).
+
+`DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` bounds the *runner*, not the
+container: alert on the container-level `memory.events` `oom_kill` counter
+(cgroup v2) regardless, since a runaway allocation anywhere else in the `api`
+process is invisible to the runner's own rlimit and still only ever surfaces
+in `dmesg`/`memory.events`, never in `docker inspect` or the metrics this
+stack already exports.
+
 ## CHAOS-3142 end-to-end proof
 
 The durable record of what CHAOS-3142 proved — against a real shared local

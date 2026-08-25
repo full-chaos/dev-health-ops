@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,7 @@ from dev_health_ops.work_graph.extractors.ai_workflow import (
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
 
 # Public aliases for backward compatibility
 _to_utc = to_utc
@@ -739,6 +741,7 @@ async def run_daily_metrics_job(
     provider: str = "auto",
     org_id: str,
     skip_finalize: bool = False,
+    on_write_starting: Callable[[], None] | None = None,
 ) -> dict[date, list[str]]:
     """Run the daily metrics compute+write pipeline.
 
@@ -1356,6 +1359,19 @@ async def run_daily_metrics_job(
             pr_commit_stats=pr_commit_stats,
         )
 
+        # CHAOS-4264: this is the FIRST write for (repo_id, d) in the whole
+        # function -- everything above is loading/compute, no sink writes.
+        # on_write_starting is the caller's durable-proof boundary: if the
+        # process dies before this fires, nothing was written for (repo_id,
+        # d) and a retry is unconditionally safe; if it fires and the
+        # process then dies mid-write, the caller must NOT assume safety --
+        # a repo-level "finished" signal (fired only after the whole call
+        # returns) is too coarse for that, which is exactly what let a
+        # kill-after-first-write-block-but-before-return be misclassified
+        # as "no progress" before this callback existed.
+        if on_write_starting is not None:
+            on_write_starting()
+
         for s in sinks:
             s.write_repo_metrics(result.repo_metrics)
             s.write_user_metrics(result.user_metrics)
@@ -1496,6 +1512,19 @@ async def run_daily_metrics_job(
             )
             for s in sinks:
                 s.write_ic_landscape_rolling(ic_landscape)
+
+        if len(days) > 1:
+            # CHAOS-4264: a backfill_days > 1 call holds this day's source
+            # rows (commit/PR/CI/testops/incident/work-item lists, complexity
+            # and blame maps) as plain local variables that Python's own
+            # refcounting already drops once the next iteration reassigns
+            # them -- except for anything a reference cycle keeps alive
+            # (tracebacks captured in a `except ... as exc` that outlives its
+            # block, a resolver closure holding a day's rows). gc.collect()
+            # forces that cycle collection at the day boundary instead of
+            # letting it accumulate across the whole backfill window; it is
+            # a no-op cost in the common single-day case, which skips it.
+            gc.collect()
 
     if families_zero_rows:
         logger.warning(

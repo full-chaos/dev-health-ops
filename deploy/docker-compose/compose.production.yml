@@ -167,6 +167,27 @@ services:
       # Schema is applied by the one-shot `migrate` service (gated via
       # depends_on) — the API must never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
+      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
+      # metrics compatibility bridge's runner subprocess
+      # (worker_metrics_runner), independent of this service's own
+      # `deploy.resources.limits.memory` below (which the runner shares with
+      # the API process itself -- the incident this closes was the runner
+      # alone reaching 1.7 GB inside this container). Hitting this bound
+      # raises a classified MemoryError instead of leaving the container-wide
+      # cgroup OOM killer as the only thing that notices -- see
+      # deploy/go-workers/README.md "Daily-metrics compatibility bridge".
+      # Do NOT raise the limit below to "fix" this; it bounds the runner
+      # underneath whatever that limit already is. 640 MiB leaves ~384 MiB
+      # for the API process under THIS file's 1G limit; paired with
+      # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (default 1) it is the WHOLE
+      # per-runner budget, not a slice of a larger aggregate (codex R1: a
+      # per-runner limit alone is not an aggregate bound without a
+      # concurrency cap). If this service's real deployed container limit
+      # differs from the 1G configured here (see the README section above),
+      # both env vars must be set explicitly for that limit -- do not assume
+      # this default is correct for a differently-sized deployment.
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
+      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

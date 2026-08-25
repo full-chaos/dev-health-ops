@@ -412,7 +412,17 @@ wait_for_ready() {
 echo "==> waiting for Valkey readiness"
 wait_for_redis
 
-echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
+# FIXTURE-BACKED, NOT PIPELINE PROOF (CHAOS-4266): --with-metrics writes
+# derived metric rows (repo_metrics_daily, team_metrics_daily, ...) directly
+# into ClickHouse via the fixture sink, bypassing sync -> metrics.daily_dispatch
+# -> the Go/Python bridge -> job_daily.py entirely. The assertions below (health/
+# meta/home) only prove the API can read those pre-seeded rows back -- they do
+# NOT exercise the metrics compute pipeline, and this job's own trigger/dispatch
+# path can be completely dead while these checks stay green (CHAOS-4263 and
+# CHAOS-4264 both did exactly that for a week, undetected). For real
+# executed-proof of the metrics pipeline, see the `metrics-executed-proof` job
+# in .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+echo "==> generating deterministic ClickHouse fixtures (metrics + work graph) — FIXTURE-BACKED, not pipeline proof"
 (
   export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
@@ -478,7 +488,11 @@ META_FILE="${TMP_DIR}/meta.json"
 fetch_json "/api/v1/meta" "${META_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_meta.py" "${META_FILE}"
 
-echo "==> validating /api/v1/home"
+# FIXTURE-BACKED, NOT PIPELINE PROOF (CHAOS-4266): asserts the API can read
+# back the rows --with-metrics wrote directly above. Does not exercise sync,
+# dispatch, or the job_daily.py/bridge compute path -- see the comment on the
+# fixture-generation step above.
+echo "==> validating /api/v1/home (fixture-backed readback, not metrics-pipeline proof)"
 HOME_FILE="${TMP_DIR}/home.json"
 fetch_json "/api/v1/home" "${HOME_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"

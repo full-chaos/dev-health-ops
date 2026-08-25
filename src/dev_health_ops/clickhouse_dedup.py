@@ -46,6 +46,12 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     "testops_test_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_coverage_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_quality_drag": ("org_id", "repo_id", "day"),
+    # CHAOS-4242: was missing entirely -- dedup_from() fell through to
+    # `return table`, handing reports/charts.py the RAW table. Natural key
+    # matches compute_dora.py's own documented contract, "one row per
+    # (repo, metric_name, day)" (metric_name included, or two metrics for
+    # the same repo/day would collapse into one row).
+    "dora_metrics_daily": ("org_id", "repo_id", "day", "metric_name"),
 }
 
 

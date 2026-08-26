@@ -724,6 +724,18 @@ def finalize_synthetic_sync_run(ns: argparse.Namespace, target: str) -> int:
     the row-write step so a caller can seed several dora-relevant targets
     before any of their fanouts run (CHAOS-4266; see the comment above the
     call site in `sync_synthetic_target`).
+
+    NOT idempotent (codex review): every call mints a new `sync_runs` row via
+    `_complete_synthetic_sync_run`, exactly as the non-deferred path already
+    did -- calling this (or the non-deferred seed path) twice for the same
+    target has always produced two independent sync_run/post_sync
+    generations, not a merge. What decoupling changes is only WHEN
+    `since_at`/`before_at` get computed: always fresh at call time (`now` and
+    `now - backfill days`), same as before, just later than the seed step by
+    however long the caller takes to finalize its other deferred targets.
+    Call this at most once per seeded target, immediately after all of a
+    run's dora-relevant targets have finished seeding -- exactly what
+    `ci/run_metrics_executed_proof.sh` does.
     """
     if target not in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS:
         raise SystemExit(

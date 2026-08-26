@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import dataclasses
 import io
+import json
 import pathlib
 import uuid
 from datetime import datetime, timezone
@@ -87,7 +88,108 @@ class _ContextQueryClient:
         self.as_of = as_of
         self.seen: set[str] = set()
 
+    def _identities_from_members(self) -> list[dict[str, Any]]:
+        """CHAOS-4321: synthesize `identities` rows FROM the oracle case's
+        `Facts.Members` list (still the shared Go/Python fixture format --
+        the OUTPUT shape loadMembers/member_rows used to query directly, now
+        the shared oracle test data's input shape instead). One
+        `identities` row per distinct MemberID, with its facets grouped by
+        Provider and every TeamID it appears under unioned into `team_ids`
+        -- reproduces exactly the admin-authored data that would make the
+        production loader emit the SAME member_by_identity candidates the
+        pre-CHAOS-4321 team_memberships-shaped fixture rows did.
+        """
+        by_member: dict[str, dict[str, Any]] = {}
+        for raw in self.facts.get("Members") or []:
+            member_id = str(raw.get("MemberID") or "")
+            if not member_id:
+                continue
+            entry = by_member.setdefault(
+                member_id,
+                {
+                    "canonical_id": member_id,
+                    "email": raw.get("RawEmail"),
+                    "provider_identities": {},
+                    "team_ids": [],
+                    "updated_at": raw.get("UpdatedAt"),
+                },
+            )
+            team_id = str(raw.get("TeamID") or "")
+            if team_id and team_id not in entry["team_ids"]:
+                entry["team_ids"].append(team_id)
+            provider = str(raw.get("Provider") or "")
+            if provider:
+                raw_ids = list(raw.get("IdentityFacets") or [])
+                if raw.get("RawProviderUserID"):
+                    raw_ids.append(raw["RawProviderUserID"])
+                bucket = entry["provider_identities"].setdefault(provider, [])
+                for value in raw_ids:
+                    if value and value not in bucket:
+                        bucket.append(value)
+        return [
+            {
+                "canonical_id": entry["canonical_id"],
+                "email": entry["email"],
+                "provider_identities": json.dumps(entry["provider_identities"]),
+                "team_ids": entry["team_ids"],
+                "updated_at": _time(entry["updated_at"])
+                if entry["updated_at"]
+                else None,
+            }
+            for entry in by_member.values()
+        ]
+
+    def _admin_teams_from_members(self) -> list[dict[str, Any]]:
+        """CHAOS-4321: synthesize `teams` rows FROM the same `Facts.Members`
+        list, one row per distinct TeamID -- the identities-side `team_ids`
+        union above already accounts for every membership these Facts
+        describe, so `members`/`manual_members` are left empty here.
+
+        Note: this fake does NOT yet exercise Facts.UntypedMembers/
+        Facts.ProviderUntypedMembers (the teams.manual_members-override /
+        teams.members-fallback untyped-facet paths added by CHAOS-4321) --
+        that gap predates this ticket's fix (member_by_untyped_facet's oracle
+        coverage was already absent) and is covered instead by pure-Go/
+        pure-Python unit tests on both sides
+        (TestGitHubWorkItemDerivationTwoLayerMembershipResolution's (e)-(j)
+        subtests; test_chaos_4321_ownership_only_attribution.py)."""
+        by_team: dict[str, dict[str, Any]] = {}
+        for raw in self.facts.get("Members") or []:
+            team_id = str(raw.get("TeamID") or "")
+            if not team_id:
+                continue
+            by_team.setdefault(
+                team_id,
+                {
+                    "id": team_id,
+                    "name": str(raw.get("TeamName") or team_id),
+                    "members": [],
+                    "manual_members": [],
+                },
+            )
+        return list(by_team.values())
+
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if "FROM identities FINAL" in query:
+            if (
+                params.get("org_id") != self.org_id
+                or "org_id = {org_id:String}" not in query
+            ):
+                raise AssertionError("identities query lost its tenant fence")
+            if "is_active = 1" not in query:
+                raise AssertionError("identities query lost its active fence")
+            self.seen.add("identities")
+            return self._identities_from_members()
+        if "FROM teams FINAL" in query:
+            if (
+                params.get("org_id") != self.org_id
+                or "org_id = {org_id:String}" not in query
+            ):
+                raise AssertionError("admin teams query lost its tenant fence")
+            if "is_active = 1" not in query:
+                raise AssertionError("admin teams query lost its active fence")
+            self.seen.add("admin_teams")
+            return self._admin_teams_from_members()
         if (
             params.get("org_id") != self.org_id
             or "o.org_id = {org_id:String}" not in query
@@ -136,8 +238,13 @@ class _ContextQueryClient:
                 for raw in self.facts.get("Repos") or []
             ]
         if "team_memberships" in query:
+            # CHAOS-4321 (chris, 08:30 PT): the FALLBACK membership layer --
+            # provider auto-import, restored unchanged from before this
+            # ticket. Sourced from Facts.ProviderMembers (NOT Facts.Members,
+            # which is the admin/override layer synthesized into
+            # identities/teams via _identities_from_members above).
             self._assert_deterministic_team_join(query, "g.member_id")
-            self.seen.add("members")
+            self.seen.add("provider_members")
             return [
                 _loader_row(
                     raw,
@@ -155,7 +262,7 @@ class _ContextQueryClient:
                         "updated_at",
                     ),
                 )
-                for raw in self.facts.get("Members") or []
+                for raw in self.facts.get("ProviderMembers") or []
             ]
         if "manual_attribution_fallbacks" in query:
             self.seen.add("manual")
@@ -218,7 +325,14 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
             as_of=as_of
         )
     )
-    if query_client.seen != {"projects", "repos", "members", "manual"}:
+    if query_client.seen != {
+        "projects",
+        "repos",
+        "identities",
+        "admin_teams",
+        "provider_members",
+        "manual",
+    }:
         raise AssertionError(
             f"production team-attribution loader coverage incomplete: {query_client.seen}"
         )

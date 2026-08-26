@@ -3,6 +3,7 @@ package streamhandlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -169,6 +170,74 @@ func TestClickHouseExternalSinkRetriesAreIdempotentAtNaturalKeys(t *testing.T) {
 	}
 }
 
+// TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite pins the fix
+// for the CHAOS-4321 round-3 codex adversarial review HIGH finding: a
+// team.v1 external-ingest write used to send manual_members=[]
+// unconditionally, so it could silently clear an admin override. Write()
+// must now read the team's current manual_members and carry it forward.
+func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
+	pointer := externalTestPointer()
+	connection := &productSink{
+		batch: &productBatch{},
+		queryRows: [][]any{
+			{"team-a", []string{"alice@example.test"}},
+		},
+	}
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	source := externalSinkBatch{
+		Pointer: pointer, SourceID: uuid.New(),
+		Records: []externalSinkRecord{externalSinkFixture("team.v1", map[string]any{
+			"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z",
+		})},
+	}
+	if _, err := sink.Write(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	if connection.queryCalls != 1 {
+		t.Fatalf("preserve-lookup calls = %d, want 1", connection.queryCalls)
+	}
+	if !connection.batch.sent || len(connection.batch.rows) != 1 {
+		t.Fatalf("team sink not durable: %#v", connection.batch)
+	}
+	// members (4) is a bare update; manual_members (5) is the column this
+	// test protects.
+	got := connection.batch.rows[0][5]
+	if want := []string{"alice@example.test"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("manual_members = %v, want %v (existing override must survive)", got, want)
+	}
+}
+
+// TestClickHouseExternalSinkAbortsTeamWriteWhenPreserveLookupFails pins the
+// other half of the same fix: if the preserve-lookup read itself fails, the
+// team.v1 row must never be written with a blind [] -- that would silently
+// wipe whatever override actually exists. Write() must return an error and
+// the batch must never be sent.
+func TestClickHouseExternalSinkAbortsTeamWriteWhenPreserveLookupFails(t *testing.T) {
+	pointer := externalTestPointer()
+	connection := &productSink{batch: &productBatch{}, queryErr: errors.New("clickhouse unavailable")}
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	source := externalSinkBatch{
+		Pointer: pointer, SourceID: uuid.New(),
+		Records: []externalSinkRecord{externalSinkFixture("team.v1", map[string]any{
+			"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z",
+		})},
+	}
+	if _, err := sink.Write(context.Background(), source); err == nil {
+		t.Fatal("expected Write to fail closed when the manual_members preserve-lookup errors")
+	}
+	if connection.batch.sent {
+		t.Fatal("team row must never be sent when its manual_members could not be preserved")
+	}
+}
+
 func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyTwoKinds(t *testing.T) {
 	pointer := externalTestPointer()
 	records := []externalSinkRecord{
@@ -269,7 +338,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 			record := externalSinkRecord{Kind: kind, ExternalID: "golden", Payload: expected.Payload}
 			values, err := externalRecordValues(
 				externalSinkBatch{Pointer: pointer, SourceID: sourceID},
-				record, now, &ExternalRecomputeScope{},
+				record, now, &ExternalRecomputeScope{}, nil,
 			)
 			if err != nil {
 				t.Fatal(err)

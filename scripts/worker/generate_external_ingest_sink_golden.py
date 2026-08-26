@@ -79,13 +79,34 @@ def _canonical(value: Any) -> Any:
     return value
 
 
+class _CaptureQueryResult:
+    """Always-empty result_rows: CaptureStore snapshots a single write in
+    isolation, with no real prior ClickHouse state -- "no existing row" is
+    the only correct answer for any SELECT a captured write path issues."""
+
+    result_rows: list[tuple[Any, ...]] = []
+
+
+class _CaptureClient:
+    """Stub for ClickHouseStore.insert_teams's
+    _preserve_existing_manual_members lookup (CHAOS-4321), which is the
+    only thing besides _insert_rows that CaptureStore's writers reach
+    through self.client. Everything else stays a bare object() attribute
+    surface -- no other client method is exercised by this script's capture
+    path, and adding one here that silently no-ops would mask a real
+    capture gap if that ever changed."""
+
+    def query(self, *_args: Any, **_kwargs: Any) -> _CaptureQueryResult:
+        return _CaptureQueryResult()
+
+
 class CaptureStore(ClickHouseStore):
     def __init__(self, org_id: str) -> None:
         super().__init__(
             "clickhouse://capture.invalid",
             operational_ordering_contract=OperationalOrderingContract.CURRENT,
         )
-        self.client = object()
+        self.client = _CaptureClient()
         self.org_id = org_id
         self.captured: dict[str, dict[str, Any]] = {}
 

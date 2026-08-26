@@ -194,6 +194,8 @@ class FakeClickHouseTeamStore:
                 "name": str(get("name")) if get("name") is not None else team_id,
                 "description": get("description"),
                 "members": _as_list(get("members")),
+                # CHAOS-4321: admin-override provenance marker.
+                "manual_members": _as_list(get("manual_members")),
                 "project_keys": _as_list(get("project_keys")),
                 "repo_patterns": _as_list(get("repo_patterns")),
                 "is_active": int(get("is_active", 1) or 0),

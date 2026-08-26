@@ -89,6 +89,108 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > `metrics/compute_work_items.py:405-642` and
 > `internal/providersync/github_work_items_derivation_context.go:605-754`.
 
+> **CHAOS-4321 (chris's ruling, 2026-08-26, final form 08:30 PT).** Plain
+> wording (chris-approved, quoted verbatim wherever this rule is described —
+> ticket, PR, docs, evidence strings): *"A work item gets a team from the
+> project/repo it lives in. That is team attribution. If that finds nothing,
+> we look at the person on the item (assignee, or PR author). If that person
+> is mapped to one team, the item goes to that team. If the person is mapped
+> to two or more teams, we do not guess — the item stays unassigned."*
+> "Mapped" means the ClickHouse team mappings — an admin-authored override
+> when one exists, provider-imported membership otherwise.
+>
+> `assignee_membership` (rank 4) and `author_membership` (rank 6) are
+> membership-shaped signals, resolved by a shared TWO-LAYER lookup
+> (`_resolve_membership` / `resolveMembership`, one exactly-one-team gate,
+> applied identically to both layers):
+>
+> 1. **Admin layer (the override, authoritative).** `identities`
+>    (canonical_id → team_ids, provider_identities — written by
+>    `/org/admin/identities`) ∪ `teams.manual_members` (a facet roster —
+>    written ONLY by `ClickHouseTeamAdminService.add_members`/
+>    `remove_members`/`set_members`, the admin Identities screen and the
+>    drift-approval flow; provider-untagged: a bare `manual_members` entry
+>    with no backing `identities` row still resolves, matched by normalized
+>    equality with no provider tag). An identity's admin-authorized team set
+>    is `identities.team_ids` ∪ every active team whose `teams.manual_members`
+>    contains one of the identity's facets — the union matters because the
+>    drift-approval admin action (`apply_identity_membership_change`,
+>    `api/services/configuration/clickhouse_identity_drift.py`) writes
+>    `teams.manual_members` directly without updating `identities.team_ids`.
+>    If this layer has ANY candidate for the identity, it decides outright —
+>    1 team attributes, 2+ teams is `unassigned` (`ambiguous_admin_membership`,
+>    evidence lists the colliding team ids) and does **not** fall through to
+>    layer 2: an ambiguous admin mapping is a data problem to fix, not to
+>    route around.
+>
+>    `teams.manual_members` (migration `079_teams_manual_members.py` -- a
+>    Python migration, not pure DDL, since it also backfills from
+>    `identities.team_ids` for pre-existing admin-mapped identities) is a
+>    CHAOS-4321 fix, not the original design: an earlier revision of this
+>    ticket treated ALL of `teams.members` as the override, but a codex
+>    adversarial review (HIGH, both languages) found provider auto-import
+>    writes UNREVIEWED roster rows straight into `teams.members` too
+>    (`ClickHouseTeamDriftProjector.project_team`'s `AUTO_APPLY_POLICY`
+>    branch, for any identity that doesn't conflict with an existing manual
+>    override) — so a roster entry imported from ONE provider could become
+>    the authoritative, ambiguity-suppressing answer for a DIFFERENT
+>    provider's work item sharing the same identity string. `manual_members`
+>    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
+>    provider auto-import carries it forward unchanged on every sync write
+>    and never sets or clears it. Pre-existing `teams.members` entries have
+>    no way to prove their provenance and fall into the provider layer below
+>    until re-saved from the admin panel.
+> 2. **Provider layer (the fallback).** `team_memberships`, populated
+>    exclusively by the four auto-import workers
+>    (`workers/team_autoimport_{github,gitlab,jira,linear}.py`) ∪
+>    `teams.members` (the mixed-provenance roster the fix above demoted out
+>    of the admin layer). Consulted ONLY when layer 1 has zero candidates for
+>    that identity (chris, 08:30 PT: *"manual is override — if the override
+>    exists, use it, else use attribution from providers"*; refined
+>    2026-08-26 10:39 PT: *"admin is an override, not a default — it's the
+>    sync config mapping, but admin can override it in the panel"*). Same
+>    one-team gate: ambiguous here is `ambiguous_provider_membership`;
+>    nothing in either layer is `no_membership`.
+>
+> `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
+> untouched — this ticket only changes which candidate source(s) attribution
+> reads and in what order, not what writes `team_memberships` or how drift
+> review reconciles it.
+>
+> The pre-existing single-team ambiguity gate (CHAOS-4110, previously
+> author-only, provider-layer-only) now applies to BOTH assignee and author,
+> and to BOTH layers (assignee previously had no gate at all — an ambiguous
+> member's ranking by specificity/priority silently picked an arbitrary
+> winner, the exact defect this ticket removes). Telemetry rides the
+> existing `no_candidate:<reason>` evidence mechanism (already generalized by
+> `work_item_team_attribution_metric_source` /
+> `githubWorkItemTeamAttributionMetricSource` — those mappers strip any
+> `:<team ids>` suffix before it becomes a Prometheus label, a cardinality
+> guard, while the full reason + team ids stay in the persisted `evidence`
+> column for an admin to act on): `no_membership` (neither layer has any
+> mapping), `ambiguous_admin_membership:<ids>`, `ambiguous_provider_membership:<ids>`
+> (precedence in that order when more than one applies), `bot_author`
+> (author path only, unchanged).
+>
+> Net effect: the precedence ladder, its ranks, its Enum8 codes and its
+> donor-eligibility set are **unchanged by this ticket** — only HOW
+> `assignee_membership`/`author_membership` resolve changed (a two-layer
+> lookup replacing a single flat one). See
+> `metrics/compute_work_items.py::_resolve_membership`/`resolve_team_attribution`
+> and
+> `internal/providersync/github_work_items_derivation_context.go::resolveMembership`/`resolve`.
+>
+> **Regression, not new design.** This override existed before: the
+> ClickHouse-backed roster resolver (`providers/teams.py::_build_member_to_team`,
+> reachable via `load_team_resolver_from_store` reading `teams.members`) is
+> the ancestor this ticket restores as the admin layer's manual-facet half —
+> now via the narrower, provably admin-exclusive `teams.manual_members`
+> column rather than the mixed-provenance `teams.members` an earlier
+> revision used, per the fix above — see "Stale references to this
+> document" / the CHAOS-4321 PR body for the file:line history of where the
+> override stopped being wired into `resolve_team_attribution`'s default
+> call path.
+
 ---
 
 ## 0. Target state (CHAOS-2600) — ClickHouse-only team attribution
@@ -112,8 +214,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
 > semantics: updating an identity removes its facets from teams it left and replaces changed facets in
-> teams it stayed in, editing `teams.members` add/remove-by-facet (never a full recompute) so Auto
-> Import / catalog members are preserved. See *CS6 status (CHAOS-2607)* at the end of §4.
+> teams it stayed in, editing `teams.members` **and** `teams.manual_members` (CHAOS-4321) add/remove-by-facet
+> (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status (CHAOS-2607)*
+> at the end of §4.
 
 **ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
 team attribution mappings.** Manual mappings are ClickHouse fallback records only — never overrides,
@@ -168,11 +271,11 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee identity)"}
+    RO -->|"no"| AM{"4 · assignee_membership candidate?<br/>(assignee identity, CHAOS-4321 -- admin mapping if present (single-team), else provider auto-import fallback (single-team))"}
     AM -->|"yes"| Win
     AM -->|"no"| LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
-    LK -->|"no"| AU{"6 · author_membership candidate?<br/>(reporter/author identity, CHAOS-4244 — single-team, non-bot only)"}
+    LK -->|"no"| AU{"6 · author_membership candidate?<br/>(reporter/author identity, CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer admin-then-provider resolution, single-team, non-bot only)"}
     AU -->|"yes"| Win
     AU -->|"no"| MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
@@ -231,9 +334,9 @@ means the ClickHouse `teams` dimension is empty.
 | 1 | `issue_project` | native issue project → owning team | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | `team_memberships` (assignee identity) | medium | 5–8 | 0–3 | `member_id, identity` (evidence text: `assignee=<id>`) |
+| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
 | 5 | `linked_issue` | `work_item_dependencies` donor → donor's team | medium | 6–8 | 0–4 | `dependency_type, donor_work_item_id, donor_provider` |
-| 6 | `author_membership` | `team_memberships` (PR/MR reporter identity, CHAOS-4244 — single-team, non-bot only) | medium | 7–8 | 0–5 | `member_id, identity` (evidence text: `reporter=<id>`) |
+| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | 7–8 | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
 | 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
@@ -311,7 +414,7 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
 
-One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Two member representations — do not conflate:** `team_memberships` (edges) = canonical attribution source, read by the ladder, all 4 providers; `teams.members` (roster) = secondary resolver + admin/display, this CS populates it for github/gitlab too. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 > **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
@@ -509,8 +612,9 @@ existing orgs see **no behavior change** — discovery writes straight to `teams
 (flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
 `repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
 imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
-membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` roster is
-then updated surgically on approval. `policy 2` is manual/none. `status` / `change_type` are
+membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` **and**
+`teams.manual_members` (CHAOS-4321) rosters are then updated surgically on approval. `policy 2` is
+manual/none. `status` / `change_type` are
 low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
 can be emitted.
 
@@ -548,8 +652,26 @@ the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
 > 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
 > attribution dimension before write-through — not just the `teams.members` roster — whenever the
 > provider row would replace a manual membership or member fallback. Approving inserts the provider
-> membership, expires the conflicting manual row/fallback, and adds only the incoming member facets to
-> `teams.members`; dismissing leaves both the catalog and attribution dimensions unchanged.
+> membership, expires the conflicting manual row/fallback, and adds the incoming member facets to
+> `teams.members` **and** `teams.manual_members` (CHAOS-4321, via
+> `ClickHouseTeamAdminService.add_members` — see below); dismissing leaves both the catalog and
+> attribution dimensions unchanged.
+>
+> **CHAOS-4321 cross-reference.** `team_memberships` is the PROVIDER (fallback) attribution layer as
+> of this ticket (see the CHAOS-4321 callout in "Why this exists" above and §0.2 rows 4/6) — read
+> only when an identity has no ADMIN mapping (`identities`/`teams.manual_members`) at all. Approving a
+> pending identity change here inserts the provider's row into `team_memberships` under ITS OWN
+> auto-import `source` (`provider_access`/`native`/`jira_legacy`) — it does not relabel the row
+> `manual` and does not touch `identities.team_ids`. **This is one of the two genuinely
+> admin-exclusive writers of `teams.manual_members`** (the admin Identities screen is the other;
+> `/org/admin/teams` itself has no member-editing endpoint at all — confirmed by tracing every write
+> site during CHAOS-4321): `apply_identity_membership_change` calls
+> `team_admin.add_members`/`remove_members` directly, which now writes `teams.manual_members` (not
+> just `teams.members`) as of CHAOS-4321. So approving a drift change here DOES mint an admin
+> (override) mapping — a human clicking "approve" is itself the admin action that earns override
+> status, even though the underlying data originated from provider auto-import. (Before CHAOS-4321's
+> provenance fix, this was NOT true: `add_members` wrote only `teams.members`, and this section
+> claimed approval could "never mint an admin mapping" — that claim is now stale and corrected here.)
 
 ### 0.6 Current execution transport (Go worker cutover) — added at restoration
 
@@ -557,10 +679,24 @@ the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
 > This section states what changed in *how the computation is invoked*; it does not change what §0.1
 > and §0.2 say about *how a team is resolved* — that logic has not moved.
 
-**Python remains the source of truth for the attribution computation.** `resolve_team_attribution`,
-`compute_work_item_team_attributions`, and `write_work_item_team_attributions` are still Python
-(`src/dev_health_ops/metrics/compute_work_items.py`, `src/dev_health_ops/metrics/sinks/*`). No Go
-reimplementation of the precedence ladder exists.
+**Python was the source of truth for the attribution computation when this section was first
+written (2026-08-19); that has since changed for GitHub/GitLab/Jira/Linear work items.**
+`resolve_team_attribution` / `compute_work_item_team_attributions` /
+`write_work_item_team_attributions` remain the ORACLE — Python is still authoritative for the
+precedence ladder's *correctness* (the Go port below is verified against it, not the other way
+around) — but a full independent Go REIMPLEMENTATION now exists:
+`internal/providersync/github_work_items_derivation_context.go`'s `resolve()`, shared across
+GitHub/GitLab/Jira/Linear via `loadWorkItemDerivationContextForProvider`, with its own
+`work_item_team_attributions` writer (`github_work_item_derived_effects_clickhouse.go`) and a
+row-vs-row compute-parity oracle (`internal/testsupport/oraclecompare`,
+`github_work_items_derivation_context_oracle_test.go`, run via `ci/check_go.sh live-python-oracles`
+or `fast`/`ci`/`all` — see `ops/.claude/skills/go-checks/SKILL.md`). Any change to the precedence
+ladder or its source tables — CHAOS-4321 included — must land in BOTH `compute_work_items.py` and
+`github_work_items_derivation_context.go` in the same PR, or the oracle gate fails: confirmed
+directly during CHAOS-4321, where an interim Go-only change (a telemetry evidence string, then a
+`team_memberships`-vs-`identities`/`teams` query mismatch) failed dozens of oracle cases under
+`ci/check_go.sh fast` while plain `go test` stayed green — see AGENTS.md "Anything
+cross-implementation needs a differential oracle."
 
 What moved is dispatch. The daily chain is now:
 

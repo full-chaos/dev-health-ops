@@ -41,6 +41,9 @@ if TYPE_CHECKING:
     from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 # Columns selected for the admin surface (superset of get_all_teams()).
+# CHAOS-4321: manual_members is APPENDED, not inserted alphabetically/by
+# schema position -- _row_to_team below indexes this tuple positionally, and
+# appending keeps every existing index (0-9) unchanged.
 _TEAM_COLUMNS = (
     "id",
     "team_uuid",
@@ -52,6 +55,7 @@ _TEAM_COLUMNS = (
     "is_active",
     "updated_at",
     "org_id",
+    "manual_members",
 )
 
 _TEAM_SELECT = ", ".join(_TEAM_COLUMNS)
@@ -128,6 +132,7 @@ class ClickHouseTeam:
         is_active: bool,
         updated_at: datetime,
         org_id: str,
+        manual_members: list[str] | None = None,
     ) -> None:
         # ``id`` is the Postgres-style surrogate (the team_uuid); ``team_id``
         # is the ClickHouse slug. This matches the TeamMapping response shape.
@@ -143,6 +148,12 @@ class ClickHouseTeam:
         self.updated_at = updated_at
         self.created_at = updated_at
         self.org_id = org_id
+        # CHAOS-4321: the admin-override provenance marker -- a SUBSET of
+        # ``members`` containing only the facets explicitly added via this
+        # service's add_members/remove_members/set_members (the admin
+        # Identities screen and the drift-approval flow; see
+        # team-attribution.md s0). Provider auto-import never writes this.
+        self.manual_members = manual_members if manual_members is not None else []
         # Drift-only Postgres fields with no ClickHouse counterpart.
         self.extra_data: dict[str, Any] = {}
         self.managed_fields: list[str] = []
@@ -176,6 +187,7 @@ class ClickHouseTeamAdminService:
             is_active=bool(row[7]),
             updated_at=updated_at,
             org_id=str(row[9] or ""),
+            manual_members=_as_str_list(row[10]) if len(row) > 10 else [],
         )
 
     async def _query_teams(
@@ -214,6 +226,7 @@ class ClickHouseTeamAdminService:
         repo_patterns: list[str] | None = None,
         project_keys: list[str] | None = None,
         members: list[str] | None = None,
+        manual_members: list[str] | None = None,
     ) -> ClickHouseTeam:
         existing = await self.get(team_id)
         team_uuid = (
@@ -226,6 +239,15 @@ class ClickHouseTeamAdminService:
             if members is not None
             else (existing.members if existing is not None else [])
         )
+        # CHAOS-4321: same carry-forward contract as ``members`` above --
+        # None means "leave manual_members untouched" (this is how provider
+        # auto-import's writer must call this, so a sync write never clears
+        # an admin override; see ClickHouseTeamDriftProjector.project_team).
+        resolved_manual_members = (
+            manual_members
+            if manual_members is not None
+            else (existing.manual_members if existing is not None else [])
+        )
         resolved_projects = _resolve_list_field(project_keys, existing, "project_keys")
         resolved_repos = _resolve_list_field(repo_patterns, existing, "repo_patterns")
         now = datetime.now(timezone.utc)
@@ -237,6 +259,7 @@ class ClickHouseTeamAdminService:
                     "name": name,
                     "description": description,
                     "members": resolved_members,
+                    "manual_members": resolved_manual_members,
                     "project_keys": resolved_projects,
                     "repo_patterns": resolved_repos,
                     "is_active": 1,
@@ -253,6 +276,7 @@ class ClickHouseTeamAdminService:
             name=name,
             description=description,
             members=_as_str_list(resolved_members),
+            manual_members=_as_str_list(resolved_manual_members),
             project_keys=resolved_projects,
             repo_patterns=resolved_repos,
             is_active=True,
@@ -261,9 +285,20 @@ class ClickHouseTeamAdminService:
         )
 
     async def set_members(
-        self, team_id: str, members: list[str]
+        self,
+        team_id: str,
+        members: list[str],
+        manual_members: list[str] | None = None,
     ) -> ClickHouseTeam | None:
-        """Replace a team's member list in ClickHouse, preserving other fields."""
+        """Replace a team's member list in ClickHouse, preserving other fields.
+
+        ``manual_members`` (CHAOS-4321): pass ``None`` to leave the
+        admin-override roster untouched (create_or_update's own
+        carry-forward), or an explicit list to replace it -- add_members/
+        remove_members below compute this against the EXISTING
+        ``manual_members``, not ``members``, so it only ever tracks facets
+        this service itself added.
+        """
         existing = await self.get(team_id)
         if existing is None:
             return None
@@ -274,31 +309,53 @@ class ClickHouseTeamAdminService:
             repo_patterns=existing.repo_patterns,
             project_keys=existing.project_keys,
             members=sorted({str(m) for m in members if m}),
+            manual_members=(
+                sorted({str(m) for m in manual_members if m})
+                if manual_members is not None
+                else None
+            ),
         )
 
     async def add_members(
         self, team_id: str, members: list[str]
     ) -> ClickHouseTeam | None:
-        """Union new members into a team's member list in ClickHouse."""
+        """Union new members into a team's member list AND its
+        admin-override roster (CHAOS-4321) in ClickHouse.
+
+        This method is called only from the admin Identities screen
+        (api/admin/routers/identities.py) and the drift-approval flow
+        (clickhouse_identity_drift.py) -- both genuine admin actions, per
+        chris's 2026-08-26 10:39 PT ruling ("admin is an override... it's
+        just a mapping"). Provider auto-import never calls this.
+        """
         existing = await self.get(team_id)
         if existing is None:
             return None
-        merged = sorted({*existing.members, *(str(m) for m in members if m)})
-        return await self.set_members(team_id, merged)
+        given = tuple(str(m) for m in members if m)
+        merged = sorted({*existing.members, *given})
+        merged_manual = sorted({*existing.manual_members, *given})
+        return await self.set_members(team_id, merged, manual_members=merged_manual)
 
     async def remove_members(
         self, team_id: str, facets: set[str]
     ) -> ClickHouseTeam | None:
-        """Surgically drop the given facets from a team's member list.
+        """Surgically drop the given facets from a team's member list AND
+        its admin-override roster (CHAOS-4321).
 
-        Edits ``members`` in place (does NOT recompute from scratch), so
-        Auto Import / team-catalog members not in ``facets`` are preserved.
+        Edits ``members``/``manual_members`` in place (does NOT recompute
+        from scratch), so Auto Import / team-catalog members not in
+        ``facets`` are preserved. ``manual_members`` is filtered against its
+        OWN existing contents, not against ``members`` -- a facet that was
+        never manually added is not something this call can "remove" from
+        the override roster.
         """
         existing = await self.get(team_id)
         if existing is None:
             return None
         return await self.set_members(
-            team_id, [m for m in existing.members if m not in facets]
+            team_id,
+            [m for m in existing.members if m not in facets],
+            manual_members=[m for m in existing.manual_members if m not in facets],
         )
 
     async def delete(self, team_id: str) -> bool:

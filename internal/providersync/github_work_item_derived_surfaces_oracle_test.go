@@ -352,17 +352,26 @@ func githubDerivedOracleCases() []oracleCase {
 			// collapse them -- and the attribution table's sorting key
 			// (org_id, repo_id, work_item_id, ifNull(team_id,''), source)
 			// contains none of the fields they differ in. Two rows therefore
-			// land on ONE sorting key, differing in team_name, is_primary and
-			// evidence.
+			// land on ONE sorting key, differing in evidence (and, whichever
+			// wins the ranking tie-break, is_primary).
 			//
 			// This is the input class the write-side dedup exists for. Every
 			// other case has one candidate per (source, team_id), where a dedup
 			// that collapses correctly and one that does nothing at all are
 			// indistinguishable.
 			//
-			// The two facts carry DIFFERENT TeamName for one TeamID on purpose:
-			// with equal names the surviving row would look the same whichever
-			// of the two won, so which row survives would sit unasserted.
+			// CHAOS-4321: the two facts used to carry DIFFERENT TeamName for
+			// one TeamID on purpose (an old team_memberships-shaped row could
+			// carry its own resolved name per membership). That is no longer a
+			// reachable production state: membership now comes from the
+			// admin-authored `identities`/`teams` catalog, where a team_id has
+			// exactly ONE name (both loaders' candidate-building code -- Go's
+			// newGitHubWorkItemDerivationContext member loop and Python's
+			// load_team_attribution_context -- resolve team_name from that
+			// single catalog row, never from the per-membership fact). Equal
+			// TeamName here is therefore the REALISTIC case; `evidence` (which
+			// embeds MemberID) is what still differentiates the two rows and
+			// keeps the sorting-key collision this case exists to exercise.
 			ID: "two_assignees_one_team_collide_on_sorting_key",
 			Input: map[string]any{
 				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
@@ -381,7 +390,7 @@ func githubDerivedOracleCases() []oracleCase {
 						},
 						map[string]any{
 							"Provider": "github", "TeamID": "payments",
-							"TeamName": "Payments Squad", "MemberID": "m2",
+							"TeamName": "Payments", "MemberID": "m2",
 							"RawProviderUserID": "hubcat", "RawEmail": "hub@example.com",
 							"IdentityFacets": []any{"hubcat"},
 							"IsPrimary":      0, "Specificity": 50, "Priority": 20,

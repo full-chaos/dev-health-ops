@@ -74,12 +74,18 @@ func TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths(t *te
 		t.Fatalf("repo numeric fields = %+v", repos)
 	}
 
-	members, err := source.loadMembers(context.Background(), orgID, asOf)
+	// CHAOS-4321: loadMembers (admin layer, identities/teams) no longer
+	// scans is_primary/specificity/priority from ClickHouse at all -- they
+	// are protocol constants now (see newGitHubWorkItemDerivationContext).
+	// The native-integer-width scan this test exists to prove now applies
+	// to loadProviderMembers (the restored team_memberships fallback
+	// layer), which is exactly what was seeded above.
+	providerMembers, err := source.loadProviderMembers(context.Background(), orgID, asOf)
 	if err != nil {
-		t.Fatalf("load members: %v", err)
+		t.Fatalf("load provider members: %v", err)
 	}
-	if len(members) != 1 || members[0].IsPrimary != 1 || members[0].Specificity != 42 || members[0].Priority != -5 {
-		t.Fatalf("member numeric fields = %+v", members)
+	if len(providerMembers) != 1 || providerMembers[0].IsPrimary != 1 || providerMembers[0].Specificity != 42 || providerMembers[0].Priority != -5 {
+		t.Fatalf("provider member numeric fields = %+v", providerMembers)
 	}
 
 	manual, err := source.loadManualFallbacks(context.Background(), orgID, asOf)

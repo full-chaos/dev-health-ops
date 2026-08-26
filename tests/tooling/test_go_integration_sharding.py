@@ -695,7 +695,57 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # pinned SELECT-projection string assertion (no new top-level test, just
     # an added assertion) -- confirmed red when the SELECT column order is
     # swapped. Still no database, so the integration-tagged count stays 117.
-    assert len(expected_provider_tests) == 1084
+    #
+    # CHAOS-4321's Round-1 commit (cbe8f65fe, "remove person-membership as a
+    # team source") then deleted all 19 of the CHAOS-4244 author-path
+    # top-level tests named above (1084 -> 1065), under that round's
+    # original, wider scope ("author_membership and assignee_membership are
+    # both removed as team sources"). Two later commits on the same branch
+    # (501d34b16 restoring assignee_membership; 608308a99 adding the
+    # two-layer admin/provider member resolution chris's 08:30 PT ruling
+    # required) added 4 replacement top-level tests covering some of the same
+    # ground as table-driven subtests rather than one-function-per-case
+    # (1065 -> 1069) -- but 11 of the 19 deleted properties were never
+    # restored, a genuine coverage gap confirmed against origin/main
+    # (f26cf55e0, still at 1084) via an isolated worktree diff, not a stale
+    # pin. This restoration pass added those 11 back as top-level tests
+    # (1069 -> 1080): TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership,
+    # TestGitHubWorkItemDerivationNoAssigneeNoReporterStaysUnassigned,
+    # TestGitHubWorkItemDerivationUnambiguousReporterMembershipStillResolves,
+    # TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor,
+    # TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor,
+    # TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue,
+    # TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue,
+    # TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue,
+    # TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape,
+    # TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance,
+    # and TestGitHubWorkItemTeamAttributionMetricSourceSplitsRealReporterFromRealAssigneeRows.
+    # The remaining 8 of the 19 stay covered only as subtests of the 4
+    # already-existing consolidated functions (deliberately not split back
+    # into 8 more top-level funcs -- table-driven subtests are equivalent
+    # coverage, not a regression): author-with-no-mapping/one-team/
+    # two-teams/bot/non-PR-issue/GitLab-MR cases live in
+    # TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminMapped;
+    # the reporter-never-outranks-a-higher-source case lives in
+    # TestGitHubWorkItemDerivationOwnershipWinsOverAssigneeAndAuthorMembership
+    # (which also covers the assignee half); the causal-author-only-donor
+    # case lives in TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam.
+    # None of this touches a database, so the integration-tagged count stays
+    # 117. Net: 1084 -> 1080 (four fewer top-level funcs than the original
+    # 1084, all four accounted for above as consolidated subtests, not lost
+    # coverage).
+    #
+    # CHAOS-4321 round 3 (team-lead ruling, 2026-08-26, codex adversarial
+    # review HIGH finding) then added ONE ordinary top-level test (1080 ->
+    # 1081): TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider,
+    # pinning that a bare (non-email) `teams.members` roster facet only
+    # joins the provider-scoped fallback pool when
+    # `identities.provider_identities` confirms which provider it belongs
+    # to -- closing a cross-provider leak class the earlier
+    # `teams.members`-demotion fix (above) narrowed but did not structurally
+    # prevent. Drives loadMembers through a fake ClickHouse conn and touches
+    # no database, so the integration-tagged count stays 117.
+    assert len(expected_provider_tests) == 1081
     assert len(expected_integration_tests) == 117
     assert expected_integration_tests < expected_provider_tests
 
@@ -712,7 +762,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1084
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1081
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -773,7 +823,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1084
+    assert len(selected_tests) == len(set(selected_tests)) == 1081
     assert set(selected_tests) == expected_tests
 
 

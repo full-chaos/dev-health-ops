@@ -499,6 +499,19 @@ is_primary, confidence, evidence, computed_at)`)
 		sink.Metrics.RecordWorkItemTeamAttributionWritten(
 			row.Provider, githubWorkItemTeamAttributionMetricSource(row),
 		)
+		// CHAOS-4321 (chris/team-lead, 2026-08-26): count the winning
+		// assignee_membership/author_membership resolution by which layer
+		// resolved it. HERE, at the actual metrics-capable write boundary --
+		// not inside resolveMembership/resolve(), which stay pure. row.Priority
+		// is carried (not persisted) exactly for this: see its doc comment on
+		// githubWorkItemTeamAttributionRow.
+		if row.Source == "assignee_membership" || row.Source == "author_membership" {
+			layer := "provider_fallback"
+			if row.Priority == 0 {
+				layer = "admin_override"
+			}
+			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
+		}
 	}
 	return nil
 }
@@ -527,6 +540,16 @@ func githubWorkItemTeamAttributionMetricSource(row githubWorkItemTeamAttribution
 		// label so the residual is legible, not folded back into the generic
 		// "unassigned" bucket.
 		if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok && reason != "" {
+			// CHAOS-4321: an ambiguous-membership reason carries the
+			// colliding team ids after a second ":" (e.g.
+			// "ambiguous_admin_membership:team-ops,team-platform") so an
+			// admin can act on the persisted evidence text -- but a metric
+			// label must stay bounded cardinality, so only the reason NAME
+			// (before that ":") becomes the label value here. Mirrors
+			// Python's work_item_team_attribution_metric_source exactly.
+			if name, _, found := strings.Cut(reason, ":"); found {
+				return name
+			}
 			return reason
 		}
 		return "unassigned"

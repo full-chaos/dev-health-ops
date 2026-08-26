@@ -19,6 +19,7 @@ from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
     TeamAttributionSource,
+    _identity_key,
 )
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.loaders.base import (
@@ -827,6 +828,21 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # this schema a raw facet string is genuinely tagged with a
         # provider, so it is the source of truth for facet_provider_index
         # below.
+        # Python/Go are a differential pair (team-lead ruling, 2026-08-26):
+        # any normalization difference between them is a parity defect,
+        # independent of whether a real facet would ever hit it. Go's
+        # equivalent split (github_work_items_derivation_context.go's
+        # facetProviderIndex + normalizeDerivationIdentity) collapses
+        # internal whitespace runs, not just case/edge-strip -- the SAME
+        # rule `_identity_key` (compute_work_items.py) already applies to
+        # every identity string `_resolve_membership` looks a key up with.
+        # It matters here beyond parity, too: `provider_member_by_identity`/
+        # `provider_member_by_untyped_facet` are looked up directly by
+        # `_identity_key(identity)` with no downstream re-normalization
+        # pass (unlike Go, which re-normalizes MemberID once more when
+        # building its own resolution maps) -- an entry keyed by anything
+        # less than `_identity_key`'s own normalization can silently never
+        # match.
         facet_provider_index: dict[str, set[str]] = {}
         for row in identity_rows:
             for provider, raw_ids in _decode_provider_identities_json(
@@ -836,7 +852,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 if not provider:
                     continue
                 for raw_id in raw_ids or []:
-                    key = str(raw_id).strip().lower()
+                    key = _identity_key(raw_id)
                     if not key:
                         continue
                     facet_provider_index.setdefault(key, set()).add(provider)
@@ -863,6 +879,18 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             for facet in team["members"]:
                 if not facet:
                     continue
+                # Normalized once, used for every lookup/dict-key below --
+                # `_identity_key` is exactly what `_resolve_membership` runs
+                # the work item's identity string through before looking
+                # either dict up, so a key stored as anything less
+                # normalized can silently never match (see the
+                # facet_provider_index comment above). `evidence` keeps the
+                # original `facet` text for readability, matching this
+                # file's convention elsewhere (e.g. member_by_identity's
+                # evidence uses the raw canonical_id, not a normalized key).
+                normalized_facet = _identity_key(facet)
+                if not normalized_facet:
+                    continue
                 candidate = TeamAttributionCandidate(
                     source="assignee_membership",
                     team_id=team_id,
@@ -882,12 +910,12 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     priority=10,
                     updated_at=as_of,
                 )
-                if "@" in facet:
+                if "@" in normalized_facet:
                     # Email-shaped: matched WITHOUT a provider tag, same as
                     # before CHAOS-4321 round 3 -- CHAOS-2609 bare-email
                     # matching is deliberately cross-provider.
                     context.provider_member_by_untyped_facet.setdefault(
-                        facet, []
+                        normalized_facet, []
                     ).append(candidate)
                     continue
                 # Non-email: only match for a provider facet_provider_index
@@ -898,9 +926,9 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 # `(provider, key)` lookup, not a parallel untyped one. A
                 # facet with no confirmed provider tag at all matches
                 # nothing.
-                for provider in facet_provider_index.get(facet, ()):
+                for provider in facet_provider_index.get(normalized_facet, ()):
                     context.provider_member_by_identity.setdefault(
-                        (provider, facet), []
+                        (provider, normalized_facet), []
                     ).append(candidate)
 
         # CHAOS-4321 (chris, 08:30 PT): provider auto-import fallback layer

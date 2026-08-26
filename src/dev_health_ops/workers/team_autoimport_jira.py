@@ -26,6 +26,9 @@ from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
 from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_roster_preservation_failed,
+)
 from dev_health_ops.metrics.schemas import (
     MemberRecord,
     ProjectRecord,
@@ -37,6 +40,10 @@ from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
 from dev_health_ops.providers.jira.normalize import jira_sprint_payload_to_model
+from dev_health_ops.providers.team_capabilities import auto_import_capabilities
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -95,6 +102,65 @@ def _clickhouse_dsn(scope: dict[str, Any]) -> str:
     if not dsn:
         raise ValueError("ClickHouse DSN is required for Jira team auto-import")
     return dsn
+
+
+def _existing_team_members(
+    *,
+    sink: Any,
+    org_id: str,
+    provider: str,
+    team_ids: list[str],
+    sync_run_id: str | None = None,
+) -> dict[str, list[str]] | None:
+    """Read of the CURRENTLY persisted roster for these teams, for a
+    members-off run to carry forward instead of overwriting it with [].
+
+    CHAOS-4323 round 2 (codex adversarial-review, HIGH): returns ``None``
+    (never a substitute {}) whenever the current roster genuinely could not
+    be confirmed, so the caller fails CLOSED (skips the team-dimension
+    write) rather than write an empty roster it never actually verified was
+    empty. Deliberately does NOT filter on ``provider`` in SQL (round 3:
+    ``teams`` dedups on ``id`` alone -- an admin-edited provider="" row can
+    otherwise hide the existing team from a provider-filtered query).
+    ``sync_run_id`` (round-3 follow-up) is included in the WARNING when the
+    caller has one. See the identical helper's docstring in
+    team_autoimport_github.py for the full rationale on both.
+    """
+    if not team_ids:
+        return {}
+    if not hasattr(sink, "query_dicts"):
+        logging.getLogger(__name__).warning(
+            "Cannot confirm existing team rosters for org_id=%s provider=%s "
+            "sync_run_id=%s (sink has no query_dicts) -- skipping the "
+            "team-dimension write for this members-off run rather than "
+            "risk erasing rosters",
+            org_id,
+            provider,
+            sync_run_id,
+        )
+        return None
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT id, members
+            FROM teams FINAL
+            WHERE org_id = {org_id:String}
+              AND id IN {team_ids:Array(String)}
+            """,
+            {"org_id": org_id, "team_ids": team_ids},
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Could not read existing team rosters for org_id=%s provider=%s "
+            "sync_run_id=%s -- skipping the team-dimension write for this "
+            "members-off run rather than risk erasing rosters",
+            org_id,
+            provider,
+            sync_run_id,
+            exc_info=True,
+        )
+        return None
+    return {str(row.get("id")): list(row.get("members") or []) for row in rows}
 
 
 def _team_store_from_kwargs(sink: _DimensionSink, kwargs: dict[str, Any]) -> Any | None:
@@ -171,6 +237,23 @@ def populate(
     **kwargs: Any,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested (Jira supports all three today).
+    capability = auto_import_capabilities("jira")
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return {
+            "status": "skipped",
+            "reason": "no_categories_selected",
+            "teams_imported": 0,
+            "projects_imported": 0,
+            "members_imported": 0,
+            "team_memberships_imported": 0,
+            "team_project_ownership_imported": 0,
+        }
     jira_credentials = jira_credentials_from_mapping(credentials)
     if jira_credentials is None:
         if strict:
@@ -283,13 +366,17 @@ def populate(
                 )
             )
 
-        discovered_members = _run(
-            membership.discover_members_jira_bulk(
-                email=jira_credentials.email,
-                api_token=jira_credentials.api_token,
-                url=jira_credentials.base_url,
-                project_keys=project_keys,
+        discovered_members = (
+            _run(
+                membership.discover_members_jira_bulk(
+                    email=jira_credentials.email,
+                    api_token=jira_credentials.api_token,
+                    url=jira_credentials.base_url,
+                    project_keys=project_keys,
+                )
             )
+            if want_members
+            else []
         )
         # Resolve each member through the SAME org alias map an assignee uses:
         # facets[0] is the alias-resolved identity (canonical email when the
@@ -372,40 +459,41 @@ def populate(
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
         team_store = _team_store_from_kwargs(sink, kwargs)
-        for link in _load_jira_legacy_links(sink, org_id=org_id):
-            project_key = str(link.get("project_key") or "")
-            ops_team_id = str(link.get("ops_team_id") or "")
-            if not project_key or not ops_team_id:
-                continue
-            project_id = _project_id(org_id, "jira", project_key)
-            if not any(row.id == project_id for row in project_rows):
-                project_rows.append(
-                    ProjectRecord(
-                        id=project_id,
+        if want_projects:
+            for link in _load_jira_legacy_links(sink, org_id=org_id):
+                project_key = str(link.get("project_key") or "")
+                ops_team_id = str(link.get("ops_team_id") or "")
+                if not project_key or not ops_team_id:
+                    continue
+                project_id = _project_id(org_id, "jira", project_key)
+                if not any(row.id == project_id for row in project_rows):
+                    project_rows.append(
+                        ProjectRecord(
+                            id=project_id,
+                            org_id=org_id,
+                            provider="jira",
+                            project_key=project_key,
+                            name=str(link.get("project_name") or project_key),
+                            is_active=1,
+                            updated_at=now,
+                            last_synced=now,
+                        )
+                    )
+                ownership_rows.append(
+                    TeamProjectOwnershipRecord(
                         org_id=org_id,
                         provider="jira",
+                        team_id=ops_team_id,
+                        project_id=project_id,
                         project_key=project_key,
-                        name=str(link.get("project_name") or project_key),
-                        is_active=1,
+                        source="jira_legacy",
+                        is_primary=1,
+                        specificity=90,
+                        priority=20,
+                        valid_from=now,
                         updated_at=now,
-                        last_synced=now,
                     )
                 )
-            ownership_rows.append(
-                TeamProjectOwnershipRecord(
-                    org_id=org_id,
-                    provider="jira",
-                    team_id=ops_team_id,
-                    project_id=project_id,
-                    project_key=project_key,
-                    source="jira_legacy",
-                    is_primary=1,
-                    specificity=90,
-                    priority=20,
-                    valid_from=now,
-                    updated_at=now,
-                )
-            )
 
         projects = _dedupe_projects(project_rows)
         members = _dedupe_members(member_rows)
@@ -418,7 +506,9 @@ def populate(
                     store=review_store,
                     org_id=org_id,
                     rows=memberships,
-                    observed_team_ids=_observed_team_ids("jira", team_rows),
+                    observed_team_ids=(
+                        _observed_team_ids("jira", team_rows) if want_members else ()
+                    ),
                     discovered_at=now,
                 )
             )
@@ -432,40 +522,74 @@ def populate(
                         store=store,
                         org_id=org_id,
                         rows=memberships,
-                        observed_team_ids=_observed_team_ids("jira", team_rows),
+                        observed_team_ids=(
+                            _observed_team_ids("jira", team_rows)
+                            if want_members
+                            else ()
+                        ),
                         discovered_at=now,
                     )
 
             memberships = _run(split_with_store())
-        _apply_roster(team_rows, memberships)
-        if team_store is not None:
-            _run(
-                project_team_rows_with_store(
-                    store=team_store,
-                    org_id=org_id,
-                    provider="jira",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
-                )
+        # CHAOS-4323 round 2 (codex adversarial-review, HIGH): roster_write_safe
+        # gates ONLY the team-dimension write (the row carrying "members"). A
+        # roster-preservation read failure must never fall through to writing
+        # an unconfirmed empty roster -- it skips that write entirely instead.
+        roster_write_safe = True
+        if want_members:
+            _apply_roster(team_rows, memberships)
+        elif want_teams:
+            # A teams-only run (members off) must not erase a previously-
+            # imported roster by writing an empty "members" list -- preserve
+            # whatever is currently persisted.
+            existing_members = _existing_team_members(
+                sink=sink,
+                org_id=org_id,
+                provider="jira",
+                team_ids=[str(row["id"]) for row in team_rows],
+                sync_run_id=(
+                    str(scope.get("sync_run_id"))
+                    if scope.get("sync_run_id") is not None
+                    else None
+                ),
             )
-        elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
-            _run(
-                project_provider_team_rows(
-                    dsn=_clickhouse_dsn(scope),
-                    org_id=org_id,
-                    provider="jira",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
+            if existing_members is None:
+                roster_write_safe = False
+                record_team_autoimport_roster_preservation_failed(provider="jira")
+            else:
+                for team_row in team_rows:
+                    team_row["members"] = existing_members.get(str(team_row["id"]), [])
+        if want_teams and roster_write_safe:
+            if team_store is not None:
+                _run(
+                    project_team_rows_with_store(
+                        store=team_store,
+                        org_id=org_id,
+                        provider="jira",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
                 )
-            )
-        else:
-            _run(sink.insert_teams(team_rows))
-        sink.write_projects(projects)
-        sink.write_members(members)
-        sink.write_team_memberships(memberships)
-        sink.write_team_project_ownership(ownership)
+            elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+                _run(
+                    project_provider_team_rows(
+                        dsn=_clickhouse_dsn(scope),
+                        org_id=org_id,
+                        provider="jira",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
+                )
+            else:
+                _run(sink.insert_teams(team_rows))
+        if want_projects:
+            sink.write_projects(projects)
+            sink.write_team_project_ownership(ownership)
+        if want_members:
+            sink.write_members(members)
+            sink.write_team_memberships(memberships)
         if hasattr(sink, "write_sprints"):
             sink.write_sprints(sprint_rows)
     finally:
@@ -475,15 +599,18 @@ def populate(
     jira_legacy_count = sum(1 for row in ownership if row.source == "jira_legacy")
     return {
         "mode": scope.get("mode"),
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
+        "roster_preservation_failed": not roster_write_safe,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
-        "projects_imported": len(projects),
-        "members_imported": len(members),
-        "team_memberships_imported": len(memberships),
-        "team_project_ownership_imported": len(ownership),
+        "projects_imported": len(projects) if want_projects else 0,
+        "members_imported": len(members) if want_members else 0,
+        "team_memberships_imported": len(memberships) if want_members else 0,
+        "team_project_ownership_imported": len(ownership) if want_projects else 0,
         "sprints_imported": len(sprint_rows),
-        "jira_legacy_project_ownership_imported": jira_legacy_count,
+        "jira_legacy_project_ownership_imported": jira_legacy_count
+        if want_projects
+        else 0,
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }

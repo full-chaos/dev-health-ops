@@ -822,7 +822,10 @@ resolver reads, then verifies the user-visible Investment → Allocation coverag
 does not collapse to `unassigned`.
 
 1. In Admin → Sync, create or edit a real Linear work-items sync and enable
-   **Auto-import teams, projects & members** (`sync_options.auto_import_teams=true`).
+   **Import teams**, **Import projects**, and **Import members** (`sync_options`
+   keys `auto_import_teams`/`auto_import_projects`/`auto_import_members`, each
+   independently selectable and off by default; CHAOS-4323 replaced the single
+   "Auto-import teams, projects & members" checkbox with these three).
 2. Trigger the sync through the sync-config UI or worker-backed trigger endpoint
    so the configured worker credentials are used.
 3. After the sync succeeds, run daily metrics with the same analytics database:

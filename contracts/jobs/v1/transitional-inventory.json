@@ -305,12 +305,12 @@
       "notes": "Beat entry monitor-queue-depths, 60s"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/team_autoimport.py:198",
+      "id": "celery_task:src/dev_health_ops/workers/team_autoimport.py:224",
       "surface": "run_post_sync_team_autoimport",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/team_autoimport.py",
-        "line": 198
+        "line": 224
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -953,12 +953,12 @@
       "notes": "POST /teams/trigger-drift-sync; dynamic name-based dispatch, TODO CHAOS-2653 to replace with concrete import"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:263",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:271",
       "surface": "chain(*chain_sigs).apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 263
+        "line": 271
       },
       "queue_or_cadence": "n/a",
       "dispatches": "complexity/build/materialize/daily-metrics signatures",
@@ -1097,12 +1097,12 @@
       "notes": "feeds chord at work_graph_tasks.py:654"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:206",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:214",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 206
+        "line": 214
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_complexity_job",
@@ -1118,15 +1118,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:263"
+      "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:242",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:250",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 242
+        "line": 250
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_work_graph_build",
@@ -1142,15 +1142,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:263"
+      "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:248",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:256",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 248
+        "line": 256
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize",
@@ -1166,15 +1166,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:263"
+      "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:254",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:262",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 254
+        "line": 262
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_daily_metrics_partitioned",
@@ -1190,7 +1190,7 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:263"
+      "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
       "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:396",
@@ -1241,12 +1241,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:268",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:276",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 268
+        "line": 276
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",
@@ -1265,12 +1265,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:291",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:299",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 291
+        "line": 299
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",

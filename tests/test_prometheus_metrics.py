@@ -9,10 +9,12 @@ from __future__ import annotations
 from prometheus_client import REGISTRY
 
 from dev_health_ops.metrics.prometheus import (
+    DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL,
     GITHUB_API_REQUESTS_TOTAL,
     GITHUB_RATE_LIMIT_REMAINING,
     record_github_api_request,
     record_github_rate_limit,
+    record_team_autoimport_roster_preservation_failed,
 )
 
 
@@ -72,3 +74,54 @@ class TestGitHubApiMetrics:
         """Rate limit gauge is registered in the default Prometheus registry."""
         metric_names = [m.name for m in REGISTRY.collect()]
         assert "devhealth_github_rate_limit_remaining" in metric_names
+
+
+class TestTeamAutoimportRosterPreservationFailedMetric:
+    """CHAOS-4323 (team-lead 08-26): dev_health_team_autoimport_roster_preservation_failed_total.
+
+    Exercises the REAL Counter object and record_* helper directly -- unlike
+    the populator-level tests (tests/workers/test_team_autoimport_github_gitlab.py),
+    which replace the recorder with a fake and so cannot catch a wrong metric
+    name/label or a broken no-op fallback (codex adversarial-review,
+    narrow round 4, MEDIUM)."""
+
+    def test_counter_increments_with_correct_label(self):
+        before = DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+            provider="github"
+        )._value.get()
+
+        record_team_autoimport_roster_preservation_failed(provider="github")
+
+        after = DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+            provider="github"
+        )._value.get()
+        assert after == before + 1
+
+    def test_counter_tracks_providers_independently(self):
+        before_gitlab = (
+            DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+                provider="gitlab"
+            )._value.get()
+        )
+        before_jira = (
+            DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+                provider="jira"
+            )._value.get()
+        )
+
+        record_team_autoimport_roster_preservation_failed(provider="gitlab")
+
+        after_gitlab = (
+            DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+                provider="gitlab"
+            )._value.get()
+        )
+        after_jira = DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+            provider="jira"
+        )._value.get()
+        assert after_gitlab == before_gitlab + 1
+        assert after_jira == before_jira
+
+    def test_counter_registered_in_default_registry(self):
+        metric_names = [m.name for m in REGISTRY.collect()]
+        assert "dev_health_team_autoimport_roster_preservation_failed" in metric_names

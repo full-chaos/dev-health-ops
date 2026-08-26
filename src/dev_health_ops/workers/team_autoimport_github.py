@@ -20,11 +20,20 @@ from dev_health_ops.api.services.configuration.team_discovery import (
 from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
+from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_roster_preservation_failed,
+)
 from dev_health_ops.metrics.schemas import TeamMembershipRecord, TeamRepoOwnershipRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
-from dev_health_ops.providers.team_capabilities import team_provider_capabilities
+from dev_health_ops.providers.team_capabilities import (
+    auto_import_capabilities,
+    team_provider_capabilities,
+)
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +69,17 @@ async def _populate_async(
     team_store: Any | None = None,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested -- GitHub has no "Projects" import
+    # (projects_imported is always 0 below), so want_projects is always False
+    # here even if a stale config or a bypassed caller set it True.
+    capability = auto_import_capabilities(PROVIDER)
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return _zero_summary(org_id=org_id, reason="no_categories_selected")
     if not _provider_capable():
         if strict:
             raise ValueError(
@@ -109,16 +129,26 @@ async def _populate_async(
     # canonical identity an aliased assignee does (CHAOS-2609).
     resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
+    # GitHub has no "Projects" import concept at all -- auto_import_capabilities
+    # ("github").projects is False, so want_projects is always False (see the
+    # capability clamp above) and projects_imported stays 0 below. Repo
+    # ownership is derived PURELY from team associations (no separate
+    # "projects" discovery call exists), so it is a team-import artifact, not
+    # a projects one -- gated on "teams", matching pre-CHAOS-4323 behavior
+    # where the single auto_import_teams flag wrote both together.
     repo_rows = _repo_ownership_rows(org_id=org_id, teams=teams, now=now)
-    membership_rows, _, observed_team_ids = await _membership_rows(
-        org_id=org_id,
-        token=token,
-        org_name=org_name,
-        teams=teams,
-        now=now,
-        resolver=resolver,
-        strict=strict,
-    )
+    if want_members:
+        membership_rows, _, observed_team_ids = await _membership_rows(
+            org_id=org_id,
+            token=token,
+            org_name=org_name,
+            teams=teams,
+            now=now,
+            resolver=resolver,
+            strict=strict,
+        )
+    else:
+        membership_rows, observed_team_ids = [], set()
     sink = _sink(scope)
     membership_rows = await _split_memberships_for_review(
         org_id=org_id,
@@ -128,30 +158,63 @@ async def _populate_async(
         team_store=team_store,
         discovered_at=now,
     )
-    member_roster = _roster_from_memberships(membership_rows)
-    for team_row in team_rows:
-        team_row["members"] = member_roster.get(str(team_row["id"]), [])
+    # CHAOS-4323 round 2 (codex adversarial-review, HIGH): roster_write_safe
+    # gates ONLY the team-dimension write (the row carrying "members"). A
+    # roster-preservation read failure must never fall through to writing an
+    # unconfirmed empty roster -- it skips that write entirely instead.
+    roster_write_safe = True
+    if want_members:
+        member_roster = _roster_from_memberships(membership_rows)
+        for team_row in team_rows:
+            team_row["members"] = member_roster.get(str(team_row["id"]), [])
+    elif want_teams:
+        # A teams-only run (members off) must not erase a previously-imported
+        # roster by writing an empty "members" list -- preserve whatever is
+        # currently persisted.
+        existing_members = _existing_team_members(
+            sink=sink,
+            org_id=org_id,
+            provider=PROVIDER,
+            team_ids=[str(row["id"]) for row in team_rows],
+            sync_run_id=(
+                str(scope.get("sync_run_id"))
+                if scope.get("sync_run_id") is not None
+                else None
+            ),
+        )
+        if existing_members is None:
+            roster_write_safe = False
+            record_team_autoimport_roster_preservation_failed(provider=PROVIDER)
+        else:
+            for team_row in team_rows:
+                team_row["members"] = existing_members.get(str(team_row["id"]), [])
 
-    await _project_team_rows(
-        org_id=org_id,
-        team_rows=team_rows,
-        sink=sink,
-        team_store=team_store,
-        discovered_at=now,
-    )
-    sink.write_team_repo_ownership(repo_rows)
-    sink.write_team_memberships(membership_rows)
+    if want_teams and roster_write_safe:
+        await _project_team_rows(
+            org_id=org_id,
+            team_rows=team_rows,
+            sink=sink,
+            team_store=team_store,
+            discovered_at=now,
+        )
+    if want_teams:
+        sink.write_team_repo_ownership(repo_rows)
+    if want_members:
+        sink.write_team_memberships(membership_rows)
 
     return {
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": 0,
-        "members_imported": len({row.member_id for row in membership_rows}),
-        "team_memberships_imported": len(membership_rows),
+        "members_imported": len({row.member_id for row in membership_rows})
+        if want_members
+        else 0,
+        "team_memberships_imported": len(membership_rows) if want_members else 0,
         "team_project_ownership_imported": 0,
-        "team_repo_ownership_imported": len(repo_rows),
+        "team_repo_ownership_imported": len(repo_rows) if want_teams else 0,
         "work_item_team_attributions_imported": 0,
+        "roster_preservation_failed": not roster_write_safe,
     }
 
 
@@ -362,6 +425,94 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
     if not dsn:
         raise ValueError("CLICKHOUSE_URI is required for GitHub team auto-import")
     return ClickHouseMetricsSink(dsn=dsn)
+
+
+def _existing_team_members(
+    *,
+    sink: Any,
+    org_id: str,
+    provider: str,
+    team_ids: list[str],
+    sync_run_id: str | None = None,
+) -> dict[str, list[str]] | None:
+    """Read of the CURRENTLY persisted roster for these teams, for a
+    members-off run to carry forward instead of overwriting it with [].
+
+    CHAOS-4323 round 2 (codex adversarial-review, HIGH): the first version of
+    this helper swallowed a failed read and returned {}, which the caller
+    then treated as "these teams truly have no members" and wrote — silently
+    reproducing the exact data loss this fix exists to prevent, only now
+    triggered by ClickHouse being unavailable/degraded instead of by the
+    members flag. Returns ``None`` (never a substitute {}) whenever the
+    current roster genuinely could not be confirmed, so the caller can fail
+    CLOSED (skip the team-dimension write for this run) rather than write an
+    empty roster it never actually verified was empty. An empty dict is only
+    ever returned when there is nothing to look up (``team_ids`` empty) or
+    the query genuinely found no matching rows (a real, confirmed answer).
+    Same query shape as
+    ``clickhouse_team_drift_projector.ClickHouseTeamDriftProjector._team_row``.
+
+    CHAOS-4323 round 3 (codex adversarial-review, HIGH): deliberately does
+    NOT filter on ``provider`` in SQL (``provider`` stays a parameter, used
+    only for logging). ``migrations/clickhouse/002_teams.sql``'s
+    ``ReplacingMergeTree(updated_at) ORDER BY (id)`` -- confirmed still true
+    by ``024_add_org_id.sql``'s own comment that org_id was added as a
+    plain column, NOT the sort key -- means ``teams`` deduplicates on ``id``
+    ALONE. An admin edit of an existing team writes ``provider=""``
+    (``clickhouse_team_admin.py``); if that write's ``updated_at`` is
+    latest, ``FINAL`` returns that provider=""  row for the id, and a query
+    that also filtered on this provider would see zero rows -- misread as
+    "team doesn't exist yet" instead of "exists, under a different
+    provider tag" -- and go on to write an empty roster, the exact bug this
+    whole helper exists to prevent. Filtering only on ``id`` (matching the
+    table's true identity) closes that gap.
+
+    CHAOS-4323 round-3 follow-up (codex adversarial-review, MEDIUM):
+    ``sync_run_id``, when the caller has one, is included in this WARNING.
+    This log fires synchronously and unconditionally at the moment the read
+    fails -- unlike the task-level warning in
+    ``team_autoimport.run_post_sync_team_autoimport``, which reads
+    ``roster_preservation_failed`` off the RETURNED summary and so goes
+    silent if a LATER write in this same call raises (the exception skips
+    the return entirely). Carrying sync_run_id here means that compound-
+    failure case still has full diagnostic context, not just a generic
+    ``logger.exception``.
+    """
+    if not team_ids:
+        return {}
+    if not hasattr(sink, "query_dicts"):
+        logger.warning(
+            "Cannot confirm existing team rosters for org_id=%s provider=%s "
+            "sync_run_id=%s (sink has no query_dicts) -- skipping the "
+            "team-dimension write for this members-off run rather than "
+            "risk erasing rosters",
+            org_id,
+            provider,
+            sync_run_id,
+        )
+        return None
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT id, members
+            FROM teams FINAL
+            WHERE org_id = {org_id:String}
+              AND id IN {team_ids:Array(String)}
+            """,
+            {"org_id": org_id, "team_ids": team_ids},
+        )
+    except Exception:
+        logger.warning(
+            "Could not read existing team rosters for org_id=%s provider=%s "
+            "sync_run_id=%s -- skipping the team-dimension write for this "
+            "members-off run rather than risk erasing rosters",
+            org_id,
+            provider,
+            sync_run_id,
+            exc_info=True,
+        )
+        return None
+    return {str(row.get("id")): list(row.get("members") or []) for row in rows}
 
 
 def _roster_from_memberships(

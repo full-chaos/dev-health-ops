@@ -122,6 +122,23 @@ if _PROMETHEUS_AVAILABLE:
         ["provider", "missing_field"],
     )
 
+    DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_team_autoimport_roster_preservation_failed_total",
+            "A members-off team-autoimport run could not confirm a team's "
+            "currently persisted roster (ClickHouse unavailable, a query "
+            "error, or a sink incapable of a raw read) and skipped the "
+            "team-dimension write rather than risk overwriting it with an "
+            "empty one (CHAOS-4323). The skip is correct and prevents data "
+            "loss, but it also means that team's name/description/"
+            "repo_patterns silently stop refreshing until a later run "
+            "succeeds -- run_team_autoimport still reports status=success, "
+            "so this counter is the only signal a degraded run happened. "
+            "Alert wiring is a follow-up (see CHAOS-4184's alert pattern).",
+            ["provider"],
+        )
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -429,6 +446,7 @@ else:
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
+    DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     LLM_REQUESTS_TOTAL = _noop_counter()
@@ -565,6 +583,21 @@ def record_credential_mapping_rejected(*, provider: str, missing_field: str) -> 
     CREDENTIAL_MAPPING_REJECTED_TOTAL.labels(
         provider=provider,
         missing_field=missing_field,
+    ).inc()
+
+
+def record_team_autoimport_roster_preservation_failed(*, provider: str) -> None:
+    """Record a members-off team-autoimport run that could not confirm a
+    team's current roster and skipped the team-dimension write (CHAOS-4323).
+
+    Called from each provider's team_autoimport_<provider>.py wherever
+    ``roster_write_safe`` becomes False -- see
+    ``_existing_team_members``'s docstring in team_autoimport_github.py for
+    the full data-loss rationale this skip (and this counter) exist to
+    close.
+    """
+    DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
+        provider=provider,
     ).inc()
 
 

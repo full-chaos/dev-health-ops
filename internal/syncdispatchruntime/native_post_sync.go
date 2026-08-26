@@ -456,9 +456,20 @@ ORDER BY id`, args.SyncRunID())
 	if unboundedTo {
 		to = nil
 	}
+	// CHAOS-4323: auto_import_teams split into three independent flags
+	// (auto_import_teams/auto_import_projects/auto_import_members). This gate
+	// only decides whether to dispatch the team-autoimport task AT ALL, so it
+	// is an OR across all three -- the task itself (Python
+	// team_autoimport.run_post_sync_team_autoimport) re-reads sync_options and
+	// honours each flag independently.
 	autoImport := false
 	if err := tx.QueryRow(ctx, `
-SELECT COALESCE(sync_options->>'auto_import_teams' = 'true', false)
+SELECT COALESCE(
+	sync_options->>'auto_import_teams' = 'true'
+	OR sync_options->>'auto_import_projects' = 'true'
+	OR sync_options->>'auto_import_members' = 'true',
+	false
+)
 FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id

@@ -70,6 +70,14 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
             "credentials": {"token": "secret"},
             "scope": {
                 "project_keys": ["OPS"],
+                # CHAOS-4323: no "sync_options" in the caller's scope means
+                # unrestricted -- every category defaults True (see
+                # team_autoimport_categories.import_categories_from_sync_options).
+                "import_categories": {
+                    "teams": True,
+                    "projects": True,
+                    "members": True,
+                },
                 "analytics_db": "clickhouse://config-dsn",
             },
         }

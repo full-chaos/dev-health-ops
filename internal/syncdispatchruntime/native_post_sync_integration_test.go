@@ -762,3 +762,131 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 		})
 	}
 }
+
+// seedPostSyncWithSyncOptions mirrors seedPostSync but takes an explicit
+// sync_options JSON literal instead of the hardcoded '{"auto_import_teams":true}',
+// so a caller can pin the CHAOS-4323 three-flag gate for each flag combination.
+func seedPostSyncWithSyncOptions(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, runID, outboxID, integrationID, repositoryID, unitID, configID, syncOptionsJSON string,
+) {
+	t.Helper()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		// ON CONFLICT DO NOTHING: this helper is called once per sub-test
+		// against the SAME pool/schema, and the route row is process-wide
+		// config, not per-run data -- only the first call needs to insert it.
+		{`INSERT INTO sync_dispatch_transport_routes
+		    (kind,transport,generation,paused,rollback_transport)
+		  VALUES ('post_sync','river',1,false,'celery')
+		  ON CONFLICT (kind) DO NOTHING`, nil},
+		{`INSERT INTO sync_dispatch_outbox
+    (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
+		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
+			[]any{runID, orgID, integrationID}},
+		{`INSERT INTO sync_run_units
+    (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
+VALUES ($1,$2,'github','commits',$3,
+        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
+			[]any{unitID, runID, repositoryID}},
+		{`INSERT INTO sync_configurations
+    (id,org_id,integration_id,parent_id,sync_options,created_at)
+VALUES ($1,$2,$3,NULL,
+        $4::json,'2026-07-23T00:00:00Z')`,
+			[]any{configID, orgID, integrationID, syncOptionsJSON}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories pins the
+// CHAOS-4323 split: auto_import_teams became three independent flags
+// (auto_import_teams/auto_import_projects/auto_import_members), and the
+// native_post_sync.go dispatch gate (loadPostSyncPlan's SQL predicate) must
+// fire on ANY of the three, not just the literal auto_import_teams key --
+// this is the Go side of the Python/Go parity pair (the Python predicate is
+// pinned by test_sync_units.py::
+// test_build_post_sync_dispatch_payload_auto_import_teams_is_any_of_three).
+// Selecting ONLY projects or ONLY members, with auto_import_teams itself
+// false, must still stage the team_autoimport post-sync marker.
+func TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	testCases := []struct {
+		name            string
+		syncOptionsJSON string
+		wantMarker      bool
+	}{
+		{"all_false", `{"auto_import_teams":false,"auto_import_projects":false,"auto_import_members":false}`, false},
+		{"absent", `{}`, false},
+		{"teams_only", `{"auto_import_teams":true}`, true},
+		{"projects_only_teams_explicitly_false", `{"auto_import_teams":false,"auto_import_projects":true}`, true},
+		{"members_only_teams_explicitly_false", `{"auto_import_teams":false,"auto_import_members":true}`, true},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			orgID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+1)
+			runID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+2)
+			outboxID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+3)
+			integrationID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+4)
+			repositoryID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+5)
+			unitID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+6)
+			configID := fmt.Sprintf("00000000-0000-4000-9000-%012d", index*10+7)
+			seedPostSyncWithSyncOptions(
+				t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID,
+				unitID, configID, testCase.syncOptionsJSON,
+			)
+			service, err := NewNativePostSyncService(
+				pool,
+				markerDaily{},
+				markerRemaining{},
+				markerWorkGraph{},
+				markerTeam{},
+				nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+			args := PostSyncArgs{TransportArgs: TransportArgs{
+				Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+				DispatchOutbox: outboxID, RouteGeneration: 1,
+			}}
+			if err := service.Fanout(ctx, args); err != nil {
+				t.Fatal(err)
+			}
+			var markers int
+			if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM post_sync_markers
+WHERE sync_run_id=$1 AND kind='team_autoimport'`, runID).Scan(&markers); err != nil {
+				t.Fatal(err)
+			}
+			gotMarker := markers > 0
+			if gotMarker != testCase.wantMarker {
+				t.Fatalf("sync_options=%s: team_autoimport marker written=%v want=%v",
+					testCase.syncOptionsJSON, gotMarker, testCase.wantMarker)
+			}
+		})
+	}
+}

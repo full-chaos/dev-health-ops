@@ -8,6 +8,9 @@ from typing import Any, cast
 
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.team_autoimport_categories import (
+    import_categories_from_sync_options,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +95,31 @@ def run_team_autoimport(
             reason="populator_not_available",
         )
 
+    # CHAOS-4323: the single auto_import_teams flag became three independent
+    # booleans (auto_import_teams/auto_import_projects/auto_import_members).
+    # This is the ONLY call site that threads the resulting selection into the
+    # populator scope -- run_team_autoimport_strict deliberately does not, so
+    # reference discovery and backfill keep importing everything they always
+    # have (see team_autoimport_categories module docstring).
+    scope_sync_options = (scope or {}).get("sync_options")
+    import_categories = import_categories_from_sync_options(
+        scope_sync_options if isinstance(scope_sync_options, Mapping) else None
+    )
+    if not any(import_categories.values()):
+        logger.info(
+            "Skipping team auto-import for provider=%s org_id=%s: no category selected",
+            normalized_provider,
+            org_id,
+        )
+        return _zero_summary(
+            provider=normalized_provider,
+            org_id=org_id,
+            reason="no_categories_selected",
+        )
+
     try:
         populator_scope = dict(scope or {})
+        populator_scope["import_categories"] = import_categories
         if analytics_db_url:
             populator_scope["analytics_db"] = analytics_db_url
 
@@ -256,7 +282,7 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
                 "sync_run_id": sync_run_id,
             }
         sync_options = dict(config.sync_options or {})
-        if not sync_options.get("auto_import_teams"):
+        if not any(import_categories_from_sync_options(sync_options).values()):
             return {
                 "status": "skipped",
                 "reason": "auto_import_disabled",
@@ -317,9 +343,39 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
             "sync_targets": sync_targets,
             "sync_options": sync_options,
             "triggered_by": triggered_by,
+            # CHAOS-4323 round-3-follow-up (codex adversarial-review,
+            # MEDIUM): if a LATER write in the same populate() call raises
+            # after roster_write_safe was already set False, the exception
+            # propagates through run_team_autoimport's except-block and the
+            # returned summary never carries roster_preservation_failed --
+            # the WARNING below would never fire. Threading sync_run_id
+            # into scope lets the per-populator warning (which fires
+            # synchronously, unconditionally, at the moment the read fails
+            # -- see _existing_team_members) carry the SAME diagnostic
+            # context, so the compound-failure case is never silent even
+            # when this task-level warning is.
+            "sync_run_id": sync_run_id,
         },
         analytics_db_url=_get_db_url(),
     )
+    # CHAOS-4323 (team-lead 08-26): run_team_autoimport still returns
+    # status=success on a roster-preservation-read failure -- correct, since
+    # the write was safely skipped rather than corrupting data, but that
+    # also means a degraded run is otherwise indistinguishable from a clean
+    # one. The counter (record_team_autoimport_roster_preservation_failed,
+    # incremented at the point of failure inside each populator) is the
+    # metric signal; this WARNING is the log signal for the same event,
+    # surfaced at the one place every sync run's outcome is already logged.
+    if summary.get("roster_preservation_failed"):
+        logger.warning(
+            "Team auto-import for org_id=%s provider=%s could not confirm "
+            "the existing team roster and skipped the team-dimension write "
+            "for sync_run_id=%s -- team name/description/repo_patterns are "
+            "stale for this org until a later run succeeds",
+            org_id,
+            provider,
+            sync_run_id,
+        )
     return {
         "status": "dispatched",
         "sync_run_id": sync_run_id,

@@ -155,6 +155,21 @@ if _PROMETHEUS_AVAILABLE:
         ["query_type", "status"],
     )
 
+    CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_clickhouse_org_scope_rows_filtered_total",
+        "Rows excluded from a ClickHouseDataLoader read by its org_id scope "
+        "-- i.e. rows that matched the query's time/repo predicate but "
+        "belong to a different tenant (CHAOS-4324). Computed as the delta "
+        "between a same-predicate count without the org filter and the "
+        "actual org-scoped row count. A near-zero rate on a busy multi-org "
+        "deployment is the leak-guard signal: the previous unparenthesized "
+        "OR in the PR query silently dropped org scoping for any row whose "
+        "created_at matched the window, which this counter would have "
+        "made visible as filtered_count == 0 despite other tenants having "
+        "matching rows.",
+        ["table"],
+    )
+
     # ---------------------------------------------------------------------------
     # LLM metrics
     # ---------------------------------------------------------------------------
@@ -449,6 +464,7 @@ else:
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
+    CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL = _noop_counter()
     LLM_REQUESTS_TOTAL = _noop_counter()
     LLM_TOKENS_TOTAL = _noop_counter()
     LLM_REQUEST_DURATION_SECONDS = _noop_histogram()

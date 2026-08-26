@@ -88,8 +88,10 @@ class SqlAlchemyDataLoader(DataLoader):
 
         pr_query = f"""
         SELECT * FROM git_pull_requests
-        WHERE (created_at >= :start AND created_at < :end)
-        OR (merged_at IS NOT NULL AND merged_at >= :start AND merged_at < :end)
+        WHERE (
+          (created_at >= :start AND created_at < :end)
+          OR (merged_at IS NOT NULL AND merged_at >= :start AND merged_at < :end)
+        )
         {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
         """
 

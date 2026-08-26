@@ -70,7 +70,9 @@ def _isolate_pids_sources(
     tree except pids_current, which the caller mutates to simulate live
     consumption. Neutralizes RLIMIT_NPROC and host threads-max so the test's
     ceiling is deterministic (the real test process's rlimits/host state
-    would otherwise leak in and make the ceiling non-reproducible)."""
+    would otherwise leak in and make the ceiling non-reproducible), and
+    resets the module-level reservation state so no earlier test in this
+    process's shared module globals leaks a stale reservation in."""
     pids_max_file = tmp_path / "pids.max"
     pids_current_file = tmp_path / "pids.current"
     pids_max_file.write_text(str(pids_max))
@@ -83,6 +85,11 @@ def _isolate_pids_sources(
     monkeypatch.setattr(
         worker_metrics, "_HOST_THREADS_MAX_PATH", str(tmp_path / "nope")
     )
+    monkeypatch.setattr(worker_metrics, "_PIDS_RESERVED_HOLDER", [0])
+    # Default the safety multiplier to 1.0 (no hedge) so tests can reason
+    # about clean arithmetic; the dedicated multiplier test below overrides
+    # this explicitly to exercise the real default.
+    monkeypatch.setenv(worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, "1.0")
     return pids_current_file
 
 
@@ -175,19 +182,21 @@ def test_per_child_pids_cost_seeds_conservative_then_converges_upward(
 
 
 @pytest.mark.asyncio
-async def test_await_pids_capacity_proceeds_immediately_when_headroom_exists(
+async def test_reserve_pids_capacity_proceeds_immediately_when_headroom_exists(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _isolate_pids_sources(monkeypatch, tmp_path, pids_max=1000, pids_current=10)
     monkeypatch.setattr(worker_metrics, "_PIDS_PER_CHILD_COST_HOLDER", [10])
     monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, "0.0")
 
-    waited = await worker_metrics._await_pids_capacity()
+    waited, reserved = await worker_metrics._reserve_pids_capacity()
     assert waited == 0.0
+    assert reserved == 10
+    await worker_metrics._release_pids_capacity_reservation(reserved)
 
 
 @pytest.mark.asyncio
-async def test_await_pids_capacity_queues_then_proceeds_once_headroom_frees(
+async def test_reserve_pids_capacity_queues_then_proceeds_once_headroom_frees(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """CHAOS-4317 falsifier: before this ticket, nothing gated spawn on
@@ -209,14 +218,15 @@ async def test_await_pids_capacity_queues_then_proceeds_once_headroom_frees(
         pids_current_file.write_text("50")
 
     freer = asyncio.create_task(free_up_headroom_shortly())
-    waited = await worker_metrics._await_pids_capacity()
+    waited, reserved = await worker_metrics._reserve_pids_capacity()
     await freer
 
     assert waited > 0.0  # it actually queued, not a pass-through
+    await worker_metrics._release_pids_capacity_reservation(reserved)
 
 
 @pytest.mark.asyncio
-async def test_await_pids_capacity_exhausted_wait_raises_retryable_capacity_exhausted(
+async def test_reserve_pids_capacity_exhausted_wait_raises_retryable_capacity_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _isolate_pids_sources(monkeypatch, tmp_path, pids_max=100, pids_current=95)
@@ -229,11 +239,91 @@ async def test_await_pids_capacity_exhausted_wait_raises_retryable_capacity_exha
     monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_WAIT_UNIT_SECONDS_ENV, "0.03")
 
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._await_pids_capacity()
+        await worker_metrics._reserve_pids_capacity()
     assert excinfo.value.reason == "capacity_exhausted"
     # Always retryable -- capacity pressure is transient container state,
     # never a reason to park a partition for human review.
     assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_reserve_pids_capacity_is_atomic_across_concurrent_callers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 1, P1): a plain check-then-
+    spawn is not atomic -- two callers racing the same pids.current snapshot
+    could both observe headroom and both reserve/spawn, together exceeding
+    the ceiling. Falsifier: with the reservation lock removed (or the
+    reservation not actually accounted for in the second caller's `needed`
+    calculation), both calls below would return waited=0.0 immediately,
+    since neither would see the other's claim on the only 15 units of
+    headroom available for one 10-unit child.
+    """
+    _isolate_pids_sources(monkeypatch, tmp_path, pids_max=100, pids_current=75)
+    monkeypatch.setattr(worker_metrics, "_PIDS_PER_CHILD_COST_HOLDER", [10])
+    monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, "0.0")
+    monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_WAIT_POLL_SECONDS_ENV, "0.01")
+    # ceiling=100, current=75 -> 25 units of headroom, enough for exactly
+    # ONE 10-unit child (a second would need 20, pushing to 95... actually
+    # fits) -- tighten to exactly one-child headroom: current=85 leaves 15,
+    # enough for one child (10) but not two (20).
+    (tmp_path / "pids.current").write_text("85")
+
+    first_reserved: list[int] = []
+    second_call_saw_first_reservation = []
+
+    async def first_call() -> None:
+        waited, reserved = await worker_metrics._reserve_pids_capacity()
+        assert waited == 0.0
+        first_reserved.append(reserved)
+
+    async def second_call() -> None:
+        # Give the first call's lock-held critical section a chance to run
+        # and commit its reservation before this one starts checking.
+        await asyncio.sleep(0.005)
+        # A short wait unit + tiny wait ceiling: this call must EITHER wait
+        # (because it correctly sees the first reservation and there isn't
+        # room for a second 10-unit child in 15 units of headroom) or raise
+        # capacity_exhausted -- either proves it did NOT admit past budget.
+        monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_WAIT_UNIT_SECONDS_ENV, "0.02")
+        try:
+            waited, _reserved = await worker_metrics._reserve_pids_capacity()
+            second_call_saw_first_reservation.append(waited > 0.0)
+        except worker_metrics._CompatibilityProcessFailure as exc:
+            assert exc.reason == "capacity_exhausted"
+            second_call_saw_first_reservation.append(True)
+
+    await asyncio.gather(first_call(), second_call())
+
+    assert first_reserved == [10]
+    assert second_call_saw_first_reservation == [True], (
+        "the second concurrent caller admitted immediately despite the "
+        "first caller's reservation leaving no headroom -- the "
+        "check-then-reserve step is not atomic"
+    )
+    await worker_metrics._release_pids_capacity_reservation(first_reserved[0])
+
+
+def test_reserved_per_child_pids_cost_applies_the_default_safety_multiplier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 1, P1): the background
+    sampler can miss a short-lived child's true peak entirely (a spike that
+    both starts and recedes faster than one poll interval reports a 0
+    delta). The admission math must not trust the raw observed watermark
+    1:1 -- it applies a safety multiplier on top. The recorded watermark
+    itself (_observed_per_child_pids_cost) stays the true measured value,
+    unmultiplied, for telemetry accuracy; only the reservation math hedges.
+    """
+    monkeypatch.setattr(worker_metrics, "_PIDS_PER_CHILD_COST_HOLDER", [10])
+    monkeypatch.delenv(
+        worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, raising=False
+    )
+    assert worker_metrics._observed_per_child_pids_cost() == 10
+    assert worker_metrics._reserved_per_child_pids_cost() == 20  # default 2.0x
+    assert (
+        worker_metrics._observed_per_child_pids_cost() == 10
+    )  # watermark itself unaffected
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +335,10 @@ async def test_await_pids_capacity_exhausted_wait_raises_retryable_capacity_exha
 async def test_run_compatibility_process_propagates_capacity_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Proves the gate is actually called from _run_compatibility_process_
-    locked's real spawn path, not just reachable in isolation. Falsifier:
-    removing the `await _await_pids_capacity()` call before
-    asyncio.create_subprocess_exec makes this test hang until the runner
+    """Proves the gate is actually called from _run_compatibility_process's
+    real spawn path, not just reachable in isolation. Falsifier: removing
+    the `await _reserve_pids_capacity()` call before delegating to
+    _run_compatibility_process_locked makes this test hang until the runner
     subprocess exits normally instead of raising -- caught by asserting the
     exception, not merely "no exception"."""
     _isolate_pids_sources(monkeypatch, tmp_path, pids_max=100, pids_current=95)
@@ -325,11 +415,16 @@ async def test_partitions_over_budget_queue_durably_without_ever_exceeding_the_c
     completed: list[tuple[int, float]] = []
 
     async def simulate_partition(index: int) -> None:
-        waited = await worker_metrics._await_pids_capacity()
+        waited, reserved = await worker_metrics._reserve_pids_capacity()
         async with file_lock:
             current = int(pids_current_file.read_text()) + 10
             pids_current_file.write_text(str(current))
             peak_seen[0] = max(peak_seen[0], current)
+        # The fake pids.current file now reflects this "child" directly, so
+        # the transient reservation (which only needs to cover the gap
+        # between "decided" and "the live signal reflects it") is released
+        # immediately -- holding both would double-count the same child.
+        await worker_metrics._release_pids_capacity_reservation(reserved)
         await asyncio.sleep(0.03)  # simulated child lifetime
         async with file_lock:
             current = int(pids_current_file.read_text()) - 10

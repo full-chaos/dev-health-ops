@@ -27,6 +27,11 @@ spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
       containers:
+        # CHAOS-4317: same gap as deploy/kubernetes/api.yaml -- Kubernetes has
+        # no per-container pids cgroup limit expressible in a Pod spec (the
+        # only lever is cluster-wide kubelet `--pod-max-pids`), so
+        # worker_metrics.py's capacity reader falls through to its host-wide
+        # kernel.threads-max fallback on Helm-deployed clusters too.
         - name: api
           image: {{ include "dev-health.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}

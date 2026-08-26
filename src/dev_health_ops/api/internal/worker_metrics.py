@@ -387,6 +387,17 @@ def _configured_int_env(key: str, default: int) -> int:
 
 
 def _configured_float_env(key: str, default: float) -> float:
+    """Parse a non-negative float env override, falling back to `default`.
+
+    Zero is a valid, meaningful configuration for several callers of this
+    helper (e.g. DEV_HEALTH_METRICS_RUNNER_PIDS_SAFETY_MARGIN_FRACTION="0"
+    deliberately disables the margin) -- only a negative or unparseable
+    value falls back to the default. An earlier version rejected 0 the same
+    way as a negative/garbage value, silently overriding an operator's
+    explicit "0" back to this function's default (caught by this module's
+    own test suite: setting the margin fraction to "0.0" for a test had no
+    effect until this was fixed).
+    """
     raw = os.environ.get(key, "").strip()
     if not raw:
         return default
@@ -394,7 +405,7 @@ def _configured_float_env(key: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value > 0 else default
+    return value if value >= 0 else default
 
 
 def _effective_pids_ceiling() -> int:
@@ -418,6 +429,46 @@ def _observed_per_child_pids_cost() -> int:
 def _record_per_child_pids_cost(sample: int) -> None:
     if sample > _PIDS_PER_CHILD_COST_HOLDER[0]:
         _PIDS_PER_CHILD_COST_HOLDER[0] = sample
+
+
+_PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV = (
+    "DEV_HEALTH_METRICS_RUNNER_PIDS_PER_CHILD_SAFETY_MULTIPLIER"
+)
+_DEFAULT_PIDS_PER_CHILD_SAFETY_MULTIPLIER = 2.0  # codex review (2026-08-26,
+# PR #1931 round 1): the background poller samples every _PIDS_POLL_SECONDS
+# and is only reliably able to observe a child whose thread burst outlasts
+# its own scheduling latency -- a short-lived runner, or a startup thread
+# burst that spikes and recedes faster than one poll interval, can leave
+# peak_pids_delta_holder at 0 even though the child briefly cost more than
+# the seeded/converged watermark. Admission math must not trust the raw
+# sampler 1:1; this multiplier is applied ONLY to the reservation/admission
+# calculation (_reserved_per_child_pids_cost), never to the recorded
+# watermark itself (_observed_per_child_pids_cost stays the true measured
+# value, for telemetry/debugging accuracy).
+
+
+def _reserved_per_child_pids_cost() -> int:
+    multiplier = _configured_float_env(
+        _PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV,
+        _DEFAULT_PIDS_PER_CHILD_SAFETY_MULTIPLIER,
+    )
+    return math.ceil(_observed_per_child_pids_cost() * multiplier)
+
+
+# CHAOS-4317 codex review (2026-08-26, PR #1931 round 1): a plain
+# check-then-spawn is not atomic across concurrent callers -- with
+# DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY above 1 (or simply two callers
+# racing the same read), both could observe the same pre-spawn pids.current
+# snapshot, both conclude there is headroom, and both spawn, reproducing the
+# exact over-budget condition this gate exists to prevent. _PIDS_RESERVATION_
+# LOCK makes "read current, decide, and reserve" one atomic step; the
+# reservation is held for the reserving child's full lifetime (released by
+# the caller once its pids/rss pollers are torn down, mirroring their
+# existing cancel-then-await pattern) so a second concurrent caller sees the
+# first's reservation even before pids.current itself reflects the new
+# child's real thread creation.
+_PIDS_RESERVATION_LOCK = asyncio.Lock()
+_PIDS_RESERVED_HOLDER = [0]
 
 
 async def _poll_peak_child_pids_delta(
@@ -451,19 +502,27 @@ async def _poll_peak_child_pids_delta(
         await asyncio.sleep(interval_seconds)
 
 
-async def _await_pids_capacity() -> float:
-    """Block until the container has pids headroom for one more runner child.
+async def _reserve_pids_capacity() -> tuple[float, int]:
+    """Block until the container has pids headroom, then atomically claim it.
 
-    Returns the seconds actually waited (0.0 if capacity was already
-    available) -- the caller observes this into
-    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS. Never spawns anything
-    itself, purely a gate checked before asyncio.create_subprocess_exec.
-    This IS the durable, no-drop queue CHAOS-4317 asks for: the Go caller's
-    HTTP request is already kept alive independently by River's
-    lease-renewal loop (runWithLeaseRenewal keeps workCtx alive as long as
-    the cheap RenewPartition UPDATE keeps succeeding, regardless of whether
-    this call is progressing) -- so waiting here inside the still-open
-    request drops nothing and needs no new disk-backed queue.
+    Returns (seconds_waited, reserved_amount). seconds_waited is 0.0 if
+    capacity was already available (observed into DEV_HEALTH_METRIC_COMPAT_
+    PIDS_WAIT_SECONDS either way). reserved_amount is the pids/thread budget
+    claimed against _PIDS_RESERVED_HOLDER -- 0 when no live cgroup signal
+    was available to gate on at all (nothing was reserved because nothing
+    could be checked). The caller MUST release exactly this amount via
+    _release_pids_capacity_reservation once the reserving child's lifetime
+    has ended (same teardown point as its pids/rss pollers), or the
+    reservation leaks and the gate becomes permanently over-conservative.
+
+    Never spawns anything itself, purely a gate checked before asyncio.
+    create_subprocess_exec. This IS the durable, no-drop queue CHAOS-4317
+    asks for: the Go caller's HTTP request is already kept alive
+    independently by River's lease-renewal loop (runWithLeaseRenewal keeps
+    workCtx alive as long as the cheap RenewPartition UPDATE keeps
+    succeeding, regardless of whether this call is progressing) -- so
+    waiting here inside the still-open request drops nothing and needs no
+    new disk-backed queue.
 
     Bounded, not infinite: the wait ceiling scales with how far over budget
     the container currently is (deficit_units * a per-unit second budget),
@@ -472,6 +531,12 @@ async def _await_pids_capacity() -> float:
     _CompatibilityProcessFailure(reason="capacity_exhausted",
     safe_to_retry=True) if the bound is exceeded -- always retryable, never
     a silent drop.
+
+    The read-decide-reserve step happens under _PIDS_RESERVATION_LOCK so two
+    concurrent callers (DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY above 1)
+    cannot both observe the same pre-spawn snapshot and both admit past the
+    ceiling (codex review, PR #1931 round 1) -- the lock is released before
+    sleeping, so waiters don't serialize on the poll delay itself.
     """
     poll_interval = _configured_float_env(
         _PIDS_CAPACITY_WAIT_POLL_SECONDS_ENV, _DEFAULT_PIDS_CAPACITY_WAIT_POLL_SECONDS
@@ -484,35 +549,47 @@ async def _await_pids_capacity() -> float:
     )
     waited = 0.0
     while True:
-        ceiling = _effective_pids_ceiling()
-        current = _read_pids_current()
-        if current is None:
-            # No live cgroup signal at all (non-Linux/dev) -- nothing to
-            # gate on, proceed exactly as before this feature existed.
-            return waited
-        DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT.set(current)
-        DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING.set(ceiling)
-        per_child = _observed_per_child_pids_cost()
-        margin = int(ceiling * margin_fraction)
-        needed = current + margin + per_child
-        if needed <= ceiling:
-            if waited:
+        async with _PIDS_RESERVATION_LOCK:
+            ceiling = _effective_pids_ceiling()
+            current = _read_pids_current()
+            if current is None:
+                # No live cgroup signal at all (non-Linux/dev) -- nothing to
+                # gate on, proceed exactly as before this feature existed.
+                return waited, 0
+            DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT.set(current)
+            DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING.set(ceiling)
+            per_child = _reserved_per_child_pids_cost()
+            margin = int(ceiling * margin_fraction)
+            reserved_by_others = _PIDS_RESERVED_HOLDER[0]
+            needed = current + reserved_by_others + margin + per_child
+            if needed <= ceiling:
+                _PIDS_RESERVED_HOLDER[0] += per_child
+                if waited:
+                    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS.observe(waited)
+                return waited, per_child
+            deficit_units = max(1, math.ceil((needed - ceiling) / max(per_child, 1)))
+            wait_ceiling = deficit_units * wait_unit_seconds
+            if waited >= wait_ceiling:
                 DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS.observe(waited)
-            return waited
-        deficit_units = max(1, math.ceil((needed - ceiling) / max(per_child, 1)))
-        wait_ceiling = deficit_units * wait_unit_seconds
-        if waited >= wait_ceiling:
-            DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS.observe(waited)
-            DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL.inc()
-            raise _CompatibilityProcessFailure(
-                f"metric compatibility process capacity_exhausted -- waited "
-                f"{waited:.1f}s for pids headroom (ceiling={ceiling}, "
-                f"current={current}, margin={margin}, per_child={per_child})",
-                reason="capacity_exhausted",
-                safe_to_retry=True,
-            )
+                DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL.inc()
+                raise _CompatibilityProcessFailure(
+                    f"metric compatibility process capacity_exhausted -- "
+                    f"waited {waited:.1f}s for pids headroom (ceiling="
+                    f"{ceiling}, current={current}, reserved_by_others="
+                    f"{reserved_by_others}, margin={margin}, "
+                    f"per_child={per_child})",
+                    reason="capacity_exhausted",
+                    safe_to_retry=True,
+                )
         await asyncio.sleep(poll_interval)
         waited += poll_interval
+
+
+async def _release_pids_capacity_reservation(amount: int) -> None:
+    if amount <= 0:
+        return
+    async with _PIDS_RESERVATION_LOCK:
+        _PIDS_RESERVED_HOLDER[0] = max(0, _PIDS_RESERVED_HOLDER[0] - amount)
 
 
 class _StrictRequest(BaseModel):
@@ -1798,9 +1875,21 @@ async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
         # of only inferable after the fact from queued-partition latency, as
         # it was during the 2026-08-26 incident.
         DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE.inc()
+        # CHAOS-4317: reserve pids/thread capacity BEFORE spawning (waits,
+        # bounded and capacity-derived, if none is available -- see
+        # _reserve_pids_capacity's docstring). The reservation is released
+        # here, in a finally wrapping the ENTIRE locked call, so every exit
+        # path -- success, a classified _CompatibilityProcessFailure, or any
+        # other exception -- releases exactly once. Held at this outer layer
+        # (not inside _run_compatibility_process_locked) so the reservation
+        # covers the child's full lifetime with a single, unmissable release
+        # point, rather than needing every return/raise inside the locked
+        # function to remember to release it.
+        _waited, reserved = await _reserve_pids_capacity()
         try:
             return await _run_compatibility_process_locked(execution)
         finally:
+            await _release_pids_capacity_reservation(reserved)
             DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE.dec()
 
 
@@ -1808,14 +1897,10 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     payload = _canonical_json(_execution_process_payload(execution)).encode()
     if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
         raise ValueError("metric compatibility process input exceeds the bound")
-    # CHAOS-4317: gate on the container's live pids/thread budget BEFORE
-    # spawning -- the concurrency semaphore above bounds this feature's own
-    # subprocess count, but the 2026-08-26 incident hit pthread_create
-    # failures with that count already at its floor, because nothing read
-    # the actual shared budget. Waits (bounded, capacity-derived) rather
-    # than erroring immediately -- see _await_pids_capacity's docstring for
-    # why waiting here is a durable queue, not a drop.
-    await _await_pids_capacity()
+    # CHAOS-4317: capacity is already reserved by the caller
+    # (_run_compatibility_process) before this function is even invoked --
+    # this baseline read is only for measuring THIS child's own pids delta,
+    # a separate concern from the reservation.
     pids_baseline = _read_pids_current()
     process = await asyncio.create_subprocess_exec(
         *_COMPATIBILITY_RUNNER_COMMAND,

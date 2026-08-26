@@ -38,10 +38,13 @@ type githubWorkItemDerivationSubject struct {
 	WorkItemID string
 	Provider   string
 	// Type is the item's own native kind (e.g. "pr", "merge_request", "bug",
-	// "issue"). No longer consulted by resolve() for team attribution
-	// (CHAOS-4321 removed the Provider+Type-gated author_membership path
-	// that used it); kept for callers outside this file (e.g. persisted
-	// work_items rows) and any future PR/MR-vs-issue distinction.
+	// "issue"). Consulted by resolve() to gate author_membership: only a
+	// PR/MR-shaped item (per githubWorkItemDerivationIsPullOrMergeRequestType,
+	// which checks Provider+Type, never WorkItemID shape -- codex round-5,
+	// 2026-08-25) is eligible for the author (Reporter) membership signal.
+	// CHAOS-4321 (chris, 08:30 PT) restored this path after an earlier round
+	// of the same ticket removed it; also kept for callers outside this file
+	// (e.g. persisted work_items rows).
 	Type          string
 	RepoID        *string
 	NativeTeamKey *string
@@ -49,15 +52,14 @@ type githubWorkItemDerivationSubject struct {
 	ProjectID     *string
 	ProjectName   *string
 	Assignees     []string
-	// Reporter is the item's author (e.g. a PR's opener). CHAOS-4321 (chris's
-	// ruling, 2026-08-26): the CHAOS-4244 author_membership path (rank 6),
-	// which fed Reporter through the same team_memberships lookup as
-	// assignee_membership, is removed -- resolve() no longer reads Reporter
-	// for team attribution at all. assignee_membership (below) is unchanged.
-	// Reporter is kept on the struct because callers outside this file
-	// populate/persist it as ordinary work_item data (member attribution, a
-	// separate person-keyed concern -- see
-	// docs/contribute/architecture/team-attribution.md §0).
+	// Reporter is the item's author (e.g. a PR's opener). CHAOS-4244 added an
+	// author_membership path (rank 6, below linked_issue) fed through the
+	// same resolveMembership two-layer lookup as assignee_membership; an
+	// earlier round of CHAOS-4321 removed it, then chris's 08:30 PT ruling
+	// restored it, gated on the SAME two-layer admin/provider resolution
+	// (see the CHAOS-4321 comment above resolve()'s reporter block) --
+	// resolve() DOES read Reporter for team attribution. See
+	// docs/contribute/architecture/team-attribution.md §0.
 	Reporter *string
 	OrgID    string
 }

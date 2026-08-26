@@ -1048,3 +1048,425 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		}
 	})
 }
+
+// The tests below restore CHAOS-4244 author-path coverage that lane-4321's
+// Round-1 commit (cbe8f65fe, "remove person-membership as a team source")
+// deleted under that round's original wider scope, and which was never
+// brought back when the scope narrowed to "membership stays, but only
+// through admin-authored data, else provider fallback" (chris, 08:30 PT).
+// Confirmed via `git worktree add ... origin/main` that origin/main still
+// carries all 19 of these as of f26cf55e0 -- this is a genuine coverage
+// gap on this branch, not a stale golden-count pin. Each is adapted to the
+// two-layer resolveMembership design: admin-authored member facts now live
+// in Facts.Members at Specificity 60 (the CHAOS-4321 admin-layer
+// convention), not the pre-4321 Specificity 50 the deleted originals used.
+
+func TestGitHubWorkItemDerivationSubjectFromRowPropagatesTypeForAuthorMembership(t *testing.T) {
+	// Codex round-7 finding (2026-08-25, HIGH, reproduced by hand: removing
+	// "Type: row.Type" from githubWorkItemDerivationSubjectFromRow left every
+	// R6 Jira/Linear/mismatched-provider negative test green, because all
+	// three use Provider "jira" -- the provider+type gate is already closed
+	// on Provider alone, so those tests never actually exercise whether Type
+	// propagated). This is the positive case codex asked for: a real
+	// githubWorkItemRow with Provider "github" and Type "pr", converted
+	// through the actual production githubWorkItemDerivationSubjectFromRow,
+	// must still resolve via author_membership -- if Type propagation broke,
+	// the gate would close and this would resolve unassigned instead. Table
+	// includes the GitLab MR case too, since the gate is provider-paired.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name     string
+		provider string
+		itemType string
+	}{
+		{name: "github_pr", provider: "github", itemType: "pr"},
+		{name: "gitlab_merge_request", provider: "gitlab", itemType: "merge_request"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{{
+					Provider: testCase.provider, TeamID: "team-ops", TeamName: "Ops Team",
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+				}},
+			})
+			reporter := "alice"
+			row := githubWorkItemRow{
+				WorkItemID: "acme/api#9", Provider: testCase.provider, Title: "t", Type: testCase.itemType,
+				Status: "open", Reporter: &reporter, OrgID: "org-acme",
+			}
+			subject := githubWorkItemDerivationSubjectFromRow(row)
+			if subject.Type != row.Type {
+				t.Fatalf("githubWorkItemDerivationSubjectFromRow(row).Type = %q, want %q (row.Type must propagate)", subject.Type, row.Type)
+			}
+			teamID, teamName, candidates := derived.resolve(subject)
+			if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+				t.Fatalf("team id = %v, want team-ops (Type propagation must keep the author_membership gate open)", githubWorkItemDerivationStringValue(teamID))
+			}
+			if githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+				t.Fatalf("team name = %v, want Ops Team", githubWorkItemDerivationStringValue(teamName))
+			}
+			if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].IsPrimary != 1 {
+				t.Fatalf("candidates = %+v", candidates)
+			}
+		})
+	}
+}
+
+func TestGitHubWorkItemDerivationNoAssigneeNoReporterStaysUnassigned(t *testing.T) {
+	// RED CONTROL: same member facts as a positive author_membership case,
+	// but subject.Reporter is nil. Must stay unassigned -- proves the
+	// positive cases elsewhere in this file are not passing for some other,
+	// accidental reason (e.g. an assignee fallback silently covering for a
+	// broken reporter path).
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#4244", Provider: "github", Type: "pr",
+		OrgID: "org-acme",
+	})
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil", teamID)
+	}
+	// No Reporter and no Assignees means neither membership path is even
+	// attempted (resolveMembership is never called), so no membership skip
+	// reason exists to report -- evidence stays the bare "no_candidate", not
+	// "no_candidate:no_membership" (that suffix is only for a path that WAS
+	// attempted and found zero candidates).
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" ||
+		candidates[0].Evidence != "no_candidate" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationUnambiguousReporterMembershipStillResolves(t *testing.T) {
+	// Positive control: multiple candidate ROWS for the same identity that
+	// all name the SAME team_id (e.g. matched via member_id and an email
+	// facet separately) must still resolve -- the two-layer admin gate
+	// counts DISTINCT team_ids, not candidate rows.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{
+			{
+				Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+				MemberID: "alice", RawEmail: githubWorkItemDerivationStringPointer("alice"),
+				IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+			},
+		},
+	})
+	reporter := "alice"
+	teamID, teamName, _ := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#4244", Provider: "github", Type: "pr",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+		t.Fatalf("team id = %v, want team-ops", teamID)
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+		t.Fatalf("team name = %v, want Ops Team", teamName)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing.T) {
+	// CHAOS-4244 precedence ruling (chris, 2026-08-24): a PR with an
+	// admin-mapped author AND a linked_issue donor for a DIFFERENT team must
+	// resolve to the linked issue's team -- author_membership (rank 6) sits
+	// BELOW linked_issue (rank 5).
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	derived.linkedIssue = map[string][2]string{
+		"ghpr:acme/api#9": {"team-platform", "Platform Team"},
+	}
+	reporter := "alice"
+	teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#9", Provider: "github", Type: "pr",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-platform" {
+		t.Fatalf("team id = %v, want team-platform (linked_issue must outrank the author)", teamID)
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Platform Team" {
+		t.Fatalf("team name = %v, want Platform Team", teamName)
+	}
+	bySource := map[string]githubWorkItemDerivationCandidate{}
+	for _, candidate := range candidates {
+		bySource[candidate.Source] = candidate
+	}
+	if author := bySource["author_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	}
+	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || githubWorkItemDerivationStringValue(linked.TeamID) != "team-platform" {
+		t.Fatalf("linked_issue candidate = %+v, want present, primary, team-platform", linked)
+	}
+}
+
+func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(t *testing.T) {
+	// The other half of the test above: rather than injecting the
+	// linked_issue candidate directly, this drives the REAL production
+	// builder end to end -- a Linear issue that resolves to team CHAOS via
+	// its OWN project ownership fact (a first-class, donor-eligible source)
+	// is linked to a GitHub PR whose author resolves to a DIFFERENT team via
+	// the admin member layer. The PR must inherit the donor's team, not the
+	// author's.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	donorProjectID := "linear-project-chaos"
+	donor := githubWorkItemDerivationSubject{
+		WorkItemID: "linear:CHAOS-2400", Provider: "linear",
+		ProjectID: &donorProjectID, OrgID: "org-acme",
+	}
+	pr := githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#100", Provider: "github", Type: "pr",
+		OrgID: "org-acme",
+	}
+	reporter := "alice"
+	pr.Reporter = &reporter
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Projects: []githubWorkItemDerivationProjectFact{{
+			Provider: "linear", ProjectID: donorProjectID, TeamID: "CHAOS", TeamName: "Chaos Team",
+			IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	subjects := map[string]githubWorkItemDerivationSubject{
+		donor.WorkItemID: donor, pr.WorkItemID: pr,
+	}
+	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
+		"github", subjects, []githubWorkItemDependencyRow{{
+			SourceWorkItemID: pr.WorkItemID, TargetWorkItemID: donor.WorkItemID,
+			RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
+		}}, nil,
+	)
+	teamID, teamName, candidates := derived.resolve(pr)
+	if githubWorkItemDerivationStringValue(teamID) != "CHAOS" {
+		t.Fatalf("team id = %v, want CHAOS (the real donor must outrank the author)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if githubWorkItemDerivationStringValue(teamName) != "Chaos Team" {
+		t.Fatalf("team name = %v, want Chaos Team", githubWorkItemDerivationStringValue(teamName))
+	}
+	bySource := map[string]githubWorkItemDerivationCandidate{}
+	for _, candidate := range candidates {
+		bySource[candidate.Source] = candidate
+	}
+	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || githubWorkItemDerivationStringValue(linked.TeamID) != "CHAOS" {
+		t.Fatalf("linked_issue candidate = %+v, want present, primary, CHAOS", linked)
+	}
+	if author := bySource["author_membership"]; author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue(t *testing.T) {
+	// Negative control paired with the GitLab MR case in
+	// TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminMapped:
+	// a GitLab ISSUE (WorkItemID "gitlab:acme/api#9", the "#" convention, not
+	// "!") must stay unassigned on this signal alone, exactly like a GitHub
+	// issue does -- the PR/MR gate is Provider+Type, not just Provider.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "gitlab", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "gitlab:acme/api#9", Provider: "gitlab", Type: "issue",
+		Reporter: &reporter, OrgID: "org-acme",
+	})
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (GitLab issue must not gain author_membership)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAJiraIssue(t *testing.T) {
+	// Codex round-5 finding (2026-08-25, BLOCK): Jira has no PR-equivalent
+	// Type at all, so this proves the gate stays closed for it even when its
+	// author IS an admin-mapped, unambiguous single-team member -- the same
+	// shape that would resolve for a real GitHub PR or GitLab MR author.
+	// Drives the real githubWorkItemRow -> githubWorkItemDerivationSubjectFromRow
+	// conversion (codex round-6: a hand-built subject literal would miss a
+	// Type-propagation regression in that conversion).
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "jira", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	row := githubWorkItemRow{
+		WorkItemID: "jira:OPS-101", Provider: "jira", Title: "t", Type: "bug",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (Jira has no PR-equivalent type)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToALinearIssue(t *testing.T) {
+	// The Linear half of the codex round-5 finding above: Linear also has no
+	// PR-equivalent Type, so an admin-mapped, unambiguous single-team Linear
+	// author must never gain author_membership either. Drives the real
+	// githubWorkItemRow -> githubWorkItemDerivationSubjectFromRow conversion.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "linear", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	row := githubWorkItemRow{
+		WorkItemID: "linear:CHAOS-5", Provider: "linear", Title: "t", Type: "story",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (Linear has no PR-equivalent type)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationAuthorMembershipGatesOnProviderNotIDShape(t *testing.T) {
+	// RED-FIRST on a since-fixed gate (codex round-5, 2026-08-25, BLOCK): an
+	// earlier gate matched on WorkItemID STRING SHAPE alone (a "gitlab:"
+	// prefix containing "!") with no check that Provider actually said
+	// "gitlab". A legacy or mismatched row -- a Jira item whose WorkItemID
+	// happens to look like a GitLab MR -- would therefore have incorrectly
+	// opened the gate. The current gate,
+	// githubWorkItemDerivationIsPullOrMergeRequestType, closes this because
+	// Provider "jira" never matches either case of its switch. Drives the
+	// real githubWorkItemRow -> githubWorkItemDerivationSubjectFromRow
+	// conversion (codex round-6) so the proof covers actual production Type
+	// propagation, not just the resolve()-level gate logic.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "jira", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	row := githubWorkItemRow{
+		WorkItemID: "gitlab:legacy-import!42", Provider: "jira", Title: "t", Type: "bug",
+		Status: "todo", Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(row))
+	if teamID != nil {
+		t.Fatalf("team id = %v, want nil (Provider jira must gate closed despite a GitLab-MR-shaped WorkItemID)", githubWorkItemDerivationStringValue(teamID))
+	}
+	if len(candidates) != 1 || candidates[0].Source != "unassigned" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+}
+
+func TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance(t *testing.T) {
+	// When the author IS the assignee and both resolve to the SAME team,
+	// resolve() keeps BOTH candidates as provenance -- one assignee_membership
+	// row (rank 4, evidence "assignee=...") and one author_membership row
+	// (rank 6, evidence "reporter=..."). Splitting the source (CHAOS-4244's
+	// precedence ruling) makes them structurally distinct at the ClickHouse
+	// storage key (source differs, not just evidence). The assignee_membership
+	// row must win primary: it outranks author_membership even for the
+	// identical team.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+		Members: []githubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	teamID, _, candidates := derived.resolve(githubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#77", Provider: "github", Type: "pr",
+		Assignees: []string{"alice"}, Reporter: &reporter, OrgID: "org-acme",
+	})
+	if githubWorkItemDerivationStringValue(teamID) != "team-ops" {
+		t.Fatalf("team id = %v, want team-ops", teamID)
+	}
+	bySource := map[string]githubWorkItemDerivationCandidate{}
+	for _, candidate := range candidates {
+		bySource[candidate.Source] = candidate
+	}
+	assignee, ok := bySource["assignee_membership"]
+	if !ok || assignee.IsPrimary != 1 || githubWorkItemDerivationStringValue(assignee.TeamID) != "team-ops" {
+		t.Fatalf("assignee candidate = %+v (present=%v), want present, primary, team-ops", assignee, ok)
+	}
+	author, ok := bySource["author_membership"]
+	if !ok || author.IsPrimary != 0 || githubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+		t.Fatalf("author candidate = %+v (present=%v), want present, non-primary, team-ops", author, ok)
+	}
+	if assignee.Evidence == author.Evidence {
+		t.Fatalf("expected distinct evidence (assignee= vs reporter=), got identical: %q", assignee.Evidence)
+	}
+}
+
+func TestGitHubWorkItemTeamAttributionMetricSourceSplitsRealReporterFromRealAssigneeRows(t *testing.T) {
+	// Metric-vocabulary regression (codex, 2026-08-24): a real
+	// resolver-produced reporter candidate's evidence must classify as
+	// "author", and a real assignee candidate's evidence must classify as
+	// "assignee" -- proving it end to end through resolve(), not a
+	// handcrafted "reporter="/"assignee=" literal.
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		subject    githubWorkItemDerivationSubject
+		wantMetric string
+	}{
+		{
+			name: "reporter",
+			subject: func() githubWorkItemDerivationSubject {
+				reporter := "alice"
+				return githubWorkItemDerivationSubject{
+					WorkItemID: "ghpr:acme/api#4244", Provider: "github", Type: "pr",
+					Reporter: &reporter, OrgID: "org-acme",
+				}
+			}(),
+			wantMetric: "author",
+		},
+		{
+			name: "assignee",
+			subject: githubWorkItemDerivationSubject{
+				WorkItemID: "gh:acme/api#4245", Provider: "github", Type: "issue",
+				Assignees: []string{"alice"}, OrgID: "org-acme",
+			},
+			wantMetric: "assignee",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{{
+					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+				}},
+			})
+			_, _, candidates := derived.resolve(testCase.subject)
+			primary := candidates[0]
+			row := githubWorkItemTeamAttributionRow{Source: primary.Source, Evidence: primary.Evidence}
+			if got := githubWorkItemTeamAttributionMetricSource(row); got != testCase.wantMetric {
+				t.Fatalf("metric source = %q, want %q (evidence=%q)", got, testCase.wantMetric, primary.Evidence)
+			}
+		})
+	}
+}

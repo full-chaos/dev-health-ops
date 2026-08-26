@@ -159,15 +159,21 @@ async def _fetch_team_metrics(
     owning N repos writes one row PER (team_id, repo_id, day); collapsing
     straight to ``(team_id, day)`` the old way keeps only one repo's slice.
 
-    Three layers: (1) the innermost subquery collapses each
+    Four layers: (1) the innermost subquery collapses each
     ``(org_id, team_id, repo_id, day)`` key to its latest row via
-    ``argMax(<col>, computed_at)``; (2) the middle layer SUMs the additive
-    counts across a team's repos for each day and RECOMPUTES the ratio from
-    those summed counts -- a ratio is not additive across rows, so it is
-    never averaged directly across repos; (3) the outer query AVGs those
-    per-team-day ratios across teams, unchanged from before. When
-    ``team_id`` is supplied we filter to that team; otherwise we average
-    across all teams to produce an org-wide signal.
+    ``argMax(<col>, computed_at)``; (2) a filter drops the legacy
+    ``repo_id=''`` bucket for a (team_id, day) key WHENEVER real per-repo
+    buckets also exist for that same key -- a historical day that gets a
+    real per-repo backfill/re-drive after migration 080 must not have its
+    old pre-migration aggregate summed together with the new per-repo rows,
+    which would double-count that day (codex CHAOS-4329 round 1, P1); (3)
+    the middle layer SUMs the additive counts across a team's remaining
+    repos for each day and RECOMPUTES the ratio from those summed counts --
+    a ratio is not additive across rows, so it is never averaged directly
+    across repos; (4) the outer query AVGs those per-team-day ratios across
+    teams, unchanged from before. When ``team_id`` is supplied we filter to
+    that team; otherwise we average across all teams to produce an org-wide
+    signal.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -202,16 +208,21 @@ async def _fetch_team_metrics(
                    total_weekend_commits / total_commits, 0.0
                 ) AS weekend_commit_ratio
             FROM (
-                SELECT
-                    day,
-                    team_id,
-                    repo_id,
-                    argMax(commits_count,             computed_at) AS commits_count,
-                    argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
-                    argMax(weekend_commits_count,      computed_at) AS weekend_commits_count
-                FROM team_metrics_daily
-                {inner_where}
-                GROUP BY day, team_id, repo_id
+                SELECT day, team_id, repo_id, commits_count, after_hours_commits_count, weekend_commits_count
+                FROM (
+                    SELECT
+                        day,
+                        team_id,
+                        repo_id,
+                        argMax(commits_count,             computed_at) AS commits_count,
+                        argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
+                        argMax(weekend_commits_count,      computed_at) AS weekend_commits_count,
+                        countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+                    FROM team_metrics_daily
+                    {inner_where}
+                    GROUP BY day, team_id, repo_id
+                )
+                WHERE repo_id != '' OR real_repo_count = 0
             )
             GROUP BY day, team_id
         )

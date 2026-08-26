@@ -547,6 +547,7 @@ else:
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
+    DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
 
 
 # ---------------------------------------------------------------------------

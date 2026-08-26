@@ -240,3 +240,79 @@ def test_team_spanning_two_repos_sums_correctly_through_every_reader() -> None:
         "core", DAY, date(2026, 8, 25)
     )
     assert after_hours == pytest.approx(true_ratio)
+
+
+def test_legacy_row_is_not_double_counted_after_a_real_per_repo_backfill() -> None:
+    """codex CHAOS-4329 round 1 (P1): a legacy repo_id='' row (written
+    before migration 080) is its own dedup bucket, distinct from a real
+    repo_id bucket. If a historical day later gets a real per-repo
+    backfill/re-drive (append-only tables re-drive an existing day rather
+    than rewrite it -- CHAOS-4246 made this a designed, expected
+    occurrence), a naive per-(team, repo, day) SUM would add the legacy
+    aggregate on top of the new per-repo rows and double-count that day.
+    Every reader must drop the legacy bucket once real per-repo data exists
+    for the same (team_id, day) key.
+    """
+    import asyncio
+
+    from dev_health_ops.api.graphql.resolvers.cognitive_load import (
+        _fetch_team_metrics,
+    )
+    from dev_health_ops.metrics.schemas import TeamMetricsDailyRecord
+
+    sink = _sink()
+    org_id = str(uuid.uuid4())  # throwaway random org (isolated, no cleanup needed)
+    sink.org_id = org_id
+
+    # A legacy row (repo_id='', the migration 080 default) for team "core"
+    # on DAY, as if written before that migration -- 10 commits, 3
+    # after-hours.
+    legacy_record = TeamMetricsDailyRecord(
+        day=DAY,
+        team_id="core",
+        team_name="Core",
+        commits_count=10,
+        after_hours_commits_count=3,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.3,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
+        repo_id="",
+    )
+    sink.write_team_metrics([legacy_record])
+    # A real per-repo backfill for the SAME day, repo_id populated -- 4
+    # commits, 1 after-hours. Deliberately a DIFFERENT total than the
+    # legacy row so double-counting is numerically visible.
+    backfill_record = TeamMetricsDailyRecord(
+        day=DAY,
+        team_id="core",
+        team_name="Core",
+        commits_count=4,
+        after_hours_commits_count=1,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.25,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 8, 25, 1, 0, tzinfo=timezone.utc),
+        repo_id=str(uuid.uuid4()),
+    )
+    sink.write_team_metrics([backfill_record])
+
+    # True answer: the real per-repo backfill superseded the legacy row for
+    # this day -- 4 commits, 1 after-hours (ratio 0.25). NOT 14/4 (0.2857),
+    # which is what a naive sum-across-all-buckets would produce.
+    team_rows = asyncio.run(
+        _fetch_team_metrics(
+            sink.client,
+            org_id=org_id,
+            since_date=DAY.isoformat(),
+            until_date=DAY.isoformat(),
+            team_id="core",
+        )
+    )
+    assert len(team_rows) == 1
+    assert team_rows[0]["after_hours_commit_ratio"] == pytest.approx(0.25), (
+        f"cognitive_load.py._fetch_team_metrics returned "
+        f"{team_rows[0]['after_hours_commit_ratio']!r}, expected 0.25 (the "
+        "real per-repo backfill alone) -- 0.2857 would mean the legacy "
+        "repo_id='' row was double-counted alongside the new per-repo row"
+    )

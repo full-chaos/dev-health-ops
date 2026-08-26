@@ -22,12 +22,14 @@ and never sets it, per chris's "sync must not clear it."
 BACKFILL (team-lead, 2026-08-26): identities.team_ids is confirmed
 admin-only (every writer traced -- only /org/admin/identities and the
 drift-approval flow ever touch it, both genuinely admin actions). Seed
-manual_members for every team from the UNION of member_facets(...) --
-the SAME facet shape ClickHouseTeamAdminService.member_facets computes at
-request time -- over every active identity whose team_ids includes that
-team. Mirrored into legacy teams.members too (union, never removed), so the
-pre-CHAOS-4321 TeamResolver reader (providers/teams.py) keeps working
-unchanged.
+manual_members for every team from the UNION of _member_facets_at_079(...)
+-- a FROZEN copy of the same facet shape
+ClickHouseTeamAdminService.member_facets computes at request time, as of
+this migration's authorship (team-lead ruling, 2026-08-26: a migration must
+not import live service code -- see _member_facets_at_079's own docstring)
+-- over every active identity whose team_ids includes that team. Mirrored
+into legacy teams.members too (union, never removed), so the pre-CHAOS-4321
+TeamResolver reader (providers/teams.py) keeps working unchanged.
 
 KNOWN GAP (documented, not fixed here): drift-approved memberships
 (apply_identity_membership_change writes teams.members/team_memberships
@@ -48,11 +50,45 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
-    member_facets,
-)
-
 log = logging.getLogger(__name__)
+
+
+def _member_facets_at_079(
+    *,
+    canonical_id: str | None = None,
+    email: str | None = None,
+    display_name: str | None = None,
+    provider_identities: dict[str, list[str]] | None = None,
+) -> set[str]:
+    """Frozen copy of ClickHouseTeamAdminService.member_facets's logic, AS OF
+    this migration's authorship (team-lead ruling, 2026-08-26; same doctrine
+    applied to migration 0112's capability-map freeze): a migration must be
+    frozen at authorship. Importing the live ``member_facets`` here would let
+    a future edit to that service silently change what THIS backfill
+    computes, and would drag the whole ``api.services.configuration`` package
+    tree -- and its eager __init__.py re-export cascade -- into the
+    migration's dependency closure (that closure is deliberately minimal; see
+    ci/requirements-clickhouse-migrations.txt's own comments on why).
+
+    tests/test_migration_079_teams_manual_members.py pins that this copy
+    still agrees with the live ``member_facets`` on a fixture identity set,
+    so future drift between the two is a test failure, not a silent
+    divergence this migration would otherwise never notice.
+    """
+    facets: set[str] = set()
+    if email:
+        facets.add(str(email))
+    if canonical_id:
+        facets.add(str(canonical_id))
+    for values in (provider_identities or {}).values():
+        if isinstance(values, list):
+            facets.update(str(v) for v in values if v)
+        elif values:
+            facets.add(str(values))
+    if not email and display_name:
+        facets.add(str(display_name))
+    return facets
+
 
 # Full row shape teams.insert requires (a ReplacingMergeTree new-version
 # write must carry every column forward, not just the ones changing) --
@@ -125,7 +161,7 @@ def upgrade(client) -> None:
         ) = row
         if not team_ids:
             continue
-        facets = member_facets(
+        facets = _member_facets_at_079(
             canonical_id=canonical_id,
             email=email,
             display_name=display_name,

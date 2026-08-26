@@ -14,6 +14,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 MIGRATIONS_DIR = (
     Path(__file__).resolve().parents[1]
@@ -269,3 +270,98 @@ def test_migration_079_skips_teams_with_no_matching_admin_identity() -> None:
 
     assert client.inserts == []
     assert client.teams[("org-acme", "team-untouched")] == other_team
+
+
+def test_migration_079_frozen_member_facets_still_agrees_with_the_live_function() -> (
+    None
+):
+    """team-lead ruling (2026-08-26): a migration must be frozen at
+    authorship -- the same doctrine applied to migration 0112's
+    capability-map freeze. Migration 079 no longer imports
+    ClickHouseTeamAdminService.member_facets (that import dragged the whole
+    api.services.configuration package tree, and its eager __init__.py
+    re-export cascade, into the migration's dependency closure -- see
+    ci/requirements-clickhouse-migrations.txt's own comments). It carries a
+    private, frozen copy (_member_facets_at_079) instead.
+
+    A frozen copy can silently drift from the live function it was copied
+    from. This test is the guard: it asserts the two agree on a fixture
+    identity set that exercises every branch (email present, canonical_id
+    only, multiple provider identities as both list and bare-string values,
+    display_name used only when email is absent, empty/falsy inputs). A
+    future edit to the live member_facets that this copy does NOT mirror
+    must fail this test, not silently change what future migration runs
+    would have computed -- migration 079 itself must never change to chase
+    that drift; a NEW migration is how the fix ships if one is ever needed.
+    """
+    from dev_health_ops.api.services.configuration.clickhouse_team_admin import (
+        member_facets,
+    )
+
+    migration = _load_migration()
+
+    fixture_identities: list[dict[str, Any]] = [
+        # email + canonical_id + provider identities (list-shaped)
+        {
+            "canonical_id": "github:alice",
+            "email": "alice@example.com",
+            "display_name": "Alice",
+            "provider_identities": {
+                "github": ["gh-alice"],
+                "jira": ["jira-alice-1", "jira-alice-2"],
+            },
+        },
+        # canonical_id only, no email -- display_name must be included
+        {
+            "canonical_id": "gitlab:bob",
+            "email": None,
+            "display_name": "Bob B",
+            "provider_identities": {},
+        },
+        # email present -- display_name must NOT be included
+        {
+            "canonical_id": "linear:carol",
+            "email": "carol@example.com",
+            "display_name": "Carol C",
+            "provider_identities": {"linear": ["linear-carol"]},
+        },
+        # provider_identities value is a bare string, not a list
+        {
+            "canonical_id": "jira:dave",
+            "email": None,
+            "display_name": None,
+            "provider_identities": {"jira": "jira-dave-solo"},
+        },
+        # everything falsy except canonical_id
+        {
+            "canonical_id": "github:eve",
+            "email": None,
+            "display_name": None,
+            "provider_identities": None,
+        },
+        # empty provider_identities values (falsy list entries dropped)
+        {
+            "canonical_id": "github:frank",
+            "email": "",
+            "display_name": "",
+            "provider_identities": {"github": ["", "gh-frank", None]},
+        },
+    ]
+
+    for identity in fixture_identities:
+        live = member_facets(
+            canonical_id=identity["canonical_id"],
+            email=identity["email"],
+            display_name=identity["display_name"],
+            provider_identities=identity["provider_identities"],
+        )
+        frozen = migration._member_facets_at_079(
+            canonical_id=identity["canonical_id"],
+            email=identity["email"],
+            display_name=identity["display_name"],
+            provider_identities=identity["provider_identities"],
+        )
+        assert frozen == live, (
+            f"frozen copy diverged from the live function for "
+            f"{identity['canonical_id']!r}: frozen={frozen!r} live={live!r}"
+        )

@@ -516,3 +516,78 @@ async def test_loader_scopes_teams_members_fallback_facet_by_confirmed_provider(
         github_item, None, None, attribution_context=context
     )
     assert team_id == "team-eng", "the same login must still attribute its own provider"
+
+
+@pytest.mark.asyncio
+async def test_loader_scopes_teams_members_fallback_facet_normalizes_internal_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Python and Go are a differential pair (team-lead ruling, 2026-08-26):
+    a normalization difference between them is a parity defect regardless of
+    real-world plausibility. Go's facetProviderIndex normalizes via
+    normalizeDerivationIdentity, which collapses internal whitespace runs
+    (strings.Fields + Join), not just case/edge-strip. This pins the Python
+    side matches: a `teams.members` facet AND its confirming
+    identities.provider_identities raw value both carry irregular internal
+    whitespace ("john   doe", triple space), and the work item's assignee
+    string carries DIFFERENT irregular whitespace ("john  doe", double
+    space) -- all three must collapse to the same key
+    (`_identity_key`/`normalizeDerivationIdentity` semantics) for the match
+    to succeed at all. Before this fix, the facet was only `.strip().lower()`
+    -- both provider_member_by_identity's dict key AND
+    facet_provider_index's own key would carry the irregular whitespace
+    literally, so a facet that didn't happen to already match a caller's
+    exact whitespace-shape would silently never resolve."""
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    async def fake_query(_client: object, query: str, _params: dict[str, object]):
+        if "FROM identities FINAL" in query:
+            return [
+                {
+                    "canonical_id": "github:john-doe",
+                    "email": None,
+                    "provider_identities": '{"github": ["john   doe"]}',
+                    "team_ids": [],
+                    "updated_at": now,
+                },
+            ]
+        if "FROM teams FINAL" in query:
+            return [
+                {
+                    "id": "team-eng",
+                    "name": "Engineering",
+                    "members": ["john   doe"],
+                    "manual_members": [],
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query,
+    )
+
+    context = await ClickHouseDataLoader(
+        object(), org_id="org-1"
+    ).load_team_attribution_context(as_of=now)
+
+    item = WorkItem(
+        work_item_id="gh:full-chaos/dev-health#4",
+        provider="github",
+        title="Irregular-whitespace facet probe",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        created_at=now,
+        updated_at=now,
+        assignees=["john  doe"],  # different irregular whitespace than the facet
+        labels=[],
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=context
+    )
+    assert team_id == "team-eng", (
+        "a teams.members facet and an assignee string with DIFFERENT "
+        "irregular internal whitespace must still match once both are "
+        "collapsed to the same normalized key"
+    )

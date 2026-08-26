@@ -1250,6 +1250,36 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("(n) a provider-tagged roster facet with irregular internal whitespace still matches a work item assignee with DIFFERENT irregular whitespace", func(t *testing.T) {
+		// Python/Go parity companion (team-lead ruling, 2026-08-26): Go's
+		// resolve() already collapses internal whitespace correctly here --
+		// normalizeDerivationIdentity (via strings.Fields+Join) runs on
+		// every ProviderMembers identity at the SAME point real
+		// team_memberships rows go through, so this pool's MemberID does
+		// not need to be pre-normalized by loadMembers's split logic to
+		// resolve correctly. This test is the Go half of the pair pinning
+		// that fact -- the Python half
+		// (test_loader_scopes_teams_members_fallback_facet_normalizes_internal_whitespace)
+		// needed an actual code fix; this one is a regression pin, not a
+		// fix, proving both languages now agree.
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-eng", TeamName: "Engineering",
+				MemberID: "john   doe", IsPrimary: 1, Specificity: 50, Priority: 10,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#41", Provider: "github", Type: "issue",
+			Assignees: []string{"john  doe"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-eng" || githubWorkItemDerivationStringValue(teamName) != "Engineering" {
+			t.Fatalf("team = (%v, %v), want team-eng/Engineering", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row", candidates)
+		}
+	})
 }
 
 // The tests below restore CHAOS-4244 author-path coverage that lane-4321's

@@ -376,6 +376,30 @@ for target in cicd deployments incidents tests; do
     --defer-finalize
 done
 
+echo "   -- git (CHAOS-4276: raw git_commits for team_wellbeing/repo_user_commit)"
+# "git" is NOT in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS -- it writes analytics
+# rows only (git_commits/git_commit_stats via the same SyntheticDataGenerator
+# the 4 targets above already use to insert_repo), no sync_run to defer or
+# finalize, no DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN gate. Ordering relative to
+# the loop above is irrelevant for exactly that reason: it never touches
+# post_sync/dora dispatch. --repo-name matches the SAME REPO_NAME the 4
+# targets above already seeded (SyntheticDataGenerator derives repo_id via
+# uuid5(namespace, repo_name), so this lands on the identical repo row --
+# see ci/seed_metrics_proof_team.py's docstring for why that matters).
+ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
+  run_dev_hops sync git \
+  --provider synthetic \
+  --repo-name "${REPO_NAME}" \
+  --backfill "${BACKFILL_DAYS}" \
+  --org "${ORG_ID}" \
+  --sink clickhouse
+
+echo "==> seeding a repo-pattern team for team_wellbeing (CHAOS-4276): without one, every commit resolves to the 'unassigned' bucket, which is a valid but less meaningful proof"
+PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/seed_metrics_proof_team.py" \
+  --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
+  --org-id "${ORG_ID}" \
+  --repo-name "${REPO_NAME}"
+
 echo "==> finalizing the 4 deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
 for target in cicd deployments incidents tests; do
   echo "   -- ${target}"
@@ -393,16 +417,21 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # review): cicd/deploy/testops_pipeline/testops_test come directly from the
 # cicd/deployments/tests targets seeded above; dora is computed from
 # deployments+cicd+incidents (all seeded) per _DORA_TARGETS in
-# post_sync_dispatch.py. repo_user_commit/complexity need git commit/PR
-# history, which this job never seeds (only cicd/deployments/incidents/tests,
-# matching the ticket's stated source families) -- asserting them here would
-# fail forever, for a reason unrelated to CHAOS-4263, even after it merges.
+# post_sync_dispatch.py. repo_user_commit/team_wellbeing (CHAOS-4276) come
+# from the "git" target seeded above (git_commits); team_wellbeing also
+# needs the repo-pattern team ci/seed_metrics_proof_team.py seeds, or every
+# commit resolves to the less-meaningful "unassigned" bucket instead of
+# actually exercising repo-pattern resolution. complexity is the one
+# remaining exclusion: it needs persisted file CONTENTS
+# (git_files.contents), which this job's synthetic git seeding does not
+# write -- asserting it here would fail forever, for a reason unrelated to
+# CHAOS-4263, even after everything else merges.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora \
+    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 

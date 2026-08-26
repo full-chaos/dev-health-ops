@@ -4,7 +4,7 @@
   "source": "src/dev_health_ops/metrics/job_daily.py",
   "families": [
     {"name":"repo_user_commit","python":"compute_daily_metrics","writes":["repo_metrics_daily","user_metrics_daily","commit_metrics"],"port":"next_core","golden":"required"},
-    {"name":"team_wellbeing","python":"compute_team_wellbeing_metrics_daily","writes":["team_metrics_daily"],"port":"next_core","golden":"required"},
+    {"name":"team_wellbeing","python":"compute_team_wellbeing_metrics_daily","writes":["team_metrics_daily"],"port":"go","golden":"required"},
     {"name":"file_hotspots","python":"compute_file_hotspots","writes":["file_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"file_risk_hotspots","python":"compute_file_risk_hotspots","writes":["file_hotspot_daily"],"port":"pending","golden":"required"},
     {"name":"work_item","python":"compute_work_item_metrics_daily","writes":["work_item_metrics_daily","work_item_user_metrics_daily","work_item_cycle_times"],"port":"pending","golden":"required"},

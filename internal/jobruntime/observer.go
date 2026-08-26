@@ -135,6 +135,21 @@ type DailyMetricsZeroRowsObserver interface {
 	ObserveDailyMetricsFamilyZeroRowsWithSource(family string) error
 }
 
+// DailyMetricsNativeFamilyObserver is the narrow capability
+// PartitionHandler depends on after attempting one native family compute
+// inside a partition (CHAOS-4276, the daily bridge's per-partition
+// counterpart to ObserveDORAPartition/ObserveDORARefused for the remaining
+// bridge's per-kind native cutovers). Before this observer existed, a native
+// family that silently stopped writing rows was indistinguishable from a
+// healthy but quiet day: only the executor that ran the compute knows
+// whether it wrote real rows, wrote nothing, or was refused and fell back to
+// the compatibility bridge for this partition.
+type DailyMetricsNativeFamilyObserver interface {
+	ObserveDailyMetricsNativeFamily(
+		family string, outcome DailyMetricsNativeFamilyOutcome, rowsWritten int, duration time.Duration,
+	) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

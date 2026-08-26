@@ -742,6 +742,7 @@ async def run_daily_metrics_job(
     org_id: str,
     skip_finalize: bool = False,
     on_write_starting: Callable[[], None] | None = None,
+    skip_families: set[str] | None = None,
 ) -> dict[date, list[str]]:
     """Run the daily metrics compute+write pipeline.
 
@@ -753,7 +754,16 @@ async def run_daily_metrics_job(
     family never raises or aborts the job. Callers that want the partition to
     reflect it should surface this map (e.g. in the HTTP execution result or
     a log line) rather than relying on the job's plain completion.
+
+    ``skip_families`` (CHAOS-4276) names families.json families a native Go
+    executor already computed and wrote for this (org, day, repo) scope --
+    this job must neither recompute nor rewrite them. ``None`` or an empty
+    set is a no-op: every family computes and writes exactly as it did
+    before this parameter existed. Only families with a Go native executor
+    check this set (currently just ``team_wellbeing``); naming any other
+    family here has no effect.
     """
+    skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
@@ -1101,16 +1111,26 @@ async def run_daily_metrics_job(
             code_ownership_gini_by_repo=gini_by_repo,
         )
 
-        team_metrics = compute_team_wellbeing_metrics_daily(
-            day=d,
-            commit_stat_rows=commit_rows,
-            team_resolver=team_resolver,
-            repo_team_resolver=repo_team_resolver,
-            repo_names_by_id=repo_names_by_id,
-            computed_at=computed_at,
-            business_timezone=business_tz,
-            business_hours_start=business_start,
-            business_hours_end=business_end,
+        # CHAOS-4276: team_wellbeing has a native Go executor. When the Go
+        # dispatcher reports it already computed and wrote this scope,
+        # skip both compute and write here -- an empty list produces the
+        # same "nothing to write" shape write_team_metrics already handles
+        # for a legitimately quiet day, so no separate branch is needed
+        # below.
+        team_metrics = (
+            []
+            if "team_wellbeing" in skip_families
+            else compute_team_wellbeing_metrics_daily(
+                day=d,
+                commit_stat_rows=commit_rows,
+                team_resolver=team_resolver,
+                repo_team_resolver=repo_team_resolver,
+                repo_names_by_id=repo_names_by_id,
+                computed_at=computed_at,
+                business_timezone=business_tz,
+                business_hours_start=business_start,
+                business_hours_end=business_end,
+            )
         )
 
         wi_metrics: list[Any] = []

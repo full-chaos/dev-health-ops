@@ -462,14 +462,19 @@ func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, err
 		return Run{}, ErrUnavailable
 	}
 	var run Run
+	var targetDay string
 	err := store.pool.QueryRow(ctx, `
-SELECT id::text, org_id::text, generation, status
-FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status)
+SELECT id::text, org_id::text, generation, status, target_day::text
+FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrInvalidState
 	}
 	if err != nil {
 		return Run{}, ErrUnavailable
+	}
+	if run.TargetDay, err = time.Parse("2006-01-02", targetDay); err != nil {
+		return Run{}, ErrInvalidState
 	}
 	return run, nil
 }
@@ -479,6 +484,7 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 		return nil, ErrUnavailable
 	}
 	var run Run
+	var targetDay string
 	// RepositoryDiscoveryRequired is generation-agnostic: it is true exactly
 	// when the run was created with no partitions yet, whichever entry point
 	// created it (the nightly fixed schedule, or a post-sync re-drive per
@@ -490,16 +496,19 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 UPDATE public.daily_metrics_runs
 SET status = 'running', updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')
-RETURNING id::text, org_id::text, generation, status,
+RETURNING id::text, org_id::text, generation, status, target_day::text,
   NOT EXISTS (
     SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = daily_metrics_runs.id
   )`, store.now().UTC(), runID).
-		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &run.RepositoryDiscoveryRequired)
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.RepositoryDiscoveryRequired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	if run.TargetDay, err = time.Parse("2006-01-02", targetDay); err != nil {
+		return nil, ErrInvalidState
 	}
 	return &run, nil
 }
@@ -660,7 +669,7 @@ func (store *PostgresStore) DispatchablePartitions(ctx context.Context, runID st
 		return nil, ErrUnavailable
 	}
 	rows, err := store.pool.Query(ctx, `
-SELECT partition.id::text, partition.run_id::text FROM public.daily_metrics_partitions AS partition
+SELECT partition.id::text, partition.run_id::text, partition.repo_ids::text FROM public.daily_metrics_partitions AS partition
 JOIN public.daily_metrics_runs AS run ON run.id = partition.run_id
 WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
   AND run.status = 'running' ORDER BY partition.ordinal`, runID)
@@ -671,13 +680,32 @@ WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
 	var result []Partition
 	for rows.Next() {
 		var partition Partition
-		if err := rows.Scan(&partition.ID, &partition.RunID); err != nil {
+		var repoIDs string
+		if err := rows.Scan(&partition.ID, &partition.RunID, &repoIDs); err != nil {
 			return nil, ErrUnavailable
+		}
+		if partition.RepoIDs, err = parsePartitionRepoIDs(repoIDs); err != nil {
+			return nil, ErrInvalidState
 		}
 		result = append(result, partition)
 	}
 	if rows.Err() != nil {
 		return nil, ErrUnavailable
+	}
+	return result, nil
+}
+
+// parsePartitionRepoIDs decodes daily_metrics_partitions.repo_ids's JSONB
+// array (a plain []string of repos.id values, written by
+// MaterializeScheduledFanout/normalizeStartRunRequest) into RepositoryID.
+func parsePartitionRepoIDs(raw string) ([]RepositoryID, error) {
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil, err
+	}
+	result := make([]RepositoryID, len(ids))
+	for index, id := range ids {
+		result[index] = RepositoryID(id)
 	}
 	return result, nil
 }
@@ -729,16 +757,20 @@ FOR UPDATE OF partition`, partitionID).Scan(&status, &leaseExpiresAt, &runStatus
 		return nil, nil
 	}
 	var claim PartitionClaim
+	var repoIDs string
 	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_partitions
 SET status = 'running', claim_token = $2, lease_expires_at = $3,
     attempt_count = attempt_count + 1, updated_at = $1
 WHERE id = $4::uuid
-RETURNING id::text, run_id::text, claim_token::text`,
+RETURNING id::text, run_id::text, claim_token::text, repo_ids::text`,
 		now, token, now.Add(store.lease), partitionID,
-	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Token)
+	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Token, &repoIDs)
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	if claim.Partition.RepoIDs, err = parsePartitionRepoIDs(repoIDs); err != nil {
+		return nil, ErrInvalidState
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, ErrUnavailable

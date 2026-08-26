@@ -32,7 +32,7 @@ func TestHTTPCompatibilityExecutorSendsOnlyAuthoritativeIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
-	if err := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID}); err != nil {
+	if err := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := executor.Finalize(t.Context(), run); err != nil {
@@ -98,10 +98,10 @@ func TestHTTPCompatibilityRetryUsesAuthoritativeGenerationAndSkipsCompletedOutpu
 	}
 	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
 	partition := Partition{ID: testPartitionID, RunID: testRunID}
-	if err := executor.ComputePartition(t.Context(), run, partition); err != nil {
+	if err := executor.ComputePartition(t.Context(), run, partition, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := executor.ComputePartition(t.Context(), run, partition); err != nil {
+	if err := executor.ComputePartition(t.Context(), run, partition, nil); err != nil {
 		t.Fatal(err)
 	}
 	if writes["daily-v1:"+testRunID+":"+testPartitionID] != 1 {
@@ -184,7 +184,7 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 				t.Fatal(err)
 			}
 			run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
-			got := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID})
+			got := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID}, nil)
 			if !errors.Is(got, testCase.wantErr) {
 				t.Fatalf("ComputePartition error = %v, want %v", got, testCase.wantErr)
 			}
@@ -210,7 +210,7 @@ func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds
 	ctx, cancel := context.WithTimeout(context.Background(), 31*time.Second)
 	defer cancel()
 	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
-	if err := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}); err != nil {
+	if err := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}, nil); err != nil {
 		t.Fatal(err)
 	}
 }

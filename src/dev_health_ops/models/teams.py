@@ -43,6 +43,7 @@ class Team(Base):
         updated_at: datetime | None = None,
         team_uuid: uuid.UUID | None = None,
         org_id: str = "",
+        repo_patterns: list[str] | None = None,
     ):
         self.id = id
         self.team_uuid = team_uuid or uuid.uuid4()
@@ -51,6 +52,15 @@ class Team(Base):
         self.members = members or []
         self.updated_at = updated_at or datetime.now(timezone.utc)
         self.org_id = org_id
+        # NOT a mapped_column: this Postgres-mapped class has no repo_patterns
+        # DB column (repo_patterns is a ClickHouse-only concept -- see
+        # migration 025_teams_project_repo.sql -- and this model predates and
+        # is unrelated to that table's schema). Kept as a plain instance
+        # attribute so ClickHouseStore.insert_teams's getattr(item,
+        # "repo_patterns", []) picks it up (storage/clickhouse.py) without a
+        # Postgres migration; SQLAlchemy ignores unmapped attributes on
+        # flush, so this is a no-op for any Postgres-backed store.
+        self.repo_patterns = repo_patterns or []
 
 
 class JiraProjectOpsTeamLink(Base):

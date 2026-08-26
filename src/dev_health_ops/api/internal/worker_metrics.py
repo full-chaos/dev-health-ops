@@ -17,6 +17,7 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic as _monotonic
 from typing import Annotated, Any, Literal
@@ -95,11 +96,18 @@ class DailyMetricsExecutionRequest(_StrictRequest):
     operation: Literal["partition", "finalize"]
     run_id: uuid.UUID
     partition_id: uuid.UUID | None = None
+    # CHAOS-4276: families a NativeFamilyExecutor already computed and wrote
+    # for this partition on the Go side -- run_daily_metrics_job must not
+    # recompute or rewrite them. Empty/omitted is a no-op, byte-identical to
+    # every request before this field existed.
+    skip_families: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_operation_identity(self) -> DailyMetricsExecutionRequest:
         if (self.operation == "partition") != (self.partition_id is not None):
             raise ValueError("partition_id must be supplied only for partition")
+        if self.operation != "partition" and self.skip_families:
+            raise ValueError("skip_families must be supplied only for partition")
         return self
 
 
@@ -145,6 +153,13 @@ class _Execution:
     scope: dict[str, Any]
     scope_digest: str
     generation_seed: int | None = None
+    # CHAOS-4276: families a NativeFamilyExecutor already computed on the Go
+    # side, from DailyMetricsExecutionRequest.skip_families. Deliberately NOT
+    # part of _execution_id's identity digest (an orchestration hint about
+    # WHO computes a family, not part of the durable scope being computed) --
+    # attached via dataclasses.replace after _load_daily_execution builds the
+    # rest of _Execution from durable Postgres state.
+    skip_families: tuple[str, ...] = ()
 
 
 def _execution_process_payload(execution: _Execution) -> dict[str, Any]:
@@ -161,6 +176,7 @@ def _execution_process_payload(execution: _Execution) -> dict[str, Any]:
         "claim_token": str(execution.claim_token),
         "scope": execution.scope,
         "generation_seed": execution.generation_seed,
+        "skip_families": list(execution.skip_families),
     }
 
 
@@ -176,9 +192,15 @@ def _execution_from_process_payload(payload: object) -> _Execution:
         "claim_token",
         "scope",
         "generation_seed",
+        "skip_families",
     }
     if not isinstance(payload, dict) or set(payload) != expected_fields:
         raise ValueError("metric compatibility process input is invalid")
+    raw_skip_families = payload["skip_families"]
+    if not isinstance(raw_skip_families, list) or not all(
+        isinstance(value, str) for value in raw_skip_families
+    ):
+        raise ValueError("metric compatibility process skip_families is invalid")
     worker_kind = payload["worker_kind"]
     operation = payload["operation"]
     if worker_kind not in {"daily", "remaining"} or operation not in {
@@ -240,12 +262,13 @@ def _execution_from_process_payload(payload: object) -> _Execution:
             "scope": scope,
             "claim_token": claim_token,
         }
-    return _execution_from_row(
+    execution = _execution_from_row(
         worker_kind=worker_kind,
         operation=operation,
         row=row,
         partition_id=partition_id,
     )
+    return dataclass_replace(execution, skip_families=tuple(raw_skip_families))
 
 
 def _canonical_json(value: Any) -> str:
@@ -983,6 +1006,7 @@ async def _run_daily_direct(
             provider="auto",
             org_id=execution.organization_id,
             on_write_starting=_mark_progress,
+            skip_families=set(execution.skip_families) or None,
         )
         for day, families in zero_rows_by_day.items():
             if families:
@@ -1555,6 +1579,13 @@ async def execute_daily_metrics(
 ) -> dict[str, Any]:
     authorize_worker_bridge(authorization)
     execution = await _load_daily_execution(session, request)
+    if request.skip_families:
+        # CHAOS-4276: an orchestration hint from the Go dispatcher, not part
+        # of the durable scope _load_daily_execution reads from Postgres --
+        # attached here, after the execution identity is already fixed.
+        execution = dataclass_replace(
+            execution, skip_families=tuple(request.skip_families)
+        )
     return await _execute(session, execution, connection)
 
 

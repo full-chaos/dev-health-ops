@@ -158,6 +158,45 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 	}
 }
 
+// DailyMetricsNativeFamilyOutcome is the bounded durable outcome of one
+// native family compute attempt inside a metrics.daily partition (CHAOS-4276).
+// Computed means the executor wrote rows (possibly zero, a legitimate quiet
+// day -- see rowsWritten, not this label, for that) and the compatibility
+// bridge skipped it; Refused means the executor failed and the compatibility
+// bridge computed it instead (the fail-open policy -- see
+// PartitionHandler.computeNativeFamilies).
+type DailyMetricsNativeFamilyOutcome string
+
+const (
+	DailyMetricsNativeFamilyOutcomeComputed DailyMetricsNativeFamilyOutcome = "computed"
+	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
+)
+
+func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
+	return []DailyMetricsNativeFamilyOutcome{
+		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
+	}
+}
+
+type dailyMetricsNativeFamilyOutcomeLabels struct {
+	Family  string
+	Outcome DailyMetricsNativeFamilyOutcome
+}
+
+// dailyMetricsNativeFamilies is the closed, compile-time set of
+// metrics.daily families a native Go executor MAY exist for (CHAOS-4276),
+// mirrored the same way dailyMetricsZeroRowsWithSourceFamilies is: a fixed
+// list, not a runtime-registered MetricDimensions field. A runtime
+// dimension would need the collector built AFTER every native executor's
+// construction outcome is known, but a construction failure (chris's ruling:
+// fail-open -- the family just stays on the compatibility bridge) must not
+// block worker startup or leave the collector unable to report the refusal
+// it is trying to observe. Every series below is emitted at zero from
+// process start, exactly like the zero-rows-with-source series, so a
+// construction refusal is visible on the SAME counter a healthy deploy
+// would move, not absent from it.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing"}
+
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
 // four the RCA found stale despite fresh source data. The other 19 families in
@@ -307,10 +346,17 @@ type MetricsCollector struct {
 	dailyMetricsLease                    map[dailyMetricsLeaseLabels]uint64
 	dailyMetricsDiscovery                map[dailyMetricsDiscoveryLabels]uint64
 	dailyMetricsFamilyZeroRowsWithSource map[string]uint64
-	postSyncFanout                       map[PostSyncFanoutOutcome]uint64
-	workGraphReleaseLost                 uint64
-	remainingReleaseLost                 uint64
-	zeroUnitFinalizations                map[zeroUnitFinalizationLabels]uint64
+	// Native family compute (CHAOS-4276, the daily bridge's per-partition
+	// counterpart to the DORA/capacity counters above). Duration is tracked
+	// per family since native families are cut over independently and one
+	// family's compute cost tells nothing about another's.
+	dailyMetricsNativeFamilyOutcome     map[dailyMetricsNativeFamilyOutcomeLabels]uint64
+	dailyMetricsNativeFamilyRowsWritten map[string]uint64
+	dailyMetricsNativeFamilyDuration    map[string]*histogram
+	postSyncFanout                      map[PostSyncFanoutOutcome]uint64
+	workGraphReleaseLost                uint64
+	remainingReleaseLost                uint64
+	zeroUnitFinalizations               map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -393,6 +439,7 @@ var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -418,6 +465,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		allowedStreams:                       make(map[StreamLabels]struct{}, len(dimensions.Streams)),
 		allowedBudgets:                       make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
 		allowedConcurrencyBudgets:            make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
+		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dailyMetricsNativeFamilies)),
+		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dailyMetricsNativeFamilies)),
 		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
 		jobOldestAge:                         make(map[queueLabels]float64),
 		jobsRunning:                          make(map[JobLabels]int64, len(dimensions.Jobs)),
@@ -511,6 +561,13 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
+	}
+	for _, family := range dailyMetricsNativeFamilies {
+		collector.dailyMetricsNativeFamilyRowsWritten[family] = 0
+		collector.dailyMetricsNativeFamilyDuration[family] = newHistogram()
+		for _, outcome := range dailyMetricsNativeFamilyOutcomes() {
+			collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}] = 0
+		}
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -828,6 +885,35 @@ func (collector *MetricsCollector) ObserveDailyMetricsFamilyZeroRowsWithSource(f
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFamilyZeroRowsWithSource[family]++
+	return nil
+}
+
+// ObserveDailyMetricsNativeFamily records one native family compute attempt
+// inside a metrics.daily partition (CHAOS-4276). rowsWritten and duration are
+// only meaningful for a Computed outcome -- a Refused attempt did not
+// complete, so both are recorded as zero rather than whatever partial value
+// the caller happened to measure before giving up (mirrors
+// ObserveDORAPartition's rowsWritten/skippedRows discipline: a caller must
+// not report work that did not durably happen).
+func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
+	family string, outcome DailyMetricsNativeFamilyOutcome, rowsWritten int, duration time.Duration,
+) error {
+	if !slices.Contains(dailyMetricsNativeFamilyOutcomes(), outcome) {
+		return errors.New("daily metrics native family outcome is not registered")
+	}
+	if !slices.Contains(dailyMetricsNativeFamilies, family) {
+		return errors.New("daily metrics native family is not registered")
+	}
+	if rowsWritten < 0 || duration < 0 {
+		return errors.New("daily metrics native family counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
+	if outcome == DailyMetricsNativeFamilyOutcomeComputed {
+		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
+		collector.dailyMetricsNativeFamilyDuration[family].observe(duration.Seconds())
+	}
 	return nil
 }
 
@@ -1415,6 +1501,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsLeases(&output)
 	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
+	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
@@ -1700,6 +1787,39 @@ func (collector *MetricsCollector) writeDailyMetricsFamilyZeroRowsWithSource(out
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		writeUintSample(output, "dev_health_daily_metrics_families_zero_rows_with_source_total",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsFamilyZeroRowsWithSource[family])
+	}
+}
+
+// writeDailyMetricsNativeFamily exposes the daily bridge's per-family native
+// compute counters (CHAOS-4276) -- the same three-metric shape as the DORA/
+// capacity native counters above (partitions/rows/refused), except keyed by
+// family name (this bridge computes many families per partition, not one
+// per River kind) and with a per-family duration histogram, since native
+// families are cut over independently and one family's compute cost tells
+// nothing about another's.
+func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings.Builder) {
+	families := append([]string(nil), dailyMetricsNativeFamilies...)
+	sort.Strings(families)
+
+	writeMetadata(output, "worker_daily_metrics_native_family_outcome_total", "Native metrics.daily family compute attempts, by family and bounded outcome (CHAOS-4276).", "counter")
+	for _, family := range families {
+		for _, outcome := range dailyMetricsNativeFamilyOutcomes() {
+			labels := dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}
+			writeUintSample(output, "worker_daily_metrics_native_family_outcome_total",
+				[]metricLabel{{"family", family}, {"outcome", string(outcome)}}, collector.dailyMetricsNativeFamilyOutcome[labels])
+		}
+	}
+
+	writeMetadata(output, "worker_daily_metrics_native_family_rows_written_total", "Rows written by native metrics.daily family executors, by family.", "counter")
+	for _, family := range families {
+		writeUintSample(output, "worker_daily_metrics_native_family_rows_written_total",
+			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyRowsWritten[family])
+	}
+
+	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Only Computed attempts are observed.", "histogram")
+	for _, family := range families {
+		writeHistogram(output, "worker_daily_metrics_native_family_duration_seconds",
+			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyDuration[family])
 	}
 }
 

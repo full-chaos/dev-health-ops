@@ -156,6 +156,32 @@ func buildDailyWorker(
 						handler.SetZeroRowsObserver(zeroRowsObserver)
 					}
 				}
+				// CHAOS-4276: team_wellbeing is the daily bridge's first
+				// native family. UNLIKE dora/capacity's per-KIND refusal
+				// below (which takes a whole River kind out of service), a
+				// native FAMILY construction failure here simply leaves
+				// team_wellbeing off the native map: the daily_partition
+				// kind still registers, and the Python compatibility bridge
+				// still computes team_wellbeing for every partition, exactly
+				// as it did before this executor existed. One family
+				// degrading must not take the other 22 daily families down
+				// with it.
+				if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
+					handler.SetNativeFamilies(map[string]daily.NativeFamilyExecutor{
+						"team_wellbeing": teamWellbeingExecutor,
+					})
+					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+						handler.SetNativeFamilyObserver(nativeObserver)
+					}
+				} else {
+					logger.Error(
+						"team_wellbeing native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", teamWellbeingErr,
+					)
+				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,
 				)

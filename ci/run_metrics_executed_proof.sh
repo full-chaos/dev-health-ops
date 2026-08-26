@@ -376,6 +376,44 @@ for target in cicd deployments incidents tests; do
     --defer-finalize
 done
 
+echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for team_wellbeing/repo_user_commit)"
+# chris's order (2026-08-26): use the EXISTING fixture system
+# (src/dev_health_ops/fixtures/, dev-hops fixtures generate) rather than a
+# new hand-rolled seeder. This writes git_commits/git_commit_stats via the
+# SAME SyntheticDataGenerator the 4 targets above already use to insert_repo
+# (repo_id derives from uuid5(namespace, repo_name), so --repo-name
+# "${REPO_NAME}" lands on the identical repo row), plus `teams` rows whose
+# repo_patterns are now populated from the real repo<->team ownership
+# assignment (fixtures/runner.py run_fixtures_generation, extended in this
+# PR -- see .remember/lanes/lane-fixtures-audit/fixtures-audit-2026-08-26.md
+# section 3/5.2, which found repo_patterns was previously always [] for
+# every fixture team). No sync_run, no DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN
+# gate -- `fixtures generate` writes directly, independent of the
+# sync_run/outbox/post_sync chain the loop above drives, so ordering
+# relative to it is irrelevant.
+#
+# --team-count 1 (CHAOS-4276 codex round-1 finding 3): with repo-count 1 and
+# team-count >= 2, _build_repo_team_assignments's own "every team must own at
+# least one repo" fallback forces every team onto the SAME single repo, i.e.
+# a multi-owner repo. RepoPatternTeamResolver's exact-match map (both the Go
+# and Python implementations) holds exactly one team per repo pattern
+# string, so seeding the same pattern for two co-owning teams makes
+# whichever team was written last win and silently strands the other team's
+# commits with no repo-pattern match -- the fixtures fix above deliberately
+# does not emit a pattern for a multi-owner repo (see its own comment), so a
+# 2-team/1-repo seed here would have exercised membership fallback instead
+# of the repo-pattern-first path this job's comment above says it proves.
+# One team keeps the repo genuinely single-owner.
+ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+  run_dev_hops fixtures generate \
+  --sink "${CLICKHOUSE_URI_HTTP}" \
+  --org "${ORG_ID}" \
+  --repo-name "${REPO_NAME}" \
+  --repo-count 1 \
+  --days "${BACKFILL_DAYS}" \
+  --team-count 1 \
+  --seed 4276
+
 echo "==> finalizing the 4 deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
 for target in cicd deployments incidents tests; do
   echo "   -- ${target}"
@@ -393,16 +431,23 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # review): cicd/deploy/testops_pipeline/testops_test come directly from the
 # cicd/deployments/tests targets seeded above; dora is computed from
 # deployments+cicd+incidents (all seeded) per _DORA_TARGETS in
-# post_sync_dispatch.py. repo_user_commit/complexity need git commit/PR
-# history, which this job never seeds (only cicd/deployments/incidents/tests,
-# matching the ticket's stated source families) -- asserting them here would
-# fail forever, for a reason unrelated to CHAOS-4263, even after it merges.
+# post_sync_dispatch.py. repo_user_commit/team_wellbeing (CHAOS-4276) come
+# from the `dev-hops fixtures generate` call above (git_commits); team_
+# wellbeing also needs a repo-pattern team, now populated by that same call
+# (fixtures/runner.py run_fixtures_generation sets each team's repo_patterns
+# from its real repo<->team ownership assignment -- CHAOS-4276), or every
+# commit resolves to the less-meaningful "unassigned" bucket instead of
+# actually exercising repo-pattern resolution. complexity is the one
+# remaining exclusion: it needs persisted file CONTENTS
+# (git_files.contents), which fixtures generate does not write by default --
+# asserting it here would fail forever, for a reason unrelated to CHAOS-4263,
+# even after everything else merges.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora \
+    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 
@@ -447,6 +492,20 @@ for family, info in summary.items():
     } >>"${GITHUB_STEP_SUMMARY}"
   fi
 fi
+
+echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from the Go executor, not the Python fail-open fallback"
+# The readback JSON above proves rows LANDED; it cannot distinguish which
+# path wrote them (TeamWellbeingExecutor vs. job_daily.py's Python compute
+# after the native call fell open). worker_daily_metrics_native_family_
+# outcome_total{family="team_wellbeing",outcome="computed"} is the ONLY
+# signal that names which path actually ran (team-lead's ruling: without
+# it, a green readback is not proof the native executor is the one being
+# tested). Read from the worker's own /metrics endpoint while it is still
+# running -- this must happen before the cleanup trap tears it down at
+# script exit.
+curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null \
+  | grep -E '^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{family="team_wellbeing"' \
+  || echo "WARNING: no worker_daily_metrics_native_family_* series found for team_wellbeing"
 
 if [ "${FINAL_RC}" -ne 0 ]; then
   # Dispatch-path diagnostic dump (CHAOS-4266): the readback assertion only

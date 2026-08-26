@@ -360,7 +360,6 @@ def _resolve_membership(
     admin_candidates.extend(attribution_context.member_by_untyped_facet.get(key, []))
     admin_teams = {c.team_id for c in admin_candidates}
     if len(admin_teams) == 1:
-        TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer="admin_override").inc()
         return admin_candidates, None
     if len(admin_teams) > 1:
         ids = ",".join(sorted(t for t in admin_teams if t))
@@ -376,7 +375,6 @@ def _resolve_membership(
     )
     provider_teams = {c.team_id for c in provider_candidates}
     if len(provider_teams) == 1:
-        TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer="provider_fallback").inc()
         return provider_candidates, None
     if len(provider_teams) > 1:
         ids = ",".join(sorted(t for t in provider_teams if t))
@@ -1532,4 +1530,25 @@ def compute_work_item_team_attributions(
                     org_id=item.org_id,
                 )
             )
+            # CHAOS-4321 (team-lead, 2026-08-26): count the winning
+            # assignee_membership/author_membership resolution by which
+            # layer resolved it -- HERE, at the call site that consumes
+            # resolve_team_attribution's result, not inside
+            # _resolve_membership (keeps that pure-resolution chain
+            # side-effect-free). No new field: `candidate.priority` is
+            # already on TeamAttributionCandidate and already reliably
+            # separates the two layers -- every admin-layer candidate
+            # (member_by_identity, member_by_untyped_facet) is stamped
+            # priority=0; every provider-layer candidate is priority>0
+            # (team_memberships rows carry a real provider-assigned
+            # priority -- 10/20 for jira/linear, 300 for github/gitlab,
+            # never 0; provider_member_by_untyped_facet is a fixed 0...
+            if candidate.is_primary == 1 and candidate.source in (
+                "assignee_membership",
+                "author_membership",
+            ):
+                layer = (
+                    "admin_override" if candidate.priority == 0 else "provider_fallback"
+                )
+                TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer=layer).inc()
     return records

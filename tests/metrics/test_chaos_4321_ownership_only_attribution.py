@@ -46,9 +46,13 @@ from datetime import datetime, timezone
 from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
+    compute_work_item_team_attributions,
     resolve_team_attribution,
 )
-from dev_health_ops.metrics.prometheus import work_item_team_attribution_metric_source
+from dev_health_ops.metrics.prometheus import (
+    TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL,
+    work_item_team_attribution_metric_source,
+)
 from dev_health_ops.models.work_items import WorkItem
 
 COMPUTED_AT = datetime(2026, 8, 26, tzinfo=timezone.utc)
@@ -82,9 +86,13 @@ def _pr_work_item(
 
 def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
     # Mirrors what load_team_attribution_context now stores in
-    # member_by_identity: sourced from admin-authored `identities`/`teams`
-    # rows only, stamped "assignee_membership" at load time (the reporter
-    # path relabels it "author_membership" at the point of use).
+    # member_by_identity: sourced from admin-authored `identities`/
+    # `teams.manual_members` rows only, stamped "assignee_membership" at
+    # load time (the reporter path relabels it "author_membership" at the
+    # point of use). priority=0 (the dataclass default, made explicit here)
+    # is itself load-bearing: compute_work_item_team_attributions'
+    # membership-layer telemetry (chris/team-lead, 2026-08-26) derives
+    # admin_override vs provider_fallback from priority==0.
     return TeamAttributionCandidate(
         source="assignee_membership",
         team_id=team_id,
@@ -93,6 +101,7 @@ def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
         evidence=f"assignee_membership={team_id}",
         is_primary=1,
         specificity=60,
+        priority=0,
     )
 
 
@@ -100,6 +109,11 @@ def _provider_candidate(team_id: str, team_name: str) -> TeamAttributionCandidat
     # Mirrors what load_team_attribution_context's restored fallback layer
     # stores in provider_member_by_identity: sourced from provider
     # auto-import team_memberships (unchanged shape from before CHAOS-4321).
+    # priority=300 matches team_autoimport_github.py's real
+    # PROVIDER_ACCESS_PRIORITY constant -- every real team_memberships row
+    # has priority > 0 (10/20 for jira/linear, 300 for github/gitlab),
+    # never 0, which is exactly what the membership-layer telemetry above
+    # relies on to tell this layer apart from the admin one.
     return TeamAttributionCandidate(
         source="assignee_membership",
         team_id=team_id,
@@ -108,6 +122,7 @@ def _provider_candidate(team_id: str, team_name: str) -> TeamAttributionCandidat
         evidence=f"assignee_membership={team_id}",
         is_primary=1,
         specificity=50,
+        priority=300,
     )
 
 
@@ -405,3 +420,44 @@ def test_ambiguous_admin_mapping_does_not_fall_through_to_provider():
         candidates[0].evidence
         == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
     )
+
+
+def _membership_layer_count(layer: str) -> float:
+    return TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer=layer)._value.get()
+
+
+def test_admin_override_resolution_increments_the_membership_layer_counter():
+    """chris/team-lead (2026-08-26): counter of override vs fallback
+    resolutions, incremented at compute_work_item_team_attributions (the
+    call site that consumes resolve_team_attribution's result), not inside
+    _resolve_membership -- which stays pure. An admin-layer resolution
+    (priority=0) must increment layer="admin_override", not
+    "provider_fallback"."""
+    before = _membership_layer_count("admin_override")
+    item = _pr_work_item(assignees=["alice"])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [_member_candidate("team-ops", "Ops Team")]
+        }
+    )
+    compute_work_item_team_attributions(
+        work_items=[item], computed_at=COMPUTED_AT, attribution_context=context
+    )
+    assert _membership_layer_count("admin_override") == before + 1
+
+
+def test_provider_fallback_resolution_increments_the_membership_layer_counter():
+    """The other half: a provider-layer resolution (priority=300, matching
+    real team_memberships rows -- never 0) must increment
+    layer="provider_fallback", not "admin_override"."""
+    before = _membership_layer_count("provider_fallback")
+    item = _pr_work_item(assignees=["alice"])
+    context = TeamAttributionContext(
+        provider_member_by_identity={
+            ("github", "alice"): [_provider_candidate("team-ops", "Ops Team")]
+        }
+    )
+    compute_work_item_team_attributions(
+        work_items=[item], computed_at=COMPUTED_AT, attribution_context=context
+    )
+    assert _membership_layer_count("provider_fallback") == before + 1

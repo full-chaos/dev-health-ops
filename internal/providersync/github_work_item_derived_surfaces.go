@@ -62,6 +62,17 @@ type githubWorkItemTeamAttributionRow struct {
 	TeamID     *string    `json:"team_id"`
 	TeamName   *string    `json:"team_name"`
 	OrgID      string     `json:"org_id"`
+	// Priority is NOT part of WorkItemTeamAttributionRecord and is never
+	// persisted to work_item_team_attributions (excluded from the INSERT
+	// column list in WriteGitHubWorkItemEffect and from
+	// newGitHubTeamAttributionColumns's oracle-comparison projection, both
+	// deliberately). Carried here ONLY so WriteGitHubWorkItemEffect --
+	// the actual metrics-capable write boundary -- can derive the
+	// membership-layer telemetry label (chris/team-lead, 2026-08-26) from
+	// candidate.Priority (already on githubWorkItemDerivationCandidate,
+	// no new field there) without threading a *providerfoundation.Metrics
+	// through the pure build*/resolve chain in between.
+	Priority int `json:"-"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors
@@ -350,6 +361,7 @@ func buildGitHubWorkItemTeamAttributions(
 				IsPrimary:  candidate.IsPrimary,
 				Confidence: candidate.Confidence,
 				Evidence:   candidate.Evidence,
+				Priority:   candidate.Priority,
 				ComputedAt: githubWorkItemDerivedStamp(
 					computedAt, githubTeamAttributionStampPrecision,
 				),

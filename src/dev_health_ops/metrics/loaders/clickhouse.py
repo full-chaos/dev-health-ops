@@ -844,7 +844,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     evidence=f"assignee_membership={facet}",
                     is_primary=1,
                     specificity=50,
-                    priority=0,
+                    # 10, NOT 0: every provider-layer candidate must have
+                    # priority > 0 -- compute_work_item_team_attributions'
+                    # membership-layer telemetry (chris/team-lead,
+                    # 2026-08-26) derives admin_override vs
+                    # provider_fallback from priority==0, and priority=0 is
+                    # the admin layer's fixed value (member_by_identity,
+                    # member_by_untyped_facet). Matches the lowest
+                    # real team_memberships priority in use (jira's).
+                    priority=10,
                     updated_at=as_of,
                 )
                 context.provider_member_by_untyped_facet.setdefault(facet, []).append(

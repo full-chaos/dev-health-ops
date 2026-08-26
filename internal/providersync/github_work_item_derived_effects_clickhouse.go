@@ -499,6 +499,19 @@ is_primary, confidence, evidence, computed_at)`)
 		sink.Metrics.RecordWorkItemTeamAttributionWritten(
 			row.Provider, githubWorkItemTeamAttributionMetricSource(row),
 		)
+		// CHAOS-4321 (chris/team-lead, 2026-08-26): count the winning
+		// assignee_membership/author_membership resolution by which layer
+		// resolved it. HERE, at the actual metrics-capable write boundary --
+		// not inside resolveMembership/resolve(), which stay pure. row.Priority
+		// is carried (not persisted) exactly for this: see its doc comment on
+		// githubWorkItemTeamAttributionRow.
+		if row.Source == "assignee_membership" || row.Source == "author_membership" {
+			layer := "provider_fallback"
+			if row.Priority == 0 {
+				layer = "admin_override"
+			}
+			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
+		}
 	}
 	return nil
 }

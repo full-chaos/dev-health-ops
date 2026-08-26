@@ -683,10 +683,17 @@ func newGitHubWorkItemDerivationContext(
 		if teamID == "" {
 			continue
 		}
+		// Priority 10, NOT 0: every provider-layer candidate must have
+		// priority > 0 -- WriteGitHubWorkItemEffect's membership-layer
+		// telemetry (chris/team-lead, 2026-08-26) derives admin_override
+		// vs provider_fallback from Priority==0, and priority=0 is the
+		// admin layer's fixed value (memberByID, memberByUntypedFacet).
+		// Matches Python's provider_member_by_untyped_facet exactly (the
+		// lowest real team_memberships priority in use, jira's).
 		candidate := githubWorkItemDerivationCandidateFromFact(
 			"assignee_membership", teamID, githubWorkItemDerivationFirstNonEmpty(fact.TeamName, teamID),
 			fmt.Sprintf("assignee_membership=%s", fact.Facet),
-			1, 50, 0, fact.UpdatedAt,
+			1, 50, 10, fact.UpdatedAt,
 		)
 		result.providerMemberByUntypedFacet[facet] = append(result.providerMemberByUntypedFacet[facet], candidate)
 	}

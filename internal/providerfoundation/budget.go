@@ -271,6 +271,7 @@ type Metrics struct {
 	incidentEntitlementRefused     map[string]uint64
 	allArtifactsUnreadable         map[string]uint64
 	workItemTeamAttributionWritten map[string]uint64
+	teamAttributionMembershipLayer map[string]uint64
 	projectsV2DegradedSnapshots    map[string]uint64
 }
 
@@ -288,6 +289,7 @@ func NewMetrics() *Metrics {
 		incidentEntitlementRefused:     map[string]uint64{},
 		allArtifactsUnreadable:         map[string]uint64{},
 		workItemTeamAttributionWritten: map[string]uint64{},
+		teamAttributionMembershipLayer: map[string]uint64{},
 		projectsV2DegradedSnapshots:    map[string]uint64{},
 	}
 }
@@ -664,6 +666,43 @@ func (m *Metrics) RecordWorkItemTeamAttributionWritten(provider, source string) 
 	m.workItemTeamAttributionWritten[metricProvider(provider)+":"+MetricWorkItemTeamAttributionSourceLabel(source)]++
 }
 
+// metricTeamAttributionMembershipLayerVocabulary bounds the layer label to a
+// closed set, mirroring every other bounded vocabulary in this file.
+var metricTeamAttributionMembershipLayerVocabulary = map[string]struct{}{
+	"admin_override": {}, "provider_fallback": {},
+}
+
+// MetricTeamAttributionMembershipLayerLabel bounds the membership-layer
+// telemetry label (chris/team-lead, 2026-08-26: "admin is an override, not
+// a default -- it's the sync config mapping, but admin can override it in
+// the panel"). An unrecognized value collapses to "other" rather than
+// minting an unbounded series.
+func MetricTeamAttributionMembershipLayerLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricTeamAttributionMembershipLayerVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordTeamAttributionMembershipLayer counts ONE winning
+// assignee_membership/author_membership resolution by which layer resolved
+// it -- admin_override (identities.team_ids ∪ teams.manual_members) or
+// provider_fallback (team_memberships ∪ teams.members). Called from
+// WriteGitHubWorkItemEffect, the actual metrics-capable write boundary --
+// NOT from resolveMembership/resolve(), which stay pure. See
+// githubWorkItemTeamAttributionRow.Priority's doc comment for why the
+// signal has to be carried that far instead of derived closer to
+// resolve().
+func (m *Metrics) RecordTeamAttributionMembershipLayer(layer string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.teamAttributionMembershipLayer[MetricTeamAttributionMembershipLayerLabel(layer)]++
+}
+
 // MetricProjectsV2DegradedReasonLabel bounds the provider response classes
 // emitted by the GitHub Projects V2 collector. The vocabulary is closed so a
 // provider payload cannot mint unbounded Prometheus series.
@@ -889,6 +928,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_team_attribution_membership_layer_total",
+		"assignee_membership/author_membership resolutions by which layer resolved them (CHAOS-4321).",
+		"layer", m.teamAttributionMembershipLayer,
+	); err != nil {
+		return err
+	}
 	if _, err := io.WriteString(writer,
 		"# HELP dev_health_providersync_projects_v2_degraded_snapshots_total GitHub Projects V2 responses that were structurally degraded, by reason.\n"+"# TYPE dev_health_providersync_projects_v2_degraded_snapshots_total counter\n"); err != nil {
 		return err
@@ -912,6 +958,32 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 // writeProviderDatasetCounter, for series that pair provider with a bounded
 // label OTHER than dataset (e.g. "source"). Every key is built from bounded
 // vocabularies, so SplitN into exactly two parts is total.
+// writeLabeledCounter emits a single-label counter series -- unlike
+// writeProviderLabeledCounter, keys are the label value directly, with no
+// "provider:" composite-key splitting (this metric is not provider-scoped;
+// Python's dev_health_team_attribution_membership_layer_total mirrors this
+// exactly, one label, no provider dimension).
+func writeLabeledCounter(
+	writer io.Writer, name, help, labelName string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(
+			writer, "%s{%s=%q} %d\n", name, labelName, key, values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func writeProviderLabeledCounter(
 	writer io.Writer, name, help, labelName string, values map[string]uint64,
 ) error {

@@ -330,23 +330,91 @@ func TestGitHubTestsChunkedArtifactDownloadReadFailureCarriesCause(t *testing.T)
 	}
 }
 
+// CHAOS-4315. RED on the pre-fix baseline: main terminalized the whole
+// chunked-route unit the moment ONE of its N artifacts exceeded
+// githubTestsMaxDownloadSize (the old ErrGitHubTestsChunkedArtifactDownloadOversizedCarriesCause
+// asserted exactly that terminal error). Prod hit this every hour
+// (github_tests_artifact_oversized, ~22 of the last 30 cicd units for org
+// c6a38355) and sync_watermarks pinned forever, because the SAME artifact is
+// the same size on every retry -- re-walking the window never clears it.
+//
+// The ruling (chris 08-23 on CHAOS-4142, reapplied here): partial-commit-
+// and-continue. An oversized artifact is provider data, not a fault of the
+// caller, exactly like ErrGitHubTestsArtifactUnavailable already is
+// (CHAOS-4191) -- skip it, record a durable marker and counter, keep
+// walking the OTHER N-1 artifacts, and let the unit finalize instead of
+// sinking on this one artifact. This folds into the same top-level func the
+// pre-fix assertion lived in (package census pin: 1084 top-level Test
+// funcs) rather than adding a new one.
 func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
-	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, oversized: map[int]bool{1: true}}
+	t.Run("skips the oversized artifact and finalizes the unit", func(t *testing.T) {
+		// Two artifacts per run: #1 oversized, #2 healthy -- proves the
+		// oversized artifact costs only itself, not the healthy one after it
+		// or the whole unit (mirrors
+		// TestGitHubTestsArtifactDownloadMissingLocationDoesNotSinkTheUnit's
+		// shape for ErrGitHubTestsArtifactUnavailable).
+		doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, oversized: map[int]bool{1: true}}
 
-	_, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
-	if !errors.Is(err, ErrGitHubTestsIncomplete) {
-		t.Fatalf("error=%v, want it to still satisfy ErrGitHubTestsIncomplete", err)
-	}
-	// This is the mechanism providerunit.deterministicTerminalCategory keys
-	// on to terminalize on the first attempt instead of burning every River
-	// attempt re-downloading the same oversized bytes (CHAOS-4191).
-	if !errors.Is(err, ErrGitHubTestsArtifactOversized) {
-		t.Fatalf("error=%v, want it to satisfy ErrGitHubTestsArtifactOversized", err)
-	}
-	if err.Error() == ErrGitHubTestsIncomplete.Error() {
-		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
-	}
-	if !strings.Contains(err.Error(), strconv.Itoa(githubTestsMaxDownloadSize)) {
-		t.Fatalf("error=%q does not carry the max-download-size bound", err.Error())
-	}
+		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+		if err != nil {
+			t.Fatalf(
+				"oversized artifact sank the unit: err=%v; want it skipped and the unit finalized",
+				err,
+			)
+		}
+		if doer.archiveRequests != 2 {
+			t.Fatalf(
+				"downloaded %d archive redirects, want 2; the route never reached the healthy artifact after the oversized one",
+				doer.archiveRequests,
+			)
+		}
+		if walk.cursor.Phase != "done" {
+			t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+		}
+		if walk.cursor.Suites != 1 {
+			t.Fatalf("committed %d suites, want 1 from the healthy artifact", walk.cursor.Suites)
+		}
+		if complete, ok := walk.final.Result["reports_complete"].(bool); !ok || complete {
+			t.Fatalf("reports_complete=%v, want false after an artifact was skipped", walk.final.Result["reports_complete"])
+		}
+		observation := githubTestsSkipObservation(t, walk.cursor.Incomplete, githubTestsReportMemberComponent)
+		if observation.Cause != githubTestsArtifactOversizedCause || observation.Count != 1 {
+			t.Fatalf(
+				"durable observation=%+v, want cause=%s count=1 -- and distinct from artifact_unavailable/unreadable_archive",
+				observation, githubTestsArtifactOversizedCause,
+			)
+		}
+		if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
+			context.Background(), nativeTestClaim("github", "cicd"), walk.final,
+		); err != nil {
+			t.Fatalf("production comparator rejected a skipped-artifact completion: %v", err)
+		}
+	})
+
+	// Telemetry ships with the behaviour it counts (standing requirement): a
+	// skipped-but-uncounted artifact is silent data loss. Reuses the
+	// existing dev_health_provider_artifact_skipped_total series
+	// (RecordArtifactSkipped) rather than inventing a new one -- CHAOS-4184's
+	// ProviderArtifactSkipsSustained alert already consumes it by
+	// provider/dataset, and its `reason` label vocabulary
+	// (internal/providerfoundation/budget.go) now includes
+	// "artifact_oversized" alongside "artifact_unavailable"/"unreadable_archive".
+	t.Run("counts the skip on the existing artifact-skip counter", func(t *testing.T) {
+		doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1, oversized: map[int]bool{1: true}}
+		client := githubTestsClient(t, doer)
+		client.Metrics = providerfoundation.NewMetrics()
+
+		if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
+			t.Fatalf("walk returned err=%v", err)
+		}
+
+		var buffer bytes.Buffer
+		if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+			t.Fatalf("WritePrometheus: %v", err)
+		}
+		want := `dev_health_provider_artifact_skipped_total{provider="github",dataset="cicd",reason="artifact_oversized"} 1`
+		if !strings.Contains(buffer.String(), want) {
+			t.Fatalf("metrics did not carry the skip:\nwant line: %s\ngot:\n%s", want, buffer.String())
+		}
+	})
 }

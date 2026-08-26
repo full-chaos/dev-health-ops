@@ -44,15 +44,34 @@ var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", E
 
 // ErrGitHubTestsArtifactOversized narrows ErrGitHubTestsIncomplete to the
 // download-time bound violation: the artifact body exceeded
-// githubTestsMaxDownloadSize. Unlike ErrGitHubTestsArtifactUnavailable above,
-// this stays a UNIT-level failure rather than a per-artifact skip -- it is
-// the download-time sibling of the in-archive archive_bounds/report_cap
-// bounds (github_tests_reports.go), which fail the batch closed rather than
-// silently drop what breached a safety bound.
+// githubTestsMaxDownloadSize.
 //
-// It exists as its OWN sentinel, distinct from a plain read error, because it
-// is deterministic: the same artifact is the same size on every attempt, so
-// the generic bounded-retry path (providerunit.deterministicTerminalCategory)
+// CHAOS-4315 (reversing this sentinel's original disposition): in the
+// CHUNKED route -- the one production dispatch always executes for cicd/tests
+// (execution_registry.go marks github {cicd,tests} Chunked unconditionally)
+// -- this is now a per-artifact SKIP, handled exactly like
+// ErrGitHubTestsArtifactUnavailable above: the artifact is skipped with its
+// own durable cause (githubTestsArtifactOversizedCause) and its own counter
+// reason, and the walk continues. The prior "stays a UNIT-level failure"
+// disposition pinned sync_watermarks forever on any repository that
+// regularly produces one oversized CI artifact, since the same artifact is
+// the same size on every retry (CHAOS-4142's ruling reapplied one level
+// down: an oversized artifact is provider data, not a fault of the caller,
+// same as an unavailable one). It matches the Python precedent
+// (connectors/github.py's download_artifact_zip returns b"" past the same
+// 100MB cap; processors/github.py's `if not data: continue` skips it) --
+// prod Go was the one route out of step.
+//
+// The non-chunked oracle Collect below (github_tests_route.go, production-
+// dead for cicd/tests) deliberately KEEPS the old terminal disposition,
+// consistent with its documented divergence from the chunked route
+// elsewhere in this file (see the comment at its per-run cap check): it
+// exists only as the comparison implementation, so
+// providerunit.deterministicTerminalCategory's GitHubTestsArtifactOversizedCategory
+// mapping stays correct for that path without extra plumbing. It exists as
+// its OWN sentinel, distinct from a plain read error, because it is
+// deterministic: the same artifact is the same size on every attempt, so
+// (for a caller that still propagates it) the generic bounded-retry path
 // would otherwise burn every River attempt re-downloading it before
 // collapsing into the generic exhausted category -- the same repeated-refusal
 // waste CHAOS-3871 fixed for a pagination cap refusal. A genuine read error
@@ -692,9 +711,14 @@ func downloadGitHubTestsArtifact(
 		)
 	}
 	if len(body) > githubTestsMaxDownloadSize {
+		// len(body) is capped at githubTestsMaxDownloadSize+1 by the
+		// LimitReader above, so it is always exactly that value here -- the
+		// true artifact size beyond the cap is never read. That capped
+		// length is still the useful "observed size" for the skip marker: it
+		// is the boundary the download actually crossed.
 		return nil, requests, false, fmt.Errorf(
-			"%w: artifact exceeds max download size %d bytes",
-			ErrGitHubTestsArtifactOversized, githubTestsMaxDownloadSize,
+			"%w: artifact size %d bytes exceeds cap %d bytes",
+			ErrGitHubTestsArtifactOversized, len(body), githubTestsMaxDownloadSize,
 		)
 	}
 	return body, requests, false, nil

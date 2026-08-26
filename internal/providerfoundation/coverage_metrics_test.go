@@ -182,6 +182,12 @@ func TestArtifactSkipReasonLabelIsBounded(t *testing.T) {
 	if got := MetricArtifactSkipReasonLabel("  ARTIFACT_UNAVAILABLE "); got != "artifact_unavailable" {
 		t.Fatalf("known reason label = %q, want artifact_unavailable", got)
 	}
+	// artifact_oversized (CHAOS-4315): an artifact download that exceeded the
+	// route's size cap, now skipped-and-counted like the other two reasons
+	// instead of failing the unit closed. Must not collapse to "other".
+	if got := MetricArtifactSkipReasonLabel("  ARTIFACT_OVERSIZED "); got != "artifact_oversized" {
+		t.Fatalf("known reason label = %q, want artifact_oversized", got)
+	}
 	if got := MetricArtifactSkipReasonLabel("repo-full-chaos/dev-health-ops"); got != "other" {
 		t.Fatalf("unknown reason label = %q, want other", got)
 	}

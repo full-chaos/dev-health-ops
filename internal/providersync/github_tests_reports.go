@@ -174,6 +174,16 @@ const (
 	// evidence or an operator reading the cause could not tell which failure
 	// actually happened (CHAOS-4191).
 	githubTestsArtifactUnavailableCause = "artifact_unavailable"
+	// githubTestsArtifactOversizedCause records that ONE artifact's download
+	// exceeded githubTestsMaxDownloadSize, so its bytes were never fully read
+	// and the artifact was skipped. It joins the report_member vocabulary
+	// alongside unreadable_archive and artifact_unavailable but names a
+	// DIFFERENT fact -- the other two mean the bytes could not be obtained or
+	// opened, this means a known safety bound was hit -- so the three must
+	// not be conflated in the durable evidence or an operator reading the
+	// cause could not tell which failure actually happened (CHAOS-4315,
+	// reversing the prior UNIT-level-failure disposition for this bound).
+	githubTestsArtifactOversizedCause = "artifact_oversized"
 )
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
@@ -279,7 +289,7 @@ func validatePerRunPageBudget(setting string, budget, perPage, itemCap int) erro
 var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsReportMemberComponent: {
 		"malformed": {}, "unreadable": {}, githubTestsUnreadableArchiveCause: {},
-		githubTestsArtifactUnavailableCause: {},
+		githubTestsArtifactUnavailableCause: {}, githubTestsArtifactOversizedCause: {},
 	},
 	githubTestsRunInventoryComponent:      {githubTestsPageBudgetCause: {}},
 	githubTestsArtifactInventoryComponent: {githubTestsPageBudgetCause: {}},

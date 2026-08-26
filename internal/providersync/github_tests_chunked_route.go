@@ -848,6 +848,41 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
 							}
+							// An artifact whose body exceeded
+							// githubTestsMaxDownloadSize is provider data
+							// too: the same repository produces the same
+							// oversized bytes on every future attempt, so
+							// failing the whole unit here pinned
+							// sync_watermarks forever on this one run
+							// instead of just losing this one artifact's
+							// reports (CHAOS-4315 -- reverses the prior
+							// UNIT-level-failure disposition documented on
+							// ErrGitHubTestsArtifactOversized before this
+							// fix). Skipped the same way as an unavailable
+							// artifact, with its own cause and its own
+							// counter reason so an operator can tell the
+							// two apart; the artifact id and the observed
+							// size/cap (carried in downloadErr) go to the
+							// log line only, matching run id's treatment
+							// above -- both are provider-supplied and
+							// unbounded, so neither belongs in the durable
+							// GitHubTestsIncomplete evidence.
+							if errors.Is(downloadErr, ErrGitHubTestsArtifactOversized) {
+								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
+									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
+									githubTestsArtifactOversizedCause,
+								)
+								slog.Warn(
+									"provider artifact skipped: oversized",
+									"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+									"repository", cursor.Repo, "run", pipeline.RunID,
+									"artifact", artifact.ID, "cap", githubTestsMaxDownloadSize,
+									"error", downloadErr,
+								)
+								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
+								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+								continue
+							}
 							return downloadErr
 						}
 						if notFound {

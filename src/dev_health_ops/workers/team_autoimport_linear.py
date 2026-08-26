@@ -107,7 +107,12 @@ def _clickhouse_dsn(scope: dict[str, Any]) -> str:
 
 
 def _existing_team_members(
-    *, sink: Any, org_id: str, provider: str, team_ids: list[str]
+    *,
+    sink: Any,
+    org_id: str,
+    provider: str,
+    team_ids: list[str],
+    sync_run_id: str | None = None,
 ) -> dict[str, list[str]] | None:
     """Read of the CURRENTLY persisted roster for these teams, for a
     members-off run to carry forward instead of overwriting it with [].
@@ -118,19 +123,22 @@ def _existing_team_members(
     write) rather than write an empty roster it never actually verified was
     empty. Deliberately does NOT filter on ``provider`` in SQL (round 3:
     ``teams`` dedups on ``id`` alone -- an admin-edited provider="" row can
-    otherwise hide the existing team from a provider-filtered query). See
-    the identical helper's docstring in team_autoimport_github.py for the
-    full rationale.
+    otherwise hide the existing team from a provider-filtered query).
+    ``sync_run_id`` (round-3 follow-up) is included in the WARNING when the
+    caller has one. See the identical helper's docstring in
+    team_autoimport_github.py for the full rationale on both.
     """
     if not team_ids:
         return {}
     if not hasattr(sink, "query_dicts"):
         logger.warning(
             "Cannot confirm existing team rosters for org_id=%s provider=%s "
-            "(sink has no query_dicts) -- skipping the team-dimension write "
-            "for this members-off run rather than risk erasing rosters",
+            "sync_run_id=%s (sink has no query_dicts) -- skipping the "
+            "team-dimension write for this members-off run rather than "
+            "risk erasing rosters",
             org_id,
             provider,
+            sync_run_id,
         )
         return None
     try:
@@ -146,10 +154,11 @@ def _existing_team_members(
     except Exception:
         logger.warning(
             "Could not read existing team rosters for org_id=%s provider=%s "
-            "-- skipping the team-dimension write for this members-off run "
-            "rather than risk erasing rosters",
+            "sync_run_id=%s -- skipping the team-dimension write for this "
+            "members-off run rather than risk erasing rosters",
             org_id,
             provider,
+            sync_run_id,
             exc_info=True,
         )
         return None
@@ -675,6 +684,11 @@ def populate(
                 org_id=org_id,
                 provider="linear",
                 team_ids=[str(row["id"]) for row in team_rows],
+                sync_run_id=(
+                    str(scope.get("sync_run_id"))
+                    if scope.get("sync_run_id") is not None
+                    else None
+                ),
             )
             if existing_members is None:
                 roster_write_safe = False

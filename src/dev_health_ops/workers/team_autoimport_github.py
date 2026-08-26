@@ -176,6 +176,11 @@ async def _populate_async(
             org_id=org_id,
             provider=PROVIDER,
             team_ids=[str(row["id"]) for row in team_rows],
+            sync_run_id=(
+                str(scope.get("sync_run_id"))
+                if scope.get("sync_run_id") is not None
+                else None
+            ),
         )
         if existing_members is None:
             roster_write_safe = False
@@ -423,7 +428,12 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
 
 
 def _existing_team_members(
-    *, sink: Any, org_id: str, provider: str, team_ids: list[str]
+    *,
+    sink: Any,
+    org_id: str,
+    provider: str,
+    team_ids: list[str],
+    sync_run_id: str | None = None,
 ) -> dict[str, list[str]] | None:
     """Read of the CURRENTLY persisted roster for these teams, for a
     members-off run to carry forward instead of overwriting it with [].
@@ -456,16 +466,29 @@ def _existing_team_members(
     provider tag" -- and go on to write an empty roster, the exact bug this
     whole helper exists to prevent. Filtering only on ``id`` (matching the
     table's true identity) closes that gap.
+
+    CHAOS-4323 round-3 follow-up (codex adversarial-review, MEDIUM):
+    ``sync_run_id``, when the caller has one, is included in this WARNING.
+    This log fires synchronously and unconditionally at the moment the read
+    fails -- unlike the task-level warning in
+    ``team_autoimport.run_post_sync_team_autoimport``, which reads
+    ``roster_preservation_failed`` off the RETURNED summary and so goes
+    silent if a LATER write in this same call raises (the exception skips
+    the return entirely). Carrying sync_run_id here means that compound-
+    failure case still has full diagnostic context, not just a generic
+    ``logger.exception``.
     """
     if not team_ids:
         return {}
     if not hasattr(sink, "query_dicts"):
         logger.warning(
             "Cannot confirm existing team rosters for org_id=%s provider=%s "
-            "(sink has no query_dicts) -- skipping the team-dimension write "
-            "for this members-off run rather than risk erasing rosters",
+            "sync_run_id=%s (sink has no query_dicts) -- skipping the "
+            "team-dimension write for this members-off run rather than "
+            "risk erasing rosters",
             org_id,
             provider,
+            sync_run_id,
         )
         return None
     try:
@@ -481,10 +504,11 @@ def _existing_team_members(
     except Exception:
         logger.warning(
             "Could not read existing team rosters for org_id=%s provider=%s "
-            "-- skipping the team-dimension write for this members-off run "
-            "rather than risk erasing rosters",
+            "sync_run_id=%s -- skipping the team-dimension write for this "
+            "members-off run rather than risk erasing rosters",
             org_id,
             provider,
+            sync_run_id,
             exc_info=True,
         )
         return None

@@ -26,6 +26,10 @@ class FakeDimensionSink:
     teams: dict[tuple[str, str], dict[str, Any]]
     jira_legacy_links: list[dict[str, Any]]
     closed: bool = False
+    # CHAOS-4323 round-3/narrow-round-4 follow-up: set to force query_dicts
+    # to raise, simulating a ClickHouse read failure during roster
+    # preservation (_existing_team_members).
+    query_dicts_raises: bool = False
 
     def write_projects(self, rows: list[ProjectRecord]) -> None:
         for row in rows:
@@ -56,6 +60,8 @@ class FakeDimensionSink:
     def query_dicts(
         self, query: str, parameters: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        if self.query_dicts_raises:
+            raise RuntimeError("simulated ClickHouse read failure")
         return [
             row
             for row in self.jira_legacy_links
@@ -67,7 +73,9 @@ class FakeDimensionSink:
 
 
 def _fake_sink(
-    *, jira_legacy_links: list[dict[str, Any]] | None = None
+    *,
+    jira_legacy_links: list[dict[str, Any]] | None = None,
+    query_dicts_raises: bool = False,
 ) -> FakeDimensionSink:
     return FakeDimensionSink(
         projects={},
@@ -76,6 +84,7 @@ def _fake_sink(
         ownership={},
         teams={},
         jira_legacy_links=list(jira_legacy_links or []),
+        query_dicts_raises=query_dicts_raises,
     )
 
 
@@ -209,6 +218,80 @@ def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_
     assert project.name == "Ops Project"
     assert project.org_id == "org-1"
     assert project.provider == "jira"
+
+
+def test_jira_org_import_fails_closed_when_roster_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323 round 3 + narrow-round-4 follow-up (codex adversarial-
+    review): the fail-closed roster-preservation path, verified for Jira
+    specifically (not just GitHub/GitLab) -- the counter must fire with
+    provider="jira", and the team-dimension write must be skipped."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        raise AssertionError(
+            "member discovery must not run when the members category is off"
+        )
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService,
+        "discover_jira",
+        discover_jira,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        team_autoimport_jira,
+        "record_team_autoimport_roster_preservation_failed",
+        lambda *, provider: recorded.append(provider),
+    )
+    sink = _fake_sink(query_dicts_raises=True)
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={
+            "mode": "sync_config",
+            "import_categories": {
+                "teams": True,
+                "projects": False,
+                "members": False,
+            },
+        },
+        sink=sink,
+    )
+
+    assert summary["teams_imported"] == 0
+    assert summary["roster_preservation_failed"] is True
+    assert sink.teams == {}
+    assert recorded == ["jira"]
 
 
 def test_chaos_2547_2544_jira_autoimport_uses_analytics_db_url_with_env_unset(

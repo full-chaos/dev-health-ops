@@ -885,6 +885,84 @@ def _populate_gitlab(**scope_overrides: Any) -> dict[str, Any]:
     )
 
 
+def test_gitlab_org_import_fails_closed_when_roster_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323 round 3 + narrow-round-4 follow-up (codex adversarial-
+    review): the fail-closed roster-preservation path, verified for GitLab
+    specifically (not just GitHub) -- the counter must fire with
+    provider="gitlab", and the team-dimension write must be skipped."""
+
+    sink = RecordingSink(query_dicts_raises=True)
+    resolver = IdentityResolver(alias_to_canonical={})
+
+    async def discover_gitlab(
+        self, token: str, group_path: str, url: str
+    ) -> GitLabDiscoveryResult:
+        return GitLabDiscoveryResult(
+            teams=[
+                DiscoveredTeam(
+                    provider_type="gitlab",
+                    provider_team_id="full-chaos",
+                    name="Full Chaos",
+                    associations={
+                        "repo_patterns": ["full-chaos/platform"],
+                        "provider_org": group_path,
+                    },
+                ),
+            ],
+            projects=[],
+        )
+
+    async def discover_members_gitlab(
+        self, token: str, group_path: str, url: str
+    ) -> list[DiscoveredMember]:
+        raise AssertionError(
+            "member discovery must not run when the members category is off"
+        )
+
+    monkeypatch.setattr(
+        team_autoimport_gitlab.TeamDiscoveryService,
+        "discover_gitlab",
+        discover_gitlab,
+    )
+    monkeypatch.setattr(
+        team_autoimport_gitlab.TeamMembershipService,
+        "discover_members_gitlab",
+        discover_members_gitlab,
+    )
+    monkeypatch.setattr(
+        team_autoimport_gitlab, "ClickHouseMetricsSink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        team_autoimport_gitlab, "load_identity_resolver", lambda: resolver
+    )
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        team_autoimport_gitlab,
+        "record_team_autoimport_roster_preservation_failed",
+        lambda *, provider: recorded.append(provider),
+    )
+
+    summary = team_autoimport_gitlab.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "group_path": "full-chaos"},
+        scope={
+            "analytics_db": "clickhouse://test",
+            "import_categories": {
+                "teams": True,
+                "projects": False,
+                "members": False,
+            },
+        },
+    )
+
+    assert summary["teams_imported"] == 0
+    assert summary["roster_preservation_failed"] is True
+    assert sink.teams == []
+    assert recorded == ["gitlab"]
+
+
 def test_gitlab_archived_project_is_written_as_retired(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

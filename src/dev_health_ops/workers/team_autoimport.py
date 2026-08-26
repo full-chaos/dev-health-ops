@@ -343,6 +343,18 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
             "sync_targets": sync_targets,
             "sync_options": sync_options,
             "triggered_by": triggered_by,
+            # CHAOS-4323 round-3-follow-up (codex adversarial-review,
+            # MEDIUM): if a LATER write in the same populate() call raises
+            # after roster_write_safe was already set False, the exception
+            # propagates through run_team_autoimport's except-block and the
+            # returned summary never carries roster_preservation_failed --
+            # the WARNING below would never fire. Threading sync_run_id
+            # into scope lets the per-populator warning (which fires
+            # synchronously, unconditionally, at the moment the read fails
+            # -- see _existing_team_members) carry the SAME diagnostic
+            # context, so the compound-failure case is never silent even
+            # when this task-level warning is.
+            "sync_run_id": sync_run_id,
         },
         analytics_db_url=_get_db_url(),
     )

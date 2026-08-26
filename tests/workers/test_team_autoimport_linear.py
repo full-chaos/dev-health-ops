@@ -24,6 +24,17 @@ class FakeDimensionSink:
     ownership: dict[tuple[str, str, str, str, str], TeamProjectOwnershipRecord]
     teams: dict[tuple[str, str], dict[str, Any]]
     closed: bool = False
+    # CHAOS-4323 round-3/narrow-round-4 follow-up: set to force query_dicts
+    # to raise, simulating a ClickHouse read failure during roster
+    # preservation (_existing_team_members).
+    query_dicts_raises: bool = False
+
+    def query_dicts(
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if self.query_dicts_raises:
+            raise RuntimeError("simulated ClickHouse read failure")
+        return []
 
     def write_projects(self, rows: list[ProjectRecord]) -> None:
         for row in rows:
@@ -55,13 +66,14 @@ class FakeDimensionSink:
         self.closed = True
 
 
-def _fake_sink() -> FakeDimensionSink:
+def _fake_sink(*, query_dicts_raises: bool = False) -> FakeDimensionSink:
     return FakeDimensionSink(
         projects={},
         members={},
         memberships={},
         ownership={},
         teams={},
+        query_dicts_raises=query_dicts_raises,
     )
 
 
@@ -183,6 +195,69 @@ def test_linear_populate_writes_projects_memberships_and_project_ownership(
     assert project.name == "Engineering"
     assert project.org_id == "org-1"
     assert project.provider == "linear"
+
+
+def test_linear_org_import_fails_closed_when_roster_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323 round 3 + narrow-round-4 follow-up (codex adversarial-
+    review): the fail-closed roster-preservation path, verified for Linear
+    specifically (not just GitHub/GitLab/Jira) -- the counter must fire
+    with provider="linear", and the team-dimension write must be skipped."""
+
+    async def discover_linear(self: object, api_key: str) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="linear",
+                provider_team_id="ENG",
+                name="Engineering",
+                associations={"project_keys": ["ENG"]},
+            )
+        ]
+
+    async def discover_members_linear(
+        self: object, api_key: str, team_key: str
+    ) -> list[DiscoveredMember]:
+        raise AssertionError(
+            "member discovery must not run when the members category is off"
+        )
+
+    monkeypatch.setattr(
+        team_autoimport_linear.TeamDiscoveryService,
+        "discover_linear",
+        discover_linear,
+    )
+    monkeypatch.setattr(
+        team_autoimport_linear.TeamMembershipService,
+        "discover_members_linear",
+        discover_members_linear,
+    )
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        team_autoimport_linear,
+        "record_team_autoimport_roster_preservation_failed",
+        lambda *, provider: recorded.append(provider),
+    )
+    sink = _fake_sink(query_dicts_raises=True)
+
+    summary = team_autoimport_linear.populate(
+        org_id="org-1",
+        credentials={"api_key": "lin-key"},
+        scope={
+            "mode": "sync_config",
+            "import_categories": {
+                "teams": True,
+                "projects": False,
+                "members": False,
+            },
+        },
+        sink=sink,
+    )
+
+    assert summary["teams_imported"] == 0
+    assert summary["roster_preservation_failed"] is True
+    assert sink.teams == {}
+    assert recorded == ["linear"]
 
 
 def test_chaos_2547_2544_autoimport_uses_analytics_db_url_with_env_unset(

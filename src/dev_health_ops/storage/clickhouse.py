@@ -1660,65 +1660,73 @@ class ClickHouseStore:
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         rows: list[dict[str, Any]] = []
+        # CHAOS-4321 (codex adversarial review round 2, HIGH: "the new
+        # provenance column can still be silently cleared by existing
+        # direct team writers"). A caller that never learned about
+        # manual_members (providers/teams.py's sync_teams CLI path was the
+        # concrete case found -- its Team model has no such attribute) must
+        # NOT silently wipe an existing admin override just by omitting the
+        # key/attribute. Track which rows the caller left unspecified here
+        # -- explicitly-empty ([]) is NOT the same as omitted, so this is a
+        # `in`/`hasattr` check, not `.get(...) or []` -- and backfill their
+        # CURRENT manual_members from ClickHouse below, in one batched
+        # query, before the write. A row with no prior team (genuinely new)
+        # has nothing to preserve and correctly lands at [].
+        rows_missing_manual_members: list[dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
                 team_id = str(item.get("id") or "")
-                rows.append(
-                    {
-                        "id": team_id,
-                        "team_uuid": self._normalize_uuid(
-                            item.get("team_uuid")
-                            or uuid.uuid5(uuid.NAMESPACE_URL, f"team:{team_id}")
-                        ),
-                        "name": item.get("name"),
-                        "description": item.get("description"),
-                        "members": item.get("members") or [],
-                        # CHAOS-4321: admin-override provenance marker. Callers
-                        # that never carry it forward (i.e. never set this key)
-                        # get [] here, which is only safe for a genuinely-new
-                        # row -- ClickHouseTeamDriftProjector's AUTO_APPLY_POLICY
-                        # branch and ClickHouseTeamAdminService.create_or_update
-                        # both explicitly carry the existing value forward
-                        # before calling insert_teams, precisely so a sync
-                        # write never lands here as an accidental reset.
-                        "manual_members": item.get("manual_members") or [],
-                        "project_keys": item.get("project_keys") or [],
-                        "repo_patterns": item.get("repo_patterns") or [],
-                        "is_active": int(item.get("is_active", 1)),
-                        "updated_at": self._normalize_datetime(item.get("updated_at")),
-                        "last_synced": synced_at,
-                        "org_id": item.get("org_id") or self.org_id or "",
-                        "provider": str(item.get("provider") or ""),
-                        "native_team_key": item.get("native_team_key"),
-                        "parent_team_id": item.get("parent_team_id"),
-                        "source_id": self._normalize_uuid_or_none(
-                            item.get("source_id")
-                        ),
-                    }
-                )
+                row = {
+                    "id": team_id,
+                    "team_uuid": self._normalize_uuid(
+                        item.get("team_uuid")
+                        or uuid.uuid5(uuid.NAMESPACE_URL, f"team:{team_id}")
+                    ),
+                    "name": item.get("name"),
+                    "description": item.get("description"),
+                    "members": item.get("members") or [],
+                    "manual_members": item.get("manual_members") or [],
+                    "project_keys": item.get("project_keys") or [],
+                    "repo_patterns": item.get("repo_patterns") or [],
+                    "is_active": int(item.get("is_active", 1)),
+                    "updated_at": self._normalize_datetime(item.get("updated_at")),
+                    "last_synced": synced_at,
+                    "org_id": item.get("org_id") or self.org_id or "",
+                    "provider": str(item.get("provider") or ""),
+                    "native_team_key": item.get("native_team_key"),
+                    "parent_team_id": item.get("parent_team_id"),
+                    "source_id": self._normalize_uuid_or_none(item.get("source_id")),
+                }
+                if "manual_members" not in item:
+                    rows_missing_manual_members.append(row)
+                rows.append(row)
             else:
-                rows.append(
-                    {
-                        "id": item.id,
-                        "team_uuid": self._normalize_uuid(item.team_uuid),
-                        "name": item.name,
-                        "description": item.description,
-                        "members": getattr(item, "members", []) or [],
-                        "manual_members": getattr(item, "manual_members", []) or [],
-                        "project_keys": getattr(item, "project_keys", []) or [],
-                        "repo_patterns": getattr(item, "repo_patterns", []) or [],
-                        "is_active": int(getattr(item, "is_active", 1) or 0),
-                        "updated_at": self._normalize_datetime(item.updated_at),
-                        "last_synced": synced_at,
-                        "org_id": getattr(item, "org_id", None) or self.org_id or "",
-                        "provider": str(getattr(item, "provider", "") or ""),
-                        "native_team_key": getattr(item, "native_team_key", None),
-                        "parent_team_id": getattr(item, "parent_team_id", None),
-                        "source_id": self._normalize_uuid_or_none(
-                            getattr(item, "source_id", None)
-                        ),
-                    }
-                )
+                row = {
+                    "id": item.id,
+                    "team_uuid": self._normalize_uuid(item.team_uuid),
+                    "name": item.name,
+                    "description": item.description,
+                    "members": getattr(item, "members", []) or [],
+                    "manual_members": getattr(item, "manual_members", []) or [],
+                    "project_keys": getattr(item, "project_keys", []) or [],
+                    "repo_patterns": getattr(item, "repo_patterns", []) or [],
+                    "is_active": int(getattr(item, "is_active", 1) or 0),
+                    "updated_at": self._normalize_datetime(item.updated_at),
+                    "last_synced": synced_at,
+                    "org_id": getattr(item, "org_id", None) or self.org_id or "",
+                    "provider": str(getattr(item, "provider", "") or ""),
+                    "native_team_key": getattr(item, "native_team_key", None),
+                    "parent_team_id": getattr(item, "parent_team_id", None),
+                    "source_id": self._normalize_uuid_or_none(
+                        getattr(item, "source_id", None)
+                    ),
+                }
+                if not hasattr(item, "manual_members"):
+                    rows_missing_manual_members.append(row)
+                rows.append(row)
+
+        if rows_missing_manual_members:
+            await self._preserve_existing_manual_members(rows_missing_manual_members)
 
         await self._insert_rows(
             "teams",
@@ -1742,6 +1750,41 @@ class ClickHouseStore:
             ],
             rows,
         )
+
+    async def _preserve_existing_manual_members(
+        self, rows: list[dict[str, Any]]
+    ) -> None:
+        """Backfill ``manual_members`` on ROWS (mutated in place) from the
+        CURRENT ClickHouse value for their ``(org_id, id)``, for callers of
+        ``insert_teams`` that never learned about the column (CHAOS-4321,
+        codex adversarial review round 2, HIGH: "the new provenance column
+        can still be silently cleared by existing direct team writers").
+
+        A team with no existing row (genuinely new) has nothing to
+        preserve and correctly keeps the caller's default ``[]``. One
+        batched query regardless of how many rows need it -- never N+1.
+        """
+        assert self.client is not None
+        org_ids = sorted({str(row["org_id"]) for row in rows})
+        ids = sorted({str(row["id"]) for row in rows})
+        query = (
+            "SELECT org_id, id, manual_members FROM teams FINAL "
+            "WHERE org_id IN {org_ids:Array(String)} AND id IN {ids:Array(String)}"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query,
+                query,
+                parameters={"org_ids": org_ids, "ids": ids},
+            )
+        existing: dict[tuple[str, str], list[str]] = {
+            (str(org_id), str(team_id)): [str(m) for m in (manual_members or [])]
+            for org_id, team_id, manual_members in (result.result_rows or [])
+        }
+        for row in rows:
+            row["manual_members"] = existing.get(
+                (str(row["org_id"]), str(row["id"])), []
+            )
 
     async def insert_identities(self, mappings: list[Any]) -> None:
         """Insert ClickHouse-native identity rows (CHAOS-2600 CS5).

@@ -99,8 +99,12 @@ func TestGitHubWorkItemDerivationOracleRetainsNonPrimaryCandidates(t *testing.T)
 		t.Fatal("full-provenance oracle case is missing")
 	}
 	got := buildGitHubWorkItemDerivationOracleCandidates(t, input)
-	wantSources := []string{"repo_ownership", "assignee_membership", "manual_fallback"}
-	wantPrimary := []int{1, 0, 0}
+	// CHAOS-4321: the Members fact in this fixture (assignee dev@example.com,
+	// mapped to team-member) must no longer surface as a candidate at all --
+	// repo_ownership still wins primary, manual_fallback is still retained as
+	// lower-precedence provenance, but assignee_membership is gone entirely.
+	wantSources := []string{"repo_ownership", "manual_fallback"}
+	wantPrimary := []int{1, 0}
 	if !reflect.DeepEqual(got.Source, wantSources) || !reflect.DeepEqual(got.IsPrimary, wantPrimary) {
 		t.Fatalf("oracle candidates sources=%v primary=%v", got.Source, got.IsPrimary)
 	}

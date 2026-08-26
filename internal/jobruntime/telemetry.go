@@ -183,6 +183,27 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 	Outcome DailyMetricsNativeFamilyOutcome
 }
 
+// DailyMetricsCompatRetryDecision is the bounded durable outcome of one
+// ambiguous metrics.daily compatibility-bridge execution (CHAOS-4319). The
+// Go side only ever observes "persisted_failed" -- the point PartitionHandler
+// gives up retrying a ledger row stuck at "ambiguous" and durably records a
+// failed_permanent partition instead of letting River discard the job with
+// no trace. "retry_authorized" is the Python bridge's mirror label for the
+// companion decision (a classified runner failure that safely re-authorizes
+// another attempt); it shares this metric name and label set on the Python
+// side (dev_health_metric_compat_retry_total) but is never emitted here,
+// since Go never observes that a retry was authorized -- only that one
+// eventually wasn't and had to be persisted as terminal.
+type DailyMetricsCompatRetryDecision string
+
+const (
+	DailyMetricsCompatRetryDecisionPersistedFailed DailyMetricsCompatRetryDecision = "persisted_failed"
+)
+
+func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
+	return []DailyMetricsCompatRetryDecision{DailyMetricsCompatRetryDecisionPersistedFailed}
+}
+
 // dailyMetricsNativeFamilies is the closed, compile-time set of
 // metrics.daily families a native Go executor MAY exist for (CHAOS-4276),
 // mirrored the same way dailyMetricsZeroRowsWithSourceFamilies is: a fixed
@@ -353,10 +374,14 @@ type MetricsCollector struct {
 	dailyMetricsNativeFamilyOutcome     map[dailyMetricsNativeFamilyOutcomeLabels]uint64
 	dailyMetricsNativeFamilyRowsWritten map[string]uint64
 	dailyMetricsNativeFamilyDuration    map[string]*histogram
-	postSyncFanout                      map[PostSyncFanoutOutcome]uint64
-	workGraphReleaseLost                uint64
-	remainingReleaseLost                uint64
-	zeroUnitFinalizations               map[zeroUnitFinalizationLabels]uint64
+	// Ambiguous-refused terminal persistence (CHAOS-4319). See
+	// DailyMetricsCompatRetryDecision's doc comment for why Go only ever
+	// records the "persisted_failed" half of this decision axis.
+	dailyMetricsCompatRetry map[DailyMetricsCompatRetryDecision]uint64
+	postSyncFanout          map[PostSyncFanoutOutcome]uint64
+	workGraphReleaseLost    uint64
+	remainingReleaseLost    uint64
+	zeroUnitFinalizations   map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -440,6 +465,7 @@ var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -465,6 +491,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		allowedStreams:                       make(map[StreamLabels]struct{}, len(dimensions.Streams)),
 		allowedBudgets:                       make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
 		allowedConcurrencyBudgets:            make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		dailyMetricsCompatRetry:              make(map[DailyMetricsCompatRetryDecision]uint64, len(dailyMetricsCompatRetryDecisions())),
 		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
 		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dailyMetricsNativeFamilies)),
 		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dailyMetricsNativeFamilies)),
@@ -561,6 +588,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
+	}
+	for _, decision := range dailyMetricsCompatRetryDecisions() {
+		collector.dailyMetricsCompatRetry[decision] = 0
 	}
 	for _, family := range dailyMetricsNativeFamilies {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] = 0
@@ -914,6 +944,20 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
 		collector.dailyMetricsNativeFamilyDuration[family].observe(duration.Seconds())
 	}
+	return nil
+}
+
+// ObserveDailyMetricsCompatRetry records one ambiguous_refused metrics.daily
+// compatibility-bridge execution's terminal disposition (CHAOS-4319). See
+// DailyMetricsCompatRetryDecision for why Go only ever reports
+// "persisted_failed".
+func (collector *MetricsCollector) ObserveDailyMetricsCompatRetry(decision DailyMetricsCompatRetryDecision) error {
+	if !slices.Contains(dailyMetricsCompatRetryDecisions(), decision) {
+		return errors.New("daily metrics compat retry decision is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsCompatRetry[decision]++
 	return nil
 }
 
@@ -1502,6 +1546,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
+	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
@@ -1820,6 +1865,20 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 	for _, family := range families {
 		writeHistogram(output, "worker_daily_metrics_native_family_duration_seconds",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyDuration[family])
+	}
+}
+
+// writeDailyMetricsCompatRetry exposes the terminal ambiguous_refused
+// disposition counter (CHAOS-4319). The metric name and "decision" label are
+// a deliberate cross-language contract with the Python bridge's
+// dev_health_metric_compat_retry_total (worker_metrics.py) -- see
+// DailyMetricsCompatRetryDecision for why this side only ever emits
+// "persisted_failed".
+func (collector *MetricsCollector) writeDailyMetricsCompatRetry(output *strings.Builder) {
+	writeMetadata(output, "dev_health_metric_compat_retry_total", "Terminal disposition of an ambiguous_refused metrics.daily compatibility-bridge execution, by worker_kind and bounded decision (CHAOS-4319).", "counter")
+	for _, decision := range dailyMetricsCompatRetryDecisions() {
+		writeUintSample(output, "dev_health_metric_compat_retry_total",
+			[]metricLabel{{"worker_kind", "daily"}, {"decision", string(decision)}}, collector.dailyMetricsCompatRetry[decision])
 	}
 }
 

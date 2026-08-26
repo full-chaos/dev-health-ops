@@ -150,6 +150,23 @@ type DailyMetricsNativeFamilyObserver interface {
 	) error
 }
 
+// DailyMetricsCompatRetryObserver is the narrow capability PartitionHandler
+// depends on when a metrics.daily compatibility-bridge execution ends up
+// stuck at "ambiguous" (CHAOS-4319: an ambiguous_refused response whose
+// ledger state is "ambiguous", not the merely-transient "executing"
+// collision). Retrying that partition can never succeed without a human
+// repair call, so this observer's only outcome today is "persisted_failed" --
+// the point at which PartitionHandler durably marks the partition
+// failed_permanent instead of letting River exhaust its attempt budget on
+// guaranteed 409s and silently discard the job. The "retry_authorized"
+// decision this metric's name anticipates is emitted from the Python bridge
+// (dev_health_metric_compat_retry_total), which is where the corresponding
+// safe-to-retry authorization actually happens; this Go-side observer only
+// ever reports the terminal half of the same bounded decision axis.
+type DailyMetricsCompatRetryObserver interface {
+	ObserveDailyMetricsCompatRetry(decision DailyMetricsCompatRetryDecision) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

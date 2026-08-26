@@ -469,6 +469,22 @@ if _PROMETHEUS_AVAILABLE:
             buckets=(1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0),
         )
     )
+    # CHAOS-4319: the bounded terminal disposition of an ambiguous_refused
+    # metric-compatibility-execution ledger row. "retry_authorized" is
+    # emitted here, in _mark_retry_authorized, the moment a classified
+    # runner failure is handed straight back to River as retryable instead
+    # of sticking at "ambiguous"; "persisted_failed" is the Go-side mirror
+    # label (internal/jobruntime, same metric name and axis) for the case
+    # that still lands genuinely stuck. The two halves of one decision live
+    # in different languages because each is only ever observed from the
+    # side that made it.
+    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_metric_compat_retry_total",
+        "Terminal disposition of an ambiguous_refused metrics.daily "
+        "compatibility-bridge execution, by worker_kind and bounded "
+        "decision (CHAOS-4319).",
+        ["worker_kind", "decision"],
+    )
 
 else:
     # Graceful no-ops when prometheus_client is unavailable
@@ -514,6 +530,7 @@ else:
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
+    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

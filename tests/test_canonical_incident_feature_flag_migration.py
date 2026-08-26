@@ -117,7 +117,7 @@ def test_canonical_incident_feature_seed_is_in_application_schema_graph() -> Non
     # lineage, and pin both named heads so an accidental third branch or an
     # out-of-order down_revision still fails loudly.
     heads = scripts.get_heads()
-    assert set(heads) == {"0066", "0112"}
+    assert set(heads) == {"0066", "0113"}
     application_head = scripts.get_revision("application_schema@head").revision
     assert application_head == max(revisions)
     application_revisions = {

@@ -535,6 +535,114 @@ async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
     assert session.commits == 1
 
 
+@pytest.mark.asyncio
+async def test_daily_partition_reauthorizes_past_repeated_progress_having_failures() -> (
+    None
+):
+    """CHAOS-4319 red-first proof at the ledger layer: for worker_kind ==
+    "daily" and operation == "partition", TWO consecutive classified runner
+    failures that each made progress must each authorize another attempt
+    through the real _reserve_execution/_mark_retry_authorized CAS -- never
+    landing at the terminal 409 test_ambiguous_ledger_row_never_reexecutes
+    proves an "ambiguous" row is stuck at. Before this ticket, the second
+    failure's own _reserve_execution call would have found the row still at
+    "ambiguous" from the first and refused permanently; this drives the real
+    (non-mocked) _reserve_execution/_mark_retry_authorized functions with a
+    fake session across two full _execute rounds to prove the ledger CAS
+    itself, not just the classification layer, keeps re-authorizing."""
+    from datetime import date
+
+    daily_execution = worker_metrics._Execution(
+        id=uuid.uuid4(),
+        worker_kind="daily",
+        operation="partition",
+        run_id=RUN_ID,
+        partition_id=PARTITION_ID,
+        organization_id="55555555-5555-4555-8555-555555555555",
+        family="daily",
+        generation="generation-v1",
+        claim_token=CLAIM_TOKEN,
+        scope={"target_day": date(2026, 8, 24).isoformat(), "repo_ids": []},
+        scope_digest="digest",
+    )
+
+    async def failing_with_progress(
+        _connection: object, _current: worker_metrics._Execution
+    ) -> dict[str, Any]:
+        raise worker_metrics._CompatibilityProcessFailure(
+            "metric compatibility process exceeded its memory bound",
+            reason="resource_exhausted",
+            safe_to_retry=True,
+        )
+
+    # Round 1: a fresh row -- INSERT succeeds, execution proceeds and fails.
+    # Two _Result entries: _reserve_execution's INSERT...RETURNING id, then
+    # _mark_retry_authorized's UPDATE (return value unchecked, but still one
+    # session.execute call).
+    round_one_session = _Session([_Result(scalar=daily_execution.id), _Result()])
+    with patch.object(
+        worker_metrics,
+        "_run_until_client_disconnect",
+        new=AsyncMock(side_effect=failing_with_progress),
+    ):
+        with pytest.raises(HTTPException) as first:
+            await worker_metrics._execute(
+                cast(AsyncSession, round_one_session),
+                daily_execution,
+                cast(Any, object()),
+            )
+    assert first.value.status_code == 503
+    assert isinstance(first.value.detail, dict)
+    assert first.value.detail["reason"] == "resource_exhausted"
+    # _mark_retry_authorized's own UPDATE + commit is the round's second
+    # session.execute/commit; _reserve_execution's INSERT was the first.
+    assert round_one_session.commits == 2
+
+    # Round 2: the ledger row now sits at "retry_authorized" (never
+    # "ambiguous") -- _reserve_execution's CAS must claim it and let a
+    # second progress-having failure authorize a THIRD attempt in turn,
+    # never refusing with the terminal 409.
+    retry_authorized_row = {
+        "worker_kind": daily_execution.worker_kind,
+        "operation": daily_execution.operation,
+        "run_id": daily_execution.run_id,
+        "partition_id": daily_execution.partition_id,
+        "family": daily_execution.family,
+        "generation": daily_execution.generation,
+        "scope_digest": daily_execution.scope_digest,
+        "state": "retry_authorized",
+        "attempt_count": 1,
+        "claim_token": daily_execution.claim_token,
+    }
+    round_two_session = _Session(
+        [
+            _Result(scalar=None),  # INSERT ... ON CONFLICT DO NOTHING: row exists
+            _Result(row=retry_authorized_row),  # SELECT ... FOR UPDATE
+            _Result(
+                scalar=daily_execution.id
+            ),  # CAS UPDATE retry_authorized->executing
+            _Result(),  # _mark_retry_authorized's own UPDATE, on the 2nd failure
+        ]
+    )
+    with patch.object(
+        worker_metrics,
+        "_run_until_client_disconnect",
+        new=AsyncMock(side_effect=failing_with_progress),
+    ):
+        with pytest.raises(HTTPException) as second:
+            await worker_metrics._execute(
+                cast(AsyncSession, round_two_session),
+                daily_execution,
+                cast(Any, object()),
+            )
+    # The proof: still a 503 "failed, safe to retry" -- NEVER the 409
+    # "ambiguous_refused" a stuck ambiguous row would have produced.
+    assert second.value.status_code == 503
+    assert isinstance(second.value.detail, dict)
+    assert second.value.detail["reason"] == "resource_exhausted"
+    assert second.value.detail["state"] == "failed"
+
+
 def test_execution_ledger_migration_has_attempt_and_exact_output_state() -> None:
     migration = (
         Path(__file__).parents[2] / "src/dev_health_ops/alembic/versions/"

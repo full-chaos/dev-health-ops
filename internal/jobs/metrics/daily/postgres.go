@@ -910,6 +910,50 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
 	return nil
 }
 
+// dailyMetricsPartitionFailureReasons is the closed, bounded vocabulary
+// FailPartitionPermanently accepts (CHAOS-4319) -- durable_partition_failure
+// rows must stay safe for logs, dashboards, and telemetry labels, mirroring
+// jobruntime.Reason's own compile-time-fixed catalog. An unrecognized reason
+// is a caller bug, not a value worth persisting.
+var dailyMetricsPartitionFailureReasons = map[string]struct{}{
+	"ambiguous_refused": {},
+}
+
+// FailPartitionPermanently durably terminalizes a partition whose
+// compatibility-bridge ledger row is stuck ambiguous (CHAOS-4319): status
+// moves to 'failed_permanent' with a bounded failure_reason, fenced by the
+// same live-lease check every other partition transition uses. Unlike
+// ReleasePartition's 'failed' (silently re-dispatchable by
+// DispatchablePartitions), 'failed_permanent' is deliberately excluded from
+// that reclaim set -- retrying a ledger row that can never move again
+// without a human /repair call would only reproduce the same 409 forever.
+func (store *PostgresStore) FailPartitionPermanently(ctx context.Context, claim PartitionClaim, reason string) error {
+	if !store.valid() || !validUUID(claim.Partition.ID) || !validUUID(claim.Partition.RunID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	if _, ok := dailyMetricsPartitionFailureReasons[reason]; !ok {
+		return ErrInvalidState
+	}
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_partitions
+SET status = 'failed_permanent', failure_reason = $1, claim_token = NULL, lease_expires_at = NULL,
+    updated_at = $2
+WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
+  AND lease_expires_at > $2
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_runs AS run
+      WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
+  )`,
+		reason, store.now().UTC(), claim.Partition.ID, claim.Partition.RunID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 // ClaimFinalize fences a run's finalization. Like ClaimPartition it reads the
 // row under a lock first, so that a finalize lease orphaned by a dead claimant
 // is reported as a LeaseActiveError instead of as "nothing to do". This is the

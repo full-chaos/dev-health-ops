@@ -37,6 +37,21 @@ const dailyRepositoryPartitionSizeEnvKey = "DEV_HEALTH_DAILY_PARTITION_MAX_REPOS
 
 var dailyRepositoryPartitionSize = loadDailyRepositoryPartitionSize()
 
+// maxDailyMetricsRepositoriesPerRun bounds the total number of repositories
+// one daily-metrics run will partition, for BOTH sources: an explicit
+// StartRunRequest (normalizeStartRunRequest, unchanged since before this
+// ticket) and live ClickHouse discovery (MaterializeScheduledFanout, CHAOS-
+// 4263, codex adversarial review round 3). Before round 3, only the explicit
+// path enforced this; deferred discovery accepted the entire unbounded
+// ClickHouse result and chunked it into as many `daily_partition` jobs as
+// dailyRepositoryPartitionSize allowed, with no upper bound on the total
+// count. This PR's post-sync backfill (up to 15 daily_metrics_runs per sync
+// event: day D plus up to maxPostSyncDailyBackfillDays) multiplies that
+// per-sync-event exposure on the shared metrics queue for an unusually large
+// tenant, so the cap now applies to the deferred path too, instead of
+// silently accepting an unbounded partition-job burst.
+const maxDailyMetricsRepositoriesPerRun = 1000
+
 func loadDailyRepositoryPartitionSize() int {
 	raw := strings.TrimSpace(os.Getenv(dailyRepositoryPartitionSizeEnvKey))
 	if raw == "" {
@@ -263,7 +278,7 @@ ON CONFLICT DO NOTHING`,
 
 func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]RepositoryID, error) {
 	if !validUUID(request.OrganizationID) || request.Generation == "" ||
-		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 ||
+		len(request.Generation) > 64 || len(request.RepositoryIDs) > maxDailyMetricsRepositoriesPerRun ||
 		len(request.PrerequisiteCompletionKey) > 256 {
 		return StartRunRequest{}, nil, ErrInvalidState
 	}
@@ -506,6 +521,18 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation)) {
 		return false, ErrInvalidState
 	}
+	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
+	if isPostSyncGeneration(run.Generation) {
+		trigger = jobruntime.DailyMetricsRunTriggerPostSync
+	}
+	// Live ClickHouse discovery has no natural upper bound the way an
+	// explicit StartRunRequest does -- fail loud here rather than silently
+	// chunking an unbounded repository set into an unbounded number of
+	// daily_partition jobs (CHAOS-4263, codex adversarial review round 3).
+	if len(repositoryIDs) > maxDailyMetricsRepositoriesPerRun {
+		store.observeDiscovery(trigger, jobruntime.DailyMetricsDiscoveryOutcomeRepositoryCapExceeded)
+		return false, ErrRepositoryCapExceeded
+	}
 	partitions, err := normalizeRepositoryPartitions(repositoryIDs)
 	if err != nil {
 		return false, err
@@ -584,10 +611,6 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	outcome := jobruntime.DailyMetricsDiscoveryOutcomeMaterialized
 	if len(partitions) == 0 {
 		outcome = jobruntime.DailyMetricsDiscoveryOutcomeNoRepositories
-	}
-	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
-	if isPostSyncGeneration(run.Generation) {
-		trigger = jobruntime.DailyMetricsRunTriggerPostSync
 	}
 	store.observeDiscovery(trigger, outcome)
 	return true, nil

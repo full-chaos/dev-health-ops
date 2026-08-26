@@ -124,6 +124,11 @@ type DailyMetricsDiscoveryOutcome string
 const (
 	DailyMetricsDiscoveryOutcomeMaterialized   DailyMetricsDiscoveryOutcome = "materialized"
 	DailyMetricsDiscoveryOutcomeNoRepositories DailyMetricsDiscoveryOutcome = "no_repositories"
+	// DailyMetricsDiscoveryOutcomeRepositoryCapExceeded records a discovery
+	// that resolved more repositories than the run is allowed to partition
+	// (CHAOS-4263, codex adversarial review round 3) -- a fail-loud outcome,
+	// never a silent truncation to the cap.
+	DailyMetricsDiscoveryOutcomeRepositoryCapExceeded DailyMetricsDiscoveryOutcome = "repository_cap_exceeded"
 )
 
 type dailyMetricsDiscoveryLabels struct {
@@ -1990,12 +1995,13 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 // outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
 // non-empty every time" from "discovery never runs for this trigger".
 func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
-	series := make([]dailyMetricsDiscoveryLabels, 0, 4)
+	series := make([]dailyMetricsDiscoveryLabels, 0, 6)
 	for _, trigger := range []DailyMetricsRunTrigger{
 		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
 	} {
 		for _, outcome := range []DailyMetricsDiscoveryOutcome{
 			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,
+			DailyMetricsDiscoveryOutcomeRepositoryCapExceeded,
 		} {
 			series = append(series, dailyMetricsDiscoveryLabels{Trigger: trigger, Outcome: outcome})
 		}

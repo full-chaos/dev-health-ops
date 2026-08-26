@@ -16,6 +16,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -45,6 +46,16 @@ var (
 	// a separate, larger change than this ticket's scope.
 	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
 )
+
+// ErrRepositoryCapExceeded means live ClickHouse repository discovery
+// (MaterializeScheduledFanout) resolved more repositories than
+// maxDailyMetricsRepositoriesPerRun for one run (CHAOS-4263, codex
+// adversarial review round 3). It wraps ErrInvalidState so existing
+// classification call sites (errors.Is(err, ErrInvalidState) -> Permanent)
+// need no changes: retrying cannot reduce the discovered repository count,
+// so this must fail loud and immediately, exactly like any other invalid
+// durable state, never silently truncate to the cap.
+var ErrRepositoryCapExceeded = fmt.Errorf("%w: repository count exceeds cap", ErrInvalidState)
 
 // LeaseActiveError reports that the claim target is held by a lease that has
 // not expired yet, and carries how long is left on it.

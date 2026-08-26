@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -222,6 +224,86 @@ func TestPostgresStoreScheduledFanoutMaterializesOnceAndRecordsNoRepositories(t 
 	}
 	if status != "no_repositories" || finalization != "succeeded" || emptyPartitions != 0 || fences != 1 {
 		t.Fatalf("empty status=%s finalization=%s partitions=%d fences=%d", status, finalization, emptyPartitions, fences)
+	}
+}
+
+// TestMaterializeScheduledFanoutFailsLoudlyWhenRepositoryCapIsExceeded pins
+// the codex adversarial-review finding (round 3, CHAOS-4263): an explicit
+// StartRunRequest has always rejected more than maxDailyMetricsRepositoriesPerRun
+// repositories (normalizeStartRunRequest), but live ClickHouse discovery
+// (MaterializeScheduledFanout, shared by the scheduled fixed-fanout and this
+// PR's deferred post-sync discovery) had no equivalent cap -- an unusually
+// large tenant's discovered repository set would be silently chunked into an
+// unbounded number of daily_partition jobs. This must fail loud (a durable,
+// Permanent, alertable error) instead of silently truncating or bursting.
+func TestMaterializeScheduledFanoutFailsLoudlyWhenRepositoryCapIsExceeded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ScheduledFanoutRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000009",
+		TargetDay:      time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC),
+		Generation:     "fixed-schedule:daily_metrics_fanout:2026-08-12T02:00:00Z",
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartScheduledFanoutRunTx(ctx, tx, request, publisher)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimDispatch(ctx, run.ID)
+	if err != nil || claimed == nil || !claimed.RepositoryDiscoveryRequired {
+		t.Fatalf("claim=%#v err=%v", claimed, err)
+	}
+	tooMany := make([]RepositoryID, maxDailyMetricsRepositoriesPerRun+1)
+	for index := range tooMany {
+		tooMany[index] = RepositoryID(uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("repository-cap-test-%d", index))).String())
+	}
+	created, err := store.MaterializeScheduledFanout(ctx, *claimed, tooMany)
+	if created || !errors.Is(err, ErrRepositoryCapExceeded) || !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("materialize=%t err=%v, want created=false err=ErrRepositoryCapExceeded (wrapping ErrInvalidState)", created, err)
+	}
+	var partitions int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions WHERE run_id=$1::uuid`, run.ID).Scan(&partitions); err != nil {
+		t.Fatal(err)
+	}
+	if partitions != 0 {
+		t.Fatalf("partitions=%d, want 0 -- an over-cap discovery must not silently truncate and partition anyway", partitions)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id=$1::uuid`, run.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" {
+		t.Fatalf("run status=%s, want running (unaffected -- MaterializeScheduledFanout's own transaction rolled back)", status)
 	}
 }
 

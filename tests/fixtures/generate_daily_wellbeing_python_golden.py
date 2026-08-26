@@ -409,10 +409,176 @@ def _team_wellbeing() -> list[dict[str, Any]]:
     return cases
 
 
+def _multi_repo_partition_case(
+    *,
+    label: str,
+    day: date,
+    rows_by_repo: dict[uuid.UUID, list[dict[str, Any]]],
+    team_resolver: TeamResolver | None,
+    repo_team_resolver: RepoPatternTeamResolver | None,
+    repo_names_by_id: dict[uuid.UUID, str],
+    business_timezone: str = "UTC",
+    business_hours_start: int = 9,
+    business_hours_end: int = 17,
+) -> dict[str, Any]:
+    """Mirrors worker_metrics.py's `for repo_id in repo_ids` loop
+    (CHAOS-4264/CHAOS-4276): production calls
+    compute_team_wellbeing_metrics_daily ONCE PER repo_id, each call scoped
+    to only that repo's commit_stat_rows, and concatenates the results. This
+    helper reproduces that exactly -- one real Python call per repo, in
+    rows_by_repo's key order, concatenating each call's rows -- rather than
+    one call over every repo's rows combined, which is NOT what production
+    does and would hide exactly the bug this golden case exists to catch
+    (CHAOS-4276 codex round-1 finding 2: the native Go executor was
+    aggregating every repo in a partition into one call/row instead of
+    running the compute once per repo).
+    """
+    all_expected: list[dict[str, Any]] = []
+    all_rows: list[dict[str, Any]] = []
+    repo_ids_in_order = list(rows_by_repo.keys())
+    for repo_id in repo_ids_in_order:
+        rows = rows_by_repo[repo_id]
+        records = compute_team_wellbeing_metrics_daily(
+            day=day,
+            commit_stat_rows=cast(Sequence[CommitStatRow], rows),
+            team_resolver=team_resolver,
+            computed_at=COMPUTED_AT,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
+            business_timezone=business_timezone,
+            business_hours_start=business_hours_start,
+            business_hours_end=business_hours_end,
+        )
+        all_expected.extend(
+            {
+                "team_id": r.team_id,
+                "team_name": r.team_name,
+                "commits_count": r.commits_count,
+                "after_hours_commits_count": r.after_hours_commits_count,
+                "weekend_commits_count": r.weekend_commits_count,
+                "after_hours_commit_ratio": r.after_hours_commit_ratio,
+                "weekend_commit_ratio": r.weekend_commit_ratio,
+            }
+            for r in records
+        )
+        all_rows.extend(rows)
+    return {
+        "label": label,
+        "day": day.isoformat(),
+        "repo_ids_in_order": [str(rid) for rid in repo_ids_in_order],
+        "rows": [
+            {
+                "repo_id": str(row["repo_id"]),
+                "commit_hash": row["commit_hash"],
+                "author_email": row["author_email"],
+                "author_name": row["author_name"],
+                "committer_when": row["committer_when"]
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            for row in all_rows
+        ],
+        "repo_names_by_id": {str(k): v for k, v in repo_names_by_id.items()},
+        "business_timezone": business_timezone,
+        "business_hours_start": business_hours_start,
+        "business_hours_end": business_hours_end,
+        "expected": all_expected,
+    }
+
+
+# Second repo for the multi-repo-partition case -- distinct from REPO_A/B/
+# UNMAPPED above so this case's fixtures cannot accidentally collide with
+# _team_wellbeing()'s.
+REPO_D = uuid.UUID("00000000-0000-4000-8000-00000000000d")
+
+
+def _team_wellbeing_multi_repo_partition() -> list[dict[str, Any]]:
+    """CHAOS-4276 codex round-1 finding 2 regression oracle: a team whose
+    commits span TWO repos in the same daily_metrics_partition must produce
+    ONE team_metrics_daily row PER REPO -- Python's real per-repo_id
+    invocation loop (worker_metrics.py, CHAOS-4264) resets every team's
+    commit/after-hours/weekend bucket at each repo boundary -- never one row
+    aggregating both repos' commits together. Both repos below resolve to
+    the SAME team via repo-pattern, and each repo gets a different commit
+    mix (different counts, different after-hours split) so an aggregated
+    (wrong) result is numerically distinguishable from two correctly-scoped
+    per-repo rows -- a bug that silently combined both repos would still
+    pass a same-commit-count check.
+
+    The daily-package oracle for this case is
+    internal/jobs/metrics/daily/wellbeing_multi_repo_golden_test.go: it feeds
+    ALL of this case's rows (undivided) through computeWellbeingPerRepo (the
+    Go grouping+per-repo-loop this bug lives in) and compares against
+    `expected` below -- which was produced by genuinely separate Python
+    calls, not simulated. A unit test with hand-computed expectations is not
+    an oracle; this is.
+    """
+    teams_data = [
+        {
+            "id": "team-repo",
+            "name": "Repo Team",
+            "members": [],
+            "repo_patterns": ["org/service-a", "org/service-b"],
+        },
+    ]
+    repo_team_resolver = build_repo_pattern_resolver(teams_data)
+    repo_names_by_id = {
+        REPO_A: "org/service-a",
+        REPO_D: "org/service-b",
+    }
+
+    cases: list[dict[str, Any]] = []
+
+    cases.append(
+        _multi_repo_partition_case(
+            label="team_spans_two_repos_in_one_partition",
+            day=DAY,
+            rows_by_repo={
+                REPO_A: [
+                    _row(
+                        repo_id=REPO_A,
+                        commit_hash="mp1",
+                        author_email="dev-a@example.com",
+                        author_name=None,
+                        committer_when=datetime(
+                            2026, 8, 24, 12, 0, tzinfo=timezone.utc
+                        ),
+                    ),
+                    _row(
+                        repo_id=REPO_A,
+                        commit_hash="mp2",
+                        author_email="dev-a@example.com",
+                        author_name=None,
+                        # 03:00 UTC, before business_hours_start=9 -> after-hours.
+                        committer_when=datetime(2026, 8, 24, 3, 0, tzinfo=timezone.utc),
+                    ),
+                ],
+                REPO_D: [
+                    _row(
+                        repo_id=REPO_D,
+                        commit_hash="mp3",
+                        author_email="dev-b@example.com",
+                        author_name=None,
+                        committer_when=datetime(
+                            2026, 8, 24, 12, 0, tzinfo=timezone.utc
+                        ),
+                    ),
+                ],
+            },
+            team_resolver=None,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
+        )
+    )
+
+    return cases
+
+
 def render() -> str:
     value = {
         "schema_version": 1,
         "team_wellbeing": _team_wellbeing(),
+        "team_wellbeing_multi_repo_partition": _team_wellbeing_multi_repo_partition(),
     }
     return json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
 

@@ -384,10 +384,73 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 				observation, githubTestsArtifactOversizedCause,
 			)
 		}
+		// The oversized branch must bump BOTH totality counters exactly like
+		// the adjacent ErrGitHubTestsArtifactUnavailable branch does: SEEN
+		// because a real download attempt was made, UNREADABLE because its
+		// contents were never obtained. Asserting only the observation/cause
+		// above would pass even if one of these two bumps were dropped,
+		// silently miscounting the CHAOS-4185 total-unreadability floor.
+		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 2 {
+			t.Fatalf("ArchivesSeen=%v, want known 2 (1 oversized + 1 healthy)", intPtrString(walk.cursor.ArchivesSeen))
+		}
+		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 1 {
+			t.Fatalf("ArchivesUnreadable=%v, want known 1 (the oversized artifact only)", intPtrString(walk.cursor.ArchivesUnreadable))
+		}
 		if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
 			context.Background(), nativeTestClaim("github", "cicd"), walk.final,
 		); err != nil {
 			t.Fatalf("production comparator rejected a skipped-artifact completion: %v", err)
+		}
+	})
+
+	// A run whose bad artifacts are a MIX of causes (oversized + unavailable)
+	// alongside one healthy artifact must classify totality the same way a
+	// single-cause mix would: ArchivesSeen counts every attempt, both bad
+	// causes land in Incomplete distinctly, and -- because one artifact WAS
+	// readable -- githubTestsCheckAllArtifactsUnreadable's seen==unreadable
+	// floor (CHAOS-4185) must NOT fire. This guards against the oversized
+	// branch double-counting, undercounting, or being classified into the
+	// wrong bucket relative to its unavailable sibling.
+	t.Run("mixed oversized and unavailable artifacts classify totality correctly", func(t *testing.T) {
+		doer := &githubTestsDownloadFailureDoer{
+			t: t, artifacts: 3,
+			oversized:  map[int]bool{1: true},
+			noLocation: map[int]bool{2: true},
+		}
+
+		walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+		if err != nil {
+			t.Fatalf("mixed oversized/unavailable artifacts sank the unit: err=%v; want both skipped and the unit finalized", err)
+		}
+		if walk.cursor.Phase != "done" {
+			t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+		}
+		if walk.cursor.Suites != 1 {
+			t.Fatalf("committed %d suites, want 1 from the healthy artifact", walk.cursor.Suites)
+		}
+		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 3 {
+			t.Fatalf("ArchivesSeen=%v, want known 3", intPtrString(walk.cursor.ArchivesSeen))
+		}
+		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 2 {
+			t.Fatalf("ArchivesUnreadable=%v, want known 2 (not 3 -- the healthy artifact must not count)", intPtrString(walk.cursor.ArchivesUnreadable))
+		}
+		var oversizedCount, unavailableCount int
+		for _, observation := range walk.cursor.Incomplete {
+			if observation.Component != githubTestsReportMemberComponent {
+				continue
+			}
+			switch observation.Cause {
+			case githubTestsArtifactOversizedCause:
+				oversizedCount = observation.Count
+			case githubTestsArtifactUnavailableCause:
+				unavailableCount = observation.Count
+			}
+		}
+		if oversizedCount != 1 {
+			t.Fatalf("oversized report_member count=%d, want 1", oversizedCount)
+		}
+		if unavailableCount != 1 {
+			t.Fatalf("unavailable report_member count=%d, want 1 -- must stay distinct from the oversized cause", unavailableCount)
 		}
 	})
 

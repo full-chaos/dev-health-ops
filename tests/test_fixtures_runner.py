@@ -782,3 +782,76 @@ class TestGenerateUsersRespectsOrgId:
         assert isinstance(org_uuid, uuid.UUID)
         for m in data["memberships"]:
             assert m.org_id == org_uuid
+
+
+class TestFixtureTeamRepoPatterns:
+    """CHAOS-4276 / fixtures audit 2026-08-26
+    (.remember/lanes/lane-fixtures-audit/fixtures-audit-2026-08-26.md
+    section 3): every fixture team's repo_patterns was always [], which
+    starves RepoPatternTeamResolver's repo-pattern-FIRST path (checked
+    before membership) that team_wellbeing and other team-scoped families
+    try first. run_fixtures_generation must populate each team's
+    repo_patterns from the SAME repo<->team ownership assignment already
+    computed for repo-cooccurrence density."""
+
+    @pytest.mark.asyncio
+    async def test_run_fixtures_generation_populates_repo_patterns(
+        self, tmp_path, monkeypatch
+    ):
+        from dev_health_ops.fixtures.demo_identity import demo_repo_name
+
+        captured_teams: list = []
+        original_insert_teams = SQLAlchemyStore.insert_teams
+
+        async def spy_insert_teams(self_store, teams):
+            captured_teams.extend(teams)
+            return await original_insert_teams(self_store, teams)
+
+        monkeypatch.setattr(SQLAlchemyStore, "insert_teams", spy_insert_teams)
+
+        db_file = tmp_path / "test_repo_patterns.db"
+        ns = argparse.Namespace(
+            sink=f"sqlite:///{db_file}",
+            db_type="sqlite",
+            org_id="test-org",
+            repo_name="acme/repo-patterns",
+            repo_count=3,
+            days=1,
+            commits_per_day=1,
+            pr_count=1,
+            seed=7,
+            provider="synthetic",
+            with_work_graph=False,
+            with_metrics=False,
+            team_count=3,
+        )
+
+        result = await run_fixtures_generation(ns)
+        assert result == 0
+        assert captured_teams, "insert_teams must have been called"
+
+        repo_names = {demo_repo_name(ns.repo_name, i, ns.repo_count) for i in range(3)}
+
+        # Every team's repo_patterns entries must be real generated repo
+        # names -- no stray/fabricated values.
+        for team in captured_teams:
+            for pattern in team.repo_patterns:
+                assert pattern in repo_names, (
+                    f"team {team.id} repo_patterns has an unrecognized repo {pattern!r}"
+                )
+
+        # At least one team must own at least one repo -- previously this
+        # was unconditionally empty for every team.
+        assert any(team.repo_patterns for team in captured_teams), (
+            "no fixture team was assigned a repo_patterns entry -- the "
+            "repo-pattern-first resolver path is unreachable from fixtures"
+        )
+
+    def test_team_model_repo_patterns_defaults_empty_and_accepts_a_list(self):
+        from dev_health_ops.models.teams import Team
+
+        default_team = Team(id="t1", name="Team 1")
+        assert default_team.repo_patterns == []
+
+        patterned_team = Team(id="t2", name="Team 2", repo_patterns=["acme/service-a"])
+        assert patterned_team.repo_patterns == ["acme/service-a"]

@@ -376,29 +376,30 @@ for target in cicd deployments incidents tests; do
     --defer-finalize
 done
 
-echo "   -- git (CHAOS-4276: raw git_commits for team_wellbeing/repo_user_commit)"
-# "git" is NOT in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS -- it writes analytics
-# rows only (git_commits/git_commit_stats via the same SyntheticDataGenerator
-# the 4 targets above already use to insert_repo), no sync_run to defer or
-# finalize, no DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN gate. Ordering relative to
-# the loop above is irrelevant for exactly that reason: it never touches
-# post_sync/dora dispatch. --repo-name matches the SAME REPO_NAME the 4
-# targets above already seeded (SyntheticDataGenerator derives repo_id via
-# uuid5(namespace, repo_name), so this lands on the identical repo row --
-# see ci/seed_metrics_proof_team.py's docstring for why that matters).
-ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
-  run_dev_hops sync git \
-  --provider synthetic \
-  --repo-name "${REPO_NAME}" \
-  --backfill "${BACKFILL_DAYS}" \
+echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for team_wellbeing/repo_user_commit)"
+# chris's order (2026-08-26): use the EXISTING fixture system
+# (src/dev_health_ops/fixtures/, dev-hops fixtures generate) rather than a
+# new hand-rolled seeder. This writes git_commits/git_commit_stats via the
+# SAME SyntheticDataGenerator the 4 targets above already use to insert_repo
+# (repo_id derives from uuid5(namespace, repo_name), so --repo-name
+# "${REPO_NAME}" lands on the identical repo row), plus `teams` rows whose
+# repo_patterns are now populated from the real repo<->team ownership
+# assignment (fixtures/runner.py run_fixtures_generation, extended in this
+# PR -- see .remember/lanes/lane-fixtures-audit/fixtures-audit-2026-08-26.md
+# section 3/5.2, which found repo_patterns was previously always [] for
+# every fixture team). No sync_run, no DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN
+# gate -- `fixtures generate` writes directly, independent of the
+# sync_run/outbox/post_sync chain the loop above drives, so ordering
+# relative to it is irrelevant.
+ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+  run_dev_hops fixtures generate \
+  --sink "${CLICKHOUSE_URI_HTTP}" \
   --org "${ORG_ID}" \
-  --sink clickhouse
-
-echo "==> seeding a repo-pattern team for team_wellbeing (CHAOS-4276): without one, every commit resolves to the 'unassigned' bucket, which is a valid but less meaningful proof"
-PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/seed_metrics_proof_team.py" \
-  --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
-  --org-id "${ORG_ID}" \
-  --repo-name "${REPO_NAME}"
+  --repo-name "${REPO_NAME}" \
+  --repo-count 1 \
+  --days "${BACKFILL_DAYS}" \
+  --team-count 2 \
+  --seed 4276
 
 echo "==> finalizing the 4 deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
 for target in cicd deployments incidents tests; do
@@ -418,14 +419,16 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # cicd/deployments/tests targets seeded above; dora is computed from
 # deployments+cicd+incidents (all seeded) per _DORA_TARGETS in
 # post_sync_dispatch.py. repo_user_commit/team_wellbeing (CHAOS-4276) come
-# from the "git" target seeded above (git_commits); team_wellbeing also
-# needs the repo-pattern team ci/seed_metrics_proof_team.py seeds, or every
+# from the `dev-hops fixtures generate` call above (git_commits); team_
+# wellbeing also needs a repo-pattern team, now populated by that same call
+# (fixtures/runner.py run_fixtures_generation sets each team's repo_patterns
+# from its real repo<->team ownership assignment -- CHAOS-4276), or every
 # commit resolves to the less-meaningful "unassigned" bucket instead of
 # actually exercising repo-pattern resolution. complexity is the one
 # remaining exclusion: it needs persisted file CONTENTS
-# (git_files.contents), which this job's synthetic git seeding does not
-# write -- asserting it here would fail forever, for a reason unrelated to
-# CHAOS-4263, even after everything else merges.
+# (git_files.contents), which fixtures generate does not write by default --
+# asserting it here would fail forever, for a reason unrelated to CHAOS-4263,
+# even after everything else merges.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \

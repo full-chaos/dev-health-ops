@@ -718,6 +718,25 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         repo_team_assignments = _build_repo_team_assignments(
             all_teams, repo_count, ns.seed
         )
+        # CHAOS-4276 / fixtures audit 2026-08-26
+        # (.remember/lanes/lane-fixtures-audit/fixtures-audit-2026-08-26.md
+        # section 3): every fixture team's repo_patterns was always [],
+        # which starves the repo-pattern-FIRST resolver path
+        # (RepoPatternTeamResolver, checked before membership) that
+        # team_wellbeing and other team-scoped families try before falling
+        # back to membership. Reuses the SAME repo<->team ownership already
+        # computed above for cooccurrence density, so a team's repo_patterns
+        # exactly matches which repos it was assigned to own -- no separate
+        # random assignment to keep in sync.
+        _repo_names = [
+            demo_repo_name(base_name, i, repo_count) for i in range(repo_count)
+        ]
+        _team_repo_patterns: dict[str, list[str]] = {team.id: [] for team in all_teams}
+        for _repo_idx, _owning_teams in enumerate(repo_team_assignments):
+            for _team in _owning_teams:
+                _team_repo_patterns[_team.id].append(_repo_names[_repo_idx])
+        for team in all_teams:
+            team.repo_patterns = _team_repo_patterns.get(team.id, [])
         if hasattr(store, "insert_teams") and all_teams:
             for team in all_teams:
                 team.org_id = org_id

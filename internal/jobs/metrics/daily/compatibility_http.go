@@ -84,11 +84,14 @@ func NewHTTPCompatibilityExecutor(client *http.Client, config HTTPCompatibilityC
 	return &HTTPCompatibilityExecutor{client: client, endpoint: config.Endpoint, token: config.BearerToken}, nil
 }
 
-func (executor *HTTPCompatibilityExecutor) ComputePartition(ctx context.Context, run Run, partition Partition) error {
+func (executor *HTTPCompatibilityExecutor) ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error {
 	if run.ID == "" || partition.ID == "" || partition.RunID != run.ID {
 		return ErrInvalidState
 	}
-	return executor.post(ctx, compatibilityRequest{Operation: "partition", RunID: run.ID, PartitionID: partition.ID})
+	return executor.post(ctx, compatibilityRequest{
+		Operation: "partition", RunID: run.ID, PartitionID: partition.ID,
+		SkipFamilies: skipFamilies,
+	})
 }
 
 func (executor *HTTPCompatibilityExecutor) Finalize(ctx context.Context, run Run) error {
@@ -102,6 +105,12 @@ type compatibilityRequest struct {
 	Operation   string `json:"operation"`
 	RunID       string `json:"run_id"`
 	PartitionID string `json:"partition_id,omitempty"`
+	// SkipFamilies (CHAOS-4276) names families.json families a
+	// NativeFamilyExecutor already computed and wrote for this partition --
+	// the Python bridge's run_daily_metrics_job(skip_families=...) must not
+	// recompute or rewrite them. omitempty keeps every existing/finalize
+	// request byte-identical to before this field existed.
+	SkipFamilies []string `json:"skip_families,omitempty"`
 }
 
 type compatibilityResponse struct {

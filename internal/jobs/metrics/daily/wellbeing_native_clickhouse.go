@@ -179,6 +179,46 @@ func normalizeKey(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(value)), " ")
 }
 
+// LoadRepoNames reads the full repo name (`org/repo`, the `repos.repo`
+// column) for a set of repository ids, scoped by org_id -- the
+// team_wellbeing-native counterpart of job_daily.py's
+// `repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}`.
+// Deduplicated the same way ClickHouseRepositoryDiscoverer.RepositoryIDs
+// dedups the same table (argMax by last_synced): `repos` is
+// ReplacingMergeTree, so a re-synced repo can have more than one physical
+// row.
+func LoadRepoNames(ctx context.Context, conn repositoryRows, organizationID string, repoIDs []uuid.UUID) (map[string]string, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	if len(repoIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	rows, err := conn.Query(ctx, `
+SELECT id, argMax(repo, last_synced) AS full_name
+FROM repos
+WHERE org_id = ? AND id IN ?
+GROUP BY id`, organizationID, repositoryUUIDStrings(repoIDs))
+	if err != nil {
+		return nil, fmt.Errorf("load repo names: %w", err)
+	}
+	defer rows.Close()
+
+	names := make(map[string]string, len(repoIDs))
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("scan repo name: %w", err)
+		}
+		names[id.String()] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repo names: %w", err)
+	}
+	return names, nil
+}
+
 // LoadWellbeingCommits reads one day's deduplicated commits for team_wellbeing.
 //
 // This is NOT load_git_rows (metrics/loaders/clickhouse.py:86) -- that query

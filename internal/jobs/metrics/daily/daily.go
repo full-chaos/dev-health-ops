@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -123,6 +124,12 @@ type Run struct {
 	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.
 	RepositoryDiscoveryRequired bool
+	// TargetDay is the UTC calendar day this run computes metrics for
+	// (`daily_metrics_runs.target_day`). CHAOS-4276: a native family
+	// executor needs this to scope its own ClickHouse reads/writes -- the
+	// compatibility bridge never needed it in Go because the Python side
+	// re-derives it from the run id itself.
+	TargetDay time.Time
 }
 
 // StartRunRequest is the immutable post-sync input for one daily generation.
@@ -149,6 +156,12 @@ type ScheduledFanoutRequest struct {
 type Partition struct {
 	ID    string
 	RunID string
+	// RepoIDs is the partition's repository scope
+	// (`daily_metrics_partitions.repo_ids`). CHAOS-4276: a native family
+	// executor needs this the same way TargetDay is needed on Run -- the
+	// compatibility bridge never surfaced it in Go because Python re-derives
+	// it from the partition id.
+	RepoIDs []RepositoryID
 }
 
 type PartitionClaim struct {
@@ -202,9 +215,35 @@ type RunPublisher interface {
 
 // CompatibilityExecutor is the only temporary Python seam. Both identities
 // are loaded from Store before it is called, so it cannot expand the scope.
+//
+// ComputePartition's skipFamilies argument (CHAOS-4276) names families.json
+// families a NativeFamilyExecutor already computed and wrote for this
+// partition -- the compatibility bridge must not recompute or rewrite them.
+// An empty/nil skipFamilies is a no-op: every existing caller (and the
+// Python side, run_daily_metrics_job's skip_families parameter) behaves
+// exactly as before this field existed.
 type CompatibilityExecutor interface {
-	ComputePartition(context.Context, Run, Partition) error
+	ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error
 	Finalize(context.Context, Run) error
+}
+
+// NativeFamilyExecutor computes and writes ONE families.json family's rows
+// for a partition natively in Go, in place of the Python compatibility
+// bridge (CHAOS-4276, the daily bridge's per-family counterpart to the
+// remaining bridge's per-kind native executors). It returns how many rows it
+// wrote so PartitionHandler can report it through telemetry without a
+// separate readback.
+//
+// Unlike the remaining bridge (one River kind per family, a construction
+// refusal takes only that kind out of service), the daily bridge computes
+// every family inside ONE partition call. A NativeFamilyExecutor is
+// therefore consulted, and can fail, PER PARTITION rather than once at
+// worker startup -- PartitionHandler's fail-open policy (see Work) means a
+// single family's runtime failure degrades to "Python still computes it
+// this partition", not a failed partition and not a family taken out of
+// service fleet-wide.
+type NativeFamilyExecutor interface {
+	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
 }
 
 type Dispatcher struct {
@@ -269,18 +308,25 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 }
 
 type PartitionHandler struct {
-	store            Store
-	publisher        Publisher
-	compatibility    CompatibilityExecutor
-	sourceChecker    SourceDataChecker
-	zeroRowsObserver jobruntime.DailyMetricsZeroRowsObserver
+	store             Store
+	publisher         Publisher
+	compatibility     CompatibilityExecutor
+	sourceChecker     SourceDataChecker
+	zeroRowsObserver  jobruntime.DailyMetricsZeroRowsObserver
+	nativeFamilies    map[string]NativeFamilyExecutor
+	nativeFamilyNames []string
+	nativeObserver    jobruntime.DailyMetricsNativeFamilyObserver
+	nativeFamiliesNow func() time.Time
 }
 
 func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
 	if store == nil || publisher == nil || compatibility == nil {
 		return nil, ErrUnavailable
 	}
-	return &PartitionHandler{store: store, publisher: publisher, compatibility: compatibility}, nil
+	return &PartitionHandler{
+		store: store, publisher: publisher, compatibility: compatibility,
+		nativeFamiliesNow: func() time.Time { return time.Now().UTC() },
+	}, nil
 }
 
 // SetSourceDataChecker wires the optional zero-rows-with-source-data check
@@ -301,6 +347,80 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 		return
 	}
 	handler.zeroRowsObserver = observer
+}
+
+// SetNativeFamilies registers the families.json families this handler
+// computes natively in Go instead of the Python compatibility bridge
+// (CHAOS-4276). A nil/empty map (the default) is a no-op: every family stays
+// on the compatibility path exactly as before this capability existed. The
+// caller (cmd/dev-health-worker/daily.go) decides per family whether its
+// native executor could be built at all -- a family absent from this map
+// simply never leaves the compatibility path; see NativeFamilyExecutor's
+// doc comment for the runtime (per-partition) fail-open policy on top of
+// that construction-time decision.
+func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) {
+	if handler == nil {
+		return
+	}
+	handler.nativeFamilies = families
+	names := make([]string, 0, len(families))
+	for name := range families {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	handler.nativeFamilyNames = names
+}
+
+// SetNativeFamilyObserver wires the optional telemetry observer for native
+// family computation. Never gates behavior on its own.
+func (handler *PartitionHandler) SetNativeFamilyObserver(observer jobruntime.DailyMetricsNativeFamilyObserver) {
+	if handler == nil {
+		return
+	}
+	handler.nativeObserver = observer
+}
+
+// computeNativeFamilies runs every registered native family executor for one
+// partition and returns the names that succeeded, in the same sorted order
+// SetNativeFamilies stored -- deterministic so a failure in one family never
+// makes another family's inclusion depend on Go map iteration order.
+//
+// FAIL-OPEN BY DESIGN (chris's ruling relayed via team-lead, CHAOS-4276): a
+// native family's runtime failure is NOT a partition failure. It is excluded
+// from the returned skip list, which means the compatibility bridge computes
+// and writes that family for this partition exactly as it would have before
+// any native executor existed -- one family degrading to Python must never
+// take the other 22 down with it, and must never turn a transient ClickHouse
+// hiccup into a Permanent partition failure.
+func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) []string {
+	if handler == nil || len(handler.nativeFamilyNames) == 0 {
+		return nil
+	}
+	skipFamilies := make([]string, 0, len(handler.nativeFamilyNames))
+	for _, name := range handler.nativeFamilyNames {
+		executor := handler.nativeFamilies[name]
+		if executor == nil {
+			continue
+		}
+		started := handler.nativeFamiliesNow()
+		rows, err := executor.ComputeFamily(ctx, run, partition)
+		duration := handler.nativeFamiliesNow().Sub(started)
+		if err != nil {
+			if handler.nativeObserver != nil {
+				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, duration,
+				)
+			}
+			continue
+		}
+		skipFamilies = append(skipFamilies, name)
+		if handler.nativeObserver != nil {
+			_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rows, duration,
+			)
+		}
+	}
+	return skipFamilies
 }
 
 func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) error {
@@ -337,7 +457,8 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition)
+			skipFamilies := handler.computeNativeFamilies(workCtx, run, claim.Partition)
+			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition, skipFamilies)
 		},
 	); err != nil {
 		releasePartition(handler.store, ctx, *claim)

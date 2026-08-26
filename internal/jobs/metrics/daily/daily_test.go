@@ -72,6 +72,100 @@ func TestPartitionRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 	}
 }
 
+// TestPartitionNativeFamilySuccessSkipsCompatibility proves a native family
+// that computes successfully is excluded from the compatibility bridge's
+// work for this partition (CHAOS-4276): the compatibility call still
+// happens (every other family still needs it), but with the successful
+// family named in skipFamilies.
+func TestPartitionNativeFamilySuccessSkipsCompatibility(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{rowsWritten: 7}
+	observer := &recordingNativeFamilyObserver{}
+	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor})
+	handler.SetNativeFamilyObserver(observer)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("native executor calls=%d, want 1", executor.calls)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "team_wellbeing" {
+		t.Fatalf("skipFamilies=%v, want [team_wellbeing]", got)
+	}
+	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeComputed || observer.calls[0].rowsWritten != 7 {
+		t.Fatalf("observations=%#v", observer.calls)
+	}
+}
+
+// TestPartitionNativeFamilyFailureFallsOpenToCompatibility proves a native
+// family's RUNTIME failure is fail-open (chris's ruling, relayed via
+// team-lead, CHAOS-4276): the partition still succeeds, the failed family is
+// NOT in skipFamilies (so the compatibility bridge computes it as before),
+// and the refusal is observed rather than silently swallowed.
+func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{err: errors.New("transient clickhouse failure")}
+	observer := &recordingNativeFamilyObserver{}
+	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor})
+	handler.SetNativeFamilyObserver(observer)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a native family failure must not fail the partition: %v", err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("native executor calls=%d, want 1", executor.calls)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
+		t.Fatalf("skipFamilies=%v, want empty -- the failed family must stay on the compatibility path", got)
+	}
+	if store.partitionCompletions != 1 {
+		t.Fatalf("partition completions=%d, want 1 (fail-open must still complete the partition)", store.partitionCompletions)
+	}
+	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+		t.Fatalf("observations=%#v", observer.calls)
+	}
+}
+
+// TestPartitionWithNoNativeFamiliesIsANoop proves the default (no
+// SetNativeFamilies call) behaves exactly as before this capability existed:
+// compatibility receives a nil/empty skipFamilies.
+func TestPartitionWithNoNativeFamiliesIsANoop(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
+		t.Fatalf("skipFamilies=%v, want empty with no native families registered", got)
+	}
+}
+
 func TestPartitionLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{
@@ -489,20 +583,82 @@ func (fakePublisher) PublishFinalizeTx(context.Context, pgx.Tx, Run) error   { r
 
 type fakeCompatibility struct{}
 
-func (fakeCompatibility) ComputePartition(context.Context, Run, Partition) error { return nil }
-func (fakeCompatibility) Finalize(context.Context, Run) error                    { return nil }
+func (fakeCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
+	return nil
+}
+func (fakeCompatibility) Finalize(context.Context, Run) error { return nil }
 
 // failingCompatibility always fails with a fixed, caller-chosen error --
 // used to prove the classified compatibility bridge sentinels (CHAOS-4264)
 // reach the caller unchanged through Handler.Work's retry wrapping.
 type failingCompatibility struct{ err error }
 
-func (compatibility failingCompatibility) ComputePartition(context.Context, Run, Partition) error {
+func (compatibility failingCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
 	return compatibility.err
 }
 
 func (compatibility failingCompatibility) Finalize(context.Context, Run) error {
 	return compatibility.err
+}
+
+// recordingCompatibility records the skipFamilies each ComputePartition call
+// received, so a test can assert exactly which families a native executor's
+// outcome caused to be skipped.
+type recordingCompatibility struct {
+	mu           sync.Mutex
+	skipFamilies [][]string
+}
+
+func (compatibility *recordingCompatibility) ComputePartition(_ context.Context, _ Run, _ Partition, skipFamilies []string) error {
+	compatibility.mu.Lock()
+	defer compatibility.mu.Unlock()
+	compatibility.skipFamilies = append(compatibility.skipFamilies, skipFamilies)
+	return nil
+}
+func (*recordingCompatibility) Finalize(context.Context, Run) error { return nil }
+
+func (compatibility *recordingCompatibility) lastSkipFamilies() []string {
+	compatibility.mu.Lock()
+	defer compatibility.mu.Unlock()
+	if len(compatibility.skipFamilies) == 0 {
+		return nil
+	}
+	return compatibility.skipFamilies[len(compatibility.skipFamilies)-1]
+}
+
+// fakeNativeFamilyExecutor is a NativeFamilyExecutor test double: either
+// returns a fixed row count, or a fixed error to exercise the fail-open path.
+type fakeNativeFamilyExecutor struct {
+	rowsWritten int
+	err         error
+	calls       int
+}
+
+func (executor *fakeNativeFamilyExecutor) ComputeFamily(context.Context, Run, Partition) (int, error) {
+	executor.calls++
+	return executor.rowsWritten, executor.err
+}
+
+// recordingNativeFamilyObserver captures every ObserveDailyMetricsNativeFamily
+// call so a test can assert both success and fail-open telemetry.
+type recordingNativeFamilyObserver struct {
+	mu    sync.Mutex
+	calls []recordingNativeFamilyObservation
+}
+
+type recordingNativeFamilyObservation struct {
+	family      string
+	outcome     jobruntime.DailyMetricsNativeFamilyOutcome
+	rowsWritten int
+}
+
+func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome, rowsWritten int, _ time.Duration,
+) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.calls = append(observer.calls, recordingNativeFamilyObservation{family: family, outcome: outcome, rowsWritten: rowsWritten})
+	return nil
 }
 
 type errorSourceDataChecker struct{ err error }
@@ -531,7 +687,7 @@ type blockingCompatibility struct {
 	finalizeCanceled    bool
 }
 
-func (compatibility *blockingCompatibility) ComputePartition(ctx context.Context, _ Run, _ Partition) error {
+func (compatibility *blockingCompatibility) ComputePartition(ctx context.Context, _ Run, _ Partition, _ []string) error {
 	if compatibility.waitForCancellation {
 		<-ctx.Done()
 		compatibility.mu.Lock()

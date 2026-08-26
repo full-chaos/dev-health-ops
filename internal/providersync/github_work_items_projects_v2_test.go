@@ -540,6 +540,54 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	}
 }
 
+// TestGitHubProjectV2FetcherContinuationPageMissingNodesIsIncomplete is codex
+// adversarial review CHAOS-4289 round 3's finding: the initial item.Changes
+// payload's null/omitted `nodes` is refused (see
+// TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination's "nested
+// changes nodes missing" case), but a CONTINUATION page -- fetched only when
+// the initial page claims hasNextPage:true -- is the identical GraphQL shape
+// and needs the identical check. Without it, a continuation page reporting
+// hasNextPage:false with `nodes` entirely omitted silently truncated this
+// item's status-transition history while the board still reported Complete.
+//
+// The item (Issue #7 in acme/api) is otherwise fully identifiable, isolating
+// this to the pagination-completeness gate rather than item-identification
+// (boardIncomplete).
+func TestGitHubProjectV2FetcherContinuationPageMissingNodesIsIncomplete(t *testing.T) {
+	doer := &gitHubProjectV2Doer{t: t, replies: []string{
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+			`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[` +
+			`{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"Doing"},"createdAt":"2026-08-01T09:00:00Z","actor":{"login":"octocat"}}` +
+			`],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}` +
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		// The continuation reply: valid, explicit hasNextPage:false, but
+		// `nodes` is entirely omitted -- the same malformed shape the initial
+		// page's own guard refuses.
+		`{"data":{"node":{"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+	}}
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	result, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		githubProjectV2TestClient(t, doer), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Snapshots) != 1 || result.Snapshots[0].Complete {
+		t.Fatalf("snapshot=%+v, want Complete=false", result.Snapshots)
+	}
+	if len(result.Snapshots[0].Subjects) != 1 || result.Snapshots[0].Subjects[0].SubjectID != "gh:acme/api#7" {
+		t.Fatalf("snapshot=%+v, want the Issue still positively identified", result.Snapshots)
+	}
+	if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+		result.Incomplete[0].Cause != githubProjectsV2StructuralDegraded {
+		t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+			result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2StructuralDegraded)
+	}
+}
+
 func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
 	for _, replies := range [][]string{
 		{

@@ -513,8 +513,21 @@ func fetchGitHubProjectV2Target(
 						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 					}
 					more := continuation.Data.Node.Changes
+					// A null/omitted `nodes` appends nothing either way; check
+					// it before mutating item.Changes.Nodes purely so the
+					// degradation branch below reads as "this page told us
+					// nothing new", not as a side effect of the append.
+					//
+					// codex adversarial review, CHAOS-4289 round 3: a
+					// continuation page is the identical GraphQL shape as the
+					// initial item.Changes payload above, and needs the
+					// identical null/omitted `nodes` check -- without it, a
+					// continuation page reporting hasNextPage:false with
+					// `nodes` entirely omitted silently truncated this item's
+					// status-transition history while still looking complete.
+					degradedContinuation := more.PageInfo == nil || more.PageInfo.HasNextPage == nil || more.Nodes == nil
 					item.Changes.Nodes = append(item.Changes.Nodes, more.Nodes...)
-					if more.PageInfo == nil || more.PageInfo.HasNextPage == nil {
+					if degradedContinuation {
 						paginationComplete = false
 						break
 					}

@@ -198,6 +198,32 @@ DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
   DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 \
   run_dev_hops --db "${POSTGRES_SUPERUSER_URI}" migrate postgres upgrade
 
+# Fail closed, immediately, if the cutover above did not actually take: this
+# gate exists because a silently-wrong dispatch topology reads as a clean
+# green/red on the assertion below for an unrelated reason (or, before this
+# assert existed, as a red that looked identical to the CHAOS-4263 shape).
+# Never let that happen again undetected -- confirm every metrics.* kind that
+# must be executable is actually on 'river' before doing anything else.
+echo "==> asserting the River cutover actually took for the metrics kinds this gate depends on"
+NON_RIVER_METRICS_ROUTES="$(PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+  --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+  --tuples-only --no-align --field-separator=' -> ' \
+  -c "SELECT job_kind, transport FROM worker_job_routes
+      WHERE job_kind IN (
+        'metrics.daily_dispatch', 'metrics.daily_partition', 'metrics.daily_finalize',
+        'metrics.remaining.capacity', 'metrics.remaining.complexity', 'metrics.remaining.dora',
+        'metrics.remaining.membership_backfill', 'metrics.remaining.recommendations',
+        'metrics.remaining.release_impact'
+      )
+      AND transport <> 'river';")"
+if [ -n "${NON_RIVER_METRICS_ROUTES}" ]; then
+  echo "ERROR: the following metrics.* kinds are not routed to 'river' after the migration step above:"
+  echo "${NON_RIVER_METRICS_ROUTES}"
+  echo "ERROR: this gate cannot produce a meaningful result against the wrong dispatch topology (CHAOS-4266)."
+  exit "${EXIT_FAILURE}"
+fi
+echo "   confirmed: all metrics.* kinds this gate depends on are routed to river"
+
 echo "==> applying ClickHouse migrations"
 CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" OTEL_ENABLED=false \
   run_dev_hops migrate clickhouse upgrade

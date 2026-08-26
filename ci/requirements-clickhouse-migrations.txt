@@ -51,19 +51,6 @@ starlette==1.3.1
 pynacl==1.6.2
 cffi==2.0.0
 pycparser==3.0
-# CHAOS-4321: migration 079_teams_manual_members.py imports member_facets
-# from api.services.configuration.clickhouse_team_admin (deliberately, to
-# reuse the SAME facet shape the Identities route writes rather than
-# duplicate the logic). Importing ANY submodule of that package runs its
-# __init__.py first (unavoidable -- Python always executes a parent
-# package's __init__ before a submodule import completes), and that
-# __init__.py eagerly re-exports every service in the package for
-# backwards-compat import paths. cffi (above) already covers
-# cryptography's own only dependency.
-cryptography==50.0.0
-# __init__.py -> .team_discovery -> requests
-requests==2.34.0
-charset-normalizer==3.4.7
 
 # --- ClickHouse client used to APPLY the migrations ---
 clickhouse-connect==0.15.1

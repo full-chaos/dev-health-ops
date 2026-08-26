@@ -1392,11 +1392,24 @@ async def run_daily_metrics_job(
         if on_write_starting is not None:
             on_write_starting()
 
+        # CHAOS-4275: repo_user_commit has a native Go executor
+        # (RepoUserCommitExecutor). When the Go dispatcher reports it
+        # already computed and wrote this scope, skip ONLY the write here --
+        # unlike team_wellbeing above, `compute_daily_metrics` itself is
+        # NOT skipped: `result.repo_metrics` is a live in-process input to
+        # `_write_compounding_risk_for_day` a few lines below, and
+        # compounding_risk (not yet ported) has no other source for it. A
+        # codex adversarial review (round 2) on the Go port caught that this
+        # gate was missing entirely -- the native executor and this
+        # unconditional write path would otherwise both fire for every
+        # partition, doubling every repo/user/commit row's generation.
+        skip_repo_user_commit_write = "repo_user_commit" in skip_families
         for s in sinks:
-            s.write_repo_metrics(result.repo_metrics)
-            s.write_user_metrics(result.user_metrics)
-            if include_commit_metrics:
-                s.write_commit_metrics(result.commit_metrics)
+            if not skip_repo_user_commit_write:
+                s.write_repo_metrics(result.repo_metrics)
+                s.write_user_metrics(result.user_metrics)
+                if include_commit_metrics:
+                    s.write_commit_metrics(result.commit_metrics)
             s.write_team_metrics(team_metrics)
             if wi_metrics:
                 s.write_work_item_metrics(wi_metrics)

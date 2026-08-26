@@ -62,10 +62,9 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		t.Fatalf("team_wellbeing must be port=go, got %q", got)
 	}
 	// repo_user_commit is Wave 1's OTHER reference implementation
-	// (lane-4275), not yet cut over as of this family's own port -- it must
-	// stay next_core until its own PR flips it, exactly as team_wellbeing
-	// did here.
-	if got := byName["repo_user_commit"]; got != "next_core" {
-		t.Fatalf("repo_user_commit must still be port=next_core, got %q", got)
+	// (lane-4275): its own PR flips this to "go", registering
+	// RepoUserCommitExecutor exactly as team_wellbeing did above.
+	if got := byName["repo_user_commit"]; got != "go" {
+		t.Fatalf("repo_user_commit must be port=go, got %q", got)
 	}
 }

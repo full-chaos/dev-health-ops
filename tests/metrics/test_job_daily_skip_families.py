@@ -12,6 +12,16 @@ recompute or rewrite it. These tests pin the Python side of that contract:
    is never called and write_team_metrics is never called (nothing written).
 3. Every OTHER family is unaffected by skip_families naming team_wellbeing --
    naming a family with no native executor has no effect at all.
+
+CHAOS-4275 (repo_user_commit) added a SECOND, differently-shaped gate: unlike
+team_wellbeing, `compute_daily_metrics` is still called even when
+"repo_user_commit" is in skip_families, because `result.repo_metrics` is a
+live in-process input to `_write_compounding_risk_for_day` a few lines
+later and compounding_risk has no other source for it -- only the WRITE is
+skipped. A codex adversarial review on the Go port caught that this gate was
+entirely missing in an earlier revision (the native executor and this
+unconditional write both fired for every partition); these tests pin the
+fixed contract the same way the team_wellbeing tests above pin theirs.
 """
 
 from __future__ import annotations
@@ -238,7 +248,8 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
     monkeypatch: Any,
 ) -> None:
     """A family with no native executor is unaffected by being named in
-    skip_families -- only team_wellbeing checks this set today."""
+    skip_families -- only team_wellbeing and repo_user_commit check this set
+    today."""
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
@@ -250,6 +261,65 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         org_id=ORG_ID,
         skip_finalize=True,
         skip_families={"cicd"},
+    )
+
+    assert "team_metrics" in sink.write_calls
+    assert "repo_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_repo_user_commit_in_skip_families_writes_nothing_but_still_computes(
+    monkeypatch: Any,
+) -> None:
+    """Unlike team_wellbeing, compute_daily_metrics must still run when
+    repo_user_commit is skipped -- result.repo_metrics feeds
+    _write_compounding_risk_for_day (compounding_risk has no other source
+    for it, and is not yet ported). Only the three writes are gated."""
+    compute_calls: list[Any] = []
+    original = job_daily.compute_daily_metrics
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(job_daily, "compute_daily_metrics", _spy)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"repo_user_commit"},
+    )
+
+    assert len(compute_calls) == 1
+    assert "repo_metrics" not in sink.write_calls
+    assert "write_user_metrics" not in sink.write_calls
+    assert "write_commit_metrics" not in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_repo_user_commit_skip_does_not_affect_other_families(
+    monkeypatch: Any,
+) -> None:
+    """Naming repo_user_commit in skip_families must not perturb team_metrics
+    or any other family's write path."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"repo_user_commit"},
     )
 
     assert "team_metrics" in sink.write_calls

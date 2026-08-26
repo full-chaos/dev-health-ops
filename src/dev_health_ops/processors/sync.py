@@ -684,7 +684,24 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
 
     await run_with_store(db_uri, db_type, _handler, org_id=org_id)
 
-    if target in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS:
+    # --defer-finalize (CHAOS-4266): finalizing here, right after this one
+    # target's own rows land, is what raced dora in the metrics-executed-proof
+    # gate -- NativePostSyncService.Fanout triggers a remaining-metric family
+    # off ANY qualifying dataset (dora: git/deployments/cicd/incidents) as
+    # soon as ITS sync_run finalizes, without waiting for a caller's OTHER
+    # targets to also land. Seeding cicd/deployments/incidents/tests in a
+    # loop that finalizes each immediately meant dora's dispatch fired off
+    # whichever target happened to be seeded first -- before the other two
+    # dora inputs existed -- and it never gets a second chance (idempotent
+    # per-day dispatch; no retry when the rest of the data later shows up).
+    # A caller seeding multiple dora-relevant targets for the same org/window
+    # must pass --defer-finalize for every one of them, then call the
+    # `finalize-synthetic-sync` verb for each only after ALL of them have
+    # written their rows -- matching how the real pipeline never fans out
+    # before a provider's sync actually completes.
+    if target in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS and not getattr(
+        ns, "defer_finalize", False
+    ):
         assert org_id is not None  # guarded above, this target requires it
         before_at = datetime.now(timezone.utc)
         since_at = before_at - timedelta(days=days)
@@ -695,6 +712,51 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
             since_at=since_at,
             before_at=before_at,
         )
+    return 0
+
+
+def finalize_synthetic_sync_run(ns: argparse.Namespace, target: str) -> int:
+    """Finalize a synthetic sync run seeded earlier with ``--defer-finalize``.
+
+    Writes no analytics rows -- only completes the durable SyncRun/
+    SyncRunUnit and triggers the real post_sync fanout, exactly like the
+    non-deferred path in `sync_synthetic_target` does, just decoupled from
+    the row-write step so a caller can seed several dora-relevant targets
+    before any of their fanouts run (CHAOS-4266; see the comment above the
+    call site in `sync_synthetic_target`).
+    """
+    if target not in _SYNC_RUN_BACKED_SYNTHETIC_TARGETS:
+        raise SystemExit(
+            "finalize-synthetic-sync --target "
+            f"{target}: only valid for "
+            f"{', '.join(sorted(_SYNC_RUN_BACKED_SYNTHETIC_TARGETS))}."
+        )
+    if os.environ.get("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN") != "1":
+        raise SystemExit(
+            "finalize-synthetic-sync writes to the GLOBAL CHAOS-4114 "
+            "executed-proof ledger under a real provider identity and must "
+            "never run against a shared or production-adjacent database. "
+            "Set DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 explicitly if this "
+            "really is a throwaway CI/test database."
+        )
+    org_id = getattr(ns, "org", None)
+    if not org_id:
+        raise SystemExit(
+            "finalize-synthetic-sync --target "
+            f"{target} requires a resolved org (--org or ORG_ID env)."
+        )
+    repo_name = _resolve_synthetic_repo_name(ns)
+    _, backfill_days = resolve_date_range(ns)
+    before_at = datetime.now(timezone.utc)
+    since_at = before_at - timedelta(days=backfill_days)
+    run_id = _complete_synthetic_sync_run(
+        org_id=org_id,
+        repo_full_name=repo_name,
+        target=target,
+        since_at=since_at,
+        before_at=before_at,
+    )
+    print(run_id)
     return 0
 
 
@@ -766,7 +828,40 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
         "--repo-name",
         help=f"Synthetic repo name (default: {DEFAULT_DEMO_REPO_NAME}).",
     )
+    parser.add_argument(
+        "--defer-finalize",
+        action="store_true",
+        help=(
+            "Synthetic provider, sync-run-backed targets only (cicd/"
+            "deployments/incidents/tests): write analytics rows but do NOT "
+            "complete the sync_run or trigger the post_sync fanout yet. Use "
+            "the `finalize-synthetic-sync` verb afterward, once every "
+            "dora-relevant target (cicd/deployments/incidents) has been "
+            "seeded, so a remaining-metric family that spans multiple "
+            "targets never fans out against a partially-seeded org "
+            "(CHAOS-4266)."
+        ),
+    )
     add_date_range_args(parser)
+
+
+def _add_finalize_synthetic_sync_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--target",
+        required=True,
+        choices=sorted(_SYNC_RUN_BACKED_SYNTHETIC_TARGETS),
+        help="The synthetic target seeded earlier with --defer-finalize.",
+    )
+    parser.add_argument(
+        "--repo-name",
+        help=f"Synthetic repo name (default: {DEFAULT_DEMO_REPO_NAME}); must "
+        "match the value passed when seeding.",
+    )
+    add_date_range_args(parser)
+
+
+def run_finalize_synthetic_sync(ns: argparse.Namespace) -> int:
+    return finalize_synthetic_sync_run(ns, ns.target)
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -786,5 +881,15 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         target_parser = subparsers.add_parser(target, help=help_text)
         _add_sync_target_args(target_parser)
         target_parser.set_defaults(func=run_sync_target, sync_target=target)
+
+    finalize_parser = subparsers.add_parser(
+        "finalize-synthetic-sync",
+        help=(
+            "Complete a synthetic sync run seeded earlier with "
+            "--defer-finalize (CHAOS-4266)."
+        ),
+    )
+    _add_finalize_synthetic_sync_args(finalize_parser)
+    finalize_parser.set_defaults(func=run_finalize_synthetic_sync)
 
     # Note: 'teams' and 'work-items' are also sync subcommands but handled in their own modules.

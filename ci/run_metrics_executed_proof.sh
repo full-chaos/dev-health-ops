@@ -18,6 +18,17 @@ set -euo pipefail
 # ClickHouse, so no family computes any rows. It goes green once CHAOS-4263
 # merges -- do not mark it a required check before that (RISK-NOTES).
 #
+# ORDERING CONTRACT (CHAOS-4266): all four synthetic targets are seeded with
+# --defer-finalize BEFORE any of them is finalized (see the seeding section
+# below). A sync_run's finalize is what triggers the real post_sync fanout,
+# and the fanout dispatches a remaining-metric family (dora needs
+# cicd+deployments+incidents) off the FIRST qualifying sync_run to finalize,
+# with no retry once the rest of the data later lands -- finalizing targets
+# one at a time, immediately after each seed, races that dispatch against
+# whichever target happens to be seeded first. Do not collapse the two loops
+# below back into one without re-verifying dora stays non-zero across
+# multiple runs.
+#
 # RISK-NOTES: this is a LIGHTER topology than prod/local-dev's
 # deploy/docker-compose/compose.go-workers.yml -- no PgBouncer, no
 # transaction-mode pooling, direct role DSNs, only the "metrics" and "sync"
@@ -333,7 +344,22 @@ RECONCILER_PID="$!"
 wait_for_http_ready "dev-health-reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${RECONCILER_LOG_FILE}" RECONCILER_PID
 
 RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
-echo "==> seeding real source rows through the real sync path (dev-hops sync <target> --provider synthetic), run_start=${RUN_START}"
+# Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows
+# BEFORE finalizing ANY of their sync_runs. NativePostSyncService.Fanout
+# dispatches a remaining-metric family (dora needs cicd+deployments+
+# incidents) off the FIRST qualifying sync_run to finalize -- it does not
+# wait for a caller's other targets, and it never gets a second chance (no
+# retry once the rest of the data later lands). Finalizing each target
+# immediately after seeding it -- the original shape of this loop --
+# therefore raced dora against whichever target the loop happened to seed
+# first, and finalizing cicd/deployments/incidents in ANY order fails the
+# same way if `tests` (not dora-relevant) is finalized in between.
+# `--defer-finalize` (sync.py) writes rows without completing the sync_run;
+# `finalize-synthetic-sync` (sync.py) completes it afterward, standalone.
+# This mirrors how the real pipeline never fans out before a provider's own
+# sync actually completes -- it is the CI seeding step that was out of
+# order, not the dispatch logic.
+echo "==> seeding real source rows through the real sync path (dev-hops sync <target> --provider synthetic --defer-finalize), run_start=${RUN_START}"
 for target in cicd deployments incidents tests; do
   echo "   -- ${target}"
   # DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1: required by sync_synthetic_target
@@ -345,6 +371,18 @@ for target in cicd deployments incidents tests; do
     DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 \
     run_dev_hops sync "${target}" \
     --provider synthetic \
+    --repo-name "${REPO_NAME}" \
+    --backfill "${BACKFILL_DAYS}" \
+    --defer-finalize
+done
+
+echo "==> finalizing the 4 deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
+for target in cicd deployments incidents tests; do
+  echo "   -- ${target}"
+  ORG_ID="${ORG_ID}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+    DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 \
+    run_dev_hops sync finalize-synthetic-sync \
+    --target "${target}" \
     --repo-name "${REPO_NAME}" \
     --backfill "${BACKFILL_DAYS}"
 done

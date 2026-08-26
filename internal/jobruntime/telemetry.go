@@ -22,16 +22,12 @@ const (
 	maxMetricStreams            = 64
 	maxMetricBudgets            = 128
 	maxMetricConcurrencyBudgets = 128
-	// maxDailyMetricsNativeFamilies bounds registered native metrics.daily
-	// families (CHAOS-4276). families.json has 23 families total, so this
-	// is a generous ceiling, not a working limit.
-	maxDailyMetricsNativeFamilies = 64
-	poolDomain                    = "domain"
-	poolQueueControl              = "queue_control"
-	poolResultAcquired            = "acquired"
-	poolResultTimeout             = "timeout"
-	poolResultCancelled           = "cancelled"
-	poolResultError               = "error"
+	poolDomain                  = "domain"
+	poolQueueControl            = "queue_control"
+	poolResultAcquired          = "acquired"
+	poolResultTimeout           = "timeout"
+	poolResultCancelled         = "cancelled"
+	poolResultError             = "error"
 )
 
 // SyncLeaseResult is the bounded result vocabulary for expired sync-lease
@@ -187,6 +183,20 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 	Outcome DailyMetricsNativeFamilyOutcome
 }
 
+// dailyMetricsNativeFamilies is the closed, compile-time set of
+// metrics.daily families a native Go executor MAY exist for (CHAOS-4276),
+// mirrored the same way dailyMetricsZeroRowsWithSourceFamilies is: a fixed
+// list, not a runtime-registered MetricDimensions field. A runtime
+// dimension would need the collector built AFTER every native executor's
+// construction outcome is known, but a construction failure (chris's ruling:
+// fail-open -- the family just stays on the compatibility bridge) must not
+// block worker startup or leave the collector unable to report the refusal
+// it is trying to observe. Every series below is emitted at zero from
+// process start, exactly like the zero-rows-with-source series, so a
+// construction refusal is visible on the SAME counter a healthy deploy
+// would move, not absent from it.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing"}
+
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
 // four the RCA found stale despite fresh source data. The other 19 families in
@@ -237,13 +247,6 @@ type MetricDimensions struct {
 	Streams            []StreamLabels
 	Budgets            []BudgetLabels
 	ConcurrencyBudgets []ConcurrencyBudgetLabels
-	// DailyMetricsNativeFamilies names the metrics.daily families this
-	// worker computes natively (CHAOS-4276) -- static deployment
-	// configuration (which families.json families this build registered a
-	// native executor for), not derived from the job registry the way Jobs
-	// is: a worker with zero native families is a normal, expected topology
-	// (e.g. before any family is cut over), not a construction error.
-	DailyMetricsNativeFamilies []string
 }
 
 type queueLabels struct {
@@ -315,15 +318,14 @@ func (histogram *histogram) observe(value float64) {
 type MetricsCollector struct {
 	mu sync.RWMutex
 
-	allowedJobs                     map[JobLabels]struct{}
-	allowedQueues                   map[queueLabels]struct{}
-	allowedKinds                    map[string]struct{}
-	allowedDomains                  map[string]struct{}
-	allowedSyncLeases               map[SyncLeaseLabels]struct{}
-	allowedStreams                  map[StreamLabels]struct{}
-	allowedBudgets                  map[BudgetLabels]struct{}
-	allowedConcurrencyBudgets       map[ConcurrencyBudgetLabels]struct{}
-	allowedDailyMetricsNativeFamily map[string]struct{}
+	allowedJobs               map[JobLabels]struct{}
+	allowedQueues             map[queueLabels]struct{}
+	allowedKinds              map[string]struct{}
+	allowedDomains            map[string]struct{}
+	allowedSyncLeases         map[SyncLeaseLabels]struct{}
+	allowedStreams            map[StreamLabels]struct{}
+	allowedBudgets            map[BudgetLabels]struct{}
+	allowedConcurrencyBudgets map[ConcurrencyBudgetLabels]struct{}
 
 	runtimeInfo *RuntimeInfo
 
@@ -450,8 +452,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	if len(dimensions.DomainTypes) > maxMetricDomains ||
 		len(dimensions.SyncLeases) > maxMetricSyncLeases || len(dimensions.Streams) > maxMetricStreams ||
-		len(dimensions.Budgets) > maxMetricBudgets || len(dimensions.ConcurrencyBudgets) > maxMetricConcurrencyBudgets ||
-		len(dimensions.DailyMetricsNativeFamilies) > maxDailyMetricsNativeFamilies {
+		len(dimensions.Budgets) > maxMetricBudgets || len(dimensions.ConcurrencyBudgets) > maxMetricConcurrencyBudgets {
 		return nil, errors.New("metric dimensions exceed cardinality bounds")
 	}
 
@@ -464,10 +465,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		allowedStreams:                       make(map[StreamLabels]struct{}, len(dimensions.Streams)),
 		allowedBudgets:                       make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
 		allowedConcurrencyBudgets:            make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
-		allowedDailyMetricsNativeFamily:      make(map[string]struct{}, len(dimensions.DailyMetricsNativeFamilies)),
-		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dimensions.DailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
-		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dimensions.DailyMetricsNativeFamilies)),
-		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dimensions.DailyMetricsNativeFamilies)),
+		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
+		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dailyMetricsNativeFamilies)),
+		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dailyMetricsNativeFamilies)),
 		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
 		jobOldestAge:                         make(map[queueLabels]float64),
 		jobsRunning:                          make(map[JobLabels]int64, len(dimensions.Jobs)),
@@ -562,14 +562,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
 	}
-	for _, family := range dimensions.DailyMetricsNativeFamilies {
-		if !metricIdentifier(family, 96) {
-			return nil, errors.New("invalid daily metrics native family dimension")
-		}
-		if _, duplicate := collector.allowedDailyMetricsNativeFamily[family]; duplicate {
-			return nil, errors.New("duplicate daily metrics native family dimension")
-		}
-		collector.allowedDailyMetricsNativeFamily[family] = struct{}{}
+	for _, family := range dailyMetricsNativeFamilies {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] = 0
 		collector.dailyMetricsNativeFamilyDuration[family] = newHistogram()
 		for _, outcome := range dailyMetricsNativeFamilyOutcomes() {
@@ -908,14 +901,14 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	if !slices.Contains(dailyMetricsNativeFamilyOutcomes(), outcome) {
 		return errors.New("daily metrics native family outcome is not registered")
 	}
+	if !slices.Contains(dailyMetricsNativeFamilies, family) {
+		return errors.New("daily metrics native family is not registered")
+	}
 	if rowsWritten < 0 || duration < 0 {
 		return errors.New("daily metrics native family counts cannot be negative")
 	}
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
-	if _, ok := collector.allowedDailyMetricsNativeFamily[family]; !ok {
-		return errors.New("daily metrics native family dimension is not registered")
-	}
 	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
 	if outcome == DailyMetricsNativeFamilyOutcomeComputed {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
@@ -1805,10 +1798,7 @@ func (collector *MetricsCollector) writeDailyMetricsFamilyZeroRowsWithSource(out
 // families are cut over independently and one family's compute cost tells
 // nothing about another's.
 func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings.Builder) {
-	families := make([]string, 0, len(collector.allowedDailyMetricsNativeFamily))
-	for family := range collector.allowedDailyMetricsNativeFamily {
-		families = append(families, family)
-	}
+	families := append([]string(nil), dailyMetricsNativeFamilies...)
 	sort.Strings(families)
 
 	writeMetadata(output, "worker_daily_metrics_native_family_outcome_total", "Native metrics.daily family compute attempts, by family and bounded outcome (CHAOS-4276).", "counter")

@@ -38,6 +38,19 @@ class ChartResult:
 def _aggregate_expression(metric: str, definition: MetricDefinition) -> str:
     if metric.endswith("_count") or definition.unit == "count":
         return f"sum({metric})"
+    if definition.numerator and definition.denominator:
+        # CHAOS-4329 ("no regression" ruling, codex round 2): a plain
+        # avg(metric) here averages one row PER (chart-key, repo) equally
+        # regardless of repo size the moment the source table can yield
+        # more than one row per key (team_metrics_daily gained repo_id).
+        # Recompute the ratio from the summed additive numerator/
+        # denominator instead -- correct at any chart-key grouping,
+        # matches the SUM-then-recompute pattern the 4 named
+        # team_metrics_daily readers already use.
+        return (
+            f"if(sum({definition.denominator}) > 0, "
+            f"sum({definition.numerator}) / sum({definition.denominator}), 0.0)"
+        )
     return f"avg({metric})"
 
 

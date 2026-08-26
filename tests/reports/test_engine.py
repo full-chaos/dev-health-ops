@@ -106,6 +106,27 @@ def test_build_chart_query_with_month_grouping_uses_time_bucket():
     assert "LIMIT 1 BY org_id, repo_id, day" in query
 
 
+def test_build_chart_query_recomputes_team_metrics_daily_ratio_from_summed_counts():
+    """CHAOS-4329 ('no regression' ruling, codex round 2): team_metrics_daily
+    gained repo_id, so its dedup source can now yield MORE THAN ONE row per
+    chart key (a team owning N repos writes N rows). A plain avg(metric)
+    would average those N repo ratios unweighted, which is wrong the moment
+    repo sizes/ratios differ. after_hours_commit_ratio and
+    weekend_commit_ratio declare a table-local numerator/denominator pair
+    in the registry (metric_registry.py::RATIO_NUMERATOR_DENOMINATOR) so
+    build_chart_query recomputes SUM(numerator)/SUM(denominator) instead.
+    """
+    spec = _chart_spec("after_hours_commit_ratio", chart_id="chart-ratio")
+    query, _ = build_chart_query(spec)
+    normalized = " ".join(query.split())
+
+    assert (
+        "if(sum(commits_count) > 0, "
+        "sum(after_hours_commits_count) / sum(commits_count), 0.0) AS y" in normalized
+    )
+    assert "avg(after_hours_commit_ratio)" not in normalized
+
+
 @pytest.mark.parametrize(
     ("metric", "table", "key"),
     [

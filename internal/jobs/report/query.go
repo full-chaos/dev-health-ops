@@ -248,6 +248,14 @@ type metricDefinition struct {
 	Unit          string   `json:"unit"`
 	Dimensions    []string `json:"dimensions"`
 	SourceTable   string   `json:"source_table"`
+	// Numerator/Denominator (CHAOS-4329) are the table-local additive
+	// columns a ratio metric recomputes from when its source table can
+	// yield more than one physical row per chart key (team_metrics_daily
+	// gained repo_id: a team owning N repos writes N rows). Empty for
+	// every metric whose source table stays single-row-per-key -- see
+	// metricDefinition.numeratorDenominator's caller in buildChartQuery.
+	Numerator   string `json:"numerator,omitempty"`
+	Denominator string `json:"denominator,omitempty"`
 }
 
 type metricRegistryArtifact struct {
@@ -352,9 +360,23 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		definition.hasDimension("day") {
 		xExpression, xType, temporal = "toDate(day)", "Date", true
 	}
-	aggregate := "avg"
-	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
-		aggregate = "sum"
+	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
+	switch {
+	case strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count":
+		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
+	case definition.Numerator != "" && definition.Denominator != "":
+		// CHAOS-4329 ("no regression" ruling, codex round 2): a plain
+		// avg(metric) here averages one row PER (chart-key, repo) equally
+		// regardless of repo size the moment the source table can yield
+		// more than one row per key. Recompute the ratio from the summed
+		// additive numerator/denominator instead -- correct at any
+		// chart-key grouping, matches the SUM-then-recompute pattern the
+		// 4 named team_metrics_daily readers already use (Python mirror:
+		// reports/charts.py::_aggregate_expression).
+		yExpression = fmt.Sprintf(
+			"if(sum(%s) > 0, sum(%s) / sum(%s), 0.0)",
+			definition.Denominator, definition.Numerator, definition.Denominator,
+		)
 	}
 	clauses := []string{spec.Metric + " IS NOT NULL"}
 	parameters := make([]any, 0, 5)
@@ -394,10 +416,10 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		return fmt.Sprintf(`SELECT
         CAST('total', '%s') AS x,
         CAST(NULL, 'Nullable(String)') AS group_value,
-        %s(%s) AS y
+        %s AS y
     FROM %s
     WHERE
-        %s`, xType, aggregate, spec.Metric, source, where), parameters, nil
+        %s`, xType, yExpression, source, where), parameters, nil
 	}
 	order := "y DESC, x"
 	if temporal {
@@ -406,12 +428,12 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	return fmt.Sprintf(`SELECT
         %s AS x,
         CAST(NULL, 'Nullable(String)') AS group_value,
-        %s(%s) AS y
+        %s AS y
     FROM %s
     WHERE
         %s
     GROUP BY x
-    ORDER BY %s`, xExpression, aggregate, spec.Metric, source, where, order), parameters, nil
+    ORDER BY %s`, xExpression, yExpression, source, where, order), parameters, nil
 }
 
 func (definition metricDefinition) hasDimension(target string) bool {

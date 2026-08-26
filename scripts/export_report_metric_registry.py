@@ -14,17 +14,28 @@ DEFAULT_OUTPUT = Path("internal/jobs/report/metric_registry.json")
 
 def build_payload() -> dict[str, Any]:
     """Return the complete, deterministically ordered report metric registry."""
+
+    def _entry(definition: Any) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "canonical_name": definition.canonical_name,
+            "display_name": definition.display_name,
+            "unit": definition.unit,
+            "dimensions": list(definition.dimensions),
+            "source_table": definition.source_table,
+        }
+        # CHAOS-4329: only present for the handful of table-local ratio
+        # metrics that declare a numerator/denominator pair -- omitted
+        # (not null) for every other metric so the artifact stays minimal
+        # for consumers that don't care about this table-local mechanism.
+        if definition.numerator and definition.denominator:
+            entry["numerator"] = definition.numerator
+            entry["denominator"] = definition.denominator
+        return entry
+
     return {
         "schema_version": 1,
         "metrics": [
-            {
-                "canonical_name": definition.canonical_name,
-                "display_name": definition.display_name,
-                "unit": definition.unit,
-                "dimensions": list(definition.dimensions),
-                "source_table": definition.source_table,
-            }
-            for _, definition in sorted(METRIC_REGISTRY.items())
+            _entry(definition) for _, definition in sorted(METRIC_REGISTRY.items())
         ],
     }
 

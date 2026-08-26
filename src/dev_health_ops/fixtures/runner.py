@@ -1182,7 +1182,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 }
                 for r in pipeline_runs
             ]
-            release_refs = ff_release_refs = generator._default_release_refs(ns.days)
+            # CHAOS-4338 / codex review round 2, P1: _default_release_refs
+            # only depends on `days`, so every repo generated the SAME
+            # release_ref strings (e.g. "v1.0.0"). release_impact compute
+            # (below, after this loop) groups by (org, release_ref,
+            # environment) org-wide, not per repo -- identical refs across
+            # repos silently blended one repo's telemetry into another's and
+            # attributed the merged row to whichever deployment happened to
+            # be latest. Repo-index-suffixing keeps every repo's refs
+            # distinct so each release_impact row stays scoped to the repo
+            # that actually generated it.
+            release_refs = ff_release_refs = [
+                f"{ref}-r{i}" for ref in generator._default_release_refs(ns.days)
+            ]
             deployments = generator.generate_deployments(
                 days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
             )
@@ -2361,6 +2373,21 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 return 1
         logging.info("Ownership tables: %s", ownership_counts)
 
+        # Scoping org_id for the admin-override identity lookup below
+        # (codex review, CHAOS-4338 round 2, P2): `fixtures validate` takes
+        # no --org flag, and an unscoped `identities` lookup on a
+        # shared/non-scratch database could pick up an unrelated pre-
+        # existing active identity instead of this run's own fixture row,
+        # producing a false pass or fail. team_project_ownership was just
+        # confirmed non-empty above and is written by this SAME
+        # generate_team_ownership_edges call as the identities row, so its
+        # org_id is this run's real org.
+        _validate_org_id = str(
+            client.query(
+                "SELECT org_id FROM team_project_ownership LIMIT 1"
+            ).result_rows[0][0]
+        )
+
         # CHAOS-4329 proof: at least one team owns >= 2 distinct repos.
         # Gated on the run's actual repo topology (codex review, CHAOS-4338
         # round 1, P2): `--repo-count 1` (the CLI default) can only ever
@@ -2397,21 +2424,39 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
         # Ambiguous-identity proof: at least one member maps to >=2 teams --
         # the real resolver's exactly-one-team gate must see this and refuse
-        # to guess rather than pick one arbitrarily.
-        ambiguous_members = int(
+        # to guess rather than pick one arbitrarily. Gated on the run's
+        # actual team topology (codex review, CHAOS-4338 round 2, P2):
+        # generate_team_ownership_edges can only create this ambiguous
+        # member when there are >=2 teams WITH members -- the supported
+        # `--team-count 1` topology has none, so this proof is unsatisfiable
+        # by construction on a single-team run. Skip rather than
+        # hard-failing, mirroring the multi-repo-team gate above.
+        distinct_teams_with_members_for_ambiguity = int(
             client.query(
-                "SELECT count() FROM ("
-                "  SELECT member_id FROM team_memberships"
-                "  GROUP BY member_id HAVING count(DISTINCT team_id) >= 2"
-                ")"
+                "SELECT countDistinct(team_id) FROM team_memberships"
             ).result_rows[0][0]
         )
-        if ambiguous_members == 0:
-            logging.error(
-                "FAIL: no team_memberships identity maps to >=2 teams "
-                "(ambiguous-unassigned proof missing)."
+        if distinct_teams_with_members_for_ambiguity < 2:
+            logging.info(
+                "SKIP: ambiguous-identity proof (%d team(s) with members; needs >=2).",
+                distinct_teams_with_members_for_ambiguity,
             )
-            return 1
+            ambiguous_members = 0
+        else:
+            ambiguous_members = int(
+                client.query(
+                    "SELECT count() FROM ("
+                    "  SELECT member_id FROM team_memberships"
+                    "  GROUP BY member_id HAVING count(DISTINCT team_id) >= 2"
+                    ")"
+                ).result_rows[0][0]
+            )
+            if ambiguous_members == 0:
+                logging.error(
+                    "FAIL: no team_memberships identity maps to >=2 teams "
+                    "(ambiguous-unassigned proof missing)."
+                )
+                return 1
         logging.info(
             "Ownership proofs: multi_repo_teams=%d, ambiguous_members=%d",
             multi_repo_teams,
@@ -2447,24 +2492,39 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             )
             identity_rows_for_check: list = []
         else:
+            # Scoped to this run's org_id (codex review, CHAOS-4338 round 2,
+            # P2) -- see the _validate_org_id comment above.
             identity_rows_for_check = client.query(
                 "SELECT canonical_id, team_ids FROM identities FINAL "
-                "WHERE is_active = 1 AND length(team_ids) > 0 LIMIT 1"
+                "WHERE is_active = 1 AND length(team_ids) > 0 "
+                "AND org_id = {org_id:String} LIMIT 1",
+                parameters={"org_id": _validate_org_id},
             ).result_rows
         if identity_rows_for_check:
             override_identity, override_team_ids = identity_rows_for_check[0]
             override_team_id = str(override_team_ids[0])
 
-            conflicting_count = int(
-                client.query(
-                    "SELECT count() FROM team_memberships WHERE member_id = "
-                    "{member_id:String} AND team_id != {team_id:String}",
-                    parameters={
-                        "member_id": str(override_identity),
-                        "team_id": override_team_id,
-                    },
-                ).result_rows[0][0]
-            )
+            # Also fetch the conflicting row's provider (codex review,
+            # CHAOS-4338 round 2, P2): the conflicting team_memberships row
+            # was written under this run's ACTUAL --provider
+            # (default 'synthetic'), and the two-layer resolver's provider-
+            # fallback layer is looked up by (provider, identity) -- calling
+            # it with a hardcoded 'synthetic' on a --provider github/gitlab/
+            # jira run would never find the conflicting row at all, so the
+            # admin layer would trivially "win" without the fallback layer
+            # ever being in contention.
+            conflicting_rows = client.query(
+                "SELECT provider, count() FROM team_memberships WHERE "
+                "member_id = {member_id:String} AND team_id != "
+                "{team_id:String} AND org_id = {org_id:String} "
+                "GROUP BY provider",
+                parameters={
+                    "member_id": str(override_identity),
+                    "team_id": override_team_id,
+                    "org_id": _validate_org_id,
+                },
+            ).result_rows
+            conflicting_count = sum(int(row[1]) for row in conflicting_rows)
             if conflicting_count == 0:
                 logging.error(
                     "FAIL: admin-override identity %s has no conflicting "
@@ -2473,6 +2533,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                     override_identity,
                 )
                 return 1
+            conflicting_provider = str(conflicting_rows[0][0])
 
             async def _resolve_override():
                 from dev_health_ops.metrics.compute_work_items import (
@@ -2482,11 +2543,13 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                     ClickHouseDataLoader,
                 )
 
-                loader = ClickHouseDataLoader(client, org_id="")
+                loader = ClickHouseDataLoader(client, org_id=_validate_org_id)
                 ctx = await loader.load_team_attribution_context(
                     as_of=datetime.now(timezone.utc)
                 )
-                return _resolve_membership(ctx, "synthetic", str(override_identity))
+                return _resolve_membership(
+                    ctx, conflicting_provider, str(override_identity)
+                )
 
             try:
                 override_candidates, override_reason = asyncio.run(_resolve_override())

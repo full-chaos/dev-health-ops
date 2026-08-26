@@ -64,13 +64,24 @@ class Team(Base):
         self.repo_patterns = repo_patterns or []
         # NOT a mapped_column either, same reasoning as repo_patterns above --
         # manual_members is the ClickHouse-only admin-override provenance
-        # column added by migration 079 (CHAOS-4321). Kept as a plain
-        # instance attribute so ClickHouseStore.insert_teams picks it up via
-        # getattr/hasattr; always present (defaulting to []) so fixtures
-        # writers never hit the "caller never learned about this column"
-        # preserve-existing-value path insert_teams reserves for OTHER,
-        # non-fixtures Team-like callers (e.g. providers/teams.py).
-        self.manual_members = manual_members or []
+        # column added by migration 079 (CHAOS-4321). UNLIKE repo_patterns,
+        # this attribute is deliberately left UNSET (not defaulted to [])
+        # when the caller doesn't pass it -- codex review, CHAOS-4338 round
+        # 1, P1: `providers/teams.py`'s real sync path constructs this SAME
+        # Team class without manual_members, and `ClickHouseStore.
+        # insert_teams` treats `hasattr(item, "manual_members") is False`
+        # as "this caller never learned about the column" -> it batches a
+        # CURRENT-value lookup and preserves whatever an admin already set,
+        # instead of silently overwriting it with []. Defaulting to []
+        # unconditionally here would have made every real provider sync
+        # clobber an existing admin override on its next write. Fixture
+        # callers that want the attribute considered "set" (even to [])
+        # pass manual_members=[] explicitly, or (as
+        # generate_team_ownership_edges does for the one admin-override
+        # team) mutate the attribute directly on an already-constructed
+        # Team -- both produce a real hasattr()-visible attribute.
+        if manual_members is not None:
+            self.manual_members = manual_members
 
 
 class JiraProjectOpsTeamLink(Base):

@@ -76,19 +76,30 @@ def build_project_record(
     display_name: str | None = None,
     is_active: bool = True,
     as_of: datetime,
+    provider: str = SYNTHETIC_PROVIDER,
 ) -> ProjectRecord:
     """One repo-backed PROJECT catalog row, active as of ``as_of``.
 
     ``as_of`` must be derived from the world's pinned ``now`` by the caller
     (``fixtures/world.py``) -- never ``datetime.now()`` here, per the
     CHAOS-3392 no-wall-clock rule for new fixture-world code.
+
+    ``provider`` defaults to ``SYNTHETIC_PROVIDER`` for the ask-dev-world
+    caller (always synthetic). CHAOS-4338 / codex review round 1 (P1):
+    `dev-hops fixtures generate --provider github|gitlab|jira` labels its
+    generated work items with that provider
+    (`SyntheticDataGenerator.generate_work_items(..., provider=ns.provider)`);
+    provider-aware project identity resolution requires
+    `work_items.project_id`'s provider context to match `projects.provider`
+    for the same row, so a non-synthetic fixture run must pass its own
+    provider through here too.
     """
 
     return ProjectRecord(
         id=project_id_for_repo(repo_full_name),
         org_id=org_id,
         name=display_name or repo_full_name,
-        provider=SYNTHETIC_PROVIDER,
+        provider=provider,
         project_key=None,
         is_active=is_active,
         updated_at=as_of,

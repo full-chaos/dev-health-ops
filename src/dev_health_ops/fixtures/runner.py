@@ -835,7 +835,12 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         # (repo-backed projects are 1:1 with repos in this fixture world).
         if hasattr(store, "client") and store.client is not None:
             _project_records = [
-                build_project_record(org_id=org_id, repo_full_name=repo_name, as_of=now)
+                build_project_record(
+                    org_id=org_id,
+                    repo_full_name=repo_name,
+                    as_of=now,
+                    provider=ns.provider,
+                )
                 for repo_name in _repo_names
             ]
             await insert_projects(store.client, _project_records)
@@ -1590,50 +1595,31 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     ):
                         sink.write_telemetry_signal_buckets(telemetry_buckets)
 
-                    # CHAOS-4338 / fixtures audit section 3: this used to
-                    # fabricate release_impact_daily via pure random.uniform,
-                    # completely hiding the already-known CHAOS-4243/4256/
-                    # 4258 silent-write-failure bugs. `_compute_day` is the
-                    # SAME per-day computation `dev-hops metrics
-                    # release-impact`'s public `compute_release_impact_daily`
-                    # delegates to -- called directly (not through that
-                    # wrapper's day-range/recomputation-window driver, which
-                    # exists for the CLI's re-run use case, not needed here
-                    # since the exact day range is already known) so the
-                    # real records are still available in-process for the
-                    # --with-work-graph edge builder below, which needs
-                    # ReleaseImpactDailyRecord objects, not a row count.
-                    release_impact: list = []
-                    if getattr(sink, "client", None) is not None:
-                        _ri_computed_at = datetime.now(timezone.utc)
-                        for _day_offset in range(max(ns.days, 1)):
-                            _ri_day = now.date() - timedelta(days=_day_offset)
-                            release_impact.extend(
-                                _compute_release_impact_day(
-                                    sink.client, org_id, _ri_day, _ri_computed_at
-                                )
-                            )
-                    if hasattr(sink, "write_release_impact_daily") and release_impact:
-                        sink.write_release_impact_daily(release_impact)
-
+                    # CHAOS-4338 / fixtures audit section 3: release_impact
+                    # is computed ONCE, org-wide, AFTER this loop (see below)
+                    # -- not per repo. `_compute_day`/`_find_release_env_pairs`
+                    # query ALL org telemetry_signal_bucket/deployments, not
+                    # a single repo's; calling it once per repo iteration
+                    # (codex review, CHAOS-4338 round 1, P1) wrote duplicate
+                    # org-wide rows and attributed every row to whichever
+                    # deployment happened to be latest at that moment,
+                    # independent of which repo's iteration triggered it.
                     feature_flag_graph_contexts.append(
                         {
                             "flags": ff_flags,
                             "events": ff_events,
                             "links": ff_links,
-                            "release_impact": release_impact,
                             "repo_context": repo_context,
                         }
                     )
 
                     logging.info(
                         "Wrote %d feature flags, %d events, %d links, "
-                        "%d telemetry buckets, %d release impact records for repo %s.",
+                        "%d telemetry buckets for repo %s.",
                         len(ff_flags),
                         len(ff_events),
                         len(ff_links),
                         len(telemetry_buckets),
-                        len(release_impact),
                         r_name,
                     )
 
@@ -1641,6 +1627,43 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     "Wrote DORA, investment classifications, investment metrics, "
                     "and file hotspot daily records for %d repos.",
                     _repo_count,
+                )
+
+                # CHAOS-4338 / fixtures audit section 3: this used to
+                # fabricate release_impact_daily via pure random.uniform,
+                # completely hiding the already-known CHAOS-4243/4256/4258
+                # silent-write-failure bugs. `_compute_day` is the SAME
+                # per-day computation `dev-hops metrics release-impact`'s
+                # public `compute_release_impact_daily` delegates to --
+                # called directly (not through that wrapper's day-range/
+                # recomputation-window driver, which exists for the CLI's
+                # re-run use case, not needed here since the exact day range
+                # is already known) so the real records are still available
+                # in-process for the --with-work-graph edge builder below,
+                # which needs ReleaseImpactDailyRecord objects, not a row
+                # count. Computed ONCE (org-wide, all telemetry/deployments
+                # from every repo generated above), not per repo -- see the
+                # comment above the loop this replaced. Shared unfiltered
+                # across every repo's graph-edge context: the consumer
+                # already filters `impact.release_ref in linked_release_refs`
+                # per repo/flag, so sharing the full org-wide list is safe.
+                release_impact: list = []
+                if getattr(sink, "client", None) is not None:
+                    _ri_computed_at = datetime.now(timezone.utc)
+                    for _day_offset in range(max(ns.days, 1)):
+                        _ri_day = now.date() - timedelta(days=_day_offset)
+                        release_impact.extend(
+                            _compute_release_impact_day(
+                                sink.client, org_id, _ri_day, _ri_computed_at
+                            )
+                        )
+                if hasattr(sink, "write_release_impact_daily") and release_impact:
+                    sink.write_release_impact_daily(release_impact)
+                for _context in feature_flag_graph_contexts:
+                    _context["release_impact"] = release_impact
+                logging.info(
+                    "Wrote %d release impact records (org-wide, real compute).",
+                    len(release_impact),
                 )
 
                 team_resolver = load_team_resolver()
@@ -2339,20 +2362,38 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         logging.info("Ownership tables: %s", ownership_counts)
 
         # CHAOS-4329 proof: at least one team owns >= 2 distinct repos.
-        multi_repo_teams = int(
+        # Gated on the run's actual repo topology (codex review, CHAOS-4338
+        # round 1, P2): `--repo-count 1` (the CLI default) can only ever
+        # produce one distinct repo_full_name, so this proof is
+        # unsatisfiable by construction on a single-repo run -- skip it
+        # rather than hard-failing a supported, smaller fixture topology.
+        distinct_owned_repos = int(
             client.query(
-                "SELECT count() FROM ("
-                "  SELECT team_id FROM team_repo_ownership"
-                "  GROUP BY team_id HAVING count(DISTINCT repo_full_name) >= 2"
-                ")"
+                "SELECT countDistinct(repo_full_name) FROM team_repo_ownership"
             ).result_rows[0][0]
         )
-        if multi_repo_teams == 0:
-            logging.error(
-                "FAIL: no team owns >=2 repos in team_repo_ownership "
-                "(CHAOS-4329 proof missing)."
+        if distinct_owned_repos < 2:
+            logging.info(
+                "SKIP: CHAOS-4329 multi-repo-team proof (only %d distinct "
+                "repo in team_repo_ownership; needs --repo-count >= 2).",
+                distinct_owned_repos,
             )
-            return 1
+            multi_repo_teams = 0
+        else:
+            multi_repo_teams = int(
+                client.query(
+                    "SELECT count() FROM ("
+                    "  SELECT team_id FROM team_repo_ownership"
+                    "  GROUP BY team_id HAVING count(DISTINCT repo_full_name) >= 2"
+                    ")"
+                ).result_rows[0][0]
+            )
+            if multi_repo_teams == 0:
+                logging.error(
+                    "FAIL: no team owns >=2 repos in team_repo_ownership "
+                    "(CHAOS-4329 proof missing)."
+                )
+                return 1
 
         # Ambiguous-identity proof: at least one member maps to >=2 teams --
         # the real resolver's exactly-one-team gate must see this and refuse
@@ -2385,83 +2426,94 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         # DIFFERENT team, through the REAL two-layer resolver
         # (compute_work_items._resolve_membership via
         # load_team_attribution_context), and asserts the admin layer wins.
-        if not _table_exists("identities"):
-            logging.error(
-                "FAIL: identities table missing -- admin-override proof unreachable."
-            )
-            return 1
-        identity_rows_for_check = client.query(
-            "SELECT canonical_id, team_ids FROM identities FINAL "
-            "WHERE is_active = 1 AND length(team_ids) > 0 LIMIT 1"
-        ).result_rows
-        if not identity_rows_for_check:
-            logging.error(
-                "FAIL: no identities row with team_ids set -- admin-override "
-                "proof missing."
-            )
-            return 1
-        override_identity, override_team_ids = identity_rows_for_check[0]
-        override_team_id = str(override_team_ids[0])
-
-        conflicting_count = int(
+        # Gated on the run's actual team topology (codex review, CHAOS-4338
+        # round 1, P2): `generate_team_ownership_edges` only creates the
+        # admin-override identity when there are >=3 teams WITH members
+        # (needs a distinct admin team, a distinct conflicting team, and
+        # >=1 member on the admin team) -- `--team-count 1` or `2` (or a
+        # `--team-count 3+` run whose author distribution happens to leave
+        # a team memberless) can legitimately produce zero such identities.
+        # Skip rather than hard-failing a supported, smaller topology.
+        distinct_teams_with_members = int(
             client.query(
-                "SELECT count() FROM team_memberships WHERE member_id = "
-                "{member_id:String} AND team_id != {team_id:String}",
-                parameters={
-                    "member_id": str(override_identity),
-                    "team_id": override_team_id,
-                },
+                "SELECT countDistinct(team_id) FROM team_memberships"
             ).result_rows[0][0]
         )
-        if conflicting_count == 0:
-            logging.error(
-                "FAIL: admin-override identity %s has no conflicting "
-                "provider-fallback team_memberships row -- the "
-                "override-vs-fallback proof is not actually a conflict.",
+        if not _table_exists("identities") or distinct_teams_with_members < 3:
+            logging.info(
+                "SKIP: CHAOS-4321 admin-override proof (%d team(s) with "
+                "members; needs >=3, or identities table missing).",
+                distinct_teams_with_members,
+            )
+            identity_rows_for_check: list = []
+        else:
+            identity_rows_for_check = client.query(
+                "SELECT canonical_id, team_ids FROM identities FINAL "
+                "WHERE is_active = 1 AND length(team_ids) > 0 LIMIT 1"
+            ).result_rows
+        if identity_rows_for_check:
+            override_identity, override_team_ids = identity_rows_for_check[0]
+            override_team_id = str(override_team_ids[0])
+
+            conflicting_count = int(
+                client.query(
+                    "SELECT count() FROM team_memberships WHERE member_id = "
+                    "{member_id:String} AND team_id != {team_id:String}",
+                    parameters={
+                        "member_id": str(override_identity),
+                        "team_id": override_team_id,
+                    },
+                ).result_rows[0][0]
+            )
+            if conflicting_count == 0:
+                logging.error(
+                    "FAIL: admin-override identity %s has no conflicting "
+                    "provider-fallback team_memberships row -- the "
+                    "override-vs-fallback proof is not actually a conflict.",
+                    override_identity,
+                )
+                return 1
+
+            async def _resolve_override():
+                from dev_health_ops.metrics.compute_work_items import (
+                    _resolve_membership,
+                )
+                from dev_health_ops.metrics.loaders.clickhouse import (
+                    ClickHouseDataLoader,
+                )
+
+                loader = ClickHouseDataLoader(client, org_id="")
+                ctx = await loader.load_team_attribution_context(
+                    as_of=datetime.now(timezone.utc)
+                )
+                return _resolve_membership(ctx, "synthetic", str(override_identity))
+
+            try:
+                override_candidates, override_reason = asyncio.run(_resolve_override())
+            except Exception as e:
+                logging.error(
+                    f"FAIL: Could not resolve admin-override identity through "
+                    f"the real two-layer resolver: {e}"
+                )
+                return 1
+            resolved_team_ids = {c.team_id for c in override_candidates}
+            if resolved_team_ids != {override_team_id}:
+                logging.error(
+                    "FAIL: admin-override identity did not resolve to the admin "
+                    "team (resolved=%s, reason=%s, expected=%s) -- CHAOS-4321: "
+                    '"manual is override -- if the override exists, use it, '
+                    'else use attribution from providers."',
+                    resolved_team_ids,
+                    override_reason,
+                    override_team_id,
+                )
+                return 1
+            logging.info(
+                "Admin-override proof: identity %s resolved to admin team %s "
+                "despite a conflicting provider_access team_memberships row.",
                 override_identity,
-            )
-            return 1
-
-        async def _resolve_override():
-            from dev_health_ops.metrics.compute_work_items import (
-                _resolve_membership,
-            )
-            from dev_health_ops.metrics.loaders.clickhouse import (
-                ClickHouseDataLoader,
-            )
-
-            loader = ClickHouseDataLoader(client, org_id="")
-            ctx = await loader.load_team_attribution_context(
-                as_of=datetime.now(timezone.utc)
-            )
-            return _resolve_membership(ctx, "synthetic", str(override_identity))
-
-        try:
-            override_candidates, override_reason = asyncio.run(_resolve_override())
-        except Exception as e:
-            logging.error(
-                f"FAIL: Could not resolve admin-override identity through "
-                f"the real two-layer resolver: {e}"
-            )
-            return 1
-        resolved_team_ids = {c.team_id for c in override_candidates}
-        if resolved_team_ids != {override_team_id}:
-            logging.error(
-                "FAIL: admin-override identity did not resolve to the admin "
-                "team (resolved=%s, reason=%s, expected=%s) -- CHAOS-4321: "
-                '"manual is override -- if the override exists, use it, '
-                'else use attribution from providers."',
-                resolved_team_ids,
-                override_reason,
                 override_team_id,
             )
-            return 1
-        logging.info(
-            "Admin-override proof: identity %s resolved to admin team %s "
-            "despite a conflicting provider_access team_memberships row.",
-            override_identity,
-            override_team_id,
-        )
 
         if not _table_exists("work_item_team_attributions"):
             logging.error(

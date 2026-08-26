@@ -197,9 +197,8 @@ func TestClickHouseSourceDataCheckerFlagsOnlyFamiliesWithSourceButNoOutput(t *te
 
 	// cicd: source present, output missing -> flagged.
 	// deploy: neither present -> genuinely empty day, not flagged.
-	// testops_risk: source present, output present (both of its output
-	// tables agree, to avoid the UNION ALL query's two table names racing
-	// each other under a substring-keyed stub) -> not flagged.
+	// testops_risk: source present, all three independent outputs present
+	// -> not flagged.
 	// incident: source present, output missing -> flagged.
 	conn := &stubSourceDataConn{hasRows: map[string]bool{
 		"ci_pipeline_runs":           true,
@@ -208,6 +207,7 @@ func TestClickHouseSourceDataCheckerFlagsOnlyFamiliesWithSourceButNoOutput(t *te
 		"deploy_metrics_daily":       false,
 		"test_suite_results":         true,
 		"testops_release_confidence": true,
+		"testops_quality_drag":       true,
 		"testops_pipeline_stability": true,
 		"operational_incidents":      true,
 		"incident_metrics_daily":     false,
@@ -226,6 +226,84 @@ func TestClickHouseSourceDataCheckerFlagsOnlyFamiliesWithSourceButNoOutput(t *te
 	}
 	if !got["cicd"] || got["deploy"] || got["testops_risk"] || !got["incident"] {
 		t.Fatalf("flagged families=%v, want exactly cicd and incident", families)
+	}
+}
+
+// TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty pins
+// the codex adversarial-review finding (round 1, CHAOS-4263): testops_risk
+// writes THREE independent output tables (release_confidence, quality_drag,
+// pipeline_stability -- job_daily.py:1481-1483 logs their zero-row state
+// separately), and a UNION-based existence check let one populated table mask
+// another's empty one. Seeds source data plus two of the three outputs
+// present and the third empty, and drives the real PartitionHandler.Work path
+// (not just the checker function) to prove the partition is released and
+// retried instead of silently completing.
+func TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000114"
+		partitionID = "00000000-0000-4000-8000-000000000115"
+		orgID       = "00000000-0000-4000-8000-000000000009"
+		day         = "2026-08-25"
+	)
+	insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, day,
+		[]RepositoryID{"00000000-0000-4000-8000-000000000002"})
+
+	// testops_risk source present (test_suite_results); release_confidence
+	// and quality_drag populated but pipeline_stability empty -- the exact
+	// shape a UNION ALL existence check cannot distinguish from "all three
+	// present".
+	conn := &stubSourceDataConn{hasRows: map[string]bool{
+		"test_suite_results":         true,
+		"testops_release_confidence": true,
+		"testops_quality_drag":       true,
+		"testops_pipeline_stability": false,
+	}}
+	checker, err := NewClickHouseSourceDataChecker(pool, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: partitionID, RunID: runID},
+			Token:         "00000000-0000-4000-8000-000000000116",
+			LeaseDuration: time.Second,
+		},
+		run: Run{ID: runID, OrganizationID: orgID, Status: "running"},
+	}
+	observer := &recordingZeroRowsObserver{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetSourceDataChecker(checker)
+	handler.SetZeroRowsObserver(observer)
+
+	err = handler.Work(ctx, partitionExecutionFor(partitionID, runID, orgID))
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("handler error = %v, want retryable zero-row error", err)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("ReleasePartition calls = %d, want 1", store.partitionReleases)
+	}
+	if len(observer.families) != 1 || observer.families[0] != "testops_risk" {
+		t.Fatalf("observed families = %v, want [testops_risk]", observer.families)
 	}
 }
 

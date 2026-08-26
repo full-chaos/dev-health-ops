@@ -125,18 +125,35 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
-	testopsOutput, err := checker.exists(ctx, `
-SELECT 1 FROM (
-  SELECT repo_id FROM testops_release_confidence
+	// testops_risk writes three independent output tables (release_confidence,
+	// quality_drag, pipeline_stability -- job_daily.py:1481-1483 logs zero-rows
+	// for each separately). A UNION ALL existence check collapses them into one
+	// boolean, so a regression that empties one table while another still has
+	// rows never gets flagged (codex adversarial review, round 1, CHAOS-4263).
+	// Check each output independently and flag the family if source data
+	// exists but ANY expected output is missing.
+	releaseConfidenceOutput, err := checker.exists(ctx, `
+SELECT 1 FROM testops_release_confidence
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-  UNION ALL
-  SELECT repo_id FROM testops_pipeline_stability
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
-)
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
+	qualityDragOutput, err := checker.exists(ctx, `
+SELECT 1 FROM testops_quality_drag
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
+LIMIT 1`, orgID, day, repositoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	pipelineStabilityOutput, err := checker.exists(ctx, `
+SELECT 1 FROM testops_pipeline_stability
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
+LIMIT 1`, orgID, day, repositoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	testopsOutput := releaseConfidenceOutput && qualityDragOutput && pipelineStabilityOutput
 
 	// incident: operational_incidents has no repo_id. The canonical projection
 	dayStart, err := time.Parse("2006-01-02", day)

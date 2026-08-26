@@ -151,12 +151,20 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		executor.businessTZ, executor.businessHoursStart, executor.businessHoursEnd,
 	)
 
-	// One fresh timestamp per repo group, captured in repoIDs' own
-	// deterministic order -- see WriteTeamMetricsDailyPerRepo's doc comment
-	// (CHAOS-4276 codex round-2 finding 1).
+	// One timestamp per repo group, strictly increasing by a full second per
+	// group in repoIDs' own deterministic order -- see
+	// WriteTeamMetricsDailyPerRepo's doc comment (CHAOS-4276 codex round-2
+	// finding 1, tightened in round 3: team_metrics_daily.computed_at is
+	// ClickHouse `DateTime`, second precision, not `DateTime64` -- two
+	// wall-clock time.Now() calls captured within the same second, entirely
+	// plausible for a small partition, would truncate to an IDENTICAL
+	// persisted value and reopen the exact argMax tie round 2 was fixing.
+	// One base timestamp plus a full second per group index survives that
+	// truncation regardless of how fast the loop actually runs.
+	base := executor.nowUTC()
 	computedAtByRepo := make([]time.Time, len(perRepoMetrics))
 	for index := range perRepoMetrics {
-		computedAtByRepo[index] = executor.nowUTC()
+		computedAtByRepo[index] = base.Add(time.Duration(index) * time.Second)
 	}
 
 	written, err := WriteTeamMetricsDailyPerRepo(ctx, executor.conn, run.OrganizationID, day, perRepoMetrics, computedAtByRepo)

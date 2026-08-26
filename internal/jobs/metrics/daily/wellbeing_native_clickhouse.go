@@ -302,11 +302,24 @@ type wellbeingBatchConn interface {
 // inside every run_daily_metrics_job call, so distinct repo-scoped calls
 // naturally get distinct, monotonically increasing timestamps --
 // "whichever repo was processed last wins" is at least a REPRODUCIBLE
-// tie-break. perRepoRows and computedAtByRepo must be the same length and
-// share index order; every row in perRepoRows[i] is stamped with
-// computedAtByRepo[i]. Still ONE PrepareBatch/Send round trip (not one
-// write per repo), so this carries no new partial-write risk relative to
-// WriteTeamMetricsDaily.
+// tie-break.
+//
+// CALLERS MUST NOT PASS TWO GROUPS WHOSE TIMESTAMPS FALL IN THE SAME
+// WALL-CLOCK SECOND (codex round-3 finding): this table's computed_at
+// column is `DateTime('UTC')` -- ClickHouse's second-precision type, not
+// `DateTime64` -- so two Go time.Time values that are merely unequal in
+// memory still collapse to an IDENTICAL persisted value, and thus an
+// identical argMax tie, if their computedAtByRepo entries share a second.
+// wellbeing_native_executor.go's caller satisfies this by spacing every
+// group's timestamp a full second apart (base.Add(index * time.Second)),
+// not by calling nowUTC() fresh per group -- a real ClickHouse round trip
+// (wellbeing_native_executor_timestamp_integration_test.go) proves this
+// survives the truncation and that argMax resolves deterministically.
+//
+// perRepoRows and computedAtByRepo must be the same length and share index
+// order; every row in perRepoRows[i] is stamped with computedAtByRepo[i].
+// Still ONE PrepareBatch/Send round trip, so this carries no partial-write
+// risk beyond what any single-batch write already has.
 func WriteTeamMetricsDailyPerRepo(
 	ctx context.Context, conn wellbeingBatchConn, organizationID string, day time.Time,
 	perRepoRows [][]numerical.TeamWellbeingMetric, computedAtByRepo []time.Time,

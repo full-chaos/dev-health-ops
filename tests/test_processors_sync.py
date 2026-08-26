@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -36,6 +36,7 @@ def _ns(**overrides):
         before=None,
         backfill=1,
         repo_name=None,
+        defer_finalize=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -191,3 +192,305 @@ def test_run_sync_target_routes_to_local_provider(monkeypatch):
 
     assert sync_mod.run_sync_target(ns) == 0
     local_target.assert_called_once_with(ns, "git")
+
+
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+def test_sync_synthetic_target_requires_org_for_sync_run_backed_targets(
+    monkeypatch, target
+):
+    """CHAOS-4266: cicd/deployments/incidents/tests complete a real sync_run
+    scoped to an org (unlike git/prs/blame, which only write analytics rows),
+    so they must fail loudly before touching any store if no org resolved."""
+    ns = _ns(provider="synthetic", org=None, repo_name="acme/demo")
+
+    async def unreachable_run_with_store(*_args, **_kwargs):
+        raise AssertionError(
+            "run_with_store must not be called before the org guard fires"
+        )
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", unreachable_run_with_store)
+
+    with pytest.raises(SystemExit, match="requires a resolved org"):
+        import asyncio
+
+        asyncio.run(sync_mod.sync_synthetic_target(ns, target))
+
+
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+def test_sync_synthetic_target_requires_ledger_ack_env_var(monkeypatch, target):
+    """CHAOS-4266 (codex round 3): _complete_synthetic_sync_run writes to the
+    GLOBAL, org-unscoped CHAOS-4114 executed-proof ledger under the real
+    "gitlab" provider identity -- a code comment warning against a shared
+    database is not a guard, so an explicit env var is required and this must
+    fail loudly, before touching any store, when it is unset."""
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo")
+    monkeypatch.delenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", raising=False)
+
+    async def unreachable_run_with_store(*_args, **_kwargs):
+        raise AssertionError(
+            "run_with_store must not be called before the ledger-ack guard fires"
+        )
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", unreachable_run_with_store)
+
+    with pytest.raises(SystemExit, match="DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN"):
+        import asyncio
+
+        asyncio.run(sync_mod.sync_synthetic_target(ns, target))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+async def test_sync_synthetic_target_defer_finalize_skips_complete(monkeypatch, target):
+    """CHAOS-4266: --defer-finalize seeds analytics rows but must NOT complete
+    the sync_run or trigger the post_sync fanout -- that is exactly the
+    behavior that let a remaining-metric family (dora: cicd+deployments+
+    incidents) fan out against a partially-seeded org when a caller finalizes
+    each target immediately after seeding it. Assert the write path still
+    runs (unlike the org/ledger guards above, which fail before any store
+    write) but _complete_synthetic_sync_run is never reached."""
+    ns = _ns(
+        provider="synthetic",
+        org="org-1",
+        repo_name="acme/demo",
+        backfill=3,
+        defer_finalize=True,
+    )
+    store = SimpleNamespace(
+        insert_repo=AsyncMock(),
+        insert_ci_pipeline_runs=AsyncMock(),
+        insert_deployments=AsyncMock(),
+        insert_incidents=AsyncMock(),
+        insert_ci_job_runs=AsyncMock(),
+        insert_test_suite_results=AsyncMock(),
+        insert_test_case_results=AsyncMock(),
+    )
+
+    def unreachable_complete(**_kwargs):
+        raise AssertionError(
+            "_complete_synthetic_sync_run must not be called when defer_finalize is set"
+        )
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", unreachable_complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, target)
+
+    assert result == 0
+    store.insert_repo.assert_awaited_once()
+
+
+def test_finalize_synthetic_sync_run_requires_ledger_ack_env_var(monkeypatch):
+    monkeypatch.delenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", raising=False)
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached before the ledger-ack guard")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="cicd", org="org-1", repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN"):
+        sync_mod.finalize_synthetic_sync_run(ns, "cicd")
+    complete.assert_not_called()
+
+
+def test_finalize_synthetic_sync_run_requires_org(monkeypatch):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached before the org guard")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="cicd", org=None, repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="requires a resolved org"):
+        sync_mod.finalize_synthetic_sync_run(ns, "cicd")
+    complete.assert_not_called()
+
+
+def test_finalize_synthetic_sync_run_rejects_target_outside_sync_run_backed_set(
+    monkeypatch,
+):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached for an unsupported target")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="git", org="org-1", repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="only valid for"):
+        sync_mod.finalize_synthetic_sync_run(ns, "git")
+    complete.assert_not_called()
+
+
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+def test_finalize_synthetic_sync_run_completes_sync_run(monkeypatch, target):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(return_value="run-id")
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target=target, org="org-1", repo_name="acme/demo", backfill=3)
+
+    result = sync_mod.finalize_synthetic_sync_run(ns, target)
+
+    assert result == 0
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["org_id"] == "org-1"
+    assert complete.call_args.kwargs["repo_full_name"] == "acme/demo"
+    assert complete.call_args.kwargs["target"] == target
+    since_at = complete.call_args.kwargs["since_at"]
+    before_at = complete.call_args.kwargs["before_at"]
+    assert (before_at - since_at).days == 3
+
+
+@pytest.mark.asyncio
+async def test_sync_synthetic_target_cicd_writes_pipeline_runs_and_completes_sync_run(
+    monkeypatch,
+):
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo", backfill=3)
+    store = SimpleNamespace(
+        insert_repo=AsyncMock(), insert_ci_pipeline_runs=AsyncMock()
+    )
+    complete = MagicMock(return_value="run-id")
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        assert org_id == "org-1"
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, "cicd")
+
+    assert result == 0
+    store.insert_ci_pipeline_runs.assert_awaited_once()
+    (pipeline_runs,) = store.insert_ci_pipeline_runs.await_args.args
+    assert len(pipeline_runs) > 0
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["org_id"] == "org-1"
+    assert complete.call_args.kwargs["repo_full_name"] == "acme/demo"
+    assert complete.call_args.kwargs["target"] == "cicd"
+
+
+@pytest.mark.asyncio
+async def test_sync_synthetic_target_deployments_writes_deployments_and_completes_sync_run(
+    monkeypatch,
+):
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo", backfill=3)
+    store = SimpleNamespace(insert_repo=AsyncMock(), insert_deployments=AsyncMock())
+    complete = MagicMock(return_value="run-id")
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, "deployments")
+
+    assert result == 0
+    store.insert_deployments.assert_awaited_once()
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["target"] == "deployments"
+
+
+@pytest.mark.asyncio
+async def test_sync_synthetic_target_incidents_writes_incidents_and_completes_sync_run(
+    monkeypatch,
+):
+    # SimpleNamespace is not a ClickHouseStore instance, so this exercises the
+    # SQLAlchemy/legacy insert_incidents branch; the ClickHouseStore ->
+    # write_operational_batch(map_issue_incidents(...)) branch is verified
+    # against a real ClickHouse instance (not mockable meaningfully here) --
+    # see the CHAOS-4266 handoff notes for that manual verification.
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo", backfill=3)
+    store = SimpleNamespace(insert_repo=AsyncMock(), insert_incidents=AsyncMock())
+    complete = MagicMock(return_value="run-id")
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, "incidents")
+
+    assert result == 0
+    store.insert_incidents.assert_awaited_once()
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["target"] == "incidents"
+
+
+@pytest.mark.asyncio
+async def test_sync_synthetic_target_tests_writes_job_and_test_rows_and_completes_sync_run(
+    monkeypatch,
+):
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo", backfill=3)
+    store = SimpleNamespace(
+        insert_repo=AsyncMock(),
+        insert_ci_job_runs=AsyncMock(),
+        insert_test_suite_results=AsyncMock(),
+        insert_test_case_results=AsyncMock(),
+    )
+    complete = MagicMock(return_value="run-id")
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, "tests")
+
+    assert result == 0
+    store.insert_ci_job_runs.assert_awaited_once()
+    store.insert_test_suite_results.assert_awaited_once()
+    store.insert_test_case_results.assert_awaited_once()
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["target"] == "tests"
+
+
+@pytest.mark.asyncio
+async def test_sync_synthetic_target_tests_requires_clickhouse_sink(monkeypatch):
+    ns = _ns(provider="synthetic", org="org-1", repo_name="acme/demo", backfill=3)
+    store = SimpleNamespace(
+        insert_repo=AsyncMock()
+    )  # no insert_ci_job_runs -> not a ClickHouse-shaped store
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    with pytest.raises(SystemExit, match="requires a ClickHouse sink"):
+        await sync_mod.sync_synthetic_target(ns, "tests")

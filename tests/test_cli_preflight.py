@@ -151,6 +151,12 @@ _MISSING_CASES = [
     (("service-credentials", "list"), ("PostgreSQL",)),
     # sync teams persists to ClickHouse after generating teams.
     (("sync", "teams", "--provider", "synthetic"), ("ClickHouse",)),
+    # finalize-synthetic-sync (CHAOS-4266) only completes a durable sync_run
+    # in Postgres -- it never touches ClickHouse -- and needs a resolved org.
+    (
+        ("sync", "finalize-synthetic-sync", "--target", "cicd"),
+        ("PostgreSQL", "organization"),
+    ),
 ]
 
 

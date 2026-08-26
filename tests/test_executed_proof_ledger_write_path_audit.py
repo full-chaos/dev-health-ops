@@ -35,6 +35,16 @@ _SRC = _REPO_ROOT / "src" / "dev_health_ops"
 _ATTEMPTED_WRITERS = {
     "internal/scheduler/sync/materializer.go": "RecordExecutedProofAttempted",
     "src/dev_health_ops/sync/planner.py": "record_executed_proof_attempts",
+    # CHAOS-4266: the executed-proof gate's synthetic cicd/deployments/
+    # incidents/tests seeding constructs a SyncRunUnit already at SUCCESS,
+    # so it records ATTEMPTED in the same transaction as the insert.
+    # Deliberately does NOT call record_executed_proof_terminal (codex
+    # review): that would mark the shared, non-org-scoped (provider=gitlab,
+    # dataset_key) pair PROVEN from synthetic data, which could satisfy
+    # CHAOS-4060's executed-proof gate for a real gitlab route that never
+    # actually worked -- see the comment at the call site in
+    # processors/sync.py.
+    "src/dev_health_ops/processors/sync.py": "record_executed_proof_attempts",
 }
 
 #: Files allowed to terminalize a unit as SUCCESS. Each MUST stamp the proven

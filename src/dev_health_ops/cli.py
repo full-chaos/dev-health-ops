@@ -507,6 +507,15 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("sync", "tests"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "work-items"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
+    # finalize-synthetic-sync (CHAOS-4266) never touches ClickHouse -- it only
+    # completes a durable sync_run via get_postgres_session_sync() -- so it
+    # needs _REQ_POSTGRES where the other sync leaves need _REQ_CLICKHOUSE.
+    # Declaring it here (codex review) is what makes `--db` actually reach
+    # POSTGRES_URI before that session opens (see the _REQ_POSTGRES export in
+    # main()); without it, --db silently has no effect and the command falls
+    # back to whatever POSTGRES_URI/DATABASE_URI happens to already be set in
+    # the shell -- exactly the failure mode a preflight exists to catch.
+    ("sync", "finalize-synthetic-sync"): frozenset({_REQ_POSTGRES, _REQ_ORG}),
     ("teams", "reconcile"): frozenset({_REQ_CLICKHOUSE, _REQ_POSTGRES, _REQ_ORG}),
     # --- audit (read ClickHouse analytics store) ---
     ("audit", "completeness"): frozenset({_REQ_ORG}),

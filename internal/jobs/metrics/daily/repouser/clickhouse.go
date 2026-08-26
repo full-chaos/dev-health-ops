@@ -386,17 +386,32 @@ func NewWriter(connection conn) (*Writer, error) {
 // commit batch after the repo batch already landed leaves a partial
 // generation for this (org, repo, day). This is a deliberate, accepted
 // consequence of the fail-open policy RepoUserCommitExecutor.ComputeFamily
-// relies on (a codex adversarial review raised it explicitly): on any error
-// here, PartitionHandler does NOT put "repo_user_commit" in skipFamilies,
-// so the Python compatibility bridge still computes and writes the SAME
-// (org, repo, day) scope's full, correct row set as part of the same
-// partition -- with a LATER computed_at that wins every reader's
-// argMax/latest dedup over the partial native generation (the same
-// append-only-table contract this repo uses everywhere else, see AGENTS.md
-// "Append-only daily tables = reader dedup"). A durable per-generation
-// commit protocol would only earn its complexity if a native family were
-// ever the SOLE writer with no compatibility-bridge fallback behind it,
-// which is not this family's current design.
+// relies on: on any error here, PartitionHandler does NOT put
+// "repo_user_commit" in skipFamilies, so the Python compatibility bridge
+// still computes and writes the SAME (org, repo, day) scope's full, correct
+// row set as part of the same partition.
+//
+// Two codex adversarial review rounds pushed on whether that recovery is
+// actually DETERMINISTIC, and the honest answer is: usually, not
+// guaranteed. repo_metrics_daily/user_metrics_daily/commit_metrics all
+// declare `computed_at DateTime('UTC')` -- SECOND precision, not
+// DateTime64 -- so a partial native write and the compatibility bridge's
+// write for the SAME partition, moments apart in the same synchronous flow,
+// CAN land in the same wall-clock second. Reader dedup (argMax/latest on
+// computed_at) breaks that tie in an implementation-defined way, not
+// reliably "whichever ran later." This is not unique to this family or
+// introduced by this port: team_metrics_daily (TeamWellbeingExecutor,
+// CHAOS-4276, already merged) declares the identical `DateTime('UTC')`
+// column and has the identical exposure on its own per-repo fail-open path.
+// A real fix (a monotonic generation key every reader dedups on, or
+// DateTime64) is a cross-cutting change affecting every native family this
+// repo has shipped, not something to bolt onto one family's writer alone --
+// tracked as follow-up scope, not this ticket's. The practical exposure is
+// narrow: it only surfaces on a genuine mid-batch ClickHouse failure (rare),
+// and any wrong dedup pick self-corrects on the NEXT day's partition run
+// (which gets an unambiguously fresh computed_at), so the worst case is one
+// day of a partial-vs-complete row being ambiguous, not permanent
+// corruption.
 func (writer *Writer) WriteResult(ctx context.Context, result Result) (repoRows, userRows, commitRows int, err error) {
 	if writer == nil || writer.conn == nil {
 		return 0, 0, 0, fmt.Errorf("repouser: writer unavailable")

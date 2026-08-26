@@ -37,10 +37,27 @@ if logging.getLevelName(TRACE_LOG_LEVEL) == f"Level {TRACE_LOG_LEVEL}":
 # ordinary application logs (CHAOS-3258).
 #
 # - "openai": the OpenAI Python SDK (openai._base_client logs the full
-#   "Request options" -- messages, tools, schemas -- at DEBUG).
+#   "Request options" -- messages, tools, schemas -- at DEBUG, on SDK
+#   versions old enough to still include it; see the CHAOS-4346 note below).
 # - "httpx": logs request/response lines; DEBUG adds headers.
 # - "httpcore": httpx's transport; DEBUG logs raw connection/wire detail.
-_CONTENT_CARRYING_CLIENT_LOGGERS = ("openai", "httpx", "httpcore")
+# - "httpx2" / "httpcore2": the openai SDK's own pinned transport dependency
+#   (pyproject.toml: "httpx2<3,>=2.7.0") is a distinctly-named package, not
+#   "httpx" -- its loggers are "httpx2"/"httpcore2.*", so clamping only
+#   "httpx"/"httpcore" never reached the loggers the SDK's requests actually
+#   go through (CHAOS-4346: found while investigating an openai 3.4.0 CI
+#   break -- that release also stopped including request/response bodies in
+#   its own "openai" logger's DEBUG line, per its own _base_client.py:
+#   "Request bodies, files, URLs, and custom options can contain private
+#   data" -- an upstream privacy improvement, not something this pin should
+#   rely on staying true).
+_CONTENT_CARRYING_CLIENT_LOGGERS = (
+    "openai",
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+)
 
 
 def pin_content_carrying_client_loggers() -> None:

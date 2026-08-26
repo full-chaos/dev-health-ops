@@ -36,6 +36,7 @@ def _ns(**overrides):
         before=None,
         backfill=1,
         repo_name=None,
+        defer_finalize=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -242,6 +243,114 @@ def test_sync_synthetic_target_requires_ledger_ack_env_var(monkeypatch, target):
         import asyncio
 
         asyncio.run(sync_mod.sync_synthetic_target(ns, target))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+async def test_sync_synthetic_target_defer_finalize_skips_complete(monkeypatch, target):
+    """CHAOS-4266: --defer-finalize seeds analytics rows but must NOT complete
+    the sync_run or trigger the post_sync fanout -- that is exactly the
+    behavior that let a remaining-metric family (dora: cicd+deployments+
+    incidents) fan out against a partially-seeded org when a caller finalizes
+    each target immediately after seeding it. Assert the write path still
+    runs (unlike the org/ledger guards above, which fail before any store
+    write) but _complete_synthetic_sync_run is never reached."""
+    ns = _ns(
+        provider="synthetic",
+        org="org-1",
+        repo_name="acme/demo",
+        backfill=3,
+        defer_finalize=True,
+    )
+    store = SimpleNamespace(
+        insert_repo=AsyncMock(),
+        insert_ci_pipeline_runs=AsyncMock(),
+        insert_deployments=AsyncMock(),
+        insert_incidents=AsyncMock(),
+        insert_ci_job_runs=AsyncMock(),
+        insert_test_suite_results=AsyncMock(),
+        insert_test_case_results=AsyncMock(),
+    )
+
+    def unreachable_complete(**_kwargs):
+        raise AssertionError(
+            "_complete_synthetic_sync_run must not be called when defer_finalize is set"
+        )
+
+    async def fake_run_with_store(_db_uri, _db_type, handler, org_id=None):
+        await handler(store)
+
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", unreachable_complete)
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+
+    result = await sync_mod.sync_synthetic_target(ns, target)
+
+    assert result == 0
+    store.insert_repo.assert_awaited_once()
+
+
+def test_finalize_synthetic_sync_run_requires_ledger_ack_env_var(monkeypatch):
+    monkeypatch.delenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", raising=False)
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached before the ledger-ack guard")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="cicd", org="org-1", repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN"):
+        sync_mod.finalize_synthetic_sync_run(ns, "cicd")
+    complete.assert_not_called()
+
+
+def test_finalize_synthetic_sync_run_requires_org(monkeypatch):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached before the org guard")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="cicd", org=None, repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="requires a resolved org"):
+        sync_mod.finalize_synthetic_sync_run(ns, "cicd")
+    complete.assert_not_called()
+
+
+def test_finalize_synthetic_sync_run_rejects_target_outside_sync_run_backed_set(
+    monkeypatch,
+):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(
+        side_effect=AssertionError("must not be reached for an unsupported target")
+    )
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target="git", org="org-1", repo_name="acme/demo")
+
+    with pytest.raises(SystemExit, match="only valid for"):
+        sync_mod.finalize_synthetic_sync_run(ns, "git")
+    complete.assert_not_called()
+
+
+@pytest.mark.parametrize("target", ["cicd", "deployments", "incidents", "tests"])
+def test_finalize_synthetic_sync_run_completes_sync_run(monkeypatch, target):
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1")
+    complete = MagicMock(return_value="run-id")
+    monkeypatch.setattr(sync_mod, "_complete_synthetic_sync_run", complete)
+    ns = _ns(target=target, org="org-1", repo_name="acme/demo", backfill=3)
+
+    result = sync_mod.finalize_synthetic_sync_run(ns, target)
+
+    assert result == 0
+    complete.assert_called_once()
+    assert complete.call_args.kwargs["org_id"] == "org-1"
+    assert complete.call_args.kwargs["repo_full_name"] == "acme/demo"
+    assert complete.call_args.kwargs["target"] == target
+    since_at = complete.call_args.kwargs["since_at"]
+    before_at = complete.call_args.kwargs["before_at"]
+    assert (before_at - since_at).days == 3
 
 
 @pytest.mark.asyncio

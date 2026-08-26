@@ -596,8 +596,11 @@ def _existing_team_members(
     (never a substitute {}) whenever the current roster genuinely could not
     be confirmed, so the caller fails CLOSED (skips the team-dimension
     write) rather than write an empty roster it never actually verified was
-    empty. See the identical helper's docstring in
-    team_autoimport_github.py for the full rationale.
+    empty. Deliberately does NOT filter on ``provider`` in SQL (round 3:
+    ``teams`` dedups on ``id`` alone -- an admin-edited provider="" row can
+    otherwise hide the existing team from a provider-filtered query). See
+    the identical helper's docstring in team_autoimport_github.py for the
+    full rationale.
     """
     if not team_ids:
         return {}
@@ -616,10 +619,9 @@ def _existing_team_members(
             SELECT id, members
             FROM teams FINAL
             WHERE org_id = {org_id:String}
-              AND provider = {provider:String}
               AND id IN {team_ids:Array(String)}
             """,
-            {"org_id": org_id, "provider": provider, "team_ids": team_ids},
+            {"org_id": org_id, "team_ids": team_ids},
         )
     except Exception:
         logger.warning(

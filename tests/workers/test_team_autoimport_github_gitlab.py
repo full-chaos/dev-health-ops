@@ -372,6 +372,14 @@ def test_github_org_import_preserves_existing_roster_when_members_off(
     # Preserved, not erased -- this is the whole point of the fix.
     assert sink.teams[0]["members"] == ["preexisting-lead@example.com"]
     assert sink.query_dicts_calls, "roster-preservation read must have run"
+    # CHAOS-4323 round 3 (codex adversarial-review, HIGH): the query must
+    # NOT filter on provider -- the teams table dedups on id alone
+    # (ReplacingMergeTree ORDER BY (id)), and an admin edit writes
+    # provider="" for the same id. Filtering on provider here could see
+    # zero rows for a team that actually exists, and go on to erase its
+    # roster -- the exact bug this whole read exists to prevent.
+    _query, parameters = sink.query_dicts_calls[0]
+    assert "provider" not in parameters
 
 
 def test_github_org_import_fails_closed_when_roster_read_fails(

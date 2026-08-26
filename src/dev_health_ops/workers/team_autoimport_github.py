@@ -437,6 +437,21 @@ def _existing_team_members(
     the query genuinely found no matching rows (a real, confirmed answer).
     Same query shape as
     ``clickhouse_team_drift_projector.ClickHouseTeamDriftProjector._team_row``.
+
+    CHAOS-4323 round 3 (codex adversarial-review, HIGH): deliberately does
+    NOT filter on ``provider`` in SQL (``provider`` stays a parameter, used
+    only for logging). ``migrations/clickhouse/002_teams.sql``'s
+    ``ReplacingMergeTree(updated_at) ORDER BY (id)`` -- confirmed still true
+    by ``024_add_org_id.sql``'s own comment that org_id was added as a
+    plain column, NOT the sort key -- means ``teams`` deduplicates on ``id``
+    ALONE. An admin edit of an existing team writes ``provider=""``
+    (``clickhouse_team_admin.py``); if that write's ``updated_at`` is
+    latest, ``FINAL`` returns that provider=""  row for the id, and a query
+    that also filtered on this provider would see zero rows -- misread as
+    "team doesn't exist yet" instead of "exists, under a different
+    provider tag" -- and go on to write an empty roster, the exact bug this
+    whole helper exists to prevent. Filtering only on ``id`` (matching the
+    table's true identity) closes that gap.
     """
     if not team_ids:
         return {}
@@ -455,10 +470,9 @@ def _existing_team_members(
             SELECT id, members
             FROM teams FINAL
             WHERE org_id = {org_id:String}
-              AND provider = {provider:String}
               AND id IN {team_ids:Array(String)}
             """,
-            {"org_id": org_id, "provider": provider, "team_ids": team_ids},
+            {"org_id": org_id, "team_ids": team_ids},
         )
     except Exception:
         logger.warning(
